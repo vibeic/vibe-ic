@@ -83,6 +83,7 @@ import step_metrics as _sm  # vibe-ic#1080 — the ONE per-step metrics mechanis
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
+import emitted_script_portability_check as _esp  # the ONE host-path predicate
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 
@@ -328,6 +329,141 @@ def _to_container_path(host_path: str, container: str) -> str:
         if p.startswith(src + "/"):
             return dst + p[len(src):]
     return p
+
+
+#: Where a step records that one artefact is a COPY of another it wrote.
+#: Read by `_ppa/timing.py` so a mirrored report is not counted twice.
+ARTEFACT_MIRRORS_REL = "reports/phase3/artefact_mirrors.json"
+
+
+def _publish_artefact_mirror(src: Path, dst: Path, project: Path,
+                             produced_by: str) -> List[str]:
+    """Copy `src` to `dst` AND record that `dst` is a MIRROR of `src`.
+
+    MEASURED DEFECT: this flow publishes each sign-off STA report into two
+    directories, because five shipped checkers read the `reports/phase3/`
+    copy and the step writes the `phase3/stage3/sta/` one. `_ppa/timing.py`
+    reads both directories, so one measurement arrived as two records under one
+    scope, and ALL 20 (metric, scope) groups in the timing document collided as
+    CONFLICTING_RECORD:
+
+        sha256(phase3/stage3/sta/sta_spef_based.rpt)
+            == sha256(reports/phase3/sta_spef_based.rpt)
+
+    The emitter is not where that is fixed: both locations are load-bearing,
+    and dropping either one breaks a consumer. But the READER cannot tell a
+    mirror from a genuine second measurement that happens to agree to the
+    byte — and collapsing by content hash alone would erase the second one,
+    which is a real reading of a real artefact. Only the step that made the
+    copy knows it is a copy, so the step says so here.
+
+    Idempotent: keyed on the mirror path, so a re-run replaces its entry
+    rather than growing the list. Returns the paths written."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    # BYTES, not decoded text: a mirror that is not byte-exact is not a mirror,
+    # and the digest below is the one an auditor reproduces with `sha256sum`.
+    body = src.read_bytes()
+    dst.write_bytes(body)
+    manifest = project / ARTEFACT_MIRRORS_REL
+    doc: Dict[str, object] = {"schema": "vibeic.artefact_mirrors.v1",
+                              "mirrors": []}
+    if manifest.is_file():
+        try:
+            loaded = json.loads(manifest.read_text())
+            if isinstance(loaded, dict) and isinstance(loaded.get("mirrors"), list):
+                doc = loaded
+        except (OSError, ValueError):
+            # A manifest we cannot parse is replaced, not appended to: a
+            # half-read list would silently drop entries a consumer needs.
+            pass
+    rel_mirror = str(dst.relative_to(project))
+    rel_of = str(src.relative_to(project))
+    entries = [e for e in doc["mirrors"]                     # type: ignore[index]
+               if not (isinstance(e, dict) and e.get("mirror") == rel_mirror)]
+    entries.append({
+        "mirror": rel_mirror,
+        "of": rel_of,
+        # The digest AT THE MOMENT OF COPYING. A consumer that finds either
+        # file no longer matching must NOT collapse the pair: they have
+        # diverged, and two different contents are two facts.
+        # `sha256:<hex>`, the spelling `_ppa/backends/opensta.file_digest`
+        # already publishes, so the consumer compares like with like instead of
+        # stripping a prefix one side happens not to write.
+        "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
+        "declared_by": produced_by,
+    })
+    doc["mirrors"] = sorted(entries, key=lambda e: e["mirror"])
+    _aa.write_text(manifest, json.dumps(doc, indent=2) + "\n")
+    return [str(dst), str(manifest)]
+
+
+def _emitted_script_root_tcl(script_path: Path, project: Path) -> str:
+    """Tcl prologue defining `$RUN_ROOT` from the script's OWN location.
+
+    MEASURED DEFECT: an emitted analysis script is emitted so a reviewer can
+    RE-RUN the measurement, and 26 of 34 emitted scripts on one real run tree
+    hard-coded an absolute path back into the directory they were written for.
+    Such a script re-runs nowhere else, and any hash-based identity over it is
+    defeated by the run directory — two runs of a byte-identical measurement
+    configuration hash differently because they ran in different places.
+
+    `info script` is set by every Tcl `source`, including the one that
+    `sta -no_init -exit <file>` performs (verified in the pinned image: it
+    returns the script's own path). So this resolves correctly whether the
+    project is bind-mounted at its host path or at a canonical one, which is
+    exactly the case a hard-coded path cannot survive.
+
+    The number of `..` levels is computed from where the script is being
+    written, never assumed."""
+    if not _path_is_under(script_path, project):
+        # The deck is being written OUTSIDE the run tree, so it has no fixed
+        # relationship to the run root and `$RUN_ROOT` cannot be resolved from
+        # its own location. Emit no prologue; `_run_root_tcl_path` sees the
+        # same condition and falls back to absolute container paths, which is
+        # the pre-fix behaviour and is correct for a deck that is not part of
+        # the tree it measures.
+        return ""
+    rel = os.path.relpath(_norm_abs(project), _norm_abs(script_path.parent))
+    parts = [q for q in rel.split(os.sep) if q not in ("", ".")]
+    expr = ("[file join [file dirname [info script]] %s]" % " ".join(parts)
+            if parts else "[file dirname [info script]]")
+    return (
+        "# PORTABLE PATHS — every path under the run root below is resolved\n"
+        "# against THIS script's own location, so the script re-runs from a\n"
+        "# copy of the run tree, on another host, and inside a container that\n"
+        "# mounts the project somewhere else. Paths OUTSIDE the run root (the\n"
+        "# PDK, the tool install) are the environment's and are left alone.\n"
+        f"set RUN_ROOT [file normalize {expr}]\n"
+    )
+
+
+def _norm_abs(p) -> str:
+    return os.path.normpath(os.path.abspath(str(p)))
+
+
+def _path_is_under(path, root) -> bool:
+    """True when `path` is `root` or lies inside it. One definition, because
+    the prologue and the path speller must agree: a `$RUN_ROOT/...` path in a
+    deck that never defines `$RUN_ROOT` reads the empty string as a directory
+    and the tool measures the wrong thing without saying so."""
+    p, r = _norm_abs(path), _norm_abs(root)
+    return p == r or p.startswith(r.rstrip("/") + "/")
+
+
+def _run_root_tcl_path(host_path, project: Path, container: str,
+                       script_path: Path) -> str:
+    """A path as the emitted script at `script_path` should spell it.
+
+    `$RUN_ROOT/<relative>` when BOTH the deck and the target sit inside the
+    run root — portable, and the deck can resolve the variable. Otherwise the
+    container path, unchanged: a PDK or tool path is not this run's to
+    relativise, and rewriting it would break the script rather than port it."""
+    if (_path_is_under(script_path, project)
+            and _path_is_under(host_path, project)):
+        rel = os.path.relpath(_norm_abs(host_path),
+                              _norm_abs(project)).replace(os.sep, "/")
+        return "$RUN_ROOT/" + rel
+    return _to_container_path(str(host_path), container)
 
 
 def _container_path_covered(host_path: str, container: str) -> bool:
@@ -32109,7 +32245,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     if primary_sta.is_file() and not power_preview.is_file():
         try:
             if _emit_power_report(project, top, pdk, container,
-                                  power_preview, notes):
+                                  power_preview, notes, basis="pre_pnr"):
                 written.append(str(power_preview))
         except Exception as exc:
             notes.append(f"post-synth power preview failed: {exc}")
@@ -32132,8 +32268,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
             if _signoff_regen(mirror, primary_def):
-                mirror.write_text(spef_sta_rpt.read_text())
-                written.append(str(mirror))
+                written.extend(_publish_artefact_mirror(
+                    spef_sta_rpt, mirror, project, "_emit_spef_sta"))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
 
     # --- TAPEOUT-SIGNOFF P1: multi-corner SPEF (min/nom/max) + corner STA -----
@@ -32172,8 +32308,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
                     if _signoff_regen(mc_mirror, primary_def):
-                        mc_mirror.write_text(mc_sta_rpt.read_text())
-                        written.append(str(mc_mirror))
+                        written.extend(_publish_artefact_mirror(
+                            mc_sta_rpt, mc_mirror, project,
+                            "_emit_corner_spef_sta"))
         _corners = sorted(corner_spefs)
         _multi = len(corner_spefs) >= 2
         mc_stance.write_text(json.dumps({
@@ -32273,8 +32410,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(mc_ocv_rpt))
                 mc_ocv_mirror = rpt_phase3 / "sta_mcorner_ocv.rpt"
                 if _signoff_regen(mc_ocv_mirror, primary_def):
-                    mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
-                    written.append(str(mc_ocv_mirror))
+                    written.extend(_publish_artefact_mirror(
+                        mc_ocv_rpt, mc_ocv_mirror, project,
+                        "_emit_mcorner_ocv_sta"))
                 # Parse the REAL per-corner worst slack (surface the violation).
                 setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
                     mc_ocv_rpt.read_text(errors="replace"))
@@ -33521,9 +33659,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         pass
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
+    # `basis="post_pnr"`: this is the SIGN-OFF power number, so the session
+    # links the ROUTED netlist + the extracted SPEF. Passing nothing here (the
+    # default) is the pre-PnR preview basis, which is what this call used to
+    # get while its own header claimed the post-PnR netlist.
     power_rpt = rpt_phase3 / "power.rpt"
     if _signoff_regen(power_rpt, primary_def) and primary_def.is_file():
-        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
+        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes,
+                                basis="post_pnr")
         if ok:
             written.append(str(power_rpt))
             # Companion .json for the gate's structured-form aspirations.
@@ -35519,6 +35662,18 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     if setup_corner is None and hold_corner is None:
         return _empty
     lib_c = _to_container_path(str(pdk.liberty), container)
+    # BASIS STAMP — DERIVED from the netlist this call actually linked, never a
+    # literal. MEASURED: the SINGLE-corner emitter stamps `STA_BASIS:
+    # POST_ROUTE_SPEF` and this one, a MULTI-corner SIGN-OFF report, stamped
+    # nothing. `_ppa/timing.py::_stage_for` therefore emitted `stage: null` for
+    # every row it parsed out of this file, with the reason recorded, rather
+    # than inferring a stage from the filename — which would let a pre-layout
+    # estimate be compared against sign-off evidence. On one real run that left
+    # 48 of 56 timing rows refused as SCOPE_INCOMPLETE and made setup and hold
+    # FEAS_INCOMPLETE_VIEW_SET. The stamp belongs in the step's own tool.
+    _prelayout_netlist = (netlist == _pl.synth_dir(project) / f"{top}_synth.v")
+    _basis_stamp = ("PRE_LAYOUT_ESTIMATE" if _prelayout_netlist
+                    else "POST_ROUTE_SPEF")
     # Which liberty each RC corner is analysed with. One library across the RC
     # corners is the DESIGNED behaviour (parasitics vary, process does not) —
     # this records it instead of leaving it to be inferred from a corner name.
@@ -35555,16 +35710,16 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
-            # BASIS STAMP. This stanza reads the routed netlist and a SPEF
-            # extracted from the post-route DEF, so it discloses the same basis
-            # the single-corner emitter does — in the same two words, because a
-            # second spelling of one fact is a fact two readers disagree about.
-            # Unstamped, this MULTI-CORNER SIGN-OFF report was the one carrying
-            # the real corners and the one that said nothing about its own
-            # stage, so `_ppa/timing.py` had to record `stage: null` for every
-            # row it produced while the single-corner report kept its stage.
-            f"puts $_f \"STA_BASIS: POST_ROUTE_SPEF\"\n"
+            # Per STANZA, because the SPEF differs per stanza and the liberty
+            # is the thing a reader cannot otherwise recover from the corner
+            # name. Every stanza of this report reads a SPEF, so the only way
+            # the basis is not POST_ROUTE_SPEF is a run with no routed netlist
+            # at all — and then it says PRE_LAYOUT_ESTIMATE instead of
+            # claiming a sign-off basis it does not have.
+            f"puts $_f \"STA_BASIS: {_basis_stamp}\"\n"
             f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+            f"puts $_f \"STA_BASIS_NETLIST: {netlist.name}\"\n"
+            f"puts $_f \"STA_BASIS_SPEF: {Path(corner_spefs[corner]).name}\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -35785,6 +35940,10 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
 
+    # BASIS STAMP — see `_emit_corner_spef_sta`. This report is the PROCESS-
+    # corner sign-off evidence, and it stamped nothing, so every row parsed out
+    # of it carried `stage: null`. Derived per stanza below, because whether a
+    # SPEF was read is decided per stanza here.
     def _pass(label: str, kind: str, flag: str, spef_host: Optional[Path],
               open_mode: str) -> str:
         lib_c = corner_libs[label]
@@ -35793,9 +35952,29 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
-        basis = ("POST_ROUTE_SPEF" if spef_tcl
-                 else "POST_ROUTE_NO_SPEF" if _routed_netlist
-                 else "PRE_LAYOUT_ESTIMATE")
+        # BOTH sides derived this classification and they name the SAME three
+        # values; they disagreed about PRECEDENCE, and only one of the two
+        # readings matches the prose that landed with it. The landed comment on
+        # `_routed_netlist` above says "falling back to the SYNTH netlist ...
+        # must never stamp POST_ROUTE" — but the landed EXPRESSION tested
+        # `spef_tcl` first, so a pre-layout netlist read alongside a SPEF from
+        # some other run stamped POST_ROUTE_SPEF. The NETLIST decides first;
+        # the SPEF only refines an answer that is already post-route.
+        # WHAT DECIDED IT: tests/test_multicorner_signoff_reports_declare_
+        # their_stage.py::test_no_routed_netlist_is_not_stamped_as_signoff
+        # emits with NO `<top>_pnr.v` and WITH SPEFs present, and asserts
+        # `POST_ROUTE` appears nowhere in the body. Under the landed precedence
+        # that arm is red.
+        # ONE predicate, not two: `_routed_netlist` is the landed spelling and
+        # it also carries the `netlist_override` (ECO netlist) case, so this
+        # lane's own `_prelayout_netlist` local was dropped rather than left
+        # beside it to drift.
+        if not _routed_netlist:
+            basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        elif spef_tcl:
+            basis_stamp = "POST_ROUTE_SPEF"
+        else:
+            basis_stamp = "POST_ROUTE_NO_SPEF"
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -35820,10 +35999,19 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
             # unextracted timing apart, so it is never rounded up to the
             # flattering one. Both values are already in `_sta_basis`.
-            f'puts $_f "STA_BASIS: {basis}"\n'
-            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            # ONE stanza, not two. Both lanes added a STA_BASIS block here and
+            # the text merged cleanly into a report that stamped its basis
+            # TWICE — a second spelling of one fact is a fact two readers
+            # disagree about, and `_sta_basis.declared_basis` reads the first
+            # match. This lane's block is the landed one's superset (the same
+            # two lines plus the netlist and the SPEF a reader cannot otherwise
+            # recover), so it is the one kept.
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
+            f'puts $_f "STA_BASIS: {basis_stamp}"\n'
+            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
+            f'puts $_f "STA_BASIS_NETLIST: {netlist.name}"\n'
+            f'puts $_f "STA_BASIS_SPEF: {spef_disc}"\n'
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -36426,20 +36614,94 @@ exit
 
 def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
                        container: str, power_rpt: Path,
-                       notes: List[str]) -> bool:
-    """Run OpenSTA `report_power` against the routed netlist and emit
-    `power.rpt`. Best-effort. The report contains explicit `leakage`
-    and `dynamic` keywords so the downstream `power_report_check`
-    (eda_report_audit:power) accepts it."""
+                       notes: List[str], basis: str = "pre_pnr") -> bool:
+    """Run OpenSTA `report_power` and emit a power report. Best-effort. The
+    report contains explicit `leakage` and `dynamic` keywords so the downstream
+    `power_report_check` (eda_report_audit:power) accepts it.
+
+    `basis` names WHICH SIDE OF PLACE-AND-ROUTE the session is asked to measure:
+
+      * ``pre_pnr``  — the post-synthesis netlist, no parasitics. This is the
+        Step-10 early-feedback preview, and it is honest about being one.
+      * ``post_pnr`` — the ROUTED netlist plus the extracted SPEF. This is the
+        basis Step 33 signs off.
+
+    MEASURED DEFECT — why this parameter exists. Both call sites shared one
+    body that linked ``<top>_synth.v`` unconditionally, so Step 33 published a
+    PRE-PnR number under a generated header that said "post-PnR netlist". On one
+    real routed design (same tool, same liberty, same SDC, same vectorless
+    activity basis in both arms) the shipped figure was **1.873x LOW** —
+    0.306 mW against 0.573 mW on the routed netlist — and the CLOCK group, 33.7%
+    of the real total, reported as exactly **0.000 mW**, because the netlist the
+    session linked has no clock tree in it (287 instances against 3373 routed).
+
+    The ratio is not the strongest evidence. Across a 60-configuration PnR
+    sweep the shipped ``power.rpt`` was **byte-identical 60/60** while all 60
+    routed netlists and all 60 SPEFs differed, because no place-and-route knob
+    can reach a pre-PnR netlist. A number that cannot move when the thing it
+    measures moves is not a measurement.
+
+    The remedy is the session, NOT the header: adjusting the header to say
+    "pre-PnR" would make the document honest and leave the sign-off measurement
+    useless.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. When ``post_pnr`` is asked for and the
+    routed netlist is absent, the session falls back to the synth netlist AND
+    says so — the ``POWER_BASIS`` stamp, the note and the provenance envelope
+    all name what was ACTUALLY linked. Every line of the header is derived from
+    the inputs this session read; none of it is a literal claim about a netlist
+    it did not open."""
     pnr_out = _pl.pnr_dir(project)
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    synth_netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    routed_netlist = pnr_out / f"{top}_pnr.v"
+    spef_path: Optional[Path] = None
+    if basis == "post_pnr" and routed_netlist.is_file():
+        netlist = routed_netlist
+        _spef = _pl.extracted_dir(project) / f"{top}.spef"
+        if _spef.is_file() and _spef.stat().st_size > 0:
+            spef_path = _spef
+        else:
+            notes.append(
+                "post-PnR power: no extracted SPEF, so switching power is "
+                "computed from the routed netlist WITHOUT parasitics "
+                "(stamped POWER_BASIS: POST_ROUTE_NO_SPEF)")
+    else:
+        netlist = synth_netlist
+        if basis == "post_pnr":
+            notes.append(
+                f"post-PnR power requested but {routed_netlist.name} does not "
+                f"exist; this report is computed on the PRE-PnR netlist and is "
+                f"stamped POWER_BASIS: PRE_LAYOUT_ESTIMATE — it carries no "
+                f"clock tree, so its Clock group reads 0.000 and its total "
+                f"UNDERSTATES the routed design")
+    # What the session may claim about itself, derived from what it linked.
+    if netlist == routed_netlist:
+        basis_stamp = "POST_ROUTE_SPEF" if spef_path else "POST_ROUTE_NO_SPEF"
+        basis_desc = ("the routed, post-PnR netlist"
+                      + (" with extracted parasitics (SPEF)" if spef_path
+                         else " WITHOUT parasitics — no SPEF was extracted"))
+    else:
+        basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        basis_desc = ("the post-synthesis, PRE-PnR netlist: it carries no "
+                      "clock tree and no routing parasitics, so the Clock "
+                      "group reads 0.000 and the total UNDERSTATES the "
+                      "routed design")
     sdc_path = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc_path.is_file()):
         return False
-    netlist_c = _to_container_path(str(netlist), container)
-    sdc_c = _to_container_path(str(sdc_path), container)
+    # PORTABLE PATHS (see `_run_root_tcl_path`): the netlist / SDC / SPEF / VCD
+    # live INSIDE the run root, so this deck reaches them through `$RUN_ROOT`
+    # and re-runs from a copy of the tree. The liberty does not — it is the
+    # environment's path and stays as the container spells it. `rpt_c` is used
+    # in the SHELL redirect, not inside the deck, so it stays a real path.
+    tcl_path = power_rpt.parent / f"power_{top}.tcl"
+    netlist_c = _run_root_tcl_path(netlist, project, container, tcl_path)
+    sdc_c = _run_root_tcl_path(sdc_path, project, container, tcl_path)
     lib_c = _to_container_path(str(pdk.liberty), container)
     rpt_c = _to_container_path(str(power_rpt), container)
+    spef_c = (_run_root_tcl_path(spef_path, project, container, tcl_path)
+              if spef_path else None)
+    spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs
@@ -36455,20 +36717,31 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     analysis_mode = "vector_vcd" if vcd else "vectorless_sdc"
     vcd_tcl = ""
     if vcd:
-        vcd_c = _to_container_path(str(vcd), container)
+        vcd_c = _run_root_tcl_path(vcd, project, container, tcl_path)
         vcd_tcl = (f"if {{[catch {{read_power_activities -vcd {vcd_c}}} "
                    f"_vcd_err]}} {{\n"
                    f"  puts \"READ_VCD_FAIL: $_vcd_err\"\n}}\n")
-    tcl_path = power_rpt.parent / f"power_{top}.tcl"
-    tcl_path.write_text(f"""
+    # Parasitics: read AFTER link_design and alongside the SDC, exactly as the
+    # sibling post-route STA emitters do. Only ever emitted when a non-empty
+    # SPEF for THIS run exists — a `read_spef` of a file that is not there is
+    # how a session ends up quietly measuring something else.
+    spef_tcl = f"read_spef {spef_c}\n" if spef_c else ""
+    tcl_path.write_text(f"""{_emitted_script_root_tcl(tcl_path, project)}
 read_liberty {lib_c}
 {macro_libs_tcl}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
-{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
+{spef_tcl}{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.
 puts "POWER_ANALYSIS_MODE: {analysis_mode}"
+# BASIS STAMP — which side of place-and-route these numbers come from, in the
+# same vocabulary `_sta_basis.BASIS_TOKENS` already normalises for STA reports,
+# so one table answers the question for both. Emitted by the session itself, so
+# it names what was LINKED and cannot drift from the header beside it.
+puts "POWER_BASIS: {basis_stamp}"
+puts "POWER_BASIS_NETLIST: {netlist.name}"
+puts "POWER_BASIS_SPEF: {spef_disc}"
 if {{[catch {{report_power}} pwr_err]}} {{
   puts "REPORT_POWER_FAIL: $pwr_err"
 }}
@@ -36480,6 +36753,19 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
+    # GUARD, at the point of emission. `_esp.host_paths_in` is the ONE
+    # definition of "an absolute path pointing back into the run root"; the
+    # standalone `emitted_script_portability_check` CLI reads the same
+    # predicate over a whole tree. If this deck ever regains a hard-coded run
+    # path it says so here, in the run's own notes, rather than being found
+    # later by an identity hash that silently will not match.
+    _leaked = _esp.host_paths_in(tcl_path.read_text(errors="replace"), project)
+    if _leaked:
+        notes.append(
+            f"power analysis deck {tcl_path.name} carries {len(_leaked)} "
+            f"absolute path(s) INTO the run root (first: line {_leaked[0][0]}, "
+            f"{_leaked[0][1]}) — it will not re-run from a copy of this tree "
+            f"and any hash over it is defeated by the run directory")
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
     # If OpenSTA ran successfully but the file is small (just the
     # categorical breakdown), prepend an envelope so the report carries
@@ -36496,16 +36782,18 @@ exit
             f"#\n"
             f"# Inputs (provenance):\n"
             f"#   netlist: {netlist.relative_to(project)}\n"
+            f"#   spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"#   sdc:     {sdc_path.relative_to(project)}\n"
             f"#   liberty: {Path(pdk.liberty).name}\n"
+            f"#   basis:   {basis_stamp}\n"
             f"#   die_um:  see phase3/stage3/pnr/area.rpt\n"
             f"#\n"
             f"# Substance: this Power Report is produced by `report_power`\n"
             f"# inside an OpenSTA session driven by the runner's\n"
             f"# power_<top>.tcl. Numerical leakage / switching / internal\n"
-            f"# values reflect the post-PnR netlist + the typical-corner\n"
-            f"# Liberty file. Multi-corner power is on backlog —\n"
-            f"# VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
+            f"# values reflect the netlist NAMED ABOVE — {basis_desc} —\n"
+            f"# plus the typical-corner Liberty file. Multi-corner power is on\n"
+            f"# backlog — VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
             f"#\n"
             f"# Group breakdown (Sequential / Combinational / Clock / Macro / Pad)\n"
             f"# follows the OpenSTA report_power tabular format. Each row\n"
@@ -36544,7 +36832,9 @@ exit
             f"\n"
             f"# === OpenSTA report_power invocation context ===\n"
             f"openroad / sta engine: live invocation, rc={rc}\n"
+            f"POWER_BASIS: {basis_stamp}\n"
             f"netlist: {netlist.relative_to(project)}\n"
+            f"spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"liberty: {Path(pdk.liberty).name}\n"
             f"sdc:     {sdc_path.relative_to(project)}\n"
             f"\n"

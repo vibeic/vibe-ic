@@ -843,28 +843,59 @@ def _publish_twice(tmp_path, name, body):
 
 
 def test_a_report_published_into_two_directories_is_read_ONCE(tmp_path):
-    """THE F-10 GUARD. `_STA_DIRS` names three directories and the runner
-    publishes into two of them, so every row was emitted twice and all 20
-    (metric, scope) groups in the document collided.
+    """THE F-10 GUARD, and the producer is what closes it.
 
-    They are one artefact and one reading -- the second copy is the
-    publisher's, not the tool's -- so de-duplication is by CONTENT HASH. On the
-    resolved path (which is what this did until v1.11.33) these are two files.
+    `_STA_DIRS` names three directories and the runner publishes into two, so
+    every row was emitted twice and all 20 (metric, scope) groups in the
+    document collided.
+
+    WHAT CHANGED AND WHY (v1.11.57). This guard originally de-duplicated by
+    CONTENT HASH. A second lane then shipped
+    `test_two_identical_artefacts_that_are_not_declared_mirrors_both_count`,
+    whose rule a content hash cannot satisfy: two DIFFERENT sign-off reports
+    whose bytes happen to agree are two measurements, and collapsing them by
+    digest deletes evidence. Nothing in the bytes tells the two situations
+    apart.
+
+    So byte equality now DETECTS and the producer's declaration DECIDES. The
+    runner writes `reports/phase3/artefact_mirrors.json`
+    (`_publish_artefact_mirror`), this reads it, and the mirror collapses with
+    a reason attached. Undeclared byte-identical artefacts are reported as a
+    finding and BOTH are counted -- deleting a real second measurement is worse
+    than double-counting one, because a double count is visible in the document
+    and a deletion is not.
     """
     first, second = _publish_twice(tmp_path, "sta_spef_based.rpt",
                                    SINGLE_CORNER_STAMPED)
     assert first.read_bytes() == second.read_bytes()
     assert first.resolve() != second.resolve(), "not the same path: the point"
 
+    # WITHOUT the declaration: both are read, and the finding is emitted.
     collapsed = []
     found = timing.discover_reports(tmp_path, collapsed)
-    assert len(found) == 1, found
+    assert len(found) == 2, found
     assert len(collapsed) == 1, collapsed
+    _, notes = timing.timing_rows(tmp_path)
+    assert any("undeclared byte-identical artefacts" in n for n in notes), notes
+
+    # WITH the declaration the runner now writes: one reading, one row per key.
+    mirror = timing._MIRROR_MANIFEST
+    (tmp_path / mirror).parent.mkdir(parents=True, exist_ok=True)
+    # `collapse_declared_mirrors` keys by `_rel(project, f)`, the same relative
+    # form the runner writes -- not by an absolute or resolved path.
+    rel_first = timing._rel(tmp_path, first)
+    rel_second = timing._rel(tmp_path, second)
+    # the digest form the READER compares against, not a bare hexdigest
+    sha = opensta.file_digest(first)
+    (tmp_path / mirror).write_text(json.dumps(
+        {"schema": "vibeic.artefact_mirrors.v1",
+         "mirrors": [{"mirror": rel_second, "of": rel_first, "sha256": sha,
+                      "reason": "published into a second directory by the runner"}]},
+        indent=2) + "\n", encoding="utf-8")
 
     rows, notes = timing.timing_rows(tmp_path)
     keys = [(r["metric"], cj.digest_of(r["scope"])) for r in rows]
     assert len(keys) == len(set(keys)), "a row was emitted twice"
-    assert any("collapsed duplicate artefact" in n for n in notes), notes
 
 
 def test_two_DIFFERENT_reports_of_one_name_are_both_read(tmp_path):
