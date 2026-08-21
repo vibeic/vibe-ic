@@ -305,6 +305,25 @@ def test_a_denial_is_bounded_by_the_line_it_is_written_on(tmp_path):
         "record boundary:\n" + json.dumps(doc, indent=2))
     assert doc["counters_examined"] == 2, doc
 
+    # BOTH DIRECTIONS, because `sentence_scope` clamps forward and backward in
+    # ONE loop and the fixture above only places the denial BEFORE the sites. A
+    # broken FORWARD clamp leaves that arm green while a later line's denial
+    # silently retracts earlier members -- the quiet direction, again.
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+    deny = '  puts "no repair could be applied"'
+    site = '  if {[catch {%s}]} { incr _n }'
+    den = '  if {$_n >= 2} { puts ALL }'
+    for where, lines in (
+            ("before", [deny, site % "a", site % "b", den]),
+            ("after", [site % "a", site % "b", deny, den]),
+            ("between", [site % "a", deny, site % "b", den])):
+        rows, refused = E.counters(
+            'def s():\n    return """\n' + "\n".join(lines) + '\n"""\n')
+        assert refused == [], f"{where}: the reach crossed a record boundary"
+        assert rows and rows[0][1] == 2, f"{where}: sites {rows}"
+        assert sorted({v for _, _, d in rows for _, v in d}) == [2], where
+
 
 def test_polarity_did_not_switch_the_population_check_off(tmp_path):
     """THE NEGATIVE CONTROL, and the reason the four tests above are not enough:
