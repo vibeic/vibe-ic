@@ -178,12 +178,6 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         "ppa_contract_build.py": ["--declaration", j, "--root", str(tmp_path),
                                   "--out", str(tmp_path / "o.json")],
         "ppa_contract_check.py": ["--contract", j],
-        # A well-formed JSON that is not a spare plan: it names no `count`, no
-        # `instances` and no `tie_off`, so every row must come out
-        # NOT_MEASURED with a reason rather than the reader falling over --
-        # or, worse, defaulting a missing field to zero.
-        "ppa_eco_spare_records.py": ["--spare-plan", j, "--stage",
-                                     "post_route"],
         "ppa_feasibility_check.py": ["--candidates", j],
         "ppa_head_to_head_check.py": [j],
         "ppa_measurement_check.py": ["--coverage", j, "--expect", j],

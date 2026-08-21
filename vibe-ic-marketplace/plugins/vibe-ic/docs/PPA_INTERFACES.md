@@ -71,10 +71,9 @@ One shape, `vibeic.ppa.metric.v1`. Numbers never travel alone.
 prints the literal `NOT_MEASURED` row; it does not omit it.
 
 **A verdict is not a number.** A metric whose last name segment is `verdict`
-carries a non-empty STRING value and declares `"unit": "verdict"`. Three of the
-feasibility axes are proved this way: LVS answers whether two named circuits
-match, equivalence answers whether a proof exists, and design-for-ECO tie-off
-answers whether every spare input is tied — none of them is a
+carries a non-empty STRING value and declares `"unit": "verdict"`. Two of the
+nine feasibility axes are proved this way: LVS answers whether two named
+circuits match, and equivalence answers whether a proof exists — neither is a
 population, and encoding "matched" as the integer `0` puts a number where a
 verdict belongs and invites arithmetic on it downstream. `_ppa/metrics.compare`
 returns `NOT_NUMERIC` for a pair of verdicts and never a delta; whether a
@@ -150,10 +149,10 @@ not corroboration; the scope is missing the field that tells the readings apart.
 
 `_ppa/feasibility.FeasibilityPolicy` reads `required_views` (global) and
 `required_views_by_axis` (per axis, falling back to the global list for any axis
-it does not name). The two exist because the axes are not measured in one
+it does not name). The two exist because the nine axes are not measured in one
 scope namespace: setup and hold sign off across process corners, while DRC, LVS,
-antenna, IR, EM, equivalence and design-for-ECO readiness are single
-measurements over one database and have no process corner at all. With one global list, a contract declaring its
+antenna, IR, EM and equivalence are single measurements over one database and
+have no process corner at all. With one global list, a contract declaring its
 timing corners also demanded them of DRC, so either DRC was permanently
 uncovered or its producer had to emit one measurement N times under fabricated
 scopes — N records carrying one source hash, into an index whose job is to
@@ -227,16 +226,7 @@ _ppa/metrics.py          the record above: construct, validate, index, coverage
 _ppa/timing.py           per-view timing rows from STA artefacts
 _ppa/power.py            power split + activity basis provenance
 _ppa/area.py             area taxonomy: proxy vs physical, kept separate
-_ppa/feasibility.py      the hard gate: setup/hold/DRV/DRC/LVS/ANT/IR/EM/
-                         equivalence/eco_readiness. The last is the one axis
-                         whose APPLICABILITY the design declares: a design that
-                         declares no spare/ECO requirement gets NOT_APPLICABLE
-                         from it, and a design that declares one cannot be
-                         promoted without meeting it. See `AXIS_NOT_APPLICABLE`
-                         and `FeasibilityPolicy.eco_requirement`.
-ppa_eco_spare_records.py the design-for-ECO spare population as canonical
-                         records, from the flow's own spare_cells.json (the
-                         producer side of the axis above)
+_ppa/feasibility.py      the hard gate: setup/hold/DRV/DRC/LVS/ANT/IR/EM/equivalence
 _ppa/signoff.py          the physical/reliability/equivalence axes, read out of
                          the flow's own sign-off artefacts (the producer side of
                          the gate above)

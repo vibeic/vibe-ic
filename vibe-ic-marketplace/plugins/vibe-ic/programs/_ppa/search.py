@@ -171,17 +171,9 @@ FEAS_UNDETERMINED = "UNDETERMINED"
 # `docs/PPA_INTERFACES.md` §4: "_ppa/feasibility.py  the hard gate:
 # setup/hold/DRV/DRC/LVS/ANT/IR/EM/equivalence". These are the components, named
 # individually so that a verdict built from a SUBSET is visibly a subset. This
-# is the replacement for ORFS's `num_drc`: `drc` alone is one of the terms.
-#
-# `eco_readiness` joined them because a place-and-route search that deleted a
-# design's whole spare-cell population scored BETTER on area and power and
-# nothing in this vector said so. It is the one term whose APPLICABILITY the
-# design declares, so on a design that declares no requirement it reads
-# NOT_APPLICABLE -- which `audit_manifest` accepts, exactly as it accepts a
-# NOT_APPLICABLE on any other term.
+# is the replacement for ORFS's `num_drc`: `drc` alone is one of nine terms.
 FEASIBILITY_TERMS: Tuple[str, ...] = (
     "setup", "hold", "drv", "drc", "lvs", "antenna", "ir", "em", "equivalence",
-    "eco_readiness",
 )
 
 

@@ -170,34 +170,11 @@ def test_the_gate_has_no_numeric_margin_of_its_own():
     express "any view will do" (an axis named with an empty list is
     UNDETERMINED, exactly as an undeclared global list is) so it is a view
     declaration and not a knob.
-
-    `eco_requirement` is the DESIGN's design-for-ECO declaration, carried
-    verbatim. It is argued for here because this test is where a new field has
-    to be argued for. It is not a tolerance, and the direction it can move a
-    verdict is the one that matters: the ONLY thing it can do on its own is
-    make a candidate INFEASIBLE that would otherwise have been FEASIBLE, by
-    stating a floor the candidate does not meet. Absent, it produces
-    NOT_APPLICABLE -- which is the behaviour of every contract written before
-    it existed, so adding it changed no standing verdict. The numbers it
-    carries are the design's, never this module's;
-    `test_no_spare_count_or_density_is_hard_coded_in_the_gate` measures that
-    the gate contains none of its own.
-
-    `delivery_path` is the ROUTE the flow took, resolved elsewhere and carried
-    here as a value. It is not a knob either, and it is the field that makes
-    `eco_requirement` safe to have: without it an absent declaration means
-    NOT_APPLICABLE for every design, which is the opt-in hole. With it, a
-    design the flow routed to the chip terminal and nobody declared a
-    requirement for is UNDETERMINED. Again the only movement it can cause on
-    its own is toward refusing. It is deliberately a VALUE and not a directory
-    to probe: a promotion gate that walked a tree could be pointed at a
-    different tree than the records came from.
     """
     fields = {f.name for f in __import__("dataclasses").fields(
         F.FeasibilityPolicy)}
     assert fields == {"axes", "required_views", "required_views_by_axis",
-                      "limits", "allow_waivers", "eco_requirement",
-                      "delivery_path"}
+                      "limits", "allow_waivers"}
     assert not any(n in fields for n in
                    ("tolerance", "margin", "penalty", "weight", "weights",
                     "score", "threshold"))

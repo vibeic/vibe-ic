@@ -103,18 +103,13 @@ def _a_clean_fully_measured_candidate():
     ]}
 
 
-def test_the_axis_table_is_the_one_this_file_reasons_about():
+def test_the_axis_table_is_the_nine_this_file_reasons_about():
     """The denominator. If an axis is added or removed the reasoning above is
     stale, and this says so instead of quietly testing a smaller cross
-    product.
-
-    `eco_readiness` is the tenth and is the one axis whose APPLICABILITY the
-    design declares; this file's fixtures declare no ECO requirement, so it is
-    NOT_APPLICABLE throughout and the view-scope reasoning above -- which is
-    about corner coverage -- does not reach it."""
+    product."""
     names = [a.name for a in F.DEFAULT_AXES]
     assert names == ["setup", "hold", "drv", "drc", "lvs", "antenna",
-                     "ir", "em", "equivalence", "eco_readiness"], names
+                     "ir", "em", "equivalence"], names
 
 
 def test_a_single_weak_view_is_the_only_way_the_gate_passes_today():

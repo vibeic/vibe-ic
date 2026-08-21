@@ -44,35 +44,6 @@ Without `--frontier` the recomputed document is checked against its own
 invariants and written to `--json`; that is the emit-and-verify mode. With
 `--frontier` the published document is the thing under test.
 
-CORPUS MODE
-===========
-    python3 ppa_pareto_check.py --corpus DIR [--contract contract.json]
-                                [--corpus-may-be-absent]
-
-`--candidates` names ONE document, so a candidate set filed anywhere the caller
-did not name never had its frontier recomputed. `--corpus DIR` recomputes the
-frontier for every candidate set under DIR, resolved through
-`_corpus_location` -- the same seam `ppa_head_to_head_check` uses, so both
-follow `$VIBE_IC_BENCHMARK_DATA` to a cloned corpus.
-
-Candidate sets are selected by SHAPE, not by filename: a mapping carrying a
-`candidates` list, excluding this lane's own output schemas (`vibeic.ppa.
-feasibility.v1`, `vibeic.ppa.pareto_frontier.v1`), which carry that key too.
-
-AN EMPTY CORPUS IS rc=2 WITH THE ROOT NAMED. The whole subject of this gate is
-a frontier nobody recomputed; a corpus mode that reported VALID over zero
-candidate sets would be publishing exactly that.
-
-TWO CANDIDATE ENTRIES CLAIMING ONE `candidate_id` ARE A CONFLICT -- both paths
-and both digests are named and the run REFUSES. Taking the first match would
-decide which implementation reaches a public frontier on directory order.
-
-`--candidates` or `--frontier` together with `--corpus` is rc=3, a bad
-invocation: each names one document, and `--frontier` in particular is the
-record under test, which cannot be under test against N candidate sets at once.
-`--contract` is the declared objective set the whole corpus is measured
-against, so it composes with `--corpus`.
-
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -86,7 +57,6 @@ from typing import Any, Dict, List, Mapping, Optional
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import _atomic_artefact  # noqa: E402
-import _ppa_corpus as corpus_seam  # noqa: E402  one seam for all corpora
 from _ppa import feasibility as feas  # noqa: E402
 from _ppa import pareto as par  # noqa: E402
 
@@ -123,86 +93,10 @@ def _undetermined(out: Optional[str], code: str, detail: str) -> int:
     return feas.RC_UNDETERMINED
 
 
-#: What this gate would have examined, for the NO_CORPUS / VACUOUS line.
-_GATE = "PPA candidate sets (frontier)"
-_SCANNED = "published candidate set(s)"
-
-#: Documents this lane PRODUCES; they carry a `candidates` key too.
-_OUTPUT_SCHEMAS = (feas.FEASIBILITY_SCHEMA, par.PARETO_SCHEMA)
-
-
-def is_candidate_set(doc: Any) -> bool:
-    """A corpus record for THIS gate, decided on the document, not its name."""
-    return (isinstance(doc, Mapping)
-            and isinstance(doc.get("candidates"), list)
-            and doc.get("schema") not in _OUTPUT_SCHEMAS)
-
-
-def check_corpus(named: pathlib.Path, contract: Optional[str],
-                 may_be_absent: bool = False,
-                 json_out: Optional[str] = None) -> int:
-    """Recompute the frontier for every candidate set under `named`."""
-    corpus, rc = corpus_seam.open_corpus(named, _GATE, _SCANNED, may_be_absent)
-    if corpus is None:
-        return rc
-    scan = corpus_seam.collect(corpus, is_candidate_set)
-    print(f"ppa_pareto_check --corpus {corpus}: {scan.denominator(_SCANNED)}")
-    unread_rc = corpus_seam.report_unreadable(_GATE, scan)
-    if not scan.records:
-        return corpus_seam.worst_rc(
-            [corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan), unread_rc])
-
-    rows: List[Any] = []
-    for path, doc in scan.records:
-        for cand in doc.get("candidates") or []:
-            if isinstance(cand, Mapping) and cand.get("candidate_id"):
-                rows.append((path, str(cand["candidate_id"]), cand))
-    conflicts, copies = corpus_seam.identity_conflicts(
-        rows, _GATE, "candidate_id")
-    conflict_rc = corpus_seam.print_conflicts(_GATE, conflicts, copies)
-
-    rcs = []
-    for path, _ in scan.records:
-        argv = ["--candidates", str(path)]
-        if contract:
-            argv += ["--contract", contract]
-        rcs.append(main(argv))
-    worst = corpus_seam.worst_rc(rcs + [conflict_rc, unread_rc])
-    refused = sum(1 for r in rcs if r == feas.RC_FAIL)
-    undet = sum(1 for r in rcs if r == feas.RC_UNDETERMINED)
-    print(f"ppa_pareto_check --corpus {corpus}: {len(rcs)} set(s), "
-          f"{refused} refused, {undet} undetermined, "
-          f"{len(rcs) - refused - undet} valid, {len(conflicts)} "
-          f"candidate_id conflict(s) -> rc={worst}")
-    if json_out:
-        _atomic_artefact.write_json(json_out, {
-            "schema": par.PARETO_SCHEMA, "mode": "corpus",
-            "corpus": str(corpus), "files_opened": scan.files,
-            "sets": [str(path) for path, _ in scan.records],
-            "unreadable": [{"path": str(p), "why": w}
-                           for p, w in scan.unreadable],
-            "candidate_id_conflicts": conflicts,
-            "candidate_id_copies": copies,
-            "exit_code": worst,
-            "verdict": {feas.RC_PASS: "VALID", feas.RC_FAIL: "REFUSED"}.get(
-                worst, "UNDETERMINED"),
-            "frontier": [],
-        }, indent=2, sort_keys=True)
-    return worst
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Recompute a Pareto frontier and refuse a published lie.")
-    ap.add_argument("--candidates", default=None)
-    ap.add_argument("--corpus", default=None, metavar="DIR",
-                    help="recompute the frontier for every candidate set "
-                         "under DIR; exits 2 when the corpus carries none")
-    ap.add_argument("--corpus-may-be-absent", action="store_true",
-                    help="this repository need not carry the published "
-                         "corpus. Turns 'nothing anywhere' into a stated "
-                         "NO_CORPUS that names its zero, and NEVER excuses a "
-                         "$VIBE_IC_BENCHMARK_DATA that is set and unreadable.")
+    ap.add_argument("--candidates", required=True)
     ap.add_argument("--contract", default=None,
                     help="declares `objectives` (and required_views / limits)")
     ap.add_argument("--frontier", default=None,
@@ -211,19 +105,6 @@ def main(argv=None) -> int:
     try:
         args = ap.parse_args(argv)
     except SystemExit:
-        return feas.RC_BAD_INVOCATION
-
-    if args.corpus is not None:
-        if args.candidates is not None or args.frontier is not None:
-            return corpus_seam.both_given("ppa_pareto_check",
-                                          "--candidates/--frontier",
-                                          "--corpus")
-        return check_corpus(pathlib.Path(args.corpus).resolve(),
-                            args.contract, args.corpus_may_be_absent,
-                            args.json)
-    if args.candidates is None:
-        print(f"{MARK_REFUSE} give --candidates CANDIDATES.json or --corpus "
-              f"DIR (rc=3, bad invocation)", file=sys.stderr)
         return feas.RC_BAD_INVOCATION
 
     cand_doc = _load(args.candidates, "candidates")

@@ -106,22 +106,16 @@ def test_stub_feasibility_is_undetermined_never_eligible():
     assert v.reason, "an UNDETERMINED verdict carries a reason, not a silence"
 
 
-def test_stub_names_every_term_as_not_checked():
-    """Explicitly NOT_CHECKED, not absent: a reader must see how many terms
-    there are and that none was answered.
-
-    The denominator is asserted by NAME and not by a count, because a count
-    goes red for a term that was ADDED (which is fine) and stays green for a
-    term that was renamed (which is not)."""
+def test_stub_names_all_nine_terms_as_not_checked():
+    """Explicitly NOT_CHECKED, not absent: a reader must see there are nine
+    terms and that none was answered."""
     v = S.stub_feasibility(_cand())
     assert set(v.terms) == set(S.FEASIBILITY_TERMS)
     assert set(v.terms.values()) == {"NOT_CHECKED"}
-    assert S.FEASIBILITY_TERMS == (
-        "setup", "hold", "drv", "drc", "lvs", "antenna", "ir", "em",
-        "equivalence", "eco_readiness")
+    assert len(S.FEASIBILITY_TERMS) == 9
 
 
-def test_drc_is_one_term_among_many_not_the_verdict():
+def test_drc_is_one_of_nine_terms_not_the_verdict():
     """The replacement for ORFS `num_drc` as an anti-cheating term."""
     assert "drc" in S.FEASIBILITY_TERMS
     assert len(S.FEASIBILITY_TERMS) > 1
