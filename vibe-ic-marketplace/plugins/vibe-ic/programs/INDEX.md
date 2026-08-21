@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1138
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1138)
+- **Total programs (excluding helpers / shims):** 1164
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1164)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1129 |
+| `any` | 1155 |
 
 ## Alphabetical listing
 
@@ -117,6 +117,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `atomic_artifact_write_check` | any | — | a gate report must appear whole or not at all (vibe-ic#1082). |
 | `atomic_write_pr_attribution` | any | — | Which OPEN PR owns each non-atomic declared-report write (vibe-ic#1468). |
 | `atpg_untestable_fault_classify` | any | — | which stuck-at faults NO test can detect. |
+| `attestation_preflight_check` | any | — | refuse a dirty tree BEFORE the hour, not after it. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `automotive_ethernet_protocol_synth` | any | v0.1.91 | Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth. |
 | `avalon_protocol_synth` | any | — | Intel/Altera Avalon Interface protocol synth helper (protocol #54). |
@@ -197,6 +198,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `closed_loop_edge_check` | any | — | a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration. |
+| `closed_loop_executable_coverage_check` | any | — | a line of YAML is not a loop. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
 | `cmd_argument_validation_present_check` | any | — | every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci... |
 | `cmd_buf_index_semantic_consistency_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
@@ -309,6 +311,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `displayport_protocol_synth` | any | v0.1.91 | VESA DisplayPort (DP) protocol synth helper. |
 | `doc_consistency_no_unresolved_conflicts_check` | any | Wave 37 | Cross-doc range conflict detector. When >=2 extracted docs disagree |
 | `doc_extract` | any | — | Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to plain-text or structured JSON for downstream Phase 1 (doc-extraction) / spec-de... |
+| `doc_table_row_placement_check` | any | — | a table row in the middle of a paragraph is a swallowed sentence, and a version gate that checks AGREEMENT cannot see it. |
 | `drc_fix_planner` | any | v0.1.50 | DRC fix-planner (Pattern-B → program). |
 | `drc_report_check` | any | — | DRC report check — wrapper for eda_report_audit --mode drc. |
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into stdcell-library-internal vs design-level. |
@@ -329,7 +332,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `em_report_check` | any | — | EM report check — wrapper for eda_report_audit --mode em. |
 | `emit_attestation` | any | — | GATE-AS-SOLE-EMIT-PATH enforcement (shared helper). |
 | `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
+| `emitted_script_portability_check` | any | — | An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of... |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `emitter_population_pin_check` | any | — | an emitter that PRINTS a population and a test that PINS it are two statements of one fact, and they must move together. |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
 | `encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / BINARY-DECODER / ONE-HOT family, covering the cases the already-shipped registry sol... |
@@ -459,6 +464,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `general_precheck` | any | — | the tape-out precheck for a design with NO operator. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
 | `generated_artifact_conflict_resolve` | any | — | resolve the merge conflicts that carry no information, and REFUSE every conflict that does. |
+| `generated_test_list_min_guard` | any | — | a generated test list is checked against a MINIMUM and a resolvable path set, never against emptiness. |
 | `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family. |
 | `gh_enumerate_all` | any | — | Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions). |
@@ -607,6 +613,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
+| `landing_noop_verdict_check` | any | — | "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area. |
 | `landing_pytest_runtime_preflight` | any | — | can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably. |
 | `landing_tier_checkout_preflight` | any | — | the full tier runs in a SELF-CONTAINED checkout, or it does not start. |
 | `landing_unselectable_pytest_corpus` | any | — | the tracked pytest files NO landing stage can reach, enumerated so a stage can run them. |
@@ -731,6 +738,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `package_invariants_check` | any | — | the rule lives NEXT TO the code it binds. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
+| `pad_assignment_gen` | any | — | the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
 | `pad_ring_gen` | any | — | step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without. |
@@ -822,10 +830,26 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
-| `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks. |
+| `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks. |
+| `ppa_agent_context_build` | any | — | CLI: build the read-only, hash-bound agent context from a manifest. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
-| `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121. |
+| `ppa_closure_run` | any | — | execute one declared closed_loop edge, or report that nothing can execute it. |
+| `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
+| `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
+| `ppa_diagnostic_router` | any | — | CLI: run Program-First diagnosis over a situation; hand off only on a waive. |
+| `ppa_feasibility_check` | any | — | the hard promotion gate, as a flow-callable gate. |
+| `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2. |
+| `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
+| `ppa_metric_extract` | any | — | Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one. |
+| `ppa_page_claim_check` | any | — | Refuse a public sentence that claims more than the artefact behind it supports. |
+| `ppa_pareto_check` | any | — | recompute the frontier and refuse a published lie. |
+| `ppa_pnr_search_space` | any | — | the PLACE-AND-ROUTE search space, MEASURED against the runner that would have to apply it. |
+| `ppa_pr_scope_check` | any | — | the PR review checklist, answered by machine. |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
+| `ppa_problem_integrity_check` | any | — | were these two runs solving the same problem? |
+| `ppa_report_gen` | any | — | The human report, and the claims file that makes every sentence in it checkable. |
+| `ppa_search_run` | any | — | build a PPA search manifest, and audit one. |
+| `ppa_signoff_records` | any | — | the flow's sign-off evidence, as canonical records. |
 | `pr_base_reachability_check` | any | — | a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot... |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak... |
@@ -891,6 +915,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `response_latency_observability_check` | any | — | LL-5. |
 | `response_payload_template_check` | any | — | M5: Verify that response payload bytes are assembled from dynamic data (register values, echoed arguments, computed results) rather than ... |
 | `result_md_audit_provenance_check` | any | Wave 33 | Wave 33 (v0.119.65). |
+| `retired_pytest_plugin_request_check` | any | — | no file may hand pytest a plugin the anchored runtime does not carry. |
 | `reused_ip_rtl_consume` | any | — | Deterministic reused-IP RTL CONSUME step. |
 | `rig_firmware_capability_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp, unknown | Wave 58 | Wave 58 / BACKLOG-v12 P0.5 plugin gate. |
 | `rig_topology_disclosure_check` | any | — | verify hardware rig topology is declared. |
@@ -983,6 +1008,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6). |
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
 | `slave_tx_no_device_break_check` | any | Wave 25 | In a half-duplex single-wire request-response protocol (AID class — |
+| `slot_pad_budget_check` | any | — | does this design's interface FIT the purchased slot? |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper. |
 | `sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
@@ -1210,7 +1236,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1129 programs)
+### `any` (1155 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1303,6 +1329,7 @@ _(no programs in this group)_
 - `atomic_artifact_write_check` — a gate report must appear whole or not at all (vibe-ic#1082).
 - `atomic_write_pr_attribution` — Which OPEN PR owns each non-atomic declared-report write (vibe-ic#1468).
 - `atpg_untestable_fault_classify` — which stuck-at faults NO test can detect.
+- `attestation_preflight_check` — refuse a dirty tree BEFORE the hour, not after it.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `automotive_ethernet_protocol_synth` — Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth.  _[v0.1.91]_
 - `avalon_protocol_synth` — Intel/Altera Avalon Interface protocol synth helper (protocol #54).
@@ -1382,6 +1409,7 @@ _(no programs in this group)_
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `closed_loop_edge_check` — a declared `closed_loop` must be an edge something can actually take, or the declaration is decoration.
+- `closed_loop_executable_coverage_check` — a line of YAML is not a loop.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...
 - `cmd_argument_validation_present_check` — every opcode in L3_CMD_PROTOCOL.json that takes ≥2 inbound argument bytes must declare an `argument_validation_predicate` field referenci...
 - `cmd_protocol_byte_exact_check` — gate that catches L3_CMD_PROTOCOL.json with symbolic/abstract entries in fields_tx instead of byte-exact bytes.
@@ -1491,6 +1519,7 @@ _(no programs in this group)_
 - `displayport_protocol_synth` — VESA DisplayPort (DP) protocol synth helper.  _[v0.1.91]_
 - `doc_consistency_no_unresolved_conflicts_check` — Cross-doc range conflict detector. When >=2 extracted docs disagree  _[Wave 37]_
 - `doc_extract` — Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to plain-text or structured JSON for downstream Phase 1 (doc-extraction) / spec-de...
+- `doc_table_row_placement_check` — a table row in the middle of a paragraph is a swallowed sentence, and a version gate that checks AGREEMENT cannot see it.
 - `drc_fix_planner` — DRC fix-planner (Pattern-B → program).  _[v0.1.50]_
 - `drc_report_check` — DRC report check — wrapper for eda_report_audit --mode drc.
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into stdcell-library-internal vs design-level.  _[v0.3.16]_
@@ -1511,7 +1540,9 @@ _(no programs in this group)_
 - `em_report_check` — EM report check — wrapper for eda_report_audit --mode em.
 - `emit_attestation` — GATE-AS-SOLE-EMIT-PATH enforcement (shared helper).
 - `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
+- `emitted_script_portability_check` — An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of...
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
+- `emitter_population_pin_check` — an emitter that PRINTS a population and a test that PINS it are two statements of one fact, and they must move together.
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
 - `encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER / BINARY-DECODER / ONE-HOT family, covering the cases the already-shipped registry sol...
@@ -1641,6 +1672,7 @@ _(no programs in this group)_
 - `general_precheck` — the tape-out precheck for a design with NO operator.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
 - `generated_artifact_conflict_resolve` — resolve the merge conflicts that carry no information, and REFUSE every conflict that does.
+- `generated_test_list_min_guard` — a generated test list is checked against a MINIMUM and a resolvable path set, never against emptiness.
 - `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family.
 - `gh_enumerate_all` — Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
@@ -1788,6 +1820,7 @@ _(no programs in this group)_
 - `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
+- `landing_noop_verdict_check` — "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area.
 - `landing_pytest_runtime_preflight` — can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably.
 - `landing_tier_checkout_preflight` — the full tier runs in a SELF-CONTAINED checkout, or it does not start.
 - `landing_unselectable_pytest_corpus` — the tracked pytest files NO landing stage can reach, enumerated so a stage can run them.
@@ -1912,6 +1945,7 @@ _(no programs in this group)_
 - `package_invariants_check` — the rule lives NEXT TO the code it binds.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
+- `pad_assignment_gen` — the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
 - `pad_ring_gen` — step 15.5ic's producer: place a DECLARED pad ring by upstream's own algorithm, or name the config variables it went without.
@@ -2003,10 +2037,26 @@ _(no programs in this group)_
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.
-- `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks.
+- `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks.
+- `ppa_agent_context_build` — CLI: build the read-only, hash-bound agent context from a manifest.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
-- `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121.
+- `ppa_closure_run` — execute one declared closed_loop edge, or report that nothing can execute it.
+- `ppa_contract_build` — build the measurement contract for one PPA run.
+- `ppa_contract_check` — the validator, and what it must REFUSE.
+- `ppa_diagnostic_router` — CLI: run Program-First diagnosis over a situation; hand off only on a waive.
+- `ppa_feasibility_check` — the hard promotion gate, as a flow-callable gate.
+- `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2.
+- `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
+- `ppa_metric_extract` — Assemble metric records into ONE validated, indexed, canonically-identified bundle — and refuse the record set that cannot be one.
+- `ppa_page_claim_check` — Refuse a public sentence that claims more than the artefact behind it supports.
+- `ppa_pareto_check` — recompute the frontier and refuse a published lie.
+- `ppa_pnr_search_space` — the PLACE-AND-ROUTE search space, MEASURED against the runner that would have to apply it.
+- `ppa_pr_scope_check` — the PR review checklist, answered by machine.
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
+- `ppa_problem_integrity_check` — were these two runs solving the same problem?
+- `ppa_report_gen` — The human report, and the claims file that makes every sentence in it checkable.
+- `ppa_search_run` — build a PPA search manifest, and audit one.
+- `ppa_signoff_records` — the flow's sign-off evidence, as canonical records.
 - `pr_base_reachability_check` — a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot...
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak...
@@ -2072,6 +2122,7 @@ _(no programs in this group)_
 - `response_latency_observability_check` — LL-5.
 - `response_payload_template_check` — M5: Verify that response payload bytes are assembled from dynamic data (register values, echoed arguments, computed results) rather than ...
 - `result_md_audit_provenance_check` — Wave 33 (v0.119.65).  _[Wave 33]_
+- `retired_pytest_plugin_request_check` — no file may hand pytest a plugin the anchored runtime does not carry.
 - `reused_ip_rtl_consume` — Deterministic reused-IP RTL CONSUME step.
 - `rig_topology_disclosure_check` — verify hardware rig topology is declared.
 - `rig_topology_image_extracted_check` — gate (LL-35).  _[v0.119.32]_
@@ -2162,6 +2213,7 @@ _(no programs in this group)_
 - `sizing_history_emit` — fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6).
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
 - `slave_tx_no_device_break_check` — In a half-duplex single-wire request-response protocol (AID class —  _[Wave 25]_
+- `slot_pad_budget_check` — does this design's interface FIT the purchased slot?
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper.  _[v0.1.91]_
 - `sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_

@@ -505,3 +505,24 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
         check_types_failure=ct_fail.group(1).strip() if ct_fail else None,
         empty=not body.strip(),
     )
+
+
+#: WHY THIS BACKEND IS NOT DRIVEN FROM A PATH (`_ppa/backends/__init__.py`).
+#: `parse_report` returns a `Report` -- sections, headers and measurements --
+#: and NOT canonical records, because turning a slack into a row means deciding
+#: which view it belongs to, whether an infinity is a sentinel, and whether a
+#: number may be withheld. Those are domain rules and they live in
+#: `_ppa/timing.py`, which is the module that owns per-view timing rows. A
+#: record producer bolted on here would be a second implementation of them,
+#: free to disagree with the first about one number.
+#: The reason names the domain module by FILE PATH and not by import path. The
+#: purity guard in `tests/test_ppa_timing.py` bans the import spelling from this
+#: file's code, and it is right to: a backend that can name its domain module as
+#: a module is one refactor away from importing it, and then a parser has gained
+#: the ability to decide what a number means. A path in a help string is
+#: documentation and creates no such edge.
+NO_DRIVER_REASON = (
+    "opensta parses STA reports into a Report, not into records: deciding what "
+    "a slack MEANS is a domain rule, and it lives in the timing domain module "
+    "(`_ppa/timing.py`). Run that module over the project with --json and read "
+    "the `vibeic.ppa.timing_rows.v1` document it writes with --records.")

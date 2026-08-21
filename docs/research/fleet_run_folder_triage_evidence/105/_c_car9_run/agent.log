@@ -1,0 +1,57 @@
+Round 9 complete. Findings: `/home/reyerchu/_c_car9_findings.md` (893 lines). Deliverable: `/home/reyerchu/_c_car9_run/iter2/RESULT.md`.
+
+## Step 23 moves. It is PASS.
+
+**R8's diagnosis was right; R8's cure was wrong, and I measured that rather than argued it.**
+
+EST-0104 is not about which parasitics *source* is selected. From OpenROAD's own source, it fires iff the estimator's `parasitics_invalid_` set is non-empty when `repair_design` opens its incremental guard — and that set is filled by **netlist** edits (`GRT-0015 Inserted 28 diodes`) and cleared in only two places, one of which is `estimate_parasitics -placement`. Four-arm control, RUN on the real design with real global routes so every flag was a legal call:
+
+| arm | result |
+|---|---|
+| none | EST-0104 (reproduces) |
+| `-global_routing` (R8's cure) | command **succeeds**, repair still dies EST-0104 |
+| `-detailed_routing` | command **succeeds**, repair still dies EST-0104 |
+| `-placement` | repair OK |
+
+The re-`read_spef` afterwards is load-bearing: the reseed wipes the sign-off annotation (3 violated pins → 0 → 3).
+
+**Landed** as a guarded recovery inside the caller's existing failure `catch` — on a run that never raises EST-0104, not one command executes. 15 tests that *execute* the emitted Tcl under `tclsh` with stubs. Negative control RUN on two real trees: baseline → `SDR_REPAIR_NONFATAL: EST-0104`; patched → `SDR_EST0104_RECOVERED`, 396 buffers in 31 nets.
+
+**End-to-end**, with the first repair loop byte-identical to R8's (347/763/365/63/12/0), so it is a controlled A/B:
+
+| | R8 iter2 | R9 iter2 |
+|---|---|---|
+| SDR2 | 4 → EST-0104 → never ran | 4 → recovered → 4→1→1→1 |
+| DRV, sign-off process axis | 3 | **0** |
+| **Step 23 `sta_record`** | **FAIL** | **PASS** |
+| sign-off DRC, user layers | 3 | 1 |
+| LVS | MATCH | MATCH |
+
+`grep -E "^  FAIL"` over the run returns exactly one line: `drc`.
+
+## The last FAIL is a KLayout bug in our own fork
+
+I root-caused it, and it is not what §7 of my findings first said — I corrected that in §15. Same deck expression, same GDS, one token changed, positive control in the script:
+
+```
+                          deep   flat
+ctl_vias (positive ctl)     2      2
+enclosing_less_edges        5      4      <- delta is ONE edge: the via's TOP
+m2.5 (full chain)           1      0
+```
+
+That via's top enclosure is 0.280 µm against a 0.085 requirement. `deep` calls it short. The same engine also contradicts itself: inside deep, `via2.not_inside(m3.sized(-0.065))` is empty while `m3.enclosing(via2,0.065)` returns 2.
+
+I did **not** work around it at flow level — dropping a deep-only violation would weaken the sign-off gate. I also withdrew a wrong fix I'd built first (requiring enclosure on both axes + margin: `deficient=8818 patched=8414 unpatchable=404` — it condemns nearly every via in the design), and reverted it to byte-identical.
+
+## Finish line — two of three, stated plainly
+
+```
+run_output_completeness_check.py   COMPLETENESS_RC=0   COMPLETE
+benchmark_result_md_lint.py        LINT_RC=0           PASS (all 7 sections)
+flow_compliance_check.py --strict  FLOWCOMP_RC=1       Overall: FAIL
+```
+
+The third is FAIL *only* because Step 31 (DRC) is FAIL; all 7 of its ordering violations are downstream of that one. Read from the source, not assumed: the verdict promoter reaches `PASS_WITH_OPEN_SOURCE_CONSTRAINTS` (exit 0) the moment the only remaining failures are the three OSS-blocked steps. **Closing the KLayout `deep` bug is the entire remaining distance.**
+
+Two corrections to your brief, both measured: origin/main HEAD is `829da5f5` = **v1.9.5**, not v1.9.1; and a foreground Bash call here is SIGTERMed at its 600 s maximum (exit 143) while leaving `openroad` orphaned in the container — harness-tracked `run_in_background` *does* re-invoke, and that is how iter2 ran.

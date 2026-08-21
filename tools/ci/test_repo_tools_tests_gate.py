@@ -123,35 +123,59 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
 
 # ── WIRING ────────────────────────────────────────────────────────────────
 
+def _invocation_lines(src: str, fn: str) -> list[int]:
+    """0-based line indices where `fn` is invoked, in any call shape.
+
+    Neither the definition nor a comment counts. A trailing comment on a real
+    line is stripped so that a line which BOTH calls the function and mentions
+    it in a comment is still read as a call and not the other way round.
+    """
+    hit = []
+    for index, line in enumerate(src.splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith(f"{fn}() {{"):
+            continue
+        code = re.split(r"(?:^|\s)#", stripped, maxsplit=1)[0]
+        if re.search(rf"(?:^|[\s;&|(]){re.escape(fn)}(?:$|[\s;&|)])", code):
+            hit.append(index)
+    return hit
+
+
 def test_the_gate_function_exists_and_is_called():
     """A function nobody calls is a comment with syntax."""
     src = _LAND.read_text()
     assert f"{_FN}() {{" in src, f"{_FN} is not defined in gatekeeper-land.sh"
-    # ASSERT THE PROPERTY, NOT THE SPELLING. This used to require a BARE call
-    # at column 0 (`^run_repo_tools_pytest$`). The semantic-landing runtime
-    # legitimately calls it as `if run_repo_tools_pytest; then ... fi` so the
-    # verdict can be recorded through `landing_record`, and the old regex read
-    # that correct refactor as "defined but never invoked". A test that pins a
-    # call SHAPE blocks refactors it was never meant to have an opinion about.
-    invoked = re.search(
-        rf"^(?!{_FN}\(\) \{{)(?:\s*|.*?[;&|]\s*|\s*if\s+|\s*!\s*)"
-        rf"{_FN}\b",
-        src, re.M)
-    assert invoked, (
+    # ASSERT THE PROPERTY, NOT THE SPELLING. This has now been re-pinned twice
+    # by the same mistake. It first required a BARE call at column 0
+    # (`^run_repo_tools_pytest$`); the semantic-landing runtime legitimately
+    # made it `if run_repo_tools_pytest; then … fi` so the verdict could be
+    # recorded through `landing_record`, and the regex read that correct
+    # refactor as "defined but never invoked". The replacement regex enumerated
+    # PREFIXES, so it broke again the moment the concurrent full tier passed
+    # the function to a wrapper — `fn_capture "full:repo-tools-tests"
+    # run_repo_tools_pytest`, which invokes it through `"$@"`.
+    #
+    # The property is simply: the name appears, as a WORD, on a line that is
+    # neither the definition nor a comment. Every call shape bash has satisfies
+    # that, and nothing that merely talks about the function does.
+    assert _invocation_lines(src, _FN), (
         f"{_FN} is defined but never invoked — the repo tests would still "
         f"gate nothing")
 
 
 def test_the_gate_runs_before_the_verdict_is_read():
     """It must sit inside the gate body, above the FAILED verdict."""
-    src = _LAND.read_text().splitlines()
-    # Same reason as above: match the invocation wherever it is, not only as a
-    # bare line. `next(... if l == _FN)` raised StopIteration — an ERROR, not
-    # even a legible failure — the moment the call gained an `if`.
-    call = next(
-        i for i, l in enumerate(src)
-        if re.search(rf"(?<![\w-]){_FN}\b", l) and f"{_FN}() {{" not in l
-        and not l.lstrip().startswith("#"))
+    text = _LAND.read_text()
+    src = text.splitlines()
+    # Same reason as above: match the invocation wherever it is and in whatever
+    # shape, not only as a bare line. `next(… if l == _FN)` raised
+    # StopIteration — an ERROR, not even a legible failure — the moment the
+    # call gained an `if`.
+    calls = _invocation_lines(text, _FN)
+    assert calls, f"{_FN} is never invoked"
+    call = calls[0]
     verdict = [i for i, l in enumerate(src) if re.search(r"exit .*FAILED|"
                                                          r"if .*FAILED", l)]
     assert verdict, "no FAILED verdict found to order against"

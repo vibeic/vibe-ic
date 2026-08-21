@@ -8,12 +8,18 @@ nothing declares, so nothing checks it exists, so its absence is invisible.**
 No gate goes red. A downstream checker simply reads a file that is not there
 and takes its "absent" branch, and the run reports PASS.
 
-One cell per flow step, 63 in all, each ending in exactly one of three
+One cell per flow step, 69 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            58
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   4
-  NA        the NA precondition is asserted LIVE           1
+  ENFORCED  the live predicate runs and passes           63
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason    5
+  NA        the NA precondition is asserted LIVE          1
+
+Those four numbers are DERIVED, not remembered — ``cells_for(DIM)`` against the
+live yaml, counted by ``test_every_cell_lands_in_exactly_one_state``. They read
+``63 / 58 / 4 / 1`` here for as long as it took six steps to arrive and one to
+leave without anybody restating them, which is the same defect that test's own
+pin exists to prevent one step lower down.
 
 ====================================================================
 WHAT IS MEASURED, AND FROM WHAT
@@ -1134,23 +1140,28 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """68 cells; ENFORCED + WAIVED + NA == 68, and no cell is in two states.
+    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
     for a step that has stopped failing is caught by its own ``strict=True``.
     """
     cells = cells_for(DIM)
-    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
-    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
-    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
-    # every design that reaches that step, and the operator's container runs IN
-    # ADDITION wherever the PDK ships a precheck and its template was fetched.
-    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
-    # different route. Re-stated by hand, as the census comments here require:
-    # a step LEAVING must force a human to say the number just as loudly as one
-    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells) == len(F.step_ids()) == 68
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
     for cell in cells:
@@ -1163,16 +1174,21 @@ def test_every_cell_lands_in_exactly_one_state():
         )
         state["NA" if is_na else ("WAIVED" if is_waived else "ENFORCED")] += 1
 
-    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
-    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
-    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
-    # every design that reaches that step, and the operator's container runs IN
-    # ADDITION wherever the PDK ships a precheck and its template was fetched.
-    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
-    # different route. Re-stated by hand, as the census comments here require:
-    # a step LEAVING must force a human to say the number just as loudly as one
-    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert sum(state.values()) == 68, state
+    # 68 -> 69, and the previous number was wrong rather than stale. Two steps
+    # moved and only one of them was counted:
+    #   `1.6x` ARRIVED at v1.11.15 (ppa(phase4): wire step 1.6x to an executor)
+    #   `37.5self` was RETIRED at v1.11.18 (the general precheck was never a
+    #       third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    #       every design that reaches that step, and the operator's container
+    #       runs IN ADDITION wherever the PDK ships a precheck and its template
+    #       was fetched. A PDK with no shuttle precheck is the same step with
+    #       one fewer arm, not a different route.)
+    # v1.11.18 wrote `69 -> 68` by DECREMENTING, and the count it decremented
+    # from predated `1.6x`. That is precisely the failure this pin exists to
+    # make loud, so the number is re-derived rather than adjusted: the live
+    # yaml carries 69 step ids, `1.6x` among them and `37.5self` not.
+    # A step arriving OR leaving must force a human to say the number out loud.
+    assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.
