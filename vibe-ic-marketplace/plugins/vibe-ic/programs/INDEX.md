@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1155
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1155)
+- **Total programs (excluding helpers / shims):** 1156
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1156)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1146 |
+| `any` | 1147 |
 
 ## Alphabetical listing
 
@@ -1000,6 +1000,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6). |
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
 | `slave_tx_no_device_break_check` | any | Wave 25 | In a half-duplex single-wire request-response protocol (AID class — |
+| `slot_pad_budget_check` | any | — | does this design's interface FIT the purchased slot? |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper. |
 | `sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
@@ -1227,7 +1228,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1146 programs)
+### `any` (1147 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2196,6 +2197,7 @@ _(no programs in this group)_
 - `sizing_history_emit` — fixed-schema validator/emitter for the analog-sizing-loop output artefacts (rule 6).
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
 - `slave_tx_no_device_break_check` — In a half-duplex single-wire request-response protocol (AID class —  _[Wave 25]_
+- `slot_pad_budget_check` — does this design's interface FIT the purchased slot?
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) protocol synth helper.  _[v0.1.91]_
 - `sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_
