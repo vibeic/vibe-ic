@@ -133,9 +133,23 @@ for are answered per record: **(o)** would it have fired on the original defect,
 
 ### A-1 · gate proof vocabulary has a producer · `ppa.feasibility`
 
-    $ python3 -c "…union the producers' name tables; diff against the axis proofs…"
-    drv  ['timing.drv.max_cap_violations', 'timing.drv.max_fanout_violations',
-          'timing.drv.max_tran_violations', 'timing.drv.violations']   0 producers
+The predicate, run from the registries rather than from a text scan — the four
+producer tables unioned (8 sign-off + 4 power + 14 area + 8 timing, the last
+EXPANDED from three format strings) and diffed against the nine axes:
+
+    setup 2/3   hold 2/3   drv 0/4  <-- no producer for any proof name
+    drc   1/1   lvs  1/2   antenna 1/1   ir 2/2   em 2/2   equivalence 1/1
+
+    axes structurally unprovable: 1 of 9
+      drv: max_cap / max_fanout / max_tran / violations — all four unproduced
+
+Three further axes carry a proof name nothing emits and survive only because a
+sibling proof group covers them; that is why the check must report per proof
+name, not per axis. My first pass used a crude literal scan and I flagged it as
+unreliable — the registry union **agrees with it on the headline**, so the
+finding never depended on the weak method, but the partial rows are only visible
+this way. Expanding the timing names from format strings is itself the evidence
+for the record's demand that the timing module gain a declared table.
 
 1 of 9 axes has no producer for any name in any proof group. **Nothing in the
 tree asserts that an axis has one.** The nearest thing is
@@ -150,11 +164,27 @@ proof name added tomorrow is covered the day it lands.
 
 ### A-2 · required scope keys are emitted by their producer · `ppa.head_to_head`
 
-The comparison gate requires six scope keys for the power axis
-(`_ppa/benchmark.py:199`); the producer emits five (`_ppa/power.py:452-472`
-fills three of the four it was missing and leaves one). Measured by the
-cross-layer lane: `h2h_B` refuses `rc=2 SCOPE_INCOMPLETE`, naming the one key,
-on both arms, before any value is compared.
+Measured first-hand on this tree by building the producer's real records and
+diffing their scope against the consumer's table:
+
+    records built            4
+    scope keys emitted       activity_basis group liberty process scenario
+                             stage temperature_c tool voltage_v
+    REQUIRED_SCOPE[power]    activity_basis mode process stage temperature_c
+                             voltage_v
+    satisfied                5 of 6        MISSING: mode
+
+The cross-layer lane's independent observation of the consequence:
+`h2h_B` refuses `rc=2 SCOPE_INCOMPLETE`, naming that key, on both arms, before
+any value is compared.
+
+**One arm I did not get.** I tried the same diff on the timing axis with a text
+screen over the producer and it reported five required keys missing — including
+one the module demonstrably DOES emit, which the cross-layer lane observed
+carrying a real value on one corner and a null on another. The screen is wrong
+and I am not quoting its number. The timing arm needs the same treatment as the
+power arm — build the records, diff the scope — and it needs an STA fixture to
+do it.
 **(o)** yes — it was four keys then and it is one now; the predicate is the same.
 **(d)** yes, and in the other direction too: the record's second clause refuses
 a required key present with a null value, which is the failure the same lane hit
