@@ -365,3 +365,52 @@ Checked every registered row on all five hosts:
 measured statement with its denominator rather than an absence of complaint. The 389 + 113 pruned
 checkouts are a different matter and were never in this population: they have no HEAD and no
 reflog by construction, which the rows already say.
+
+## The residual I called the owner's call was an unmeasured assumption
+
+I wrote that the 458 pruned checkouts holding content on no commit could not be preserved without
+"committing someone's working tree into the repository", and left it. **That was an assumption and
+it was wrong.** Preserving them does not mean pushing whole trees — it means pushing the files
+that *differ from main*, and I never measured how many that was.
+
+Measured, content-addressed so copies across scratch directories collapse to one entry:
+
+| host | pruned checkouts | file instances | **distinct blobs** | **unique content** | over 100 MB |
+|---|---|---|---|---|---|
+| .105 | 356 | 4158 | 1161 | 97.16 MB | 0 |
+| .102 | 104 | 595 | 286 | 22.15 MB | 0 |
+
+Entirely feasible. Both preserved as parentless snapshots holding only the differing files, each
+under `preserved/<checkout>/<path>`:
+
+    harvest/preserved-pruned-8HD-9   114fc14e715   4158 files
+    harvest/preserved-pruned-8HD-7   57bd8623bb2    595 files
+
+They merge into nothing and change nothing; they exist so the content survives the directory.
+
+**One of them was published partial and the fix is visible rather than hidden.** The first
+`preserved-pruned-8HD-9` was built while the measuring pass was still writing its output file, so
+it caught 1685 of 4158 rows. The complete snapshot is a **child** of that commit, not a force-push
+over it, so the record shows the first was incomplete.
+
+## Branch reflogs — jharv3's find, and the largest class yet
+
+We both swept per-worktree `logs/HEAD`. The **clone** also keeps `logs/refs/heads/<branch>`: every
+rebase, amend, reset and force-update leaves the old tip there, unreachable the moment the branch
+moves and expiring at the reflog default. Swept per **clone**, never per worktree:
+
+| host | clones | at-risk commits |
+|---|---|---|
+| .105 | 23 | 181 |
+| .114 | 3 | 265 |
+| .121 | 6 | 240 |
+| .102 | 81 | 370 |
+| **total (distinct)** | **113** | **547** |
+
+**547 of 547 covered**, verified by walking refs from origin against a non-empty authority.
+13 anchors; 4 were hook-blocked on their host and routed through a clone whose hook passes.
+
+jharv3's framing is kept because it is the honest one: **most of these are almost certainly
+intermediate states of work that later landed** — a branch rebased twenty times leaves twenty old
+tips, each "differing from main", all superseded. This is a bulk safety net against silent loss at
+the 90-day default, not a claim that each holds unique work.
