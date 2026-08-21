@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1151
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1151)
+- **Total programs (excluding helpers / shims):** 1153
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1153)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1142 |
+| `any` | 1144 |
 
 ## Alphabetical listing
 
@@ -824,10 +824,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | Power report check — wrapper for eda_report_audit --mode power. |
 | `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks. |
+| `ppa_agent_context_build` | any | — | CLI: build the read-only, hash-bound agent context from a manifest. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_closure_run` | any | — | execute one declared closed_loop edge, or report that nothing can execute it. |
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
+| `ppa_diagnostic_router` | any | — | CLI: run Program-First diagnosis over a situation; hand off only on a waive. |
 | `ppa_feasibility_check` | any | — | the hard promotion gate, as a flow-callable gate. |
 | `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2. |
 | `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
@@ -1223,7 +1225,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1142 programs)
+### `any` (1144 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2018,10 +2020,12 @@ _(no programs in this group)_
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — Power report check — wrapper for eda_report_audit --mode power.
 - `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name what it lacks.
+- `ppa_agent_context_build` — CLI: build the read-only, hash-bound agent context from a manifest.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_closure_run` — execute one declared closed_loop edge, or report that nothing can execute it.
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
+- `ppa_diagnostic_router` — CLI: run Program-First diagnosis over a situation; hand off only on a waive.
 - `ppa_feasibility_check` — the hard promotion gate, as a flow-callable gate.
 - `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2.
 - `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
