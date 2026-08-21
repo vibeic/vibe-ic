@@ -224,14 +224,20 @@ def discover_reports(project: Path) -> List[Path]:
 def _stage_for(report: opensta.Report) -> Tuple[Optional[str], Optional[str]]:
     """(stage, gap-reason). Unknown is null and says why — never a guess.
 
-    MEASURED on this checkout (`grep -n 'puts .*STA_BASIS'
-    phase3_one_shot_runner.py`): the SINGLE-corner emitter stamps
+    HISTORY, kept because it is why this function refuses instead of guessing.
+    MEASURED at v1.11.33 (`grep -n 'puts .*STA_BASIS'
+    phase3_one_shot_runner.py`): the SINGLE-corner emitter stamped
     `STA_BASIS: POST_ROUTE_SPEF`, and the two MULTI-corner sign-off emitters —
     the ones that write `sta_spef_multicorner.rpt` and `sta_mcorner_ocv.rpt` —
-    stamp nothing at all. Inferring `post_route_extracted` from the filename
-    would let a pre-layout estimate be compared against sign-off evidence the
-    moment somebody adds a pre-layout report to the same directory, so the
-    unstamped case degrades LOUDLY instead.
+    stamped nothing at all, so 48 of 56 timing rows on one real run were
+    refused as SCOPE_INCOMPLETE. Those two emitters now stamp per stanza, in
+    the step's own tool, which is where the netlist/liberty/SPEF a stanza read
+    is actually known.
+
+    Nothing here changed for it, and nothing here should: inferring
+    `post_route_extracted` from the filename would let a pre-layout estimate be
+    compared against sign-off evidence the moment somebody adds a pre-layout
+    report to the same directory, so an unstamped report still degrades LOUDLY.
     """
     stamp = report.basis_stamp
     if not stamp:
