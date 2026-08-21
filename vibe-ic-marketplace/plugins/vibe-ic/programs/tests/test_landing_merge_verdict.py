@@ -2183,7 +2183,18 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
     assert delta["status"] == "CLEAN", delta
-    assert delta.get("corpus_transitions", []) == []
+    # `.get(..., [])` here made "the producer never ran" and "the producer ran
+    # and found nothing" produce the SAME verdict, and the first is what is
+    # actually happening: measured, the key is ABSENT from the delta. The test
+    # then passed through the empty<->empty path instead of the
+    # expanded<->expanded path its own docstring names. Its sibling above reads
+    # the same key with a bare subscript and fails loudly with KeyError on the
+    # same condition. Demand the key, so absence is red rather than silent.
+    assert "corpus_transitions" in delta, (
+        "the corpus-transition producer never ran, so an equal-corpus "
+        "assertion here cannot fail and is not measuring the post-bootstrap "
+        "path: " + repr(sorted(delta)))
+    assert delta["corpus_transitions"] == []
     assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
 
 

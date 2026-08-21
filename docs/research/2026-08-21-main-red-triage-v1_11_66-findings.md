@@ -399,7 +399,7 @@ outside `$HOME`:
 | `..._b2_corpus_mutation_is_post_attested_and_norecord` | MUTATE_BENCHMARK_ARM | RED |
 | `..._relinked_parent_selection_is_norecord` | RELINK_SELECTION | RED |
 | `..._candidate_cannot_prewrite_base_wave_artifacts` | PREWRITE_BASE_ARTIFACTS | **GREEN — vacuity RISK** |
-| `..._post_bootstrap_equal_corpus_uses_ordinary_delta` | STUB_BASE_EXPANDED, STUB_ROUTED_TRANSITION | **GREEN — vacuity RISK** |
+| `..._post_bootstrap_equal_corpus_uses_ordinary_delta` | STUB_BASE_EXPANDED, STUB_ROUTED_TRANSITION | **was GREEN — vacuity PROVEN, now an honest RED (M14)** |
 | `..._the_caller_checkout_is_never_touched` | PROBE_DIR | GREEN — genuine |
 | `..._the_version_deferral_still_refuses_a_backwards_version` | PROBE_DIR | GREEN — genuine |
 
@@ -433,9 +433,67 @@ container's own working directory. I could not deliver the attack, which is not
 the same as the attack being blocked. **Those two guards remain UNPROVEN in
 either direction**, and saying so is the whole point of rule 9.
 
+### M14 — one of the two silent greens is PROVEN vacuous, and is now red
+
+`..._post_bootstrap_equal_corpus_uses_ordinary_delta` is no longer a risk; it is
+measured. Instrumenting the delta at the moment of its assertion:
+
+```
+{"key_present": false, "value": "<ABSENT>",
+ "delta_keys": ["base_findings","candidate_findings","carried","cleared",
+                "declared","empty_corpora","introduced",
+                "no_verdict_either_side","status"]}
+```
+
+**The key is ABSENT, not empty.** The test passed only because it read it as
+`delta.get("corpus_transitions", [])`. Its docstring names the
+expanded<->expanded path; with neither knob able to cross, base and candidate
+are both EMPTY, which is still "equal", so every one of its five assertions
+holds through a path it does not name.
+
+This is the repository's own rule 9 violated in one line, and the proof is that
+its sibling does it correctly. **Same key, same condition, two verdicts:**
+
+| test | how it reads the key | verdict when the producer never runs |
+|---|---|---|
+| `..._trusted_verifier_supplies_the_one_bootstrap_evidence` (G5) | `delta["corpus_transitions"]` | **RED** — `KeyError`, loud and true |
+| `..._post_bootstrap_equal_corpus_uses_ordinary_delta` | `delta.get("corpus_transitions", [])` | **GREEN** — the default hides it |
+
+The bare subscript tells the truth. The defaulted `.get` converts "I could not
+read it" into "I read it and it was empty" — the exact collapse this brief
+forbids.
+
+**FIXED, and note this deliberately turns a GREEN into a RED.** The assertion now
+demands the key before comparing it:
+
+```python
+assert "corpus_transitions" in delta, (
+    "the corpus-transition producer never ran, so an equal-corpus "
+    "assertion here cannot fail and is not measuring the post-bootstrap "
+    "path: " + repr(sorted(delta)))
+assert delta["corpus_transitions"] == []
+```
+
+A/B: before `1 passed`; after `1 failed` naming the true cause. Mutation arm:
+restore the `.get` default and it passes again. This is not a relaxation and not
+a new defect — it is the SAME defect, moved from the silent column to the loud
+one, where the deadline and the landing gate can see it. It should go red until
+the knob channel is re-founded, and then go green for the right reason.
+
+**The other silent green is NOT fixed, deliberately.**
+`..._cannot_prewrite_base_wave_artifacts` remains UNPROVEN: my positive control
+could not deliver the attack (`GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD` is absent
+from the runner, so the forged writes went to the container's cwd). I will not
+convert a green to a red on a guard I have not shown to be vacuous. It stays
+listed as a risk with the control recorded.
+
+Revised count for the one defect: **7 loud, 1 unproven, 2 genuine** across ten
+tests.
+
 ### One defect or several
 
-**ONE defect, six unreachable knobs, ten affected tests.** G4, G5 and G6 in the
+**ONE defect, six unreachable knobs, ten affected tests** (7 red after M14, 1
+unproven, 2 genuine greens). G4, G5 and G6 in the
 table below collapse into this single entry; they are not three findings. The
 cause is one architectural change — arms became hermetic — that the end-to-end
 tests in this file were never migrated across. Both previously OPEN items are
