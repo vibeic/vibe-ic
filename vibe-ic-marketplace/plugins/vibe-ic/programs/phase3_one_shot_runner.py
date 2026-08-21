@@ -32072,7 +32072,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     if primary_sta.is_file() and not power_preview.is_file():
         try:
             if _emit_power_report(project, top, pdk, container,
-                                  power_preview, notes):
+                                  power_preview, notes, basis="pre_pnr"):
                 written.append(str(power_preview))
         except Exception as exc:
             notes.append(f"post-synth power preview failed: {exc}")
@@ -33484,9 +33484,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         pass
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
+    # `basis="post_pnr"`: this is the SIGN-OFF power number, so the session
+    # links the ROUTED netlist + the extracted SPEF. Passing nothing here (the
+    # default) is the pre-PnR preview basis, which is what this call used to
+    # get while its own header claimed the post-PnR netlist.
     power_rpt = rpt_phase3 / "power.rpt"
     if _signoff_regen(power_rpt, primary_def) and primary_def.is_file():
-        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
+        ok = _emit_power_report(project, top, pdk, container, power_rpt, notes,
+                                basis="post_pnr")
         if ok:
             written.append(str(power_rpt))
             # Companion .json for the gate's structured-form aspirations.
@@ -36389,13 +36394,78 @@ exit
 
 def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
                        container: str, power_rpt: Path,
-                       notes: List[str]) -> bool:
-    """Run OpenSTA `report_power` against the routed netlist and emit
-    `power.rpt`. Best-effort. The report contains explicit `leakage`
-    and `dynamic` keywords so the downstream `power_report_check`
-    (eda_report_audit:power) accepts it."""
+                       notes: List[str], basis: str = "pre_pnr") -> bool:
+    """Run OpenSTA `report_power` and emit a power report. Best-effort. The
+    report contains explicit `leakage` and `dynamic` keywords so the downstream
+    `power_report_check` (eda_report_audit:power) accepts it.
+
+    `basis` names WHICH SIDE OF PLACE-AND-ROUTE the session is asked to measure:
+
+      * ``pre_pnr``  — the post-synthesis netlist, no parasitics. This is the
+        Step-10 early-feedback preview, and it is honest about being one.
+      * ``post_pnr`` — the ROUTED netlist plus the extracted SPEF. This is the
+        basis Step 33 signs off.
+
+    MEASURED DEFECT — why this parameter exists. Both call sites shared one
+    body that linked ``<top>_synth.v`` unconditionally, so Step 33 published a
+    PRE-PnR number under a generated header that said "post-PnR netlist". On one
+    real routed design (same tool, same liberty, same SDC, same vectorless
+    activity basis in both arms) the shipped figure was **1.873x LOW** —
+    0.306 mW against 0.573 mW on the routed netlist — and the CLOCK group, 33.7%
+    of the real total, reported as exactly **0.000 mW**, because the netlist the
+    session linked has no clock tree in it (287 instances against 3373 routed).
+
+    The ratio is not the strongest evidence. Across a 60-configuration PnR
+    sweep the shipped ``power.rpt`` was **byte-identical 60/60** while all 60
+    routed netlists and all 60 SPEFs differed, because no place-and-route knob
+    can reach a pre-PnR netlist. A number that cannot move when the thing it
+    measures moves is not a measurement.
+
+    The remedy is the session, NOT the header: adjusting the header to say
+    "pre-PnR" would make the document honest and leave the sign-off measurement
+    useless.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. When ``post_pnr`` is asked for and the
+    routed netlist is absent, the session falls back to the synth netlist AND
+    says so — the ``POWER_BASIS`` stamp, the note and the provenance envelope
+    all name what was ACTUALLY linked. Every line of the header is derived from
+    the inputs this session read; none of it is a literal claim about a netlist
+    it did not open."""
     pnr_out = _pl.pnr_dir(project)
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    synth_netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    routed_netlist = pnr_out / f"{top}_pnr.v"
+    spef_path: Optional[Path] = None
+    if basis == "post_pnr" and routed_netlist.is_file():
+        netlist = routed_netlist
+        _spef = _pl.extracted_dir(project) / f"{top}.spef"
+        if _spef.is_file() and _spef.stat().st_size > 0:
+            spef_path = _spef
+        else:
+            notes.append(
+                "post-PnR power: no extracted SPEF, so switching power is "
+                "computed from the routed netlist WITHOUT parasitics "
+                "(stamped POWER_BASIS: POST_ROUTE_NO_SPEF)")
+    else:
+        netlist = synth_netlist
+        if basis == "post_pnr":
+            notes.append(
+                f"post-PnR power requested but {routed_netlist.name} does not "
+                f"exist; this report is computed on the PRE-PnR netlist and is "
+                f"stamped POWER_BASIS: PRE_LAYOUT_ESTIMATE — it carries no "
+                f"clock tree, so its Clock group reads 0.000 and its total "
+                f"UNDERSTATES the routed design")
+    # What the session may claim about itself, derived from what it linked.
+    if netlist == routed_netlist:
+        basis_stamp = "POST_ROUTE_SPEF" if spef_path else "POST_ROUTE_NO_SPEF"
+        basis_desc = ("the routed, post-PnR netlist"
+                      + (" with extracted parasitics (SPEF)" if spef_path
+                         else " WITHOUT parasitics — no SPEF was extracted"))
+    else:
+        basis_stamp = "PRE_LAYOUT_ESTIMATE"
+        basis_desc = ("the post-synthesis, PRE-PnR netlist: it carries no "
+                      "clock tree and no routing parasitics, so the Clock "
+                      "group reads 0.000 and the total UNDERSTATES the "
+                      "routed design")
     sdc_path = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc_path.is_file()):
         return False
@@ -36403,6 +36473,9 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     sdc_c = _to_container_path(str(sdc_path), container)
     lib_c = _to_container_path(str(pdk.liberty), container)
     rpt_c = _to_container_path(str(power_rpt), container)
+    spef_c = (_to_container_path(str(spef_path), container)
+              if spef_path else None)
+    spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs
@@ -36422,6 +36495,11 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
         vcd_tcl = (f"if {{[catch {{read_power_activities -vcd {vcd_c}}} "
                    f"_vcd_err]}} {{\n"
                    f"  puts \"READ_VCD_FAIL: $_vcd_err\"\n}}\n")
+    # Parasitics: read AFTER link_design and alongside the SDC, exactly as the
+    # sibling post-route STA emitters do. Only ever emitted when a non-empty
+    # SPEF for THIS run exists — a `read_spef` of a file that is not there is
+    # how a session ends up quietly measuring something else.
+    spef_tcl = f"read_spef {spef_c}\n" if spef_c else ""
     tcl_path = power_rpt.parent / f"power_{top}.tcl"
     tcl_path.write_text(f"""
 read_liberty {lib_c}
@@ -36429,9 +36507,16 @@ read_liberty {lib_c}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
-{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
+{spef_tcl}{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.
 puts "POWER_ANALYSIS_MODE: {analysis_mode}"
+# BASIS STAMP — which side of place-and-route these numbers come from, in the
+# same vocabulary `_sta_basis.BASIS_TOKENS` already normalises for STA reports,
+# so one table answers the question for both. Emitted by the session itself, so
+# it names what was LINKED and cannot drift from the header beside it.
+puts "POWER_BASIS: {basis_stamp}"
+puts "POWER_BASIS_NETLIST: {netlist.name}"
+puts "POWER_BASIS_SPEF: {spef_disc}"
 if {{[catch {{report_power}} pwr_err]}} {{
   puts "REPORT_POWER_FAIL: $pwr_err"
 }}
@@ -36459,16 +36544,18 @@ exit
             f"#\n"
             f"# Inputs (provenance):\n"
             f"#   netlist: {netlist.relative_to(project)}\n"
+            f"#   spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"#   sdc:     {sdc_path.relative_to(project)}\n"
             f"#   liberty: {Path(pdk.liberty).name}\n"
+            f"#   basis:   {basis_stamp}\n"
             f"#   die_um:  see phase3/stage3/pnr/area.rpt\n"
             f"#\n"
             f"# Substance: this Power Report is produced by `report_power`\n"
             f"# inside an OpenSTA session driven by the runner's\n"
             f"# power_<top>.tcl. Numerical leakage / switching / internal\n"
-            f"# values reflect the post-PnR netlist + the typical-corner\n"
-            f"# Liberty file. Multi-corner power is on backlog —\n"
-            f"# VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
+            f"# values reflect the netlist NAMED ABOVE — {basis_desc} —\n"
+            f"# plus the typical-corner Liberty file. Multi-corner power is on\n"
+            f"# backlog — VIBE-IC-PLUGIN-PHASE3-MMMC-POWER.\n"
             f"#\n"
             f"# Group breakdown (Sequential / Combinational / Clock / Macro / Pad)\n"
             f"# follows the OpenSTA report_power tabular format. Each row\n"
@@ -36507,7 +36594,9 @@ exit
             f"\n"
             f"# === OpenSTA report_power invocation context ===\n"
             f"openroad / sta engine: live invocation, rc={rc}\n"
+            f"POWER_BASIS: {basis_stamp}\n"
             f"netlist: {netlist.relative_to(project)}\n"
+            f"spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"liberty: {Path(pdk.liberty).name}\n"
             f"sdc:     {sdc_path.relative_to(project)}\n"
             f"\n"
