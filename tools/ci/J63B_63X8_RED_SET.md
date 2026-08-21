@@ -246,11 +246,34 @@ slowest durations, test_matrix_d3_outputs_produced.py, load 5.60
 no-progress window on an almost idle box. Under the three-way contention that
 produced the red, 3x is not a stretch.
 
-And it is not a slow test anybody should speed up. `producer_evidence` is
-already `@lru_cache(maxsize=None)`, and its docstring already says what the time
-is: `writers_of` builds an AST index over the tree, deferred so that "only a run
-that reaches an UNEVIDENCED verdict should pay for it". The cost is one-time,
-cached, and deliberately lazy. There is nothing to optimise away.
+And it is not a slow test anybody should speed up. That was first taken from the
+docstring; it is now MEASURED, by timing the calls directly:
+
+```
+import the module          0.50 s
+producer_evidence  #1     17.29 s    producers=1
+producer_evidence  #2      0.00 s
+producer_evidence  #3      0.00 s
+```
+
+The first call pays for the whole AST index and every later call is free, which
+is exactly what `@lru_cache(maxsize=None)` plus the deliberate deferral — "only
+a run that reaches an UNEVIDENCED verdict should pay for it" — is supposed to
+produce. **The cache works, the deferral works, and the cost is irreducible.**
+There is nothing to optimise away, and that is now a measurement rather than a
+quotation.
+
+Two alternatives were considered and are worse:
+
+* **build the index in a session fixture**, so it sits outside any item — this
+  makes EVERY d3 run pay 17 s including the ones that never reach an UNEVIDENCED
+  verdict, which is precisely the cost the deferral exists to avoid;
+* **build it incrementally** so progress fires during the work — pytest emits no
+  transition mid-item whatever the work does, so this changes nothing.
+
+Which leaves the intra-item heartbeat as the only remedy that is not a widening,
+and closes the chain: 17.29 s irreducible, inside one item, with no intra-item
+transition available, against a 60 s window.
 
 **The finding is structural, and it is the same root as red 11's.** pytest emits
 lifecycle transitions at item BOUNDARIES, never during an item, so the driver
