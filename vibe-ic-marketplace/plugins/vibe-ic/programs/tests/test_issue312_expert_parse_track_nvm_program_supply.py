@@ -237,6 +237,54 @@ def test_adding_the_terminal_clears_it(tmp_path):
     assert all(p["status"] == "external_pin" for p in rep["pins"])
 
 
+_MACRO_STUB = """
+module mem_array_512x32 (clk, VDDC, VPROG, VSS);
+  input clk;
+  input VDDC;
+  input VPROG;
+  input VSS;
+endmodule
+"""
+
+
+def test_macro_vendor_stub_does_not_manufacture_a_boundary_terminal(tmp_path):
+    """#785-class circularity: a macro's OWN vendor-supplied Verilog view
+    (staged beside its LEF, the same handoff tree `load_macro_lefs` reads)
+    types its own VPROG pin as a port — normal for a behavioural simulation
+    model. Before the fix, `input_rtl_files()` swept that file into the
+    boundary-inventory scan too, so the macro's own declaration of its own
+    pin was read as proof the CHIP's top level exposes a path for it: the
+    missing-supply defect this whole module exists to catch went silent on
+    every macro whose vendor stub types its power pins, which most do.
+    MEASURED (this is the finding, not a hypothetical): before the fix this
+    exact fixture returned gaps=[] and every pin external_pin; after,
+    correctly, VPROG is still a gap because the CHIP's own top level (in
+    input/design_src/rtl/, not input/pdk_local/) never declares it."""
+    p = _project(tmp_path)
+    (p / "input" / "pdk_local" / "memlib" / "mem_array_512x32.v").write_text(
+        _MACRO_STUB)
+    rep = N.assess(p)
+    assert rep["applicable"] is True
+    assert [(g["master"], g["pin"]) for g in rep["gaps"]] == [
+        ("mem_array_512x32", "VPROG")]
+
+
+def test_reverse_the_chip_top_level_declaring_the_pin_still_clears_it(
+    tmp_path,
+):
+    """The other direction, so the fix above is not merely 'never trust
+    pdk_local': WITH the same vendor stub present, a chip top level that
+    genuinely, independently exposes VPROG at its OWN boundary must still
+    clear the gap — the exclusion narrows the EVIDENCE source, it does not
+    disable the finding."""
+    p = _project(tmp_path, pinout=("VDDC", "VPROG", "VSS"))
+    (p / "input" / "pdk_local" / "memlib" / "mem_array_512x32.v").write_text(
+        _MACRO_STUB)
+    rep = N.assess(p)
+    assert rep["gaps"] == []
+    assert all(x["status"] == "external_pin" for x in rep["pins"])
+
+
 def test_read_only_use_of_a_programmable_macro_is_not_a_defect(tmp_path):
     """A design may legitimately read a pre-programmed array. It needs no
     programming supply, and must not be accused of missing one."""

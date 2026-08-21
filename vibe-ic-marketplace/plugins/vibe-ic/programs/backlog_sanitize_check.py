@@ -14,21 +14,62 @@ General pattern:
     catalogue of HARD (reject) and SOFT (warn) patterns, reusing the
     same rule set as ``practical_notes_specificity_check.py``.
 
+THE SECOND QUESTION THIS PROGRAM OWNS (vibe-ic#794): IS THE ITEM IN GIT?
+=======================================================================
+Thirteen ORGANIC backlog items were written into
+``vibe-ic-marketplace/community/backlogs/`` between 2026-06-14 and 2026-07-12
+and never committed. Twenty-five of their siblings in the same directory WERE
+tracked, so the directory held two populations that were indistinguishable in
+``ls``: one that had entered the process and one that had not.
+
+The write path is prose. ``skills/community-backlog-submit/SKILL.md`` Step 3
+says "create a file in ``community/backlogs/``"; Step 4 sanitizes it; Step 5
+optionally opens a GitHub issue. **No step commits it, and no gate ever asked.**
+A rule that depends on an agent remembering to `git add` is not a rule, and the
+loss is silent: a reader opening the directory cannot tell a live backlog item
+from a dropped one, and a fresh clone simply does not receive the dropped ones.
+
+``--audit tracked`` is that missing predicate, in the program that already owns
+this directory. A backlog YAML present on disk but unknown to git — untracked,
+or hidden behind a ``.gitignore`` — is reported as an ERROR naming the file.
+
+WHY A PREDICATE HERE RATHER THAN AN AUTO-COMMIT. Committing from the write path
+is not available: the filing agent is frequently a benchmark-agent, which
+``agent_checkin_scope_guard`` forbids from checking in to this zone at all, and
+a program that commits on the author's behalf would put results and process
+records into whatever commit happened to be open. Failing loudly AT WRITE TIME
+is wrong for the opposite reason — at the moment the file is written, being
+untracked is CORRECT. What was missing is the third option: an observation
+made later, by a gate that runs on every landing.
+
+WHY IT IS A SEPARATE ``--audit`` LANE AND NOT FOLDED INTO THE CONTENT VERDICT.
+Measured 2026-08-04 on this repo's own 25 tracked items, the CONTENT audit
+returns rc 1 with 18 ERROR findings (7 MISSING_FIELD, 6 INVALID_COMPONENT,
+5 INVALID_TYPE) — a legacy pile that predates this change. Wiring the combined
+verdict would make the gate red on day one, which is how a gate becomes
+something people route around. The two questions therefore keep separate exit
+lanes: ``--audit content`` (the default, unchanged) and ``--audit tracked``
+(green today, and blocking from its first run).
+
 Usage:
     python3 backlog_sanitize_check.py --file <backlog.yaml> [--json <report.json>]
     python3 backlog_sanitize_check.py --dir <backlogs_dir> [--json <report.json>]
+    python3 backlog_sanitize_check.py --dir <backlogs_dir> --audit tracked
 
-Exit: 0 = PASS (clean), 1 = FAIL (specificity violations found), 2 = IO error.
+Exit: 0 = PASS (clean), 1 = FAIL (specificity violations found), 2 = IO error
+      or REFUSED (trackedness could not be determined / nothing to certify).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:  # config-driven NDA-token source (detector reconstructs SKU from encoded form)
     import _commercial_pdk as _cpdk
@@ -183,6 +224,24 @@ _OSS_CORES = _load_oss_cores()
 _OSS_PATTERN = _build_oss_pattern(_OSS_CORES)
 
 REQUIRED_FIELDS = ["type", "component", "title", "pattern", "plugin_version"]
+
+
+def _shipped_plugin_version() -> str:
+    """The version `.claude-plugin/plugin.json` actually declares, or "".
+
+    Returns "" when it cannot be read — an unreadable manifest must not
+    manufacture a MISMATCH against a record that may be perfectly correct.
+    Unknown is not disagreement."""
+    import json as _json
+    here = Path(__file__).resolve().parent
+    for base in (here.parent, here.parent.parent):
+        mf = base / ".claude-plugin" / "plugin.json"
+        if mf.is_file():
+            try:
+                return str(_json.loads(mf.read_text()).get("version", "")).strip()
+            except (OSError, ValueError):
+                return ""
+    return ""
 VALID_TYPES = {"bug", "issue", "enhancement"}
 COMPONENT_RE = re.compile(
     r"^(skill|program|mcp|flow):[\w_-]+$", re.IGNORECASE
@@ -247,6 +306,25 @@ def _check_structure(data: Dict, fname: str) -> List[Finding]:
                 file=fname, field=field,
             ))
 
+    # plugin_version must MATCH the shipped release, not merely be filled in.
+    #
+    # MEASURED (#835): the field was validated as "present and non-empty" and
+    # nothing read `plugin.json` to compare. A record hand-written against one
+    # release stays green after a rebase onto a main that has bumped — it then
+    # asserts a release it was never written against, and every check still
+    # passes. A field nobody compares is a field that decays silently, which is
+    # exactly the shape this checker exists to catch elsewhere.
+    declared = str(data.get("plugin_version", "")).strip().strip('"')
+    shipped = _shipped_plugin_version()
+    if declared and shipped and declared != shipped:
+        findings.append(Finding(
+            "ERROR", "PLUGIN_VERSION_MISMATCH",
+            f"plugin_version says '{declared}' but the shipped plugin.json "
+            f"says '{shipped}' — the record asserts a release it was not "
+            f"written against",
+            file=fname, field="plugin_version",
+        ))
+
     btype = data.get("type", "")
     if btype and btype not in VALID_TYPES:
         findings.append(Finding(
@@ -297,6 +375,124 @@ def audit_file(path: Path) -> Tuple[List[Finding], Dict]:
     }
 
 
+# ---------------------------------------------------------------------------
+# TRACKEDNESS AUDIT (vibe-ic#794)
+# ---------------------------------------------------------------------------
+# The population is EXACTLY the one the content audit already walks — the
+# `*.yaml` / `*.yml` files in the scanned directory. Producer and consumer
+# disagreeing about which file set they mean is the same defect one level up,
+# so the tracked audit is handed the paths the caller already resolved rather
+# than re-globbing them with a second, drifting rule.
+
+#: A backlog file git does not know about. ERROR, because a fresh clone never
+#: receives it and every consumer of the directory is therefore reading a
+#: different set than the author wrote.
+CAT_UNTRACKED = "UNTRACKED_BACKLOG"
+#: Worse than untracked: `git add` would silently refuse it. Reported apart so
+#: the remedy differs (`git add -f`, or delete the ignore rule).
+CAT_IGNORED = "IGNORED_BACKLOG"
+
+
+def _git(dirpath: Path, *args: str) -> Optional[subprocess.CompletedProcess]:
+    """Run git, or None if git itself could not be executed.
+
+    A missing/unexecutable `git` is a THIRD outcome, distinct from "git said
+    no": it must not surface as a traceback (rc 1 reads as "found a defect")
+    and must not surface as an empty tracked set (which would report every
+    file on disk as lost). Both would be a verdict this program has not
+    earned; the caller turns None into the same REFUSAL as a non-repo tree.
+    """
+    try:
+        return subprocess.run(["git", "-C", str(dirpath), *args],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+
+
+def _git_tracked_names(dirpath: Path) -> Optional[List[str]]:
+    """Names git TRACKS directly in `dirpath`, or None when it cannot answer.
+
+    None means "not inside a git work tree" — never an empty set. A checker
+    that cannot see the population must not speak for it: the caller turns
+    None into a REFUSAL (rc 2), not into a clean pass.
+    """
+    r = _git(dirpath, "ls-files", "-z", "--", ".")
+    if r is None or r.returncode != 0:
+        return None
+    return [n for n in (r.stdout or "").split("\0") if n]
+
+
+def _git_ignored_names(dirpath: Path, names: List[str]) -> List[str]:
+    """Subset of `names` that a .gitignore rule excludes."""
+    if not names:
+        return []
+    # `check-ignore` exits 1 when nothing matched — a normal answer, not an
+    # error; only rc >= 2 is a real failure and is reported as "none known".
+    try:
+        proc = subprocess.run(["git", "-C", str(dirpath), "check-ignore", "-z",
+                               "--stdin"],
+                              input="\0".join(names),
+                              capture_output=True, text=True)
+    except OSError:
+        return []
+    if proc.returncode >= 2:
+        return []
+    return [n for n in (proc.stdout or "").split("\0") if n]
+
+
+def audit_tracked(dirpath: Path,
+                  paths: List[Path]) -> Tuple[Optional[List[Finding]], Dict]:
+    """Every backlog file on disk must be one git knows about.
+
+    Returns (findings, summary). `findings is None` means REFUSED — the
+    directory is not inside a git work tree, so trackedness is unanswerable
+    here and the caller must exit 2 rather than report a pass.
+    """
+    tracked = _git_tracked_names(dirpath)
+    if tracked is None:
+        return None, {
+            "audit": "tracked",
+            "dir": str(dirpath),
+            "refused": ("not inside a git work tree — trackedness is "
+                        "unanswerable here"),
+            "on_disk": len(paths),
+        }
+
+    tracked_set = set(tracked)
+    on_disk = [p.name for p in paths]
+    missing = [n for n in on_disk if n not in tracked_set]
+    ignored = set(_git_ignored_names(dirpath, missing))
+
+    findings: List[Finding] = []
+    for name in missing:
+        is_ignored = name in ignored
+        findings.append(Finding(
+            "ERROR",
+            CAT_IGNORED if is_ignored else CAT_UNTRACKED,
+            (f"backlog file is present on disk but "
+             + ("EXCLUDED by a .gitignore rule" if is_ignored
+                else "NOT TRACKED by git")
+             + " — a fresh clone never receives it, so it is invisible to "
+               "every consumer of this directory. Commit it (or delete it "
+               "if it was abandoned); leaving it on disk is what makes a "
+               "dropped item indistinguishable from a live one."),
+            file=str(dirpath / name),
+            field="",
+        ))
+
+    return findings, {
+        "audit": "tracked",
+        "dir": str(dirpath),
+        # The denominator, always printed — a run that examined nothing must
+        # not read the same as a run that examined everything and found it
+        # clean (`gate_discloses_denominator_check`).
+        "on_disk": len(on_disk),
+        "tracked": len([n for n in on_disk if n in tracked_set]),
+        "untracked": sorted(n for n in missing if n not in ignored),
+        "ignored": sorted(ignored),
+    }
+
+
 def audit(paths: List[Path]) -> Tuple[List[Finding], Dict]:
     all_findings: List[Finding] = []
     summaries = []
@@ -325,6 +521,11 @@ def main(argv: List[str] = None) -> int:
     ap.add_argument("--json", dest="json_out", default=None)
     ap.add_argument("--strict", action="store_true",
                     help="Treat SOFT warnings as errors")
+    ap.add_argument("--audit", choices=("content", "tracked", "both"),
+                    default="content",
+                    help="content (default) = the IC-agnostic text scan; "
+                         "tracked = every backlog file on disk must be known "
+                         "to git (vibe-ic#794); both = run the two together")
     args = ap.parse_args(argv)
 
     paths: List[Path] = []
@@ -334,23 +535,61 @@ def main(argv: List[str] = None) -> int:
             print(f"ERROR: file not found: {p}", file=sys.stderr)
             return 2
         paths = [p]
+        base_dir = p.parent
     else:
         d = Path(args.dir_path)
         if not d.exists():
             print(f"ERROR: directory not found: {d}", file=sys.stderr)
             return 2
+        base_dir = d
         paths = sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml"))
         if not paths:
+            if args.audit != "content":
+                # A zero population is not a clean tracked-audit: the whole
+                # point is that this directory holds records, and one that
+                # holds none certifies nothing. REFUSE rather than pass.
+                print("REFUSED: 0 backlog file(s) on disk in "
+                      f"{d} — nothing to certify as tracked", file=sys.stderr)
+                print(json.dumps({"program": "backlog_sanitize_check",
+                                  "summary": {"pass": False, "refused": True,
+                                              "audit": args.audit,
+                                              "files_checked": 0}}))
+                return 2
             print(json.dumps({"program": "backlog_sanitize_check",
                               "summary": {"pass": True, "files_checked": 0,
                                           "note": "no YAML files found"}}))
             return 0
 
-    try:
-        findings, summary = audit(paths)
-    except OSError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+    findings: List[Finding] = []
+    summary: Dict = {"files_checked": len(paths), "audit": args.audit}
+
+    if args.audit in ("content", "both"):
+        try:
+            c_findings, c_summary = audit(paths)
+        except OSError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        findings.extend(c_findings)
+        summary.update(c_summary)
+
+    if args.audit in ("tracked", "both"):
+        t_findings, t_summary = audit_tracked(base_dir, paths)
+        summary["tracked_audit"] = t_summary
+        if t_findings is None:
+            print(f"REFUSED: {t_summary['refused']}: {base_dir} "
+                  f"({t_summary['on_disk']} backlog file(s) on disk)",
+                  file=sys.stderr)
+            print(json.dumps({"program": "backlog_sanitize_check",
+                              "summary": {"pass": False, "refused": True,
+                                          **summary}}))
+            return 2
+        findings.extend(t_findings)
+        # The denominator, on every run, pass or fail. stderr so a caller
+        # parsing stdout as JSON is unaffected.
+        print(f"backlog trackedness: {t_summary['on_disk']} backlog file(s) "
+              f"examined in {base_dir}, {t_summary['tracked']} tracked, "
+              f"{len(t_summary['untracked'])} untracked, "
+              f"{len(t_summary['ignored'])} git-ignored", file=sys.stderr)
 
     if args.strict:
         is_pass = len(findings) == 0
@@ -359,14 +598,14 @@ def main(argv: List[str] = None) -> int:
 
     report = {
         "program": "backlog_sanitize_check",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "summary": {"pass": is_pass, "findings_count": len(findings), **summary},
         "findings": [asdict(f) for f in findings],
     }
     out = json.dumps(report, indent=2, ensure_ascii=False)
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(out)
+        atomic_write_text(Path(args.json_out), out)
     print(out)
     return 0 if is_pass else 1
 

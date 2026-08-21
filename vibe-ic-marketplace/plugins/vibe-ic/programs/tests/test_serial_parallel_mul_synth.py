@@ -36,6 +36,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import serial_parallel_mul_synth as spm  # noqa: E402
+import design_one_shot_runner as runner  # noqa: E402
 
 _HAVE_IVERILOG = shutil.which("iverilog") is not None
 
@@ -193,3 +194,120 @@ def test_defer_on_fully_parallel_multiplier(tmp_path):
         proj, "digital_arithmetic_primitive")
     assert spec is None, \
         f"solver must DEFER when there is no 1-bit serial operand/result, got {spec}"
+
+
+# ── L7 ## 7.0 declaration ──────────────────────────────────────────────────
+# spm's own input/docs/L7_verification_plan.md #7.0: "Plugin, before starting
+# RTL design, MUST declare {bit_order, reset_polarity, latency_cycles,
+# integer_encoding} in plugin_output/declaration.json; the L7 comparison
+# procedure reads this file to correctly pair reference outputs." Unwritten,
+# this failed spec_required_artifact_check on every real spm run (measured
+# 2026-08-06, all three published PDKs) — a genuine spec requirement the
+# generator never fulfilled, not a fixture gap.
+def test_emit_writes_the_l7_required_declaration(tmp_path):
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS,
+                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
+    rc = spm.main([str(proj), "--emit"])
+    assert rc == 0
+    decl_path = proj / "plugin_output" / "declaration.json"
+    assert decl_path.is_file(), \
+        "L7 #7.0 requires plugin_output/declaration.json and --emit must write it"
+    decl = json.loads(decl_path.read_text())
+    # Exactly L7's four required fields, exactly its stated allowed values.
+    assert decl == {
+        "bit_order": "LSB_first",
+        "reset_polarity": "active_high",
+        "latency_cycles": 1,
+        "integer_encoding": "unsigned",
+    }
+
+
+def test_declaration_reset_polarity_follows_the_designs_own_reset_name(tmp_path):
+    """The one field that is NOT a fixed constant: reset polarity must read
+    the design's OWN reset port, never assume active-high."""
+    ports = [dict(p) for p in _SPM_PORTS]
+    for p in ports:
+        if p["name"] == "rst":
+            p["name"] = "rst_n"
+    proj = _mk_project(tmp_path, ports=ports, top="spm_n",
+                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
+    rc = spm.main([str(proj), "--emit"])
+    assert rc == 0
+    decl = json.loads((proj / "plugin_output" / "declaration.json").read_text())
+    assert decl["reset_polarity"] == "active_low"
+    # and the OTHER three fields must NOT have moved with it
+    assert decl["bit_order"] == "LSB_first"
+    assert decl["latency_cycles"] == 1
+    assert decl["integer_encoding"] == "unsigned"
+
+
+def test_declaration_is_not_written_on_a_deferred_shape(tmp_path):
+    """The over-correction this must NOT become: writing a declaration for a
+    design the solver never actually generated RTL for."""
+    ports = [
+        {"name": "clk", "direction": "input", "width": 1},
+        {"name": "rst", "direction": "input", "width": 1},
+        {"name": "a", "direction": "input", "width": "N-1:0",
+         "width_symbolic": "N-1:0", "msb": "N-1"},
+        {"name": "b", "direction": "input", "width": 1},
+        {"name": "s", "direction": "output", "width": 1},
+    ]
+    proj = _mk_project(tmp_path, ports=ports, top="ser_adder",
+                       l2_text="serial adder: s = a + b, an N-bit adder core")
+    rc = spm.main([str(proj), "--emit"])
+    assert rc == 2
+    assert not (proj / "plugin_output" / "declaration.json").exists()
+
+
+def test_runner_serial_multifile_commit_rolls_back_as_one_transaction(
+        tmp_path, monkeypatch):
+    """RTL and the L7 declaration cannot become a torn two-root commit."""
+    proj = _mk_project(
+        tmp_path, ports=_SPM_PORTS,
+        l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
+    before_binding = runner._Phase1ProjectBinding.open(proj)
+    try:
+        before = runner._phase1_tree_manifest_fd(
+            before_binding.project_fd, proj)
+    finally:
+        before_binding.close()
+    generator_roots = []
+    real_run = runner.subprocess.run
+
+    def _observe_generator(cmd, *args, **kwargs):
+        if (len(cmd) >= 3
+                and Path(cmd[1]).name == "serial_parallel_mul_synth.py"):
+            generator_roots.append(Path(cmd[2]))
+        return real_run(cmd, *args, **kwargs)
+
+    real_rename = runner._phase1_rename_noreplace
+    injected = False
+
+    def _fail_second_top(src_fd, src, dst_fd, dst):
+        nonlocal injected
+        if dst == "plugin_output" and not injected:
+            injected = True
+            raise OSError("injected declaration publication failure")
+        return real_rename(src_fd, src, dst_fd, dst)
+
+    monkeypatch.setattr(runner.subprocess, "run", _observe_generator)
+    monkeypatch.setattr(runner, "_phase1_rename_noreplace", _fail_second_top)
+
+    result = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+
+    assert result.status == "BLOCKED"
+    assert result.extras["output_refusal"]["reason"] == (
+        "RTL_TRANSACTION_COMMIT_REFUSED")
+    assert result.output_files == []
+    assert injected and len(generator_roots) == 1
+    assert generator_roots[0] != proj
+    assert not (proj / "phase2").exists()
+    assert not (proj / "plugin_output").exists()
+    assert not any(p.name.startswith(".vibeic-rtl-txn.")
+                   for p in proj.iterdir())
+    binding = runner._Phase1ProjectBinding.open(proj)
+    try:
+        assert runner._phase1_tree_manifest_fd(
+            binding.project_fd, proj) == before
+    finally:
+        binding.close()

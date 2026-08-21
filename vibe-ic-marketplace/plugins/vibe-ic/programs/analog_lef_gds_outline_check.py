@@ -116,6 +116,7 @@ import struct
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl
@@ -831,7 +832,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
     verdict = report["verdict"]
     if verdict == "VACUOUS_PASS":

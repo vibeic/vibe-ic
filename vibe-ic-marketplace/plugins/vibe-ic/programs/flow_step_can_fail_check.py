@@ -8,8 +8,10 @@ The flow-gate dashboard publishes eight per-step dimensions, one of which asks
 the page's own generator says so in its docstring and carries the distribution
 forward untouched, so the figure is a judgement someone made once.
 
-Recomputed from the flow yaml, EIGHT of the 63 steps have no criterion capable
-of failing on content:
+Recomputed from the flow yaml, SEVEN of the 63 steps have no criterion capable
+of failing on content (it was EIGHT until step 12 was given
+`program_exit_zero: dft_post_optimization_scan_survival_check` in 23d96bf55,
+which is why the entry below is gone rather than merely quiet):
 
     no blocking criterion at all
       P0   Structural-RTL pre-flight            (no `gate:` key)
@@ -17,7 +19,6 @@ of failing on content:
 
     judged only by "the declared file exists and is non-empty"
       1    Spec-to-RTL
-      12   Post-DFT optimization
       18   Spare-cell + ECO-prep insertion
       27   Signal Integrity (crosstalk / noise / glitch)
       32   Post-route timing repair pass
@@ -80,7 +81,6 @@ BASELINE: Dict[str, str] = {
     "P0": "no gate key at all",
     "14": "only optional_program_exit_zero",
     "1": "files_exist only — fails on absence, never on content",
-    "12": "files_exist only — fails on absence, never on content",
     "18": "files_exist only — fails on absence, never on content",
     "27": "files_exist only — fails on absence, never on content",
     "32": "files_exist only — fails on absence, never on content",
