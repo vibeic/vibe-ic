@@ -96,8 +96,36 @@ Usage:
     python3 flow_condition_reachability_check.py [<flow_yaml>] [--json <out>]
     # default flow_yaml = <plugin>/flow/phase1_phase2_phase3.yaml
 
-Exit: 0 = every condition reachable (PASS) / 1 = self-disabling condition(s)
-found (FAIL) / 2 = flow YAML not found or unparseable (operational).
+THE SECOND RULE — AN UNDECLARED NOT-APPLICABLE (W4)
+---------------------------------------------------
+Everything above asks whether a condition can be false EXACTLY WHEN the defect
+it guards occurs. It does not ask what the RUN learns on the ordinary days the
+condition is false for a perfectly good reason — and until W4 the answer was
+"nothing": `flow_compliance_check` returned a bare `True` with no marker and no
+reason, so a clause that never ran was indistinguishable in the record from one
+that ran and found nothing. A condition can be entirely reachable and still
+leave that hole in every run where it does not fire.
+
+So every `optional_program_exit_zero` clause must DECLARE, at its own wiring
+site, why an absent input is a genuine not-applicable:
+
+    optional_program_exit_zero:
+      command: "..."
+      condition_files_exist: ["..."]
+      absent_condition_reason: "<why nothing to check is legitimate here>"
+
+A clause with no such declaration — or one whose declaration is too short to
+be checkable — FAILs this gate, and `flow_compliance_check` FAILs the clause at
+run time for the same reason. The declaration lives at the clause and not in
+`ALLOWLIST` below deliberately: a registry keyed by (step, program, path)
+desynchronises silently — a renamed program loses its entry and a deleted
+clause leaves a rotting one — while deleting the clause deletes its declaration
+with it. `ALLOWLIST` keeps its own, narrower job: excusing a condition this
+gate has judged SELF-DISABLING.
+
+Exit: 0 = every condition reachable and every optional clause declared (PASS) /
+1 = self-disabling condition(s) or undeclared not-applicable(s) found (FAIL) /
+2 = flow YAML not found or unparseable (operational).
 """
 from __future__ import annotations
 
@@ -126,10 +154,41 @@ DECLARATION_FILES = (
 # ---------------------------------------------------------------- T2
 DISCLOSURE_SUFFIXES = ("_not_run.json", "_skipped.json", "_not_run.flag")
 
+# ---------------------------------------------------------------- W4
+#: Minimum usable length of an `absent_condition_reason`. Kept EQUAL to
+#: `flow_compliance_check._MIN_ABSENT_CONDITION_REASON` so a clause this gate
+#: passes cannot be one the runtime refuses — the two are asserted equal by
+#: `test_w4_absent_condition_is_not_a_pass.py`, because two hand-kept numbers
+#: are two numbers that drift. A one-word "N/A" is a label on the hole, not the
+#: hole closed; the floor is on EFFORT, and length is not being claimed as truth.
+MIN_ABSENT_CONDITION_REASON = 40
+
 # ---------------------------------------------------------------- allowlist
 # (step_id, program_or_None, frozenset(condition paths)) -> justification.
 # `program` is None for a step-level condition.
 ALLOWLIST: dict[tuple, str] = {
+    ("36", "ppa_head_to_head_check",
+     "**/*head_to_head*.json"):
+        "The subject is a CLAIM, not a result — the same shape as "
+        "`rtl_bug_report_schema_check` below, with one property that one does "
+        "not have. A PPA head-to-head record is produced by a comparison "
+        "campaign against another flow, never by a design run, so nearly every "
+        "sign-off legitimately files none; the failure this gate exists for, a "
+        "comparison that cannot support the claim printed on it, REQUIRES the "
+        "claim to exist. "
+        "WHY THE CONDITION CANNOT HIDE ONE: the trigger glob IS the checker's "
+        "own `_RECORD_GLOB`, so 'the condition matched nothing' and 'the corpus "
+        "held nothing' are the SAME SET by construction — there is no state in "
+        "which a claim was filed and this clause declined to look. That is what "
+        "separates it from the self-disabling shape this gate exists to refuse, "
+        "where the trigger names an artefact the flow itself produces and its "
+        "absence is the very defect being skipped. "
+        "WHY NOT UNCONDITIONAL, MEASURED: `--corpus .` returns rc 2 on a run "
+        "that files no record, and `check_step` reads ONE vacuous clause beside "
+        "substantive ones as 'every clause was vacuous' (a substantive sub-gate "
+        "appends nothing). Wiring it unconditionally therefore demoted step 36 "
+        "— the tapeout sign-off itself — from PASS to VACUOUS_PASS on every "
+        "ordinary run, which is the mis-fire that withdrew v1.10.14.",
     ("2", "rtl_bug_report_schema_check",
      "reports/phase2/rtl_bugs.json"):
         "The subject is a CLAIM file, not a result. This gate validates the "
@@ -352,10 +411,35 @@ def _collect_conditions(steps: list) -> list[dict]:
         def rec(node):
             if isinstance(node, dict):
                 for k, v in node.items():
-                    if (k == "optional_program_exit_zero"
+                    # W4 — the ADVISORY slot carries the same
+                    # `condition_files_exist` shape and had the same silent
+                    # skip (`return True  # no inputs -> not applicable ->
+                    # silent`). It is collected under its own surface rather
+                    # than folded in with the blocking one: the REACHABILITY
+                    # verdicts below are calibrated on blocking clauses, and an
+                    # advisory clause that self-disables is a different-sized
+                    # fact. The declaration requirement applies to both.
+                    if (k == "advisory_program_exit_zero"
                             and isinstance(v, dict)
                             and v.get("condition_files_exist")):
                         cmd = str(v.get("command", ""))
+                        _why = v.get("absent_condition_reason")
+                        out.append({
+                            "surface": "advisory", "step": sid, "name": name,
+                            "program": cmd.split(" ")[0] or None,
+                            "paths": [str(p)
+                                      for p in v["condition_files_exist"]],
+                            "any_of": True,
+                            "required_outputs": [str(r) for r in ro],
+                            "hard_files_exist": sorted(hard),
+                            "absent_condition_reason": (
+                                _why if isinstance(_why, str) else None),
+                        })
+                    elif (k == "optional_program_exit_zero"
+                            and isinstance(v, dict)
+                            and v.get("condition_files_exist")):
+                        cmd = str(v.get("command", ""))
+                        _why = v.get("absent_condition_reason")
                         out.append({
                             "surface": "predicate", "step": sid, "name": name,
                             "program": cmd.split(" ")[0] or None,
@@ -364,6 +448,11 @@ def _collect_conditions(steps: list) -> list[dict]:
                             "any_of": True,  # predicate conditions are any-of
                             "required_outputs": [str(r) for r in ro],
                             "hard_files_exist": sorted(hard),
+                            # W4 — read from the clause, never defaulted to a
+                            # string: `None` and `""` must stay distinguishable
+                            # from a real declaration in the record this writes.
+                            "absent_condition_reason": (
+                                _why if isinstance(_why, str) else None),
                         })
                     else:
                         rec(v)
@@ -433,13 +522,13 @@ def classify(flow_yaml: Path) -> list[dict]:
                     and c["surface"] == "predicate"):
                 # Its own sole required_output. This rescues a PREDICATE only.
                 # `check_step` evaluates the step-level `condition` at
-                # flow_compliance_check.py:5200 and RETURNS SKIPPED-CONDITION
-                # at :5219 — before the required_outputs check at :5253. So a
+                # flow_compliance_check.py:5598 and RETURNS SKIPPED-CONDITION
+                # at :5617 — before the required_outputs check at :5651. So a
                 # STEP gated on its own required_output never reaches the
                 # MISSING path that would have made the absence loud, and the
                 # artefact's disappearance is what silences the very step that
                 # was supposed to report it (Step 44 / HTOL). A predicate
-                # condition lives inside the gate, which runs after :5253, so
+                # condition lives inside the gate, which runs after :5651, so
                 # there the required_outputs check really does fire first.
                 reasons[p] = ("T3 own sole required_output, predicate "
                               "surface (required_outputs checked first)")
@@ -485,6 +574,20 @@ def classify(flow_yaml: Path) -> list[dict]:
         if allow_key and verdict == "self-disabling":
             verdict = "allowlisted"
             detail = ALLOWLIST[allow_key]
+
+        # W4 — the ADVISORY surface is collected for the DECLARATION rule only.
+        # The T1-T4/R1 verdicts above were calibrated against blocking clauses
+        # and the ALLOWLIST is keyed on them, so letting an advisory clause
+        # reach `holes` would fail this gate on a claim it has not measured.
+        # Named rather than silently dropped, so a reader of the record can see
+        # the clause was collected and see what was and was not asked of it.
+        if c["surface"] == "advisory" and verdict == "self-disabling":
+            verdict = "advisory-not-judged"
+            detail = ("ADVISORY slot: collected for the "
+                      "`absent_condition_reason` rule only. The reachability "
+                      "verdicts are calibrated on BLOCKING clauses and the "
+                      "allowlist is keyed on them, so no reachability claim is "
+                      "made here.")
 
         records.append({**c, "verdict": verdict, "detail": detail})
     return records
@@ -563,6 +666,27 @@ def main(argv=None) -> int:
     base_keys = {_bkey(b.get("step"), b.get("program"), b.get("paths") or [])
                  for b in baseline}
 
+    # ---- W4: every optional clause must DECLARE its not-applicable ------
+    # Predicate surface only: a STEP-level `condition:` is a different shape
+    # with a different consumer (`check_step` resolves it to
+    # SKIPPED-CONDITION, which is already a visible non-PASS tier), so demanding
+    # the key there would be demanding a declaration for a state that is
+    # already named in the record.
+    #
+    # NOT FOLDED INTO `holes`, and not answerable by the baseline: the baseline
+    # excuses a condition that IS self-disabling and has a named owner. An
+    # undeclared not-applicable is not a hazard waiting on an owner — it is one
+    # missing line at the clause, and there is no state in which leaving it out
+    # is the right call.
+    undeclared = []
+    for r in records:
+        if r["surface"] not in ("predicate", "advisory"):
+            continue
+        why = r.get("absent_condition_reason")
+        why = why.strip() if isinstance(why, str) else ""
+        if len(why) < MIN_ABSENT_CONDITION_REASON:
+            undeclared.append({**r, "declared_chars": len(why)})
+
     all_holes = [r for r in records if r["verdict"] == "self-disabling"]
     hole_keys = {_bkey(h["step"], h["program"], h["paths"]) for h in all_holes}
 
@@ -576,10 +700,12 @@ def main(argv=None) -> int:
              if _bkey(b.get("step"), b.get("program"), b.get("paths") or [])
              not in hole_keys]
 
-    verdict = "PASS" if (not holes and not stale) else "FAIL"
+    verdict = ("PASS" if (not holes and not stale and not undeclared)
+               else "FAIL")
     report = {"gate": "flow_condition_reachability_check", "verdict": verdict,
               "flow_yaml": str(flow), "total_conditions": len(records),
               "holes": holes, "known_open_holes": known,
+              "undeclared_not_applicable": undeclared,
               "stale_baseline_entries": stale, "conditions": records}
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
@@ -627,11 +753,30 @@ def main(argv=None) -> int:
               "`any_of: true`, or make the checker unconditional so it fails "
               "on the absent artefact itself.")
 
-    if holes or stale:
+    if undeclared:
+        print(f"FAIL: {len(undeclared)} optional_program_exit_zero clause(s) in "
+              f"{flow.name} do not declare `absent_condition_reason` — when "
+              f"their condition matches nothing the program does not run, the "
+              f"clause concludes NOTHING, and without a declaration the record "
+              f"cannot tell that apart from a gate that ran and found nothing:")
+        for u in undeclared:
+            print(f"  - step {u['step']} {u['surface']} {u['program']}: "
+                  f"condition {u['paths']} "
+                  f"({u['declared_chars']} declared char(s), "
+                  f"{MIN_ABSENT_CONDITION_REASON} required)")
+        print("  Fix shape: add `absent_condition_reason: >-` to the clause, "
+              "saying why an absent input is a genuine not-applicable HERE and "
+              "what still catches the absence if it is not. Nothing to check "
+              "is a FAIL, not a pass.")
+
+    if holes or stale or undeclared:
         return 1
     print(f"PASS: all {len(records)} flow conditions are reachable when their "
           f"own subject is missing, or are listed as known-open "
-          f"({len(known)}) ({flow.name}).")
+          f"({len(known)}); all "
+          f"{sum(1 for r in records if r['surface'] in ('predicate', 'advisory'))}"
+          f" conditioned gate clause(s) declare why an absent input is "
+          f"not-applicable ({flow.name}).")
     return 0
 
 

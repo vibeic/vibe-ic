@@ -11,10 +11,14 @@ Cases:
   1. SKIP_PURE_DIGITAL — no analog_block_list.json + L5 absent → SKIP exit 0,
                            reports/analog_one_shot.json verdict=SKIP.
   2. POSITIVE_FAIL_MISSING_PROJECT — non-existent project dir → exit 2.
-  3. PASS_WITH_WAIVERS_ONE_BLOCK — one block declared → 9 steps emitted,
-                                     all WAIVED (no det program present in
-                                     test environment) → verdict
-                                     PASS_WITH_WAIVERS.
+  3. PASS_WITH_WAIVERS_ONE_BLOCK — one block declared and nothing else staged
+                                     → 9 steps emitted, verdict FAIL / rc 1.
+                                     Since the `required_inputs` pre-flight was
+                                     wired into this runner, A1-A7 are BLOCKED
+                                     (refused for want of input, NEVER RAN) and
+                                     name the artefact they were owed; A8/A9
+                                     declare no inputs and still WAIVE. The
+                                     verdict and exit code are unchanged.
   4. INTEGRATION_REPORT_SHAPE — phase=analog, blocks list, steps list.
   5. SKIP_VIA_L5_NO_ANALOG — L5_ADI_SPEC.json#no_analog=true → SKIP.
   6. EDGE_BLOCKS_FILTER — `--blocks <name>` selects subset of declared blocks.
@@ -98,15 +102,39 @@ def test_pass_with_waivers_one_block(tmp_path):
     assert "tst_bandgap" in body["blocks"]
     # 9 A* steps × 1 block = 9 step entries (A1-A9 canonical).
     assert len(body["steps"]) == 9
-    # A6 per-block PV is mandatory + hardened: with no DRC/LVS evidence
-    # in this empty fixture it FAILs honestly (no fabrication), so the
-    # top-level verdict is FAIL while every other step WAIVEs.
-    step_status = {s["name"]: s["status"] for s in body["steps"]}
-    assert step_status["A6_block_pv"] == "FAIL"
+    # The top-level verdict and the exit code are UNCHANGED by the
+    # `required_inputs` pre-flight: FAIL / rc 1, exactly as before.
     assert body["verdict"] == "FAIL"
     assert cp.returncode == 1
-    for name in ("A1_spec_extract", "A7_post_layout_resim",
-                 "A8_hardmacro_gen", "A9_hw_verify"):
+    step_status = {s["name"]: s["status"] for s in body["steps"]}
+
+    # WHAT CHANGED IS THE ATTRIBUTION, and that is the point.
+    #
+    # This fixture declares a block and stages NOTHING else — no L-docs, no
+    # spec, no netlist, no layout. It used to be recorded as `A6_block_pv:
+    # FAIL — no parseable LVS result`, with A1/A7 WAIVED. That charges the
+    # absence to A6, a step that never had a layout to verify, and it left the
+    # ROOT cause (Phase 1 produced no L1/L5 at all, so A1 could not start)
+    # invisible behind seven downstream symptoms.
+    #
+    # With the pre-flight wired, every step of the chain is BLOCKED and NAMES
+    # the artefact it was owed and the step that owed it, so a reader is
+    # pointed at the first absence instead of the last symptom. `BLOCKED` is in
+    # `_aggregate_verdict._FAIL_STATUSES`, so nothing became greener: the
+    # distinction preserved here is exactly `step_preflight`'s —
+    #   BLOCKED = refused for want of input, NEVER RAN
+    #   FAIL    = ran and did not pass
+    for name in ("A1_spec_extract", "A2_topology_select", "A3_netlist_gen",
+                 "A4_corner_sweep", "A5_layout", "A6_block_pv",
+                 "A7_post_layout_resim"):
+        assert step_status[name] == "BLOCKED", (
+            f"{name} should be refused for want of input, not run")
+    a1 = next(s for s in body["steps"] if s["name"] == "A1_spec_extract")
+    assert "L5_ADI_SPEC.json" in a1["detail"] and "owed by step D1" in a1["detail"]
+    assert a1["extras"]["finding"] == "REQUIRED_INPUT_ABSENT"
+    # A8/A9 declare NO required_inputs in the flow, so nothing can be charged
+    # to them and they still run and WAIVE on their own evidence.
+    for name in ("A8_hardmacro_gen", "A9_hw_verify"):
         assert step_status[name] == "WAIVED"
 
 

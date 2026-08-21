@@ -1,6 +1,0 @@
-{
-  "tool": "openroad-filler_placement",
-  "filler_instances": 0,
-  "row_utilization_pct": 14.0,
-  "note": "row fill via filler_placement; per-layer metal CMP density screened by KLayout met_min_ca_density at sign-off DRC"
-}

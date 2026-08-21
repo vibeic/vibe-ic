@@ -13,9 +13,16 @@ a foundry, SKU, process node or part number.
 
 Layout:
   1. THE RULE          -- silence cannot erase, in the helper and at each site
-  2. THE REVERSE CASE  -- what the OVER-correction looks like, and that it is
+  2. THE CONFLICT DIRECTION, AT EACH CALL SITE -- two SPEAKING sources
+                          disagree, and `on_conflict` decides. Every SITE test
+                          in section 1 uses one full source and one EMPTY one,
+                          which never reaches this branch at all (`len(distinct)
+                          == 1` short-circuits before `on_conflict` is read) --
+                          so none of them can tell "richer" from "sparser".
+                          These do.
+  3. THE REVERSE CASE  -- what the OVER-correction looks like, and that it is
                           not what shipped. These are the ones that matter.
-  3. THE GUARD         -- fires on the shape, abstains on the legitimate ones
+  4. THE GUARD         -- fires on the shape, abstains on the legitimate ones
 """
 from __future__ import annotations
 
@@ -30,6 +37,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import atpg_untestable_fault_classify as auc            # noqa: E402
+import dft_test_coverage as dtc                          # noqa: E402
 import payload_bit_position_check as pbp                # noqa: E402
 import per_source_record_merge_check as guard           # noqa: E402
 from _source_record_merge import merge_source_records   # noqa: E402
@@ -286,7 +294,199 @@ def test_payload_bitmap_byte_named_without_bits_does_not_blank_the_other_layer(t
     assert both["status_byte"] == {"bit0": "busy", "bit1": "err"}
 
 
-# ═══════════════════════════════════════════════ 2. THE REVERSE CASE ══════
+# ══════════════════ 2. THE CONFLICT DIRECTION, AT EACH CALL SITE ══════════
+#
+# policy_direction_pin_check flagged all four of these `on_conflict="richer"`
+# sites UNPINNED: every candidate test it could find (the SITE tests above)
+# still passed after the literal was flipped to `"sparser"`. That is not a gap
+# in test COUNT -- it is a gap in test SHAPE. One full source and one EMPTY
+# source produces exactly one `distinct` record, and `merge_source_records`
+# returns it on the `len(distinct) == 1` line, several lines before
+# `on_conflict` is ever read. Two full sources that DISAGREE is the only input
+# that reaches the branch the parameter controls -- so that is what these
+# construct, through each call site's own public entry point, never by calling
+# `merge_source_records` directly. Each asserts three things: the RICHER
+# (larger) record wins, in BOTH argument orders, and the answer is NOT what
+# `on_conflict="sparser"` would have produced -- the third clause is what a
+# flip to `"sparser"` actually kills.
+
+
+def test_atpg_untestable_classify_richer_keeps_the_fuller_pin_map(tmp_path):
+    """SITE 1, through `main()`. Two liberties genuinely disagree about BUF2's
+    pin list -- one names only A, one names A and Z -- rather than one of them
+    being silent. MEASURED: feeding the richer (2-pin) liberty alone gives
+    `untestable_count: 2`; the poorer (1-pin) one alone gives `1` (Z's
+    direction is unknown, so u1's Z pin drives nothing, `mid` loses its driver
+    and drops out of the graph the closure walks -- see the module docstring
+    for the driver/load mechanics). Both orders of [poor, full] must read as
+    the 2-net answer, and must NOT read as the 1-net one.
+    """
+    full = tmp_path / "a_full.lib"
+    poor = tmp_path / "z_poor.lib"
+    full.write_text("""
+    library (l0) {
+      cell (BUF2) { pin (A) { direction : input; } pin (Z) { direction : output; } }
+    }
+    """)
+    poor.write_text("""
+    library (l1) {
+      cell (BUF2) { pin (A) { direction : input; } }
+    }
+    """)
+    netlist = tmp_path / "cut.v"
+    netlist.write_text(
+        "module top (pi, po);\n"
+        "  input pi; output po; wire mid;\n"
+        "  BUF2 u1 (.A(pi), .Z(mid));\n"
+        "  BUF2 u2 (.A(mid), .Z(po));\n"
+        "endmodule\n")
+
+    def run(first, second):
+        out = tmp_path / f"o_{first.stem}_{second.stem}.json"
+        auc.main(["--netlist", str(netlist), "--top", "top",
+                  "--liberty", str(first), "--liberty", str(second),
+                  "--json", str(out)])
+        return json.loads(out.read_text())
+
+    o = tmp_path / "o_poor_alone.json"
+    auc.main(["--netlist", str(netlist), "--top", "top",
+              "--liberty", str(poor), "--json", str(o)])
+    poor_alone = json.loads(o.read_text())
+    assert poor_alone["untestable_count"] == 1, \
+        "precondition: the poorer liberty alone really does read differently"
+
+    fwd = run(full, poor)
+    rev = run(poor, full)
+    assert fwd == rev, "the merge result depends on liberty argument order"
+    assert fwd["untestable_count"] == 2, \
+        "the richer (2-pin) liberty did not win the disagreement"
+    assert fwd["untestable_count"] != poor_alone["untestable_count"], \
+        "precondition: the two liberties really do read differently downstream"
+
+
+def test_dft_test_coverage_richer_keeps_the_fuller_pin_map(tmp_path):
+    """SITE 2, through `compute()`. Same disagreement as SITE 1 -- `dft_test_
+    coverage` performs its own, separate merge of the same shape, so it needs
+    its own pin, not a reference to the classifier's."""
+    full = tmp_path / "a_full.lib"
+    poor = tmp_path / "z_poor.lib"
+    full.write_text("""
+    library (l0) {
+      cell (BUF2) { pin (A) { direction : input; } pin (Z) { direction : output; } }
+    }
+    """)
+    poor.write_text("""
+    library (l1) {
+      cell (BUF2) { pin (A) { direction : input; } }
+    }
+    """)
+    netlist = tmp_path / "cut.v"
+    netlist.write_text(
+        "module top (pi, po);\n"
+        "  input pi; output po; wire mid;\n"
+        "  BUF2 u1 (.A(pi), .Z(mid));\n"
+        "  BUF2 u2 (.A(mid), .Z(po));\n"
+        "endmodule\n")
+    coverage = tmp_path / "coverage.yml"
+    coverage.write_text("ratio: 0.0\nfaultPoints:\n  - u1.Z\nsa0Covered:\nsa1Covered:\n")
+
+    poor_alone = dtc.compute(netlist, coverage, liberties=[str(poor)], top="top")
+    assert poor_alone["untestable_nets"] == 2, \
+        "precondition: the poorer liberty alone really does read differently"
+
+    fwd = dtc.compute(netlist, coverage, liberties=[str(full), str(poor)], top="top")
+    rev = dtc.compute(netlist, coverage, liberties=[str(poor), str(full)], top="top")
+    assert fwd["untestable_nets"] == rev["untestable_nets"] == 3, \
+        "the richer (2-pin) liberty did not win the disagreement, in one or both orders"
+    assert fwd["untestable_nets"] != poor_alone["untestable_nets"], \
+        "precondition: the two liberties really do read differently downstream"
+
+
+def test_payload_bitmap_richer_keeps_the_byte_with_more_bits(tmp_path):
+    """SITE 3, through `parse_bitmap()` -- the call site itself, not a level
+    above it. L3 and L4 both describe `status_byte` with real content, and
+    disagree about how many bits it has."""
+    l3 = tmp_path / "l3.json"
+    l4 = tmp_path / "l4.json"
+    l3.write_text(json.dumps({"bit_layouts": {
+        "status_byte": {"bit0": "busy"}}}))
+    l4.write_text(json.dumps({"bit_layouts": {
+        "status_byte": {"bit0": "busy", "bit1": "err"}}}))
+
+    poor_alone = pbp.parse_bitmap(None, l3, None)
+    assert poor_alone["status_byte"] == {"bit0": "busy"}
+
+    fwd = pbp.parse_bitmap(None, l3, l4)
+    rev = pbp.parse_bitmap(None, l4, l3)
+    assert fwd == rev, "the merge result depends on layer argument order"
+    assert fwd["status_byte"] == {"bit0": "busy", "bit1": "err"}, \
+        "the richer (2-bit) layer did not win the disagreement"
+    assert fwd["status_byte"] != poor_alone["status_byte"]
+
+
+def test_macro_pdn_planner_richer_keeps_the_wider_blockage(tmp_path):
+    """SITE 4, through `_macro_pdn_grid_outcome()`. Two LEFs both declare a REAL
+    OBS for the same macro and disagree about which layers it covers -- L4 only,
+    vs L4 AND L5 -- rather than one of them saying nothing.
+
+    This is the domain's own worked example for why `richer` is the direction
+    here (see the call site's comment): the under-read is a strap laid straight
+    across metal ONE of the two sources declared blocked. MEASURED: with only
+    L4 blocked, the planner straps on L5 and succeeds. With BOTH blocked, every
+    candidate strap layer is blocked and the planner REFUSES
+    (`ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS`) rather than route across L5.
+    Richer must reach the refusal in both argument orders; sparser would
+    instead hand back the L4-only plan -- the exact strap-across-blocked-metal
+    failure this call site's comment names.
+    """
+    import importlib.util as ilu
+    import re as _re
+
+    spec = ilu.spec_from_file_location(
+        "_pin_phase3", PROGRAMS / "phase3_one_shot_runner.py")
+    R = ilu.module_from_spec(spec)
+    sys.modules["_pin_phase3"] = R
+    try:
+        spec.loader.exec_module(R)
+    except SystemExit:
+        pass
+    tspec = ilu.spec_from_file_location(
+        "_pin_pdnfix", PROGRAMS / "tests" / "test_macro_pdn_grid.py")
+    T = ilu.module_from_spec(tspec)
+    sys.modules["_pin_pdnfix"] = T
+    try:
+        tspec.loader.exec_module(T)
+    except SystemExit:
+        pass
+
+    lef = T.MACRO_LEF
+    name = _re.search(r"MACRO\s+(\S+)", lef).group(1)
+    m = _re.search(r"SIZE\s+([\d.]+)\s+BY\s+([\d.]+)\s*;", lef)
+    w, h = m.group(1), m.group(2)
+    one_layer_body = f"  OBS\n    LAYER L4 ;\n      RECT 0 0 {w} {h} ;\n  END\n"
+    two_layer_body = (f"  OBS\n    LAYER L4 ;\n      RECT 0 0 {w} {h} ;\n"
+                      f"    LAYER L5 ;\n      RECT 0 0 {w} {h} ;\n  END\n")
+    poor = lef.replace(f"END {name}", one_layer_body + f"END {name}", 1)
+    full = lef.replace(f"END {name}", two_layer_body + f"END {name}", 1)
+
+    def plan(texts):
+        return R._macro_pdn_grid_outcome(texts, T.TECH_LEF, T.STRIPES, "L1")
+
+    poor_alone = plan([poor])
+    assert poor_alone["plan"] is not None, \
+        "precondition: the L4-only LEF alone really does produce a real plan"
+    assert poor_alone["plan"]["blocked_layers"] == ["L4"]
+
+    fwd = plan([poor, full])
+    rev = plan([full, poor])
+    assert fwd == rev, "the merge result depends on LEF argument order"
+    assert fwd["plan"] is None, \
+        "the richer (L4+L5) OBS declaration did not win the disagreement"
+    assert [r["reason"] for r in fwd["refusals"]] == \
+        ["ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS"]
+
+
+# ═══════════════════════════════════════════════ 3. THE REVERSE CASE ══════
 # What does the OVER-correction look like? Three ways this fix could be wrong
 # in the other direction. Each of these must STILL pass.
 
@@ -361,7 +561,7 @@ def test_unknown_policy_raises_rather_than_silently_reordering():
         merge_source_records([{"k": {"x": 1}}], on_conflict="last-wins")
 
 
-# ══════════════════════════════════════════════════════════ 3. THE GUARD ══════
+# ══════════════════════════════════════════════════════════ 4. THE GUARD ══════
 
 _DEFECTIVE = '''
 from typing import Any, Dict
