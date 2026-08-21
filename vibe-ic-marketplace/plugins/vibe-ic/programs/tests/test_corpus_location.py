@@ -253,6 +253,87 @@ def test_nothing_anywhere_without_the_opt_in_still_refuses(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
+# absent_opt_in: THE REMEDY A REFUSAL NAMES MUST BE ONE THE CALLER ACCEPTS.
+#
+# Not every call site has a flag. `tools/ci/routed_def_corpus.py` has none on
+# purpose (vibe-ic#1764): its consumer decides from the exit status and the item
+# count alone, so an rc 0 for a tree nothing opened is indistinguishable there
+# from a corpus that was read and holds none. Quoting a flag it rejects would
+# hand the reader a remedy whose real answer is `unrecognized arguments`.
+#
+# Both directions, because a refusal that never names a flag would satisfy the
+# None arm alone and silently break every gate that DOES expose one.
+# ---------------------------------------------------------------------------
+def test_the_refusal_names_the_conventional_opt_in_by_default(tmp_path, capsys):
+    rc, msg = _refuse(capsys, tmp_path / "named", tmp_path / "named", L.NAMED,
+                      may_be_absent=False)
+    assert rc == 2
+    assert L.ABSENT_OPT_IN in msg, (
+        f"a gate that DOES accept {L.ABSENT_OPT_IN} stopped being told so: {msg!r}")
+
+
+def test_a_caller_with_no_opt_in_is_not_handed_one(tmp_path, capsys):
+    rc = L.refuse("g", tmp_path / "named", tmp_path / "named", L.NAMED,
+                  may_be_absent=False, scanned="published cell(s)",
+                  absent_opt_in=None)
+    msg = capsys.readouterr().err
+    assert rc == 2, "declining to name a flag changed the verdict"
+    assert L.ABSENT_OPT_IN not in msg, (
+        f"a caller that accepts no opt-in was told to pass one: {msg!r}")
+    assert "no absent opt-in" in msg, (
+        f"the sentence dropped the flag and said nothing in its place: {msg!r}")
+
+
+def test_a_bound_sha_without_its_pointer_ignores_both_absent_knobs(tmp_path,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """The REFUSED row is decided BEFORE either absent knob is consulted.
+
+    Raised in review on vibe-ic#1764: the hermetic landing arm sets
+    `GATEKEEPER_BENCHMARK_DATA_SHA`, and a bound SHA whose pointer is missing
+    must be UNDETERMINED whatever the call site asked for — a candidate cannot
+    buy a scan of its own bytes by opting into an absent corpus. That was true
+    before `absent_opt_in` existed and this pins that adding it changed
+    nothing: rc 2 on every combination, and no flag named in a sentence whose
+    remedy is to supply the pointer.
+    """
+    monkeypatch.setenv(L.BOUND_SHA_ENV, "a" * 40)
+    named = tmp_path / "candidate" / "benchmark-data" / "ic"
+    named.mkdir(parents=True)
+    resolved, origin = L.resolve(named, subdir="ic")
+    assert origin == L.REFUSED and not resolved.is_dir()
+
+    for may_be_absent in (True, False):
+        for opt_in in (L.ABSENT_OPT_IN, None):
+            rc = L.refuse("g", named, resolved, origin,
+                          may_be_absent=may_be_absent,
+                          scanned="published cell(s)", absent_opt_in=opt_in)
+            msg = capsys.readouterr().err
+            assert rc == 2, (
+                f"a bound SHA with no pointer returned rc {rc} under "
+                f"may_be_absent={may_be_absent}, absent_opt_in={opt_in!r}")
+            assert L.ABSENT_OPT_IN not in msg, (
+                "the bound-but-unpointed refusal offers an absent opt-in as if "
+                f"it could excuse a missing attested checkout: {msg!r}")
+
+
+def test_a_broken_pointer_says_what_cannot_excuse_it_either_way(tmp_path, capsys,
+                                                                monkeypatch):
+    """SET AND WRONG stays rc 2 in both spellings, and neither sentence lies."""
+    monkeypatch.setenv(L.CORPUS_ENV, str(tmp_path / "nope"))
+    named, resolved = tmp_path / "named", tmp_path / "nope"
+
+    rc, msg = _refuse(capsys, named, resolved, L.ENV, may_be_absent=True)
+    assert rc == 2 and f"{L.ABSENT_OPT_IN} does not excuse it" in msg, msg
+
+    rc = L.refuse("g", named, resolved, L.ENV, may_be_absent=True,
+                  scanned="published cell(s)", absent_opt_in=None)
+    msg = capsys.readouterr().err
+    assert rc == 2, "a set-and-wrong pointer was excused"
+    assert L.ABSENT_OPT_IN not in msg and "no absent opt-in" in msg, msg
+
+
+# ---------------------------------------------------------------------------
 # population_key: the corpus a verdict was measured over must be identifiable, or
 # a record from one corpus can be compared against a run over another.
 # ---------------------------------------------------------------------------

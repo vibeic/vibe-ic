@@ -1062,7 +1062,7 @@ _HYGIENE_STALL_GRACE_S = 1800
 # "VIBE_IC_BENCHMARK_DATA=… is set and NOT followed".  A pointer that can be
 # shadowed by whatever happens to sit above the checkout is not a binding.
 # `GATEKEEPER_BENCHMARK_DATA_SHA` is the mechanism this repo already built for
-# exactly that (`_corpus_location.py:137-156`): with it set, the pointer wins
+# exactly that (`_corpus_location.py:156-175`): with it set, the pointer wins
 # unconditionally and every candidate-local shadow is refused.  It also reaches
 # the record as `corpus_inputs.benchmark_data_sha`, which the landing arm's
 # `hygiene_record_binds_benchmark()` already validates.
@@ -1139,7 +1139,7 @@ def _published_corpus_binding() -> Tuple[Optional[Dict[str, str]], Optional[str]
                       + _corpus_remedy())
 
     resolved = named.resolve()
-    # The producer reads git's INDEX (`tools/ci/routed_def_corpus.py:42-83`), so
+    # The producer reads git's INDEX (`tools/ci/routed_def_corpus.py:58-99`), so
     # a loose directory enumerates zero cells and that zero is "I could not
     # look", not "there are none" — the one substitution this whole module
     # exists to refuse.
