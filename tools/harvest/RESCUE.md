@@ -342,3 +342,26 @@ cause: four of that host's clones have a **local-path origin**, and `ls-remote` 
 path has no `refs/pull/*` at all, so the pull authority was empty. Refusing was correct — asking
 the wrong clone was the bug. The sweep now picks a clone whose origin is `http*`/`git@*` to ask,
 and names which clone it asked.
+
+## Where the displaced-head sweep could not look: nowhere
+
+jharv3 found 6 of their worktrees have no reflog at all, which makes the displaced-prior-head
+sweep **structurally blind** there — not "found nothing", but "could not look" — and recorded it
+as a stated limit rather than folding it into a clean count. That is the right treatment and it
+needed checking here.
+
+Checked every registered row on all five hosts:
+
+| host | rows with a directory | reflog present | **blind** |
+|---|---|---|---|
+| .105 | 92 | 92 | 0 |
+| .114 | 93 (+9 deleted, recorded separately) | 93 | 0 |
+| .112 | 36 | 36 | 0 |
+| .121 | 44 | 44 | 0 |
+| .102 | 520 | 520 | 0 |
+| **total** | **785** | **785** | **0** |
+
+**Zero blind.** The sweep was able to look everywhere it claimed to look, and that is now a
+measured statement with its denominator rather than an absence of complaint. The 389 + 113 pruned
+checkouts are a different matter and were never in this population: they have no HEAD and no
+reflog by construction, which the rows already say.
