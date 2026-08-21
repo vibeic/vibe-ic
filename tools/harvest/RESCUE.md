@@ -186,3 +186,50 @@ comparing a head it no longer has. Its LANDED means *"the directory now holds ma
 branch's work landed"* — and its previous head `a17910e9fa9` is not lost, it is on
 `origin/land/batch7-assembled`, confirmed live. The row says all of that, because a bare LANDED
 there would be true and would mislead.
+
+## 49 more commits found behind LANDED rows — the reflog, not the head
+
+jharv3 generalised the `_landppa` reset case correctly: **"head equals main" is too narrow.** Any
+head that is an *ancestor* of main collapses the owned set to empty, so every content check passes
+trivially. Of my 204 LANDED rows, **156 are that empty form** and only 8 rest on file-by-file
+identity. A LANDED there is true and says nothing about what the directory used to hold.
+
+So the reflog was asked. Across five hosts, **22 LANDED rows had earlier heads owning files that
+differ from main**, on no branch of their own:
+
+| | |
+|---|---|
+| distinct orphaned prior heads found | 76 |
+| already preserved by a GitHub **`refs/pull/*/head`** | 27 |
+| on nothing at all — **rescued here** | **49** |
+
+`refs/pull/*/head` is an authority I was not consulting at all. A PR ref keeps a commit alive when
+no branch does, and 27 commits that looked orphaned were held that way. Anyone auditing
+survivability on a GitHub remote needs both lists.
+
+Every LANDED row now states which of the two forms it is and what its reflog showed — written per
+row from that row's own measurement, because jharv3 caught themselves applying one explanation to
+a population they had not checked row by row and the same trap was available here.
+
+## A disagreement, resolved by measuring twice
+
+jharv3 reported `03926f8b50f` (prior head of `_jppa_skills/tree`) as *"owns 28 files, all 28
+byte-identical to main, so losing it loses nothing."* Measured on the clone that holds it:
+**28 owned, 14 differing** — and 14 differing against the *old* main `a00f53f2094` too, so it is
+not a main-version artefact. It is preserved as `harvest/rescue-8HD-d-jppa-skills-prior`. If their
+number is right the ref costs nothing; if mine is, it was the only thing between 14 files and an
+executor.
+
+## Ninth mode: the guard existed and I did not reuse it
+
+The first coverage check reported **all 21 rescued heads still uncovered — including
+`867de428920`, an old main commit that cannot possibly be uncovered.** The live-refs file it read
+was **empty**: the `ls-remote` that built it had run after a directory change and failed silently.
+The check grepped an empty authority and called everything uncovered.
+
+`resolve_origin.sh` had `[ -s "$LIVE" ] || exit 1` in it from hours earlier. I wrote an ad-hoc
+check without it. **The guard existed and I did not reuse it.** `bin_jharv2/covered.sh` now
+refuses to run on an empty authority and names which authority it used.
+
+This one failed *loud* — 21 false findings — and I only caught it because one of the 21 was
+obviously impossible. With no impossible row in the set, I would have believed it.
