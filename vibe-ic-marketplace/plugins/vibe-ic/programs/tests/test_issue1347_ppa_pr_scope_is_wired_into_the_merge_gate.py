@@ -125,3 +125,76 @@ def test_an_unreadable_change_set_is_NOT_CHECKED_never_a_pass():
     d, _ = _repo_with_a_surface()
     g = G.ppa_pr_scope_gate(d, "no-such-ref", "HEAD")
     assert g.rc == -1 and "NOT CHECKED" in g.summary
+
+
+# --------------------------------------------------------------------------- #
+# PROVE-BY-RUN: the verdict, not the gate list
+# --------------------------------------------------------------------------- #
+# `flow-change-acceptance` §3, and the reason it is a criterion: #306 is a gate
+# that was wired, tested, and FAILing on the same cell across three plugin
+# versions while the flow shipped a 181 MB routed.def every time. Reading the
+# aggregation and concluding "this must block" is exactly the inference that
+# produced 62 of 72 gates that cannot stop anything.
+#
+# So this drives the REAL `review()` twice over the SAME synthetic repository,
+# where the only difference is the presence of the answers document, and
+# asserts the verdict itself moves. The control matters as much as the subject:
+# it is what makes the flip attributable to this gate rather than to the
+# fixture being generally unhappy.
+
+import subprocess as _sp  # noqa: E402
+
+_ANSWERS_THAT_LIE = {"schema": "vibeic.ppa.pr_answers.v1",
+                     "answers": [{"question": 1, "applicability": "N/A"}]}
+
+
+def _reviewable_repo(with_answers: bool):
+    """A clean synthetic plugin (every other machine gate green) with real git
+    history, so nothing is stubbed and the whole chain runs."""
+    import test_gatekeeper_review as TG
+    tmp = Path(tempfile.mkdtemp(prefix="ppareview_"))
+    repo, plugin = TG._build_clean_plugin(tmp, version="1.0.96")
+
+    def git(*a):
+        _sp.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (repo / "README.md").write_text("base\n")
+    git("add", "README.md")
+    git("commit", "-qm", "base")
+    base = _sp.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                   capture_output=True, text=True).stdout.strip()
+    if with_answers:
+        (repo / ".github").mkdir(exist_ok=True)
+        (repo / G._PPA_ANSWERS_REL).write_text(json.dumps(_ANSWERS_THAT_LIE))
+    git("add", "-A")
+    git("commit", "-qm", "the change")
+    return repo, plugin, base
+
+
+def _verdict(with_answers: bool):
+    repo, plugin, base = _reviewable_repo(with_answers)
+    return G.review(
+        base, "HEAD", repo=repo, plugin_root=plugin, role="core-agent",
+        pytest_cmd="python3 -m pytest -q programs/tests",
+        commit_cmds=["git commit -m 'fix'", "git push origin main"],
+        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
+        override_cur="1.0.96", override_prev="1.0.95")
+
+
+def test_the_control_repo_is_MERGE_OK_so_the_flip_is_attributable():
+    v = _verdict(with_answers=False)
+    assert v.verdict == "MERGE_OK", v.blocking
+    assert v.blocking == []
+
+
+def test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES():
+    v = _verdict(with_answers=True)
+    assert v.verdict == "REQUEST_CHANGES"
+    gate = {g.name: g for g in v.gates}["ppa_pr_scope_check"]
+    assert gate.rc == 1 and gate.green is False
+    assert any("ppa_pr_scope_check" in b for b in v.blocking)
+    # and it is the ONLY thing blocking — same repo, one file added
+    assert [b for b in v.blocking if "ppa_pr_scope_check" not in b] == []
