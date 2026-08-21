@@ -639,6 +639,7 @@ Of the five rules proposed, measured honestly:
 | F3a | **WITHDRAWN** — the tool was behaving as documented; replaced by the convention-inversion record, which is ours |
 | F3b | a real class with **three** instances and zero absorbed — still the most valuable rule, but its motivating case is not a member |
 | F4 | correct, single instance (population 1 of 1232) |
+| F3d | the opposite-side transform: a mirror upstream, a half turn in ours — **present at the default**, and it passes every geometric gate because the two share a bounding box |
 
 The item most worth someone's time is still **F3b** — the one I first dismissed
 as having no population, then over-counted, and whose motivating case turned out
@@ -732,6 +733,59 @@ weighing whether to build it should weigh it on them. Earlier text in this
 document counted the pad ring as a fourth instance; it is not one, and a rule
 whose population is padded by a refuted member is exactly the shape this
 document has spent nine corrections learning to distrust.
+
+---
+
+## The finding that only appeared once I RAN what I had been reading
+
+F3c — our side-to-variable mapping is inverted — was supported by reading: our
+code, the tool's documentation, the tool's source. It was never *run*. Running
+it turned up a second divergence in the same function, and a worse one.
+
+```
+at the DEFAULT — nothing declared at all:
+
+  ours   SOUTH = R0     NORTH = R180   <- rotate_cw(..., 2), a half turn
+  tool   SOUTH = R0     NORTH = MX     <- north = south.flipX(), a MIRROR
+```
+
+The tool states the rule in its own source, for both axes:
+
+```cpp
+north_rotation_ver = south_rotation_ver.flipX();
+east_rotation_hor  = west_rotation_hor.flipY();
+```
+
+Ours applies a half turn on both, through a helper whose docstring says "one
+quarter turn clockwise". **A mirror is not a half turn.**
+
+### Why nothing caught it, and why it is the worst finding here
+
+For a rectangular footprint a half turn and a mirror occupy the **same bounding
+box**. So the fit sum, the spacing arithmetic, abutment, and BTerm coverage all
+agree under either — every geometric gate this step owns passes. What differs is
+which edge the cell's **pins** face: a mirrored pad and a rotated pad present
+their bond pad and their core-side signal on opposite edges. The ring is
+internally consistent, passes its own checks, and faces the wrong way.
+
+And unlike everything else in this capture, **it needs no declaration to appear.**
+Every other finding here waits for somebody to set a variable. This one is
+present at the default, with no pad configuration written, on both axes.
+
+It is the fourth instance of the one class this capture keeps finding: a
+re-implementation drifting from the upstream whose behaviour it claims to
+reproduce — on the **input set**, on the **arithmetic**, on the **convention**,
+and now on the **transform**.
+
+### The lesson, restated in the form this one taught it
+
+Earlier this document arrived at *a rule is not a rule until it has been run
+over its own population.* This finding sharpens the same edge one notch:
+
+> **A finding is not a finding until the thing it describes has been RUN.**
+> Reading our code, reading the tool's source, and reading its documentation —
+> all three agreeing — still missed a divergence that one execution exposed
+> immediately.
 
 ---
 
