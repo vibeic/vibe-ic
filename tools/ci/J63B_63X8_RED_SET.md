@@ -160,6 +160,43 @@ exist **nowhere** in the corpus, in any cell, at any version. The classification
 "needs evidence this repository does not hold" is confirmed by search, not
 inherited.
 
+## Landing note — this branch is conflict-neutral, and there is ONE trap
+
+The brief said to split with `jfindings-63x8` and not duplicate it. That was
+checked rather than assumed, by trial merge:
+
+```
+main + j63b                        clean, rc=0
+main + jfindings-63x8              6 conflicts
+main + j63b + jfindings-63x8       the SAME 6 conflicts
+```
+
+Identical sets, so **this branch adds zero conflicts** — all six are
+`jfindings-63x8` against a main it predates. `test_matrix_63x8_coverage.py`, the
+one file both branches edit, auto-merges: the two changes are in disjoint
+regions and both survive.
+
+**THE TRAP, and it is silent.** `matrix_d3_output_manifest.json` conflicts
+(theirs-vs-main, present without this branch too), and the HEAD side of that one
+conflict region contains three things while the theirs side contains one:
+
+```
+resolve --ours   : drc_signoff.json + lvs_verdict.json present = 2 of 2
+resolve --theirs : drc_signoff.json + lvs_verdict.json present = 0 of 2
+```
+
+Taking `--theirs` — the natural move, since the incoming branch carries the
+better `magic_illegal_overlap.json` provenance note — **silently deletes
+`lvs_verdict.json` and `drc_signoff.json`**, reopening reds 16 and 17 and
+leaving 164 declared paths against 162 entries. Taking `--ours` keeps both
+entries and loses the improved note.
+
+Neither side is right. Resolve by hand: **take theirs for the
+`magic_illegal_overlap.json` `provenance_note` only, and keep HEAD for
+everything else in that region.** Then run
+`pytest -q programs/tests/test_flow_manifest_declaration_parity.py` — under a
+second, and it is the check that catches this exact mistake.
+
 ## Reproduce
 
 ```
