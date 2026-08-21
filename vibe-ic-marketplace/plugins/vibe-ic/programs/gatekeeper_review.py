@@ -1466,6 +1466,27 @@ def hygiene_gate_from_record(repo: Path, record: Path,
                       f"{len(declared)} declared gate(s) matched]")
 
 
+def _process_states() -> tuple:
+    """The states a gate reaches by running, from their one owner.
+
+    Imported by path at the moment it is needed rather than at module scope:
+    this file is executed by the isolated trusted entry, and a top-level
+    `sys.path` insertion in it measurably broke two end-to-end cases once
+    already. The fallback is the same tuple, and a test asserts the two agree —
+    so a divergence fails loudly instead of silently changing a denominator.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_gr_hygiene_finding_delta",
+            Path(__file__).resolve().parent / "hygiene_finding_delta.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return tuple(module.PROCESS_STATES)
+    except Exception:                     # pragma: no cover - packaging damage
+        return ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")
+
+
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     """Turn the script's own coverage record into a gate result.
 
@@ -1526,8 +1547,14 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     # NOT_CHECKED is deliberately still counted as having run: the gate
     # executed and refused, which the summary reports separately and which must
     # not vanish from the denominator.
-    _not_run = {"LISTED", "OTHER_SHARD", "OUT_OF_SCOPE", "QUEUED"}
-    ran = declared - len([g for g in gates if g.get("state") in _not_run])
+    # DERIVED FROM THE ONE PLACE THAT ALREADY DREW THIS LINE, not re-listed.
+    # `hygiene_finding_delta.PROCESS_STATES` is the canonical set and its own
+    # roll-up has computed `ran` from it correctly all along; this line and
+    # `gate_red_since_check` had each grown a hand-maintained complement, and
+    # both were wrong in the same direction. Stating the POSITIVE set means a
+    # state added to the dispatcher later is OUT of the denominator by default
+    # rather than silently counted as having run.
+    ran = len([g for g in gates if g.get("state") in _process_states()])
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
     if secs is not None:
