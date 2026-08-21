@@ -1731,6 +1731,35 @@ property that replaced it — and to say plainly that coverage was retired, not
 relocated.
 
 
+## M26 — closing tally for `test_landing_merge_verdict.py`, host lane
+
+| state | failed | passed | collected |
+|---|--:|--:|--:|
+| pristine `6d06ba664` | 9 | 125 | 134 |
+| after A | 9 | 125 | 134 |
+| after A + C | **6** | **128** | 134 |
+
+Nothing newly red at any step.
+
+**Of the original 9 reds, 4 are closed** — G6 by design A, and the three tamper
+guards by design C. **5 remain, and one red was added deliberately** (M14's
+honest assertion), giving 6.
+
+The six, each with its reason and none of them "unknown":
+
+| test | why it is still red |
+|---|---|
+| `..._interruption_kills_a_term_ignoring_parallel_arm...` | design B — specified, channels verified, not built (hung-container risk on a shared host) |
+| `..._pid_only_term_kills_a_term_ignoring_b2...` | same |
+| `..._b2_corpus_mutation_is_post_attested_and_norecord` | M25 — no event occurs; needs the attack delivered (D's corpus question) |
+| `..._relinked_parent_selection_is_norecord` | M25 — no event occurs, and doubly undeliverable; guarantee is structurally true |
+| `..._trusted_verifier_supplies_the_one_bootstrap_evidence` | G5 — D's corpus question |
+| `..._post_bootstrap_equal_corpus_uses_ordinary_delta` | M14 — added by me on purpose; costs nothing in CI (M22) |
+
+**Every remaining red is attributed to a named cause with a named next step.**
+None is "red, cause unknown", which is where this file started the night with 22.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
