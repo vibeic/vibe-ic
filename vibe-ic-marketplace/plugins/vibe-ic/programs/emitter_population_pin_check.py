@@ -225,11 +225,19 @@ def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
                                                   (ast.Constant, ast.JoinedStr)):
             for part in ast.walk(n.value):
                 skip.add(id(part))
-    #: UNORDERED. Only `emitted_script_of` needs source order -- a script read out
-    #: of order is not the script -- and it sorts for itself. `phrases_of` and
-    #: `pins_of` key by tail and by node, so sorting for them was a sort per
-    #: file across every test in the tree, paid to answer a question neither
-    #: asks.
+    #: UNORDERED. Only `emitted_script_of` needs source order -- a script read
+    #: out of order is not the script -- and it sorts for itself. `phrases_of`
+    #: and `pins_of` key by tail and by node, so sorting for them answered a
+    #: question neither asks.
+    #:
+    #: COUNTED, because the sentence here first said "a sort per file across
+    #: every test in the tree" and that was wrong twice over. On the shipped
+    #: tree this runs 1047 times against 2727 test files, and the majority are
+    #: not tests at all: 814 come from `phrases_of` (once per named PROGRAM,
+    #: cached) and 227 from `pins_of`, which main reaches only for a test whose
+    #: named emitter actually states a phrase. The saving is real and small,
+    #: like the laziness in `pins_of`; the reason to do it is that the callers
+    #: do not need the order.
     return [n for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str)
             and id(n) not in skip]
