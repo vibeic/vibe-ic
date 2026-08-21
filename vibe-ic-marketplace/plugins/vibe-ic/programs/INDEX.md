@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1159
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1159)
+- **Total programs (excluding helpers / shims):** 1164
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1164)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1150 |
+| `any` | 1155 |
 
 ## Alphabetical listing
 
@@ -117,6 +117,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `atomic_artifact_write_check` | any | — | a gate report must appear whole or not at all (vibe-ic#1082). |
 | `atomic_write_pr_attribution` | any | — | Which OPEN PR owns each non-atomic declared-report write (vibe-ic#1468). |
 | `atpg_untestable_fault_classify` | any | — | which stuck-at faults NO test can detect. |
+| `attestation_preflight_check` | any | — | refuse a dirty tree BEFORE the hour, not after it. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `automotive_ethernet_protocol_synth` | any | v0.1.91 | Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth. |
 | `avalon_protocol_synth` | any | — | Intel/Altera Avalon Interface protocol synth helper (protocol #54). |
@@ -310,6 +311,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `displayport_protocol_synth` | any | v0.1.91 | VESA DisplayPort (DP) protocol synth helper. |
 | `doc_consistency_no_unresolved_conflicts_check` | any | Wave 37 | Cross-doc range conflict detector. When >=2 extracted docs disagree |
 | `doc_extract` | any | — | Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to plain-text or structured JSON for downstream Phase 1 (doc-extraction) / spec-de... |
+| `doc_table_row_placement_check` | any | — | a table row in the middle of a paragraph is a swallowed sentence, and a version gate that checks AGREEMENT cannot see it. |
 | `drc_fix_planner` | any | v0.1.50 | DRC fix-planner (Pattern-B → program). |
 | `drc_report_check` | any | — | DRC report check — wrapper for eda_report_audit --mode drc. |
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into stdcell-library-internal vs design-level. |
@@ -332,6 +334,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
 | `emitted_script_portability_check` | any | — | An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of... |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `emitter_population_pin_check` | any | — | an emitter that PRINTS a population and a test that PINS it are two statements of one fact, and they must move together. |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
 | `encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / BINARY-DECODER / ONE-HOT family, covering the cases the already-shipped registry sol... |
@@ -461,6 +464,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `general_precheck` | any | — | the tape-out precheck for a design with NO operator. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
 | `generated_artifact_conflict_resolve` | any | — | resolve the merge conflicts that carry no information, and REFUSE every conflict that does. |
+| `generated_test_list_min_guard` | any | — | a generated test list is checked against a MINIMUM and a resolvable path set, never against emptiness. |
 | `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family. |
 | `gh_enumerate_all` | any | — | Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions). |
@@ -609,6 +613,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
+| `landing_noop_verdict_check` | any | — | "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area. |
 | `landing_pytest_runtime_preflight` | any | — | can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably. |
 | `landing_tier_checkout_preflight` | any | — | the full tier runs in a SELF-CONTAINED checkout, or it does not start. |
 | `landing_unselectable_pytest_corpus` | any | — | the tracked pytest files NO landing stage can reach, enumerated so a stage can run them. |
@@ -1231,7 +1236,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1150 programs)
+### `any` (1155 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1324,6 +1329,7 @@ _(no programs in this group)_
 - `atomic_artifact_write_check` — a gate report must appear whole or not at all (vibe-ic#1082).
 - `atomic_write_pr_attribution` — Which OPEN PR owns each non-atomic declared-report write (vibe-ic#1468).
 - `atpg_untestable_fault_classify` — which stuck-at faults NO test can detect.
+- `attestation_preflight_check` — refuse a dirty tree BEFORE the hour, not after it.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `automotive_ethernet_protocol_synth` — Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth.  _[v0.1.91]_
 - `avalon_protocol_synth` — Intel/Altera Avalon Interface protocol synth helper (protocol #54).
@@ -1513,6 +1519,7 @@ _(no programs in this group)_
 - `displayport_protocol_synth` — VESA DisplayPort (DP) protocol synth helper.  _[v0.1.91]_
 - `doc_consistency_no_unresolved_conflicts_check` — Cross-doc range conflict detector. When >=2 extracted docs disagree  _[Wave 37]_
 - `doc_extract` — Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to plain-text or structured JSON for downstream Phase 1 (doc-extraction) / spec-de...
+- `doc_table_row_placement_check` — a table row in the middle of a paragraph is a swallowed sentence, and a version gate that checks AGREEMENT cannot see it.
 - `drc_fix_planner` — DRC fix-planner (Pattern-B → program).  _[v0.1.50]_
 - `drc_report_check` — DRC report check — wrapper for eda_report_audit --mode drc.
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into stdcell-library-internal vs design-level.  _[v0.3.16]_
@@ -1535,6 +1542,7 @@ _(no programs in this group)_
 - `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
 - `emitted_script_portability_check` — An emitted analysis script that hard-codes the directory it was emitted in is not reproducible anywhere else, which is the whole point of...
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
+- `emitter_population_pin_check` — an emitter that PRINTS a population and a test that PINS it are two statements of one fact, and they must move together.
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
 - `encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER / BINARY-DECODER / ONE-HOT family, covering the cases the already-shipped registry sol...
@@ -1664,6 +1672,7 @@ _(no programs in this group)_
 - `general_precheck` — the tape-out precheck for a design with NO operator.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
 - `generated_artifact_conflict_resolve` — resolve the merge conflicts that carry no information, and REFUSE every conflict that does.
+- `generated_test_list_min_guard` — a generated test list is checked against a MINIMUM and a resolvable path set, never against emptiness.
 - `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family.
 - `gh_enumerate_all` — Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
@@ -1811,6 +1820,7 @@ _(no programs in this group)_
 - `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
+- `landing_noop_verdict_check` — "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area.
 - `landing_pytest_runtime_preflight` — can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably.
 - `landing_tier_checkout_preflight` — the full tier runs in a SELF-CONTAINED checkout, or it does not start.
 - `landing_unselectable_pytest_corpus` — the tracked pytest files NO landing stage can reach, enumerated so a stage can run them.

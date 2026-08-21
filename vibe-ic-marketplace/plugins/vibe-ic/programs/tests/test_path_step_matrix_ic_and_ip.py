@@ -1013,3 +1013,132 @@ def test_no_path_step_declares_a_producer_that_nothing_can_invoke():
         "a step whose producer nothing dispatches cannot satisfy its own "
         "required_outputs; it reports MISSING for every design forever, and "
         "every reader charges that to the design", sorted(unwired))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 7. THE POSITIVE DIRECTION — a route that is SELECTED must be able to PASS
+# ══════════════════════════════════════════════════════════════════════════
+# The vacuous-pass guard in section 3 asks whether a gate can wrongly say YES.
+# It cannot ask whether a gate can say yes at all, and the two are different
+# questions: a gate that refuses everything passes the vacuous guard perfectly.
+#
+# THIS SECTION IS WHY THAT MATTERS, AND IT IS WHERE THE MATRIX FOUND ITS ONE
+# FIXABLE DEFECT. Step 0.5ic has TWO programs, and driving them in the order
+# the flow declares them, on a die that tapes itself out:
+#
+#   submission_template_ingest  -> status=ABSENT, writes NO_TEMPLATE.txt
+#   tapeout_declaration_gen     -> RETIRES NO_TEMPLATE.txt on purpose (it is
+#                                  the IP terminal's router and a die must not
+#                                  select it) and writes SELF_TAPEOUT.txt
+#   submission_template_check   -> rc 1, NO_TEMPLATE_FILE_MISSING
+#
+# The step's own gate refused the tree the step's own producers had just built,
+# and 0.5ic gates the whole chip path behind it. The step's SECOND gate clause
+# already read it the other way round: `tapeout_declaration_check` PASSES that
+# same tree and names `SELF_TAPEOUT.txt` as its router.
+#
+# Fixed in `submission_template_check`, which now accepts either declared-
+# absence router — and only when the file carries its producer's marker, so
+# nothing is widened.
+def _drive_step_0_5ic(root: Path, *, deliverable: str) -> Path:
+    """Build a tree by RUNNING step 0.5ic's own two programs, in order.
+
+    Not by writing the artefacts this test thinks they produce. The defect
+    below lives exactly in the gap between those two things: every fixture in
+    this repository that hand-writes a router file agrees with whichever
+    producer the fixture's author had in mind, and the two producers disagree.
+    """
+    import subprocess
+    root.mkdir(parents=True, exist_ok=True)
+    answers = root.parent / "answers.json"
+    answers.write_text(json.dumps({"deliverable": deliverable}))
+
+    def run(prog, *args):
+        return subprocess.run(
+            [sys.executable, str(PROGRAMS / (prog + ".py")), ".", *args],
+            cwd=str(root), capture_output=True, text=True, timeout=300)
+
+    # A template path that was SEARCHED and is not there — a declared absence.
+    # "Nobody looked" is a different fact and its own refusal.
+    run("submission_template_ingest",
+        "--template", str(root.parent / "no_such_operator_template"),
+        "--no-template-reason",
+        "this die tapes itself out; there is no shuttle operator whose "
+        "template could be ingested")
+    run("tapeout_declaration_gen", "--answers", str(answers))
+    return root
+
+
+def _step_0_5ic_gate(project: Path) -> dict:
+    """Every declared gate clause of step 0.5ic, run, keyed by program."""
+    return {command.split()[0]: _run_gate(project, command)
+            for command in _gate_commands("0.5ic")}
+
+
+def test_a_die_that_tapes_itself_out_can_pass_step_0_5ics_own_gate(tmp_path):
+    """THE POSITIVE ARM, and the one that found the defect.
+
+    0.5ic is the step that DECIDES the route, and every chip-path step is
+    conditioned on a router file only it writes. A route its own gate refuses
+    is a route nothing downstream can ever reach.
+    """
+    proj = _drive_step_0_5ic(tmp_path / "proj", deliverable=TD.DELIVERABLE_DIE)
+
+    assert (proj / TD.SELF_TAPEOUT_REL).is_file(), (
+        "the producers did not select the self-tape-out route; this test is "
+        "not measuring what it says it measures")
+    assert not (proj / ST.NO_TEMPLATE_REL).is_file(), (
+        "tapeout_declaration_gen retires the IP terminal's router for a DIE; "
+        "if it stopped, the two halves of this step now disagree differently")
+
+    rcs = _step_0_5ic_gate(proj)
+    assert rcs == {"submission_template_check": 0,
+                   "tapeout_declaration_check": 0}, (
+        "step 0.5ic's gate refuses the tree step 0.5ic's own producers built, "
+        "so the self-tape-out route cannot be reached by running the flow", rcs)
+
+    assert _state(proj, "15.5ic") == RUNS
+    assert _state(proj, "37.5ic") == RUNS
+    assert _state(proj, "37.5ip") == SKIPPED
+
+
+def test_an_IP_can_pass_step_0_5ics_own_gate_too(tmp_path):
+    """The control that keeps the fix from being a widening.
+
+    The IP route was never broken. If a repair to the chip route changed what
+    the IP route needs, that would be the widening this campaign refuses.
+    """
+    proj = _drive_step_0_5ic(tmp_path / "proj",
+                             deliverable=TD.DELIVERABLE_HARDMACRO)
+    assert (proj / ST.NO_TEMPLATE_REL).is_file()
+    assert _step_0_5ic_gate(proj) == {"submission_template_check": 0,
+                                      "tapeout_declaration_check": 0}
+    assert _state(proj, "37.5ip") == RUNS
+    assert _state(proj, "15.5ic") == SKIPPED
+
+
+def test_a_declared_absence_with_no_router_at_all_is_still_refused(tmp_path):
+    """The NEGATIVE arm. The absence must still be SAID, in a file the flow
+    reads; the fix accepts a second file, it does not stop requiring one."""
+    proj = _drive_step_0_5ic(tmp_path / "proj", deliverable=TD.DELIVERABLE_DIE)
+    (proj / TD.SELF_TAPEOUT_REL).unlink()
+
+    rcs = _step_0_5ic_gate(proj)
+    assert rcs["submission_template_check"] == 1, (
+        "a declared absence with no router file on disk must refuse; if it "
+        "passes, the fix widened the gate instead of correcting it", rcs)
+
+
+def test_a_router_file_without_its_producers_marker_buys_nothing(tmp_path):
+    """The VACUOUS arm, and it is the difference between reading a file and
+    reading its provenance. An empty file of the right name must not buy a
+    pass — the same test both producers already apply before retiring a marker
+    of their own."""
+    proj = _drive_step_0_5ic(tmp_path / "proj", deliverable=TD.DELIVERABLE_DIE)
+    (proj / TD.SELF_TAPEOUT_REL).write_text(
+        "somebody else left this here\n")
+
+    assert _step_0_5ic_gate(proj)["submission_template_check"] == 1, (
+        "a file with the right NAME and no marker was accepted as a declared "
+        "route; provenance is the only thing separating the router the step "
+        "wrote from one anybody could drop in")

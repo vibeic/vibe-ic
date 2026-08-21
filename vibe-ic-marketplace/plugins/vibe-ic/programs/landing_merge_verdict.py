@@ -269,7 +269,7 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 RC_OK = 0
 RC_REFUSE = 1
@@ -939,6 +939,22 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
 # EVERYTHING ABOVE MEASURES. THIS DECIDES. One function, one call site.
 
 
+def _load_red_since():
+    """`gate_red_since_check`, loaded by path at the moment it is needed.
+
+    It owns the acknowledgement vocabulary and the deadline; this file owns the
+    decision to consume it. Loading it lazily keeps this module's import graph
+    exactly what it was.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    spec = importlib.util.spec_from_file_location(
+        "_lmv_gate_red_since_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            github_tree: Optional[str], land: LandLog, delta: Delta,
            verified_sha: str, truncated: bool, dropped_files: Sequence[str],
@@ -947,6 +963,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            hygiene: Optional[dict] = None,
+           red_since_ledger: Optional[Sequence[dict]] = None,
+           commit_age: Optional[Callable[[str], Optional[int]]] = None,
            verification_tier: str = TIER_MERGE_TREE,
            git_version: str = "", tier_reason: str = "",
            missing_process_files: Sequence[str] = (),
@@ -1307,6 +1325,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
                 "THE HYGIENE SUITE FAILED HERE AND NOT ON THE BASE, YET THE "
                 "FINDING DIFFERENTIAL NAMES NOTHING — the two disagree, so the "
                 "finding list is incomplete and cannot account for the failure.")
+    # ---- AN INHERITED RED IS NOT THIS BRANCH'S, AND IT IS STILL SOMEBODY'S ----
+    #
+    # The two tiers above both end the same way: a failure present on BOTH arms
+    # is `notes` (`gate fails on the base too…`) or `carried (which do NOT
+    # block)`. That subtraction is correct — an absolute "any FAIL refuses"
+    # would refuse every landing, which is measured in the comment above the
+    # gate differential — and it has no floor. MEASURED: `flow-gate enforcement
+    # audit`, dispatched with a plain blocking `run`, was red on the base at
+    # e4880703b on 2026-08-12 and still red at 752a8baa nine days, 704 commits
+    # and 96 version-bearing landings later, and every one of those landings
+    # was correct to allow it.
+    #
+    # The deadline that would end that already exists — `max_commits` in
+    # `tools/ci/gate_red_since.json`, read by `gate_red_since_check` — and
+    # nothing ever opens it, because a row is voluntary and pure cost so no row
+    # is ever written. This is the forcing function, and it has to be HERE:
+    # a refusal wired inside the hygiene suite would be a gate in the suite, red
+    # on both arms from its first landing, and subtracted by this very rule.
+    #
+    # STRICTLY ADDITIVE, like the tier above it: it only ever appends reasons.
     else:
         # A status this program does not know is not a pass. Reached only if the
         # helper grows a fourth answer without this branch being taught it.
@@ -1315,6 +1353,29 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         reasons.append(
             f"THE HYGIENE FINDING DIFFERENTIAL RETURNED {hyg_status!r}, which "
             f"this program does not know how to read, so it read nothing.")
+
+    # The rule itself runs AFTER the whole chain above, never inside it: it must
+    # apply whatever status the differential returned, and it must not change
+    # which branch of that chain is taken.
+    if red_since_ledger is None or commit_age is None:
+        # A RULE THAT DID NOT RUN MUST SAY SO. Without the ledger or without a
+        # way to age a commit this cannot answer, and silence here would be
+        # indistinguishable from "every inherited red is owned".
+        disclosures.append("INHERITED_RED_DEADLINE_NOT_EVALUATED")
+        notes.append(
+            "the inherited-red deadline was NOT evaluated — no acknowledgement "
+            "ledger and/or no commit-age function was supplied, so whether a "
+            "gate red on both arms is owned by a live deadline is UNKNOWN here")
+    else:
+        # IMPORTED HERE, NOT AT MODULE SCOPE. This file is executed by the
+        # isolated trusted entry and its import graph is part of what the
+        # protected runtime pins; a top-level `sys.path` insertion in an
+        # authority file changes what every later import resolves to, and it
+        # measurably broke two end-to-end cases when it was one.
+        for reason in _load_red_since().inherited_red_reasons(
+                list((hygiene or {}).get("carried") or []),
+                list(red_since_ledger), commit_age):
+            reasons.append(reason)
 
     if any("assigned at merge" in l for l in land.passed):
         # A DEFERRAL IS AN ACTION ITEM, NOT A CLEAN SHEET. Measured 2026-08-12:
@@ -1551,6 +1612,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "strong one")
     ap.add_argument("--candidate-gate-rc", type=int, default=0,
                     help="OS exit status of the candidate non-target gate arm")
+    ap.add_argument("--red-since-ledger", default="",
+                    help="tools/ci/gate_red_since.json as the BASE commit "
+                         "carries it. The acknowledgement policy is BASE-owned, "
+                         "like the protected transition manifest: a candidate "
+                         "must not be able to grant itself an amnesty. Absent "
+                         "means the inherited-red deadline is NOT evaluated, "
+                         "and that is DISCLOSED rather than assumed clean")
+    ap.add_argument("--red-since-repo", default="",
+                    help="a repository containing the commits the ledger's "
+                         "`since` fields cite, used only to count commits "
+                         "behind HEAD. Absent means the same disclosure")
     ap.add_argument("--require-composite-gate-record", action="store_true",
                     help="require the B2 rc and matching terminal sentinel; "
                          "used when targeted evidence comes from parallel B1")
@@ -1690,6 +1762,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                hygiene=hygiene,
+               red_since_ledger=(
+                   _load_red_since().load_ledger(Path(a.red_since_ledger))
+                   if a.red_since_ledger else None),
+               commit_age=(
+                   _load_red_since().git_age(Path(a.red_since_repo))
+                   if a.red_since_repo else None),
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason,
                missing_process_files=missing_process_files,
