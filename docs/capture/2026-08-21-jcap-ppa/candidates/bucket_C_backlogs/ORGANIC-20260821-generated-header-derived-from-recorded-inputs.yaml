@@ -1,0 +1,18 @@
+type: enhancement
+severity: P1
+component: program:phase3_one_shot_runner
+plugin_version: "1.11.66"
+
+title: >-
+  A generated report header must be derived from the inputs the session actually opened
+
+pattern: |
+  A generated document describes its own basis in a header written as prose literals, while the session that produced it takes its inputs from variables resolved at run time. The two drift the first time a caller reaches the emitter by a path the header's author did not have in mind, and the document then states a basis the session never had. Nothing downstream can detect it: the header is well-formed, the numbers are real numbers produced by the real tool, and the only witness is the input list, which the document does not carry.
+
+suggested_fix: |
+  Give every emitter a recorded list of the inputs it opened, and derive every self-describing line of the header from that list rather than from a literal. Then a single gate can assert, for any generated document, that each basis claim in its header is entailed by its own input list — and an emitter that claims a basis it cannot support fails at emission rather than at review. The degradation rule comes with it: when the intended input is missing, the emitter falls back AND the header, the stamp and the provenance envelope all name what was actually linked.
+
+id: "ORGANIC-20260821-generated-header-derived-from-recorded-inputs"
+submitted_at: "2026-08-21T23:23:36+08:00"
+session_context: >-
+  Raised while distilling an end-to-end drive of the measurement layer over one routed core. The instance that produced it has since been fixed in its own emitter by exactly this technique, which is what makes the general form worth building: the technique is known to work and is applied in one place out of many.

@@ -1,8 +1,0 @@
-{
-  "id": "41",
-  "name": "Wafer Sort / Probe Test (ATE + probe card)",
-  "status": "external",
-  "phase": "manufacturing",
-  "folder": "41_wafer_sort_probe_test_ate_probe_card",
-  "outputs": []
-}

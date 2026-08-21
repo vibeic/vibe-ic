@@ -1,0 +1,6 @@
+u01 csa_mux auto 0.60 0.00 hc
+u02 csa_mux_hier auto 0.60 0.00 ks
+u03 csa_alt_maj auto 0.50 0.00 ks
+u04 csa_mux auto 0.60 0.02 ks
+u05 csa_alt_hier auto 0.60 0.00 ks
+u06 csa_add1 auto 0.60 0.00 ks
