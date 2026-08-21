@@ -22,6 +22,38 @@ for why it is not already covered; this file is their CLI, their corpus driver,
 and the place where the two halves of a verdict -- what the numbers derive and
 what the record asserts -- are put side by side.
 
+WHERE THIS SITS IN THE FLOW, DECLARED AT THE TOP BECAUSE IT IS A DECISION
+=========================================================================
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 36 while step 36 is running. That is the narrow question
+`flow_gate_enforcement_audit` scores, and `advisory` is that audit's token for
+the answer; it is NOT a licence to ignore the verdict. This gate is a leg of
+step 36 in the flow's BLOCKING slot -- wired as `optional_program_exit_zero`
+with an `absent_condition_reason`, never as `advisory_program_exit_zero`. An
+`optional_` clause whose condition IS met is evaluated exactly like the
+unconditional blocking form, and since vibe-ic W4 an UNMET condition FAILs
+outright unless the wiring site declares why an absent input is genuinely
+not-applicable. So when `flow_compliance_check` evaluates that clause an rc 1
+FAILs the step — and step 37 `blocks_on: [34, 36]`, so a record
+that cannot support its claim stops the run before stream-out. The two words are
+one axis apart and reading them as one axis is how a gate gets quietly defanged
+into the advisory slot.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING: this program validates a RECORD, not
+a design. The phase-3 runner's inline pattern spawns gates over artefacts the
+step it guards has just produced, and no step produces a head-to-head record —
+it is written by a comparison campaign, not by a flow run. There is nothing for
+an inline spawn to observe as it happens.
+
+AND IT IS AT THE TOP FOR A MEASURED REASON, not a stylistic one. This block was
+written at the END of this docstring, where it was TRUE AND UNREAD: `flow_gate_
+enforcement_audit.declared_intent` scans `text[:4000]`, and the declaration sat
+at byte 8249, so the audit reported `undeclared::ppa_head_to_head_check` --
+"AUDIT_ONLY and nothing in the gate says that was the decision" -- about a gate
+that had said so at length. A declaration that the reader it is written for
+cannot reach is not a declaration. Keep it inside the first 4000 bytes; if this
+docstring grows a longer preamble, the declaration moves up with it.
+
 WHAT #1121 SAYS, AND WHY A GATE IS THE FIRST STEP
 =================================================
 Our published numbers — VerilogEval-v2 153/156, RTLLM 49/50, CVDP 243/302 —
@@ -139,27 +171,6 @@ MISSING IS NOT WINNING
 An arm with an unmeasured axis yields rc=2 UNDETERMINED, never a win on the axes
 that were measured. A comparison that could not look must not reach a reader as
 a comparison that looked and was favourable.
-
-ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
-step 36 while step 36 is running. That is the narrow question
-`flow_gate_enforcement_audit` scores, and `advisory` is that audit's token for
-the answer; it is NOT a licence to ignore the verdict. This gate is a leg of
-step 36 in the flow's BLOCKING slot -- wired as `optional_program_exit_zero`
-with an `absent_condition_reason`, never as `advisory_program_exit_zero`. An
-`optional_` clause whose condition IS met is evaluated exactly like the
-unconditional blocking form, and since vibe-ic W4 an UNMET condition FAILs
-outright unless the wiring site declares why an absent input is genuinely
-not-applicable. So when `flow_compliance_check` evaluates that clause an rc 1
-FAILs the step — and step 37 `blocks_on: [34, 36]`, so a record
-that cannot support its claim stops the run before stream-out. The two words are
-one axis apart and reading them as one axis is how a gate gets quietly defanged
-into the advisory slot.
-
-WHY IT IS NOT PROMOTED TO INLINE-BLOCKING: this program validates a RECORD, not
-a design. The phase-3 runner's inline pattern spawns gates over artefacts the
-step it guards has just produced, and no step produces a head-to-head record —
-it is written by a comparison campaign, not by a flow run. There is nothing for
-an inline spawn to observe as it happens.
 
 chip-AGNOSTIC, PDK-AGNOSTIC, vendor-AGNOSTIC: no design, PDK, process, vendor or
 part literal appears in the logic or can affect it. The PDK string is compared
