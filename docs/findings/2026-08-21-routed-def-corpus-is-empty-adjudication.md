@@ -232,6 +232,22 @@ attaches to the population refusal:
     # …and the wrapper on the gate line each one precedes:
     #   run_tolerating_uncheckable  x20      run  x0      gate_dispatch_over  x0
 
+And none of the 20 has expired. Measured 2026-08-22, ISO-8601 so a string
+compare is a date compare: **9** dated `2026-11-30`, **11** dated `2027-02-28`,
+**0** past their review date. That matters because `gate_dispatch_finish` fails
+the run on an expired exemption too — so the routed-DEF population refusal really
+is the only unexempted blocking refusal in the file today, rather than one red
+among several of its class.
+
+*A count that matches is not an identity.* Nine exemptions carry the earlier date
+and the brief observed nine exempted NOT CHECKED rows, which is a coincidence of
+integers and nothing more: four of the 20 sit inside `_per_published_cell_gates`
+and cannot fire at all while the population is 0, leaving at most 16 that could
+produce a row, and which of those actually returned rc 2 in a given run is a fact
+about that run. Without its record the nine cannot be mapped one to one, and
+asserting it because the numbers agree would be the "the count was true and the
+impression was false" error this file keeps repairing.
+
 So every exemption in the file is bought by a GATE whose own process returned
 rc 2 — "I could not look at my subject". This row is not a gate's verdict at all;
 it is the dispatcher stating that the denominator was zero, and it is the only
