@@ -249,8 +249,13 @@ d5_deps_correct              0.42s                                           1%
 
 **d6 holds a single pytest item for 46 seconds against a 60-second no-progress
 window, on an idle machine.** Four of the nine modules carry an item worth a
-quarter of the window or more, and pytest emits no transition during any of
-them.
+quarter of the window or more.
+
+(When this was written it continued "and pytest emits no transition during any
+of them". **That is false and is retracted** — renewal inside items was
+afterwards measured at a 10-15 s cadence, further down. The item-duration table
+here is kept because the numbers are real, but see below for why item duration
+turned out to be the WRONG quantity to be measuring.)
 
 **Re-measured on a quieter box, and it is worse than that.** At load 0.57:
 
@@ -510,14 +515,15 @@ the evidence actually supports.
 All three pass without any change to the repository once the box is not being
 saturated by this file's own nested pytest children: 10 and 11 in the full-file
 run at load 3.45, 13 alone at load 18-30 (`1 passed in 163.79s`). The failure
-signature to recognise is `PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress
-stream was produced` — the child was killed before it emitted anything, i.e.
-interpreter startup was scored as a hang. The watchdog's stall clock starts
-before the child can possibly report (`_watchdog.supervise()` sets
-`last_progress = start`), so "has not started yet" and "stopped reporting" are
-one state to it. That looks like the conflation this repository has removed from
-`_vacuous_exit`, `UNCHECKABLE` and rc=127 — and it is NOT one. See directly
-below.
+signature this section originally pointed at was
+`PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress stream was produced`, read as
+"the child was killed before it emitted anything, i.e. interpreter startup was
+scored as a hang". **That reading is retracted.** `_watchdog.supervise()` does
+set `last_progress = start`, but a startup-keyed probe was later measured NOT to
+engage, and reds 10, 11 and 13 were all shown to be MID-RUN stalls: progress is
+observed early and then stops. The startup framing was wrong for all three — see
+"PROBED to a conclusion" below, and the 10-15 s renewal cadence measured after
+it.
 
 **CORRECTION — it is not a weakness, it is a pinned trade-off.** An earlier
 revision of this file called the startup blind spot a defect that was merely out
