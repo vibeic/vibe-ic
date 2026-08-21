@@ -10,7 +10,7 @@ design directory under analog/<block>/ with the required deliverables:
 Also checks analog/analog_block_list.json if present (explicit block list
 from analog-spec-extract skill).
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No analog modules detected in RTL AND no analog_block_list.json
 
 Usage:
@@ -18,9 +18,13 @@ Usage:
     python3 analog_block_coverage_check.py <project_dir> --json reports/gates/analog_coverage.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: analog blocks were found and every one has its deliverables
     1 = FAIL (uncovered analog blocks)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — this project declares no analog block
+        at all, so there was no coverage to measure. #521: this used to be
+        rc 0, which credited the gate in the plain PASS tier on 183 of the 200
+        tracked project roots, including a mixed-signal design's own results
+        directory. Also rc 2 for an IO / parse error on the argument.
 """
 from __future__ import annotations
 
@@ -32,6 +36,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 ANALOG_MODULE_PATTERNS = re.compile(
@@ -203,16 +209,24 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
+
+    # #521 — the verdict is routed from the gate's OWN structured result. The
+    # `skipped: True` branch in run_audit has always known there was no analog
+    # block to cover; main() simply never read it back.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        status = waiver_status if result.passed else "FAIL"
-        print(f"[{status}] analog_block_coverage_check")
+        print(_vx.verdict_line("analog_block_coverage_check", result.passed,
+                               skipped, reason, pass_token=waiver_status))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

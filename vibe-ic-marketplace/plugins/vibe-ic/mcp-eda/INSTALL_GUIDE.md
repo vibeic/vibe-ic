@@ -64,17 +64,37 @@ npm install -g @anthropic-ai/claude-code
 
 ---
 
-## Step 1: Install IIC-OSIC-Tools Docker Image
+## Step 1: Install the EDA Docker Image
 
-The IIC-OSIC-Tools image is a single Docker image (~22 GB) that contains
-**all** open-source EDA tools needed for the full RTL-to-GDS flow. No
-individual tool installation required.
+Every EDA tool runs inside one Docker container (the full RTL-to-GDS toolchain — no
+individual tool installs). There are two image options; **the plugin looks for a container
+named `vibeic-eda` either way** (`EDA_CONTAINER`).
+
+### Option A (recommended): the enhanced `vibeic-eda` image
+
+A forked + enhanced toolchain (OpenROAD / yosys / ngspice / magic / netgen / iverilog /
+klayout) carrying **gatekeeper-verified FAIL→PASS fixes** over the stock base — e.g. yosys
+uplifted to 0.66 + slang SV frontend, ngspice `-b` batch-honesty nonzero-rc, netgen
+property-error LVS verdict (kills silent false-pass), klayout MANUFACTURINGGRID streamout
+snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Get the enhanced image — pull the
+published one, or build from the canonical source:
+
+```bash
+docker pull ghcr.io/vibeic/vibeic-eda:latest                 # published image (all fork fixes baked in)
+# — or build from source (advanced): the Dockerfile lives in the canonical repo, not this tree
+git clone https://github.com/vibeic/vibeic-eda && docker build -t vibeic-eda:latest vibeic-eda/
+```
+
+### Option B: the stock IIC-OSIC-Tools base
+
+The upstream image (~22 GB) with the standard tool versions listed below (no fork fixes):
 
 ```bash
 docker pull hpretl/iic-osic-tools:latest
 ```
 
-This may take 10-30 minutes depending on your internet connection.
+This may take 10-30 minutes depending on your internet connection. The table below lists the
+**stock** baseline versions; Option A uplifts several (yosys → 0.66-fork, etc.).
 
 ### Tools Included in the Image
 
@@ -91,6 +111,8 @@ This may take 10-30 minutes depending on your internet connection.
 | **ngspice** | latest | SPICE simulation (analog/mixed-signal) |
 | **Xyce** | 7.10 | Advanced parallel SPICE simulation |
 | **cocotb** | 2.0.1 | Python-based testbench framework |
+| **cocotb-coverage** | 2.0 | Functional coverage + constrained-random (`pip install cocotb-coverage`) — required by the `eda_professional_tb` generated testbenches |
+| **pyuvm** | 4.0.1 | Python UVM (structure without a commercial simulator) |
 | **SymbiYosys** | latest | Formal verification (with Yices solver) |
 | **GTKWave** | latest | Waveform viewer |
 | **Xschem** | latest | Schematic editor |
@@ -111,21 +133,54 @@ Both PDKs are pre-installed at `/foss/pdks/` inside the container:
 
 ## Step 2: Start the EDA Container
 
-Launch the container with your designs directory mounted:
+Launch the container with your designs directory mounted.
+
+**Point this at a directory you ALREADY have** — normally your project directory,
+or the parent directory holding your projects. Letting the container see the
+files you are working on is the mount's only job.
 
 ```bash
-docker run -d --name iic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+export VIBEIC_DESIGNS="/path/to/your/projects"   # ← an EXISTING directory of yours
+```
+
+There is no default location, nothing picks one for you, and installing the
+plugin adds nothing to your home directory. `docker run` silently creates a
+missing bind-mount source as `root`, so the recipe below refuses to start when
+`$VIBEIC_DESIGNS` does not exist rather than leaving you a phantom directory. If
+you want a dedicated workspace instead of reusing an existing tree, create it
+yourself first and point at that.
+
+```bash
+# Option A image: vibeic-eda:latest   |   Option B image: hpretl/iic-osic-tools:latest
+docker rm -f vibeic-eda 2>/dev/null || true   # "name already in use" = an old container exists; drop it first
+[ -d "$VIBEIC_DESIGNS" ] || { echo "set VIBEIC_DESIGNS to an existing directory first"; exit 1; }
+docker run -d --name vibeic-eda \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   -p 8888:80 \
   -p 5901:5901 \
-  hpretl/iic-osic-tools:latest
+  vibeic-eda:latest --skip sleep infinity
+# Tip: to swap an already-running container to a new tag WITHOUT retyping the mounts/ports,
+# use the config-preserving helper:  tools/vibeic-eda/restart-eda.sh
+# (no argument = the newest vibeic-eda image this host holds, by digest; or pass a tag)
 ```
 
 ### Mount Point Explanation
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `$HOME/AI_IC_design` | `/foss/designs` | Your design workspace (RTL, netlists, GDS) |
+| `$VIBEIC_DESIGNS` | `$VIBEIC_DESIGNS` | Identity mount — host absolute paths resolve unchanged in-container (Phase 3 needs this) |
+| `$VIBEIC_DESIGNS` | `/foss/designs` | Your design workspace (RTL, netlists, GDS) |
+
+`$VIBEIC_DESIGNS` is whatever directory **you** chose above — the plugin ships no
+default and never creates it.
+
+You do not normally need to configure anything further: when a runner or scorer
+is invoked with a project directory it derives the designs root from that project
+plus the container's own mount table. `VIBEIC_DESIGNS_HOST_ROOT` is an optional
+explicit override for CI and non-standard layouts. When a tool can resolve
+neither, it returns a `DESIGNS_ROOT_UNRESOLVED` status listing both routes — it
+never guesses a path and never creates one.
 
 The MCP EDA Server executes all EDA tools inside this container via
 `docker exec`, so file paths in MCP tool calls use container paths
@@ -134,7 +189,7 @@ The MCP EDA Server executes all EDA tools inside this container via
 ### Verify the Container is Running
 
 ```bash
-docker ps --filter name=iic-eda
+docker ps --filter name=vibeic-eda
 ```
 
 You should see the container in `Up` status.
@@ -146,7 +201,7 @@ You should see the container in `Up` status.
 ### 3a. Clone and Install
 
 ```bash
-cd ~/AI_IC_design
+cd "$VIBEIC_DESIGNS"
 git clone <your-repo-url>/mcp-eda.git
 cd mcp-eda
 npm install
@@ -157,7 +212,7 @@ npm install
 **Option A: CLI command (recommended)**
 
 ```bash
-claude mcp add eda-tools node ~/AI_IC_design/mcp-eda/src/index.js
+claude mcp add eda-tools node "$VIBEIC_DESIGNS/mcp-eda/src/index.js"
 ```
 
 **Option B: Manual configuration**
@@ -177,9 +232,9 @@ The file should contain:
     "eda-tools": {
       "type": "stdio",
       "command": "node",
-      "args": ["/home/<your-user>/AI_IC_design/mcp-eda/src/index.js"],
+      "args": ["/home/<your-user>/vibe-ic-designs/mcp-eda/src/index.js"],
       "env": {
-        "EDA_CONTAINER": "iic-eda"
+        "EDA_CONTAINER": "vibeic-eda"
       }
     }
   }
@@ -241,7 +296,7 @@ programs.
 ### 4a. Clone and Install
 
 ```bash
-cd ~/AI_IC_design
+cd "$VIBEIC_DESIGNS"
 git clone <your-repo-url>/vibe-ic-marketplace.git
 cd vibe-ic-marketplace/plugins/vibe-ic-d
 pip install pytest   # for running compliance tests
@@ -373,7 +428,7 @@ For commercial or custom PDKs (e.g., proprietary 180nm libraries):
 ### 6a. Prepare PDK Files
 
 ```bash
-mkdir -p ~/AI_IC_design/pdk/my_custom_pdk
+mkdir -p "$VIBEIC_DESIGNS/pdk/my_custom_pdk"
 ```
 
 Place the following files:
@@ -416,30 +471,30 @@ accessible:
 ```bash
 echo "=== Verifying EDA Tools in Docker Container ==="
 
-echo -n "Yosys:         "; docker exec iic-eda yosys --version 2>&1 | head -1
-echo -n "OpenROAD:      "; docker exec iic-eda openroad -version 2>&1 | head -1
-echo -n "OpenSTA:       "; docker exec iic-eda sta -version 2>&1 | head -1
-echo -n "Verilator:     "; docker exec iic-eda verilator --version 2>&1 | head -1
-echo -n "Icarus:        "; docker exec iic-eda iverilog -V 2>&1 | head -1
-echo -n "KLayout:       "; docker exec iic-eda klayout -v 2>&1 | head -1
-echo -n "Magic:         "; docker exec iic-eda magic --version 2>&1 | head -1
-echo -n "Netgen:        "; docker exec iic-eda netgen --version 2>&1 | head -1
-echo -n "ngspice:       "; docker exec iic-eda ngspice --version 2>&1 | head -1
-echo -n "cocotb:        "; docker exec iic-eda pip3 show cocotb 2>&1 | grep Version
-echo -n "SymbiYosys:    "; docker exec iic-eda sby --help 2>&1 | head -1
+echo -n "Yosys:         "; docker exec vibeic-eda yosys --version 2>&1 | head -1
+echo -n "OpenROAD:      "; docker exec vibeic-eda openroad -version 2>&1 | head -1
+echo -n "OpenSTA:       "; docker exec vibeic-eda sta -version 2>&1 | head -1
+echo -n "Verilator:     "; docker exec vibeic-eda verilator --version 2>&1 | head -1
+echo -n "Icarus:        "; docker exec vibeic-eda iverilog -V 2>&1 | head -1
+echo -n "KLayout:       "; docker exec vibeic-eda klayout -v 2>&1 | head -1
+echo -n "Magic:         "; docker exec vibeic-eda magic --version 2>&1 | head -1
+echo -n "Netgen:        "; docker exec vibeic-eda netgen --version 2>&1 | head -1
+echo -n "ngspice:       "; docker exec vibeic-eda ngspice --version 2>&1 | head -1
+echo -n "cocotb:        "; docker exec vibeic-eda pip3 show cocotb 2>&1 | grep Version
+echo -n "SymbiYosys:    "; docker exec vibeic-eda sby --help 2>&1 | head -1
 
 echo ""
 echo "=== Verifying PDKs ==="
-docker exec iic-eda ls /foss/pdks/gf180mcuD/ > /dev/null 2>&1 && echo "GF180MCU: OK" || echo "GF180MCU: MISSING"
-docker exec iic-eda ls /foss/pdks/sky130A/ > /dev/null 2>&1 && echo "SKY130:   OK" || echo "SKY130:   MISSING"
+docker exec vibeic-eda ls /foss/pdks/gf180mcuD/ > /dev/null 2>&1 && echo "GF180MCU: OK" || echo "GF180MCU: MISSING"
+docker exec vibeic-eda ls /foss/pdks/sky130A/ > /dev/null 2>&1 && echo "SKY130:   OK" || echo "SKY130:   MISSING"
 
 echo ""
 echo "=== Verifying MCP Server ==="
-node ~/AI_IC_design/mcp-eda/src/index.js --help 2>&1 | head -1 || echo "MCP Server: OK (stdio mode, no --help)"
+node "$VIBEIC_DESIGNS/mcp-eda/src/index.js" --help 2>&1 | head -1 || echo "MCP Server: OK (stdio mode, no --help)"
 
 echo ""
 echo "=== Verifying vibe-ic-d ==="
-cd ~/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d && python3 -m pytest tests/ --tb=no -q 2>&1 | tail -3
+cd "$VIBEIC_DESIGNS"/vibe-ic-marketplace/plugins/vibe-ic-d && python3 -m pytest tests/ --tb=no -q 2>&1 | tail -3
 
 echo ""
 echo "=== All checks complete ==="
@@ -484,7 +539,7 @@ Claude will:
 |  eda_sta_mcorner | eda_rtl_audit                   |
 +---------------------+-----------------------------+
                       |
-                      | docker exec iic-eda ...
+                      | docker exec vibeic-eda ...
                       v
 +---------------------------------------------------+
 |       IIC-OSIC-Tools Docker Container              |
@@ -718,9 +773,10 @@ you can fabricate a real chip:
 
 ```bash
 # 1. Start Docker container
-docker start iic-eda || docker run -d --name iic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  hpretl/iic-osic-tools:latest
+docker start vibeic-eda || docker run -d --name vibeic-eda \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
+  vibeic-eda:latest --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 
 # 2. Launch Claude Code with MCP
 claude
@@ -729,16 +785,17 @@ claude
 ### Stop Everything
 
 ```bash
-docker stop iic-eda
+docker stop vibeic-eda
 ```
 
 ### Reset Container
 
 ```bash
-docker rm -f iic-eda
-docker run -d --name iic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  hpretl/iic-osic-tools:latest
+docker rm -f vibeic-eda
+docker run -d --name vibeic-eda \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
+  vibeic-eda:latest --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 ```
 
 ---
