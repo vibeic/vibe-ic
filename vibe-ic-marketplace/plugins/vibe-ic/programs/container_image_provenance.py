@@ -166,10 +166,12 @@ def verify(container: str, require_image: Optional[str] = None) -> Dict[str, obj
                 "(docker exec <container>), not an image. Start one first: "
                 "tools/vibeic-eda/restart-eda.sh (it pins the tag and then "
                 "verifies the container's image id), or plainly: "
-                "docker run -d --init --name <name> %s sleep infinity — and if the "
+                "docker run -d --init --memory 48g --memory-swap 48g "
+                "--name <name> %s sleep infinity — and if the "
                 "image declares an ENTRYPOINT launcher, pass its skip flag "
                 "before the command, e.g. "
-                "docker run -d --init --name <name> %s --skip sleep infinity "
+                "docker run -d --init --memory 48g --memory-swap 48g "
+                "--name <name> %s --skip sleep infinity "
                 "(check `docker image inspect --format "
                 "'{{.Config.Entrypoint}}' %s`)." % (container, container,
                                                     container)
