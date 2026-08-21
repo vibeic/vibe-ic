@@ -2,14 +2,14 @@
 # Corpus-sweep REQUIRED before merging into programs/pad_ring_gen.py.
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
-# Pattern: A step re-implements an upstream flow's config contract and silently drops one of the inputs that contract declares. The dropped input is the one that closes a branch the step then refuses on, so the refusal is TRUE about what the step read and FALSE about what the distribution declared. Nothing downstream can see the difference, because a step that never looks for an input reports exactly what a step that looked and found nothing reports.
+# Pattern: A step concludes a named thing is ABSENT after consulting one of the several views a distribution ships for that class of thing, and reports the conclusion as a fact about the distribution rather than as a fact about what it read. The disclosure is not what is missing -- such a step routinely names the files it opened and the zero it found in them -- so a reader auditing the artefact sees a complete, honest, wrong answer. What is missing is the comparison between the views that exist and the views that were opened.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_upstream_input_set_pin(sample_text, ports):
-    """Pin the INPUT SET of a re-implementation against its upstream. For any module that declares it borrows an upstream config contract, the set of variables upstream declares for that contract must equal the set this module either CONSUMES or explicitly declares UNPERFORMED. A variable in neither list is a silently dropped input. The comparison is a set difference over two enumerable lists, so it is a program's decision and not a reader's."""
+def rule_refusal_on_absence_read_every_view(sample_text, ports):
+    """A refusal on absence must have read every view the distribution ships for that class of thing. A distribution's view directories are a fixed, small, on-disk set, and a step that refuses on absence already records which files it opened, so the check is a set difference over directories that exist. It asks the question ONLY when the verdict is a refusal on absence, so a run that finds what it was looking for can never trip it."""
     # Expected signal: ERROR
-    # Suggested fix action: Parse the upstream config module for the variables it declares in the contract being borrowed, parse this module's own declared-required and declared-unperformed tuples, and refuse on the set difference, naming each dropped variable and the upstream docstring that says what it is for. The refusal must NAME the variables, not count them. A count is not the output: two defensible denominators over this same pair gave 11-of-20 and 13-of-14, so the finding is the list of unaccounted names or it is nothing.
+    # Suggested fix action: On any verdict that asserts a declared name is absent, enumerate the view directories of the resolved distribution tree, project the artefact's own list of opened paths onto those directories, and refuse the REFUSAL when the two differ -- naming the unread views. The step is then required to look, or to say why that view does not apply, before it may report the absence.
     return []  # list of findings — TODO implement
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.66

@@ -17,7 +17,7 @@ Deliverable: `recoveries.json` (5 records) emitted through
 
 | # | finding | bucket | why it stopped there |
 |---|---------|--------|----------------------|
-| F1 | the step read the wrong PDK view | **A** | a set difference over two enumerable variable lists |
+| F1 | the step read the wrong PDK view | **A** | a set difference over the view directories that exist on disk — see the correction below; the rule this table first carried was refuted by its own sweep |
 | F2 | the extent came from the oriented footprint | **A** | a taint walk over one function's assignments |
 | F3a | the tool does not honour the rotation variable | **T** (OpenROAD) | the plugin does not place the rows; anything it did here would be a second guess on top of a wrong one |
 | F3b | the degradation contract for a knob the tool ignores | **A** | drive the step twice and read the exit code and the report keys |
@@ -287,6 +287,80 @@ Every figure above is from a command run on this host tonight, not from the
 source report. Where the source report and my measurement agree, I re-derived
 it; where they disagree — `PAD_ROTATION_VERTICAL` being inert — the measurement
 is in `evidence/` and the disagreement is the finding.
+
+---
+
+## CORRECTION — F1's Bucket-A rule, refuted by its own corpus sweep
+
+The brief says a new guard must run clean on the current repo, and that a guard
+which fires on the state we just shipped is a bug to be narrowed or dropped. I
+swept the F1 rule over its whole population before proposing it further, and it
+does not survive. Recording that here because the earlier version of this
+document proposed it, and a wrong rule that was published as measured is worse
+than one that was never written.
+
+**The rule as first written:** *a re-implementation must account for every input
+its upstream declares*, caught by a set difference. It fails in both directions
+at once.
+
+**Population** — programs that declare an upstream contract AND cite it by
+path: **5 of 1232**.
+
+| scoping of "upstream's input set" | unaccounted | modules that fire | catches the defect? |
+|---|---|---|---|
+| variables read by the CITED upstream files | 43 | 4 / 5 | yes, buried in 42 others |
+| narrowed to upstream's own `pdk=True` set (145 of its 406) | 19 | 3 / 5 | **no — control on the pre-fix tree returns []** |
+| the upstream STEP's declared inputs (20, introspected from the running library) | — | — | **no — the variable is not in the list** |
+
+The narrowing in row 2 is not one I invented to fit the answer: it is upstream's
+own `pdk=True` flag, which separates facts about the distribution from harness
+plumbing, and it correctly removes `SCRIPTS_DIR` / `STEP_DIR` / `DESIGN_NAME` /
+`CURRENT_GDS` without anyone deciding they should go. It still fails.
+
+**Why no scoping contains it, structurally.** The dropped variable is declared
+in upstream's PDK variable table and consumed in a COMMON helper sourced by many
+steps. It is in neither the pad step's own scripts nor its `config_vars` —
+upstream's model does not attach it to the step at all. It is a fact about the
+distribution that any step touching pads inherits implicitly, so a set
+difference over *this step's declared inputs* cannot contain it under any
+reading of that phrase.
+
+### What survives, and it is a strengthening rather than a retreat
+
+> **A refusal on absence must have read every view the distribution ships for
+> that class of thing.**
+
+Not *"say which views you read"* — measured earlier in this document, the
+pre-fix refusal already said that. The missing thing was never the disclosure;
+it was the comparison between the views that exist and the views that were
+opened. A distribution's view directories are a fixed, small, **on-disk** set,
+and a step that refuses on absence already records which files it opened, so the
+check is a set difference over directories that exist. It only asks the question
+on a refusal-on-absence, so a run that finds what it was looking for can never
+trip it — which is where its narrowness comes from, rather than from tuning.
+
+Measured, both arms (`evidence/f1_view_coverage_probe.py`):
+
+```
+PRE-FIX   FAIL, refuses on absence   ships [libs.ref, libs.tech]
+                                     read  [libs.ref]        -> FIRES
+POST-FIX  PASS                       ships [libs.ref, libs.tech]
+                                     read  [libs.ref, libs.tech] -> silent
+```
+
+`recoveries.json`'s F1 record now carries this rule and a `supersedes` field
+naming what it replaced. F2's record is untouched: its pin is a taint walk with
+its own measured red/green, and it does not depend on any variable set.
+
+**What this costs the general claim.** F1 and F2 are no longer "the same rule at
+two granularities" — that was the earlier version of this document and it was
+wrong. F2's arithmetic pin works because our module cites the upstream file and
+the file can be read. F1's input-set pin does not work, because the input that
+was dropped is not attached to the step in upstream's own model. The general
+lesson that survives is narrower and more useful: **a re-implementation can be
+pinned against upstream where upstream's artefact is CITED and READABLE, and
+cannot be pinned against upstream's implicit distribution-wide facts at all —
+those have to be caught on the output side, by asking what the step read.**
 
 ---
 
