@@ -1,9 +1,9 @@
 # `matrix_63x8` — shared substrate for the flow-step × dimension coverage matrix
 
 The Vibe-IC flow has **69<!--figure:flow_steps--> steps**. The 2026-07 audit
-asked **8<!--figure:matrix_dimensions--> questions** of each one.
-69<!--figure:flow_steps--> × 8<!--figure:matrix_dimensions--> =
-**552<!--figure:ledger_cells--> cells**. This package is the substrate that
+asked **9<!--figure:matrix_dimensions--> questions** of each one.
+69<!--figure:flow_steps--> × 9<!--figure:matrix_dimensions--> =
+**621<!--figure:ledger_cells--> cells**. This package is the substrate that
 all eight dimension test-modules import so they agree on what a step is, what
 a gate says, and which cells exist.
 
@@ -53,7 +53,7 @@ Four specific forms of it, all of which an adversarial verifier will catch:
 
 ## The three-state rule
 
-Every one of the 552<!--figure:ledger_cells--> cells must end in **exactly
+Every one of the 621<!--figure:ledger_cells--> cells must end in **exactly
 one** of these, all machine-checkable:
 
 ### `ENFORCED`
@@ -156,7 +156,7 @@ Things that will bite you if you skip the docstring:
 * **No `program_exit_zero` form exists in `required_outputs`** — all 164<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
-### `cells.py` — the 552<!--figure:ledger_cells-->-cell ledger
+### `cells.py` — the 621<!--figure:ledger_cells-->-cell ledger
 `ALL_CELLS` is the cross product of `flowref.step_ids()` × `DIMENSIONS`, built
 **live from the yaml, never from the audit JSON**. Add or delete a step and the
 ledger changes with the repo; `test_matrix_63x8_ledger.py` notices.
@@ -287,7 +287,7 @@ thread-parallel test execution.
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery, asks each module the state of the
 cells it owns, and then RUNS those modules and joins the answer against what
-each cell's predicate actually did. **552<!--figure:ledger_cells--> / 552<!--figure:ledger_cells--> cells present,
+each cell's predicate actually did. **621<!--figure:ledger_cells--> / 621<!--figure:ledger_cells--> cells present,
 exactly once.**
 
 **The census has TWO axes, and the first is not quotable on its own.** A cell's

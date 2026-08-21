@@ -5,7 +5,7 @@ Everything here is recomputed from
 memoised for the process. Nothing in this module reads ``.audit_63x8.json``:
 the audit is history, the yaml is the repo. If a step is added, removed or
 re-gated, every accessor below changes with it — which is precisely what makes
-the 552<!--figure:ledger_cells-->-cell ledger self-invalidating.
+the 621<!--figure:ledger_cells-->-cell ledger self-invalidating.
 
 ====================================================================
 THE GRAMMAR, AS MEASURED (not as remembered)
