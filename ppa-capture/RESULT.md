@@ -1215,6 +1215,21 @@ the base cannot answer *"did this change make it worse"* by its exit code — on
 the diff of its output can, which is the same rule this batch records twice
 over.
 
+**And the comparison's own instrument was separation-tested**, because three
+byte-identical outputs are equally consistent with *"my change has no effect"*
+and with *"this gate prints the same thing regardless"*. Pointed at a different
+root the gate returns `rc 2` and `[CANNOT DETERMINE]` instead of its census — so
+it is not a constant.
+
+That establishes sensitivity to the root, not to the routing table specifically,
+and the honest claim needs the second half: **the identical output has a
+mechanism, not just an observation.** The gate counts a program as wired when it
+is reachable from the flow document, the routing table, a runner or the CI
+scripts — and **A-23** independently measured that every program this batch
+routes to was *already* reachable by one of the other paths. So the entries
+could not have changed the census, and two unrelated measurements agree on why.
+That agreement is the evidence; the byte-identity alone would not have been.
+
 **One honest note on how this was measured.** Comparing required temporarily
 reverting the routing file, running, and restoring it. The first attempt timed
 out mid-sequence, and I verified the restore had completed before continuing
