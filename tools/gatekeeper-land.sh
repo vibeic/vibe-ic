@@ -1553,11 +1553,19 @@ fi
 #
 # SO THE BUDGET MOVED INSTEAD, and this is the trade, stated rather than
 # buried. The ruling's four minutes was chosen for a review that was going to
-# READ a record. Running the set costs what the set costs — the lane above is
-# 259 s on this host with a REDUCED job pool, and this runs it alone after the
-# window has joined. Four minutes cannot contain that, and a deadline that can
-# only ever expire is not a deadline; it is an unconditional refusal wearing
-# one. 1800 s is the outer bound because it is `repo_hygiene_gate`'s own
+# READ a record. Running the set costs what the set costs, and the numbers are
+# MEASURED end to end rather than inferred from the lane above: the hygiene set
+# itself runs in 188-193 s on this host, and the review that runs it decides in
+# 247.5 s. Against a 240 s budget that is an overrun of 3% — small, and enough,
+# because a budget the review cannot meet is a deadline that can only ever
+# expire, and that is not a deadline; it is an unconditional refusal wearing
+# one.
+#
+# THE MARGIN IS STATED BECAUSE IT IS NARROW. An earlier version of this comment
+# argued from a 551 s run and read as though four minutes were hopeless. That
+# run was CONTENDED; quoting it as the cost overstated the case ~3x. The honest
+# claim is the small one: 247.5 s > 240 s on a quiet host, so the ruling's
+# budget expires without deciding even in the good case. 1800 s is the outer bound because it is `repo_hygiene_gate`'s own
 # `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the
 # REVIEW'S OWN SUPERVISOR still considers alive, and the kill would be reported
 # here as the review's verdict.
