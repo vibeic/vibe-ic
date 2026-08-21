@@ -28,7 +28,7 @@ is what surfaced them.
 |---|----|--------------------|---------------|
 | 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
 | 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | PROBED: the fourth state does close all three, and costs 2 further edits — and it is UNSTARTED, not pending |
-| 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED** | thin margin (2.1x); killed BETWEEN collections, not at startup — see below |
+| 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED, with a measured floor** | 2.1x -> 6x margin; but each renewal costs a FILE import, and at load 60+ that overhead alone beats the window — see below |
 | 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | mid-run stall, mechanism SETTLED by probe; widening the window reddens it, which is why it is not touched |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
 | 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | mid-run stall: one d3 item is 18.95 s against a 60 s window; widening the window is the measured trade, and it is refused |
@@ -678,6 +678,42 @@ ratio; a busy enough box beats any ratio. What the fixes remove is a
 CONSTRUCTION defect — a test whose green depended on scheduler jitter at
 ordinary load — and that is gone for both, with the improvement measured rather
 than assumed.
+
+## Why the two timing fixes have different ceilings — measured, not guessed
+
+Raising red 12's margin to `/6` made it 6 of 6 at load 87.88. Red 10 is on the
+SAME `/6` ratio and is **1 of 6 at load 63**. Same file, same technique, same
+ratio, an order of magnitude apart in robustness — so the difference was
+isolated rather than shrugged at.
+
+**The sleep is not red 10's constraint.** Driven to `0.001` — effectively no
+sleep at all, with the two `> 0.8 s` assertions stubbed so only the renewal
+mechanism was under test:
+
+```
+file_seconds = 0.001, load 76.32     1 of 4 green
+```
+
+**Three of four still fail with no sleep in the fixture.** So the floor is not
+anything this test can tune away: red 10's renewals are separate FILES, and each
+one costs a real interpreter import plus a pytest collection. At load 60+ that
+overhead alone exceeds the `0.30 s` window.
+
+That is the whole difference between the two:
+
+| | what one renewal costs | ceiling measured |
+|---|---|---|
+| red 12 | a test function in ONE already-imported file | 6/6 green at load 87.88 |
+| red 10 | a FILE — import + collect, every time | 1/6 green at load 63 |
+
+So red 10's fix should be read for exactly what it is: **the construction defect
+is gone** — the renewal interval no longer equals the window, which is what made
+the test measure scheduler jitter at ordinary load — and it is green 10/10
+alone, green in three concurrent full-file runs at load 31.5, and green in the
+original 5-way sweep shape. **It cannot be made robust at load 60+ by margin
+engineering**, because the remaining gap is per-file collection cost, and the
+only levers left are widening the window (refused) or removing files (which
+removes the renewals the test exists to demonstrate).
 
 ## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word
 
