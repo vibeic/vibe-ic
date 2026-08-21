@@ -128,3 +128,27 @@ the honest boundary of the measurement, and the drv3 finding is a warning that
 the boundary is where the misses live.
 
 Nothing was deleted. This file decides; a later job executes.
+
+## The same defect, in the other two shards
+
+The drv3 flip is a defect in the *test*, not in one row, so it should be expected
+wherever a deletion-bound verdict leans on the HEAD tree alone. Shards A and B
+carry 25 LANDED rows and 3 ABANDON rows between them; all 28 were re-measured on
+their own hosts.
+
+All 3 ABANDON rows hold, and 21 of the 25 LANDED rows hold — including
+`_wt_1390pg`, which *is* dirty but whose single edit is stale rather than novel
+(main has 82 lines the disk copy lacks and the disk copy adds none), so its
+LANDED survives. That row matters: it shows the check separates staleness from
+work instead of flagging every dirty tree.
+
+**Four LANDED rows do not hold**, all on .120:
+`_agentjob_i1015/wt`, `_agent_scratch_whatif/wt_C`, `_wt_1236` and `_wt_1486`.
+Each holds uncommitted bytes that are not on main — eleven files that main has
+never held at all, among them five whole test programs. All four working states
+are now preserved on `harvest/rescue-120-falselanded-*`, verified by re-hashing
+every transferred file and then reading one back through the pushed ref.
+
+Those rows belong to `jharvest-triage` and `jharv2`. I have not edited their
+verdict files. The measurement, the rescue and what the owners should change are
+in `FALSE_LANDED_shards_a_b.md`.
