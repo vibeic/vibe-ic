@@ -235,6 +235,32 @@ Of the two NEW in the larger group:
 
 So after the fix, **NEW = 0** against the selection a landing would run.
 
+### RE-VERIFIED ON THE FINAL HEAD
+
+Nine commits later — three programs and several test files changed since — the
+candidate arm was re-run against the same base (`origin/main` had not moved, so
+the base arm stands):
+
+    base 43 failed  |  candidate 40 failed  |  NEW 1, only-on-base 4
+
+The single NEW is `test_nested_validated_progress_is_relayed_to_the_outer_session`
+again — the `elapsed > 4.5` wall-clock MINIMUM already shown to fail on both
+arms and more often on the base.
+
+Three of the four only-on-base entries are in
+`test_issue1710_corpus_reading_gates_find_the_moved_corpus.py`, and they are not
+a difference between the arms at all. Run alone, that file is **identical on
+both arms — 12 failed, 30 passed, twice each**. Inside the 124-file selection it
+reported 3 failures on one run and 0 on another. Its verdict depends on what
+else ran in the same pytest session, not on the diff.
+
+That is worth stating rather than netting out: **a file whose result depends on
+its session neighbours cannot be used for arm attribution in either direction**,
+and taking the three as "fixed by this branch" would have been a flattering
+reading of the same instability that produced the NEW one.
+
+**NEW attributable to this branch: 0.**
+
 ## WHAT HAPPENS THE MOMENT THIS LANDS — A ONE-LANDING FUSE
 
 Stated because it is not obvious from any single commit here, and because it is
