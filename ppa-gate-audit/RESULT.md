@@ -30,7 +30,7 @@ Meanwhile the repository carries, committed and tracked:
     ppa-*/records/**/contract.json                82 vibeic.ppa.contract documents
     ppa-crosslayer/records/trials/*/candidates.json 21 candidate sets
     ppa-*/records/**/records_flat.json            metric record sets
-    ppa-crosslayer/equivalence/equiv_*.json       12 proven-equivalence records
+    ppa-crosslayer/equivalence/equiv_*.json       12 RTL-vs-RTL equivalence records
 
 ## Verdict per gate
 
@@ -195,17 +195,58 @@ for every trial. The gate agrees with the record set. It is running, it is exami
 real silicon measurements, and it is refusing to call any published candidate
 FEASIBLE — which is the honest answer.
 
-### The finding: the equivalence proofs exist and the adjudicator cannot see them
+### The finding: THREE equivalence relations, and the axis needs the one nobody proved
 
-`ppa-crosslayer/equivalence/` holds 12 committed equivalence records
-(`equiv_csa_add1.json`, `equiv_nr_rca.json`, …) and the v1.11.66 commit states that
-every RTL behind every published number is proven equivalent to the baseline. The
-`equivalence` axis is nevertheless `FEAS_NOT_MEASURED`, because no
-`vibeic.ppa.metric.v1` row in any `candidates.json` names that axis. The proof was
-run and is not wired into the record. That gap is real and it is a gap in the
-*record*, not in the design — which is why the gate says UNDETERMINED and not PASS.
+The rows are NOT missing. Each `candidates.json` carries
+`equivalence.verdict`, `reliability.em.violations` and
+`reliability.em.worst_ratio` as `vibeic.ppa.metric.v1` records — 67 distinct
+metric names across the 21 sets, those three among them. They are
+`status: NOT_MEASURED`, each with a stated reason, and the reason is where the
+finding is:
 
-`em` has no producer at all: no electromigration analysis ran in either campaign.
+    equivalence.verdict     status NOT_MEASURED
+      "the proven pair is RTL against 'post_dft_netlist.v (synth)', which names
+       no post-layout netlist. The routed netlist that became the layout was not
+       the gate side of this proof, so it establishes no post-route equivalence"
+
+Three different equivalence relations exist in this campaign and they are not
+interchangeable:
+
+  1. `ppa-crosslayer/equivalence/equiv_*.json` — `candidate_rtl == baseline_rtl`,
+     12 records, yosys, all PASS. This is the one v1.11.66 quotes when it says
+     every RTL behind every number is proven equivalent to the baseline, and it
+     is a claim about the REWRITE, not about the layout.
+  2. flow step 13 — candidate RTL against the candidate post-DFT netlist. The
+     `equiv_*.json` records name this one explicitly to say they are NOT it
+     ("step 13 passes on a rewritten candidate by construction and cannot
+     reject one").
+  3. what the `equivalence` feasibility axis at `stage: post_route` requires —
+     the ROUTED netlist that became the layout.
+
+(1) and (2) are filed. (3) is not proven by either, and the record says so in
+its own `reason` field rather than letting (1) stand in for it. The adjudicator
+is not blind to the proofs; it is refusing a proof of a different pair. That is
+the correct behaviour and the gap is real.
+
+`em` DID run — `openroad-psm`, `reports/phase3/em.json`, hash recorded — and
+produced no verdict:
+
+    reliability.em.violations   "the current-density screen states verdict
+                                 'nothing', which is neither PASS, FAIL nor SKIPPED"
+    reliability.em.worst_ratio  "the screen states no `summary.worst_utilization`,
+                                 so no segment was screened against a Jmax and no
+                                 ratio exists"
+
+So the missing artefact for the `em` axis is not an analysis run; it is an EM
+screen that reaches a verdict. Two different repairs, and conflating them would
+send someone to re-run a tool that already ran.
+
+**Correction.** An earlier draft of this report said the `equivalence` axis was
+`FEAS_NOT_MEASURED` "because no `vibeic.ppa.metric.v1` row in any
+`candidates.json` names that axis", and that `em` "has no producer at all: no
+electromigration analysis ran". Both are wrong. The rows exist, both tools ran,
+and the reasons above are what the records actually say. The wrong version would
+have sent a reader to wire up a producer that is already wired.
 
 ---
 
