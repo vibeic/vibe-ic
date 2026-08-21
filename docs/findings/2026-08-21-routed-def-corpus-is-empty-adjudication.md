@@ -202,9 +202,21 @@ zero **was** measured, and the sentence is true. **There is no dishonest
 declaration here to repair.** An earlier draft of this document claimed there
 was; that claim was wrong and is withdrawn.
 
-State A remains reachable — `tools/ci/repo_hygiene_gates.sh` run by hand, or
-`gatekeeper-land.sh`'s `lane_hygiene` on a host that never exported the pointer —
-and there the sentence is not true. That is a real but **secondary** observation
+State A remains reachable, from exactly two places, and the scope is narrower
+than an earlier draft of this document said. `gatekeeper-land.sh` never sets the
+binding — its only two mentions of `VIBE_IC_BENCHMARK_DATA` are a comment and a
+`[ -n … ]` read — but the PR-merge path does not run it bare:
+`gatekeeper-verify-merge.sh` `launch_hermetic_land_arm()` runs it inside
+`hermetic_candidate_runner.py`, which **injects the pointer itself**
+(`CORPUS_PATH = "/corpus"`, `"VIBE_IC_BENCHMARK_DATA": CORPUS_PATH`). That arm is
+state **B**. And with `GATEKEEPER_BENCHMARK_DATA_SHA` set but no pointer,
+`_corpus_location.resolve()` returns `REFUSED`, which is rc 2 whatever
+`may_be_absent` says — so "bound but unpointed" was never state A either.
+
+What is left is: `tools/ci/repo_hygiene_gates.sh` run directly with no pointer
+exported, and a human typing `tools/gatekeeper-land.sh` outside the hermetic
+runner with no pointer exported — and this repository does land by direct push on
+a maintainer's machine. There the sentence is not true. That is a real but **secondary** observation
 about a producer contract (`routed_def_corpus.py`'s docstring already promises
 *"A broken pointer, a loose directory, or a failed git query is UNDETERMINED
 (rc 2), never an empty population"*; an ABSENT corpus is the one row left out of
