@@ -67,9 +67,19 @@ been told about.
 
 1. **`--hygiene-record-in` / `--hygiene-record-rc` are gone from the CLI.**
    `review()` keeps `hygiene_record_in=` / `hygiene_record_rc=` as FUNCTION
-   KEYWORDS — the seam shape the failing test names in its first line — so all
-   ten tests in `test_hygiene_record_handover.py` still drive them and still
-   pass. `argv` cannot reach them.
+   KEYWORDS — the seam shape the failing test names in its first line — and
+   `argv` cannot reach them.
+
+   CORRECTED on the verification pass, because the first version of this line
+   said the ten tests in `test_hygiene_record_handover.py` "still drive them".
+   They do not: all ten call `hygiene_gate_from_record()` directly, and after
+   this change NO caller anywhere passes `hygiene_record_in=` to `review()`.
+   What the keywords are is a seam with no production caller, which is exactly
+   the standing `repo_hygiene_gate`'s own `script=` has and is why that
+   function's docstring is the precedent cited here. They are not inert: the
+   branch inside `review()` is live, and `_handover_kwargs()` reads them from
+   the signature — so deleting them turns the guard file RED rather than
+   silently vacuous, which was checked by deleting them (§7).
 2. **The caller's path is passed verbatim at the call site again**, in an
    explicit branch, with the record still written unconditionally in the other
    one. Both `test_the_land_script_still_honours_the_variable` and the batch's
@@ -222,3 +232,113 @@ removed flag existed to fit, so the conclusion it supported is unaffected. It
 is recorded because a measurement that answers about itself is the same class
 of defect as a gate that reads its own ledger, and this repo has been bitten by
 that one before.
+
+## 7. Independent re-verification, on a second pass over the same branch
+
+Everything in §5-§6 was re-measured from scratch against the pushed branch
+`ff9914c79`, by re-deriving each claim rather than re-reading the section that
+made it. Nothing below was taken on trust from the sections above.
+
+**The two reds, both arms.** Same two node IDs, `_jland67_base` at
+`546487a8a` (the batch, unfixed) and `_jland67` at `ff9914c79` (the fix), both
+worktrees under `$HOME` so the corpus gates walk the same parents:
+
+```
+batch 546487a8a : 2 failed in 0.56s   --hygiene is reachable from the CLI — that is a skip button
+fix   ff9914c79 : 2 passed in 0.50s
+```
+
+**The new guard, RED without the fix.** `test_hygiene_handover_is_in_process
+_only.py` copied into the unfixed batch tree and run there: `4 failed, 3
+passed` — the two shipped spellings rejected as unrecognized, the seam reached
+from `argv`, and `main()` handing the record on. `7 passed` on the fix. The
+batch worktree was restored to a clean `git status` afterwards.
+
+**No new red from the fix.** 71 passed across `test_hygiene_handover_is_in
+_process_only.py`, `test_hygiene_record_handover.py`,
+`test_issue1498_hygiene_subset_rule_is_wired.py` and
+`test_issue538_merge_gate_covers_ci_hygiene.py`; 32 passed across the two
+repo-root lander files, which no plugin-scoped selection reaches;
+`ci_harness_timeout_ceiling_check` rc 0.
+
+**The lane digests did not move.** Diffing the whole `_LANDING_LANE_SHA256`
+block between `origin/land/batch67-assembled` and this branch reports them
+IDENTICAL. The two digests that moved are the ones that pin the script the fix
+edits, and they had to move; the three that pin lane BODIES did not, which is
+the file's own witness that no lane was touched.
+
+**The wiring, made to fail.** The chain was rebuilt by EXTRACTING `run`,
+`run_capture`, `run_emit`, `lane_resolve` and `run_gatekeeper_review` from
+`tools/gatekeeper-land.sh`, plus the `run "full:gatekeeper-review"` call site
+itself — so a rename, a reshape or a deleted call site makes the driver
+unbuildable rather than silently driving a copy. At a 5 s budget, against the
+real `gatekeeper_review.py`:
+
+```
+  FAIL  gatekeeper review (deadline adjudicated)
+        UNDETERMINED: the review did not decide within 5s and was killed.
+        A landing may not proceed on a review that did not finish.
+FAILED=1
+```
+
+**The wiring, made to decide — twice, and the second one is new.** With the
+corpus UNBOUND the review decided in **53.3 s** at rc 1 and the landing still
+refused, naming the cause rather than a consequence:
+
+```
+[ERROR] repo_hygiene_gates: ... VIBE_IC_BENCHMARK_DATA and
+        VIBEIC_BENCHMARK_DATA_CHECKOUT are both unset ...
+        NOTHING WAS SCANNED and the hygiene set was NOT run.
+FAILED=1
+```
+
+That case is worth recording because it is the one the removed flag could have
+laundered: an unbound corpus reaches the verdict as a BLOCKING ERROR that says
+the set did not run, never as a green record of a set that did.
+
+With the corpus BOUND, on the same chain and the same tree:
+
+```
+# elapsed 247.5s  budget 1800s
+[FAIL] repo_hygiene_gates: 9 hygiene gate(s) FAILED: ...
+       [89/89 gate(s) ran in 193s; 11 NOT CHECKED (not a pass): ...]
+FAILED=1
+```
+
+**`89/89 gate(s) ran in 193s`** is the whole content of the change, measured a
+second time and on a second occasion: the set is PAID FOR, not adjudicated
+from a file. It was visibly the expensive thing while it ran — 101 `python3`
+processes at a load average of 54.
+
+**247.5 s here against 631.5 s in §6**, same tree, same chain, different load.
+The spread is worth stating because the smaller number is the stronger
+argument: even the FAST run overruns the 240 s the removed flag existed to
+fit. The budget move does not rest on the loaded case.
+
+**The guard cannot be made vacuous by deleting what it reads.**
+`_handover_kwargs()` takes the banned names from `review()`'s signature, so a
+seam that was deleted or renamed away could have left the file passing over
+nothing. Driven: with `review` replaced by one carrying no `hygiene_record*`
+parameter, `_handover_kwargs()` raises — "review() no longer takes the
+handover keywords this file polices" — and both tests that call it go RED
+instead of green.
+
+**The seam cannot be reached from an environment variable either.** Checked
+because it is the door next to the one that was closed: `gatekeeper_review.py`
+reads `os.environ` in four places and all four are corpus LOCATION, not the
+handover. And it is closed by construction rather than by absence —
+`test_main_never_hands_the_review_a_record` forbids `hygiene_record_in=` /
+`hygiene_record_rc=` at `main()`'s call to `review()` whatever the value's
+origin, so an env-derived value has nowhere to be passed.
+
+**The budget number, which is the one place this branch departs from a literal
+owner instruction.** The ruling said four minutes. This ships 1800 s, and the
+departure is stated here rather than left to be discovered: with the flag gone
+the review runs the set, the set alone costs ~550 s on this host, so a 240 s
+budget could only ever expire. A gate that always returns rc 2 does not block
+harder — it stops deciding, and a check that never decides is the failure mode
+this repo distrusts most. 1800 s is not a chosen number either: it is
+`repo_hygiene_gate._HYGIENE_STALL_GRACE_S` (`gatekeeper_review.py:996`), below
+which this `timeout` would kill runs the gate itself still considers alive.
+The half of the ruling that carries the weight is untouched and was driven
+above: a review that did not decide arrives as rc 2 and BLOCKS, never rc 0.
