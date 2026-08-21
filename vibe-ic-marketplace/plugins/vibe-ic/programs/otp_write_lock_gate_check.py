@@ -40,6 +40,21 @@ Static check (IC-agnostic):
      line-block contains one of those tokens" as a gate.
 
   4. If NO nearby lock token is found, emit a finding at ERROR severity.
+
+#496 — DENOMINATOR DISCLOSURE (classified: TRIGGER ABSENT FROM THIS CORPUS)
+--------------------------------------------------------------------------
+``write_enable_sites: 0`` on all 107 tracked ``rtl`` directories under
+``benchmark-data``. Re-measured for #496 with a probe deliberately LOOSER than
+the gate's own — any identifier matching
+``(otp|fuse|efuse|nvm|mtp|eeprom|flash|nvram|ee)\\w*_?(we|wen|wr_en|write_en|
+prog|pgm|pwe|program)\\w*`` anywhere in any file, with no line-shape, no
+``1'b1`` literal and no assignment requirement — and it returns **0 hits in
+0/107 directories**. There is no non-volatile memory write path in this corpus
+at all, so there is nothing for the extraction to have missed.
+
+This is therefore a valid rule with no coverage HERE, not a broken one. It is
+kept, and its PASS now says "examined 0" rather than reading as "no unguarded
+non-volatile write was found".
 """
 from __future__ import annotations
 
@@ -50,6 +65,11 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _gate_denominator as GD
+
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = "non-volatile write-enable assertion sites"
 
 
 @dataclass
@@ -91,6 +111,31 @@ def _find_v_files(rtl_dir: Path) -> List[Path]:
     )
 
 
+def _denominator(summary: Dict, findings: List[Finding]) -> GD.Denominator:
+    sites = summary.get("sites", 0)
+    files = summary.get("files_scanned", 0)
+    if sites:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=sites,
+                              considered=sites,
+                              details={"files_scanned": files})
+    if any(f.category == "IO" for f in findings):
+        reason = ("the RTL directory could not be read — nothing was "
+                  "examined, so this is an input error, not a verdict.")
+    elif files == 0:
+        reason = "no readable .v/.sv file in this directory."
+    else:
+        reason = (
+            f"{files} RTL file(s) read, none of which asserts a non-volatile "
+            "write-enable. Searched for a statement of the form "
+            "`(otp|fuse|nvm|mtp|efuse)_(we|pwe|prog|wr_en|wen|write_en) "
+            "<= 1'b1;`. This design has no OTP / fuse / NVM write path, so "
+            "the lock-gating rule has no subject here — this is 'examined 0', "
+            "not 'no unguarded write found'.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=0,
+                          not_applicable_reason=reason,
+                          details={"files_scanned": files})
+
+
 def audit(rtl_dir: Path, window: int = 30) -> Tuple[List[Finding], Dict]:
     findings: List[Finding] = []
     if not rtl_dir.exists() or not rtl_dir.is_dir():
@@ -99,11 +144,13 @@ def audit(rtl_dir: Path, window: int = 30) -> Tuple[List[Finding], Dict]:
             category="IO",
             message=f"RTL directory not found: {rtl_dir}",
         ))
-        return findings, {"sites": 0, "guarded": 0, "unguarded": 0}
+        return findings, {"sites": 0, "guarded": 0, "unguarded": 0,
+                          "files_scanned": 0}
 
     sites = 0
     guarded = 0
     unguarded = 0
+    files_scanned = 0
 
     for p in _find_v_files(rtl_dir):
         try:
@@ -116,6 +163,8 @@ def audit(rtl_dir: Path, window: int = 30) -> Tuple[List[Finding], Dict]:
                 file=str(p),
             ))
             continue
+        # #496 — count only files actually READ, not the glob size.
+        files_scanned += 1
 
         for i, line in enumerate(lines):
             m = _WE_SET_RE.match(line)
@@ -149,7 +198,8 @@ def audit(rtl_dir: Path, window: int = 30) -> Tuple[List[Finding], Dict]:
             ))
 
     return findings, {
-        "sites": sites, "guarded": guarded, "unguarded": unguarded
+        "sites": sites, "guarded": guarded, "unguarded": unguarded,
+        "files_scanned": files_scanned,
     }
 
 
@@ -163,13 +213,14 @@ def build_report(findings: List[Finding], rtl_dir: Path, summary: Dict) -> Dict:
         "note": ("static heuristic — not a formal proof; every finding "
                  "requires manual review"),
         "rtl_dir": str(rtl_dir),
-        "summary": {
+        "summary": GD.attach({
             "write_enable_sites": summary["sites"],
             "guarded_sites": summary["guarded"],
             "unguarded_sites": summary["unguarded"],
+            "files_scanned": summary.get("files_scanned", 0),
             "findings_count": len(findings),
             "pass": not any(f.severity == "ERROR" for f in findings),
-        },
+        }, _denominator(summary, findings)),
         "findings": [asdict(f) for f in findings],
     }
 
