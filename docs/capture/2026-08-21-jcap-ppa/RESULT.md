@@ -894,6 +894,14 @@ declares the path**:
         ...in a program that reads the flow declaration                 3
         ...in a program that does NOT — guesses anyway                 30
 
+*The screen behind 48 / 33 / 3 / 30 was not recorded, so these figures cannot be
+reproduced from this report — the same gap that made `A-17`'s numbers
+unreproducible, and the second instance of `A-27` inside this document. They are
+dated to the original base and are not re-derived here, because reconstructing a
+screen by guesswork returns a confident wrong number, which is the failure `A-27`
+exists to prevent. The RELATION they describe — a declared path and a guessed
+candidate list for one artefact — is verifiable independently of the counts.*
+
 One artefact, two definitions of where it lives, and the list is where they
 drift. The failure is silent in the worst direction: a consumer that finds
 nothing reports the artefact **absent**, which is indistinguishable from a step
