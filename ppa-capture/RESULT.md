@@ -1125,7 +1125,7 @@ to main.
 | `ppa-crosslayer/RESULT.md` (10 requests) | T-1; and it is the evidence that F-3 went 0 → 6 axes and that `drv` is the one left |
 | `jrc_ppa-layer-rc-contract` | A-3, A-4 |
 | `jcorpus_ppa-corpus-mode` | A-5, A-11 |
-| `agent_jppa-tests` | A-12; and the fourth-instance measurement under A-3 |
+| `agent_jppa-tests` | **C-2** (first written as a Bucket-A rule, demoted by its own sweep), **A-22**, and the fourth-instance measurement under A-3 |
 | `agent_jppafeas-feasibility-producers` | A-1, A-2 |
 | `jrecords_record-shape-reconcile` | the producer-census instance under A-3 |
 | `jreq_lander-three` | its three requests are landed; nothing left to distil |
@@ -1502,7 +1502,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Twenty-seven checks now, plus an authoritative mode**, the last of them the one that closes the loop:
+again in silence. **Twenty-eight checks now, plus an authoritative mode**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1534,6 +1534,24 @@ table by its own header row, stop at the first non-table line — gives 16 and 1
 Four bad screens in one file, every one caught by the file rather than by me,
 and the deliverable's numbers unchanged throughout. That is the difference
 between a check that runs and a check that was run once.
+## A dangling reference the whole verifier walked past
+
+The demotion of one record out of Bucket A left the provenance table citing an
+id that no longer exists — for the rest of the lane, through twenty-seven checks
+and several audits that all reported CLEAN.
+
+**They walked past it because of their shared direction.** Every check started
+from the record set and asked *is this represented in the prose?* None asked the
+reverse: *does this prose reference point at anything?* One direction of a
+two-way relation, checked twenty-seven times.
+
+Check 29 asks the reverse. It also excludes the plugin's own finding codes,
+whose tails read as record ids — matching them reports a phantom.
+
+**And its first fix reintroduced the problem it was fixing.** Rewriting the row
+to explain the demotion, I wrote the dead id into the explanation, and the check
+kept failing — correctly, because a reader scanning for that id would still find
+something that looks live. The history is now stated without the bare id.
 ---
 
 ## Summary
@@ -1541,7 +1559,7 @@ between a check that runs and a check that was run once.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (27 fast + 2 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (28 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1716,7 +1734,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     27 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     28 checks, exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other

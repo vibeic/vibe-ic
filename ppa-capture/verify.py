@@ -398,6 +398,20 @@ else:
     print("  SKIP  [slow] live wiring check — pass --slow to run it "
           "(about forty seconds)")
 
+# 23. no prose reference to a record id that has no section. A-12 was DEMOTED to
+#     C-2 mid-lane; the provenance table went on citing A-12 for the rest of the
+#     lane, and 27 checks walked past it because every one started from the
+#     record set and asked whether it was represented — never the reverse.
+#
+#     EXCLUDE THE PLUGIN'S OWN FINDING CODES. "PPA-C-016" ends in something that
+#     reads as a record id; matching it reports a phantom dangling reference.
+_ids = {sid for sid, _ in heads}
+_refs = {m.group(1) for m in re.finditer(r"(?<![A-Za-z-])([ACT]-\d+)\b", MD)}
+control("dangling-refs", "A-999" not in _ids)
+_dang = sorted(_refs - _ids)
+check("no prose reference points at a record with no section",
+      not _dang, f"{len(_refs)} referenced, dangling {_dang}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
