@@ -29,7 +29,7 @@ is what surfaced them.
 | 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
 | 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | reason recorded below; closes with the fourth-state ruling |
 | 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | NOT_MEASURED (quiet host) | PASSES in the full-file run at load 3.45 |
-| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED (quiet host) | PASSES in the full-file run at load 3.45 |
+| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED (quiet host) | PASSES at load 3.45. It is also the test that PINS the fail-closed-fast choice — see 10, 11, 13 below |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
 | 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED (quiet host) | `1 passed in 163.79s` alone |
 | 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
@@ -128,11 +128,12 @@ saturated by this file's own nested pytest children: 10 and 11 in the full-file
 run at load 3.45, 13 alone at load 18-30 (`1 passed in 163.79s`). The failure
 signature to recognise is `PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress
 stream was produced` — the child was killed before it emitted anything, i.e.
-interpreter startup was scored as a hang. **That is a real weakness**: the
-watchdog's stall clock starts before the child can possibly report, so
-"has not started yet" and "stopped reporting" are the same state to it — the
-same conflation this repository has already removed from `_vacuous_exit`,
-`UNCHECKABLE` and rc=127.
+interpreter startup was scored as a hang. The watchdog's stall clock starts
+before the child can possibly report (`_watchdog.supervise()` sets
+`last_progress = start`), so "has not started yet" and "stopped reporting" are
+one state to it. That looks like the conflation this repository has removed from
+`_vacuous_exit`, `UNCHECKABLE` and rc=127 — and it is NOT one. See directly
+below.
 
 **CORRECTION — it is not a weakness, it is a pinned trade-off.** An earlier
 revision of this file called the startup blind spot a defect that was merely out
