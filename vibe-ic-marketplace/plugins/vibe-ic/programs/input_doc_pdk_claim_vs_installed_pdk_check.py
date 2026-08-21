@@ -240,6 +240,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _container_exec  # noqa: E402
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+import _eda_image as _img  # noqa: E402 — the one site that answers "which image"
 import _vacuous_exit  # noqa: E402
 
 GATE = "input_doc_pdk_claim_vs_installed_pdk"
@@ -289,21 +291,20 @@ _CONTAINER_DEADLINE_S = 40
 #
 #   * a literal `DEFAULT_IMAGE = "...:X.Y.Z"` in this file, kept in step by
 #     `tools/vibeic-eda/sync_image_version.py` REGISTERING the file. That is
-#     what the sibling does, and it works exactly as long as the registration
+#     what the sibling did, and it works exactly as long as the registration
 #     is remembered — a second place the version can be wrong;
-#   * READING `tools/vibeic-eda/VERSION`, which is where the anchor lives. An
-#     anchor bump then applies here with no edit and no registration.
+#   * READING `tools/vibeic-eda/VERSION`, which is where the anchor lived. An
+#     anchor bump then applied here with no edit and no registration.
 #
-# The read climbs to the checkout root, so a PACKAGED plugin with no repo above
-# it finds no pin. That case returns None WITH A REASON rather than falling
-# back to a floating tag: `:latest` is a mutable third-party pointer, and a
-# gate whose answer a third party's push can change is not a gate (the
-# reasoning `pdk_registry_selectable_check._image_tag` records for vibe-ic#927,
-# applied to the same question here). An explicit `--image`, or the same
-# `VIBEIC_EDA_IMAGE` override that sibling honours, still wins — naming an
-# image by hand is the operator's deliberate call.
-_VERSION_PIN_REL = ("tools", "vibeic-eda", "VERSION")
-_GHCR_REPO = "ghcr.io/vibeic/vibeic-eda"
+# BOTH ARE GONE, because both remembered vibeic-eda's VERSION NUMBER in this
+# repo and so charged a PR here per image release. The question is now answered
+# by `_eda_image.judged_image()`, which resolves an immutable DIGEST for the
+# image already on this host. #927's property survives — a digest is not a
+# pointer a third party can re-point — and the version number does not.
+#
+# None still comes back WITH A REASON rather than a floating tag: a gate whose
+# answer a third party's push can change is not a gate. An explicit `--image`,
+# or the `VIBEIC_EDA_IMAGE` override, still wins.
 
 # Bounds for the ephemeral-container calls `--from-image` makes. All three are
 # short because none of them may PULL: the presence probe below runs first, so
@@ -660,32 +661,20 @@ def _strip_banner(lines: Sequence[str]) -> List[str]:
 
 
 def pinned_image(explicit: Optional[str] = None) -> Tuple[Optional[str], str]:
-    """`(image, why_not)` — the EDA image this checkout currently anchors.
+    """`(image, why_not)` — the EDA image this run reads the installed PDK from.
 
     Exactly one of the two is ever non-empty. `why_not` is a sentence a reader
     can act on, because "the gate could not open an image" must never reach the
     report as "the gate found nothing".
+
+    Delegates to `_eda_image.judged_image()` so this file holds no second copy of
+    "which image may a gate look inside" — the drift that folding
+    `pdk_registry_selectable_check._image_tag` into the same helper also ended.
+    The returned reference is DIGEST-PINNED, so the report names the bytes it
+    read rather than a tag whose meaning moves.
     """
-    if explicit:
-        return explicit, ""
-    override = os.environ.get("VIBEIC_EDA_IMAGE")
-    if override:
-        return override, ""
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        cand = parent.joinpath(*_VERSION_PIN_REL)
-        if cand.is_file():
-            try:
-                ver = cand.read_text().strip()
-            except OSError as exc:
-                return None, f"{cand} is unreadable: {exc}"
-            if not ver:
-                return None, f"{cand} is empty"
-            return f"{_GHCR_REPO}:{ver}", ""
-    pin = "/".join(_VERSION_PIN_REL)
-    return None, (f"no {pin} above {here} and no VIBEIC_EDA_IMAGE override; "
-                  f"refusing to fall back to a floating tag whose bytes a "
-                  f"third party controls")
+    judged = _img.judged_image(explicit=explicit)
+    return (judged.ref, "") if judged.ref else (None, judged.why_not)
 
 
 def start_pinned_container(explicit_image: Optional[str] = None
@@ -726,7 +715,8 @@ def start_pinned_container(explicit_image: Optional[str] = None
             f"multi-gigabyte download is the operator's call, not a gate's")
     try:
         r = subprocess.run(
-            ["docker", "run", "-d", "--pull", "never", "--entrypoint", "sleep",
+            ["docker", "run", "-d", *_dmem.docker_memory_flags(),
+             "--pull", "never", "--entrypoint", "sleep",
              image, str(_IMAGE_CONTAINER_TTL_S)],
             capture_output=True, text=True, timeout=_IMAGE_START_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1659,11 +1649,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--container", default=None,
                     help="read the installed PDK inside this container")
     ap.add_argument("--from-image", action="store_true",
-                    help="start an ephemeral container from the EDA image "
-                         "this repo pins and read the installed PDK inside it")
+                    help="start an ephemeral container from the EDA image this "
+                         "host holds, by digest, and read the installed PDK in it")
     ap.add_argument("--image", default=None,
-                    help="image for --from-image (default: the repo pin in "
-                         "tools/vibeic-eda/VERSION, or $VIBEIC_EDA_IMAGE)")
+                    help="image for --from-image (default: the newest "
+                         "vibeic-eda image on this host, pinned to its digest; "
+                         "or $VIBEIC_EDA_IMAGE)")
     ap.add_argument("--advisory", action="store_true",
                     help="return 0 on a FAIL, while still printing the verdict "
                          "and every contradiction (rc 2 is NOT downgraded)")

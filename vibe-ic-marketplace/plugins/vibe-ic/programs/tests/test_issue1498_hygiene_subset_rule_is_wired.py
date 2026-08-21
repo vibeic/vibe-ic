@@ -44,6 +44,7 @@ chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -53,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import landing_merge_verdict as V  # noqa: E402
+import gate_process_attestation as A  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
@@ -60,6 +62,13 @@ _REPO_ROOT = _PROGRAMS.parents[3]
 _VERIFY = _REPO_ROOT / "tools" / "gatekeeper-verify-merge.sh"
 _LAND = _REPO_ROOT / "tools" / "gatekeeper-land.sh"
 _T = 55
+
+_PROTECTED_SPEC = importlib.util.spec_from_file_location(
+    "_protected_landing_transition_for_issue1498",
+    _REPO_ROOT / "tools" / "ci" / "protected_landing_transition.py")
+assert _PROTECTED_SPEC and _PROTECTED_SPEC.loader
+_PROTECTED = importlib.util.module_from_spec(_PROTECTED_SPEC)
+_PROTECTED_SPEC.loader.exec_module(_PROTECTED)
 
 TREE = "a" * 40
 SHA = "c" * 40
@@ -89,17 +98,37 @@ def _gate(label, state, corpus=None, expired=False):
     """One gate as `repo_hygiene_gates.sh --summary-json` writes it."""
     return {"label": label, "state": state, "seconds": 1,
             "exempt_until": None, "exempt_reason": None,
-            "corpus": corpus, "exemption_expired": expired}
+            "corpus": corpus, "exemption_expired": expired, "scope": None}
+
+
+def _attestation(gate):
+    rc = {"PASS": 0, "FAIL": 1, "NOT_CHECKED": 2,
+          "WROTE_CORPUS": 0}[gate["state"]]
+    return A.process_attestation(
+        gate["label"], "[PASS] checked\n" if rc == 0 else "[FAIL] named\n",
+        rc, ["python3", "checker.py", gate["label"]])
 
 
 def _record(gates):
+    count = lambda state: sum(g["state"] == state for g in gates)
     return {
-        "listed_only": False, "declared": len(gates), "ran": len(gates),
-        "passed": sum(1 for g in gates if g["state"] == "PASS"),
-        "failed": sum(1 for g in gates if g["state"] == "FAIL"),
-        "not_checked": 0, "not_checked_unexempted": [],
+        "listed_only": False, "declared": len(gates),
+        "ran": sum(count(s) for s in
+                   ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")),
+        "decided": count("PASS") + count("FAIL"),
+        "passed": count("PASS"), "failed": count("FAIL"),
+        "not_checked": count("NOT_CHECKED"),
+        "wrote_corpus": count("WROTE_CORPUS"),
+        "deferred": count("LISTED"), "other_shard": count("OTHER_SHARD"),
+        "out_of_scope": count("OUT_OF_SCOPE"),
+        "not_checked_unexempted": [
+            g["label"] for g in gates if g["state"] == "NOT_CHECKED"
+            and not g.get("exempt_until")],
         "exemptions_expired": [], "wiring_errors": [], "corpora": [],
         "shard": None, "today": "2026-08-15", "gates": gates,
+        "process_attestations": [
+            _attestation(g) for g in gates if g["state"] in
+            ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")],
     }
 
 
@@ -143,9 +172,19 @@ def test_both_arms_are_asked_for_a_hygiene_record():
     """The defect exactly: arm A2 set the variable and arm B did not, so the
     baseline had nothing to be differenced against."""
     src = _VERIFY.read_text(encoding="utf-8")
-    assert 'GATEKEEPER_HYGIENE_REPORT="$BASE_HYG"' in src, \
+    # SPELLING ADAPTED to the hermetic arms 7c376e348 (v1.10.69) introduced. A
+    # land arm no longer writes a host path directly: it is told ONE
+    # container-relative destination, and the parent then seals that arm's
+    # evidence into the arm's own record. What is asserted is unchanged — A2's
+    # record lands in BASE_HYG and B2's in CAND_HYG, so neither side of the
+    # subset rule is a path nothing ever writes.
+    assert "--env GATEKEEPER_HYGIENE_REPORT=/evidence/hygiene.json" in src, \
+        "no land arm is asked for a hygiene record at all"
+    assert ('publish_validated_arm_artifact "$A2_VALIDATION" "$A2_OUTPUT" '
+            'hygiene.json "$BASE_HYG"') in src, \
         "arm A2 must write the BASE record"
-    assert 'GATEKEEPER_HYGIENE_REPORT="$CAND_HYG"' in src, \
+    assert ('publish_validated_arm_artifact "$B2_VALIDATION" "$B2_OUTPUT" '
+            'hygiene.json "$CAND_HYG"') in src, \
         ("arm B must write the CANDIDATE record — without it `CAND_HYG` is a "
          "path nothing ever writes and the subset rule has no candidate side")
 
@@ -178,23 +217,27 @@ def test_the_base_record_is_cached_beside_the_base_log():
     and not the record degrades every queued landing to the coarse comparison —
     in exactly the mode the merge queue runs in."""
     src = _VERIFY.read_text(encoding="utf-8")
-    # SPELLING ADAPTED to the atomic publish this script grew after this test
-    # was written: the entry is copied to a `$CACHE_TMP.*` name and `mv`d into
-    # place with the manifest LAST, so the base record reaches `$CACHED_HYG` in
-    # two steps rather than in one `cp`. What is asserted is unchanged — the
-    # BASE arm's record is what lands under the cached name.
-    assert 'cp "$BASE_HYG" "$CACHE_TMP.hygiene.json"' in src \
-        or 'cp "$BASE_HYG" "$CACHED_HYG"' in src
-    assert 'mv "$CACHE_TMP.hygiene.json" "$CACHED_HYG"' in src \
-        or 'cp "$BASE_HYG" "$CACHED_HYG"' in src
-    assert 'printf \'%s\\n\' "$THIS_HOST" > "$CACHED_HYG_HOST"' in src, \
-        ("the HOST must travel with the cached record — findings are "
-         "host-dependent and a shared cache would otherwise hand one host's "
-         "baseline to another host's candidate")
-    hit = src.split('if [ -n "$CACHED" ] && [ -s "$CACHED" ]', 1)[1].split(
-        "; then", 1)[0]
-    assert "CACHED_HYG" in hit and "CACHED_HYG_HOST" in hit, \
-        "a log-only legacy cache must be a miss, or the new gate never runs"
+    # THE HAZARD WAS REMOVED RATHER THAN FIXED, and that is why this test now
+    # reads the other way round. 7c376e348 (v1.10.69) made the base-gate cache
+    # unconditionally inert: the flag is still accepted, then cleared before it
+    # can be consulted, because "reading or writing a mutable baseline cache
+    # concurrently with that candidate would let it turn introduced failures
+    # into 'pre-existing' ones". With no cache HIT possible, arm A2 always runs
+    # and always writes BASE_HYG, so there is no cached record to store.
+    #
+    # Asserting the disable is not a retreat: it is the tripwire. Re-enabling
+    # the cache re-opens exactly the defect this file exists for — a hit SKIPS
+    # A2 and the differential silently degrades to the coarse comparison — so
+    # whoever re-enables it fails HERE and has to restore the record and the
+    # host alongside it.
+    assert 'BASE_GATE_CACHE=""' in src, \
+        ("the base-gate cache is live again; a hit SKIPS arm A2, so the cached "
+         "entry must carry the base RECORD and the HOST that measured it, and "
+         "this test has to go back to asserting that")
+    disable = src.split('if [ -n "$BASE_GATE_CACHE" ]; then', 1)[1].split(
+        "\nfi\n", 1)[0]
+    assert 'BASE_GATE_CACHE=""' in disable, \
+        "the cache is no longer cleared unconditionally when it is supplied"
 
 
 def test_the_land_script_still_honours_the_variable():
@@ -390,6 +433,71 @@ _JUNIT_XML = (
     '</testsuites>')
 
 
+def _protected_receipt(tmp_path):
+    """A STEADY protected-transition receipt, the one the program requires.
+
+    `landing_merge_verdict` refuses without it ("PROTECTED LANDING SOURCE
+    TRANSITION IS UNMEASURED"), and nothing in THIS file is about that
+    transition -- it is a precondition, so it is built rather than asserted.
+    The runner profile is READ OUT OF the live manifest instead of transcribed:
+    a literal copy here would be one more thing to drift, and the drift would
+    show up as an unrelated refusal in an unrelated test.
+    """
+    manifest_doc = json.loads(
+        (_REPO_ROOT / _PROTECTED.MANIFEST_PATH).read_text(encoding="utf-8"))
+    paths = sorted(_PROTECTED.REQUIRED_AUTHORITY_PATHS
+                   | _PROTECTED.RUNTIME_PATHS)
+    observed = []
+    for index, path in enumerate(paths, 1):
+        roles = []
+        if path in _PROTECTED.REQUIRED_AUTHORITY_PATHS:
+            roles.append("authority")
+        if path in _PROTECTED.RUNTIME_PATHS:
+            roles.append("runtime")
+        observed.append({
+            "path": path,
+            "mode": "100755" if path.endswith(".sh") else "100644",
+            "blob_oid": f"{index:040x}",
+            "sha256": f"{index:064x}",
+            "size": index,
+            "roles": roles,
+        })
+    manifest = {
+        "path": _PROTECTED.MANIFEST_PATH, "mode": "100644",
+        "blob_oid": "d" * 40, "sha256": "e" * 64, "size": 123,
+    }
+    payload = {
+        "operation": "STEADY",
+        "base_commit": SHA, "base_tree": TREE,
+        "candidate_commit": SHA, "candidate_tree": TREE,
+        "base_manifest": manifest, "candidate_manifest": dict(manifest),
+        "runner": manifest_doc["runner"],
+        "base_transition_id": "landing-semantic-v1",
+        "candidate_transition_id": "landing-semantic-v1",
+        "base_current_state_id": "legacy-timeout-v1",
+        "base_next_state_id": "semantic-progress-v1",
+        "base_state_id": "legacy-timeout-v1",
+        "candidate_state_id": "legacy-timeout-v1",
+        "base_files": observed,
+        "candidate_files": json.loads(json.dumps(observed)),
+        "worktrees": [
+            {"role": "candidate-gates", "commit": SHA,
+             "tree": TREE, "complete": True},
+            {"role": "candidate-tests", "commit": SHA,
+             "tree": TREE, "complete": True},
+        ],
+    }
+    receipt = {
+        "schema": 1, "kind": _PROTECTED.RECEIPT_KIND, "complete": True,
+        "payload": payload,
+        "payload_sha256": hashlib.sha256(
+            _PROTECTED.canonical_bytes(payload)).hexdigest(),
+    }
+    path = tmp_path / "protected-transition.json"
+    path.write_bytes(_PROTECTED.canonical_bytes(receipt))
+    return path
+
+
 def _cli(tmp_path, hyg_base: Path, hyg_cand: Path, tag: str):
     """The real program, the real arguments, one junit pair shared by both arms.
 
@@ -406,7 +514,8 @@ def _cli(tmp_path, hyg_base: Path, hyg_cand: Path, tag: str):
     out = tmp_path / f"v_{tag}.json"
     cp = subprocess.run(
         [sys.executable, str(_PROG),
-         "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
+         "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA, "--verified-sha", SHA,
          "--rebase-status", "ok", "--expected-tree", TREE,
          "--verified-tree", TREE, "--land-log", str(land),
          "--base-land-log", str(base_land), "--selection", str(sel),
@@ -414,8 +523,23 @@ def _cli(tmp_path, hyg_base: Path, hyg_cand: Path, tag: str):
          "--candidate-junit", str(junit),
          "--base-hygiene", str(hyg_base), "--candidate-hygiene", str(hyg_cand),
          "--base-hygiene-host", _HOST, "--candidate-hygiene-host", _HOST,
+         "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
          "--json", str(out)],
         capture_output=True, text=True, timeout=_T)
+    # THE PROGRAM THAT NEVER STARTED MUST SAY SO.
+    #
+    # `--base-tree` became a REQUIRED argument at 7c376e348 (v1.10.69) and this
+    # helper was not updated, so the subject died in argparse with rc=2 and
+    # wrote nothing. What the reader then saw was
+    # `FileNotFoundError: … v_ok.json` from the line below -- a missing OUTPUT,
+    # never the refusal that caused it -- and both end-to-end tests in this
+    # file stayed red on `main` for that reason without the reason ever being
+    # printed. Read the exit code and the subject's own words FIRST; a record
+    # that does not exist is a different fact from a record that says nothing.
+    if not out.is_file():
+        raise AssertionError(
+            f"landing_merge_verdict wrote no JSON record (rc={cp.returncode}). "
+            f"It said:\n{cp.stdout}\n{cp.stderr}")
     return cp.returncode, cp.stdout + cp.stderr, json.loads(out.read_text())
 
 
@@ -465,15 +589,23 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
     out = tmp_path / "v.json"
     cp = subprocess.run(
         [sys.executable, str(_PROG),
-         "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
+         "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA, "--verified-sha", SHA,
          "--rebase-status", "ok", "--expected-tree", TREE,
          "--verified-tree", TREE, "--land-log", str(land),
          "--base-land-log", str(land), "--selection", str(sel),
          "--base-selection", str(sel), "--base-junit", str(junit),
-         "--candidate-junit", str(junit), "--json", str(out)],
+         "--candidate-junit", str(junit),
+         "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
+         "--json", str(out)],
         capture_output=True, text=True, timeout=_T)
-    rec = json.loads(out.read_text())
+    # Exit code and the subject's own words BEFORE the record it may never have
+    # written -- see `_cli` above for the six-version silence this ordering cost.
     assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert out.is_file(), (
+        f"landing_merge_verdict wrote no JSON record (rc={cp.returncode}): "
+        f"{cp.stdout}\n{cp.stderr}")
+    rec = json.loads(out.read_text())
     assert rec["hygiene_finding_delta"] is None
     assert "HYGIENE_FINDING_DELTA_NOT_SUPPLIED" in rec["disclosures"]
     assert "DISCLOSE  HYGIENE_FINDING_DELTA_NOT_SUPPLIED" in cp.stdout
@@ -485,7 +617,23 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
 def test_the_hygiene_label_this_program_matches_is_the_one_land_sh_prints():
     """A regex that stopped matching the real label would silently disable the
     cross-check above, and nothing else in this file would notice."""
-    printed = re.findall(r'^run "([^"]*hygiene[^"]*)"',
-                         _LAND.read_text(encoding="utf-8"), re.M)
+    # `run` takes TWO quoted words: `run <unit> <label> <cmd…>`, and it is the
+    # SECOND that it prints (`printf '  PASS  %s\n' "$label"`). The unit id is a
+    # machine name for the landing record and is never printed, so keying on the
+    # first quoted word reads `full:repo-hygiene` and compares a name this
+    # program was never asked to match. The id arrived with the semantic landing
+    # runtime, 7c376e348 (v1.10.69), which gave every `run`/`report` call site a
+    # leading unit; the printed label did not move.
+    # `run` AND `run_emit`, AT ANY INDENT. The hygiene tier is now launched
+    # inside a lane (`run_capture "full:repo-hygiene" …`, indented) and its
+    # label is printed by the main shell's
+    # `run_emit "full:repo-hygiene" "repo hygiene gates" --last`. Both are the
+    # same two-quoted-word `<unit> <label>` shape; only the column and the
+    # function name moved. Keying on `^run "` found neither, which turned this
+    # cross-check off rather than failing it.
+    calls = re.findall(r'^\s*run(?:_emit)? "([^"]*)" "([^"]*)"',
+                       _LAND.read_text(encoding="utf-8"), re.M)
+    printed = [label for unit, label in calls
+               if "hygiene" in unit or "hygiene" in label]
     assert printed, "gatekeeper-land.sh no longer runs a labelled hygiene tier"
     assert any(V._HYGIENE_TIER.match(l) for l in printed), printed

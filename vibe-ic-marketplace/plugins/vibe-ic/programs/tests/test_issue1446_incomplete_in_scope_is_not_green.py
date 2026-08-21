@@ -72,11 +72,16 @@ def _bare_project(tmp_path: Path) -> Path:
 def _close_ancestry(project: Path) -> Path:
     """Stage every artefact step D1 declares, so the chain under P0 is closed.
 
-    D1 holds ALL of its `required_outputs` ("satisfied: N/18 — the gate passed,
+    D1 holds ALL of its `required_outputs` ("satisfied: N/19 — the gate passed,
     but every declared output must be produced"), so this has to stage the
-    L-docs, the coverage report AND the expert-track report. If D1 gains a
-    19th, `test_the_ancestry_control_really_closes_the_chain` below goes red and
-    names it, rather than this helper quietly ceasing to close anything.
+    L-docs, the coverage report, the expert-track report AND the extraction
+    pattern catalogue. If D1 gains a 20th,
+    `test_the_ancestry_control_really_closes_the_chain` below goes red and names
+    it, rather than this helper quietly ceasing to close anything.
+
+    That is not hypothetical: #1348 added the 19th
+    (`phase1/extraction_patterns.json`) and the control went red naming it
+    (vibe-ic#1351), which is the mechanism this docstring promises, working.
     """
     gd = project / "phase1" / "generated_docs"
     gd.mkdir(parents=True, exist_ok=True)
@@ -97,6 +102,18 @@ def _close_ancestry(project: Path) -> Path:
         "program": "phase1_expert_parse_track.py", "verdict": "PASS",
         "findings": [], "ai_subtrack": {"status": "SKIPPED-CONDITION"},
         "generated_by": "test fixture"}))
+    # The 19th (#1348). `phase1_doc_one_shot_runner._seed_canonical_from_
+    # backfilled_subset` returns WITHOUT writing when nothing was backfilled,
+    # and on a tree with no `input/docs` nothing can be — so a hand-staged
+    # Phase 1 stages it. An object holding only the provenance key is that
+    # seeder's own empty shape and parses as a catalogue with no entries, not as
+    # MALFORMED (`extraction_coverage_check._load_explicit_patterns` wants a
+    # top-level object and skips non-list values).
+    (project / "phase1").mkdir(parents=True, exist_ok=True)
+    (project / "phase1" / "extraction_patterns.json").write_text(json.dumps({
+        "_comment": ("Canonical extraction patterns. No auto-discovered "
+                     "literal was backfilled into a typed L doc on this tree, "
+                     "so the catalogue is empty; staged by test fixture.")}))
     return project
 
 

@@ -190,7 +190,7 @@ def main():
     if _synth_rtl:
         sample.write_text(_synth_rtl)
         steps["deterministic_synth"] = {"applied": True, "kind": _synth_kind,
-                                        "note": "exact RTL from the prompt's own spec table"}
+                                        "note": "exact RTL from a parse-complete prompt artifact"}
 
     # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
     # `tools/phase1_engine`. In a monorepo checkout the package lives at

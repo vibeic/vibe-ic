@@ -126,6 +126,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import _corpus_location as _corpus         # sibling program, one seam for all
+import _semantic_child_progress as _semantic_progress
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
@@ -257,6 +258,56 @@ _DISCLOSED_OUT_OF_SCOPE = (
     "per-task generated run outputs; reports not retained by design "
     "(measured 2026-07-26: 124 of 129 citations unresolved)")
 
+PROGRESS_SCOPE = "issue1710:evidence-citation-resolves"
+_ACTIVE_PROGRESS = None
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
+
+
+def _routing_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
+             if tracked is not None else
+             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
+    return [root / rel for rel in sorted(names)]
+
+
+def _markdown_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    return (sorted(root / t for t in tracked if t.lower().endswith(".md"))
+            if tracked is not None else sorted(root.rglob("*.md")))
+
+
+def _json_paths(root: Path, tracked: Optional[set]) -> List[Path]:
+    return (sorted(root / t for t in tracked if t.lower().endswith(".json"))
+            if tracked is not None else sorted(root.rglob("*.json")))
+
+
+def semantic_progress_units(root: Path, *, write_baseline: bool = False,
+                            require_checkout: bool = False,
+                            scope_expanded: Optional[str] = None
+                            ) -> List[str]:
+    """Exact finite work manifest for a trusted parent invoking this gate."""
+    tracked = tracked_files(root)
+    units = ["index:tracked-files"]
+    if require_checkout and tracked is None:
+        units.append("checkout:tracked-root")
+        return units
+    routing = _routing_paths(root, tracked)
+    markdown = _markdown_paths(root, tracked)
+    json_docs = _json_paths(root, tracked)
+    for kind, paths in (("routing", routing), ("document", markdown),
+                        ("document", json_docs)):
+        for path in paths:
+            units.extend(_semantic_progress.file_progress_units(
+                path, f"{kind}:{path.relative_to(root).as_posix()}"))
+    if (write_baseline and (markdown or json_docs)
+            and (scope_expanded is None
+                 or len(scope_expanded.strip()) >= 30)):
+        units.append("index:working-tree")
+    return units
+
 
 def tracked_files(root: Path) -> Optional[set]:
     """The set of git-TRACKED paths under `root`, or None when that cannot be
@@ -276,9 +327,11 @@ def tracked_files(root: Path) -> Optional[set]:
     """
     try:
         r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
-                           capture_output=True, timeout=120)
+                           capture_output=True)
     except (OSError, subprocess.SubprocessError):
+        _checkpoint("index:tracked-files")
         return None
+    _checkpoint("index:tracked-files")
     if r.returncode != 0:
         return None
     out = r.stdout.decode("utf-8", "replace")
@@ -459,11 +512,13 @@ def resolve_citation(md: Path, cite: str, root: Path,
 _VERDICT_KEY = "verdict"
 
 
-def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
+def _json_artifact_refs(path: Path,
+                        text: Optional[str] = None) -> List[Tuple[str, str]]:
     """[(field, cited_path)] for a JSON GATE REPORT — a dict carrying a
     `verdict`. Anything else is data, not a claim, and is not judged."""
     try:
-        data = json.loads(path.read_text(errors="replace"))
+        data = json.loads(path.read_text(errors="replace")
+                          if text is None else text)
     except (OSError, ValueError):
         return []
     if not isinstance(data, dict) or _VERDICT_KEY not in data:
@@ -522,14 +577,17 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
     TRACKED routing file. Untracked records are ignored: a disclosure that is
     not published cannot inform a reader."""
     out: Dict[Tuple[str, str], str] = {}
-    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
-             if tracked is not None else
-             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
-    for rel in sorted(names):
-        cell = (root / rel).parent
+    for path in _routing_paths(root, tracked):
+        rel = path.relative_to(root).as_posix()
+        identity = f"routing:{rel}"
+        cell = path.parent
         try:
-            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+            text = _semantic_progress.read_text_chunks(
+                path, identity, _ACTIVE_PROGRESS)
         except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
         for line in text.splitlines():
             s = line.strip()
@@ -544,6 +602,7 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
             except ValueError:
                 continue
             out[(key_doc, cited.strip())] = decision
+        _checkpoint(_semantic_progress.file_judged_unit(path, identity))
     return out
 
 
@@ -597,12 +656,16 @@ def scan(root: Path, tracked: Optional[set] = None
     # baseline is a set of digests, so any enumeration difference between
     # where it is WRITTEN and where it is CHECKED shows up as phantom
     # "resolved" entries. One source of truth for what exists.
-    _mds = (sorted(root / t for t in tracked if t.lower().endswith(".md"))
-            if tracked is not None else sorted(root.rglob("*.md")))
+    _mds = _markdown_paths(root, tracked)
     for md in _mds:
+        _identity = f"document:{md.relative_to(root).as_posix()}"
         try:
-            text = md.read_text(errors="replace")
+            text = _semantic_progress.read_text_chunks(
+                md, _identity, _ACTIVE_PROGRESS)
         except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
             continue
         docs += 1
         _contributed = 0
@@ -640,10 +703,19 @@ def scan(root: Path, tracked: Optional[set] = None
                     dangling.append({"doc": _d, "citation": tok})
         if not _contributed:
             zero_docs.append(str(md.relative_to(root)))
-    _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
-              if tracked is not None else sorted(root.rglob("*.json")))
+        _checkpoint(_semantic_progress.file_judged_unit(md, _identity))
+    _jsons = _json_paths(root, tracked)
     for js in _jsons:
-        refs = _json_artifact_refs(js)
+        _identity = f"document:{js.relative_to(root).as_posix()}"
+        try:
+            text = _semantic_progress.read_text_chunks(
+                js, _identity, _ACTIVE_PROGRESS)
+        except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
+            continue
+        refs = _json_artifact_refs(js, text)
         if refs:
             docs += 1
         for field, tok in refs:
@@ -653,6 +725,7 @@ def scan(root: Path, tracked: Optional[set] = None
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
+        _checkpoint(_semantic_progress.file_judged_unit(js, _identity))
     return (dangling, cited, docs, zero_docs, oversize, unjudged, outside,
             len(_mds) + len(_jsons))
 
@@ -662,10 +735,11 @@ def _working_tree_dirt(root: Path) -> List[str]:
     when the tree is clean or git is unavailable (the caller degrades)."""
     try:
         r = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
-                            "--", "."], capture_output=True, text=True,
-                           timeout=120)
+                           "--", "."], capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
+        _checkpoint("index:working-tree")
         return []
+    _checkpoint("index:working-tree")
     if r.returncode != 0:
         return []
     return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
@@ -763,7 +837,13 @@ def main(argv=None) -> int:
     # never for one a fetch produced, because a dead clone would then certify a
     # corpus instead of reporting that it could not be read.
     if origin == _corpus.ENV and tracked is None:
-        reason = _corpus.not_a_checkout_reason(root, "tracked documents") or (
+        semantic = (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled)
+        reason = _corpus.not_a_checkout_reason(
+            root, "tracked documents",
+            timeout=None if semantic else 60, strict=semantic)
+        _checkpoint("checkout:tracked-root")
+        reason = reason or (
             f"{root} is a git checkout but git tracks no regular file under it, "
             f"so this gate enumerated nothing from the index.")
         print(f"UNDETERMINED: {reason} This gate judges whether the REPOSITORY "
@@ -945,5 +1025,15 @@ def main(argv=None) -> int:
     return 1
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_entrypoint())

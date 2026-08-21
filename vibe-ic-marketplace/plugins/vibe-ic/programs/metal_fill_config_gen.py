@@ -38,7 +38,7 @@ import math
 import re
 import sys
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 _DEFAULT_FLOOR_PCT = 30.0
@@ -254,6 +254,113 @@ def parse_density_floor_pct(text: str) -> Optional[float]:
     return max(vals) if vals else None
 
 
+def strip_line_comments(text: str) -> str:
+    """`text` with every UNQUOTED `#`-to-end-of-line comment removed.
+
+    A deck carries rules that are deliberately switched OFF by commenting them
+    out — gf180mcuD's dummy-metal deck ships `DM.5_DM.7` (dummy metal to poly2)
+    that way, and the PDK's own fill script has a knob for the same thing. A
+    parser that reads the comment reads a rule the PDK is not enforcing, and in
+    this case it would subtract every poly2 shape on the die from the fillable
+    area — a large, silent, wrong answer. So the comments come off first.
+
+    Quote-aware, because a live rule's `output(...)` label legitimately
+    contains `#` (`"DM#{idx}.3"`), and cutting there would truncate the line.
+    """
+    out = []
+    for line in text.splitlines():
+        q = None
+        for i, ch in enumerate(line):
+            if q:
+                if ch == q and (i == 0 or line[i - 1] != "\\"):
+                    q = None
+            elif ch in "\"'":
+                q = ch
+            elif ch == "#":
+                line = line[:i]
+                break
+        out.append(line)
+    return "\n".join(out)
+
+
+#: A deck states what dummy metal must keep clear of as an ordinary separation
+#: rule, e.g. ``metal.separation(guard_ring_mk, 10.um)`` or
+#: ``metal_dummy.separation(otp_mk, 6.um, euclidian)``. Both halves of the
+#: keep-out are therefore IN THE DECK — the layer, and the distance.
+_SEPARATION_RE = re.compile(
+    r"([A-Za-z_]\w*)\s*\.\s*separation\s*\(\s*([A-Za-z_]\w*)\s*,\s*"
+    r"([0-9]+(?:\.[0-9]+)?)\s*\.\s*um")
+
+
+def parse_metal_keepout_layers(deck_text: str, metal_prefix: str,
+                               routing_layers: Optional[Dict[str, Tuple[int, int]]] = None
+                               ) -> List[List[Any]]:
+    """``[[gds_layer, datatype, margin_um], ...]`` — the regions THIS DECK says
+    metal (and therefore dummy metal, which is metal) must stay away from.
+
+    WHY THIS EXISTS. The fill engine already supports two keep-out forms and
+    only the weaker one was ever populated: a band of fixed width inset from
+    the layout's own bounding box, whose width was read out of the PDK's fill
+    script (``space_to_scribe_line``). That works when — and only when — three
+    things coincide: the marked structure is flush with the layout edge, the
+    fill script's margin happens to equal the marker's own width plus the
+    deck's clearance for it, and the structure is actually PRESENT. On
+    gf180mcuD all three happen to hold for the seal ring (marker 0..16 um,
+    clearance 10 um, fill-script margin 26 um), which is what made the
+    coincidence look like a contract.
+
+    None of the three is a contract. This reads the rule instead: every layer
+    a separation rule names against metal, with the distance that rule states.
+    It is self-gating in the way a band is not — a marker layer the layout does
+    not carry is EMPTY, so it keeps out nothing, and a layout with no seal ring
+    loses no fill area to a band protecting a ring that is not there.
+
+    Layers that are themselves routing metal are excluded: dummy-to-circuit
+    metal spacing is not a keep-out REGION, it is the per-layer
+    ``space_to_metal`` this same config already carries, and re-expressing it
+    here would subtract every wire on the die from the fillable area.
+
+    Chip- and PDK-AGNOSTIC: no layer number, no distance and no layer name is
+    written here. An empty list means the deck states no such rule, which is a
+    different thing from a clearance of zero and is disclosed as such by the
+    caller.
+    """
+    deck_text = strip_line_comments(deck_text)
+    table = parse_layer_table(deck_text)
+    by_name: Dict[str, Tuple[int, int]] = {}
+    for name, num, dt in table:
+        by_name.setdefault(name, (num, dt))
+    pref = (metal_prefix or "").lower()
+    routing_ids = {v for v in (routing_layers or {}).values()}
+    routing_nums = {num for num, _dt in routing_ids}
+
+    best: "OrderedDict[Tuple[int, int], float]" = OrderedDict()
+    names: Dict[Tuple[int, int], str] = {}
+    for m in _SEPARATION_RE.finditer(deck_text):
+        left, right, dist = m.group(1).lower(), m.group(2).lower(), float(m.group(3))
+        # LEFT must be metal: either the PDK's own routing-metal stem, or the
+        # generic `metal`/`metal_dummy` variable a deck uses when it writes one
+        # rule for every level. A rule about poly or comp is not ours to apply
+        # to a metal fill.
+        if not (pref and pref in left) and "metal" not in left:
+            continue
+        ids = by_name.get(right)
+        if ids is None:
+            continue                       # the deck names no GDS layer for it
+        # RIGHT must not be routing metal — see the docstring.
+        if ids in routing_ids or ids[0] in routing_nums:
+            continue
+        if pref and pref in right:
+            continue
+        if dist <= 0:
+            continue
+        prev = best.get(ids)
+        if prev is None or dist > prev:
+            best[ids] = dist
+            names[ids] = right
+    return [[num, dt, margin] for (num, dt), margin in best.items()]
+
+
 def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: str,
                             metal_prefix: Optional[str] = None,
                             margin: float = _DEFAULT_MARGIN,
@@ -314,9 +421,14 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
 
     if not layers:
         return None
+    # The deck's OWN keep-out rules (see `parse_metal_keepout_layers`). Emitted
+    # ALWAYS, `[]` included, so "this deck states none" and "this config was
+    # built before the concept existed" are distinguishable to a consumer.
+    keepout_layers = parse_metal_keepout_layers(deck_text, metal_prefix, gds)
     return {
         "boundary_layer": None,               # -> engine uses the full-die extent
         "window_um": window_um,               # None -> single whole-die window (== rule)
+        "keepout_layers": keepout_layers,
         "max_passes": max_passes,
         "mfg_grid_um": grid_um,               # fill snapped to the manufacturing grid
         "fill_datatype": None,
@@ -334,6 +446,13 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             "dummy_to_circuit_space_um": space_dc,
             "layers_derived": len(layers),
             "dummy_datatype_found": sum(1 for s in layers if "fill_datatype" in s),
+            "keepout_layers_derived": len(keepout_layers),
+            # The deck's own NAME for each keep-out, so a reader can check the
+            # derivation against the rule instead of against a layer number.
+            "keepout_layer_names": [
+                next((n for n, num, dt in table
+                      if (num, dt) == (k[0], k[1])), None)
+                for k in keepout_layers],
         },
     }
 

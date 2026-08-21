@@ -1,26 +1,25 @@
 """`fault_scan_chain_insert` must not own an image pointer of its own.
 
 WHY THIS EXISTS
-    `sync_image_version.py --check` flags any fully-qualified
-    `ghcr.io/vibeic/vibeic-eda:X.Y.Z` outside the registered install docs,
-    because an unregistered LIVE pointer is invisible in exactly the direction
-    that matters: the drift gate passes while the code keeps pulling an old
-    image. `fault_scan_chain_insert.py` tripped that net at 0.2.65 while the
-    anchor was 0.2.75.
-
-    That hit was a FALSE POSITIVE, and the file is now listed in
-    `.image-version-ignore`: both of its ghcr tags sit inside `MEASURED (...)`
+    A module-level `DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.x"` does not
+    fail loudly. It FREEZES: the code keeps running one toolchain while
+    everything around it moves, and every gate reports green. This module is a
+    likely place for one, because its two ghcr tags sit inside `MEASURED (...)`
     comment blocks that quote a tool's verbatim stdout beside the tag that
-    produced it, so advancing them would attribute those exact lines to an
-    image that never emitted them.
+    produced it — so a reader scanning for pointers sees tags here and may
+    conclude the module owns one.
 
-    An exemption is only as good as its premise. The premise here is that the
-    module names NO image itself — it runs whatever `fault_atpg_run` resolves,
-    and `fault_atpg_run.py` IS a registered install-doc candidate whose
-    pointers the anchor rewrites. If someone later writes a
-    `DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.x"` into the exempted
-    module, the drift net will stay silent about it FOREVER, and the code
-    would pull a pinned stale image while every gate reported green.
+    It does not. It runs whatever `fault_atpg_run` resolves, and
+    `fault_atpg_run` asks `_eda_image.resolve()`.
+
+    WHAT CHANGED. This used to be phrased as an exemption from
+    `sync_image_version.py --check`, a repo-root drift net keyed on
+    `tools/vibeic-eda/VERSION`. Both are deleted: that file held vibeic-eda's
+    version number inside the vibe-ic repo, so every image release needed a PR
+    here. The RULE did not change and is now held by
+    `test_the_eda_image_is_resolved_not_remembered
+    ::test_no_module_level_constant_freezes_an_image_version`, which ships with
+    the plugin instead of running only in this repo's CI.
 
     These tests assert on VALUES the modules actually expose at runtime — the
     resolved image string and the module namespace — never on source text, so
@@ -37,25 +36,26 @@ import fault_scan_chain_insert as fsci
 
 _PROGRAMS = Path(far.__file__).resolve().parent
 _REPO = _PROGRAMS.parents[3]
-_VERSION_FILE = _REPO / "tools" / "vibeic-eda" / "VERSION"
 
 _GHCR = re.compile(r"^ghcr\.io/vibeic/vibeic-eda:\d+\.\d+\.\d+$")
 
 
-def _anchor() -> str:
-    return _VERSION_FILE.read_text(encoding="utf-8").strip()
+def test_this_repo_stores_no_vibeic_eda_version():
+    """A guard on this file's own premise. If an anchor file comes back, the
+    module below can start reading it again and everything here still passes."""
+    assert not (_REPO / "tools" / "vibeic-eda" / "VERSION").exists(), (
+        "the anchor is back; every vibeic-eda release now needs a PR here again")
 
 
-def test_the_anchor_file_is_where_we_think_it_is():
-    # A guard on this test's own premise: if the VERSION file moves, the
-    # assertions below would silently compare against nothing.
-    assert _VERSION_FILE.is_file(), f"no VERSION file at {_VERSION_FILE}"
-    assert re.fullmatch(r"\d+\.\d+\.\d+", _anchor()), _anchor()
-
-
-def test_resolver_falls_back_to_the_anchor_version(monkeypatch):
-    """With no env override and nothing available locally, the image the DFT
-    steps pull is the ANCHOR image — asserted on the returned string."""
+def test_a_total_blackout_answers_the_legacy_image_AND_SAYS_SO(monkeypatch, capsys):
+    """With no env override and NOTHING reachable — no registry, no local fork
+    image — the resolver falls back to upstream iic-osic-tools, which has neither
+    Fault nor the patched yosys. That is a real degradation, so the rule is not
+    "never answer a floating tag" (there is nothing else left to answer); it is
+    NEVER SILENTLY. A toolchain quietly older, or quietly missing tools, than the
+    caller believes it is running is the failure this resolution order exists to
+    prevent, and the announcement is the only thing standing between a DFT step
+    and a silently unforked yosys."""
     monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
     monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
 
@@ -63,7 +63,23 @@ def test_resolver_falls_back_to_the_anchor_version(monkeypatch):
         raise OSError("no docker in this test")
 
     monkeypatch.setattr(far.subprocess, "run", _never_present)
-    assert far._resolve_docker_image() == f"ghcr.io/vibeic/vibeic-eda:{_anchor()}"
+    got = far._resolve_docker_image()
+    import _eda_image as M
+    assert got == M.LEGACY_IMAGE, got
+    assert "does NOT carry the forked tools" in capsys.readouterr().err
+
+
+def test_the_resolver_prefers_a_local_fork_image_over_upstream(monkeypatch):
+    """The property the deleted anchor used to carry here. With the registry
+    unreachable, a DFT step must not silently drop to upstream iic-osic-tools,
+    which has neither Fault nor the patched yosys — it must run a fork image this
+    machine already holds."""
+    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
+    monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
+    import _eda_image as M
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+    monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.13"])
+    assert far._resolve_docker_image() == f"{M.IMAGE_REPO}:0.3.13"
 
 
 def test_an_explicit_env_image_still_wins(monkeypatch):
@@ -74,12 +90,10 @@ def test_an_explicit_env_image_still_wins(monkeypatch):
 
 
 def test_scan_chain_module_declares_no_image_of_its_own():
-    """The premise of the `.image-version-ignore` entry for this module.
-
-    Walks the module NAMESPACE (runtime values), not the file text. Any
-    module-level string that is a fully-qualified vibeic-eda image reference
-    is a live pointer the drift net can no longer see, because the file is
-    exempt — so it must not exist.
+    """Walks the module NAMESPACE (runtime values), not the file text. Any
+    module-level string that is a fully-qualified vibeic-eda image reference is a
+    pointer that freezes: nothing advances it, and the code keeps pulling one
+    toolchain while everything around it moves.
     """
     importlib.reload(fsci)
     offenders = {
@@ -88,12 +102,10 @@ def test_scan_chain_module_declares_no_image_of_its_own():
         if isinstance(val, str) and _GHCR.match(val.strip())
     }
     assert offenders == {}, (
-        f"{Path(fsci.__file__).name} is exempt from the image drift net "
-        f"(.image-version-ignore) because it was believed to carry no live "
-        f"pointer. It now declares {offenders}, which nothing will ever "
-        f"advance. Either resolve the image through fault_atpg_run, or "
-        f"remove the file from .image-version-ignore and register it in "
-        f"INSTALL_DOC_CANDIDATES."
+        f"{Path(fsci.__file__).name} declares {offenders}, which nothing will "
+        f"ever advance — this repo stores no vibeic-eda version any more, by "
+        f"design. Resolve the image through fault_atpg_run, which asks "
+        f"_eda_image.resolve()."
     )
 
 

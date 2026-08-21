@@ -57,14 +57,327 @@ _T = 50
 #: Test-only no-progress window. It is not a cap on healthy runtime.
 _STALL = 1
 
-#: pytest-timeout's per-test bound inside these tests. Must be BELOW `_KILL` for
-#: the "pytest-timeout fires first" fixture and ABOVE it for the import-hang
-#: fixture, which is the whole distinction the two shapes exist to draw.
-_INNER_TIMEOUT = 4
+#: The bound the ONE-SESSION arm of `test_one_session_loses_the_whole_record_
+#: and_per_file_does_not` puts on ITSELF, as `subprocess.run(timeout=...)`.
+#:
+#: It replaces `-p pytest_timeout --timeout=4 --timeout-method=thread`, which
+#: this file used to hand to every child it launched. That idiom is RETIRED in
+#: this repo (`programs/pytest_per_file_junit.py`: "There is deliberately no
+#: pytest-timeout guard on the landing path"; `tools/ci/test_phase_b_activated_
+#: parity.py` and `tools/ci/test_repo_tools_tests_gate.py` both forbid its
+#: return), and MEASURED on 2026-08-20 the plugin is absent from the anchored
+#: runtime `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff` AND from the newer
+#: 0.3.13 tag: `-p <missing plugin>` is a HARD import that dies in pytest's
+#: pre-parse, so all 26 tests in this file that reached the child through
+#: `_pytest_cmd` were red in the image and green on a host that happened to
+#: carry an ambient pip package nothing in this tree declares.
+#:
+#: NOTHING IS LEFT UNBOUNDED THAT WAS BOUNDED. Every other child in this file
+#: goes through the driver, whose `--stall-after {_STALL}` supervision fires at
+#: 1 s -- a quarter of the 4 s the retired plugin was set to -- so the plugin
+#: could never have been the bound that fired there. The single-session arm is
+#: the ONE child with no driver above it, and it now carries its own explicit
+#: kill instead of borrowing one from a plugin.
+_SINGLE_SESSION_KILL = 8
 
 _GREEN = "def test_i_am_green():\n    assert 1 == 1\n"
 
 _GREEN_AFTER = "def test_i_am_also_green():\n    assert 2 == 2\n"
+
+
+class _OuterEmitter:
+    def __init__(self, *, fail=False):
+        self.rows = []
+        self.fail = fail
+
+    def emit(self, state, unit=None):
+        if self.fail:
+            raise RuntimeError("planted relay failure")
+        self.rows.append((state, unit))
+
+
+class _OuterProbe:
+    error = ""
+
+    def __init__(self, *, finished=(), domain_progress=None, items=None,
+                 item_order=None, declared_items=None):
+        default_items = [
+            "test_a.py::test_one", "test_b.py::test_two",
+            # A forged item outside the parent selection is never a unit.
+            "test_forged.py::test_noise",
+        ]
+        self.item_order = list(
+            default_items if item_order is None and items is None
+            else item_order if item_order is not None else items)
+        self.items = set(self.item_order)
+        self.finished = set(finished)
+        self.domain_progress = dict(domain_progress or {})
+        self.declared_items = (
+            len(self.items) if declared_items is None else declared_items)
+
+
+def _planned_items(planner, test_file):
+    spec = planner.HERMETIC_TEST_PROGRESS[test_file]
+    items = [f"{test_file}::test_slot_{ordinal}"
+             for ordinal in range(1, spec["items"] + 1)]
+    for ordinal, nodeid, _scope, _total in spec["domains"]:
+        items[ordinal - 1] = nodeid
+    assert len(items) == len(set(items))
+    return items
+
+
+def test_hermetic_outer_progress_is_exact_selection_order_only():
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    relay.observe(_OuterProbe(finished={
+        "test_b.py::test_two", "test_forged.py::test_noise"}))
+    assert emitter.rows == [("start", None)]
+    relay.observe(_OuterProbe(finished={
+        "test_a.py::test_one", "test_b.py::test_two",
+        "test_forged.py::test_noise"}))
+    assert relay.finish()
+    assert emitter.rows == [
+        ("start", None),
+        ("checkpoint", "pytest:test_a.py"),
+        ("checkpoint", "pytest:test_b.py"),
+        ("checkpoint", "pytest:record-published"),
+        ("terminal", None),
+    ]
+
+
+def test_hermetic_outer_progress_missing_or_failed_relay_is_norecord():
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    relay.observe(_OuterProbe(finished={"test_a.py::test_one"}))
+    assert not relay.finish()
+    assert "not every selected file" in relay.problem
+    assert ("terminal", None) not in emitter.rows
+
+    broken = D._HermeticAggregateProgress(
+        ["test_a.py"], emitter=_OuterEmitter(fail=True))
+    assert not broken.start()
+    assert "planted relay failure" in broken.problem
+
+
+def test_hermetic_outer_progress_relays_only_exact_parent_matrix_domains():
+    planner = D._load_hermetic_progress_planner()
+    test_file = planner.HERMETIC_MATRIX_FILE
+    spec = planner.HERMETIC_TEST_PROGRESS[test_file]
+    domains = spec["domains"]
+    first_ordinal, first_node, first_scope, first_total = domains[0]
+    items = _planned_items(planner, test_file)
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        [test_file], emitter=emitter, planner=planner)
+    assert relay.start()
+    relay.observe(_OuterProbe(
+        item_order=items,
+        finished=set(items[:first_ordinal - 1]),
+        domain_progress={
+            (first_node, first_scope): (1, first_total),
+            (first_node, "forged-noise"): (10_000, 10_000),
+        }))
+    assert emitter.rows == [
+        ("start", None),
+        *[("checkpoint", planner.test_progress_unit(
+            test_file, completed, spec["items"]))
+          for completed in range(1, first_ordinal)],
+        ("checkpoint", planner.domain_progress_unit(
+            test_file, first_node, first_scope, 1, first_total)),
+    ]
+
+    # Finishing a planned node backfills its unused suffix at terminal speed;
+    # those records keep a fast FAIL complete but did not renew while it ran.
+    relay.observe(_OuterProbe(
+        item_order=items, finished=set(items[:first_ordinal]),
+        domain_progress={(first_node, first_scope): (1, first_total)}))
+    assert emitter.rows[-2] == (
+        "checkpoint", planner.domain_progress_unit(
+            test_file, first_node, first_scope, first_total, first_total))
+    assert emitter.rows[-1] == (
+        "checkpoint", planner.test_progress_unit(
+            test_file, first_ordinal, spec["items"]))
+
+    # Once every file item has a validated finish, every remaining optional
+    # domain unit is terminal-backfilled before the mandatory file unit.
+    relay.observe(_OuterProbe(item_order=items, finished=items))
+    assert relay.finish()
+    assert emitter.rows[-3:] == [
+        ("checkpoint", f"pytest:{test_file}"),
+        ("checkpoint", "pytest:record-published"),
+        ("terminal", None),
+    ]
+    assert len([row for row in emitter.rows
+                if row[0] == "checkpoint"]) == (
+                    spec["items"]
+                    + sum(row[3] for row in domains)
+                    + 2)
+
+
+def test_hermetic_outer_progress_refuses_wrong_matrix_denominator():
+    planner = D._load_hermetic_progress_planner()
+    test_file = planner.HERMETIC_MATRIX_FILE
+    _ordinal, nodeid, scope, total = (
+        planner.HERMETIC_TEST_PROGRESS[test_file]["domains"][0])
+    items = _planned_items(planner, test_file)
+    relay = D._HermeticAggregateProgress(
+        [test_file], emitter=_OuterEmitter(), planner=planner)
+    assert relay.start()
+    relay.observe(_OuterProbe(
+        item_order=items,
+        domain_progress={(nodeid, scope): (1, total + 1)}))
+    assert relay.problem == "parent-owned nested domain denominator differs"
+    assert not relay.finish()
+
+
+def test_hermetic_outer_progress_refuses_changed_item_denominator_or_ordinal():
+    planner = D._load_hermetic_progress_planner()
+    test_file = planner.HERMETIC_MUTATION_FILE
+    items = _planned_items(planner, test_file)
+    relay = D._HermeticAggregateProgress(
+        [test_file], emitter=_OuterEmitter(), planner=planner)
+    assert relay.start()
+    relay.observe(_OuterProbe(item_order=items[:-1]))
+    assert "item denominator differs" in relay.problem
+
+    swapped = list(items)
+    ordinal = planner.HERMETIC_TEST_PROGRESS[test_file]["domains"][0][0]
+    swapped[ordinal - 2], swapped[ordinal - 1] = (
+        swapped[ordinal - 1], swapped[ordinal - 2])
+    relay = D._HermeticAggregateProgress(
+        [test_file], emitter=_OuterEmitter(), planner=planner)
+    assert relay.start()
+    relay.observe(_OuterProbe(item_order=swapped))
+    assert "nodeid/ordinal differs" in relay.problem
+
+
+def _stream_set_over(tmp_path, shares, *, item_order, declared=None,
+                     domain_progress=None):
+    """A real `_ProgressStreamSet` carrying one real probe per worker share."""
+    streams = D._ProgressStreamSet(
+        tmp_path, "0" * 32, lambda: os.getpid())
+    for index, finished in enumerate(shares):
+        name = f"w.gw{index}.{os.getpid()}.0.jsonl"
+        path = tmp_path / name
+        path.write_bytes(b"")
+        probe = D._SemanticProgressProbe(
+            path, streams.nonce, streams.pid_fn, partial_session=True)
+        probe.item_order = list(item_order)
+        probe.items = set(item_order)
+        probe.finished = set(finished)
+        probe.declared_items = (
+            len(item_order) if declared is None else declared)
+        probe.domain_progress = dict((domain_progress or {}).get(index, {}))
+        streams.streams[name] = probe
+        streams.kinds[name] = "worker"
+    return streams
+
+
+def test_a_stream_that_appears_after_the_first_scan_is_still_admitted(tmp_path):
+    """THE READ SIDE'S OWN BLIND SPOT, and it made every merge verification
+    refuse.
+
+    `_scan` lists a directory FD it holds open for the whole run.
+    `os.listdir(fd)` is `fdopendir(dup(fd))`, and a dup SHARES the file offset,
+    so a second listing resumes wherever the first one stopped. The first scan
+    always happens BEFORE the pytest child has written its stream -- the driver
+    polls immediately after spawning -- so that cursor is already at
+    end-of-directory when the stream finally appears.
+
+    MEASURED in the hermetic candidate container, whose profile mounts `/tmp`
+    as a TMPFS: `os.listdir(self.dir_fd)` returned `[]` at the same instant
+    `os.listdir(self.directory)` returned `['m.7.1.jsonl']`. A 0.02 s GREEN arm
+    was therefore admitted only by `complete()` -- after the last observer
+    sample -- so the hermetic relay emitted no checkpoint and no terminal
+    record, no B1 receipt was written, and `gatekeeper-verify-merge.sh`
+    answered rc=2 to a known-good branch and a known-bad one alike: 22 reds in
+    `test_landing_merge_verdict`, and a merge gate that could not discriminate.
+
+    The cursor position is the whole property, so this test SETS it rather than
+    hoping the host filesystem reproduces tmpfs semantics: on ext4 the kernel
+    re-seeds the readdir cursor and the defect is invisible, which is exactly
+    why it survived. A scan must be a statement about the directory, never
+    about where the previous scan stopped reading it."""
+    streams = D._ProgressStreamSet(tmp_path, "0" * 32, lambda: os.getpid())
+    try:
+        assert streams.sample() == 0
+        assert streams.streams == {}, "nothing was written yet"
+        os.lseek(streams.dir_fd, 0, os.SEEK_END)
+        name = f"m.{os.getpid()}.0.jsonl"
+        (tmp_path / name).write_bytes(b"")
+        streams.sample()
+        assert streams.error == "", streams.error
+        assert list(streams.streams) == [name], (
+            "the stream was invisible to the scan that followed it: a green "
+            "arm and a hung arm are reported identically")
+    finally:
+        streams.close()
+
+
+def test_hermetic_relay_reads_the_object_production_actually_hands_it(tmp_path):
+    """THE PAIRING NO TEST ABOVE MEASURES. Every relay test in this file feeds
+    `observe()` a hand-written duck type (`_OuterProbe`) that has the four
+    attributes by construction, so none of them can see whether the REAL
+    argument has them. `_run_progress_supervised` stopped passing
+    `_SemanticProgressProbe` and started passing `_ProgressStreamSet`; the set
+    defined none of `declared_items` / `item_order` / `finished` /
+    `domain_progress`, so the first watchdog sample raised AttributeError
+    inside the hermetic arm. The arm then died with no terminal progress
+    record and the runner could only report "candidate ended without the exact
+    semantic terminal record" — the relay's own refusal channel never fired,
+    so the cause was invisible. Measured against the real class here."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    # Two workers, each finishing only its own share: the union is the session.
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        relay.observe(streams)
+        assert relay.finish()
+    finally:
+        streams.close()
+    assert emitter.rows == [
+        ("start", None),
+        ("checkpoint", "pytest:test_a.py"),
+        ("checkpoint", "pytest:test_b.py"),
+        ("checkpoint", "pytest:record-published"),
+        ("terminal", None),
+    ]
+
+
+def test_hermetic_relay_stays_silent_until_every_worker_agrees(tmp_path):
+    """The join may never be optimistic. While one worker has not yet declared
+    the collected selection, or the workers disagree about it, the set must
+    report `declared_items is None` so the relay emits NOTHING rather than
+    computing a denominator from a partial view."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        undeclared = next(iter(streams.streams.values()))
+        undeclared.declared_items = None
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+        undeclared.declared_items = len(items)
+        undeclared.item_order = list(reversed(items))
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+    finally:
+        streams.close()
+
 
 #: The #1654 shape verbatim: `Future.result` -> `Condition.wait` ->
 #: `waiter.acquire`. `--timeout-method=thread` cannot interrupt it.
@@ -131,10 +444,15 @@ def _md5(p: Path) -> str:
 
 
 def _pytest_cmd():
-    """The harness command, pinned the way the landing gate pins it."""
-    return [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-            f"--timeout={_INNER_TIMEOUT}", "--timeout-method=thread",
-            "-p", "no:cacheprovider"]
+    """The harness command, pinned the way the landing gate pins it.
+
+    The landing gate declares SEMANTIC PROGRESS and no elapsed-time verdict, so
+    this argv carries no `--timeout` and names no timeout plugin. Keeping the
+    two in step is not left to a reader:
+    `test_the_landing_harness_argv_shape_is_the_one_this_file_pins` below
+    asserts it against the shipped `tools/ci/hermetic_test_arm_entry.sh`.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 
 def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
@@ -167,12 +485,33 @@ def test_one_session_loses_the_whole_record_and_per_file_does_not(tmp_path):
     before = {p.name: _md5(p) for p in sorted(corpus.glob("test_*.py"))}
 
     # ---- ARM 1: one session, exactly the shape gatekeeper-land.sh used ----
+    #
+    # The kill is EXTERNAL and explicit. It used to come from
+    # `-p pytest_timeout --timeout=4 --timeout-method=thread`, and #1654's
+    # measurement is that the thread method cannot interrupt the blocking
+    # `waiter.acquire()` this fixture hangs in either -- it dumps stacks and
+    # takes the PROCESS down. Both routes kill the same process at the same
+    # point; only one of them needs a plugin the anchored runtime does not
+    # carry. The claim under test is unchanged and is asserted below: a session
+    # killed while one of its files hangs writes NO junit, so the two files that
+    # had already PASSED lose their record too.
     single = tmp_path / "single.xml"
-    subprocess.run(
-        _pytest_cmd() + ["-o", "junit_family=xunit1", f"--junitxml={single}",
-                         "test_green_neighbour.py", "test_hangs_like_replay.py",
-                         "test_green_after.py"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    killed = False
+    try:
+        subprocess.run(
+            _pytest_cmd() + ["-o", "junit_family=xunit1",
+                             f"--junitxml={single}",
+                             "test_green_neighbour.py",
+                             "test_hangs_like_replay.py",
+                             "test_green_after.py"],
+            cwd=str(corpus), capture_output=True, text=True,
+            timeout=_SINGLE_SESSION_KILL)
+    except subprocess.TimeoutExpired:
+        killed = True
+    assert killed, (
+        "the single-session arm exited on its own inside "
+        f"{_SINGLE_SESSION_KILL} s — the hang fixture no longer hangs and this "
+        "test proves nothing")
     assert not single.exists(), (
         "the single-session arm wrote a junit — the hang fixture no longer "
         "reproduces #1654 and this test proves nothing")
@@ -333,6 +672,27 @@ def test_nested_validated_progress_is_relayed_to_the_outer_session(
     assert sum(D._count(s)[0] for s in suites) == 1
 
 
+def test_nested_collect_progress_is_relayed_to_the_outer_session(
+        tmp_path, monkeypatch):
+    """The live matrix collection cannot be silent until its child exits."""
+    target = (_PROGRAMS / "tests" / "test_matrix_63x8_coverage.py")
+    node = (str(target)
+            + "::test_live_collection_relays_finite_semantic_progress_past_old_bound")
+    merged = tmp_path / "outer-collect.xml"
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_one(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        node, merged, 0.8, str(_PROGRAMS.parent))
+    elapsed = time.monotonic() - started
+    assert rc == 0 and not incomplete, out
+    assert elapsed > 0.8, elapsed
+    suites = D._load_suites(merged)
+    assert suites is not None
+    assert sum(D._count(s)[0] for s in suites) == 1
+
+
 def test_pytest_deselection_is_a_complete_selected_subset(tmp_path):
     """pytest_itemcollected precedes legal -k/-m deselection."""
     corpus = _tree(tmp_path, {
@@ -349,6 +709,98 @@ def test_pytest_deselection_is_a_complete_selected_subset(tmp_path):
     suites = D._load_suites(merged)
     assert suites is not None
     assert sum(D._count(s)[0] for s in suites) == 1
+
+
+def test_collect_only_has_its_own_complete_terminal_protocol(
+        tmp_path, monkeypatch):
+    """Zero test_finish events are valid only with the collect terminal."""
+    corpus = _tree(tmp_path, {
+        "test_collect_a.py": "def test_a(): assert True\n",
+        "test_collect_b.py": "def test_b(): assert True\n",
+    })
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        ["test_collect_a.py", "test_collect_b.py"], 0.5, str(corpus))
+    assert rc == 0 and not incomplete, out
+
+
+def test_short_natural_collect_relays_its_terminal_protocol(tmp_path):
+    """A session that exits before the first poll still relays every event."""
+    corpus = _tree(tmp_path, {
+        "test_short_collect.py": "def test_short(): assert True\n",
+    })
+    relay = tmp_path / "collect.relay"
+    relay.touch(mode=0o600)
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        ["test_short_collect.py"], 1, str(corpus),
+        progress_relay_path=relay, poll_s=0.9)
+    assert rc == 0 and not incomplete, out
+    scores = [int(line) for line in relay.read_text().splitlines()]
+    assert scores == list(range(1, len(scores) + 1))
+    assert len(scores) >= 6, scores
+
+
+def test_progressing_collection_may_outlive_many_stall_windows(
+        tmp_path, monkeypatch):
+    """Completed file collections, not a total duration, renew the lease."""
+    corpus = tmp_path / "slow-collect"
+    corpus.mkdir()
+    paths = []
+    for index in range(7):
+        path = corpus / f"test_slow_collect_{index}.py"
+        path.write_text(
+            "import time\ntime.sleep(0.14)\n\n"
+            f"def test_{index}(): assert True\n", encoding="utf-8")
+        paths.append(path.name)
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"], paths, 0.3, str(corpus))
+    elapsed = time.monotonic() - started
+    assert elapsed > 0.8, elapsed
+    assert rc == 0 and not incomplete, out
+
+
+@pytest.mark.parametrize("body,sentinel", [
+    (
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline:\n"
+        "    print('COLLECT_CHATTER', flush=True)\n"
+        "    time.sleep(.02)\n"
+        "def test_never(): assert True\n",
+        "COLLECT_CHATTER",
+    ),
+    (
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline: pass\n"
+        "def test_never(): assert True\n",
+        None,
+    ),
+])
+def test_collect_import_activity_without_semantic_transition_is_norecord(
+        tmp_path, monkeypatch, body, sentinel):
+    """Captured output and CPU cannot renew the strict collection lease."""
+    corpus = tmp_path / "chatty-collect"
+    corpus.mkdir()
+    (corpus / "test_active.py").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    started = time.monotonic()
+    _rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-s", "-q",
+         "-p", "no:cacheprovider"], ["test_active.py"], 0.25, str(corpus))
+    elapsed = time.monotonic() - started
+    assert elapsed < 3, elapsed
+    assert incomplete
+    if sentinel is not None:
+        assert sentinel in out
+    assert "WATCHDOG_STALLED:" in out
 
 
 def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
@@ -368,9 +820,49 @@ def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
 
 def test_protocol_refusal_is_not_mislabeled_as_a_stall():
     reason = D._norecord_reason(
-        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3)
+        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3,
+        stalled=False, protocol_error="collection mismatch")
     assert reason == "pytest progress protocol incomplete: collection mismatch"
     assert "STALLED" not in reason
+
+
+def test_a_subject_that_prints_the_stall_marker_is_not_called_a_stall():
+    """THE HALF THE TEST ABOVE NEVER EXERCISED, and it cost a session.
+
+    MEASURED on clean origin/main 49d2b3328, this very file driven one at a time
+    the way the landing gate drives it: `10 failed, 11 passed in 24.13s`, natural
+    exit, truncated at 21 of 72 items by its own `--maxfail` bound — reported as
+    `STALLED after 300 s`. The only `WATCHDOG_STALLED:` in the whole buffer came
+    from an assertion dump belonging to this file's own test of the stall
+    detector. The supervisor's watchdog never fired.
+    """
+    out = ("E   AssertionError: assert 'X' in '\\nWATCHDOG_STALLED: configured "
+           "forward-progress signals did not advance for > 0.25s\\n'\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.16.1.jsonl: session finished before "
+           "every selected item completed (21/72)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.16.1.jsonl: session finished before every selected "
+                       "item completed (21/72)")
+    assert reason == ("pytest progress protocol incomplete: m.16.1.jsonl: session "
+                      "finished before every selected item completed (21/72)")
+    assert "STALLED" not in reason
+
+
+def test_a_stall_the_supervisor_actually_saw_is_still_called_a_stall():
+    """The other direction: the label must survive where it is TRUE."""
+    reason = D._norecord_reason(None, "", True, 300, stalled=True,
+                                protocol_error="")
+    assert reason == ("STALLED after 300 s with no validated pytest lifecycle "
+                      "progress")
+
+
+def test_the_stall_verdict_is_a_required_argument():
+    """A caller that forgets it must not silently inherit the old guess."""
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300)
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300, stalled=False)
 
 
 def test_progress_stall_cleans_a_descendant_that_escaped_the_process_group(
@@ -512,6 +1004,138 @@ def test_unproved_final_descendant_census_is_norecord(tmp_path, monkeypatch):
     assert "survivors=[999999]" in out
 
 
+def test_cleanup_retains_subreaper_until_sigkill_pending_identity_is_zero(
+        monkeypatch):
+    """The old post-KILL grace may expire; ownership must not expire with it."""
+    identity = {424242: 73}
+    scans = iter([
+        (dict(identity), True),
+        ({}, True),
+        ({}, True),
+    ])
+    waited = []
+
+    monkeypatch.setattr(
+        D, "_job_processes_checked", lambda _root, _baseline: next(scans))
+    monkeypatch.setattr(
+        D, "_open_pidfds", lambda ids: ({91: (424242, 73)}, True)
+        if ids else ({}, True))
+    monkeypatch.setattr(D, "_signal_pidfds", lambda _fds, _sig: True)
+    # TERM and the finite post-KILL observability interval both expire while
+    # the same kernel identity remains live.
+    monkeypatch.setattr(
+        D, "_wait_pidfds_until", lambda handles, _deadline: dict(handles))
+
+    def final_kernel_event(handles):
+        assert handles == {91: (424242, 73)}
+        waited.append("final-zero")
+
+    monkeypatch.setattr(D, "_wait_pidfds", final_kernel_event)
+    monkeypatch.setattr(D, "_close_pidfds", lambda _handles: None)
+    monkeypatch.setattr(D, "_reap_adopted", lambda: None)
+
+    result = D._cleanup_job(424242, set(), term_grace_s=0)
+
+    assert waited == ["final-zero"]
+    assert result.observed == {424242}
+    assert result.survivors == set()
+    assert result.census_ok is True
+
+
+def test_cleanup_latches_first_signal_until_final_zero(monkeypatch):
+    completed = []
+
+    def final_zero(_root_pid, _baseline, *, term_grace_s):
+        assert term_grace_s == 0
+        assert D._CLEANUP_ACTIVE
+        D._shutdown_handler(signal.SIGTERM, None)
+        completed.append("final-zero")
+        return D.CleanupResult(set(), set(), True)
+
+    monkeypatch.setattr(D, "_IN_SHUTDOWN", False)
+    monkeypatch.setattr(D, "_CLEANUP_ACTIVE", False)
+    monkeypatch.setattr(D, "_PENDING_SHUTDOWN_SIGNAL", None)
+    monkeypatch.setattr(D, "_block_shutdown_signals", lambda: None)
+    monkeypatch.setattr(D, "_cleanup_job_owned", final_zero)
+
+    with pytest.raises(SystemExit) as cancelled:
+        D._cleanup_job(424242, set(), term_grace_s=0)
+
+    assert cancelled.value.code == 128 + signal.SIGTERM
+    assert completed == ["final-zero"]
+    assert not D._CLEANUP_ACTIVE
+
+
+def test_term_during_cleanup_cancels_before_fallback_and_leaves_zero(
+        tmp_path):
+    corpus = _tree(tmp_path, {"test_green.py": _GREEN})
+    aggregate_pid_file = tmp_path / "aggregate.pid"
+    descendant_pid_file = tmp_path / "detached.pid"
+    cleanup_term_seen = tmp_path / "cleanup-term-seen"
+    fallback_marker = tmp_path / "fallback-launched"
+    detached = (
+        "import os,pathlib,signal,time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"pathlib.Path({str(descendant_pid_file)!r}).write_text(str(os.getpid())); "
+        "time.sleep(3600)"
+    )
+    (corpus / "conftest.py").write_text(
+        "import os,pathlib,signal,subprocess,sys,time\n"
+        f"if os.environ.get({_FALLBACK_ENV!r}) == '1':\n"
+        f"    pathlib.Path({str(fallback_marker)!r}).write_text('launched')\n"
+        "else:\n"
+        f"    pathlib.Path({str(aggregate_pid_file)!r}).write_text(str(os.getpid()))\n"
+        "    def ignore_term(_signum, _frame):\n"
+        f"        pathlib.Path({str(cleanup_term_seen)!r}).write_text('seen')\n"
+        "    signal.signal(signal.SIGTERM, ignore_term)\n"
+        f"    subprocess.Popen([sys.executable, '-c', {detached!r}], "
+        "start_new_session=True)\n"
+        "    time.sleep(3600)\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "cancelled.xml"
+    driver = subprocess.Popen(
+        [sys.executable, str(_PROG), "--selection",
+         str(corpus / "selection.txt"), "--junit", str(merged),
+         "--stall-after", "5", "--aggregate-check",
+         "--aggregate-stall-after", "0.5", "--fallback-jobs", "1",
+         "--"] + _pytest_cmd(),
+        cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, start_new_session=True,
+        env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"))
+    output = ""
+    try:
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            if (aggregate_pid_file.is_file()
+                    and descendant_pid_file.is_file()
+                    and cleanup_term_seen.is_file()):
+                break
+            time.sleep(0.02)
+        assert cleanup_term_seen.is_file(), (
+            "aggregate cleanup never entered its TERM-ignoring grace")
+        os.kill(driver.pid, signal.SIGTERM)
+        output = driver.communicate(timeout=15)[0]
+        assert driver.returncode == 128 + signal.SIGTERM, output
+        assert "=== [fallback]" not in output, output
+        assert not fallback_marker.exists(), output
+        for pid_path in (aggregate_pid_file, descendant_pid_file):
+            pid = int(pid_path.read_text())
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+    finally:
+        if driver.poll() is None:
+            os.killpg(driver.pid, signal.SIGKILL)
+            driver.wait(timeout=5)
+        for pid_path in (aggregate_pid_file, descendant_pid_file):
+            if not pid_path.is_file():
+                continue
+            try:
+                os.kill(int(pid_path.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
 def test_driver_signal_cleanup_reaps_the_active_detached_descendant(tmp_path):
     """Verifier cancellation reaches the driver, not its new-session child."""
     corpus = tmp_path / "corpus"
@@ -620,6 +1244,38 @@ def test_complete_aggregate_check_does_not_launch_per_file_sessions(
                 if tc.get("classname") == "pytest_per_file_process"]
     assert len([tc for tc in root.iter("testcase")
                 if tc.get("classname") == "pytest_aggregate_process"]) == 1
+
+
+def test_aggregate_refuses_a_selected_file_that_collected_no_tests(tmp_path):
+    """rc=0 and one green case cannot shrink a two-file denominator."""
+    corpus = _tree(tmp_path, {
+        "test_empty.py": "# selected, but contains no pytest item\n",
+        "test_green.py": _GREEN,
+    })
+    merged = tmp_path / "aggregate-missing-file.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", str(_STALL))
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert "does not exactly cover the selected files" in proc.stdout
+    assert "test_empty.py" in proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_duplicate_selected_file_is_refused_before_pytest_runs(tmp_path):
+    corpus = _tree(tmp_path, {"test_green.py": _GREEN})
+    (corpus / "selection.txt").write_text(
+        "test_green.py\n./test_green.py\n", encoding="utf-8")
+    merged = tmp_path / "duplicate-selection.xml"
+
+    proc = _run_driver(corpus, merged, "--aggregate-check")
+
+    assert proc.returncode == D.RC_CANNOT_ASK, proc.stdout + proc.stderr
+    assert "same file more than once" in proc.stderr
+    assert not merged.exists()
 
 
 def test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown(
@@ -1186,6 +1842,90 @@ def test_partial_progress_line_waits_but_is_never_progress(tmp_path):
     assert not ok and "truncated final event" in reason
 
 
+def _trusted_runtime_identity():
+    file_row = {"path": "/runtime/file.py", "sha256": "a" * 64,
+                "size": 1}
+    return {
+        "schema": 1,
+        "python": {**file_row, "path": "/usr/bin/python3"},
+        "entry": {**file_row, "path": "/runtime/trusted_pytest_entry.py"},
+        "plugin": {**file_row, "path": "/runtime/_pytest_progress_plugin.py"},
+        "modules": [
+            {"name": name, **file_row,
+             "path": f"/usr/lib/python/site-packages/{name}.py"}
+            for name in ("pytest", "_pytest", "pluggy")
+        ],
+    }
+
+
+def test_required_runtime_identity_is_bound_to_session_start(tmp_path):
+    sidecar = tmp_path / "identity-progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {"runtime_identity": _trusted_runtime_identity()}),
+        ("collection_finish", {"selected_items": 0}),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, require_runtime_identity=True)
+    try:
+        assert probe.sample() == 3
+        ok, reason = probe.complete()
+        identity = probe.runtime_identity
+    finally:
+        probe.close()
+    assert ok, reason
+    assert identity == _trusted_runtime_identity()
+
+
+def test_missing_or_ambiguous_required_runtime_identity_never_renews(tmp_path):
+    for name, session in (
+        ("missing", {}),
+        ("extra", {"runtime_identity": {
+            **_trusted_runtime_identity(), "candidate_field": True}}),
+    ):
+        sidecar = tmp_path / f"{name}.jsonl"
+        sidecar.write_text(json.dumps({
+            "schema": 1, "nonce": "nonce", "pid": os.getpid(),
+            "seq": 1, "event": "session_start", "monotonic_ns": 1,
+            **session,
+        }) + "\n", encoding="utf-8")
+        probe = D._SemanticProgressProbe(
+            sidecar, "nonce", lambda: os.getpid(),
+            require_runtime_identity=True)
+        try:
+            assert probe.sample() == 0
+            ok, reason = probe.complete()
+        finally:
+            probe.close()
+        assert not ok
+        assert "runtime identity" in reason
+
+
+def test_duplicate_key_or_nonfinite_progress_json_is_malformed(tmp_path):
+    for name, raw in (
+        ("duplicate", b'{"schema":1,"schema":1}\n'),
+        ("nonfinite", b'{"schema":NaN}\n'),
+    ):
+        sidecar = tmp_path / f"{name}.jsonl"
+        sidecar.write_bytes(raw)
+        probe = D._SemanticProgressProbe(
+            sidecar, "nonce", lambda: os.getpid())
+        try:
+            assert probe.sample() == 0
+            ok, reason = probe.complete()
+        finally:
+            probe.close()
+        assert not ok and "malformed" in reason
+
+
 @pytest.mark.parametrize("bad", [
     {"completed": 1, "total": 3},  # duplicate
     {"completed": 3, "total": 3},  # gap
@@ -1214,7 +1954,8 @@ def test_invalid_domain_progress_freezes_the_semantic_score(tmp_path, bad):
                 "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
                 "event": event, "monotonic_ns": seq, **fields,
             }) + "\n")
-    probe = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, collect_only=True)
     try:
         score = probe.sample()
         again = probe.sample()
@@ -1223,6 +1964,64 @@ def test_invalid_domain_progress_freezes_the_semantic_score(tmp_path, bad):
         probe.close()
     assert score == again == 4
     assert not ok and "domain_progress" in reason
+
+
+@pytest.mark.parametrize("terminal", [
+    {"selected_items": 0},
+    {"selected_items": 2},
+])
+def test_collect_only_terminal_must_preserve_declared_count(tmp_path, terminal):
+    sidecar = tmp_path / "collect-progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("item_collected", {"nodeid": "test_a.py::test_a"}),
+        ("collection_finish", {"selected_items": 1}),
+        ("collection_only_finish", terminal),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    try:
+        assert probe.sample() == 3
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert not ok
+    assert "collect-only terminal count/state mismatch" in reason
+
+
+def test_zero_selection_collect_requires_its_distinct_terminal(tmp_path):
+    """A normal zero-test session_finish cannot certify --collect-only."""
+    sidecar = tmp_path / "zero-collect-progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("collection_finish", {"selected_items": 0}),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, collect_only=True)
+    try:
+        assert probe.sample() == 2
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert not ok
+    assert "out-of-order session_finish" in reason
 
 
 def test_the_merge_omits_files_that_have_no_record(tmp_path):
@@ -1279,43 +2078,42 @@ def test_both_landing_arms_run_through_this_driver():
     root = _repo_root()
     land = root / "tools" / "gatekeeper-land.sh"
     verify = root / "tools" / "gatekeeper-verify-merge.sh"
-    if not land.is_file() or not verify.is_file():
+    entry = root / "tools" / "ci" / "hermetic_test_arm_entry.sh"
+    if not land.is_file() or not verify.is_file() or not entry.is_file():
         pytest.skip("the landing scripts are not shipped in this tree")
     land_src = land.read_text(errors="replace")
     verify_src = verify.read_text(errors="replace")
+    entry_src = entry.read_text(errors="replace")
     assert "programs/pytest_per_file_junit.py" in land_src, (
-        "arm B does not run through the per-file driver, so one hanging file "
-        "still costs the candidate's whole record")
-    assert "programs/pytest_per_file_junit.py" in verify_src, (
-        "arm A1 does not run through the per-file driver; an unmeasurable base "
-        "arm is the permissive direction — see vibe-ic#1443")
+        "the direct push path does not run through the semantic driver")
     assert "--aggregate-check" in land_src.split("run_pytest()")[-1], (
-        "arm B isolates every file without the whole-selection semantics canary")
-    assert "--aggregate-check" in verify_src, (
-        "arm A1 and arm B do not share the aggregate semantics canary")
+        "the direct push path has no whole-selection semantics canary")
     assert "--aggregate-check --aggregate-only" not in land_src.split(
         "run_pytest()")[-1], (
-        "arm B suppresses per-file recovery after aggregate NORECORD")
-    assert "--aggregate-check --aggregate-only" not in verify_src, (
-        "arm A1/B1 suppress per-file recovery after aggregate NORECORD")
+        "the direct push path suppresses per-file recovery after NORECORD")
     assert land_src.split("run_pytest()")[-1].split(
         "run_repo_tools_pytest")[0].count("--fallback-jobs") == 1, (
         "the push-path aggregate fallback has no bounded process width")
-    assert verify_src.count("--fallback-jobs") == 2, (
-        "arm A1 and arm B1 do not both declare the bounded fallback width")
     assert land_src.split("run_pytest()")[-1].split(
         "run_repo_tools_pytest")[0].count("--fallback-rescue-jobs") == 1, (
         "the push path does not declare its exhaustive rescue ceiling")
-    assert verify_src.count("--fallback-rescue-jobs") == 2, (
-        "arm A1 and arm B1 do not both declare the exhaustive rescue ceiling")
-    assert "contract=aggregate-first-exhaustive-process-rescue" in verify_src, (
-        "the base-test cache key does not name the process-isolated contract")
-    assert "fallback_jobs=" in verify_src, (
-        "the base-test cache fingerprint omits the fallback pool width")
-    assert "fallback_rescue_jobs=" in verify_src, (
-        "the base-test cache fingerprint omits the rescue pool width")
     assert "-p no:cacheprovider" in land_src.split("run_pytest()")[-1], (
         "arm B loads cacheprovider while A1 explicitly disables it")
+
+    # Verified A1/B1 use one BASE-authorised, read-only overlay as direct PID1.
+    # The entry owns the driver argv for both arms; the subject cannot shadow it.
+    assert "--overlay tools/ci/hermetic_test_arm_entry.sh" in verify_src
+    assert ("--overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
+            "test_matrix_63x8_coverage.py") in verify_src
+    assert "launch_hermetic_test_arm B1" in verify_src
+    assert "launch_hermetic_test_arm A1" in verify_src
+    assert "pytest_per_file_junit.py" in entry_src
+    assert "--aggregate-check" in entry_src
+    assert "--aggregate-only" in entry_src, (
+        "the hermetic arm must refuse an incomplete aggregate instead of "
+        "launching a second unbound process population")
+    assert 'python3 -I "$PROGRAMS/trusted_pytest_entry.py"' in entry_src
+    assert "--timeout" not in entry_src and "pytest_timeout" not in entry_src
     assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (
         "source text is not a runtime capability record; a comment containing "
         "the driver path must not select arm A1's instrument")
@@ -1324,21 +2122,52 @@ def test_both_landing_arms_run_through_this_driver():
         "the single-session `xargs` invocation is still in run_pytest")
 
 
-def test_the_harness_bound_is_still_declared_where_the_gate_reads_it():
-    """The pytest command is passed to the driver VERBATIM so `--timeout=180`
-    stays in `tools/gatekeeper-land.sh`, which `ci_harness_timeout_ceiling_check`
-    lists in `EXTRA_HARNESS_RELS`. A bound moved into Python would vanish from
-    that resolver and the ceiling would come from a different file."""
+def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
+    """All landing populations use the driver's no-ceiling contract."""
     import ci_harness_timeout_ceiling_check as C
     root = _repo_root()
     if not (root / "tools" / "gatekeeper-land.sh").is_file():
         pytest.skip("the landing scripts are not shipped in this tree")
-    bounds = [b for b in C.harness_bounds(root)
-              if b.workflow == "gatekeeper-land.sh"]
-    assert bounds, (
-        "gatekeeper-land.sh no longer declares any pytest harness bound the "
-        "ceiling gate can read")
-    assert min(b.seconds for b in bounds) == 180, [b.as_dict() for b in bounds]
+    contract = C.landing_semantic_progress_contract(root)
+    assert contract["declared"] is True, contract
+    assert contract["errors"] == [], contract
+    assert len(contract["lanes"]) >= 3, contract
+
+
+def test_the_landing_harness_argv_shape_is_the_one_this_file_pins():
+    """`_pytest_cmd` must stay the shipped landing argv, option for option.
+
+    THE DEFECT THIS EXISTS FOR, measured 2026-08-20 at `9cc09b863` (v1.11.5).
+    `_pytest_cmd` still carried `-p pytest_timeout --timeout=4
+    --timeout-method=thread` and called itself "pinned the way the landing gate
+    pins it" — long after `tools/ci/hermetic_test_arm_entry.sh` had dropped the
+    idiom. Nothing compared the two, so the drift was invisible until it showed
+    up as colour: the same 90 cases gave **30 red in the anchored image and 3 on
+    a host**, a 28-test set difference whose entire cause was that the image
+    does not carry the plugin and the host happened to.
+
+    A prose claim of "pinned the way the landing gate pins it" is not a pin.
+    This is.
+    """
+    root = _repo_root()
+    entry = root / "tools" / "ci" / "hermetic_test_arm_entry.sh"
+    if not entry.is_file():
+        pytest.skip("the landing scripts are not shipped in this tree")
+    body = entry.read_text(encoding="utf-8", errors="replace")
+    cmd = _pytest_cmd()
+
+    # The retired idiom, in BOTH directions: gone from the shipped entry AND
+    # gone from what this file hands its children.
+    assert "pytest_timeout" not in body, body
+    assert "--timeout" not in body, body
+    assert "pytest_timeout" not in cmd, cmd
+    assert not any(a.startswith("--timeout") for a in cmd), cmd
+
+    # The options the entry DOES declare must be the ones this file uses, or
+    # these tests are measuring a harness nobody runs.
+    assert "-p no:cacheprovider" in body, body
+    assert cmd[cmd.index("-p") + 1] == "no:cacheprovider", cmd
+    assert "-q" in body and "-q" in cmd, (body, cmd)
 
 
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
@@ -1352,3 +2181,263 @@ def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
     assert _T <= ceiling, (_T, ceiling)
     # `_STALL` is deliberately not compared: it measures absence of progress,
     # not healthy runtime, and therefore is not a wall-clock harness bound.
+
+
+# ── the selection and the report must be read in ONE frame (jnorec, C) ───────
+#
+# MEASURED at 49d2b3328, the landing gate's `full:unselectable-tests` lane:
+# `rc=0`, 852 cases, `784 passed, 60 skipped, 5 xfailed, 3 xpassed`, ZERO
+# failures — and REFUSED, `missing=111` of 111 selected with `extra=110`. The
+# corpus program emits repo-root-relative paths and the lane runs with cwd at
+# the repository root, while every one of those files lives under the plugin
+# subtree, which carries its own `pytest.ini` — so pytest's rootdir was the
+# plugin and every `file` attribute came back plugin-relative. The comparison
+# matched nothing in either direction, which means that lane's aggregate arm had
+# never measured anything and nobody could tell: UNKNOWN and broken read alike.
+#
+# Both directions are pinned below. The first fails on the pre-fix driver
+# (a fully green split-frame session is refused); the second fails on it too,
+# for the opposite reason — it names ONE genuinely absent file, and the pre-fix
+# driver names all of them, so a fix that merely stopped comparing would pass
+# the first test and fail this one.
+
+_PLAIN_GREEN = "def test_it_is_green():\n    assert True\n"
+
+#: A module pytest imports and collects ZERO items from. This is the shape the
+#: coverage check exists for and it must stay refused.
+_COLLECTS_NOTHING = "VALUE = 1\n"
+
+
+def _plain_pytest_cmd():
+    """The harness command WITHOUT `-p pytest_timeout`.
+
+    MEASURED in the pinned landing image: `import pytest_timeout` raises
+    `ModuleNotFoundError`, and `-p <missing plugin>` dies in pytest's pre-parse
+    before collection. A coverage test built on that command would exercise the
+    pre-parse failure and prove nothing about coverage.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+
+
+def _split_frame_tree(tmp_path: Path, files: dict) -> Path:
+    """A tree whose selection frame and pytest's rootdir deliberately differ.
+
+    The test files sit in a subdirectory carrying its OWN `pytest.ini`, so
+    pytest infers rootdir there, while the selection is written relative to the
+    OUTER directory the driver runs in. That is exactly the landing gate's
+    unselectable lane: repo root cwd, plugin-subtree files, plugin `pytest.ini`.
+    """
+    root = tmp_path / "outer"
+    inner = root / "inner"
+    inner.mkdir(parents=True, exist_ok=True)
+    (inner / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    for name, body in files.items():
+        (inner / name).write_text(body, encoding="utf-8")
+    (root / "selection.txt").write_text(
+        "".join(f"inner/{n}\n" for n in files), encoding="utf-8")
+    return root
+
+
+def _run_driver_in(root: Path, junit: Path, *extra, pytest_extra=()):
+    return subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(root / "selection.txt"),
+         "--junit", str(junit),
+         "--stall-after", str(_STALL), *extra,
+         "--"] + _plain_pytest_cmd() + list(pytest_extra),
+        cwd=str(root), capture_output=True, text=True, timeout=_T)
+
+
+def test_a_green_session_read_in_another_frame_is_not_refused(tmp_path):
+    """POSITIVE CONTROL: nothing is wrong, so nothing may be reported wrong."""
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_beta.py": _PLAIN_GREEN})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert "AGGREGATE_COMPLETE" in proc.stdout, proc.stdout
+    assert "AGGREGATE_NORECORD" not in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_OK, proc.stdout
+
+
+def test_a_file_that_collects_nothing_is_still_named_missing(tmp_path):
+    """NEGATIVE CONTROL, and the whole value of the change.
+
+    One selected file contributes no testcase. That is the shape
+    `_aggregate_coverage_problem` exists to catch, and declaring the frame must
+    not blunt it: the refusal must name THAT file and only that file.
+    """
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_silent.py": _COLLECTS_NOTHING})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "missing=['inner/test_silent.py'], extra=[]" in proc.stdout, (
+        "the refusal must name exactly the file that produced no testcase; "
+        "naming every file (or none) means the frames still disagree\n"
+        + proc.stdout)
+
+
+def test_a_caller_that_declared_a_rootdir_keeps_it():
+    """The frame is ADDED, never overridden — a caller may own it."""
+    assert D._declared_rootdir(["-q", "--rootdir=/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q", "--rootdir", "/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q"], "/anchor") == ["--rootdir=/anchor"]
+
+
+# ── a --maxfail prefix is a NAMED truncation, still refused (jnorec, B1) ──────
+#
+# MEASURED at 288dc9fc8, the landing gate's `full:targeted-tests` lane over a
+# 116-file selection, byte-identical in five rounds:
+#
+#     AGGREGATE_NORECORD  aggregate JUnit does not exactly cover the selected
+#                         files (missing=[108 paths]) — cross-file/order
+#                         semantics are UNKNOWN, not clean
+#
+# The truth was `10 failed, 178 passed`, `188/2565` items, `rc=1`, a valid
+# JUnit: pytest stopped inside selected file 8 of 116 because `--maxfail=10`
+# told it to. One reading sends the reader to the harness; the other sends them
+# to ten named tests. Nobody chased it for five rounds, which is what an
+# unknowable-looking refusal costs.
+#
+# The verdict does NOT move — a prefix of a failure set cannot be differenced
+# against another arm, so the landing is still refused. Only the diagnosis moves.
+
+_TWO_RED = ("def test_red_one():\n    assert False\n"
+            "def test_red_two():\n    assert False\n"
+            "def test_green_never_reached():\n    assert True\n")
+
+
+def test_a_maxfail_prefix_is_named_and_still_refused(tmp_path):
+    """POSITIVE CONTROL: the cause is knowable, so it must be named."""
+    corpus = _tree(tmp_path, {"test_aa_red.py": _TWO_RED,
+                              "test_bb_never_ran.py": _PLAIN_GREEN})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED  2 failures reached at file 1/2," in proc.stdout, (
+        proc.stdout)
+    assert "test_aa_red.py::test_red_one" in proc.stdout.replace(
+        "test_aa_red::", "test_aa_red.py::"), proc.stdout
+    # THE REFUSAL IS UNCHANGED. Every consumer keys off this marker.
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "never launched: ['test_bb_never_ran.py']" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_real_stall_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 1: a genuine hang must stay an unexplained NORECORD.
+
+    The bound is declared and the session is incomplete, exactly as in the
+    positive case. The one thing that differs is that the supervisor's stall
+    lease fired instead of the process exiting on its own, and that alone must
+    keep the truncation label off.
+    """
+    corpus = _tree(tmp_path, {"test_hangs.py": _HANGS_IN_TEST})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--aggregate-stall-after", str(_STALL),
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    # The REASON must still be the stall, not a bound. A diagnosis that renames
+    # a hang after the failure bound is the permissive direction: it would send
+    # the reader to ten tests when the harness is what stopped.
+    assert "AGGREGATE_NORECORD  STALLED after" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_zero_collecting_file_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 2: not-covered must stay not-covered.
+
+    A declared bound plus an incomplete report is not enough to blame the bound:
+    here nothing failed at all, so the refusal must remain the coverage one and
+    must still name the file that produced no testcase.
+    """
+    corpus = _tree(tmp_path, {"test_green.py": _PLAIN_GREEN,
+                              "test_silent.py": _COLLECTS_NOTHING})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    assert "missing=['test_silent.py'], extra=[]" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_the_bound_is_read_from_this_drivers_own_argv():
+    """Never from the child's output: a test may print `--maxfail` too."""
+    assert D._declared_failure_bound(["-q"]) is None
+    assert D._declared_failure_bound(["-q", "--maxfail=10"]) == 10
+    assert D._declared_failure_bound(["-q", "--maxfail", "4"]) == 4
+    assert D._declared_failure_bound(["-q", "-x"]) == 1
+    assert D._declared_failure_bound(["-qx"]) == 1
+    assert D._declared_failure_bound(["--exitfirst", "--maxfail=9"]) == 1
+    assert D._declared_failure_bound(["-q", "--maxfail=0"]) is None
+    assert D._declared_failure_bound(["-p", "no:cacheprovider"]) is None
+
+
+def test_an_unknown_session_shape_is_never_called_a_truncation():
+    """Every clause is required, and a missing sink key is UNKNOWN."""
+    full = {"natural_exit": True, "leaked": False, "cleanup_ok": True,
+            "protocol_complete": False, "items_finished": 5,
+            "items_declared": 9}
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, []) is not None
+    assert D._maxfail_truncation(None, 1, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 0, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 1, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, ["x.py"]) is None
+    assert D._maxfail_truncation(2, 1, 2, {}, 1, 3, []) is None
+    for key, bad in (("natural_exit", False), ("leaked", True),
+                     ("cleanup_ok", False), ("protocol_complete", True),
+                     ("items_finished", None), ("items_declared", None),
+                     ("items_finished", 9)):
+        broken = dict(full, **{key: bad})
+        assert D._maxfail_truncation(2, 1, 2, broken, 1, 3, []) is None, key
+
+
+def test_a_nested_drivers_complaint_is_not_this_sessions_reason():
+    """The detail must come from THIS session's probe, not from the buffer.
+
+    MEASURED with only the `stalled` half repaired: this file's per-file arm
+    reported "no pytest progress stream was produced" for a session whose own
+    probe had just said "session finished before every selected item completed
+    (29/83)". The first `PROGRESS_PROTOCOL_INCOMPLETE:` in the buffer belonged to
+    a NESTED driver run that this file spawns as its subject.
+    """
+    out = ("PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress stream was produced\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.139.138.jsonl: session finished before "
+           "every selected item completed (29/83)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.139.138.jsonl: session finished before every selected "
+                       "item completed (29/83)")
+    assert reason.endswith("completed (29/83)"), reason
+    assert "no pytest progress stream" not in reason
+
+
+def test_a_probe_that_made_no_complaint_yields_no_protocol_reason():
+    """Fail closed: an unsupplied detail must not be invented from the buffer."""
+    out = "PROGRESS_PROTOCOL_INCOMPLETE: something the child printed\n"
+    reason = D._norecord_reason(1, out, True, 300, stalled=False,
+                                protocol_error="")
+    assert "protocol incomplete" not in reason
+    assert reason == "pytest supervision ended without a complete liveness record"
+
+
+def test_the_sink_reader_refuses_a_complete_join():
+    assert D._sink_protocol_error({}) == ""
+    assert D._sink_protocol_error({"protocol_complete": True,
+                                   "protocol_error": "x"}) == ""
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": "x"}) == "x"
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": None}) == ""

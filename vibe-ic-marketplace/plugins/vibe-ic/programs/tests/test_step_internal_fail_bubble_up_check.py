@@ -345,7 +345,15 @@ def test_re_recording_the_register_clears_it(tmp_path):
     (root / "ic" / "alpha" / "clean_run_v1_20200101" / "reports"
      / "step_x_check.json").unlink()
     assert _sweep(root, bl).returncode == 1
-    assert _sweep(root, bl, "--write-baseline").returncode == 0
+    # The clearing re-record LOWERS the register, and vibe-ic#1704 requires the
+    # reason beside the new number. That is the point of the ratchet, so the
+    # inverse property this test exists for is "a stated shrink clears it",
+    # never "any shrink clears it" — the unstated one is refused in
+    # `test_issue1704_a_shrink_needs_a_stated_reason`.
+    assert _sweep(root, bl, "--write-baseline", "--shrink-reason",
+                  "the FAIL report this fixture published was deleted, so the "
+                  "finding was examined out of the corpus by the test itself "
+                  "rather than withdrawn unread.").returncode == 0
     r = _sweep(root, bl)
     assert r.returncode == 0, r.stdout
     assert "no NEW unacknowledged step-internal FAIL" in r.stdout, r.stdout
