@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 28 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 29 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 25 | deterministic rules — the default, and every one names its predicate |
+| **A** | 26 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -983,6 +983,38 @@ confirmed instance rather than a number I could not defend.**
 **(o)** yes. **(d)** yes — any docstring that quantifies a population it does not
 name is the same claim waiting to expire.
 
+### A-27 · a quoted population count must name the instance its screen was validated against · `capture.emit`
+
+**This lane's own apparatus is the evidence.** Twelve screens I wrote returned a
+number I could not use:
+
+    a prefix match pulled in every permission flag            34 for 9
+    a verb matched a path three paragraphs away              560 for 0
+    a no-argument probe measured the argument parser      18 of 19, worthless
+    module-stem matching counted in-repo packages as
+      third-party                                           216 for 51
+    an exit code read after a pipe reported `tail`
+    one matched a pattern literal inside a regex and reported a document
+      that does not exist
+
+**And three of the twelve failed to find the very case they were written for** —
+a pattern held in a constant, a command spanning continuation lines, and a name
+composed by a format string. A positive control would have caught each in one
+run, and the control is free: the motivating defect is by construction a member
+of the population.
+
+A count has no expected value to compare against — the number *is* the answer, so
+any number looks like one. And the direction that survives review is the low one:
+a small tidy number reads as a well-scoped rule.
+
+Until now these warnings sat in five records under five different headings, so a
+reader of any one saw only their local instance. **This record is the class**, and
+it is enforceable where the others are advice: the emitter can refuse a record
+that quotes a count without naming the control.
+**(o)** yes — it is the rule I most needed and did not have.
+**(d)** yes — every future batch quotes counts, and none of them will have an
+expected value either.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1226,6 +1258,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
 | A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
+| A-27 | **12 bad screens** | 3 missed their own case | the class behind every warning above |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
