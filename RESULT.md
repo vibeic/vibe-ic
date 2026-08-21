@@ -385,3 +385,98 @@ Whole-file A/B on the file this branch changes most,
    not auditable after the fact, so "was this gated" cannot be answered from the
    repository.
 6. **The 38 other red IDs of main's 92 are not mine and were not investigated.**
+
+---
+
+## THE d8 BLOCKER: ANSWERED, AND THE SEVEN ARE MOSTLY RELEASED
+
+Re-verified on today's tree (v1.11.51) rather than restated.
+
+**(a) It was a real finding, not a stale pin — and it is now closed.** The
+measurement that settled it: seeding step 1.6x's one declared output with wrong
+content and running its own gate command gave sha256 `02998b14…` before and
+`22bad440…` after. The gate OVERWROTE it. `_gradable` was deciding "is there a
+content channel" from the filename SUFFIX, and a `.json` passed — but a declared
+output that is the gate's own `--json` destination carries nothing into the
+verdict. Four steps are in that position (`1.6x`, `2`, `8`, `36`). The fix
+implemented the rule this file already stated; it did not relax it. Landed
+v1.11.44.
+
+**(b) The NORECORD rule is CORRECT, and the evidence is what happened when the
+eighth red was fixed.** The census is a claim about the whole grid derived from
+one nested session's rc; a session red for a reason no cell represents makes that
+claim false. It is guarded in both directions by
+`test_a_red_non_cell_helper_cannot_represent_the_nested_session_rc`, which
+passes. It was not touched — and fixing the eighth released the others, which is
+exactly how a correct rule behaves. A rule that had been over-broad would have
+kept them blocked.
+
+**Measured now: 5 of the 7 are GREEN.**
+
+```
+test_the_census_block_is_fresh                                GREEN
+test_the_published_total_equals_the_live_census               GREEN
+test_every_cell_has_a_live_outcome_and_the_outcome_run_...    GREEN
+test_the_enforcement_census_is_reported_for_humans            GREEN
+test_a_readable_artefact_that_is_wrong_...                    GREEN
+test_every_na_cell_asserts_a_live_precondition                RED
+test_no_cell_is_counted_enforced_while_its_predicate_is_red   RED
+```
+
+The two still red are **no longer NORECORD-blocked**. They are red on their own
+content, and they name their cause exactly:
+
+> 55 of 552 cells are reported in a state their own live predicate contradicts
+> (6 measured red, 49 not measured). MEASURED RED — these are repo defects:
+> 15/d3, 17/d3, 19/d3, 20/d3, 30/d3, 32/d3.
+
+Those six ARE the six `test_d3_required_outputs_are_produced[stepNN]` IDs already
+on this list. So `test_no_cell_is_counted_enforced_while_its_predicate_is_red` is
+their AGGREGATE, not a ninth finding — the honest count of open *defects* behind
+the 11 remaining IDs is **7**: six d3 manifest citations plus the two
+mutation-ledger cells (1.6x/d3, 0.5ic/d3) whose mutation is ALREADY_RED at
+baseline.
+
+## THE 69 x 9, MEASURED — what "the matrix is done" would mean
+
+The ninth dimension is **not on main** (`git grep test_matrix_d9_verdict_consumed
+origin/main` -> 0); it is on `jm9/d9-verdict-consumed`, rebased onto v1.11.51.
+Measured there, and verified fresh by the repository's own gate rather than read
+off the block:
+
+```
+$ python3 tools/gen_matrix_63x8_census.py . --check
+[PASS] 63x8 derived figures fresh: 60 anchored figure(s) re-derived across 35 corpus files.
+[PASS] 63x8 census fresh: 621 cells over 9 dimensions; ENFORCED own=19
+       substituted=117 undeclared=403; CONTRADICTED=6 NOT-MEASURED=49
+       WAIVED=8 NA=19 (621/621 accounted).
+```
+
+**Every one of the 621 cells is in a named state.** Both partitions total 621
+independently — the outcome axis (19+117+403+6+49+8+19) and the state axis
+(539 ENFORCED + 6 CONTRADICTED + 8 WAIVED + 19 NA + 46 ENFORCED-SKIPPED +
+3 WAIVED-SKIPPED). Nothing is unaccounted.
+
+**19 cells are measured against the step's OWN mechanism. 602 carry a gap with a
+stated reason.**
+
+| | cells | the reason it is a gap |
+|---|---:|---|
+| ENFORCED, own mechanism | **19** | — this is the floor, and the only figure that means "enforcing" in the plain sense |
+| ENFORCED, substituted | 117 | the predicate runs against a stand-in; each carries a disclosure from the module that owns it |
+| ENFORCED, undeclared | 403 | the dimension has not answered the question at all; UNDECLARED is a state, not a synonym for clean |
+| NOT MEASURED | 49 | the predicate declined and named the resource it could not reach |
+| NA | 19 | dormant, and the dormancy is guarded by a live precondition that self-invalidates |
+| WAIVED | 8 | the accepted-gap registry, which requires a reason AND evidence |
+| CONTRADICTED | 6 | configured enforcing while its own predicate is RED — a disclosed defect |
+
+So **3.1% of the grid is measured against its own mechanism** and 96.9% is a
+disclosed gap. That is not a failure of the campaign; it is the campaign's own
+answer to the question, and the reason the census refuses to publish a single
+"enforcing" total.
+
+**The ninth dimension arrives almost entirely substituted**: `verdict_consumed`
+is own=1, substituted=68. It asks a real question — when a step FAILs, does the
+verdict reach the exit code — and on this tree it answers it through a stand-in
+for 68 of 69 steps. Read it as a dimension that has started, not one that is
+done.
