@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "Intel_LPC_Interface_Specification.txt": [
-    {
-      "literal": "LAD[1]",
-      "label": "auto-discovered (bracket_kv)"
-    }
-  ]
-}

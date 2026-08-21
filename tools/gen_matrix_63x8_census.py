@@ -129,6 +129,32 @@ Run::
     python3 tools/gen_matrix_63x8_census.py <root> --check  # …for THAT tree
     python3 tools/gen_matrix_63x8_census.py --check-figures # anchors only (cheap)
     python3 tools/gen_matrix_63x8_census.py --fix-figures   # rewrite the anchors
+    python3 tools/gen_matrix_63x8_census.py --fix          # anchors AND census block
+    python3 tools/gen_matrix_63x8_census.py --fix \
+        --written-json /tmp/w.json                         # …and DECLARE what it wrote
+
+WHERE THIS IS DERIVED, AND WHY IT IS NOT AT PUSH TIME (vibe-ic#1382)
+-------------------------------------------------------------------
+This program is run for real by two callers, and they are deliberately not the
+same caller:
+
+    tools/ci/repo_hygiene_gates.sh   `--check`  — the landing gate. JUDGES.
+    gatekeeper_prepare_landing.py    `--fix`    — the batch builder. RE-DERIVES.
+
+The re-derivation runs at LAND, not at PUSH, and that was a choice between two
+readings with measurements on both sides. Moving `--check` into `pre-push` would
+show a PR author the staleness in seconds instead of an hour — but the 57
+anchored figures live in THREE shared files (`matrix_63x8/README.md`,
+`matrix_63x8/flowref.py`, `test_matrix_d2_falsifiable.py`) and every one of them
+carries tree-wide COUNTERS. Two branches that each add a gate rewrite the same
+lines with different totals, so per-PR re-derivation converts every gate-adding
+PR into a conflict with every other one. That is not a prediction: it is what
+`programs/INDEX.md` already does, measured at 26 of 30 conflicting open PRs
+(vibe-ic#1431), and it is why `tools/resolve_generated_conflicts.sh` exists.
+
+So the figures are re-derived at the only moment they are published, which costs
+nothing per PR, and the gate still runs `--check` independently afterwards — the
+builder makes the tree consistent, it does not silence the check.
 """
 from __future__ import annotations
 
@@ -437,6 +463,17 @@ def _build_corpus_figures() -> CorpusFigures:
     table["matrix_dimensions"] = lambda f: len(_dimensions())
     table["ledger_cells"] = lambda f: len(f.step_ids()) * len(_dimensions())
 
+    def _informational_gates(_f):
+        # Dimension 9's subject: the gates whose FAIL `flow_compliance_check`
+        # removes from `failing`. Read off the live frozenset, never counted by
+        # hand — the README publishes this number as the size of a hole, and a
+        # stale "4" would read as a disclosed known gap while describing a set
+        # that had grown.
+        import flow_compliance_check as _fcc
+        return len(_fcc.INFORMATIONAL_GATES)
+
+    table["informational_gates"] = _informational_gates
+
     for kind in F.OUTPUT_KINDS:
         table[f"required_outputs_{kind.lower()}"] = _out_kind(kind)
     for kind in F.GATE_CLAUSE_KINDS:
@@ -743,6 +780,51 @@ def apply_anchor_rewrites(report: Dict) -> List[str]:
     return written
 
 
+#: EVERY bucket a cell can land in. `render` sums exactly these and refuses when
+#: they do not reach the cell count, naming what was counted — so a label added to
+#: `_join_axes` without a column here fails LOUDLY and by name, instead of silently
+#: shrinking the headline.
+_LABEL_KEYS = ("enforced", "contradicted", "waived", "na",
+               "waived_contradicted", "na_contradicted",
+               "enforced_skipped", "waived_skipped", "na_skipped")
+
+#: WHICH PRINTED COLUMN EACH LABEL LANDS IN — and the reason this mapping is
+#: written down instead of being implicit in `render`'s f-string (vibe-ic#1296).
+#:
+#: `_LABEL_KEYS` made the HEADLINE partition. It did nothing for the TABLE, which
+#: is the thing a reader actually reads per dimension, and whose own comment
+#: claimed "Every one of the 504 is now in exactly one". MEASURED on `7c376e348`,
+#: that sentence was false for 53 cells: the six printed columns totalled
+#: `17+44+367+0+8+15 = 451` against 504, and dimension 3 published a row that
+#: summed to 11 of its 63 cells — the 52 whose predicate could not run appeared
+#: in no column, at no dimension, and in no total.
+#:
+#: A dropped cell reads as a dimension with nothing to report, which is the exact
+#: opposite of what it means. So every label a cell can carry is mapped to a
+#: column HERE, `render` refuses when a label has no entry, and the columns are
+#: checked to partition each row as well as the total.
+#:
+#: `None` means "not a column of its own": the ENFORCED cells are already printed
+#: SPLIT across own / substituted / undeclared, and folding them back into one
+#: column is the disclosure loss #889 removed.
+_LABEL_COLUMN = {
+    "enforced": None,
+    "contradicted": "contradicted",
+    "waived_contradicted": "contradicted",
+    "na_contradicted": "contradicted",
+    "enforced_skipped": "not_measured",
+    "waived_skipped": "not_measured",
+    "na_skipped": "not_measured",
+    "waived": "waived",
+    "na": "na",
+}
+
+#: The columns `render` prints, in printed order. The three ENFORCED columns come
+#: from `substitution_census()`; the rest are folded from `_LABEL_COLUMN`.
+_ENFORCED_COLUMNS = ("own", "substituted", "undeclared")
+_LABEL_COLUMNS = ("contradicted", "not_measured", "waived", "na")
+
+
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     """``([per-dimension row], totals)`` recomputed from the live suite."""
     CV, SUB, DIMENSIONS, NAMES, QUESTIONS = _load()
@@ -789,12 +871,105 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "contradicted": per.count("ENFORCED-CONTRADICTED"),
             "waived": per.count("WAIVED"),
             "na": per.count("NA"),
+            # The labels `_join_axes` can emit that this table had no column for.
+            # They were counted NOWHERE, so any non-zero one fell straight out of
+            # the partition and aborted the generator with a bare subtraction.
+            "waived_contradicted": per.count("WAIVED-CONTRADICTED"),
+            "na_contradicted": per.count("NA-CONTRADICTED"),
+            "enforced_skipped": per.count("ENFORCED-SKIPPED"),
+            "waived_skipped": per.count("WAIVED-SKIPPED"),
+            "na_skipped": per.count("NA-SKIPPED"),
         })
+    _fold_label_columns(rows)
     totals = {k: sum(r[k] for r in rows)
-              for k in ("own", "substituted", "undeclared",
-                        "enforced", "contradicted", "waived", "na")}
+              for k in _ENFORCED_COLUMNS + _LABEL_COLUMNS + _LABEL_KEYS}
     totals["cells"] = len(states)
+    totals["cells_per_dim"] = len(states) // len(DIMENSIONS) if DIMENSIONS else 0
     return rows, totals
+
+
+def _fold_label_columns(rows: List[Dict]) -> None:
+    """Give every census label a printed column, or refuse by name.
+
+    This is the structural half of vibe-ic#1296. `render` used to name its
+    columns inline, so a label `_join_axes` had learned to emit — `-SKIPPED` —
+    was counted by the headline and printed by nothing. Folding through
+    `_LABEL_COLUMN` means a tenth label cannot be added without either giving it
+    a column or reddening here, which is the same contract `_LABEL_KEYS` already
+    holds the headline to.
+    """
+    unmapped = sorted(set(_LABEL_KEYS) - set(_LABEL_COLUMN))
+    if unmapped:
+        raise SystemExit(
+            f"census label(s) with no table column: {unmapped}. The headline "
+            f"counts them and the per-dimension table would not, so every one "
+            f"of them would vanish from the rows a reader reads. Map each to a "
+            f"column in _LABEL_COLUMN (or to None if it is already printed "
+            f"split) rather than leaving it out of the table.")
+    for row in rows:
+        for column in _LABEL_COLUMNS:
+            row[column] = sum(row[key] for key, col in _LABEL_COLUMN.items()
+                              if col == column)
+
+
+def _extra_labels(totals: Dict[str, int]) -> str:
+    """The buckets beyond the historical four, named in the headline when non-zero.
+
+    A cell counted in the partition but absent from the sentence is the #898 defect
+    in its quieter form: the arithmetic reconciles and the reader still cannot see
+    what it reconciled over. SKIPPED is the one that matters — it says the check
+    exists and could not run, which is neither enforcement nor a contradiction.
+    """
+    parts = []
+    for key, word in (("waived_contradicted", "WAIVED-CONTRADICTED"),
+                      ("na_contradicted", "NA-CONTRADICTED"),
+                      ("enforced_skipped", "ENFORCED-SKIPPED"),
+                      ("waived_skipped", "WAIVED-SKIPPED"),
+                      ("na_skipped", "NA-SKIPPED")):
+        if totals.get(key):
+            parts.append(f"{totals[key]} {word}")
+    return (", " + ", ".join(parts)) if parts else ""
+
+
+def _check_table_partitions(rows: List[Dict], totals: Dict[str, int]) -> None:
+    """The TABLE must account for every cell, per row and in the total.
+
+    The headline had this guard (`_LABEL_KEYS`) and the table did not, which is
+    the whole of vibe-ic#1296: the two disagreed by 53 cells and nothing said
+    so. Checked per ROW as well, because a total that reconciles can still hide
+    a dimension that dropped cells against another that double-counted them —
+    and the row is what a reader reads.
+    """
+    per_dim = totals.get("cells_per_dim") or 0
+    for r in rows:
+        printed = sum(r[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+        if per_dim and printed != per_dim:
+            raise SystemExit(
+                f"the published row for dimension {r['dim']} accounts for "
+                f"{printed} of its {per_dim} cells. A row that does not "
+                f"partition publishes a dimension as smaller than it is; the "
+                f"cells it drops are not reported anywhere. Give every label a "
+                f"column in _LABEL_COLUMN rather than adjusting a figure.")
+    printed = sum(totals[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+    if printed != totals["cells"]:
+        raise SystemExit(
+            f"the published total row accounts for {printed} of "
+            f"{totals['cells']} cells. Every cell must be in exactly one "
+            f"column; see _LABEL_COLUMN.")
+
+
+def _verdict_partition(totals: Dict[str, int]) -> str:
+    """``"504/504 accounted"`` — or a refusal a reader can act on.
+
+    Printed on the verdict line itself so that the sum a reader would have to do
+    by hand is already done. The gate's PASS line published five figures that
+    summed to 451 while announcing 504, and no reader adds up a verdict line.
+    """
+    printed = sum(totals[c] for c in _ENFORCED_COLUMNS + _LABEL_COLUMNS)
+    if printed != totals["cells"]:
+        return (f"UNACCOUNTED: {totals['cells'] - printed} of "
+                f"{totals['cells']} cells are in no column")
+    return f"{printed}/{totals['cells']} accounted"
 
 
 def render(rows: List[Dict], totals: Dict[str, int]) -> str:
@@ -804,11 +979,27 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     # the contradicted cells out of a line that reads like a partition, so the
     # numbers silently failed to add to the total — the same erasure by omission
     # the split below exists to prevent, one line higher.
-    _sum = (totals['enforced'] + totals['contradicted']
-            + totals['waived'] + totals['na'])
+    #
+    # #898 FIXED THE SYMPTOM AND LEFT THE SHAPE. It enumerated FOUR buckets by
+    # hand, and `_join_axes` can emit more than four labels: every state has a
+    # `-CONTRADICTED` form, and now a `-SKIPPED` one. So this reconciled only while
+    # `WAIVED-CONTRADICTED` and `NA-CONTRADICTED` both happened to be zero — the
+    # partition held by luck, not by construction, and the first non-zero one would
+    # abort the generator with a subtraction the reader cannot act on. Measured:
+    # marking a handful of corpus-dependent cells as skipped gave `501 != 504`, and
+    # the three missing cells were nowhere in the message.
+    #
+    # Sum what the census ACTUALLY produced, and name what does not fit.
+    _sum = sum(v for k, v in totals.items() if k in _LABEL_KEYS)
     if _sum != totals['cells']:
+        _named = ", ".join(f"{k}={totals[k]}" for k in sorted(_LABEL_KEYS)
+                           if totals.get(k))
         raise SystemExit(
-            f"census does not partition: {_sum} != {totals['cells']}")
+            f"census does not partition: {_sum} != {totals['cells']} — the "
+            f"buckets that were counted are [{_named}], so "
+            f"{totals['cells'] - _sum} cell(s) carry a label this generator does "
+            f"not count. A cell with no bucket is a cell the headline silently "
+            f"drops; add its label to _LABEL_KEYS rather than adjusting a total.")
     # The guard the headline needed and did not have. The check above proves the
     # four STATE figures partition the 504; it says nothing about whether the
     # three columns underneath add up to the ENFORCED figure they are presented
@@ -824,7 +1015,8 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     out.append(
         f"**{totals['cells']} cells: {totals['enforced']} ENFORCED, "
         f"{totals['contradicted']} ENFORCED-CONTRADICTED, "
-        f"{totals['waived']} WAIVED, {totals['na']} NA.**")
+        f"{totals['waived']} WAIVED, {totals['na']} NA"
+        + _extra_labels(totals) + ".**")
     out.append("")
     out.append(
         f"The {totals['contradicted']} CONTRADICTED cells are configured as "
@@ -879,20 +1071,45 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     # enforcement axis (see census_rows) is only half the repair: without a
     # column of its own, a contradicted cell would appear in NO column, and a
     # row that silently drops cells is the erasure-by-omission this file warns
-    # about six lines from here. Every one of the 504 is now in exactly one.
+    # about six lines from here.
+    #
+    # NOT MEASURED gets one for the same reason, and vibe-ic#1296 is what it
+    # cost to leave it out. `-SKIPPED` was added to `_join_axes` and to
+    # `_LABEL_KEYS`, so the headline reconciled — and this table, which names its
+    # columns inline, kept printing six. MEASURED on `7c376e348`: the total row
+    # published 451 of 504 cells and dimension 3 published 11 of its 63, the
+    # other 52 appearing nowhere. A dimension whose predicates could not run
+    # reads, in that row, as a dimension with nothing to report.
+    #
+    # The columns are folded from `_LABEL_COLUMN` and the partition is asserted
+    # below for every ROW as well as the total, so this cannot be lost again by
+    # adding a label.
+    _check_table_partitions(rows, totals)
     out.append("| dim | question | ENFORCED: own | ENFORCED: substituted "
-               "| ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |")
+               "| ENFORCED: undeclared | CONTRADICTED | NOT MEASURED "
+               "| WAIVED | NA |")
     out.append("|-----|----------|--------------:|----------------------:"
-               "|---------------------:|-------------:|-------:|---:|")
+               "|---------------------:|-------------:|-------------:"
+               "|-------:|---:|")
     for r in rows:
         out.append(
             f"| {r['dim']} | `{r['name']}` — {r['question']} "
             f"| {r['own']} | {r['substituted']} | {r['undeclared']} "
-            f"| {r['contradicted']} | {r['waived']} | {r['na']} |")
+            f"| {r['contradicted']} | {r['not_measured']} "
+            f"| {r['waived']} | {r['na']} |")
     out.append(
         f"| **total** | | **{totals['own']}** | **{totals['substituted']}** "
         f"| **{totals['undeclared']}** | **{totals['contradicted']}** "
+        f"| **{totals['not_measured']}** "
         f"| **{totals['waived']}** | **{totals['na']}** |")
+    out.append("")
+    out.append(
+        f"**NOT MEASURED is not a pass and not a defect.** Those "
+        f"{totals['not_measured']} cells have a predicate that declined to run, "
+        f"naming a resource it could not reach — most often a published corpus "
+        f"this checkout does not carry. They are counted here so a dimension "
+        f"whose cells could not be driven cannot read as a dimension with "
+        f"nothing to report; read them as UNKNOWN, never as coverage.")
     out.append("")
     out.append("Regenerate (never edit this block by hand, and never quote it "
                "without re-running):")
@@ -952,7 +1169,9 @@ def run_figures(args) -> Tuple[int, Dict, List[str]]:
                 lines.append(f"  [FAIL] {f['rel']}:{a.line}  {a.describe()}")
         lines.append(
             f"[FAIL] {len(stale)} anchored figure(s) disagree with the tree; "
-            f"re-run `python3 tools/gen_matrix_63x8_census.py --fix-figures`")
+            f"re-run `python3 tools/gen_matrix_63x8_census.py --fix` "
+            f"(--fix-figures repairs these anchors but leaves the README "
+            f"census block stale, which still exits 1)")
         return 1, report, lines
     lines.append(
         f"[PASS] 63x8 derived figures fresh: {report['guarded_anchored']} "
@@ -981,6 +1200,15 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--fix-figures", action="store_true",
                     help="rewrite every anchored figure in the corpus from the "
                          "live flow yaml, then exit")
+    # BOTH HALVES IN ONE INVOCATION (vibe-ic#1382). The repair has always been
+    # two commands — `--fix-figures` for the anchors, the plain run for the
+    # README census block — and each failure message named only its own half.
+    # Running one and stopping leaves a failure that reads exactly like the one
+    # it was supposed to clear, which is worse than not having repaired at all.
+    ap.add_argument("--fix", action="store_true",
+                    help="rewrite the anchored figures AND the README census "
+                         "block — the complete repair. `--fix-figures` alone "
+                         "leaves the census block stale and still exits 1")
     # These three default to None, not to a path. A path baked in here could
     # not be told apart from one the caller chose, so `repo_root` would have
     # been unable to move them — which is how the subject came to be ignored in
@@ -995,8 +1223,57 @@ def main(argv: List[str]) -> int:
                          f"against (default <repo_root>/{PLUGIN_REL})")
     ap.add_argument("--figures-json",
                     help="write the full coverage report here")
+    # WHAT THIS RUN WROTE, AS DATA (vibe-ic#1382). The two write paths already
+    # SAY what they wrote — "rewrote anchored figures in 3 file(s): a, b, c"
+    # and "wrote <path>: …" — in prose, on stdout, interleaved with a coverage
+    # disclosure. A caller that has to re-derive that by parsing sentences is
+    # the "check that lies" shape this repository exists to remove, and the
+    # caller that needs it is `gatekeeper_prepare_landing.py`, whose entire
+    # safety property is that every path it leaves dirty was DECLARED by the
+    # writer that produced it (#1029/#1089). A hand-typed allow-list there
+    # would rot in the forgiving direction the moment this program gained a
+    # corpus file.
+    #
+    # Dumped in a `finally`, and that is the load-bearing part rather than a
+    # tidiness: `--fix` rewrites the anchors FIRST and only then drives the
+    # census, which is the half that blows its 60 s inner bound on a loaded
+    # host (vibe-ic#1277). A partial repair — anchors written, census block
+    # not — is the NORMAL failure here, and a declaration emitted only on the
+    # success path would leave exactly those writes unattributable.
+    ap.add_argument("--written-json",
+                    help="write the repo-relative paths this run WROTE here, "
+                         "as a JSON list. Emitted even when the run fails, so "
+                         "a partial repair is still attributable")
     args = ap.parse_args(argv)
 
+    del _WRITTEN[:]
+    try:
+        return _run(args)
+    finally:
+        if args.written_json:
+            Path(args.written_json).write_text(
+                json.dumps(sorted(set(_WRITTEN)), indent=1), encoding="utf-8")
+
+
+#: Repo-relative paths written by the CURRENT run. Reset by `main`, appended to
+#: at each write site, published by `--written-json`. Module state rather than a
+#: return value because the two write sites sit either side of the census, and
+#: the census is allowed to abort between them.
+_WRITTEN: List[str] = []
+
+
+def _record_written(subject: Path, path: Path) -> None:
+    """Record one write, repo-relative to the SUBJECT of this run."""
+    try:
+        _WRITTEN.append(str(Path(path).resolve().relative_to(subject)))
+    except ValueError:
+        # A caller pointed --out or --figures-root outside the subject. Record
+        # the absolute path rather than dropping the write: an undeclared write
+        # is the one thing the consumer of this list must never be handed.
+        _WRITTEN.append(str(Path(path).resolve()))
+
+
+def _run(args: argparse.Namespace) -> int:
     subject = (Path(args.repo_root).resolve() if args.repo_root else REPO_ROOT)
     args.out = args.out or str(subject / README_REL)
     args.figures_root = args.figures_root or str(subject / FIGURES_REL)
@@ -1012,18 +1289,29 @@ def main(argv: List[str]) -> int:
             sys.stderr.write(line + "\n")
         return 2
 
-    if args.fix_figures:
+    if args.fix_figures or args.fix:
         figures_root = Path(args.figures_root).resolve()
         if not figures_root.is_dir():
             sys.stderr.write(f"[ERROR] no such --figures-root: {figures_root}\n")
             return 2
         report = figure_report(Path(args.root).resolve(), figures_root)
         written = apply_anchor_rewrites(report)
+        # RECORDED FROM THE REPORT, NOT FROM `written`. `apply_anchor_rewrites`
+        # returns paths relative to FIGURES_ROOT; the consumer needs them
+        # relative to the repository, and re-joining two relative paths by hand
+        # at the call site is how a declared path stops naming the file that was
+        # actually written.
+        for f in report["files"]:
+            if f["rewritten"] is not None:
+                _record_written(subject, Path(f["path"]))
         for line in coverage_lines(report):
             print(line)
         print(f"rewrote anchored figures in {len(written)} file(s)"
               + (": " + ", ".join(written) if written else ""))
-        return 0
+        if args.fix_figures:
+            return 0
+        # `--fix` falls through to the census block below. The anchors are now
+        # fresh, so the re-scan that follows costs a pass and returns 0.
 
     if args.check_figures:
         rc, report, lines = run_figures(args)
@@ -1067,15 +1355,25 @@ def main(argv: List[str]) -> int:
         if updated != text:
             sys.stderr.write(
                 f"{path} census block is stale; re-run "
-                f"`python3 tools/gen_matrix_63x8_census.py`\n")
+                f"`python3 tools/gen_matrix_63x8_census.py --fix` "
+                f"(the plain run repairs this block but leaves any stale "
+                f"anchored figure, which still exits 1)\n")
             return 1
         if fig_rc:
             return fig_rc
+        # THE VERDICT LINE PARTITIONS TOO (vibe-ic#1296). It read
+        # `own=17 substituted=44 undeclared=367; WAIVED=8 NA=15` — 451 of 504,
+        # the same 53 cells the table dropped — so the one line a landing
+        # reviewer actually reads carried the defect after the page was fixed.
+        # A gate that prints a denominator must print the WHOLE denominator.
         print(f"[PASS] 63x8 census fresh: {totals['cells']} cells over "
               f"{len(rows)} dimensions; ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
-              f"WAIVED={totals['waived']} NA={totals['na']}.")
+              f"CONTRADICTED={totals['contradicted']} "
+              f"NOT-MEASURED={totals['not_measured']} "
+              f"WAIVED={totals['waived']} NA={totals['na']} "
+              f"({_verdict_partition(totals)}).")
         return 0
 
     # The block is written FIRST and the figure verdict returned after, so a
@@ -1086,11 +1384,15 @@ def main(argv: List[str]) -> int:
         print(f"no change ({totals['cells']} cells)")
     else:
         path.write_text(updated, encoding="utf-8")
+        _record_written(subject, path)
         print(f"wrote {path}: ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
+              f"CONTRADICTED={totals['contradicted']} "
+              f"NOT-MEASURED={totals['not_measured']} "
               f"WAIVED={totals['waived']} NA={totals['na']}; "
-              f"{totals['cells']} cells.")
+              f"{totals['cells']} cells "
+              f"({_verdict_partition(totals)}).")
     return fig_rc
 
 

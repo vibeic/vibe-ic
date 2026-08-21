@@ -64,56 +64,6 @@ _RUNNER_SRC = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(
     errors="replace")
 
 
-def _json_write(body: str, path_expr: str) -> int:
-    """Offset of the write of `path_expr` in `body`, in EITHER spelling.
-
-    A declared report destination can be written directly, `p.write_text(x)`,
-    or through the atomic-artefact helper, `_aa.write_text(p, x)` — the form
-    vibe-ic#1082 introduced so a crashed run cannot leave a half-written file
-    under the FINAL name that the next reader cannot tell from a complete one.
-
-    Both are the same write. Matching only the first spelling made these tests
-    fail on a tree that had become MORE correct: measured on the 28-PR batch
-    `cb7a67626`, the em.json and antenna.json writes had moved to
-    `_aa.write_text(...)` and this module reported two failures for a change
-    that fixed a real crash-safety defect.
-
-    The path expression stays anchored in both alternatives, so this is not a
-    loosening: a write of some OTHER file still does not satisfy it, and a
-    branch that writes nothing still returns -1. Whitespace around `/` is
-    tolerated because that is formatting, not meaning.
-
-    Returns -1 when absent, so callers can assert presence AND ordering.
-    """
-    # Built by splitting on `/` rather than post-processing `re.escape`'s
-    # output: whether that escapes a plain space is version-dependent (this
-    # interpreter yields `\ /\ `, others yield ` / `), and a helper that
-    # silently stops matching on a different Python is the kind of check that
-    # passes for the wrong reason.
-    anchor = r"\s*/\s*".join(re.escape(p.strip()) for p in path_expr.split("/"))
-    pat = re.compile(
-        r"\(\s*" + anchor + r"\s*\)\.write_text"      # (p).write_text(x)
-        r"|_aa\.write_text\(\s*" + anchor             # _aa.write_text(p, x)
-    )
-    m = pat.search(body)
-    return m.start() if m else -1
-
-
-def _json_write_count(body: str, path_expr: str) -> int:
-    """How many times `path_expr` is written in `body`, either spelling.
-
-    Separate from `_json_write` because the antenna emitter has TWO success
-    branches and the property is that BOTH write the pair — a count, not a
-    presence. Same anchoring, same tolerance, so the two cannot drift apart.
-    """
-    anchor = r"\s*/\s*".join(re.escape(p.strip()) for p in path_expr.split("/"))
-    pat = re.compile(
-        r"\(\s*" + anchor + r"\s*\)\.write_text"
-        r"|_aa\.write_text\(\s*" + anchor
-    )
-    return len(pat.findall(body))
-
-
 def _steps():
     import yaml  # noqa: WPS433
     doc = yaml.safe_load(_FLOW.read_text(errors="replace"))
@@ -155,6 +105,34 @@ def test_the_runner_reads_its_verdict_from_the_declared_file(path):
 # ===========================================================================
 # SATISFIABILITY — the pairing that makes each entry meetable
 # ===========================================================================
+# vibe-ic#1082 — a declared report may be written through `_atomic_artefact`
+# instead of `Path.write_text`. This file asserts on the runner's SOURCE, so
+# matching only `.write_text` reports "the write is gone" about a write that
+# merely moved to the durable form. Widened in spelling, not in property.
+_ATOMIC_ALIASES = ("_aa.write_text", "_aa.write_json",
+                   "atomic_write_text", "atomic_write_json")
+
+
+def _json_write_pos(body: str, expr: str):
+    """Index of the statement writing `expr`, in either spelling, else None."""
+    direct = f'({expr}).write_text'
+    if direct in body:
+        return body.index(direct)
+    for alias in _ATOMIC_ALIASES:
+        cand = f'{alias}({expr}'
+        if cand in body:
+            return body.index(cand)
+    return None
+
+
+def _json_write_count(body: str, expr: str) -> int:
+    """How many statements write `expr`, counting either spelling."""
+    n = body.count(f'({expr}).write_text')
+    for alias in _ATOMIC_ALIASES:
+        n += body.count(f'{alias}({expr}')
+    return n
+
+
 def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     """Drive the emitter's own JSON-writing statement rather than asserting a
     substring: build the pair the way `_emit_ir_em_reports` does and confirm
@@ -165,12 +143,11 @@ def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     body = src[src.index("    em_ok = False"):src.index("    return ir_ok, em_ok")]
     assert body.count("if has_em:") == 1, body[:200]
     assert "em_rpt.write_text(body)" in body
-    j = _json_write(body, 'em_rpt.parent / "em.json"')
-    assert j >= 0, (
-        "em.json is not written in the same branch as em.rpt, so the step's "
-        "declared verdict source can be absent on a run that emitted the "
-        "report — in either spelling, direct or atomic")
-    assert body.index("em_rpt.write_text(body)") < j
+    _em_pos = _json_write_pos(body, 'em_rpt.parent / "em.json"')
+    assert _em_pos is not None, (
+        "the em.json write is gone from this branch — neither Path.write_text "
+        "nor an _atomic_artefact delegate writes it (vibe-ic#1082)")
+    assert body.index("em_rpt.write_text(body)") < _em_pos
     assert "em_ok = True" in body
 
 
@@ -182,10 +159,10 @@ def test_antenna_json_is_written_wherever_antenna_rpt_is():
     body = _RUNNER_SRC[start:end]
     assert body.count("antenna_rpt.write_text(") == 2, body.count(
         "antenna_rpt.write_text(")
-    n = _json_write_count(body, 'antenna_rpt.parent / "antenna.json"')
-    assert n == 2, (
-        f"both _emit_antenna_report success branches must write antenna.json "
-        f"beside antenna.rpt; found {n} write(s) in either spelling")
+    _ant = _json_write_count(body, 'antenna_rpt.parent / "antenna.json"')
+    assert _ant == 2, (
+        f"expected exactly 2 antenna.json writes, one per success branch — "
+        f"found {_ant} in either spelling (vibe-ic#1082)")
 
 
 def _gate_commands(step: dict):
@@ -296,3 +273,92 @@ def test_d1_required_outputs_stay_all_of_n():
             assert " OR " not in entry, (
                 f"step {step_id} entry {entry} is an any-of alternation; the "
                 f"additions here assume plain all-of entries")
+
+
+# ===========================================================================
+# Step 31 — reports/phase3/drc_signoff.json, and the reason it is PINNED HERE
+# ===========================================================================
+# The `.rpt` half of this step's DRC sign-off has been declared since the step
+# existed; the machine-readable `.json` half was not. It is read by three
+# programs OTHER than its writer, none of which the d7 analyser can see, because
+# `matrix_d7_artifact_graph.literal_index()` matches only the FULL path literal
+# and all three reach the file by BASENAME or by recursive glob:
+#
+#   signoff_ladder_run.check_tier_1_drc     `reports/**/drc_signoff.json`, and
+#       it grades release-gating tier T1 on it; absent, T1 reports NOT_RUN
+#   final_report_generate                   echoes its verdict into the sign-off
+#       summary a reader treats as the deliverable
+#   macro_obs_geometry_intersect_check      reads `passed` / `is_signoff_deck`
+#       out of it as geometric-DRC evidence it will not re-derive
+#
+# W1 did charge this path once, and only by accident: `general_precheck` named
+# the literal because its `Checker.MagicDRC` delegate WROTE there, and the
+# literal index cannot tell a writer from a reader. With that clobber fixed the
+# accidental consumer is gone and W1 falls silent — MEASURED: remove the entry
+# from a tree carrying the general_precheck fix and
+# `test_d7_required_outputs_list_is_complete` is 64 passed / 1 skipped /
+# 4 xfailed, step 31 GREEN with all three readers untouched.
+#
+# So the declaration is held HERE, by the readers, and not by the matrix. If a
+# reader goes away, the pin below goes red and an author re-decides rather than
+# inheriting an entry nobody can explain.
+#
+# WHAT IT COSTS, on the same corpus rule this file applies to step 23's
+# withdrawn stance files (`find` over benchmark-data, 2026-08-21, at
+# `~/vibe-ic` — benchmark-data is no longer tracked on main): 16 roots carry
+# `drc_signoff.rpt`, 3 carry `drc_signoff.json`, so 13 report the entry MISSING.
+# Unlike step 23's six, those 13 are not runs that DROPPED the artefact — the
+# PRODUCER POSTDATES THEM. Every root carrying the JSON is dated 2026-08-03 or
+# later and every root without it 2026-07-25 or earlier, which is
+# `final_report_generate`'s own ORGANIC-20260808 note from the other side.
+# That makes it the `magic_illegal_overlap.json` case, already accepted in the
+# same list: the gate postdates every older published run, dimension 3 records
+# the entry UNPROVEN there, and that is the true statement of the gap.
+_STEP31_DRC_SIGNOFF_JSON = "reports/phase3/drc_signoff.json"
+
+#: reader -> a fragment of the SOURCE that shows the read, so this pin fails
+#: when a reader stops reading rather than when a file is merely renamed.
+_STEP31_JSON_READERS = {
+    "signoff_ladder_run": "reports/**/drc_signoff.json",
+    "final_report_generate": "drc_signoff.json",
+    "macro_obs_geometry_intersect_check": "drc_signoff.json",
+}
+
+
+def test_step31_declares_the_machine_readable_drc_signoff():
+    assert _STEP31_DRC_SIGNOFF_JSON in _required("31"), (
+        f"step 31 produces {_STEP31_DRC_SIGNOFF_JSON} from its own `--signoff` "
+        f"gate clause and three programs read it, but the step no longer "
+        f"declares it. Its absence is invisible: signoff_ladder_run's tier T1 "
+        f"takes its NOT_RUN branch and the sign-off summary prints "
+        f"'(report missing)' — no gate goes red. The d7 matrix does NOT hold "
+        f"this entry (its consumer index is literal-only and every reader here "
+        f"uses a glob), so this pin is the only thing that does.")
+
+
+@pytest.mark.parametrize("module,fragment", sorted(_STEP31_JSON_READERS.items()))
+def test_step31_json_readers_still_read_it(module, fragment):
+    """The declaration is justified by these readers and by nothing else.
+
+    A reader that goes away is not a reason to delete the entry silently — it is
+    a reason for an author to re-decide, which is what a red here asks for."""
+    src = (_PROGRAMS / f"{module}.py").read_text(errors="replace")
+    assert fragment in src, (
+        f"{module} no longer names {fragment!r}. It was one of the three "
+        f"readers that justify declaring {_STEP31_DRC_SIGNOFF_JSON} on step 31 "
+        f"— re-count the readers before touching the declaration.")
+
+
+def test_the_matrix_does_not_hold_the_step31_json_entry():
+    """NEGATIVE CONTROL for the pin above, and the honest statement of an
+    analyser limit: `literal_index` is keyed on the FULL path literal, so a
+    reader that reaches this file by glob is invisible to W1. Asserted rather
+    than described, so that if the analyser is ever widened to see glob readers
+    this test goes red and the comment above stops being true quietly."""
+    import matrix_d7_artifact_graph as G  # noqa: WPS433
+    consumers = G.literal_index().get(_STEP31_DRC_SIGNOFF_JSON, frozenset())
+    assert set(consumers) <= {"drc_report_check"}, (
+        f"the d7 literal index now sees {sorted(consumers)} for "
+        f"{_STEP31_DRC_SIGNOFF_JSON}. If those are real READERS the matrix can "
+        f"hold this entry itself; if any of them WRITES the path, that is the "
+        f"general_precheck clobber returning under a new name.")
