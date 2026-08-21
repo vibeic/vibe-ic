@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 22,
+    "A": 23,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -22,7 +22,8 @@
       "programs/_ppa/metrics.py",
       "programs/ppa_pareto_check.py",
       "programs/flow_compliance_check.py",
-      "programs/_ppa/cli_exit.py"
+      "programs/_ppa/cli_exit.py",
+      "programs/tracked_json_yaml_parses_check.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -42,7 +43,8 @@
     "ppa-capture/candidates/bucket_A_programs__ppa_metrics_rule_sketches.py",
     "ppa-capture/candidates/bucket_A_programs_ppa_pareto_check_rule_sketches.py",
     "ppa-capture/candidates/bucket_A_programs_flow_compliance_check_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs__ppa_cli_exit_rule_sketches.py"
+    "ppa-capture/candidates/bucket_A_programs__ppa_cli_exit_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_tracked_json_yaml_parses_check_rule_sketches.py"
   ],
   "bucket_C_dir": "ppa-capture/candidates/bucket_C_backlogs",
   "bucket_C_files": [

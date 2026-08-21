@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 25 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 26 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 22 | deterministic rules — the default, and every one names its predicate |
+| **A** | 23 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -902,6 +902,36 @@ change: wire the program, or route the rule somewhere that runs.
 **(o)** yes. **(d)** yes — it is per record per emit, so every future batch is
 covered without anyone remembering.
 
+### A-24 · a repository-scoped gate loses its coverage when a tree is split out · `repo.tracked_artefact_hygiene`
+
+From a lane's requests: five tracked artefacts in the published corpus are
+**truncated JSON**, and *"before this branch nothing walked that tree looking, so
+nothing reported them."*
+
+The gate for that exact class **exists and is wired**, and its own header records
+the failure it was written for — a file truncated mid-string passing every
+landing gate. So why did it not fire? Because coverage of a root-scoped gate is
+whatever root it is handed:
+
+    programs walking a repository index                       37
+    programs referencing the split-out tree by name           98
+    the tree present in this repository                       NO
+    declared as a submodule                                   NO  (module list empty)
+    resolved instead by                                       an environment variable
+    the hygiene gate is invoked with                          this repository's root only
+
+The tree was moved out, the product still consumes it in 98 places, and **every
+root-scoped gate stopped covering it at that moment** — with no change to any
+gate's name, wiring or verdict. The population simply got smaller and nothing
+could say so. The split is recorded as a layout improvement; the loss of coverage
+is recorded nowhere.
+
+This is the **third** time in this capture that the tree's departure produced a
+gap: the Bucket-T roadmap that cannot be written, the records whose provenance
+paths I could only audit here, and now this.
+**(o)** yes. **(d)** yes — it is per gate per consumed tree, so it covers the
+next tree that is split out.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1111,6 +1141,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
 | A-23 | — | 0 of 21 | **this batch passes its own new check** |
+| A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |

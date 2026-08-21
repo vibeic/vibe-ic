@@ -258,6 +258,10 @@
     "ppa.cli_contract": {
       "bucket_A_program": "programs/_ppa/cli_exit.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "repo.tracked_artefact_hygiene": {
+      "bucket_A_program": "programs/tracked_json_yaml_parses_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     }
   },
   "default_routing": {
