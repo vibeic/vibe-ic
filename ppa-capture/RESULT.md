@@ -239,6 +239,14 @@ The run REFUSED and still wrote the file and created its parent inside the
 installed product. A refusal that leaves the damage behind is worse than either
 outcome alone, which is why the record requires the resolve-and-refuse to happen
 before any directory is created.
+
+**Nearest prior art, checked rather than assumed:** `programs/suite_write_guard.py`
+blocks a TEST RUN that leaves the tree it tests dirty, and it exists because
+three writers into the installed tree were each found by accident. It is scoped
+to a suite session and it looks after the fact at the working tree's status — a
+person running a shipped command outside any session is not in its population,
+and by the time it would look the write has happened. Named in the record so the
+next reader neither rebuilds it nor mistakes it for coverage.
 **(o)** yes. **(d)** yes — it goes in the shared atomic writer, so it covers
 every tool that takes an output path, not the one that was caught.
 
@@ -378,12 +386,34 @@ covered by the same acceptance criterion.
 
 ## One change outside `ppa-capture/`
 
-`benchmark/CAPTURE_ROUTING.json` gains four steps — `ppa.feasibility`,
-`ppa.head_to_head`, `ppa.search`, `ppa.artefact_write` — pointing at the
-programs that own the fixes. Without them every PPA record emits UNROUTED, which
-is a routing table that cannot express the layer it is asked to route; the
-emitter's own warning says to add the entry. `tests/test_capture_routing_consistency.py`
-and `tests/test_enhancement_emit.py` pass (69 passed, 4 skipped), as does
+`benchmark/CAPTURE_ROUTING.json` gains **eight** steps. Without them every
+record here emits UNROUTED — a routing table that cannot express the layer it is
+asked to route — and the emitter's own warning says to add the entry.
+
+    ppa.feasibility           programs/ppa_feasibility_check.py
+    ppa.head_to_head          programs/ppa_head_to_head_check.py
+    ppa.search                programs/ppa_search_run.py
+    ppa.artefact_write        programs/_atomic_artefact.py
+    capture.emit              programs/enhancement_emit.py
+    capture.backlog_sanitize  programs/backlog_sanitize_check.py
+    repo.host_independence    programs/gate_host_independence_check.py
+    repo.test_population      programs/plugin_change_pytest_gate.py
+
+**The last four are a correction to my own first pass.** Five records had been
+routed to one program because it was the nearest listed step, which piled rules
+belonging to three different files into one sketch — precisely the mis-delivery
+the implementing lane would pay for. Each now sits with the program that owns
+it, and the sketches land in eight files instead of five.
+
+Two of those five have no ideal home and the records say so rather than pretend:
+**no program in this tree audits a test suite's own population arithmetic.** The
+meta-gate family that audits the *program* population — for wiring, for a
+disclosed denominator, for host-independence — is where the *test* population
+rule belongs, and both records name that as the target and the current routing
+as a placeholder.
+
+`tests/test_capture_routing_consistency.py` and `tests/test_enhancement_emit.py`
+pass (69 passed, 4 skipped), as does
 `tests/test_issue1130_wiring_population_parity.py` (18 passed).
 
 No gate is implemented. No version bumped. No baseline written. Nothing pushed

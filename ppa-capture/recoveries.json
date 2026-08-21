@@ -20,24 +20,24 @@
     "fix_action": "For each axis of the comparison gate's required-keys table, construct the producing module's scope on a fixture and diff the key sets. Refuse when a required key is neither emitted nor accounted for by a recorded gap reason. Refuse separately, and with a distinct code, when a required key is present with a null or empty value."
   },
   {
-    "step": "benchmark.verify_claim_done",
+    "step": "repo.test_population",
     "design": "plugin test suite, layer-wide; no design involved",
     "bucket": "A",
     "rule_name": "population guard asserts equality not a floor",
     "pattern": "A suite parametrises over a population it DISCOVERS (a glob, a registry walk) but drives each member with an invocation it DECLARES (a hand-maintained table). The guard against an empty population is written as a floor — at least N — with N frozen at the count on the day the two numbers happened to agree. The floor then passes forever while the two sets drift apart, so a member added later is silently uncovered, and an entry left behind for a member since deleted is invisible in the other direction. The guard's own message keeps quoting the old count.",
     "docstring": "A population guard over a discovered set must assert EQUALITY against the declared set and print the symmetric difference, never a lower bound. A lower bound answers a question nobody asked — is the population non-empty — while the question that matters is whether every discovered member is declared and every declared member still exists. A floor cannot see either drift, and it reads as coverage while holding neither.",
     "expected_signal": "ERROR",
-    "fix_action": "Replace the floor assertion with a set-equality assertion between the discovered population and the declared table, whose message prints both counts and both directions of the difference. Emit it ONCE for the whole population rather than once per member, so the reader gets the list instead of N single names. THE OBVIOUS WRONG GUARD, and one is already in the tree: asserting the declared table against ITS OWN length. That is self-consistency; it passes for any table and can never see the population. Assert against the POPULATION. Where several declared tables cover one discovered population, assert each against it and assert the tables agree with one another — the defect is not confined to invocation tables: the same shape sits on the present-but-empty input table and on the hand-listed producer set, whose discovered counterpart is an importable package."
+    "fix_action": "Replace the floor assertion with a set-equality assertion between the discovered population and the declared table, whose message prints both counts and both directions of the difference. Emit it ONCE for the whole population rather than once per member, so the reader gets the list instead of N single names. THE OBVIOUS WRONG GUARD, and one is already in the tree: asserting the declared table against ITS OWN length. That is self-consistency; it passes for any table and can never see the population. Assert against the POPULATION. Where several declared tables cover one discovered population, assert each against it and assert the tables agree with one another — the defect is not confined to invocation tables: the same shape sits on the present-but-empty input table and on the hand-listed producer set, whose discovered counterpart is an importable package. NOTE ON WHERE THIS LIVES: no program in this tree audits a test suite's own population arithmetic, so this routes to the gate that stands between a plugin change and a completion claim. Its natural home is a new member of the meta-gate family that already audits the program population for wiring and for a disclosed denominator; build it there and this gate calls it."
   },
   {
-    "step": "benchmark.verify_claim_done",
+    "step": "repo.test_population",
     "design": "plugin test suite, layer-wide; no design involved",
     "bucket": "A",
     "rule_name": "layer membership is declared not inferred from a filename prefix",
     "pattern": "A suite that enforces a LAYER-wide property selects its population with a filename-prefix glob, because in the layer's first week the prefix and the layer were the same set. They stop being the same set as soon as the layer gains a module inside its own package, or a program that imports the layer under a different name. Every such executable is outside the population, so the layer property is unenforced on it — and the defect the suite exists to catch survives there untouched, with the suite green.",
     "docstring": "Membership of a layer is a RELATION — the executable imports the layer's package, or cites the layer's interface document — and it must be computed from that relation, never from how the file happens to be named. A naming convention standing in for a boundary silently shrinks the population every time the layer grows in a direction the convention did not anticipate, and the shrinkage is invisible because the members that fell out were never counted.",
     "expected_signal": "ERROR",
-    "fix_action": "Define the population as every executable that imports the layer's package or cites the layer's interface document, and take the prefix glob as one contributor rather than as the definition. Assert that the relation-derived population is a superset of the glob-derived one, and drive every arm of the layer property over the relation-derived set."
+    "fix_action": "Define the population as every executable that imports the layer's package or cites the layer's interface document, and take the prefix glob as one contributor rather than as the definition. Assert that the relation-derived population is a superset of the glob-derived one, and drive every arm of the layer property over the relation-derived set. NOTE ON WHERE THIS LIVES: same home as the population-equality rule, and they share a helper — the relation-derived population is the input both need, so computing it twice is how the two answers start to disagree."
   },
   {
     "step": "ppa.head_to_head",
@@ -57,7 +57,7 @@
     "pattern": "A tool takes an output path from the caller and writes it as given. A relative path is resolved against the process working directory, which for a tool invoked from inside the installation is the installation. The write then creates directories and files inside the INSTALLED product, where they survive the run, appear as untracked additions, and can be picked up by the next hygiene or packaging pass as if they were shipped content. The failure is invisible to the caller because the write succeeds.",
     "docstring": "An artefact written on behalf of a caller belongs to that caller's run, so its resolved destination must lie outside the installed product tree. Resolve the destination before opening it and refuse when it falls inside the installation, naming both the resolved path and the installation root. The refusal must happen BEFORE any directory is created: a run that refuses and still leaves a directory behind has done the damage it declined to do, which is worse than either outcome alone.",
     "expected_signal": "ERROR",
-    "fix_action": "In the shared atomic writer, resolve the destination and compare it against the installation root computed from the module's own location. Refuse with the bad-invocation code before creating any parent directory. Two properties must be tested rather than assumed: that the refusal fires on a relative path when the working directory is the installation, and that after a refusal the tree carries no new entry — the measured case refused with the could-not-check code AND still wrote the file and its parent directory."
+    "fix_action": "In the shared atomic writer, resolve the destination and compare it against the installation root computed from the module's own location. Refuse with the bad-invocation code before creating any parent directory. Two properties must be tested rather than assumed: that the refusal fires on a relative path when the working directory is the installation, and that after a refusal the tree carries no new entry — the measured case refused with the could-not-check code AND still wrote the file and its parent directory. NEAREST PRIOR ART, AND WHAT IT DOES NOT REACH: a shipped guard already blocks a TEST RUN that leaves the tree it tests dirty, and it exists because three writers into the installed tree were each found by accident. It is scoped to a suite session and it looks AFTER the fact, at the working tree's status. A person running a shipped command outside any session is not in its population, and the write has already happened when it would look. Do not rebuild it and do not treat it as coverage: the new rule refuses at the write site, before the directory is created, on every invocation."
   },
   {
     "step": "ppa.search",
@@ -113,7 +113,7 @@
     "session_context": "Ten of ten reproductions in one seventy-arm cross-layer sweep, all in the same design family, none in the fifty-two arms of the other family. Samples are committed in the sweep's own record tree."
   },
   {
-    "step": "benchmark.verify_claim_done",
+    "step": "capture.emit",
     "design": "the capture tooling itself; no design involved",
     "bucket": "A",
     "rule_name": "a writer enforces the field shapes its declared consumer requires",
@@ -123,7 +123,7 @@
     "fix_action": "Import the validator's field-shape rules into the writer and apply them to every field the validator constrains, before the file is written; refuse with the validator's own message so the two tools cannot disagree about what is wrong. State the constrained shape in the writer's schema documentation as well, since an author reads the writer's contract and never the validator's. Add a two-directional test: a well-shaped field writes and validates, and a free-text field is refused BY THE WRITER rather than only by the validator."
   },
   {
-    "step": "benchmark.verify_claim_done",
+    "step": "capture.backlog_sanitize",
     "design": "the capture tooling itself; no design involved",
     "bucket": "A",
     "rule_name": "an accepted-value branch must be able to express its own vocabulary",
@@ -143,7 +143,7 @@
     "fix_action": "Walk every candidate file under the root, parse it, and select on the declared schema identifier; where a document class declares none, select on a structural predicate and state that predicate in the code beside the selector. Exclude the gate's own output schemas by name of SCHEMA, not by name of file, and add a test that builds a real report with the real command, drops it in the corpus and asserts the vacuous refusal. Disclose three numbers on every run, not one: files opened, records selected, and files that could not be parsed — a file nobody could read is not a file that held no record, and it must raise the verdict rather than shrink the denominator quietly. Measured on the two committed record trees of this layer: 582 documents of which 15 declare the comparison schema, name-glob selects 0; and 496 documents of which 2 declare it, name-glob selects 4 — two records and two of the gate's own reports."
   },
   {
-    "step": "benchmark.verify_claim_done",
+    "step": "repo.host_independence",
     "design": "any host with an older release of an optional dependency; no design involved",
     "bucket": "A",
     "rule_name": "an optional import is guarded by capability not by exception type",
