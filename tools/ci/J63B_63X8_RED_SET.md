@@ -134,46 +134,43 @@ watchdog's stall clock starts before the child can possibly report, so
 same conflation this repository has already removed from `_vacuous_exit`,
 `UNCHECKABLE` and rc=127.
 
-**It was scoped before being declined, and the blast radius is measured, not
-guessed.** There is no startup-grace concept anywhere: `stall_grace_s` is ONE
-uniform window in `_owned_process_supervisor.run_owned`, and six programs feed
-it —
+**CORRECTION — it is not a weakness, it is a pinned trade-off.** An earlier
+revision of this file called the startup blind spot a defect that was merely out
+of validation reach. That was wrong in a way that matters, because it invites
+the next reader to "fix" it and quietly make the repo worse.
 
-    _docker_watchdog.py        EDA container runs
-    gatekeeper_review.py       THE LANDING GATE
-    repo_hygiene_parallel.py   the hygiene tier (~57 min)
-    phase3_one_shot_runner.py  real PnR / DRC / LVS runs
-    pytest_per_file_junit.py   every test tier
-    _watchdog.py               the 1800 s generic lease
+The blind spot is real and its location is exact — `_watchdog.supervise()` sets
+`last_progress = start`, so time spent launching counts as time without
+progress. But a slow-starting child and a child that will NEVER start are
+indistinguishable from the parent: neither has emitted a lifecycle event, and
+output is explicitly not progress. The only thing separating them is how long
+you are willing to wait.
 
-Separating the two states is the right fix and it changes kill timing for the
-landing gate, the hygiene tier, container runs and Phase 3. Showing that harms
-nothing needs the full `programs/tests` suite (forbidden here — measured load
-276, 0 free memory), plus a hygiene tier that perturbs itself, plus EDA
-container runs. It is written down with its scope rather than half-landed on a
-validation surface that cannot reach it.
+The repository has already chosen, and one of these very reds is the test that
+pins the choice. `test_live_collection_chatty_import_without_events_fails_closed`
+drives a child that prints for 3 s while emitting no events, and asserts:
 
-### Why 10 and 11 were NOT given 12's fix, though the technique fits
+```
+assert elapsed < 3          # the kill must BEAT the impostor
+assert "WATCHDOG_STALLED:" in message
+assert "COLLECT_CHATTER"  in message
+```
 
-Both were read for the same zero-margin defect. Neither has it, and the numbers
-are recorded so the next reader does not have to re-derive them:
+Adding a startup grace large enough to survive a loaded host pushes the kill
+past that bound and reddens this test. **Fail-closed-fast and survive-a-slow-
+start are the same dial turned opposite ways.** Reds 10 and 13 under load are
+the price of the setting the repo picked, not evidence it picked wrong — and
+red 11 is the guard that would catch anyone trading it away silently.
 
-* **10** drives 7 collections of `0.14` s against a `0.30` s window — a **2.1x**
-  renewal margin, not 12's 1.0x — and asserts `elapsed > 0.8` against a `0.98` s
-  total, a 1.22x margin. Thin, but real, which is why it goes green on an idle
-  box and 12 does not.
-* **11** is not a margin problem at all. Its subject is that captured stdout
-  cannot impersonate a transition, so it asserts `COLLECT_CHATTER` appears in
-  the kill message. Under load the child is killed by the `0.25` s window
-  BEFORE it has printed anything, so there is no chatter to quote and the
-  assertion fails on the right kill for the wrong reason. No arrangement of the
-  fixture beats interpreter startup; only a startup budget in the driver does.
-
-12 was fixed because it stays red on an idle host — that is proof of a defect.
-These two are not, so their windows were left alone. Widening `0.30` or `0.25`
-until a saturated host fits under them is the relaxation this campaign exists
-to refuse, and it is not made acceptable by the fact that a real weakness sits
-underneath.
+For completeness, the mechanical scope, since it was measured: `stall_grace_s`
+is one uniform window in `_owned_process_supervisor.run_owned` reaching
+`_watchdog.supervise`, and six programs feed it — `_docker_watchdog` (EDA
+containers), `gatekeeper_review` (the landing gate), `repo_hygiene_parallel`
+(the ~57 min tier), `phase3_one_shot_runner` (real PnR/DRC/LVS),
+`pytest_per_file_junit` (every test tier) and `_watchdog`'s own 1800 s lease. An
+opt-in parameter defaulting to today's behaviour WOULD contain the blast radius
+to one caller — so validation cost is not the reason to leave this alone. The
+reason is the paragraph above.
 
 ## 7-9 — NOT_MEASURED, with the reason field filled in
 
