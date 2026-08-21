@@ -80,7 +80,7 @@ def test_end_to_end_phase1_uses_declaration(tmp_path):
         "|---|---|---|\n| clk_i | input | 1 |\n")
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-2000:]
     # NOTE: the canonical L1 doc is L1_DATASHEET.json — a `L1*.json` glob would
     # spuriously match L10..L23 (e.g. L17_CHANNEL_SIGNAL_CATALOG.json), so we

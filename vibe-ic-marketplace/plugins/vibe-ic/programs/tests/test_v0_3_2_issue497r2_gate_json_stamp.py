@@ -109,7 +109,7 @@ def _run_real_gate_checkers(project: Path) -> None:
     for inv in invocations:
         subprocess.run(
             [sys.executable, str(PROGRAMS / inv[0])] + inv[1:],
-            cwd=project, capture_output=True, text=True, timeout=120)
+            cwd=project, capture_output=True, text=True, timeout=60)
 
 
 def _regen_with_gate_audit(project: Path, ic_name: str,

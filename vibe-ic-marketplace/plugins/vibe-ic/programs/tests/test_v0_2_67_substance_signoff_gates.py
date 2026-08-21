@@ -25,7 +25,17 @@ import json
 import sys
 from pathlib import Path
 
-from conftest import func_src
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
+from _source_pin import func_src
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA       # noqa: E402
@@ -41,9 +51,20 @@ _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
 def _tapeout_base(tmp_path):
     (tmp_path / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    (tmp_path / "phase3/stage4/gds/chip_top.gds").write_text("gds binary")
+    _gdsii.write_gdsii(tmp_path / "phase3/stage4/gds/chip_top.gds")
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
+    # 2026-07-27: tapeout mode gained a fifth LVS pillar. This fixture is
+    # about the DRC slot's substance rule; it needs a genuine LVS match so
+    # the DRC assertions are not masked by a missing-LVS FAIL.
+    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports/phase3/lvs.rpt").write_text(
+        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about the DRC slot, so it carries a PROVED
+    # SI verdict — without one every case here would collapse onto the
+    # SI refusal and stop discriminating what it exists to pin.
+    _si_signoff_fixture.write_proved_si_report(tmp_path)
 
 
 def test_tapeout_drc_fails_on_nonzero_signoff_count(tmp_path):
@@ -133,14 +154,14 @@ def test_sta_two_distinct_corners_pass(tmp_path):
     (pc / "sta_FF.rpt").write_text(
         "Startpoint: a\nPath Type: max\nslack (MET) 3.4\nOpenSTA\n")
     result = ERA._check_sta(tmp_path)
-    assert result.summary["multi_corner_substantiated"] is True
+    assert result.summary["multi_corner_claim_not_broken"] is True
 
 
 def test_sta_no_per_corner_dir_is_no_claim(tmp_path):
     _sta_base(tmp_path)
     result = ERA._check_sta(tmp_path)
     assert result.summary["corner_dirs_found"] == 0
-    assert result.summary["multi_corner_substantiated"] is True
+    assert result.summary["multi_corner_claim_not_broken"] is True
 
 
 # ── (d) runner source no longer fabricates sim_postlayout/pass.flag ───────

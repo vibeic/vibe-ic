@@ -1,12 +1,12 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.4.61**)
+# vibe-ic — AI-Native IC Design plugin (**v1.11.68**)
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
-The plugin is no longer "compliance regexes over agent prose". It is **917 Python
-programs** (888 catalogued in [`programs/INDEX.md`](programs/INDEX.md), helpers and
-deprecation shims excluded) that run the flow, **60 skills** that back the programs up
+The plugin is no longer "compliance regexes over agent prose". It is **1238 top-level Python
+programs** (1164 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+74 are helper modules and shims) that run the flow, **60 skills** that back the programs up
 where judgment is genuinely required, **6 slash commands**, **9 agents**, and
-**1608 test files**. Programs decide; skills only fill the holes the programs
+**2727 test files**. Programs decide; skills only fill the holes the programs
 deliberately leave.
 
 ## ► The one front door
@@ -20,7 +20,7 @@ That single runner drives the whole chain:
 | Phase | What runs |
 |-------|-----------|
 | **Phase 1** | NL prompt *or* vendor docs → `generated_docs/L*.json` (`L1-L23` emitted; the taxonomy in `programs/l_doc_taxonomy.py` extends to `L27`, with `L26`/`L27` opt-in only) |
-| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → ECO loop → final audit |
+| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → RTL-regeneration loop (`eco_loop` in code — it re-generates RTL, not an ECO) → final audit |
 | **Analog** | `A1..A8` from the top-level runner; `programs/analog_one_shot_runner.py` implements the full `A1-A9` (through `A9_hw_verify`) |
 | **Phase 3** | synth → PnR → CTS → GDS → DRC / LVS / STA / IR-drop |
 
@@ -197,12 +197,12 @@ separate **`VIBEIC_OPENROAD_THREADS`** (`mcp-eda/src/lib/pnr_threads.mjs`,
    metadata fields, tool invocations, hand-off lines) as a regex list.
 2. A shared driver `_shared/skill_compliance_check.py` audits any
    agent-produced output against the YAML.
-3. **917 deterministic programs** verify actual artifacts on disk — not
+3. **1238 top-level deterministic programs** verify actual artifacts on disk — not
    just what the agent wrote in its report.
 
 ## Layout
 
-At 917 programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+At 1238 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
 generated instead. `programs/INDEX.md` is produced by `tools/gen_programs_index.py`, and a
 CI freshness test diffs the regenerated index against the committed one and FAILs on drift.
 
@@ -219,7 +219,7 @@ plugins/vibe-ic/
 │   ├── bootstrap_compliance.py    — regenerates all compliance.yaml
 │   ├── gen_compliance_tests.py    — regenerates all test_compliance.py
 │   └── add_compliance_gate.py     — adds gate section to SKILL.md files
-├── programs/                      — 917 .py (888 catalogued)
+├── programs/                      — 1238 top-level *.py (1164 catalogued)
 │   ├── INDEX.md                   — AUTO-GENERATED catalog; CI-checked for drift
 │   ├── vibe_ic_one_shot_runner.py — THE front door
 │   ├── phase1_one_shot_runner.py  — and phase1_doc_, phase2_, phase23_,
@@ -229,9 +229,9 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
-│   └── tests/                     — 1608 test files
+│   └── tests/                     — 2727 test files
 ├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
-│   └── <skill>/tests/             — 62 per-skill compliance regression files
+│   └── <skill>/tests/             — 81 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
 ├── agents/                        — 9 agents (ic-expert, core, field, gatekeeper,
 │                                    repo-gatekeeper, benchmark, 3 personas)
@@ -243,7 +243,7 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**1608 test files** under `programs/tests/`, plus **62** per-skill compliance regressions
+**2727 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
 under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as
@@ -312,8 +312,9 @@ architecture (v0.40).
 Everything since has come from the same loop, run continuously: drive real ICs and open
 benchmarks through the flow, find where an AI judgment call rescued a run, and absorb
 that judgment back into a deterministic program with a regression test. That is why the
-program count moved from 41 to 917 — and why the honesty gates exist at all. Each one was
-written after a real run reported a pass it could not back.
+program count moved from 41 at v0.40 to 1238 top-level programs today — and why
+the honesty gates exist at all. Each one was written after a real run reported a
+pass it could not back.
 
 ## License
 

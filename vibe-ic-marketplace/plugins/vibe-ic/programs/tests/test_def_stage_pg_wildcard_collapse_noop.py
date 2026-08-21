@@ -166,3 +166,44 @@ def test_vacuous_shrink_with_no_routing_evidence_at_all_still_fails(tmp_path):
     (pnr / "routed.def").write_text(_no_routing_def(50, 0))  # same count, shrinks
 
     assert _nonmonotone(tmp_path) != []
+
+
+# ---------------------------------------------- harvest(#338 via #349) -----
+# The exemption's own boundary: every control above pairs the byte shrink with
+# GROWTH (more components, more segments). The measured wildcard-collapse case
+# does not have to grow — a routed.def can collapse an explicit PG pin list to
+# a wildcard token while doing exactly the same amount of work. Behaviour on
+# main is already correct (verified before writing this: equal counts + shrink
+# yields no finding); it was simply UNPINNED, so tightening the exemption to
+# require STRICT growth would silently start failing real runs and no test
+# would notice.
+
+def test_equal_work_shrink_is_still_exempt(tmp_path):
+    """Byte size shrinks, component count and routing-segment count are both
+    UNCHANGED. Nothing was lost, so this is a re-encoding, not a truncation —
+    the exemption must not require growth."""
+    _mk(tmp_path,
+        prev_components=50, prev_pg_lines=_explicit_pg_list(400),
+        prev_new_segs=50,
+        next_components=50, next_pg_lines=["( * VNB )"],
+        next_new_segs=50)
+
+    prev_size = (Path(_pl.pnr_dir(tmp_path)) / "post_hold.def").stat().st_size
+    next_size = (Path(_pl.pnr_dir(tmp_path)) / "routed.def").stat().st_size
+    assert next_size < prev_size, "fixture must actually shrink in bytes"
+
+    assert _nonmonotone(tmp_path) == []
+
+
+def test_equal_work_shrink_exemption_is_not_a_blanket_pass(tmp_path):
+    """NO-LEAK for the test above: hold the shrink and the component count
+    equal but LOSE routing segments. Equal-work is not a licence — the loss
+    must still be caught, so the test above cannot be satisfied by an
+    exemption that simply stopped looking."""
+    _mk(tmp_path,
+        prev_components=50, prev_pg_lines=_explicit_pg_list(400),
+        prev_new_segs=50,
+        next_components=50, next_pg_lines=["( * VNB )"],
+        next_new_segs=10)
+
+    assert _nonmonotone(tmp_path) != []
