@@ -399,6 +399,63 @@ def test_every_lane_pytest_invocation_freezes_the_bytecode_stimulus(land_text):
         f"`gates are host-independent` is reading it: {missing}")
 
 
+#: Every form in which the lander emits a unit. `report` is in the list because
+#: leaving it out is how this instrument was first wrong: it reproduced the
+#: tuple for 23 of 24 units and silently dropped `cheap:scratch-report`, which
+#: shifted every later index by one and would have reported a correct script as
+#: broken.
+_EMITTERS = ("run", "run_emit", "fn_emit", "landing_skip", "report")
+
+
+def _emission_order(land_text):
+    """The units the lander emits, in source order.
+
+    Comment lines are dropped first: this file's own prose names units, and a
+    unit named in a comment is not an emission — the same rule
+    `gate_is_wired_check.executable_text` applies to callers.
+    """
+    emit = re.compile(
+        r'^\s*(?:' + "|".join(_EMITTERS) + r')\s+"([a-z]+:[a-z0-9-]+)"')
+    rec = re.compile(r'^\s*landing_record\s+"([a-z]+:[a-z0-9-]+)"\s+PASS')
+    seen, order = set(), []
+    for line in land_text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = emit.match(line) or rec.match(line)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            order.append(m.group(1))
+    return order
+
+
+def test_the_script_emits_exactly_the_declared_units_in_declared_order(
+        land_text):
+    """THE CONTRACT NOTHING WAS CHECKING (added 2026-08-21).
+
+    `landing_completion_record.py:200` refuses any label that is not
+    `LANDING_PROGRESS_UNITS[len(gates)]` and `:261` refuses unless the emitted
+    labels equal the complete tuple — so a unit added to the script at the
+    wrong position, or added to the tuple and never emitted, refuses EVERY
+    landing with `[NORECORD] landing completion record is incomplete`. That is
+    the most expensive failure this file can prevent and it was checked only
+    indirectly, for the six units inside the concurrent window.
+
+    Discovered while adding `full:gatekeeper-review`: nothing compared the
+    script's own emission order against the tuple at all, so the risk was
+    carried by whoever last edited either.
+    """
+    record = _ROOT / "tools" / "ci" / "landing_completion_record.py"
+    block = re.search(r"LANDING_PROGRESS_UNITS = \(\n((?:.*?\n)*?)\)",
+                      record.read_text(encoding="utf-8"), re.MULTILINE).group(1)
+    declared = re.findall(r'"([^"]+)"', block)
+    emitted = _emission_order(land_text)
+    assert emitted == declared, (
+        "the lander's emission order and the declared tuple have diverged; "
+        f"first difference at index "
+        f"{next((i for i, (a, b) in enumerate(zip(emitted, declared)) if a != b), min(len(emitted), len(declared)))}"
+        f"\n  emitted:  {emitted}\n  declared: {declared}")
+
+
 def test_landing_record_is_never_called_from_a_lane_body(land_text):
     """`append` is an unlocked read-modify-write with a fixed-order refusal.
 
