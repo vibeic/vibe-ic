@@ -231,3 +231,88 @@ def test_the_ceiling_cannot_be_raised_from_the_file_it_adjudicates(rows, age):
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     assert findings, "a bound above the ceiling was accepted"
+
+
+# --------------------------------------------------------------------------
+# THE CANDIDATE MUST NOT MOVE THE CLOCK.
+# --------------------------------------------------------------------------
+
+def _repo(tmp_path):
+    """A history: since -> base -> three candidate commits."""
+    r = tmp_path / "r"
+    r.mkdir()
+    def git(*a):
+        return subprocess.run(["git", "-C", str(r), *a], capture_output=True,
+                              text=True, check=False)
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    shas = []
+    for i in range(5):
+        (r / f"f{i}").write_text(str(i), encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", f"c{i}")
+        shas.append(git("rev-parse", "HEAD").stdout.strip())
+    return r, shas
+
+
+def test_the_clock_counts_to_the_ref_it_is_given(tmp_path):
+    r, shas = _repo(tmp_path)
+    since, base = shas[0], shas[1]
+    assert G.git_age(r, base)(since) == 1
+    assert G.git_age(r, "HEAD")(since) == 4
+
+
+def test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched(tmp_path):
+    """MEASURED as a real defect on a 15-commit branch: 7 rows read as expired
+    against its own head and 5 against origin/main, and two of the difference
+    were rows the branch never touched. A landing therefore counts to the BASE
+    — the same rule that requires the LEDGER to be the base's, for the same
+    reason: a branch must not be able to change what counts as overdue, in
+    either direction."""
+    r, shas = _repo(tmp_path)
+    since, base = shas[0], shas[1]
+    row = {"gate": "some gate", "since": since, "max_commits": 2}
+    red = _record({"some gate": "FAIL"})
+
+    against_base, _, _ = G.adjudicate(red, [row], G.git_age(r, base))
+    assert [f.kind for f in against_base] == [], (
+        "one commit behind a bound of two must not be overdue")
+
+    against_head, _, _ = G.adjudicate(red, [row], G.git_age(r, "HEAD"))
+    assert any(f.kind == "expired" for f in against_head), (
+        "four commits behind a bound of two must be overdue — otherwise this "
+        "test proves nothing about which ref was used")
+
+
+def test_the_landing_review_passes_a_base_ref_through(tmp_path, monkeypatch):
+    """The wiring, not just the helper: `gatekeeper_review` must hand the base
+    to the checker, or the fix exists and is never reached."""
+    import gatekeeper_review as R
+    seen = {}
+
+    def fake(prog, argv):
+        seen["argv"] = argv
+        return 0, "[PASS] ok", ""
+
+    monkeypatch.setattr(R, "_run_program", fake)
+    rec = tmp_path / "rec.json"
+    rec.write_text("{}", encoding="utf-8")
+    R.gate_red_since_gate(tmp_path, rec, base="origin/main")
+    assert "--head-ref" in seen["argv"], seen["argv"]
+    assert seen["argv"][seen["argv"].index("--head-ref") + 1] == "origin/main"
+
+
+def test_without_a_base_the_checker_is_not_told_a_ref(tmp_path, monkeypatch):
+    """The mirror: callers that have no base (a developer running it by hand)
+    keep the old behaviour byte-for-byte rather than being handed an empty
+    --head-ref, which git would read as a ref named ''."""
+    import gatekeeper_review as R
+    seen = {}
+    monkeypatch.setattr(R, "_run_program",
+                        lambda prog, argv: (seen.setdefault("argv", argv), 0,
+                                            "[PASS] ok", "")[1:])
+    rec = tmp_path / "rec.json"
+    rec.write_text("{}", encoding="utf-8")
+    R.gate_red_since_gate(tmp_path, rec)
+    assert "--head-ref" not in seen["argv"], seen["argv"]
