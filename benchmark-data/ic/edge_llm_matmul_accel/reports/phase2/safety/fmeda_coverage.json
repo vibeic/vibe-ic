@@ -1,7 +1,0 @@
-{
-  "program": "fmeda_fault_injection_coverage",
-  "applicable": false,
-  "verdict": "NOT_APPLICABLE",
-  "reason": "no declared safety mechanism (ECC/parity/lockstep) found \u2014 FMEDA diagnostic-coverage step vacuously skipped",
-  "asil": "D"
-}

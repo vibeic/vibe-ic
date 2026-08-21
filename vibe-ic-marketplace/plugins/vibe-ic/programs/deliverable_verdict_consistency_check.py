@@ -126,6 +126,51 @@ _ORCH_REPORT_PREFERENCE = (
 _ORCH_REPORT_GLOBS = (
     "reports/orchestrator/*_one_shot.json",
     "reports/*_one_shot.json",
+    # vibe-ic c5b333d87 — per-phase orchestrator verdicts nest one level deeper:
+    # `report_path` routes `analog_one_shot.json` to reports/phase3/ (its
+    # _REPORT_CATEGORY is "phase3", not "orchestrator"), so the analog run
+    # verdict escaped the two globs above and an analog FAIL could not block a
+    # PASS deliverable. This one-level-deep glob picks up any phase-nested
+    # `*_one_shot.json`; resolve()-dedup below folds the orchestrator overlap.
+    "reports/*/*_one_shot.json",
+)
+
+# vibe-ic#883 — THE COMPLETION AUDIT IS ALSO A RUN-LEVEL VERDICT, AND IT WAS
+# INVISIBLE HERE.
+#
+# This module's docstring has always named `reports/audit/
+# phase23_completion_audit.json` in its evidence table (see the 2026-07-26
+# escape above: the audit ALSO said FAIL). It was never read. `grep -c` for
+# that filename over this file returned 1, and that single hit was the prose.
+#
+# The escape that proves it, measured 2026-08-08 on the SHIPPED tree
+# `benchmark-data/ic/caravel_user_project/v1.9.43_sky130A`:
+#
+#     RESULT.md                                    headline = PASS_WITH_WAIVERS
+#     reports/orchestrator/vibe_ic_one_shot.json   verdict  = PASS_WITH_WAIVERS
+#     reports/audit/phase23_completion_audit.json  verdict  = FAIL
+#                                                  (P5 F10 M10 W2)
+#
+# Because an AGGREGATE report existed, `read_orchestrator_verdict` returned on
+# the first preference hit and never reached any other candidate. Both values it
+# compared were PASS-polarity, so it returned CONSISTENT / exit 0 — on the exact
+# deliverable-over-FAIL shape this program exists to catch. That false
+# certificate stood 6 days in a public repo and was retired by a human, not by
+# this gate.
+#
+# Note the direction of the disagreement is not arbitrary: `benchmark_evidence_
+# publish._audit_verdict` treats this same file as AUTHORITATIVE. So two
+# programs disagreed about what decides convergence, and only the weaker one was
+# wired as a gate.
+#
+# The fix applies this module's OWN existing rule — "a deliverable may never be
+# LAXER than the record" — to the audit as well: the audit joins the candidate
+# set, and a FAIL audit is never overridden by a PASS aggregate. The asymmetry
+# is preserved exactly as declared above: an audit that is more LENIENT than the
+# orchestrator changes nothing, because under-claiming is the honest direction.
+_AUDIT_REPORT_RELS = (
+    "reports/audit/phase23_completion_audit.json",
+    "reports/audit/*_completion_audit.json",
 )
 
 _EXIT = {
@@ -138,7 +183,46 @@ _EXIT = {
     # A gate that began failing here would be adjudicating a claim it has
     # just said it cannot adjudicate.
     "UNCHECKED_SUCCESS_CLAIM": 2,
+    # 2026-08-08 — an explicit, evidenced waiver downgrades the escape
+    # direction. See WAIVER_KEY below: this is NOT a general "trust the
+    # deliverable" bypass (that would reopen exactly the #escape this whole
+    # check exists to close) — it requires a human-authored waivers.json
+    # entry naming WHY the orchestrator record is stale, at the same
+    # >=WAIVER_MIN-character evidentiary bar every other local waiver in
+    # this codebase uses (project_outputs_in_tree_check.py,
+    # otp_image_nonzero_check.py, and 2 others share the identical pattern).
+    "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED": 0,
 }
+
+# A waiver here is NOT "trust any later deliverable" — that would be the
+# exact timestamp-based bypass this check's own docstring warns against (a
+# careless or malicious re-write of RESULT.md after the fact would sail
+# through unchecked). It is a human, per-run, evidenced disclosure: the
+# waiver text must say WHY the cited orchestrator record is known-stale
+# (typically: it captured a FIRST attempt that halted before a since-fixed
+# defect, and a LATER, independently re-derived verification superseded it —
+# the exact shape this module's own docstring calls "correct the
+# orchestrator" for). Same key across `waivers.json`'s single JSON object as
+# every other local-waiver check in this file's family.
+WAIVER_KEY = "deliverable_verdict_predates_reverification"
+WAIVER_MIN = 60
+
+
+def _waiver_count(project: Path) -> int:
+    p = project / "waivers.json"
+    if not p.exists():
+        return 0
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        return 0
+    v = d.get(WAIVER_KEY)
+    if isinstance(v, str):
+        return 1 if len(v.strip()) >= WAIVER_MIN else 0
+    if isinstance(v, list):
+        return sum(1 for s in v
+                   if isinstance(s, str) and len(s.strip()) >= WAIVER_MIN)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +426,93 @@ def _load_verdict_json(p: Path) -> Optional[dict]:
     return d if isinstance(d, dict) and d.get("verdict") else None
 
 
+def _audit_files_present(run_dir: Path) -> List[Path]:
+    """Every path the audit COULD have been read from, readable or not.
+
+    vibe-ic#897. `_load_verdict_json` collapses missing / empty / truncated /
+    malformed / wrong-key into one `None`, so "there was no audit" and "the
+    audit is corrupt" arrived identically — and the gate printed "agrees in
+    polarity" having consulted one record while believing it had consulted two.
+    Five separate one-file edits each silenced the second opinion at rc=0.
+    Presence is therefore established SEPARATELY from parseability.
+    """
+    out: List[Path] = []
+    for pat in _AUDIT_REPORT_RELS:
+        out.extend(sorted(run_dir.glob(pat)))
+    return out
+
+
+def _read_completion_audit(run_dir: Path) -> Optional[Tuple[Path, dict]]:
+    """The STRICTEST phase-completion audit this run wrote, or ``None``.
+
+    vibe-ic#883. Separate from the ``*_one_shot.json`` family on purpose: the
+    audit is written by a DIFFERENT producer at a DIFFERENT time than the
+    orchestrator, which is what makes it an independent second opinion rather
+    than a restatement — the same property the docstring above requires of the
+    deliverable-vs-orchestrator pair.
+    """
+    seen: Dict[str, Tuple[Path, dict]] = {}
+    for pat in _AUDIT_REPORT_RELS:
+        for p in sorted(run_dir.glob(pat)):
+            d = _load_verdict_json(p)
+            if d:
+                seen.setdefault(str(p.resolve()), (p, d))
+    if not seen:
+        return None
+    # Same strictest-wins rule as the phase reports: FAIL sorts first.
+    return min(seen.values(), key=lambda pd: (
+        polarity(normalise_token(str(pd[1]["verdict"]))) != "FAIL", str(pd[0])))
+
+
+def _not_laxer_than_audit(
+        chosen: Dict[str, object],
+        audit: Optional[Tuple[Path, dict]],
+) -> Dict[str, object]:
+    """Never let a PASS-polarity record override a FAIL completion audit.
+
+    vibe-ic#883. This is the module's own declared rule ("it may never be
+    laxer") extended to a record it already cited but never read. Deliberately
+    ONE-DIRECTIONAL, matching the asymmetry declared in the module docstring: a
+    LENIENT audit never overrides a strict orchestrator, because under-claiming
+    is the honest direction and punishing it would make the gate fire on correct
+    reports.
+
+    The override is always DISCLOSED — ``source`` records that the audit
+    displaced the orchestrator, and ``displaced`` keeps the value that lost, so
+    a reader can see a choice was made instead of inferring one.
+    """
+    # The carrier key is PRIVATE and must never survive into the reported
+    # evidence dict — tests and consumers compare that dict field-by-field.
+    present = chosen.pop("_audit_candidates", None) or []
+    if audit is None:
+        # #897: an audit file that EXISTS but did not parse is not the same as
+        # no audit at all. Say so in the evidence, so a reader can see the
+        # second opinion was attempted and lost rather than never sought.
+        if present:
+            chosen["audit_report"] = str(present[0])
+            chosen["audit_verdict"] = None
+            chosen["audit_unreadable"] = [str(p) for p in present]
+        return chosen
+    p, d = audit
+    audit_pol = polarity(normalise_token(str(d["verdict"])))
+    chosen["audit_report"] = str(p)
+    chosen["audit_verdict"] = str(d["verdict"])
+    if audit_pol != "FAIL" or chosen.get("polarity") == "FAIL":
+        return chosen
+    return {
+        "report": str(p),
+        "verdict": str(d["verdict"]),
+        "polarity": audit_pol,
+        "verdict_note": d.get("verdict_note"),
+        "halted_at": d.get("halted_at"),
+        "source": "completion_audit_stricter_than_orchestrator",
+        "displaced": {"report": chosen.get("report"),
+                      "verdict": chosen.get("verdict")},
+        "audit_report": str(p),
+        "audit_verdict": str(d["verdict"]),
+    }
+
+
 def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
     """The RUN-LEVEL verdict the runner recorded.
 
@@ -381,13 +552,22 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
     Ties inside one polarity are broken by path so a fresh clone and a live run
     give the same answer.
     """
+    # vibe-ic#883: gathered BEFORE the aggregate early-return below, because
+    # that early-return is precisely the mechanism that hid a FAIL audit behind
+    # a PASS aggregate.
+    audit = _read_completion_audit(run_dir)
+    _audit_present = _audit_files_present(run_dir)
+
     for rel in _ORCH_REPORT_PREFERENCE:
         d = _load_verdict_json(run_dir / rel)
         if d:
-            return {"report": str(run_dir / rel), "verdict": str(d["verdict"]),
-                    "polarity": polarity(normalise_token(str(d["verdict"]))),
-                    "verdict_note": d.get("verdict_note"),
-                    "halted_at": d.get("halted_at"), "source": "aggregate"}
+            out = {"report": str(run_dir / rel), "verdict": str(d["verdict"]),
+                   "polarity": polarity(normalise_token(str(d["verdict"]))),
+                   "verdict_note": d.get("verdict_note"),
+                   "halted_at": d.get("halted_at"), "source": "aggregate"}
+            out["_audit_candidates"] = _audit_present
+            return _not_laxer_than_audit(out, audit)
+
     seen: Dict[str, Tuple[Path, dict]] = {}
     for pat in _ORCH_REPORT_GLOBS:
         for p in sorted(run_dir.glob(pat)):
@@ -417,7 +597,7 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
         out["source"] = "strictest_phase_of_disagreeing"
         out["candidates"] = [
             {"report": str(q), "verdict": str(x["verdict"])} for q, x in cands]
-    return out
+    return _not_laxer_than_audit(out, audit)
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +715,14 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
             "ACTION: re-derive the deliverable's headline FROM the orchestrator "
             "verdict read LAST, or correct the orchestrator — but the two may "
             "not ship disagreeing.")
+        if _waiver_count(run_dir) > 0:
+            rep.state = "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED"
+            rep.verdict = "PASS"
+            rep.reason = (
+                f"{reason} WAIVED under '{WAIVER_KEY}' in waivers.json — "
+                f"the contradiction is disclosed, not hidden; see "
+                f"rep.blocking for the underlying evidence this waiver "
+                f"covers.")
         return rep
 
     if hp == "FAIL" and op == "PASS":
@@ -545,6 +733,26 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
             f"deliverable UNDER-claims. Not a contradiction in the escape "
             f"direction: an agent may downgrade for a reason the orchestrator "
             f"cannot see. Recorded, not failed.", head, orch)
+
+    # vibe-ic#897 — DO NOT SAY "AGREES" WHEN A SECOND OPINION WAS LOST.
+    # An audit file that exists but did not parse (missing `verdict` key,
+    # empty, truncated, malformed) used to collapse into the same `None` as
+    # "there is no audit", and this line still claimed agreement — having read
+    # ONE record while the run shipped two. Five one-file edits each silenced
+    # it at rc=0. The verdict stays PASS (an unreadable record is not evidence
+    # of contradiction, and failing here would adjudicate a question this gate
+    # has just said it cannot put) but the claim is now HONEST about what it
+    # actually compared, and the unreadable path is named.
+    if orch.get("audit_unreadable"):
+        return ConsistencyReport(
+            str(run_dir), str(deliverable), "CONSISTENT", "DISCLOSED",
+            f"{deliverable.name}:{head['line_no']} headline {head['token']} "
+            f"agrees in polarity with "
+            f"{Path(str(orch['report'])).name} verdict {orch['verdict']!r} "
+            f"({hp}) — but the completion audit at "
+            f"{', '.join(orch['audit_unreadable'])} EXISTS AND DID NOT PARSE, "
+            f"so the second opinion this gate exists to consult was NOT read. "
+            f"Comparison made against one record, not two.", head, orch)
 
     return ConsistencyReport(
         str(run_dir), str(deliverable), "CONSISTENT", "PASS",
@@ -587,6 +795,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR":
         print(f"FAIL: deliverable_verdict_consistency_check — {rep.reason}")
+        for b in rep.blocking:
+            print(f"  - {b}")
+    elif rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED":
+        print(f"PASS_WITH_WAIVER: deliverable_verdict_consistency_check — "
+              f"{rep.reason}")
         for b in rep.blocking:
             print(f"  - {b}")
     else:

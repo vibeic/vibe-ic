@@ -69,6 +69,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:  # config-driven NDA-token source (detector reconstructs SKU from encoded form)
     import _commercial_pdk as _cpdk
@@ -223,6 +224,24 @@ _OSS_CORES = _load_oss_cores()
 _OSS_PATTERN = _build_oss_pattern(_OSS_CORES)
 
 REQUIRED_FIELDS = ["type", "component", "title", "pattern", "plugin_version"]
+
+
+def _shipped_plugin_version() -> str:
+    """The version `.claude-plugin/plugin.json` actually declares, or "".
+
+    Returns "" when it cannot be read — an unreadable manifest must not
+    manufacture a MISMATCH against a record that may be perfectly correct.
+    Unknown is not disagreement."""
+    import json as _json
+    here = Path(__file__).resolve().parent
+    for base in (here.parent, here.parent.parent):
+        mf = base / ".claude-plugin" / "plugin.json"
+        if mf.is_file():
+            try:
+                return str(_json.loads(mf.read_text()).get("version", "")).strip()
+            except (OSError, ValueError):
+                return ""
+    return ""
 VALID_TYPES = {"bug", "issue", "enhancement"}
 COMPONENT_RE = re.compile(
     r"^(skill|program|mcp|flow):[\w_-]+$", re.IGNORECASE
@@ -286,6 +305,25 @@ def _check_structure(data: Dict, fname: str) -> List[Finding]:
                 f"Required field '{field}' is missing or empty",
                 file=fname, field=field,
             ))
+
+    # plugin_version must MATCH the shipped release, not merely be filled in.
+    #
+    # MEASURED (#835): the field was validated as "present and non-empty" and
+    # nothing read `plugin.json` to compare. A record hand-written against one
+    # release stays green after a rebase onto a main that has bumped — it then
+    # asserts a release it was never written against, and every check still
+    # passes. A field nobody compares is a field that decays silently, which is
+    # exactly the shape this checker exists to catch elsewhere.
+    declared = str(data.get("plugin_version", "")).strip().strip('"')
+    shipped = _shipped_plugin_version()
+    if declared and shipped and declared != shipped:
+        findings.append(Finding(
+            "ERROR", "PLUGIN_VERSION_MISMATCH",
+            f"plugin_version says '{declared}' but the shipped plugin.json "
+            f"says '{shipped}' — the record asserts a release it was not "
+            f"written against",
+            file=fname, field="plugin_version",
+        ))
 
     btype = data.get("type", "")
     if btype and btype not in VALID_TYPES:
@@ -567,7 +605,7 @@ def main(argv: List[str] = None) -> int:
     out = json.dumps(report, indent=2, ensure_ascii=False)
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(out)
+        atomic_write_text(Path(args.json_out), out)
     print(out)
     return 0 if is_pass else 1
 

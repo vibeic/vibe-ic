@@ -1,8 +1,10 @@
 """matrix_63x8 — shared substrate for the 63-step x 8-dimension coverage matrix.
 
-See README.md in this directory. Intentionally contains no logic: the three
+See README.md in this directory. Intentionally contains no logic: the four
 public modules are ``flowref`` (live accessors over the flow yaml), ``cells``
-(the 504-cell ledger) and ``waivers`` (the accepted-gap registry).
+(the 504-cell ledger), ``waivers`` (the accepted-gap registry) and
+``substitution`` (whether an ENFORCED cell was measured against the step's own
+mechanism or against a stand-in).
 
 Nothing is re-exported here on purpose. Siblings import the modules by name::
 

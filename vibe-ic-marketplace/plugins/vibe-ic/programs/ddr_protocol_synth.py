@@ -32,6 +32,7 @@ import l_doc_generator_stamp as _stamp
 
 from _incidental_mention import AnchoredBlob as _AnchoredBlob
 from _incidental_mention import subject_term as _subject_term
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -1224,7 +1225,7 @@ def apply_ddr_synth(generated_docs_dir: Path, is_ddr: bool,
     p = gd / "L9_INTEGRATION_SPEC.json"
     if p.is_file():
         d = _read(p)
-        d["top_module"] = "DDR3_SDRAM_component"
+        _ptm.apply(d, "DDR3_SDRAM_component")
         d.setdefault("module_role",
             "Source-synchronous parallel memory device intended to be paired "
             "with a DDR3 memory controller + PHY. JESD79-3C standardizes the "
