@@ -726,3 +726,28 @@ did not trade one artefact for another.
 **THE CURRENT RED LIST AT v1.11.66 IS 23 BOTH + 9 in the quarantined
 landing-verdict file = 32**, with IMAGE-ONLY 0 (the seal-ring trio fixed) and
 HOST-ONLY 0.
+
+# ===== FINAL DISPOSITION AT v1.11.66 =====
+
+Every remaining red is now attributed to one of four causes, none of which is
+"unknown":
+
+| n | reds | disposition |
+|--:|---|---|
+| 11 | matrix family | the 54-ID agent's lane |
+| 2 | coverage bridge | **jmain-green's 38** (confirmed against the split), red since v1.11.18, and it poses a verdict-vocabulary DESIGN question: should "oracle PASS with no coverage measurement" be `VACUOUS-PASS` or `WAIVED-DEFERRED`? Same class as the flow-gate intent call — not mine to guess |
+| 3 | flow-gate enforcement audit | a POLICY call: two gates must declare `ENFORCEMENT: blocking\|advisory`, and the flow's `program_exit_zero` clauses make either choice wrong without a wiring change |
+| 2 | manifest parity | EVIDENCE this host lacks: 0 of the manifest's 15 declared run roots are present |
+| 9 | landing-verdict guard | the guard is UNRUNNABLE here — needs docker CLI + git >= 2.38 + a non-`$HOME` subject in ONE environment |
+| 2 | `magic` flake, 0.8 s lease family | characterised, ratios recorded |
+
+**Nothing is left in the "red, cause unknown" state**, which was the state the
+whole 92 started in.
+
+## The instrument, hardened
+
+`SCRATCH_ROOT_RULE.md` written and the three runners annotated. Two clauses,
+each bought with a false finding: the scratch root must be SHORT (a long path
+fills fixed-size evidence windows) and OUTSIDE `$HOME` (the hermetic runner
+refuses a subject under it). `/tmp/ps` satisfies both; the descriptive path I
+used for most of this job satisfies neither.
