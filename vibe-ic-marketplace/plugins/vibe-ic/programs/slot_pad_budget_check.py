@@ -98,6 +98,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082
+import _gate_usage_exit as _usage  # noqa: E402  vibe-ic#712
 
 # --------------------------------------------------------------------------- #
 # pad roles -- derived from the operator's OWN instance names, never assumed
@@ -690,7 +691,15 @@ def _load_slots(project: str) -> Dict[str, Dict[str, Any]]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
+    # `GateArgumentParser`, not the stdlib one. argparse exits 2 on a rejected
+    # command line, and 2 is THIS FLOW'S VACUOUS_PASS tier -- so a malformed
+    # gate clause would report "I examined nothing" and the step would go green
+    # over a gate that never ran. That collision is not hypothetical here: it
+    # is the reason the flow clause for this program carries no glob (a glob
+    # expands into surplus positionals, which argparse rejects). Routing around
+    # the trap left it armed for the next editor; rc 3 disarms it, and the flow
+    # reads an unsentinelled 3 as FAIL -- loud, which is the whole point.
+    ap = _usage.GateArgumentParser(
         description="Decide whether a design's declared interface fits a "
                     "purchased shuttle slot, from the slot files step 0.5ic "
                     "already ingested. Front-door arithmetic, not a build.")
@@ -712,9 +721,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 params[k.strip()] = int(v.strip(), 0)
             except ValueError:
-                print(f"slot_pad_budget_check: --param {kv} is not an integer",
-                      file=sys.stderr)
-                return 2
+                # A value this program cannot read is the CALLER being
+                # wrong, not this program examining nothing. Same tier as any
+                # other rejected command line (#712).
+                _usage.usage_error("slot_pad_budget_check",
+                                   f"--param {kv} is not an integer")
+                return _usage.RC_USAGE
 
     slots = _load_slots(a.project)
     # An explicit --rtl always wins; discovery is the fallback the flow uses.

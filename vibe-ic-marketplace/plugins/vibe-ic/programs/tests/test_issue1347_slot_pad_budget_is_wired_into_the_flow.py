@@ -452,3 +452,62 @@ def test_all_four_verdicts_are_reachable_through_the_wiring():
                        (T._RTL_FOLDABLE, True), (T._RTL_FITS, False)):
         seen.add(_drive(rtl, slots)[2]["verdict"])
     assert seen == {"DOES_NOT_FIT", "FITS", "FITS_AFTER_FOLD", "UNDECIDED"}, seen
+
+
+# --------------------------------------------------------------------------- #
+# a malformed clause must be LOUD, not a disclosed skip  (#712 rc-3 tier)
+# --------------------------------------------------------------------------- #
+# The tests above keep the SHIPPED clause glob-free, because a glob expands
+# into surplus positionals that argparse rejects. But argparse rejects with
+# exit 2, and 2 is this flow's VACUOUS_PASS tier — so the malformed clause read
+# as "I examined nothing" and the step went green over a gate that never ran.
+#
+# Keeping the clause correct routed AROUND that trap and left it armed for the
+# next editor. `_gate_usage_exit.GateArgumentParser` disarms it: a rejected
+# command line is rc 3, and the flow reads an unsentinelled 3 as FAIL.
+#
+# MEASURED, same clause, same project, on either side of the adoption:
+#     before -> VACUOUS_PASS (silent skip)
+#     after  -> FAIL (step goes red)
+
+_TRAP_CLAUSE = ("slot_pad_budget_check . --rtl phase2/stage1/rtl/*.v "
+                "--json reports/x.json")
+
+
+def _two_file_project() -> Path:
+    p = _project(T._RTL_FITS, with_slots=True)
+    (p / "phase2" / "stage1" / "rtl" / "other.v").write_text(
+        "module other (input wire a);\nendmodule\n")
+    return p
+
+
+def test_a_malformed_clause_FAILS_and_is_not_a_disclosed_skip():
+    passed, snippet = F._check_program_exit_zero(_two_file_project(), _TRAP_CLAUSE)
+    assert passed is False, "a clause the program rejects reported a pass"
+    assert not snippet.startswith(F._VACUOUS_HINT_PREFIX), (
+        "a rejected command line landed in the VACUOUS tier — 'you called me "
+        "wrongly' is being reported as 'I examined nothing'")
+
+
+def test_the_usage_tier_is_distinct_from_the_vacuous_one():
+    """rc 3 = you called it wrong; rc 2 = there was nothing to examine. The
+    program's whole contract rests on those not collapsing."""
+    import subprocess
+    prog = str(PROG / "slot_pad_budget_check.py")
+
+    def rc(*args):
+        return subprocess.run([sys.executable, prog, *args],
+                              capture_output=True, text=True, timeout=120).returncode
+
+    assert rc("--not-a-flag") == 3          # rejected command line
+    assert rc() == 3                        # missing positional
+    assert rc(".", "--param", "X=nope") == 3   # a value it cannot read
+    assert rc("--help") == 0                # a successful invocation
+    assert rc(str(Path(tempfile.mkdtemp(prefix="noslots_")))) == 2   # genuine UNDECIDED
+
+
+def test_help_still_exits_zero_so_wrappers_do_not_read_it_as_failure():
+    import subprocess
+    r = subprocess.run([sys.executable, str(PROG / "slot_pad_budget_check.py"),
+                        "--help"], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and "usage" in r.stdout.lower()
