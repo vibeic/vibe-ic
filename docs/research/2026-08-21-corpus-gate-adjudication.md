@@ -214,6 +214,45 @@ the path twice — which the first version of this fix did.
 
 ## ONE THING FOR THE OWNER, MEASURED AND NOT ACTED ON
 
+> **SHARPENED 2026-08-22 — I described the symptom, and the cause is one level
+> down.** I wrote below that the three gates "do not agree about what an absent
+> corpus means". They do not disagree about that. They disagree about **where
+> the corpus is**, and the rc difference follows from it.
+>
+> vibe-ic#1710 introduced ONE seam for that question, `_corpus_location.resolve`,
+> which follows `$VIBE_IC_BENCHMARK_DATA` only when the named path carries no
+> corpus and announces either way. Two of the three adopted it:
+>
+> ```
+> l_doc_field_producer_check         imports _corpus_location
+> evidence_citation_resolves_check   imports _corpus_location
+> benchmark_evidence_index           does NOT — its own CORPUS_ENV and
+>                                    IC_SUBDIR = "benchmark-data/ic"
+> ```
+>
+> So with the environment UNSET, on this host:
+>
+> ```
+> l_doc_field_producer_check         -> /home/reyerchu/benchmark-data/ic
+> evidence_citation_resolves_check   -> /home/reyerchu/benchmark-data/ic
+> benchmark_evidence_index           -> NO_CORPUS
+> ```
+>
+> Two gates read a corpus that is sitting right there and the third declares
+> there is none — because the third only ever looks INSIDE the repo
+> (`<repo>/benchmark-data/ic`) plus the env var, which is exactly the assumption
+> `c5d7f2d00` invalidated when the cells moved out. Its `rc=0` is not a lax
+> reading of "absent"; it is a correct reading of a question asked in the wrong
+> place, and its own docstring records `NO_CORPUS (rc=0)` as intended, decided
+> in isolation from the seam its siblings adopted.
+>
+> **The fix is therefore not the rc.** It is routing this gate through
+> `_corpus_location` like the other two, after which it finds the corpus and
+> returns the real verdict — which is FAIL, as the bound measurement below
+> already shows. That has the same blast radius as the rc change and is the
+> owner's for the same reason, but it is a different change with a different
+> justification, and picking the rc would have treated the symptom.
+
 The three `--corpus-may-be-absent` gates do not agree about what an absent
 corpus means:
 
