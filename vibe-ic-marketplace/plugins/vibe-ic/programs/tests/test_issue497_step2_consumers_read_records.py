@@ -45,6 +45,8 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 sys.path.insert(0, str(PROGRAMS))
 import _gate_invocation as GI  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _p0_umbrella_probe_flow as _probe  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +79,41 @@ def _rec(name, verdict, message="", **evidence):
     return F._p0_gate_record(name, verdict, message, evidence)
 
 
-def _run(tmp_path, extra=("--phase", "2", "--strict-structural")):
+def _run(tmp_path, extra=("--phase", "2", "--strict-structural"),
+         probe_flow=False):
+    """Drive the real `main()` over a probe flow whose P0 chain is SATISFIED.
+
+    SAME ROOT CAUSE AS THE SIX THIS PR ALREADY FIXES, found by a full sweep of
+    `a38902d16` rather than by the matrix. `P0` declares `blocks_on: [1]` and
+    step 1 declares `blocks_on: [D1]`; a `tmp_path` project has run neither, so
+    on the shipped 63-step flow the ordering rule fires against P0 and reds the
+    run before this file's subject — what the CONSUMERS do with a record — can
+    decide anything:
+
+        [P0] … = INCOMPLETE marked done while dependency [1] Spec-to-RTL = MISSING
+        [P0] … = INCOMPLETE marked done while dependency [D1] …          = MISSING
+
+    Two tests here assert `rc == 0` after asserting the audit is clean
+    (`failed_gates == []`, `gates == []`, `structural_fail_lines == []`), so
+    they were failing on the flow's health rather than on the consumers':
+
+        test_a_not_invocable_record_is_never_a_failing_gate
+        test_waived_and_skipped_records_are_not_failures
+
+    WHY THIS SEARCH MISSED IT AT FIRST, since it will mislead the next reader
+    too: the ordering rule renders as `PASS_VOIDED_BY_DEPENDENCY` when it voids
+    a PASS, but P0 here is `INCOMPLETE`, so the violation is reported with that
+    word instead and a grep for the voided-PASS wording finds nothing.
+    """
     proj = _project_with_rtl(tmp_path)
     report = tmp_path / "report.json"
-    rc = F.main([str(proj), "--json", str(report), *extra])
+    argv = [str(proj), "--json", str(report)]
+    if probe_flow:
+        flow_def = tmp_path / "p0_probe_flow.yaml"
+        _probe.write_flow(flow_def)
+        _probe.write_seed(proj)
+        argv += ["--flow-def", str(flow_def)]
+    rc = F.main([*argv, *extra])
     audit = json.loads(
         (proj / "reports" / "audit" /
          "phase23_completion_audit.json").read_text())
@@ -286,7 +319,7 @@ def test_a_not_invocable_record_is_never_a_failing_gate(
     skips = [GI.format_not_invocable_entry(r["name"], r["message"])
              for r in ni]
     _stub_umbrella(monkeypatch, records=ni, fails=[], skips=skips)
-    rc, report, audit = _run(tmp_path)
+    rc, report, audit = _run(tmp_path, probe_flow=True)
     printed = capsys.readouterr().out
 
     assert audit["failed_gates"] == []
@@ -311,7 +344,7 @@ def test_waived_and_skipped_records_are_not_failures(
                       skip_kind="input-missing"),
                  _rec("passing_check", "PASS", exit_code=0)],
         fails=[], skips=["skipped_check"], waivers=[w])
-    rc, _report, audit = _run(tmp_path)
+    rc, _report, audit = _run(tmp_path, probe_flow=True)
     capsys.readouterr()
     assert audit["failed_gates"] == []
     assert audit["failed_gate_count"] == 0

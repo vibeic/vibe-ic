@@ -1,0 +1,116 @@
+{
+  "schema": "vibeic.ppa.fixture_expectation.v1",
+  "fixture": "drc/zero_three_ways",
+  "proves": "positive + negative + vacuous",
+  "known_answer": "Three DRC runs. All three report ZERO violations. Exactly ONE of them is entitled to say the design is DRC clean. This is the easiest lie in the system and the fixture exists so a gate can be shown to catch it.",
+  "the_measured_fact_that_makes_this_a_fixture_and_not_an_opinion": "ran_and_found_none/drc.xml and ran_on_empty_layout/drc.xml are BYTE-IDENTICAL -- both sha256:0abbbf4dc0b2639b0db3735290135e331b55bb1816a99f4cc8009a242ce74a28, both 702 bytes. One is a real deck over real geometry; the other is the same deck over a layout containing no shapes at all. No parser of the REPORT can ever tell them apart, because the report does not contain the answer. Any gate that decides DRC-clean from the report alone is reading the wrong document.",
+  "generated_by": {
+    "tool": "KLayout 0.30.10",
+    "image": "ghcr.io/vibeic/vibeic-eda:0.3.16",
+    "commands": [
+      "klayout -b -r mklayout_populated.py            # -> populated.gds",
+      "klayout -b -r mklayout_empty.py                # -> empty.gds",
+      "klayout -b -r deck.drc        -rd input=populated.gds -rd output=ran_and_found_none/drc.xml    # exit 0",
+      "klayout -b -r deck.drc        -rd input=empty.gds     -rd output=ran_on_empty_layout/drc.xml   # exit 0",
+      "klayout -b -r deck_broken.drc -rd input=populated.gds -rd output=deck_never_ran/drc.xml        # exit 1",
+      "gzip -n -9 <each>.gds > <case>/layout.gds.gz   # -n so the bytes are deterministic"
+    ],
+    "why_a_local_deck_and_not_the_pdk_deck": "The published corpus contains only successful runs, so it can supply the 'ran and found none' half and nothing else (measured: every *drc*.rpt in benchmark-data has zero items). The other two halves had to be produced. Producing them with the full gf180mcuD deck would have meant 140 KB artefacts carrying 763 rule categories, none of which is the property under test. deck.drc is six lines, ships beside the artefacts, and regenerates all three in seconds.",
+    "why_gzipped": "The repo .gitignore ignores `*.gds` as 'EDA tool outputs (large, regeneratable)'. These are neither -- they are 161 and 97 byte fixtures. `*.gds.gz` falls outside that pattern, so storing them gzipped keeps them tracked WITHOUT a .gitignore negation, and drc_vacuous_pass_check.measure_layout reads .gds.gz with the same pure-Python record walk. MEASURED: shapes 3 / 0 / 3 respectively."
+  },
+  "cases": [
+    {
+      "dir": "ran_and_found_none",
+      "truth": "EARNED CLEAN",
+      "report_says": "zero violations",
+      "categories_in_report": 2,
+      "items_in_report": 0,
+      "shapes_in_layout": 3,
+      "klayout_exit": 0,
+      "expected_verdict": {
+        "rc": 0,
+        "status": "PASS",
+        "marker": null
+      },
+      "why": "The deck registered its rules (2 categories), ran them, and the layout it ran on demonstrably contained geometry. The zero is a measurement.",
+      "layout": "layout.gds.gz"
+    },
+    {
+      "dir": "ran_on_empty_layout",
+      "truth": "VACUOUS -- nothing was checked",
+      "report_says": "zero violations",
+      "categories_in_report": 2,
+      "items_in_report": 0,
+      "shapes_in_layout": 0,
+      "klayout_exit": 0,
+      "expected_verdict": {
+        "rc": 2,
+        "status": "UNDETERMINED",
+        "marker": "[CANNOT CHECK]"
+      },
+      "why": "The deck ran, but over nothing. Zero violations from an empty layout is a statement about the layout being empty, not about the design being clean. rc must be 2: no evidence either way was produced. It is NOT rc=1 -- rc=1 is a claim about silicon (contract §1) and no claim about this silicon can be made from this run.",
+      "layout": "layout.gds.gz"
+    },
+    {
+      "dir": "deck_never_ran",
+      "truth": "THE DECK NEVER RAN",
+      "report_says": "zero violations",
+      "categories_in_report": 0,
+      "items_in_report": 0,
+      "shapes_in_layout": 3,
+      "klayout_exit": 1,
+      "expected_verdict": {
+        "rc": 2,
+        "status": "UNDETERMINED",
+        "marker": "[CANNOT CHECK]"
+      },
+      "why": "The deck aborted on line 4 before defining a single rule, so no category was ever registered. Zero violations with zero categories cannot be an earned clean -- there were no rules to violate.",
+      "the_trap_in_this_one": "klayout exited 1, and THE REPORT FILE WAS STILL WRITTEN. `report()` executes on line 3, before the error on line 4. A wrapper that checks only 'does the report exist and does it have no items' reports CLEAN from a run that evaluated nothing. The exit code was the only in-band signal and it is not in the artefact.",
+      "layout": "layout.gds.gz"
+    }
+  ],
+  "discriminator": {
+    "why_it_is_stated_here": "So that every lane implements the same rule instead of eleven near-misses. Program-first: this is a decision table, not advice.",
+    "rules": [
+      {
+        "when": "items > 0",
+        "verdict": "FAIL",
+        "rc": 1
+      },
+      {
+        "when": "categories == 0",
+        "verdict": "UNDETERMINED",
+        "rc": 2,
+        "marker": "[CANNOT CHECK]",
+        "reason": "deck registered no rule"
+      },
+      {
+        "when": "categories > 0 and items == 0 and shapes == 0",
+        "verdict": "UNDETERMINED",
+        "rc": 2,
+        "marker": "[CANNOT CHECK]",
+        "reason": "nothing was checked"
+      },
+      {
+        "when": "categories > 0 and items == 0 and shapes > 0",
+        "verdict": "PASS",
+        "rc": 0
+      }
+    ],
+    "note": "`shapes` is NOT readable from the report. It must be measured from the layout the run consumed -- which is why each case ships its layout.gds. This is the same stance programs/drc_vacuous_pass_check.py already takes, and the byte-identity above is the proof that no weaker stance is available."
+  },
+  "must_not": [
+    {
+      "forbidden": "distinguishing the cases by the <generator> deck FILENAME",
+      "why": "deck.drc vs deck_broken.drc differ here only because I gave them different names. A runner that overwrites one deck path emits the same string for both. The category count is the structural fact; the filename is an accident of this fixture."
+    },
+    {
+      "forbidden": "returning rc=1 for ran_on_empty_layout or deck_never_ran",
+      "why": "contract §1 -- rc=1 is a finding about the DESIGN. Neither run looked at the design."
+    },
+    {
+      "forbidden": "returning rc=0 for any case but ran_and_found_none",
+      "why": "that is the shipped-twice defect this whole fixture is about"
+    }
+  ]
+}

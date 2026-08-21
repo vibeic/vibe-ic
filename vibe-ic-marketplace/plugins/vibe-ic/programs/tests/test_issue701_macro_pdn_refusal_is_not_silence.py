@@ -227,11 +227,15 @@ def test_the_refusal_names_the_macro_and_why(tmp_path):
     The output must carry the MASTER and the LAYERS its OBS removed."""
     tcl = _pdn(tmp_path, _macro(obs_layers=("M4", "M5")), tag="b")
     assert MACRO_NAME in tcl, "the refused macro is not named"
-    # the layers the OBS took off the table, so a reader can act on it
-    assert "M4" in tcl and "M5" in tcl
-    # and the reason is stated, not merely implied by an absence
-    assert re.search(r"(?i)obs|block", tcl), \
-        "nothing in the emitted PDN says WHY no macro grid was built"
+    # NOT `"M4" in tcl`: the core strap lines mention M4 and M5 whatever
+    # happens, so that would pass on a completely silent build. The layers the
+    # OBS removed must appear on the text that NAMES the macro.
+    about_the_macro = "\n".join(ln for ln in tcl.splitlines()
+                                if MACRO_NAME in ln)
+    assert "M4" in about_the_macro and "M5" in about_the_macro, \
+        "the refusal does not say WHICH layers the OBS took off the table"
+    assert re.search(r"(?i)obs|block", about_the_macro), \
+        "the refusal does not say WHY no macro grid was built"
 
 
 def test_the_refusal_does_not_build_a_grid_in_defiance_of_the_OBS(tmp_path):
@@ -435,6 +439,88 @@ def test_a_tcl_hostile_name_is_safe_on_the_REACHABLE_path_too(tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════
 # REPORTED, NOT BLOCKING — and the argument for it, kept next to the code
 # ═══════════════════════════════════════════════════════════════════════════
+def test_no_reachable_path_returns_no_grid_with_no_explanation():
+    """COVERAGE CONTROL, and coupled to this implementation on purpose.
+
+    The defect was ONE `return None` with no reason. There were seven of them,
+    and six were silent for the same reason the seventh was. This walks every
+    exit of the planner and asserts the invariant that replaced them: once a
+    hard-macro POWER/GROUND port has been seen, "no grid" is never the whole
+    answer. A branch added later that returns no plan and no reason fails here.
+
+    The one exemption is stated explicitly, not left implicit: a block with no
+    PG port at all asked for nothing, so nothing is the complete answer."""
+    tech = _stack()
+    stripes = [{"layer": "M4", "width": 0.8, "pitch": 20, "offset": 0},
+               {"layer": "M5", "width": 0.8, "pitch": 20, "offset": 0}]
+
+    def plan_for(lefs, t=tech, st=stripes):
+        return mod._macro_pdn_grid_outcome(lefs, t, st, "M1")
+
+    # (label, args) -> every distinct exit the planner has
+    exits = {
+        "no routing layers":     ([_macro()], "not a lef", stripes),
+        "pin layer not routing": ([_macro().replace("LAYER M3", "LAYER NOPE")],
+                                  tech, stripes),
+        "pins above every strap": ([_macro().replace("LAYER M3", "LAYER M6")],
+                                   tech, stripes),
+        "all candidates blocked": ([_macro(obs_layers=("M4", "M5"))], tech,
+                                   stripes),
+        "no perpendicular partner": ([_macro()], tech, [stripes[0]]),
+        "strap width unusable":  ([_macro()], tech,
+                                  [{"layer": "M4", "width": 0, "pitch": 20,
+                                    "offset": 0}, stripes[1]]),
+        "no port wide enough":   ([SLIVER_MACRO], tech, stripes),
+    }
+    reasons = set()
+    for label, args in exits.items():
+        got = plan_for(*args)
+        assert got["plan"] is None, label
+        assert got["refusals"], f"{label}: no grid AND no reason — the defect"
+        for rec in got["refusals"]:
+            assert rec["masters"], f"{label}: refused without naming a macro"
+            assert rec["reason"].strip(), f"{label}: no machine token"
+            assert rec["detail"].strip(), f"{label}: no sentence for a human"
+            reasons.add(rec["reason"])
+    # every exit has its OWN token: one token for seven causes is the same
+    # collapse this issue is about, moved down a level
+    assert len(reasons) == len(exits), sorted(reasons)
+
+    # the exemption, and the success path, both still hold
+    assert plan_for([SIGNAL_ONLY_MACRO]) == {"plan": None, "refusals": []}
+    built = plan_for([_macro()])
+    assert built["plan"] is not None and built["refusals"] == []
+
+
+def test_a_multi_macro_refusal_over_names_rather_than_under_names(tmp_path):
+    """MEASURED LIMITATION, pinned so it is a known state and not a surprise.
+
+    The planner has always built ONE plan for all macro LEFs together: the OBS
+    reader merges every master's blocked layers into a single candidate filter
+    (#685). So one macro that blocks every candidate takes the macro grid away
+    from a second, unblocked macro too — which was ALSO silent before this fix,
+    and is the same defect wearing a second hat.
+
+    The refusal therefore names every master with a supply port, not only the
+    one whose OBS caused it. That over-names rather than under-names, which is
+    the conservative direction for a report: a reader is pointed at a macro that
+    turns out to be fine, rather than not told about one that is not.
+
+    Narrowing it means per-macro plans — a different change, with its own
+    blast radius, and not one to smuggle in behind a reporting fix."""
+    two = _macro(obs_layers=("M4", "M5")) + SIGNAL_ONLY_MACRO.replace(
+        "USE SIGNAL", "USE POWER").replace(
+        "RECT 0 0 1 1", "RECT 0 0 12 12").replace("SIZE 10 BY 10", "SIZE 400 BY 140")
+    tcl = _pdn(tmp_path, two, tag="mm")
+    got = mod._parse_macro_pdn_grid_refusals(tcl)
+    named = {r["master"] for r in got}
+    assert MACRO_NAME in named, "the macro that caused it must be named"
+    assert "SIGBLOCK" in named, (
+        "the second macro also lost its grid to the first one's OBS and must "
+        "be named too — that loss was silent before this fix as well")
+    assert "define_pdn_grid -macro" not in tcl
+
+
 def test_the_refusal_is_reported_and_does_not_fail_the_run():
     """DELIBERATE. This planner reads `pdk.macro_lefs` — a CONFIG list — and
     never the netlist or the placement, so it cannot tell whether the master is

@@ -1,5 +1,0 @@
-{
-  "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
-  "lab_calibration_present": false,
-  "notes": "Bluetooth Core v5.2 is a wireless protocol spec; it does not define a calibration loop at the protocol layer. SoC-integrated BLE radios typically include vendor-specific factory-trim loops for crystal frequency (XO trim), PLL VCO gain, mixer LO leakage, TX power, RX gain, and antenna match. Volume 6 Part F (Direct Test Mode) provides the deterministic RF interface used at the production line for these trims (PRBS9 / PRBS15 / 11110000 / 10101010 / all-1 / all-0 packet patterns + per-channel transmitter + receiver tests at LE 1M / 2M / Coded S=2 / Coded S=8). Bluetooth qualification by the Bluetooth SIG additionally requires RF compliance per Vol 6 Part A — frequency accuracy, modulation accuracy, in-band emission, out-of-band emission, blocking, intermodulation, image rejection."
-}

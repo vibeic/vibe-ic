@@ -1,4 +1,0 @@
-# Auto-generated compliance vector catalog.
-# One requirement per line; format: <source-L-doc>: <description>
-
-# (no extractable compliance properties found in L10/L16/L22)
