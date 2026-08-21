@@ -227,6 +227,31 @@ drift = [(r.get("rule_name") or r.get("title"), f)
 check("every emitted artefact is in sync with its record",
       not drift, f"{len(drift)} stale field(s): {drift[:2]}")
 
+# 15. the STATUS block. It read "15 records — 13 Bucket A" while the batch stood
+#     at 29 and 26: the section a reader reads first, drifting for the whole
+#     second half of the lane, because every other check walked the record set
+#     and none walked the prose that summarises it.
+W = {"zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,
+     "eight":8,"nine":9,"ten":10,"eleven":11,"twelve":12}
+m = re.search(r"\*\*STATUS\*\*: (\d+) records emitted and validated — (\d+) Bucket A, "
+              r"(\d+) C, (\d+) T", MD)
+control("status-block", m is not None)
+if m:
+    got = (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    want = (len(RECS), counts["A"], counts["C"], counts["T"])
+    check("the STATUS block agrees with the record set", got == want,
+          f"status {got}, records {want}")
+else:
+    check("the STATUS block agrees with the record set", False, "STATUS line not parseable")
+
+# 16. the Bucket-A ladder split must add up to the Bucket-A record count.
+la = re.search(r"\| \*\*AUGMENT-EXISTING\*\* \| (\d+) \|", MD)
+le = re.search(r"\| \*\*EXTRACT-NEW\*\* \| (\d+) \|", MD)
+control("ladder", la is not None and le is not None)
+check("the Bucket-A ladder split totals the Bucket-A records",
+      bool(la and le) and int(la.group(1)) + int(le.group(1)) == counts["A"],
+      f"{la.group(1) if la else '-'} + {le.group(1) if le else '-'} vs {counts['A']}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
