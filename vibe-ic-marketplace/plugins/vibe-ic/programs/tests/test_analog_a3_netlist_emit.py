@@ -20,11 +20,11 @@ a shipped checker.
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
+import os
 
 import pytest
 
+from not_verified_tier import PROBE_PRESENT, probe, probe_skip_reason
 from _analog_producer_fixture import (
     A1, A2, A3, GATE_A3, NETLIST_CHECKERS, block, make_project, run_prog,
     bdir, read_json, all_sp_files)
@@ -264,20 +264,21 @@ def test_an_unreachable_simulator_is_recorded_and_not_faked(tmp_path):
         "take a converging-looking netlist for a converged one")
 
 
-def _container_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    try:
-        import os
-        name = os.environ.get("VIBEIC_ANALOG_CONTAINER", "vibeic-eda")
-        return subprocess.run(["docker", "exec", name, "true"],
-                              capture_output=True, timeout=60).returncode == 0
-    except Exception:
-        return False
+# vibe-ic#1283 — tri-state, not bool. The `except Exception: return False` this
+# replaces recorded a probe that never finished as a container that is not
+# there, so a saturated host silently turned the only ngspice-backed proof in
+# this file into a green skip that claimed a fact about the host.
+_CONTAINER_NAME = os.environ.get("VIBEIC_ANALOG_CONTAINER", "vibeic-eda")
+_CONTAINER_STATE, _CONTAINER_DETAIL = probe(
+    ["docker", "exec", _CONTAINER_NAME, "true"])
+RUN_REMEDY = "bash tools/vibeic-eda/restart-eda.sh"
 
 
-@pytest.mark.skipif(not _container_available(),
-                    reason="EDA container with ngspice not reachable")
+@pytest.mark.skipif(
+    _CONTAINER_STATE != PROBE_PRESENT,
+    reason=probe_skip_reason(_CONTAINER_STATE, _CONTAINER_DETAIL,
+                             "EDA container with ngspice not reachable",
+                             RUN_REMEDY))
 def test_every_library_class_renders_a_netlist_that_actually_converges(
         tmp_path):
     """The acceptance bar for a topology-library entry is ngspice, not a

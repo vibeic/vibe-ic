@@ -20,7 +20,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $MOUNT/<proble
     --pdk sky130A --ic-name <ic>
 
 # 5. Score against the hidden cocotb harness
-python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/score_cocotb_mcp.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/score_cocotb_mcp.py \
     --project $MOUNT/<problem> --top <dut> --rtl work/rtl/<dut>.sv \
     --mount-root $MOUNT
 # → writes $MOUNT/<problem>/reports/cocotb_score.json

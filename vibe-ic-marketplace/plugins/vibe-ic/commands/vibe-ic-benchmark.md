@@ -9,7 +9,7 @@ argument-hint: <bench> [--setup --dataset <path> --run <path>] [--score --run <p
 This command is the **front door** for every open IC-design benchmark. It enforces
 the methodology from `open-benchmark-methodology` skill (§ 2 decision matrix → § 3
 substitution disclosure → § 4 triage rubric) by routing to the correct run-shape
-per the registry at `${CLAUDE_PLUGIN_ROOT}/benchmark-harness/BENCHMARK_REGISTRY.json`.
+per the registry at `${CLAUDE_PLUGIN_ROOT}/benchmark/BENCHMARK_REGISTRY.json`.
 
 ## Modes
 
@@ -38,16 +38,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> --score --r
    - § 5 the per-benchmark cheat sheet (current shape + status + any TARGET RE-RUN)
 2. Then call `benchmark_dispatch.py <bench>` to see the env check + recommended commands.
 3. Then follow the right per-shape blind instructions from
-   `${CLAUDE_PLUGIN_ROOT}/benchmark-harness/blind_instructions_shape_<shape>.md`.
+   `${CLAUDE_PLUGIN_ROOT}/benchmark/blind_instructions_shape_<shape>.md`.
 
 ## Shape-routing summary (from the registry)
 
 | Shape | Author | Scorer | Example benchmarks |
 |---|---|---|---|
 | **A** | `vibe_ic_one_shot_runner.py` (full chain) | `benchmark-verify` skill (six pillars) | benchmark_clean ICs (spm, sha256, subservient, u_hawaii_adc) |
-| **B** | `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware` | `benchmark-harness/score_iverilog_tb.py` | RTLLM |
-| **C** | LLM authors per problem + `benchmark-harness/gates_atomic.py` (each gate is a plugin program) | `benchmark-harness/score_iverilog_tb.py` | VerilogEval-v2, VerilogEval-Human |
-| **D** | `vibe_ic_one_shot_runner.py` (with `catalog-glue-author` if REUSED-IP) | `benchmark-harness/score_cocotb_mcp.py` (MCP eda_cocotb / docker exec) | CVDP example, subservient-class |
+| **B** | `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware` | `benchmark/score_iverilog_tb.py` | RTLLM |
+| **C** | LLM authors per problem + `benchmark/gates_atomic.py` (each gate is a plugin program) | `benchmark/score_iverilog_tb.py` | VerilogEval-v2, VerilogEval-Human |
+| **D** | `vibe_ic_one_shot_runner.py` (with `catalog-glue-author` if REUSED-IP) | `benchmark/score_cocotb_mcp.py` (MCP eda_cocotb / docker exec) | CVDP example, subservient-class |
 | **E** | n/a — blocked / out-of-scope, document only | n/a | PyHDL-Eval (golden gated), RTL-Repo (wrong metric), MetRex / ResBench (different task / toolchain), CVDP-full (gated) |
 
 ## Honesty (mandatory in any RESULT.md)

@@ -53,6 +53,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -230,6 +231,48 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
             f"(one of {_DENSITY_TOOL_SIGNATURES[:5]}...) — cannot trust"))
         return
 
+    # Is this artefact about THIS design? (vibe-ic#1119, A3_CROSS_DESIGN)
+    #
+    # THE FINDING. Copying `sha256/clean_run_v1427_20260715`'s same-named
+    # artefacts over `spm/v1.9.96_gf180mcuD` and re-running this gate left it
+    # green: rc 0 -> 0. It could not have done otherwise —
+    # `reports/density.{rpt,json}` named no design anywhere, and differed
+    # between the two runs only in their numbers. The tool-signature check
+    # above asks "did a tool write this"; it cannot ask "about what".
+    #
+    # phase3_one_shot_runner now stamps `measured_design:` plus the sha256 of
+    # the DEF the filler read, so the question is answerable. A report written
+    # before that carries no stamp and is recorded NOT_DETERMINED — never
+    # failed for it, because the gap was in the producer and reddening honest
+    # older evidence for it would get this check removed.
+    #
+    # THE STAMP IS NOT A MEASUREMENT. It makes the artefact ATTRIBUTABLE and
+    # nothing more: every substance check below still has to pass, an absent
+    # artefact is still DENSITY_MISSING, and an empty one is still
+    # DENSITY_EMPTY. Both of those are reached BEFORE this point and return.
+    _binding = "NOT_DETERMINED"
+    try:
+        import eda_report_audit as _era
+        _declared = _era._report_declared_designs(text)
+        _own = _era._project_design_names(project_dir)
+    except Exception:                                   # noqa: BLE001
+        _declared, _own = set(), set()
+    if _declared and _own:
+        _foreign = sorted(n for n in _declared if n not in _own)
+        if _foreign:
+            _binding = False
+            findings.append(Finding(
+                "ERROR", "DENSITY_IS_ABOUT_ANOTHER_DESIGN",
+                f"Density artefact states it measured "
+                f"{', '.join(_foreign)}, which this project's Verilog does not "
+                f"declare — this is another design's fill report (#1119 "
+                f"A3_CROSS_DESIGN)"))
+        else:
+            _binding = True
+    stats["design_binding"] = _binding
+    if _binding is False:
+        return
+
     # 1) Per-layer metal CMP density (the genuine 20-80% rule target).
     layers = _parse_layers_from_json(data) if data is not None else []
     if not layers:
@@ -366,6 +409,9 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         "density_checked": False, "per_layer_density": False,
         "layers_ok": 0, "layers_bad": 0, "row_utilization_pct": None,
         "erc_checked": False, "erc_floating_nets": None, "erc_clean": False,
+        # True / False / "NOT_DETERMINED" — a third value, published rather
+        # than resolved into a colour. See _check_density.
+        "design_binding": "NOT_DETERMINED",
     }
     _check_density(project_dir, findings, stats)
     _check_erc(project_dir, findings, stats)
@@ -379,6 +425,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         "project_dir": project_dir,
         "summary": {
             "density_checked": stats["density_checked"],
+            "design_binding": stats["design_binding"],
             "per_layer_density": stats["per_layer_density"],
             "layers_ok": stats["layers_ok"],
             "layers_bad": stats["layers_bad"],
@@ -412,7 +459,7 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     print(out)
 

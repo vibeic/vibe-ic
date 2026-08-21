@@ -1,5 +1,0 @@
-{
-  "ic_name": "USB4 (USB Implementers Forum, Intel Thunderbolt 3 base)",
-  "lab_calibration_present": false,
-  "notes": "USB4 is a digital tunneling protocol; no analog reference/trim/calibration loop at the protocol layer. The Gen 2 / Gen 3 SerDes PHY (and USB4 v2 PAM-3 PHY) includes adaptive equalization + per-lane training during LT-LFPS link bring-up, but that is PHY behavior, not a protocol-level calibration loop."
-}

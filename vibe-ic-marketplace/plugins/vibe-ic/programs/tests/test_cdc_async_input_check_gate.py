@@ -52,5 +52,17 @@ endmodule
 
 
 def test_skip_no_rtl(tmp_path):
+    """ORGANIC #887 — the SKIP this test is named for is now SAID.
+
+    It asserted rc 0, which is the flow's word for "I examined the design and
+    found it correct" — the one thing a scan of zero files has not done. rc 2
+    is this repo's shared input-missing code (`_vacuous_exit.RC_VACUOUS`): the
+    clause still passes (`__check_program_exit_zero` maps rc 2 to a vacuous
+    PASS) and the P0 structural umbrella records a SKIP instead of a plain
+    PASS. The disclosure line is pinned in
+    `test_organic887_zero_file_scan_is_not_a_plain_pass.py`.
+    """
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2
+    assert json.loads((tmp_path / "report.json").read_text())["verdict"] == \
+        "VACUOUS_PASS"

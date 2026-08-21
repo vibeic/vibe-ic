@@ -37,6 +37,7 @@ universal naming scheme); no chip / vendor / SKU literal.
 """
 import importlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -46,15 +47,30 @@ PLUGIN = Path(__file__).resolve().parents[2]
 HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 importlib.reload(G)
 
 _V = "```verilog\n"
+
+# The end-state tests below drive the REAL gate via `G.main`, which by DESIGN
+# refuses (rc=2, writes NOTHING) when `iverilog` (#528) or `yosys` (#604) is
+# absent — that refusal is the anti-false-PASS guard, not a defect. Without
+# this precondition the helper below read a report the gate deliberately never
+# wrote and raised a misleading FileNotFoundError instead of reporting an
+# unmet environment requirement. Same idiom as the sibling cvdp_gate suites
+# (test_v1_0_74_issue715 / test_v1_0_79_issue734). The `Module Name:`
+# extractor tests (root cause #1) are PURE and stay unconditional.
+HAVE_GATE_TOOLS = (shutil.which("iverilog") is not None
+                   and shutil.which("yosys") is not None)
 
 
 def _run(tmp_path, recs, extra=None):
     """Run the REAL gate (G.main) on a drafts JSONL → (report_records,
     passed_ids). End state = each record's verdict + whether it was emitted
     to the scoring responses JSONL."""
+    if not HAVE_GATE_TOOLS:
+        pytest.skip("iverilog/yosys not available — the gate refuses to emit "
+                    "(#528/#604), so its end state cannot be observed")
     b = tmp_path / "drafts.jsonl"
     b.write_text("".join(json.dumps(r) + "\n" for r in recs))
     out = tmp_path / "responses.jsonl"
@@ -112,6 +128,7 @@ def test_filename_extractor_still_works():
 
 # ── (B) THE FIX: id-derived mismatch is ADVISORY (PASS + WARN), not BLOCK ──────
 
+@NEEDS_SIM
 def test_id_derived_mismatch_passes_with_warn_no_prompts(tmp_path):
     """The documented --batch-dir flow (no --prompts): a completion declaring
     the functional top — NOT `cvdp_copilot_<stem>` — must PASS (emitted) with
@@ -129,6 +146,7 @@ def test_id_derived_mismatch_passes_with_warn_no_prompts(tmp_path):
     assert "filename_conformance" not in recs[0]
 
 
+@NEEDS_SIM
 def test_id_derived_advisory_note_is_clearly_advisory(tmp_path):
     """The WARN must SAY it is advisory (the id stem is not the harness top
     for ~97%) so a reader is not misled into thinking it is a real failure."""
@@ -142,6 +160,7 @@ def test_id_derived_advisory_note_is_clearly_advisory(tmp_path):
 
 # ── (C) STRENGTHEN + NO-LEAK: prompt-derived names still hard-block ───────────
 
+@NEEDS_SIM
 def test_module_name_mismatch_is_advisory_not_block(tmp_path):
     """ORGANIC #642 round-2 — a name hint mismatch is ADVISORY (WARN + emit),
     NOT a hard-BLOCK. Even a `Module Name:` hint is not guaranteed to equal the
@@ -164,6 +183,7 @@ def test_module_name_mismatch_is_advisory_not_block(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@NEEDS_SIM
 def test_module_name_match_passes(tmp_path):
     """NO-LEAK: the correctly-named completion for the same prompt PASSes
     (the corrected gate is not a blanket block)."""
@@ -177,6 +197,7 @@ def test_module_name_match_passes(tmp_path):
     assert "cvdp_copilot_foo_0007" in passed
 
 
+@NEEDS_SIM
 def test_filename_pinned_top_is_advisory_not_block(tmp_path):
     """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
     harness TOPLEVEL (the cocotb harness sets TOPLEVEL from the module
@@ -200,6 +221,7 @@ def test_filename_pinned_top_is_advisory_not_block(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@NEEDS_SIM
 def test_prompts_advisory_flag_still_passes(tmp_path):
     """ORGANIC #642 round-2 — `--prompts-advisory` is retained for compat and
     still yields PASS + WARN (conformance is now always advisory regardless of
@@ -217,6 +239,7 @@ def test_prompts_advisory_flag_still_passes(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@NEEDS_SIM
 def test_non_cvdp_id_no_requirement(tmp_path):
     """NO-LEAK: a draft id NOT following the cvdp_copilot_ convention imposes
     no id-derived requirement (gate behaves as before)."""
@@ -230,6 +253,7 @@ def test_non_cvdp_id_no_requirement(tmp_path):
         "module-name-conformance" in n for n in recs[0].get("notes", []))
 
 
+@NEEDS_SIM
 def test_doc_only_unaffected(tmp_path):
     """NO-LEAK: a doc-only completion stays doc_only (no module-name path
     fires)."""
