@@ -91,6 +91,22 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "crosslayer_rewrite_equivalence::module_ports":
+        "Verilog/SystemVerilog module port declarations. The matched text is a "
+        "production of the HDL grammar — `module m(input wire [7:0] a, ...)` in the "
+        "ANSI form and `module m(a, b); input [7:0] a;` in the non-ANSI form — "
+        "written by a synthesis-bound source file, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'a is NOT an input'. A port "
+        "either appears in a declaration or it does not, and absence is already how "
+        "this function reports it (the name is simply not in the returned list, and "
+        "the caller turns an empty list into NOT_MEASURED rather than into an "
+        "empty-but-fine wrapper). This is the same class as the already-exempted "
+        "digital_hardmacro_gen::read_interface and _pad_ring::parse_def. The two "
+        "defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) "
+        "both read English design documents, where denial is spellable and was "
+        "spelled; consulting `_prose_polarity` on a port list would add a branch "
+        "that can never fire, and a call that can never fire is a green light "
+        "rather than a check.",
     "macro_obs_geometry_intersect_check::parse_via_layers":
         "LEF/DEF 5.8 VIAS section. The matched text is `- <viaName> ... "
         "+ LAYERS <lower> <cut> <upper> ;` — a production of the DEF grammar, "
@@ -142,6 +158,103 @@ _NOT_PROSE: Dict[str, str] = {
         "would not import. Contrast the two defects this gate was built from "
         "(#706 pdk_target, #711 die_area_budget_um): both read English design "
         "documents, where denial is spellable and was spelled.",
+    "pytest_per_file_junit::_admit":
+        "Progress-stream FILENAMES in a parent-owned directory. The matched "
+        "text is ONE POSIX path component, minted by this repo's own "
+        "`_pytest_progress_plugin.pytest_configure` in exactly two forms -- "
+        "`m.<pid>.<ppid>.jsonl` and `w.<workerid>.<pid>.<ppid>.jsonl` -- and "
+        "both patterns are anchored `\\A...\\Z`, so the ENTIRE subject IS the "
+        "token: there is no surrounding text for a denial to live in, and a "
+        "path component has no form that says 'this stream is NOT from pid "
+        "41'. A name that does not match is not ignored, it REFUSES the whole "
+        "set (`unexpected file in progress directory`), so absence is already "
+        "reported more strictly than any polarity branch could report it. "
+        "What the function writes -- `self.streams[name]` and "
+        "`self.kinds[name]` -- is a demultiplexing key for an open probe, not "
+        "a value published as a declaration that a neighbouring sentence "
+        "could retract; and the one claim the name does carry, the owning "
+        "pid, is not believed either -- it is re-checked against the launched "
+        "process and a mismatch refuses the set. Contrast the two defects "
+        "this gate was built from (#706 pdk_target, #711 die_area_budget_um): "
+        "both read English design documents, where denial is spellable and "
+        "was spelled. Consulting `_prose_polarity` on a directory entry would "
+        "add a branch that can never fire, and a call that can never fire is "
+        "a green light rather than a check.",
+    "_pad_ring::parse_def":
+        "LEF/DEF 5.8 UNITS / DIEAREA / COMPONENTS records. The matched text is "
+        "`UNITS DISTANCE MICRONS <n> ;`, `DIEAREA ( x y ) ( x y ) ;` and the "
+        "COMPONENTS entry form `- <inst> <master> + PLACED ( x y ) <orient> ;` "
+        "-- productions of the DEF grammar emitted by the floorplanner, in "
+        "which there is no form that DENIES a placement: DEF gives no way to "
+        "write 'this instance is NOT placed at ( 0 0 )'. A record that is "
+        "absent is already reported as absent -- a missing UNITS or DIEAREA "
+        "RAISES DefError rather than defaulting -- so absence is refused, not "
+        "silently read as a value. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "_pad_ring::parse_lef_macros":
+        "LEF 5.8 MACRO / SIZE records. The matched text is `MACRO <name>` and "
+        "`SIZE <w> BY <h> ;`, productions of the LEF grammar emitted by the "
+        "PDK's own cell library, in which there is no form that DENIES a "
+        "footprint: LEF gives no way to write 'this macro is NOT 30 BY 180'. "
+        "A MACRO carrying no SIZE simply does not enter the returned map, so "
+        "absence is reported by absence rather than by a negated value, and "
+        "the body of each macro is bounded at its own END so no neighbouring "
+        "text can lend it one. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "_pad_ring::parse_lef_sites":
+        "LEF 5.8 SITE declarations. The matched text is the top-level `SITE "
+        "<name>` form with its CLASS and SIZE, a production of the LEF grammar "
+        "emitted by the PDK, in which there is no form that DENIES a site: LEF "
+        "gives no way to write 'this site is NOT CORE'. The function already "
+        "distinguishes the two syntactic roles the same keyword plays -- a "
+        "top-level SITE that DECLARES one, versus the `SITE <name> ;` "
+        "reference inside a MACRO that only names one -- which is a grammar "
+        "question, not a polarity question. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_check::parse_lef":
+        "LEF 5.8 MACRO / SIZE / ORIGIN / PIN records read as the delivered "
+        "abstract's interface. Every matched token is a production of the LEF "
+        "grammar written by Magic's LEF writer, in which there is no form that "
+        "DENIES a pin: LEF gives no way to write 'this macro does NOT have a "
+        "pin named clk'. A pin that is not declared is not in the returned "
+        "set, and the gate's verdict is built from the DECLARATION being "
+        "present, never from a bad token being absent. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_check::parse_liberty":
+        "Liberty `cell` / `pin` / `pg_pin` groups read as the timing view's "
+        "interface. The matched text is a production of the Liberty grammar "
+        "emitted by the characterisation tool, in which there is no form that "
+        "DENIES a pin. This function is already built around exactly the "
+        "hazard polarity guards against, one level lower: it STRIPS COMMENTS "
+        "FIRST and requires the DECLARATION to be present, because "
+        "`analog_hardmacro_check` recorded a Liberty containing only `/* the "
+        "release was cancelled */` satisfying a bare `\"cell\" in text` test "
+        "on the letters inside the word cancelled. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_gen::read_interface":
+        "The DEF PINS section. The matched text is the entry form `- <pinName> "
+        "+ NET <net> + DIRECTION <dir> + USE <use> ;` -- a production of the "
+        "DEF grammar emitted by the place-and-route tool, in which there is no "
+        "form that DENIES a pin's direction or USE class: DEF gives no way to "
+        "write 'this pin is NOT POWER'. The USE scan deliberately reuses the "
+        "SAME entry split as the shared `parse_def_pins` reader so the two "
+        "cannot disagree about what an entry is, and a pin carrying no USE "
+        "records the empty string rather than guessing a class. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "crosslayer_rewrite_equivalence::module_ports":
+        "A Verilog-2005 / SystemVerilog MODULE HEADER. The matched text is "
+        "`module <name> #(...) (...) ;` and, inside it, the port declaration "
+        "form `input|output|inout [wire|reg|logic] [signed] [<range>] <name>` "
+        "-- productions of the HDL grammar, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'this module does NOT "
+        "have an input named clk'. What the function returns is not a claim "
+        "about the design read out of a sentence; it IS the module's "
+        "interface, the same text the frontend elaborates, and the frontend "
+        "-- not a neighbouring comment -- is what decides whether the port "
+        "exists. A comment reading `// b is not used` leaves `b` in the "
+        "elaborated interface, so honouring it would make this reader "
+        "disagree with the compiler that consumes the wrapper it builds. A "
+        "module that is not found returns [] and the caller turns that into "
+        "NOT_MEASURED rather than an empty-but-fine wrapper, so absence is "
+        "refused rather than read as a value. The two defects this gate was "
+        "built from (#706 pdk_target, #711 die_area_budget_um) both read "
+        "English design documents, where denial is spellable and was spelled; "
+        "the direct precedents here are `digital_hardmacro_gen::read_interface` "
+        "(DEF PINS) and `digital_hardmacro_check::parse_lef` above.",
 }
 
 

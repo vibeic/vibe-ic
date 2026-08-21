@@ -46,9 +46,10 @@
 # =========================================
 #     PASS         the gate ran and found nothing
 #     FAIL         the gate ran and found something
-#     NOT_CHECKED  the gate REFUSED — it could not look (rc 2 from a
-#                  `run_tolerating_uncheckable` gate, e.g. host-independence on
-#                  a dirty tree). Never folded into PASS: "I could not look"
+#     NOT_CHECKED  the gate REFUSED — it could not look (rc 2 from a dated
+#                  `run_tolerating_uncheckable` gate, or from the dispatcher's
+#                  private blocking population-refusal mode). Never folded into
+#                  PASS: "I could not look"
 #                  must not reach a reader as "I looked and it was clean".
 #                  This is the `_vacuous_exit` convention one level up.
 #     LISTED       declared but deliberately not executed (`--list`).
@@ -74,6 +75,11 @@
 # is load-bearing: without it the guard cannot see the class that caused the
 # trouble, and would report clean over exactly the leftovers it exists to find.
 #
+# THAT BRACKET IS ONLY ATTRIBUTABLE WHEN ONE GATE RUNS INSIDE IT, so
+# `gate_dispatch_init` forces `GATE_DISPATCH_JOBS` to 1 whenever the guard is
+# ACTIVE, and says so. The reasoning, and the measurement that made it
+# necessary, are written at that line.
+#
 # A GENUINE PRODUCER declares itself with `run_writing_the_corpus`, the same way
 # a gate that may legitimately refuse declares itself with
 # `run_tolerating_uncheckable`. Declared in the wrapper NAME and not in a comment
@@ -95,10 +101,12 @@
 # and the CONSUMER alone — the sweep said it had not checked, and passed as if
 # it had.
 #
-# There was also no ratchet. NOT_CHECKED is reachable ONLY through
-# `run_tolerating_uncheckable` + rc 2 — a missing binary (rc 127), an uncaught
-# exception (rc 1) and a plain `run` exiting 2 all become FAIL, which is loud,
-# and that part was sound. But `run` -> `run_tolerating_uncheckable` is a
+# There was also no ratchet. A gate-authored NOT_CHECKED is reachable only
+# through `run_tolerating_uncheckable` + rc 2; the separate dispatcher-owned
+# population refusal is always blocking and cannot consume an exemption. A
+# missing binary (rc 127), an uncaught exception (rc 1) and a plain `run`
+# exiting 2 all become FAIL, which is loud, and that part was sound. But
+# `run` -> `run_tolerating_uncheckable` is a
 # ONE-WORD edit that converts a gate's every rc-2 refusal into a tolerated
 # non-verdict, and nothing objected. The count could go 0 -> 3 with the only
 # trace a log line nobody exits non-zero on, and each increment subtracted a
@@ -182,6 +190,12 @@ GATE_DISPATCH_CORPUS_REL="${GATE_DISPATCH_CORPUS_REL:-benchmark-data}"
 GATE_DISPATCH_CORPUS_BLIND=0
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
+# Parallel to GATE_LABELS, but intentionally not serialized: this is a local
+# control bit used only by the dispatcher closing policy.  The legacy
+# synthetic EMPTY row is unexempted but non-blocking for bootstrap
+# compatibility; an explicitly opted-in, process-attested population refusal
+# is blocking.  A consumer must infer neither policy from a missing exemption.
+declare -a GATE_BLOCKING_REFUSAL=()
 
 # --- LOOP-DRIVEN GATES SAY HOW MANY ITEMS THEY EXPANDED OVER (vibe-ic#957) --
 # Three of this repo's gates are wired once and executed once per PUBLISHED
@@ -207,9 +221,10 @@ GATE_DISPATCH_CORPUS_IDX=0
 GATE_DISPATCH_CORPUS_TOTAL=0
 #: One entry per `gate_dispatch_over` call: what it was called, how many items
 #: it expanded over, how many gates that produced, and whether the producer
-#: itself succeeded. A corpus that expands to ZERO declares no gate at all, so
-#: nothing else in this record can carry it — which is exactly the case a
-#: reader most needs told.
+#: itself succeeded. The default keeps the legacy synthetic EMPTY declaration.
+#: A trusted caller may explicitly opt into the process-attested structural
+#: population mode; phase 1 installs that mechanism dormant and phase 2 turns
+#: it on only at the routed-corpus call site.
 declare -a GATE_CORPUS_NAMES=() GATE_CORPUS_ITEMS=() GATE_CORPUS_GATES=()
 declare -a GATE_CORPUS_STATE=()
 #: Parallel to GATE_LABELS: which corpus (if any) each gate came from.
@@ -500,6 +515,65 @@ checked for expiry"
          "gate while calling itself a shard" >&2
     exit 2
   fi
+  # THE CORPUS-WRITE GUARD NEEDS AN EXCLUSIVE WINDOW, so when it is ACTIVE the
+  # gates run one at a time.
+  #
+  # WHAT WENT WRONG. `_gate_execute` brackets each gate with a snapshot of the
+  # whole corpus and attributes the difference to THAT gate. That attribution is
+  # sound only while one gate runs at a time. #P4 made the default eight, so one
+  # gate's write now lands inside every concurrently-running gate's bracket and
+  # every one of them is recorded as a writer. MEASURED at v1.10.55 on the
+  # two-gate fixture in `test_corpus_write_guard.py` — one writer, one reader:
+  #
+  #     JOBS=1   wrote_corpus 1   passed 1   a writer WROTE_CORPUS / a reader PASS
+  #     JOBS=8   wrote_corpus 2   passed 0   BOTH recorded WROTE_CORPUS
+  #
+  # The reader wrote nothing. `git status` is a fact about the TREE, and the two
+  # brackets span the same instant, so it answers both of them identically: no
+  # tree-only observation can separate a writer from a gate that merely
+  # overlapped it. The choice is therefore between naming the wrong gate and
+  # running the watched gates one at a time, and #P4's own acceptance test
+  # settles it — "the set of (label -> state) pairs ... faster and different is a
+  # failure" (`test_gate_concurrency.sh`). A guard that names an innocent gate
+  # sends the next reader to the wrong file, which is the harm that test's case 1
+  # exists to prevent; it simply had no corpus-writer case, which is why this
+  # landed green.
+  #
+  # AND THE REST OF THE TIER IS BUILT ON THE CLAIM THIS RESTORES.
+  # `test_issue1087_write_guard_states_it_cannot_attribute.py` divides the two
+  # landing write guards by exactly this property — "`_gate_dispatch.sh`, per
+  # gate, CAN attribute" against the whole-tier snapshot in `gatekeeper-land.sh`
+  # that "names PATHS, never a gate", and #1087 is the record of what a false
+  # accusation cost when a reader took the nearest gate name off the log. The
+  # per-gate half stopped being able to attribute at v1.10.55 and nothing said
+  # so, so that division had quietly become untrue on the side it relies on.
+  #
+  # THIS IS THE RULE THE FILE ALREADY HAS, applied where it was missed. A
+  # declared producer (`run_writing_the_corpus`) is already forced serial two
+  # hundred lines below, "so that wiring one cannot silently make the corpus
+  # guard meaningless for the rest of the run" — and an UNDECLARED writer, which
+  # is the guard's actual subject, does exactly that and cannot be declared in
+  # advance. The only thing that covers it is the exclusive window.
+  #
+  # WHAT IT COSTS, and where. `benchmark-data/` moved to vibeic/benchmark-data at
+  # v1.10.60 and no longer exists in this repository, so the guard is INACTIVE on
+  # a plain checkout and the pool is untouched there — every number #P4 measured
+  # still stands on the tree CI runs. A checkout that has cloned the corpus back
+  # in-tree is the one that pays, and it is also the one where an invisible
+  # leftover costs hours, which is the trade this guard was landed to make.
+  #
+  # SAID OUT LOUD rather than inferred from a stopwatch: a run that quietly took
+  # six times as long for a reason nobody printed is its own defect.
+  if [ "$GATE_DISPATCH_JOBS" -gt 1 ] && [ "$GATE_DISPATCH_LIST_ONLY" -eq 0 ] \
+     && _gate_dispatch_corpus_state >/dev/null 2>&1; then
+    echo "gate_dispatch: the corpus-write guard is ACTIVE" \
+         "($(_gate_dispatch_corpus_root)/$GATE_DISPATCH_CORPUS_REL), so gates" \
+         "run ONE AT A TIME instead of $GATE_DISPATCH_JOBS at a time: a" \
+         "per-gate before/after snapshot of a SHARED tree can only be" \
+         "attributed to the gate that ran alone inside it, and a run that names" \
+         "the wrong writer is worse than a slower one." >&2
+    GATE_DISPATCH_JOBS=1
+  fi
 }
 
 #: True when this host owns `$1`. Whole-line match against the plan, so one
@@ -557,8 +631,14 @@ _gate_dispatch_corpus_state() {
   fi
 }
 
-# `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
+# `_dispatch <rc2_mode> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
 # place a gate is executed and the ONE place its outcome is recorded.
+#
+# rc2_mode is 0 for an ordinary gate, 1 for a gate carrying a dated exemption,
+# and 2 for a dispatcher-owned structural refusal.  Mode 2 is deliberately
+# private: an empty/undetermined population must leave normal process evidence
+# and exactly one shard owner, but it must never acquire the non-fatal tolerance
+# that a human may buy with `uncheckable_until`.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   # vibe-ic#584 — consume the pending exemption FIRST and unconditionally, so a
@@ -584,9 +664,14 @@ precedes it — tolerance has to be bought, not defaulted into"
     _gate_wiring_error "\"$label\" carries an 'uncheckable_until $ex_until' \
 exemption but is wired with a wrapper that can never report NOT_CHECKED — the \
 exemption describes a state this gate cannot reach"
+  elif [ "$tolerate" -eq 2 ] && [ -n "$ex_until" ]; then
+    _gate_wiring_error "\"$label\" is a dispatcher-owned population refusal \
+and cannot consume an uncheckable exemption — an unknown denominator must \
+remain blocking"
   fi
   GATE_EX_UNTIL+=("$ex_until"); GATE_EX_WHY+=("$ex_why")
   GATE_LABELS+=("$label")
+  GATE_BLOCKING_REFUSAL+=("$([ "$tolerate" -eq 2 ] && echo 1 || echo 0)")
   #: One append per gate, at the SAME point as the label, because the record is
   #: read by index: a scope appended on only some code paths would attribute one
   #: gate's scope to another gate's verdict.
@@ -617,6 +702,15 @@ exemption describes a state this gate cannot reach"
     echo "$shown"
     return 0
   fi
+  # vibe-ic#1144 — choose the unique shard owner BEFORE evaluating scope.
+  # Scope is a precomputed verdict, not a replicated declaration: evaluating
+  # it first made every shard claim the same OUT_OF_SCOPE row and the aggregate
+  # correctly refused the duplicate owners.  Non-owners carry OTHER_SHARD;
+  # exactly one owner may then prove and record the scope miss.
+  if ! _gate_dispatch_owns "$label"; then
+    GATE_STATES+=("OTHER_SHARD"); GATE_SECONDS+=("0")
+    return 0
+  fi
   # #P3 — the gate declared what it reads, and this change touched none of it.
   #
   # ITS OWN STATE, deliberately not folded into any existing one. It is not a PASS
@@ -645,16 +739,6 @@ exemption describes a state this gate cannot reach"
       printf '  SKIP  %s  — reads [%s]; this change touches none of it\n' \
         "$shown" "$scope"
     fi
-    return 0
-  fi
-  # vibe-ic#1144 — declared here, executed on another host. Its OWN state: not
-  # a pass (nothing ran), not LISTED (this is not --list), not NOT_CHECKED
-  # (nothing refused). The aggregator reconciles the shards' records and proves
-  # every gate ran exactly once; without a distinct state it could not tell
-  # "another host owns this" from "nobody does", and a shard that died would
-  # shrink the denominator silently.
-  if ! _gate_dispatch_owns "$label"; then
-    GATE_STATES+=("OTHER_SHARD"); GATE_SECONDS+=("0")
     return 0
   fi
   # #P4 — from here down the gate is EXECUTED, and that is the only part that
@@ -714,14 +798,11 @@ exemption describes a state this gate cannot reach"
 #:   * no flock on the host -> DO NOT write unlocked. An interleaved record makes
 #:     the consumer refuse the whole comparison at random under load, which is
 #:     worse than a named refusal here.
-#:   * lock not acquired within the timeout -> also a refusal. A gate that gave up
-#:     waiting and wrote anyway is the interleaving this exists to prevent.
+#:   * lock acquisition is blocking and owned by the enclosing shard supervisor.
+#:     Owner death releases the kernel flock; the supervisor's semantic
+#:     progress contract, not an elapsed lock timeout, decides a stalled shard.
 #: Both return non-zero, and every caller turns that into PROCESS ATTESTATION
 #: FAILED — never into a silent success.
-#:
-#: 120 s is far above any observed contention (83 gates, 8 workers, each append is
-#: a few milliseconds) and far below the enclosing gate's own bound, so a timeout
-#: here means something is genuinely wedged rather than merely busy.
 _gate_attest_locked() {
   local target="$1"; shift
   if ! command -v flock >/dev/null 2>&1; then
@@ -730,7 +811,7 @@ _gate_attest_locked() {
          "which the consumer refuses for the WHOLE comparison" >&2
     return 1
   fi
-  flock --timeout 120 "${target}.lock" \
+  flock "${target}.lock" \
     python3 "$GATE_DISPATCH_ATTESTATION_HELPER" "$@"
 }
 
@@ -749,6 +830,9 @@ _gate_execute() {
     if [ -f "$GATE_DISPATCH_ATTESTATION_HELPER" ]; then
       capture="$(mktemp "${GATE_DISPATCH_ATTESTATION_FILE}.gate.XXXXXX")"
       local -a _pipe_rc=()
+      local -a _attest_extra_roots=()
+      [ -z "${VIBE_IC_BENCHMARK_DATA:-}" ] \
+        || _attest_extra_roots=(--root "$VIBE_IC_BENCHMARK_DATA")
       # One combined stream is intentional: it is the process evidence a human
       # sees in the landing log, and tee keeps that stream live while the helper
       # derives the machine record from the exact same bytes.
@@ -767,7 +851,9 @@ _gate_execute() {
       elif ! _gate_attest_locked "$GATE_DISPATCH_ATTESTATION_FILE" \
           --label "$label" --returncode "$rc" --output-log "$capture" \
           --append-jsonl "$GATE_DISPATCH_ATTESTATION_FILE" \
-          --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
+          --root "${ROOT:-$wd}" --root "$wd" \
+          "${_attest_extra_roots[@]}" \
+          -- "$@"; then
         GATE_DISPATCH_ATTESTATION_FAILED=1
         echo "   ^^ PROCESS ATTESTATION FAILED: $label — the gate ran, but its" \
              "machine verdict record was not written; host comparison will" \
@@ -777,7 +863,9 @@ _gate_execute() {
            && ! _gate_attest_locked "$GATE_DISPATCH_PROGRESS_FILE" \
           --label "$label" --returncode "$rc" --output-log "$capture" \
           --append-jsonl "$GATE_DISPATCH_PROGRESS_FILE" \
-          --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
+          --root "${ROOT:-$wd}" --root "$wd" \
+          "${_attest_extra_roots[@]}" \
+          -- "$@"; then
         GATE_DISPATCH_ATTESTATION_FAILED=1
         echo "   ^^ PROCESS PROGRESS MIRROR FAILED: $label — the gate ran, but" \
              "its live completion event was not preserved; this run cannot" \
@@ -822,7 +910,17 @@ _gate_execute() {
       return 0
     fi
   fi
-  if [ "$rc" -eq 0 ]; then
+  if [ "$tolerate" -eq 2 ] && [ "$rc" -eq 2 ]; then
+    _GX_STATE="NOT_CHECKED"
+    echo "   ^^ NOT CHECKED (rc 2, BLOCKING; no exemption): $label [${secs}s]" >&2
+  elif [ "$tolerate" -eq 2 ]; then
+    # A structural refusal has one truthful process outcome: rc 2.  If its
+    # evidence process returned anything else, do not let rc 0 manufacture a
+    # PASS for the unknown population it was created to expose.
+    _GX_STATE="FAIL"
+    echo "   ^^ FAILED: structural population evidence returned rc $rc" \
+         "instead of rc 2: $label [${secs}s]" >&2
+  elif [ "$rc" -eq 0 ]; then
     _GX_STATE="PASS"
   elif [ "$tolerate" -eq 1 ] && [ "$rc" -eq 2 ]; then
     _GX_STATE="NOT_CHECKED"
@@ -1087,8 +1185,8 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # body to quote: the count then cannot be stale, cannot be typed by hand, and
 # cannot be omitted — every gate the body declares is bracketed by an expansion
 # that knows both the index and the total, and a corpus that expands to ZERO
-# still leaves a record even though it declares no gate. A `for` written next to
-# this primitive instead of through it is caught by the site counter in
+# leaves a blocking structural gate. A `for` written next to this primitive
+# instead of through it is caught by the site counter in
 # `_dispatch` and NAMED in the roll-up; it is not silently trusted.
 #
 # THE PRODUCER'S EXIT STATUS IS KEPT. `git ls-files` inside a non-repository
@@ -1096,9 +1194,42 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # "the corpus is empty" — the same distinction `NOT_CHECKED` draws for a gate.
 # Its stderr is deliberately NOT swallowed: a producer that failed should say
 # why, in the log, on the line above the disclosure that it produced nothing.
+_gate_dispatch_population_refusal() {
+  # The producer argv remains in "$@" after the four evidence fields.  It is
+  # intentionally not executed twice; `_gate_execute` passes the complete argv
+  # to gate_process_attestation, binding the structural verdict to the exact
+  # producer command that established it.
+  local kind="$1" corpus="$2" producer_rc="$3" item_count="$4"; shift 4
+  case "$kind" in
+    empty)
+      echo "[NOT_CHECKED] EMPTY CORPUS \"$corpus\": producer rc" \
+           "$producer_rc yielded $item_count item(s); the per-item gates had" \
+           "nothing to examine."
+      ;;
+    producer_failed)
+      echo "[NOT_CHECKED] CORPUS PRODUCER FAILED for \"$corpus\":" \
+           "rc $producer_rc after $item_count partial item(s); the denominator" \
+           "is unknown."
+      ;;
+    *)
+      echo "[ERROR] unknown dispatcher population refusal kind: $kind" >&2
+      return 1
+      ;;
+  esac
+  return 2
+}
+
 gate_dispatch_over() {
   local corpus="$1" body="$2"; shift 2
   local out="" rc=0 line i
+  local attest_population="${GATE_DISPATCH_ATTEST_POPULATION:-0}"
+  case "$attest_population" in
+    0|1) ;;
+    *)
+      _gate_wiring_error "GATE_DISPATCH_ATTEST_POPULATION must be exactly 0 or 1"
+      attest_population=0
+      ;;
+  esac
   local -a items=()
   out="$("$@")" || rc=$?
   # `[ -n "$line" ]` because a here-string over an EMPTY producer still yields
@@ -1120,39 +1251,53 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
     GATE_DISPATCH_ITEM_NOTE="[item $GATE_DISPATCH_CORPUS_IDX of $n over $corpus]"
     "$body" "${items[$i]}"
   done
+  # AN EMPTY OR UNDETERMINED CORPUS MAY LEAVE A REAL GATE BEHIND
+  # (vibe-ic#1075/#1739), but only through an explicit trusted call-site opt-in.
+  #
+  # This used to append a synthetic row to the arrays by hand.  That bypassed
+  # the common dispatcher, so all eight shards recorded themselves as owners
+  # while none ran a process and none emitted an attestation.  Arm A and Arm B
+  # then both had zero pieces of evidence for a gate the denominator listed.
+  #
+  # Phase 1 must remain declaration/state compatible with the currently
+  # trusted gate: by default an empty corpus still gets its exact legacy
+  # synthetic NOT_CHECKED row and no process attestation.  Phase 2 opts in at
+  # the routed-corpus wiring site; only then does the structural result traverse
+  # `_dispatch`/`_gate_execute`, acquire exactly one shard owner and process
+  # attestation, and block as an unexempted refusal.
   GATE_DISPATCH_ITEM_NOTE=""
-  GATE_DISPATCH_CORPUS_CUR=""
   GATE_DISPATCH_CORPUS_IDX=0
-  GATE_DISPATCH_CORPUS_TOTAL=0
-  # AN EMPTY CORPUS MUST LEAVE A GATE BEHIND (vibe-ic#1075).
-  #
-  # Until this existed, `n == 0` ran the body zero times, declared zero gates,
-  # and cost the run NOTHING: the roll-up printed "no gate in this run reports
-  # that, because none exists" and the script's exit status was unaffected. So
-  # a corpus that silently emptied — a glob that stopped matching, a corpus
-  # withdrawn from publication — read exactly like a corpus with nothing wrong
-  # in it. MEASURED: `published cells carrying a routed DEF` is 1 item on
-  # origin/main and 0 on the withdrawal branch, and at 0 the three gates it
-  # dispatches simply cease to exist with no verdict anywhere.
-  #
-  # A synthetic NOT_CHECKED gate is the honest record, and it is not a new
-  # tier: NOT_CHECKED already means "the gate REFUSED — it could not look
-  # (rc 2)", which is exactly the state of a gate with nothing to look at. It
-  # is deliberately NOT a FAIL — an empty corpus is not a broken design, and
-  # calling it one would make every host without published evidence red for a
-  # reason that is about the corpus. But it is never a silent PASS.
-  if [ "$n" -eq 0 ] && [ "$rc" -eq 0 ]; then
-    GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
-    GATE_STATES+=("NOT_CHECKED")
+  if [ "$attest_population" -eq 1 ] && [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
+    GATE_DISPATCH_ITEM_NOTE="[population: producer rc 0, 0 item(s) over $corpus]"
+    _dispatch 2 0 \
+      "corpus \"$corpus\" is EMPTY — nothing was checked over it" \
+      "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
+      empty "$corpus" "$rc" "$n" "$@"
+  elif [ "$attest_population" -eq 1 ] && [ "$rc" -ne 0 ]; then
+    GATE_DISPATCH_ITEM_NOTE="[population: producer rc $rc, $n partial item(s) over $corpus]"
+    _dispatch 2 0 \
+      "corpus \"$corpus\" producer FAILED — denominator unknown" \
+      "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
+      producer_failed "$corpus" "$rc" "$n" "$@"
+  elif [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
+    # Exact legacy bootstrap record: one structural row, no process execution
+    # and therefore no process attestation.  This branch can be deleted only
+    # after the trusted transition judge has observed the phase-2 expansion.
+    local legacy_label="corpus \"$corpus\" is EMPTY — nothing was checked over it"
+    GATE_LABELS+=("$legacy_label")
+    # Preserve the legacy no-process record while repairing its shard
+    # ownership: only the deterministically assigned shard may carry the
+    # structural NOT_CHECKED row; every other shard declares OTHER_SHARD.
+    if _gate_dispatch_owns "$legacy_label"; then
+      GATE_STATES+=("NOT_CHECKED")
+    else
+      GATE_STATES+=("OTHER_SHARD")
+    fi
     GATE_SECONDS+=("0")
-    # IN LOCKSTEP, and that is the whole point: every reader below indexes these
-    # arrays by the SAME `i` out of `${#GATE_LABELS[@]}`. This synthetic row was
-    # appending six of the eight, so `GATE_EX_UNTIL[$i]` was unbound for it and
-    # `set -u` killed the run at the expiry sweep — a corpus that expands over
-    # nothing took the whole dispatcher down. It carries no exemption, so the
-    # honest value is empty, which every reader already treats as "none".
+    GATE_BLOCKING_REFUSAL+=("0")
     GATE_EX_UNTIL+=("")
     GATE_EX_WHY+=("")
+    GATE_SCOPES+=("")
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
@@ -1160,6 +1305,10 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
 the gates it would have dispatched did not run. Recorded NOT_CHECKED so the run \
 carries a verdict for it instead of no verdict at all."
   fi
+  GATE_DISPATCH_ITEM_NOTE=""
+  GATE_DISPATCH_CORPUS_CUR=""
+  GATE_DISPATCH_CORPUS_IDX=0
+  GATE_DISPATCH_CORPUS_TOTAL=0
   GATE_CORPUS_NAMES+=("$corpus")
   GATE_CORPUS_ITEMS+=("$n")
   GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
@@ -1173,8 +1322,8 @@ carries a verdict for it instead of no verdict at all."
 # One line per corpus, printed with the roll-up. It states the DENOMINATOR the
 # loop expanded over, so a count of green gates cannot be read as a count of
 # items — including when the expansion produced exactly one, and especially
-# when it produced none, which is the only case that leaves no gate behind to
-# speak for itself.
+# when it produced none, where the blocking population gate is the only gate
+# that can speak for the absent per-item denominator.
 _gate_dispatch_corpora_rollup() {
   local declared="$1" i n name items gates
   n=${#GATE_CORPUS_NAMES[@]}
@@ -1183,18 +1332,20 @@ _gate_dispatch_corpora_rollup() {
     name="${GATE_CORPUS_NAMES[$i]}"
     items="${GATE_CORPUS_ITEMS[$i]}"
     gates="${GATE_CORPUS_GATES[$i]}"
-    if [ "$items" -eq 0 ]; then
+    if [ "${GATE_CORPUS_STATE[$i]}" = "PRODUCER_FAILED" ]; then
+      echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED" \
+           "after $items partial item(s), so the denominator is UNKNOWN;" \
+           "$gates gate(s), including the blocking population verdict, were" \
+           "declared"
+    elif [ "$items" -eq 0 ]; then
       echo "repo_hygiene_gates: loop corpus \"$name\" expanded over 0 item(s)" \
-           "— it declared 0 gate(s) and NOTHING was checked over it; no gate" \
-           "in this run reports that, because none exists"
+           "— its per-item gates did not run and NOTHING was checked over it;" \
+           "$gates blocking population gate(s) report that absence"
     else
       echo "repo_hygiene_gates: loop corpus \"$name\" expanded over $items" \
            "item(s) -> $gates of $declared declared gate(s); those verdicts" \
            "cover $items item(s), NOT the corpus at large"
     fi
-    [ "${GATE_CORPUS_STATE[$i]}" = "EXPANDED" ] || \
-      echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED," \
-           "so even that item count is a floor and not the corpus"
   done
 }
 
@@ -1338,6 +1489,10 @@ doc = {
     # and another host is responsible for it. The aggregator needs the
     # distinction to prove single coverage.
     "other_shard": n("OTHER_SHARD"),
+    # Declared but inapplicable on this tree under a machine-checkable scope.
+    # Kept separate from both ran and deferred so coverage consumers can prove
+    # the full denominator exactly: ran + out_of_scope + other_shard/deferred.
+    "out_of_scope": n("OUT_OF_SCOPE"),
     "shard": SHARD,
     # vibe-ic#957 — `declared` counts GATES. A loop-driven gate's subject is an
     # ITEM, and three green gates over one item is not three items checked.
@@ -1345,6 +1500,15 @@ doc = {
     # because a corpus that expanded to zero is invisible in `gates` by
     # construction and is the case a reader most needs told.
     "corpora": corpora,
+    # The benchmark corpus is a separate repository.  Its path is deliberately
+    # NOT an identity (A2 and B2 use different private worktrees); the immutable
+    # commit measured once by the outer verifier is.  Always carry the key so a
+    # consumer can distinguish an older record from a run that explicitly had
+    # no bound benchmark input.
+    "corpus_inputs": {
+        "benchmark_data_sha": (
+            os.environ.get("GATEKEEPER_BENCHMARK_DATA_SHA") or None),
+    },
     # Loops wired around the dispatcher instead of through it: their
     # denominator is unknown, and unknown is recorded rather than assumed 1.
     "undisclosed_loops": undisclosed,
@@ -1382,9 +1546,10 @@ gate_dispatch_finish() {
   # below could state `declared` and `notchecked`; none of them could state how
   # many gates reached a VERDICT, or how many of those were red, because
   # nothing here added either up.
-  local failed=0 decided=0 elsewhere=0 ran=0
+  local failed=0 decided=0 elsewhere=0 outofscope=0 ran=0
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
-  local refused="" writers="" expired="" nexpired=0
+  local refused="" unexempted="" writers="" expired="" nexpired=0
+  local nunexempted=0
 
   if [ "$GATE_DISPATCH_ATTESTATION_FAILED" -ne 0 ]; then
     _gate_wiring_error "one or more gate processes completed without a "\
@@ -1489,6 +1654,7 @@ after the last gate and attaches to nothing"
       # vibe-ic#1144 — declared here, owned by another host. Not something this
       # run declined to decide; something it was never asked to.
       OTHER_SHARD) elsewhere=$(( elsewhere + 1 )) ;;
+      OUT_OF_SCOPE) outofscope=$(( outofscope + 1 )) ;;
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}"
@@ -1511,6 +1677,10 @@ after the last gate and attaches to nothing"
           refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})"
         else
           refused="$refused (NO EXEMPTION DECLARED)"
+          if [ "${GATE_BLOCKING_REFUSAL[$i]:-0}" -eq 1 ]; then
+            nunexempted=$(( nunexempted + 1 ))
+            unexempted="${unexempted:+$unexempted, }${GATE_LABELS[$i]}"
+          fi
         fi ;;
       WROTE_CORPUS)
         wrote=$(( wrote + 1 ))
@@ -1522,7 +1692,7 @@ after the last gate and attaches to nothing"
   # rc is never classified, because what it did was change the tree every gate
   # after it read. OTHER_SHARD is not this host's question at all.
   decided=$(( passed + failed ))
-  ran=$(( declared - elsewhere ))
+  ran=$(( declared - elsewhere - outofscope ))
 
   if [ "$wrote" -ne 0 ]; then
     # Named separately from a plain FAIL and BEFORE it: a gate that modified
@@ -1563,6 +1733,18 @@ after the last gate and attaches to nothing"
          "$nexpired uncheckable exemption(s) are PAST their review date and" \
          "this is NOT a pass: $expired (${total}s)" >&2
     exit 1
+  fi
+
+  # Dispatcher-owned population refusals deliberately carry NO exemption.
+  # They are not wiring errors — they are the truthful verdict for an empty or
+  # undetermined denominator — but they are also never permission to land.
+  # This branch is independent of ZERO DECIDED: one structural refusal among
+  # seventy PASSes still means the claimed population was not checked.
+  if [ "$nunexempted" -ne 0 ]; then
+    echo "repo_hygiene_gates: $nunexempted UNEXEMPTED NOT_CHECKED gate(s)" \
+         "block this run; no complete verdict exists for: $unexempted" \
+         "(${total}s)" >&2
+    exit 2
   fi
 
   # A SWEEP THAT DECIDED NOTHING IS NOT A PASS (vibe-ic#1025).
@@ -1623,8 +1805,8 @@ after the last gate and attaches to nothing"
   #
   # rc stays 0 here, and since #584 that is a BOUNDED statement rather than an
   # open one. Every gate reaching this branch bought the tolerance with a dated,
-  # reasoned `uncheckable_until`; an unexempted one is a wiring error several
-  # branches up and never gets here, and an expired one failed one branch up.
+  # reasoned `uncheckable_until`; a dispatcher-owned unexempted refusal blocked
+  # above, and an expired one failed one branch up.
   # Exiting non-zero for an exemption that is doing its job would make this
   # script permanently red for a maintainer whose tree is dirty BY
   # CONSTRUCTION (benchmark artefacts, build logs), and a permanently red gate
@@ -1644,12 +1826,10 @@ after the last gate and attaches to nothing"
          "(${total}s)"
     exit 0
   fi
-  # vibe-ic#957 — a loop that expanded over NOTHING declares no gate, so it
-  # cannot appear in `$declared` and cannot be NOT_CHECKED either: the set of
-  # gates silently shrinks and the sentence below stays literally true while
-  # the coverage it implies has gone to zero. That is the same aggregation
-  # dishonesty #539 removed, arriving through the denominator instead of
-  # through a state, so it is refused the same way — by NAME, in the sentence.
+  # Defensive compatibility for a record created by a future corpus mode that
+  # reports zero items without the structural gate above.  Today's empty path
+  # exits at the UNEXEMPTED NOT_CHECKED branch, so it cannot reach an
+  # unqualified PASS here.
   if [ "$nempty" -ne 0 ]; then
     echo "repo_hygiene_gates: all $declared gate(s) passed, but $nempty loop" \
          "corpus/corpora expanded over 0 item(s) — NOTHING was checked over:" \

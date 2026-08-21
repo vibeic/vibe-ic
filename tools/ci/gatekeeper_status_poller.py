@@ -175,16 +175,87 @@ def classify(rc: int, out: str) -> tuple[str, str]:
     return "failure", f"gatekeeper-land FAIL (gate exit {rc})"
 
 
+def prepare_gate_checkout(repo_root: Path, sha: str, dest: Path
+                          ) -> tuple[Path, str | None]:
+    """`(checkout, refusal)` — a SELF-CONTAINED clone of `sha`, or why not.
+
+    THIS USED TO BE `git worktree add`, AND THAT IS THE DEFECT (job TIER).
+    A linked worktree's registration lives in `repo_root`, which this run does
+    not own. `git worktree prune` there — routine on a host where several agents
+    share one clone — unregisters the tree MID-TIER, after which every git call
+    inside it fails. MEASURED: one tier run lost four gates to pure collateral
+    that way, and the run's third measurement was lost to something outside the
+    measurement.
+
+    A clone has no external registration and cannot be pruned. On a local
+    filesystem `git clone` HARDLINKS the object files, which are immutable, so
+    this costs seconds and survives anything the source repository later does to
+    itself. `--no-hardlinks` is deliberately NOT used: it would copy the whole
+    object store to buy nothing, because a hardlinked inode already outlives the
+    source's own `git gc`.
+
+    `origin/main` is carried over EXPLICITLY. `gatekeeper-land.sh` resolves its
+    base through it, and a clone's `origin/*` are built from the source's LOCAL
+    branches — so without this the base would silently become `repo_root`'s
+    `main` rather than the remote-tracking ref the gate means.
+    """
+    # `--no-checkout`: the requested commit is checked out below, and it is not
+    # necessarily the source's HEAD.
+    r = _run(["git", "clone", "--quiet", "--no-checkout", "--no-single-branch",
+              str(repo_root), str(dest)])
+    if r.returncode != 0:
+        return dest, (f"could not clone {repo_root} for {sha[:12]}: "
+                      f"{(r.stderr or r.stdout).strip()[:200]}")
+    # A clone transfers refs/heads and tags. A PR head can live under
+    # refs/pull/* or a remote-tracking ref instead, so fetch EVERY ref the
+    # source has before asking for the commit.
+    _run(["git", "fetch", "--quiet", "--no-tags", str(repo_root),
+          "+refs/*:refs/vibeic-source/*"], cwd=dest)
+    base_ref = "refs/remotes/origin/main"
+    base = _run(["git", "rev-parse", "--verify", "--quiet", base_ref],
+                cwd=repo_root)
+    if base.returncode == 0 and base.stdout.strip():
+        _run(["git", "update-ref", base_ref, base.stdout.strip()], cwd=dest)
+    co = _run(["git", "checkout", "--quiet", "--detach", sha], cwd=dest)
+    if co.returncode != 0:
+        return dest, (f"{sha[:12]} is not reachable from any ref in "
+                      f"{repo_root}, so it could not be cloned: "
+                      f"{(co.stderr or co.stdout).strip()[:200]}")
+    # ASK, do not assume. `git clone` is SUPPOSED to produce a self-contained
+    # checkout, and the whole point of this function is that the tier's hour
+    # depends on it actually having done so. A clone made with `--shared` or
+    # against a repository that itself borrows objects would satisfy every check
+    # above and still be exactly the shape this replaced. The preflight is the
+    # one place that sentence lives; reading its answer here is cheaper than
+    # discovering it an hour later, and it means the refusal text cannot drift
+    # from the refusal.
+    preflight = (Path(__file__).resolve().parents[2] / "vibe-ic-marketplace"
+                 / "plugins" / "vibe-ic" / "programs"
+                 / "landing_tier_checkout_preflight.py")
+    if preflight.is_file():
+        pf = _run([sys.executable, str(preflight), "--root", str(dest)])
+        if pf.returncode != 0:
+            return dest, ("the checkout prepared for "
+                          f"{sha[:12]} is not self-contained: "
+                          f"{(pf.stderr or pf.stdout).strip()[:300]}")
+    return dest, None
+
+
 def run_gate(repo_root: Path, sha: str, workdir: Path, cheap_only: bool,
              log_dir: Path, timeout: int) -> tuple[str, str, Path]:
-    """Check `sha` out into its own detached worktree and run the real gate."""
-    wt = workdir / f"wt_{sha[:12]}"
+    """Clone `sha` into its own self-contained checkout and run the real gate.
+
+    NOT a worktree — see `prepare_gate_checkout`. The tier is an hour long and
+    it must not be able to lose its own repository to a `git worktree prune`
+    somebody else runs.
+    """
+    wt = workdir / f"clone_{sha[:12]}"
     log = log_dir / f"{sha[:12]}.log"
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
-        r = _run(["git", "worktree", "add", "-f", "--detach", str(wt), sha], cwd=repo_root)
-        if r.returncode != 0:
-            return "error", f"could not create worktree for {sha[:12]}", log
+        wt, refusal = prepare_gate_checkout(repo_root, sha, wt)
+        if refusal is not None:
+            return "error", refusal, log
 
         gate = wt / "tools" / "gatekeeper-land.sh"
         if not gate.exists():
@@ -216,7 +287,11 @@ def run_gate(repo_root: Path, sha: str, workdir: Path, cheap_only: bool,
             state, desc = "error", "cheap tier only — full tier not run, so this is NOT a pass"
         return state, desc, log
     finally:
-        _run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo_root)
+        # A clone owns everything under its own directory and is registered
+        # nowhere else, so removing it is a plain delete — and, unlike
+        # `git worktree remove`, it cannot fail because a third party already
+        # pruned the registration.
+        shutil.rmtree(wt, ignore_errors=True)
 
 
 def open_pr_heads() -> list[dict]:

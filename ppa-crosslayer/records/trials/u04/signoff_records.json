@@ -1,0 +1,275 @@
+{
+  "census": {
+    "measured": 5,
+    "not_measured": 3,
+    "records": 8
+  },
+  "notes": [
+    {
+      "artefact": "reports/phase3/drc_signoff.json",
+      "metric": "physical.drc.violations",
+      "present": true,
+      "reason": null,
+      "status": "MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/lvs_verdict.json",
+      "metric": "physical.lvs.verdict",
+      "present": true,
+      "reason": null,
+      "status": "MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/antenna.json",
+      "metric": "physical.antenna.violations",
+      "present": true,
+      "reason": null,
+      "status": "MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/ir_drop.json",
+      "metric": "power.ir.violations",
+      "present": true,
+      "reason": null,
+      "status": "MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/ir_drop.json",
+      "metric": "power.ir.worst_drop_v",
+      "present": true,
+      "reason": null,
+      "status": "MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/em.json",
+      "metric": "reliability.em.violations",
+      "present": true,
+      "reason": "the current-density screen states verdict 'nothing', which is neither PASS, FAIL nor SKIPPED",
+      "status": "NOT_MEASURED"
+    },
+    {
+      "artefact": "reports/phase3/em.json",
+      "metric": "reliability.em.worst_ratio",
+      "present": true,
+      "reason": "the current-density screen states no `summary.worst_utilization`, so no segment was screened against a Jmax and no ratio exists",
+      "status": "NOT_MEASURED"
+    },
+    {
+      "artefact": "reports/lec.json",
+      "metric": "equivalence.verdict",
+      "present": true,
+      "reason": "the proven pair is RTL against 'post_dft_netlist.v (synth)', which names no post-layout netlist. The routed netlist that became the layout was not the gate side of this proof, so it establishes no post-route equivalence",
+      "status": "NOT_MEASURED"
+    }
+  ],
+  "parser": "_ppa/signoff.py",
+  "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+  "records": [
+    {
+      "metric": "physical.drc.violations",
+      "provenance": {
+        "categories_found": 4,
+        "discriminator": "fixtures/ppa/drc/zero_three_ways",
+        "earned": "4 rule categories over a layout of 15299 shapes",
+        "layout_shapes": 15299,
+        "real_violation_total": 0,
+        "rule": "categories > 0 and items == 0 and shapes > 0",
+        "stage_basis": "the sign-off DRC deck is applied to the streamed layout, so its verdict is about the geometry that would be manufactured"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "signed_off_gds",
+        "tool": "klayout"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/drc_signoff.json",
+        "sha256": "sha256:d5ad6783522454997243db2f6686810e630487bfae600a76c53a4479aeb27a75",
+        "tool": "klayout"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "metric": "physical.lvs.verdict",
+      "provenance": {
+        "declared_status": "PASS",
+        "finding": "LVS_MATCH_POWER_VERIFIED",
+        "stage_basis": "LVS compares the netlist EXTRACTED from the routed layout against the gate netlist, so the measurement stands on the extraction",
+        "top_cell": null
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route_extracted",
+        "tool": "netgen"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/lvs_verdict.json",
+        "sha256": "sha256:78a1d6cca3127c58db192e96f9774ce915226222ea1fde738f3550fff43e2872",
+        "tool": "netgen"
+      },
+      "status": "MEASURED",
+      "unit": "verdict",
+      "value": "MATCH"
+    },
+    {
+      "metric": "physical.antenna.violations",
+      "provenance": {
+        "mode": "antenna_check_in_session_post_repair",
+        "net_violations": 0,
+        "pin_violations": 0,
+        "pins_unaccessed": 0,
+        "routing_incomplete": false,
+        "stage_basis": "the antenna check runs over the routed design database; it needs no extracted parasitics, so it is post_route and not post_route_extracted"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "openroad"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/antenna.json",
+        "sha256": "sha256:5f1f23ecb9d495888e162bdb062696913daa95660929dd3aeaec3adaaaa462da",
+        "tool": "openroad"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "metric": "power.ir.violations",
+      "provenance": {
+        "budget_basis": "plugin ir_drop_budget_check default (10% VDD, the loosest commonly-cited static budget; typical 5-10%); override via pdk.ir_budget_pct",
+        "budget_pct_vdd": 10.0,
+        "stage_basis": "static IR is solved over the routed power grid; the solve reads the routed database and no SPEF",
+        "supply_measured": true,
+        "supply_model": "PSM default single-bump (PSM-0073) on a padless core -> CONSERVATIVE upper bound; real multi-bump power delivery is lower",
+        "worst_ir_pct_vdd": 0.014
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "openroad-psm"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/ir_drop.json",
+        "sha256": "sha256:6c662c6fc471a54eaaabf7127566714f3ddf76379d0b1fc77adc597f043d532d",
+        "tool": "openroad-psm"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "metric": "power.ir.worst_drop_v",
+      "provenance": {
+        "conversion": "worst_ir_uv / 1e6",
+        "stage_basis": "same solve as `power.ir.violations`, reported in volts rather than as a count against the artefact's own budget",
+        "supply_measured": true,
+        "supply_voltage_v": 1.8,
+        "worst_ir_uv": 259.0
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "openroad-psm"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/ir_drop.json",
+        "sha256": "sha256:6c662c6fc471a54eaaabf7127566714f3ddf76379d0b1fc77adc597f043d532d",
+        "tool": "openroad-psm"
+      },
+      "status": "MEASURED",
+      "unit": "V",
+      "value": 0.000259
+    },
+    {
+      "metric": "reliability.em.violations",
+      "provenance": {
+        "margin": null,
+        "screen_artefact": "reports/phase3/em_signoff.json",
+        "screen_verdict": "",
+        "segments_screened": null,
+        "segments_unscreened": null,
+        "stage_basis": "the per-segment currents are solved over the routed power grid; the screen that turns them into a count reads that same solve",
+        "worst_utilization": null
+      },
+      "reason": "the current-density screen states verdict 'nothing', which is neither PASS, FAIL nor SKIPPED",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "openroad-psm"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/em.json",
+        "sha256": "sha256:520cd8b6f55b5aaa6357eb22827d92d8e44c819be5e22dd9f10f5c33140d7b58",
+        "tool": "openroad-psm"
+      },
+      "status": "NOT_MEASURED",
+      "unit": "count"
+    },
+    {
+      "metric": "reliability.em.worst_ratio",
+      "provenance": {
+        "screen_artefact": "reports/phase3/em_signoff.json",
+        "screen_verdict": null,
+        "segments_screened": null,
+        "stage_basis": "same solve as `reliability.em.violations`, as the worst J/Jmax ratio rather than as a count against the screen's own margin"
+      },
+      "reason": "the current-density screen states no `summary.worst_utilization`, so no segment was screened against a Jmax and no ratio exists",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "openroad-psm"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/phase3/em.json",
+        "sha256": "sha256:520cd8b6f55b5aaa6357eb22827d92d8e44c819be5e22dd9f10f5c33140d7b58",
+        "tool": "openroad-psm"
+      },
+      "status": "NOT_MEASURED",
+      "unit": "1"
+    },
+    {
+      "metric": "equivalence.verdict",
+      "provenance": {
+        "declared_verdict": "PASS",
+        "equivalent": true,
+        "gate": "post_dft_netlist.v (synth)",
+        "golden": null,
+        "stage_basis": "the axis is about the netlist that became the layout, so the stage is the routed one; a proof over a pre-layout gate netlist is refused by the reader rather than filed under an earlier stage"
+      },
+      "reason": "the proven pair is RTL against 'post_dft_netlist.v (synth)', which names no post-layout netlist. The routed netlist that became the layout was not the gate side of this proof, so it establishes no post-route equivalence",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "yosys"
+      },
+      "source": {
+        "parser": "_ppa/signoff.py",
+        "parser_sha256": "sha256:f58252e8c297b38592a038e9ecc6df722fd7bdea4db8edef2b95a5f778c079b6",
+        "path": "reports/lec.json",
+        "sha256": "sha256:e597dfced9912302e2912ee4d111b974f8f9a80881b7b2eea3bae0327d649a12",
+        "tool": "yosys"
+      },
+      "status": "NOT_MEASURED",
+      "unit": "verdict"
+    }
+  ],
+  "run": "/home/reyerchu/_jxlayer/run/trials/u04",
+  "schema": "vibeic.ppa.signoff_records.v1"
+}

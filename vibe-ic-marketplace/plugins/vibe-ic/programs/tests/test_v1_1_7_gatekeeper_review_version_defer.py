@@ -128,7 +128,7 @@ def test_ships_to_users_classification():
     assert GR.ships_to_users([".claude-plugin/marketplace.json"])
     assert GR.ships_to_users(["vibe-ic-marketplace/.claude-plugin/marketplace.json"])
     assert not GR.ships_to_users(["benchmark-data/ic/spm/v1/waivers.json"])
-    assert not GR.ships_to_users(["docs/INSTALL.md", "tools/vibeic-eda/VERSION"])
+    assert not GR.ships_to_users(["docs/INSTALL.md", "tools/ci/some_gate.sh"])
 
 
 def test_data_only_changeset_skips_version_gate():

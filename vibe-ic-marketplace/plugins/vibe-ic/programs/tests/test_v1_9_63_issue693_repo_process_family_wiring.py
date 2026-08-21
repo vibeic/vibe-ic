@@ -57,14 +57,9 @@ def test_the_checker_population_covers_checker_shaped_names():
     assert not [p for p in pop if p.endswith(("_synth.py", "_gen.py"))]
 
 
-def test_the_orphan_now_has_a_real_runner_and_the_false_positive_always_had_one(
-        wiring_haystack):
-    # `wiring_haystack` (conftest) builds this once per session and re-hashes
-    # every input file before handing it back, so the tokens are the same ones
-    # `W._tokenise(W._haystacks(...))` produced here — without the 18.93 s
-    # rebuild this file paid twice.
+def test_the_orphan_now_has_a_real_runner_and_the_false_positive_always_had_one():
     root = _repo_root()
-    hay = wiring_haystack(_PLUGIN, root)
+    hay = W._tokenise(W._haystacks(_PLUGIN, root))
 
     def runners(name):
         return W.runners(name[:-3], hay, str(_PROGRAMS / name))
@@ -77,8 +72,7 @@ def test_the_orphan_now_has_a_real_runner_and_the_false_positive_always_had_one(
 
 
 # ── 2. the SKILL-only disclosure register ──────────────────────────────────
-def test_skill_only_register_is_loadable_and_describes_skill_only_checkers(
-        wiring_haystack):
+def test_skill_only_register_is_loadable_and_describes_skill_only_checkers():
     """`_UNROUTED_INVENTORY` is an exact-equality ratchet over unrouted SKIP
     PATHS and `checker_execution_wiring_baseline.json` FAILs on any entry that
     has a runner, so neither can hold a checker that is reachable only from a
@@ -86,7 +80,7 @@ def test_skill_only_register_is_loadable_and_describes_skill_only_checkers(
     root = _repo_root()
     reasons = W.skill_only_register(_PROGRAMS / W._SKILL_ONLY_NAME)
     assert reasons, "the register must not be empty while entries are claimed"
-    rep = W.audit(_PLUGIN, root, hay=wiring_haystack(_PLUGIN, root))
+    rep = W.audit(_PLUGIN, root)
     skill_only = set(rep["skill_only"])
     for name, why in reasons.items():
         assert (_PROGRAMS / name).is_file(), f"{name} does not exist"

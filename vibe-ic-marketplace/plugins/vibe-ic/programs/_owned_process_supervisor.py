@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import _watchdog as _wd
+import _semantic_child_progress as _semantic_progress
+import gate_process_attestation as _attest
 from _atomic_artefact import write_json
 
 _PR_SET_CHILD_SUBREAPER = 36
@@ -39,6 +41,7 @@ _KILL_CONFIRM_GRACE_S = 1.0
 _REAPER_POLL_MS = 100
 Identity = Tuple[int, int]  # (pid, /proc starttime)
 PendingNotifier = Callable[[str, Set[Identity], bool], None]
+_MAX_ATTESTATION_PROGRESS_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,103 @@ class ActiveJob:
 
 _ACTIVE_JOB: Optional[ActiveJob] = None
 _IN_SHUTDOWN = False
+_SHUTDOWN_CLEANUP: Optional[CleanupResult] = None
+
+
+class _AttestationProgressProbe:
+    """Count only complete, digest-valid, append-only gate attestations."""
+
+    def __init__(self, path: Path, expected_labels: Sequence[str]):
+        self.path = path
+        self.expected = frozenset(expected_labels)
+        if len(self.expected) != len(expected_labels):
+            raise ValueError("expected progress labels are not unique")
+        self.identity: Optional[Tuple[int, int]] = None
+        self.size = 0
+        self.rows: List[str] = []
+        self.error = ""
+
+    def _fail(self, reason: str) -> None:
+        if not self.error:
+            self.error = reason
+
+    def sample(self, *, final: bool = False) -> int:
+        if self.error:
+            return len(self.rows)
+        try:
+            st = self.path.stat()
+        except FileNotFoundError:
+            if self.identity is not None:
+                self._fail("attestation progress file disappeared")
+            return len(self.rows)
+        except OSError as exc:
+            self._fail(f"attestation progress file unreadable: {exc}")
+            return len(self.rows)
+        observed = (st.st_dev, st.st_ino)
+        if self.identity is None:
+            self.identity = observed
+        elif observed != self.identity:
+            self._fail("attestation progress file identity changed")
+            return len(self.rows)
+        if st.st_size < self.size:
+            self._fail("attestation progress file was truncated")
+            return len(self.rows)
+        if st.st_size > _MAX_ATTESTATION_PROGRESS_BYTES:
+            self._fail("attestation progress file exceeds resource limit")
+            return len(self.rows)
+        try:
+            raw = self.path.read_bytes()
+            complete, separator, tail = raw.rpartition(b"\n")
+            if not separator:
+                complete = b""
+                tail = raw
+            if final and tail:
+                raise ValueError("truncated final attestation record")
+            records = []
+            for lineno, line in enumerate(complete.splitlines(), 1):
+                if not line.strip():
+                    raise ValueError(
+                        f"empty attestation progress line {lineno}")
+                record = _attest.strict_loads(line.decode("utf-8"))
+                records.append(_attest.validate_record(record, lineno))
+        except (OSError, ValueError, TypeError, UnicodeDecodeError,
+                json.JSONDecodeError) as exc:
+            self._fail(f"invalid attestation progress protocol: {exc}")
+            return len(self.rows)
+        if len(records) > len(self.expected):
+            self._fail("attestation progress exceeds assigned gate count")
+            return len(self.rows)
+        canonical = [json.dumps(row, sort_keys=True, ensure_ascii=False,
+                                separators=(",", ":")) for row in records]
+        if canonical[:len(self.rows)] != self.rows:
+            self._fail("attestation progress history was rewritten")
+            return len(self.rows)
+        labels = [str(row.get("label")) for row in records]
+        if len(labels) != len(set(labels)):
+            self._fail("duplicate gate label in attestation progress")
+            return len(self.rows)
+        unexpected = set(labels) - self.expected
+        if unexpected:
+            self._fail(
+                "unassigned gate label in attestation progress: "
+                + ", ".join(sorted(unexpected)[:3]))
+            return len(self.rows)
+        self.rows = canonical
+        self.size = st.st_size
+        return len(self.rows)
+
+    def complete(self) -> str:
+        self.sample(final=True)
+        if not self.error and {_attest.strict_loads(row)["label"]
+                               for row in self.rows} \
+                != self.expected:
+            missing = self.expected - {
+                str(_attest.strict_loads(row).get("label"))
+                for row in self.rows}
+            self._fail(
+                "attestation progress ended before assigned gates completed: "
+                + ", ".join(sorted(missing)[:3]))
+        return self.error
 
 
 def _identity_rows(identities: Iterable[Identity]) -> List[Dict[str, int]]:
@@ -415,7 +515,7 @@ def _capability_error() -> str:
 
 
 def _shutdown_handler(signum, _frame) -> None:
-    global _IN_SHUTDOWN
+    global _IN_SHUTDOWN, _SHUTDOWN_CLEANUP
     if _IN_SHUTDOWN:
         # A second TERM/INT must not interrupt the cleanup already retaining
         # reaper ownership.  SIGKILL remains the caller's explicit hard stop.
@@ -425,7 +525,7 @@ def _shutdown_handler(signum, _frame) -> None:
         signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
     active = _ACTIVE_JOB
     if active is not None:
-        _cleanup_job(
+        _SHUTDOWN_CLEANUP = _cleanup_job(
             active.proc, active.root, active.baseline,
             root_pidfd=active.root_pidfd,
             pending_notifier=active.pending_notifier)
@@ -435,11 +535,42 @@ def _shutdown_handler(signum, _frame) -> None:
 def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
               progress_path: Optional[Path], stall_grace_s: float,
               poll_s: float,
+              output_progress: bool = True,
+              semantic_progress: bool = False,
+              expected_progress_labels: Optional[Sequence[str]] = None,
+              semantic_progress_monitor: Optional[
+                  _semantic_progress.ParentMonitor] = None,
               pending_notifier: Optional[PendingNotifier] = None
               ) -> OwnedRunResult:
     """Run one job and return only after its final owned census is zero."""
-    global _ACTIVE_JOB, _IN_SHUTDOWN
+    global _ACTIVE_JOB, _IN_SHUTDOWN, _SHUTDOWN_CLEANUP
     _IN_SHUTDOWN = False
+    _SHUTDOWN_CLEANUP = None
+    if semantic_progress_monitor is not None and (
+            progress_path is not None or output_progress
+            or semantic_progress or expected_progress_labels is not None):
+        return OwnedRunResult(
+            _PROTOCOL, 2, "",
+            "INVALID_PROGRESS_POLICY: semantic child progress is exclusive "
+            "with stdout and generic/attestation renewal",
+            "policy_refused", False, False, [], [],
+            "semantic/output/log/attestation progress policies are exclusive")
+    if progress_path is not None and (
+            output_progress or not semantic_progress
+            or expected_progress_labels is None):
+        return OwnedRunResult(
+            _PROTOCOL, 2, "",
+            "INVALID_PROGRESS_POLICY: a progress path is accepted only as "
+            "an explicit semantic attestation channel with output disabled",
+            "policy_refused", False, False, [], [],
+            "atomic/output/attestation progress policies are exclusive")
+    if progress_path is None and expected_progress_labels is not None:
+        return OwnedRunResult(
+            _PROTOCOL, 2, "",
+            "INVALID_PROGRESS_POLICY: assigned progress labels were supplied "
+            "without a semantic progress channel",
+            "policy_refused", False, False, [], [],
+            "orphan expected-progress manifest")
     capability_error = _capability_error()
     if capability_error:
         return OwnedRunResult(
@@ -486,6 +617,8 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
                 command, cwd=str(cwd), start_new_session=True,
                 stderr=subprocess.STDOUT,
                 preexec_fn=restore_child_signal_mask, **kwargs)
+            if semantic_progress_monitor is not None:
+                semantic_progress_monitor.bind_pid(proc.pid)
             holder["proc"] = proc
             root = (proc.pid, -1)
             root_identity["value"] = root
@@ -527,8 +660,20 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
             pending_notifier=pending_notifier))
 
     try:
+        attestation_probe = (
+            _AttestationProgressProbe(
+                progress_path, list(expected_progress_labels or ()))
+            if progress_path is not None else None)
         result = _wd.run_supervised(
-            list(argv), env=env, log_path=progress_path,
+            list(argv), env=env, log_path=None,
+            output_progress=output_progress,
+            domain_progress_probe=(
+                attestation_probe.sample if attestation_probe is not None
+                else semantic_progress_monitor.sample
+                if semantic_progress_monitor is not None else None),
+            abort_probe=(
+                (lambda: semantic_progress_monitor.error or None)
+                if semantic_progress_monitor is not None else None),
             stall_grace_s=stall_grace_s, poll_s=poll_s,
             hard_ceiling_s=float("inf"), popen_factory=_popen, kill=_kill)
         proc = holder.get("proc")
@@ -584,6 +729,17 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
 
         body = (result.out or "") + (result.err or "")
         problems: List[str] = []
+        if attestation_probe is not None:
+            progress_error = attestation_probe.complete()
+            if progress_error:
+                problems.append(
+                    "PROGRESS_PROTOCOL_INCOMPLETE: "
+                    + progress_error)
+        if semantic_progress_monitor is not None:
+            progress_error = semantic_progress_monitor.complete()
+            if progress_error:
+                problems.append(
+                    "SEMANTIC_PROGRESS_NORECORD: " + progress_error)
         if result.outcome != "natural":
             problems.append(
                 f"progress watchdog outcome={result.outcome}, rc={result.rc}; "
@@ -631,7 +787,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--status", type=Path)
     parser.add_argument("--event-fd", type=int)
     parser.add_argument("--cwd", type=Path, required=True)
-    parser.add_argument("--progress", type=Path)
+    progress_mode = parser.add_mutually_exclusive_group()
+    progress_mode.add_argument("--progress", type=Path)
+    progress_mode.add_argument(
+        "--atomic", action="store_true",
+        help="treat natural child completion as the only progress transition; "
+             "stdout/CPU cannot renew the no-record lease")
+    progress_mode.add_argument("--semantic-progress-manifest", type=Path)
+    parser.add_argument("--expected-progress-labels", type=Path)
     parser.add_argument("--stall-grace", type=float, required=True)
     parser.add_argument("--poll", type=float, required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -641,6 +804,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command = command[1:]
     if not command or args.stall_grace <= 0 or args.poll <= 0:
         parser.error("a command and positive progress windows are required")
+    if (args.progress is None) != (args.expected_progress_labels is None):
+        parser.error("--progress and --expected-progress-labels are required together")
+    expected_progress_labels = None
+    if args.expected_progress_labels is not None:
+        try:
+            expected_doc = _attest.strict_loads(
+                args.expected_progress_labels.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"unreadable expected progress labels: {exc}")
+        if (not isinstance(expected_doc, dict)
+                or set(expected_doc) != {"schema", "labels"}
+                or expected_doc.get("schema") != 1
+                or not isinstance(expected_doc.get("labels"), list)
+                or not all(isinstance(label, str) and label
+                           for label in expected_doc["labels"])
+                or len(expected_doc["labels"])
+                != len(set(expected_doc["labels"]))):
+            parser.error("expected progress labels have the wrong schema")
+        expected_progress_labels = expected_doc["labels"]
     event_fd = args.event_fd
     if event_fd is not None:
         # The dispatcher passed this descriptor only to the helper.  Restore
@@ -658,6 +840,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         }, ensure_ascii=False)
     pending_events: List[Dict[str, object]] = []
     announced: Set[Tuple[str, Tuple[Identity, ...]]] = set()
+
+    def emit_private_event(event: Dict[str, object]) -> None:
+        if event_fd is None:
+            return
+        payload = (json.dumps(event, ensure_ascii=True, sort_keys=True)
+                   + "\n").encode("ascii")
+        while payload:
+            written = os.write(event_fd, payload)
+            if written <= 0:
+                raise BrokenPipeError(
+                    "private semantic progress relay made no progress")
+            payload = payload[written:]
+
+    def notify_progress(scope: str, completed: int, total: int) -> None:
+        # This descriptor is private to the trusted supervisor.  The direct
+        # child writes only its nonce-bound journal and never inherits the
+        # relay channel consumed by the outer parent.
+        emit_private_event({
+            "protocol": _semantic_progress.SCHEMA,
+            "state": "domain_progress",
+            "scope": scope,
+            "completed": completed,
+            "total": total,
+        })
 
     def notify_pending(reason: str, identities: Set[Identity],
                        census_ok: bool) -> None:
@@ -689,20 +895,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 event["status_error"] = (
                     f"{type(exc).__name__}: {exc}")
         if event_fd is not None:
-            payload = (json.dumps(event, ensure_ascii=True, sort_keys=True)
-                       + "\n").encode("ascii")
             try:
-                while payload:
-                    payload = payload[os.write(event_fd, payload):]
+                emit_private_event(event)
             except (BrokenPipeError, OSError):
                 # The dispatcher may already have returned rc=2.  The durable
                 # sidecar remains inspectable and this helper keeps ownership.
                 pass
 
-    result = run_owned(
-        command, args.cwd, os.environ.copy(), progress_path=args.progress,
-        stall_grace_s=args.stall_grace, poll_s=args.poll,
-        pending_notifier=notify_pending)
+    semantic_monitor = None
+    if args.semantic_progress_manifest is not None:
+        try:
+            semantic_monitor = _semantic_progress.ParentMonitor.from_manifest(
+                args.semantic_progress_manifest, notify_progress)
+        except (OSError, ValueError,
+                _semantic_progress.ProgressProtocolError) as exc:
+            parser.error(f"unreadable semantic progress manifest: {exc}")
+
+    try:
+        result = run_owned(
+            command, args.cwd, os.environ.copy(), progress_path=args.progress,
+            stall_grace_s=args.stall_grace, poll_s=args.poll,
+            output_progress=(not args.atomic and args.progress is None
+                             and semantic_monitor is None),
+            semantic_progress=args.progress is not None,
+            expected_progress_labels=expected_progress_labels,
+            semantic_progress_monitor=semantic_monitor,
+            pending_notifier=notify_pending)
+    except SystemExit as exc:
+        # A failed private relay requests helper shutdown.  The signal handler
+        # retains subreaper ownership until its event-driven cleanup proves a
+        # final zero census; publish that proof before propagating the exit.
+        cleanup = _SHUTDOWN_CLEANUP
+        if args.status is not None:
+            write_json(args.status, {
+                "protocol": _PROTOCOL,
+                "state": "shutdown_complete",
+                "reaper_pid": os.getpid(),
+                "reaper_starttime": own_starttime,
+                "exit_code": int(exc.code) if type(exc.code) is int else 1,
+                "census_ok": (cleanup.census_ok
+                              if cleanup is not None else False),
+                "final_descendants": (_identity_rows(cleanup.survivors)
+                                      if cleanup is not None else None),
+                "observed": (_identity_rows(cleanup.observed)
+                             if cleanup is not None else None),
+            }, ensure_ascii=False)
+        if event_fd is not None:
+            try:
+                os.close(event_fd)
+            except OSError:
+                pass
+        raise
     write_json(args.result, asdict(result), ensure_ascii=False)
     if pending_events and args.status is not None:
         write_json(args.status, {

@@ -1,0 +1,2434 @@
+{
+ "generated_by": "tools/d9_flow_gate_reality.py",
+ "corpus": {
+  "runs": 107,
+  "how": "git ls-files benchmark-data | dirs containing phase1/generated_docs/",
+  "tech_lef_runs": 0
+ },
+ "steps": 63,
+ "moves_today": 31,
+ "dark": 32,
+ "denominator_bands": {
+  "zero": 22,
+  "one_to_ten": 31,
+  "eleven_plus": 10,
+  "all_runs": 1,
+  "median": 3,
+  "max": 107
+ },
+ "skills": {
+  "declared": 56,
+  "missing": 31,
+  "missing_names": [
+   "adi-spec-gen",
+   "assertion-gen",
+   "atpg",
+   "behavioral-sequences-gen",
+   "calibration-gen",
+   "cdc-check",
+   "cmd-protocol-gen",
+   "constraint-gen",
+   "control-logic-gen",
+   "cts-plan",
+   "datasheet-gen",
+   "dft-insert",
+   "doc-consistency-check",
+   "em-check",
+   "flow-orchestrate",
+   "fpga-test-harness",
+   "frs-gen",
+   "integration-spec-gen",
+   "lab-calibration-gen",
+   "otp-content-gen",
+   "perc-check",
+   "placement-optimize",
+   "power-analysis",
+   "rdc-check",
+   "regmap-gen",
+   "rtl-constants-gen",
+   "schematic-gen",
+   "sdc-validator",
+   "test-cases-gen",
+   "test-debug-gen",
+   "timing-waveform-gen"
+  ]
+ },
+ "programs": {
+  "on_disk": 1075,
+  "all_py_in_programs": 1133,
+  "referenced_by_flow": 216
+ },
+ "publishing_excluded_dark": {
+  "def": 1,
+  "gds": 12,
+  "spef": 8,
+  "oas": 0,
+  "lef": 5,
+  "tlef": 0,
+  "lib": 11,
+  "globs": [
+   "*.gds",
+   "*.def",
+   "*.spef",
+   "*.oas"
+  ],
+  "dark_cells_blocked": 7,
+  "blocked": [
+   {
+    "step": 15,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/floorplan.def"
+    ]
+   },
+   {
+    "step": 17,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/placed.def"
+    ]
+   },
+   {
+    "step": 19,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/post_cts.def"
+    ]
+   },
+   {
+    "step": 20,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/post_hold.def"
+    ]
+   },
+   {
+    "step": 21,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/routed.def"
+    ]
+   },
+   {
+    "step": 38,
+    "cause": "ALREADY-RED",
+    "needs": [
+     "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
+    ]
+   },
+   {
+    "step": "M1",
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/mixed_signal/top_merged.gds"
+    ]
+   }
+  ],
+  "ceiling_on_published_corpus": 56
+ },
+ "causes": {
+  "ALREADY-RED": 2,
+  "DENOMINATOR": 22,
+  "NO-BLOCKING-RULER": 2,
+  "RULER-BLIND": 5,
+  "RULER-NEVER-RAN": 1
+ },
+ "evidenced_findings": {
+  "single_emitter_inverted": {
+   "file": "programs/fault_atpg_run.py",
+   "line": 1052,
+   "source": "faults_covered = int(round(faults_total * coverage_ratio / 100.0))"
+  },
+  "floorplan_budget": {
+   "l19_docs": 195,
+   "null": 136,
+   "populated": 5,
+   "key_absent": 54,
+   "populated_but_prose": 3,
+   "field": "die_area_budget_um"
+  },
+  "pdk": {
+   "tech_lef_runs": 0,
+   "em_checker": "programs/em_current_density_check.py"
+  }
+ },
+ "rows": [
+  {
+   "step": "D1",
+   "name": "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)",
+   "stage": "stage_phase1",
+   "declared_outputs": 14,
+   "denominator": 107,
+   "runs_probed": 107,
+   "runs_moved": 8,
+   "blocking_programs": [
+    "analog_a0_skip_forbidden_check",
+    "l_doc_todo_stub_count_check",
+    "phase1_all_l_docs_present_check",
+    "phase1_expert_parse_track"
+   ],
+   "advisory_programs": [
+    "cross_layer_reference_check",
+    "l10_test_case_oracle_anchor_check",
+    "l11_otp_content_consumer_contract_check",
+    "l12_sequences_in_consumed_layer_check",
+    "l13_bringup_contract_check",
+    "l14_protocol_versioning_contract_check",
+    "l15_encoding_tables_contract_check",
+    "l16_compliance_properties_actionable_check",
+    "l17_channel_catalog_consumer_contract_check",
+    "l18_interconnect_topology_factuality_check",
+    "l21_macro_supply_rail_declared_check",
+    "l6_fsm_scaffold_actionable_check",
+    "l7_debug_access_grounding_check",
+    "l8_clock_period_actionability_check",
+    "l8_sta_clock_period_design_owned_check",
+    "l9_floorplan_contract_check",
+    "l_doc_cross_consistency_check",
+    "phase1_expert_track_evidence_check",
+    "phase1_planned_consumer_starved_check",
+    "spec_review_lint"
+   ],
+   "blocking_reads_content": [
+    "analog_a0_skip_forbidden_check",
+    "l_doc_todo_stub_count_check",
+    "phase1_all_l_docs_present_check",
+    "phase1_expert_parse_track"
+   ],
+   "movers": [
+    {
+     "program": "l_doc_todo_stub_count_check",
+     "runs": 1,
+     "example": "benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    },
+    {
+     "program": "phase1_all_l_docs_present_check",
+     "runs": 7,
+     "example": "benchmark-data/ic/edge_llm_matmul_accel: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 213,
+    "already_red": 0,
+    "never_read": 207
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "datasheet-gen",
+    "frs-gen",
+    "cmd-protocol-gen",
+    "regmap-gen",
+    "adi-spec-gen",
+    "control-logic-gen",
+    "test-debug-gen",
+    "timing-waveform-gen",
+    "rtl-constants-gen",
+    "integration-spec-gen",
+    "test-cases-gen",
+    "calibration-gen",
+    "behavioral-sequences-gen",
+    "lab-calibration-gen",
+    "otp-content-gen",
+    "doc-consistency-check",
+    "schematic-gen",
+    "phase1"
+   ],
+   "missing_skills": [
+    "datasheet-gen",
+    "frs-gen",
+    "cmd-protocol-gen",
+    "regmap-gen",
+    "adi-spec-gen",
+    "control-logic-gen",
+    "test-debug-gen",
+    "timing-waveform-gen",
+    "rtl-constants-gen",
+    "integration-spec-gen",
+    "test-cases-gen",
+    "calibration-gen",
+    "behavioral-sequences-gen",
+    "lab-calibration-gen",
+    "otp-content-gen",
+    "doc-consistency-check",
+    "schematic-gen"
+   ]
+  },
+  {
+   "step": 1,
+   "name": "Spec-to-RTL",
+   "stage": "stage1",
+   "declared_outputs": 3,
+   "denominator": 30,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [],
+   "advisory_programs": [],
+   "blocking_reads_content": [],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "NO-BLOCKING-RULER",
+   "declared_skills": [
+    "spec-to-rtl"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 2,
+   "name": "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)",
+   "stage": "stage1",
+   "declared_outputs": 2,
+   "denominator": 25,
+   "runs_probed": 25,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "fpga_wrapper_input_polluter_check",
+    "internal_vs_external_timing_check",
+    "memory_read_pipeline_check",
+    "nba_addr_read_race_check",
+    "periodic_timer_vs_rx_activity_check",
+    "rom_init_lint",
+    "rsp_example_otp_consistency_check",
+    "rtl_bug_report_schema_check",
+    "rtl_hygiene_lint",
+    "spec_response_delay_check",
+    "threshold_range_contiguity_check"
+   ],
+   "advisory_programs": [
+    "arith_ss_corner_risk_check",
+    "l9_submodule_conformance_check"
+   ],
+   "blocking_reads_content": [
+    "fpga_wrapper_input_polluter_check",
+    "internal_vs_external_timing_check",
+    "memory_read_pipeline_check",
+    "nba_addr_read_race_check",
+    "periodic_timer_vs_rx_activity_check",
+    "rom_init_lint",
+    "rsp_example_otp_consistency_check",
+    "rtl_bug_report_schema_check",
+    "rtl_hygiene_lint",
+    "spec_response_delay_check",
+    "threshold_range_contiguity_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 77,
+    "already_red": 25,
+    "never_read": 173
+   },
+   "pdk_bound_programs": [
+    "rom_init_lint",
+    "rtl_hygiene_lint"
+   ],
+   "moves_today": false,
+   "cause": "RULER-BLIND",
+   "declared_skills": [
+    "rtl-review"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 3,
+   "name": "🔁 CDC / RDC check",
+   "stage": "stage1",
+   "declared_outputs": 3,
+   "denominator": 25,
+   "runs_probed": 25,
+   "runs_moved": 25,
+   "blocking_programs": [
+    "cdc_async_input_check",
+    "cdc_crossing_check",
+    "clock_domain_reg_crossing_check",
+    "reset_dependency_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "cdc_async_input_check",
+    "cdc_crossing_check",
+    "clock_domain_reg_crossing_check",
+    "reset_dependency_check"
+   ],
+   "movers": [
+    {
+     "program": "cdc_crossing_check",
+     "runs": 25,
+     "example": "benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 73,
+    "already_red": 0,
+    "never_read": 2
+   },
+   "pdk_bound_programs": [
+    "clock_domain_reg_crossing_check",
+    "reset_dependency_check"
+   ],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "cdc-check",
+    "rdc-check"
+   ],
+   "missing_skills": [
+    "cdc-check",
+    "rdc-check"
+   ]
+  },
+  {
+   "step": 4,
+   "name": "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
+   "stage": "stage1",
+   "declared_outputs": 2,
+   "denominator": 19,
+   "runs_probed": 19,
+   "runs_moved": 18,
+   "blocking_programs": [
+    "cpu_functional_oracle_waiver_check",
+    "l10_tb_conformance_check",
+    "l12_tb_coverage_check",
+    "professional_tb_check",
+    "vacuous_testbench_check",
+    "verilator_coverage_measure"
+   ],
+   "advisory_programs": [
+    "coverage_closure"
+   ],
+   "blocking_reads_content": [
+    "cpu_functional_oracle_waiver_check",
+    "l10_tb_conformance_check",
+    "l12_tb_coverage_check",
+    "professional_tb_check",
+    "vacuous_testbench_check",
+    "verilator_coverage_measure"
+   ],
+   "movers": [
+    {
+     "program": "cpu_functional_oracle_waiver_check",
+     "runs": 18,
+     "example": "benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter: CLEAN/rc=0 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 27,
+    "already_red": 5,
+    "never_read": 64
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "testbench-gen"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 5,
+   "name": "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
+   "stage": "stage1",
+   "declared_outputs": 3,
+   "denominator": 8,
+   "runs_probed": 8,
+   "runs_moved": 5,
+   "blocking_programs": [
+    "assertion_property_check",
+    "bit_level_full_stack_tb_check",
+    "formal_proof_evidence_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "assertion_property_check",
+    "bit_level_full_stack_tb_check",
+    "formal_proof_evidence_check"
+   ],
+   "movers": [
+    {
+     "program": "formal_proof_evidence_check",
+     "runs": 5,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 3,
+    "already_red": 6,
+    "never_read": 10
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "assertion-gen",
+    "formal-verify"
+   ],
+   "missing_skills": [
+    "assertion-gen"
+   ]
+  },
+  {
+   "step": 6,
+   "name": "FPGA early prototype + verification report audit",
+   "stage": "stage1",
+   "declared_outputs": 3,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "fpga_verification_audit",
+    "quartus_map_audit"
+   ],
+   "advisory_programs": [
+    "fpga_led_probe_lint"
+   ],
+   "blocking_reads_content": [
+    "fpga_verification_audit",
+    "quartus_map_audit"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "fpga-test-harness"
+   ],
+   "missing_skills": [
+    "fpga-test-harness"
+   ]
+  },
+  {
+   "step": 7,
+   "name": "Constraint setup (SDC + PVT matrix)",
+   "stage": "stage2",
+   "declared_outputs": 2,
+   "denominator": 7,
+   "runs_probed": 7,
+   "runs_moved": 7,
+   "blocking_programs": [
+    "pvt_matrix_check",
+    "sdc_syntax_check"
+   ],
+   "advisory_programs": [
+    "macro_non_seq_arc_contract_check"
+   ],
+   "blocking_reads_content": [
+    "pvt_matrix_check",
+    "sdc_syntax_check"
+   ],
+   "movers": [
+    {
+     "program": "pvt_matrix_check",
+     "runs": 7,
+     "example": "benchmark-data/evaluation/phase1_parity/mdio: FINDING/rc=1 -> NO-INPUT/rc=2"
+    },
+    {
+     "program": "sdc_syntax_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 6,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "constraint-gen"
+   ],
+   "missing_skills": [
+    "constraint-gen"
+   ]
+  },
+  {
+   "step": 8,
+   "name": "🔁 SDC validation",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 12,
+   "runs_probed": 12,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "derived_clock_sdc_required_check",
+    "sdc_exception_correlation_check",
+    "sdc_syntax_check",
+    "sdc_validator_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "derived_clock_sdc_required_check",
+    "sdc_exception_correlation_check",
+    "sdc_syntax_check",
+    "sdc_validator_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 39,
+    "already_red": 4,
+    "never_read": 5
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "RULER-BLIND",
+   "declared_skills": [
+    "sdc-validator"
+   ],
+   "missing_skills": [
+    "sdc-validator"
+   ]
+  },
+  {
+   "step": 9,
+   "name": "Synthesis (Yosys → mapped netlist)",
+   "stage": "stage2",
+   "declared_outputs": 2,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "provenance_check",
+    "synth_netlist_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "provenance_check",
+    "synth_netlist_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 6
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "RULER-NEVER-RAN",
+   "declared_skills": [
+    "synth-doctor"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 10,
+   "name": "🔁 Pre-layout STA (multi-corner)",
+   "stage": "stage2",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "sta_report_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [
+    "sta_report_check"
+   ],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "sta-review"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 11,
+   "name": "DFT insertion (scan chain + ATPG + at-speed + BSDL)",
+   "stage": "stage2",
+   "declared_outputs": 5,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "bsdl_emit",
+    "dft_atpg_coverage_check",
+    "dft_signoff_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "bsdl_emit",
+    "dft_atpg_coverage_check",
+    "dft_signoff_check"
+   ],
+   "movers": [
+    {
+     "program": "bsdl_emit",
+     "runs": 3,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=2"
+    },
+    {
+     "program": "dft_atpg_coverage_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: FINDING/rc=1 -> NO-INPUT/rc=2"
+    },
+    {
+     "program": "dft_signoff_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: FINDING/rc=1 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 2
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "dft-insert",
+    "atpg"
+   ],
+   "missing_skills": [
+    "dft-insert",
+    "atpg"
+   ]
+  },
+  {
+   "step": "FS1",
+   "name": "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)",
+   "stage": "stage2",
+   "declared_outputs": 0,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "fmeda_coverage_check",
+    "fmeda_fault_injection_coverage"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "fmeda_coverage_check",
+    "fmeda_fault_injection_coverage"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": "DT1",
+   "name": "Transition-delay-fault (at-speed LOC) ATPG",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 5,
+   "runs_probed": 5,
+   "runs_moved": 4,
+   "blocking_programs": [
+    "transition_coverage_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "transition_coverage_check"
+   ],
+   "movers": [
+    {
+     "program": "transition_coverage_check",
+     "runs": 4,
+     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 1,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 12,
+   "name": "Post-DFT optimization (resynth / buffering)",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "dft_post_optimization_scan_survival_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "dft_post_optimization_scan_survival_check"
+   ],
+   "movers": [
+    {
+     "program": "dft_post_optimization_scan_survival_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "synth-doctor"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 13,
+   "name": "🔁 Equivalence check (RTL ≡ post-DFT netlist)",
+   "stage": "stage2",
+   "declared_outputs": 2,
+   "denominator": 5,
+   "runs_probed": 5,
+   "runs_moved": 4,
+   "blocking_programs": [
+    "lec_equivalence_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "lec_equivalence_check"
+   ],
+   "movers": [
+    {
+     "program": "lec_equivalence_check",
+     "runs": 4,
+     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 1
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "equivalence-check"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A1",
+   "name": "Analog Spec Extraction",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "analog_a1_spec_extract_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_a1_spec_extract_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a1_spec_extract_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-spec-extract"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A2",
+   "name": "Analog Topology Selection",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "analog_a2_topology_select_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_a2_topology_select_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a2_topology_select_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-topology-select"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A3",
+   "name": "Analog Netlist Generation",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "analog_a3_netlist_gen_check",
+    "analog_netlist_pdk_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_a3_netlist_gen_check",
+    "analog_netlist_pdk_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a3_netlist_gen_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    },
+    {
+     "program": "analog_netlist_pdk_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/u_hawaii_adc: FINDING/rc=1 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 1,
+    "already_red": 1,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-netlist-gen"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A4",
+   "name": "Analog Corner Sweep (PVT)",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "analog_a4_corner_sweep_check"
+   ],
+   "advisory_programs": [
+    "analog_corner_lib_realism_lint"
+   ],
+   "blocking_reads_content": [
+    "analog_a4_corner_sweep_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a4_corner_sweep_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-sizing-loop"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A5",
+   "name": "Analog Layout",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
+   "blocking_programs": [
+    "analog_a5_layout_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_a5_layout_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a5_layout_check",
+     "runs": 2,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-layout"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A6",
+   "name": "Analog Physical Verification (per-block DRC + LVS before merge)",
+   "stage": "stage_analog",
+   "declared_outputs": 2,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 1,
+   "blocking_programs": [
+    "analog_a6_block_pv_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_a6_block_pv_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a6_block_pv_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 1,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "drc-fix",
+    "lvs-triage"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A7",
+   "name": "🔁 Post-Layout Resimulation",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
+   "blocking_programs": [
+    "analog_pre_vs_post_layout_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_pre_vs_post_layout_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_pre_vs_post_layout_check",
+     "runs": 2,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-extraction-resim"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A8",
+   "name": "Hardmacro Generation (LEF + Liberty + GDS + Verilog)",
+   "stage": "stage_analog",
+   "declared_outputs": 4,
+   "denominator": 1,
+   "runs_probed": 1,
+   "runs_moved": 1,
+   "blocking_programs": [
+    "analog_hardmacro_check",
+    "analog_lef_gds_outline_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "analog_hardmacro_check",
+    "analog_lef_gds_outline_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_hardmacro_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 1,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [
+    "analog_lef_gds_outline_check"
+   ],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "analog-hardmacro-gen"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "A9",
+   "name": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+   "stage": "stage_analog",
+   "declared_outputs": 1,
+   "denominator": 1,
+   "runs_probed": 1,
+   "runs_moved": 1,
+   "blocking_programs": [
+    "analog_a9_hw_verify_check",
+    "analog_hw_spice_correlation_check",
+    "mixed_signal_cosim_check"
+   ],
+   "advisory_programs": [
+    "analog_hil_iteration_cap_check",
+    "analog_hil_report_schema_check",
+    "analog_hil_single_knob_check",
+    "analog_hw_tb_de10lite_budget_check"
+   ],
+   "blocking_reads_content": [
+    "analog_a9_hw_verify_check",
+    "analog_hw_spice_correlation_check",
+    "mixed_signal_cosim_check"
+   ],
+   "movers": [
+    {
+     "program": "analog_a9_hw_verify_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/u_hawaii_adc: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    },
+    {
+     "program": "analog_hw_spice_correlation_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/u_hawaii_adc: FINDING/rc=1 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 1,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "mixed-signal-cosim",
+    "analog-hw-tuning-loop"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 14,
+   "name": "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 15,
+   "runs_probed": 15,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "yosys_hilomap_required_check",
+    "yosys_script_template_check"
+   ],
+   "advisory_programs": [
+    "yosys_tiecell_recipe_order_check"
+   ],
+   "blocking_reads_content": [
+    "yosys_hilomap_required_check",
+    "yosys_script_template_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 3,
+    "already_red": 0,
+    "never_read": 27
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "RULER-BLIND",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 15,
+   "name": "Floorplan + PDN",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "floorplan_pdn_check",
+    "ip_integration_check",
+    "macro_obs_load_parity_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "floorplan_pdn_check",
+    "ip_integration_check",
+    "macro_obs_load_parity_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 16,
+   "name": "Clock planning",
+   "stage": "stage3",
+   "declared_outputs": 1,
+   "denominator": 5,
+   "runs_probed": 5,
+   "runs_moved": 2,
+   "blocking_programs": [
+    "clock_plan_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "clock_plan_check"
+   ],
+   "movers": [
+    {
+     "program": "clock_plan_check",
+     "runs": 2,
+     "example": "benchmark-data/ic/subservient: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 3,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "cts-plan"
+   ],
+   "missing_skills": [
+    "cts-plan"
+   ]
+  },
+  {
+   "step": 17,
+   "name": "Placement (global + detailed)",
+   "stage": "stage3",
+   "declared_outputs": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "placement_legality_check",
+    "pnr_timing_repair_completeness_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "placement_legality_check",
+    "pnr_timing_repair_completeness_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "placement-optimize"
+   ],
+   "missing_skills": [
+    "placement-optimize"
+   ]
+  },
+  {
+   "step": 18,
+   "name": "Spare-cell + ECO-prep insertion (Design-for-ECO)",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 6,
+   "runs_probed": 6,
+   "runs_moved": 6,
+   "blocking_programs": [
+    "spare_cell_coverage_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "spare_cell_coverage_check"
+   ],
+   "movers": [
+    {
+     "program": "spare_cell_coverage_check",
+     "runs": 6,
+     "example": "benchmark-data/evaluation/phase1_parity/sgmii: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 19,
+   "name": "CTS (Clock Tree Synthesis)",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "cts_quality_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "cts_quality_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 20,
+   "name": "🔁 Post-CTS hold fixing",
+   "stage": "stage3",
+   "declared_outputs": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "hold_closure_check"
+   ],
+   "advisory_programs": [
+    "hold_area_budget_check"
+   ],
+   "blocking_reads_content": [
+    "hold_closure_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "hold-fix"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 21,
+   "name": "Routing (global + detailed)",
+   "stage": "stage3",
+   "declared_outputs": 3,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "def_stage_progression_check",
+    "drc_report_check",
+    "macro_obs_geometry_intersect_check",
+    "provenance_check"
+   ],
+   "advisory_programs": [
+    "route_congestion_trade_disclosure"
+   ],
+   "blocking_reads_content": [
+    "def_stage_progression_check",
+    "drc_report_check",
+    "macro_obs_geometry_intersect_check",
+    "provenance_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [
+    "drc_report_check"
+   ],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 22,
+   "name": "Parasitic Extraction (RC → SPEF)",
+   "stage": "stage3",
+   "declared_outputs": 1,
+   "denominator": 4,
+   "runs_probed": 4,
+   "runs_moved": 4,
+   "blocking_programs": [
+    "provenance_check",
+    "spef_extraction_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "provenance_check",
+    "spef_extraction_check"
+   ],
+   "movers": [
+    {
+     "program": "spef_extraction_check",
+     "runs": 4,
+     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 4
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": "DT2",
+   "name": "Path-delay-fault (at-speed, timing-graded) ATPG",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 6,
+   "runs_probed": 6,
+   "runs_moved": 5,
+   "blocking_programs": [
+    "path_delay_coverage_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "path_delay_coverage_check"
+   ],
+   "movers": [
+    {
+     "program": "path_delay_coverage_check",
+     "runs": 5,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 1
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": "DT3",
+   "name": "Small-delay-defect (SDD) at-speed grade",
+   "stage": "stage2",
+   "declared_outputs": 1,
+   "denominator": 5,
+   "runs_probed": 5,
+   "runs_moved": 4,
+   "blocking_programs": [
+    "sdd_coverage_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "sdd_coverage_check"
+   ],
+   "movers": [
+    {
+     "program": "sdd_coverage_check",
+     "runs": 4,
+     "example": "benchmark-data/ic/sha256/clean_run_v1427_20260715: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 1
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 23,
+   "name": "🔁 Post-route STA (multi-corner multi-mode sign-off)",
+   "stage": "stage3",
+   "declared_outputs": 3,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "drv_promotion_corroboration_check",
+    "hold_corner_coverage_check",
+    "post_route_signoff_corner_check",
+    "sta_corner_record_completeness_check",
+    "sta_report_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "drv_promotion_corroboration_check",
+    "hold_corner_coverage_check",
+    "post_route_signoff_corner_check",
+    "sta_corner_record_completeness_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [
+    "sta_report_check"
+   ],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "sta-review"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 24,
+   "name": "🔁 IR Drop (static + dynamic)",
+   "stage": "stage3",
+   "declared_outputs": 3,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "dynamic_ir_drop_check",
+    "ir_drop_report_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "dynamic_ir_drop_check"
+   ],
+   "movers": [
+    {
+     "program": "ir_drop_report_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 3
+   },
+   "pdk_bound_programs": [
+    "dynamic_ir_drop_check",
+    "ir_drop_report_check"
+   ],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "ir-drop-triage"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 25,
+   "name": "🔁 EM check (electromigration lifetime)",
+   "stage": "stage3",
+   "declared_outputs": 3,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "em_peak_current_authority_check",
+    "em_report_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "em_peak_current_authority_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 6,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [
+    "em_peak_current_authority_check",
+    "em_report_check"
+   ],
+   "moves_today": false,
+   "cause": "RULER-BLIND",
+   "declared_skills": [
+    "em-check"
+   ],
+   "missing_skills": [
+    "em-check"
+   ]
+  },
+  {
+   "step": 26,
+   "name": "🔁 Antenna check (gate-oxide protection)",
+   "stage": "stage3",
+   "declared_outputs": 3,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "antenna_report_check",
+    "gds_antenna_deck_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "gds_antenna_deck_check"
+   ],
+   "movers": [
+    {
+     "program": "antenna_report_check",
+     "runs": 3,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 3
+   },
+   "pdk_bound_programs": [
+    "antenna_report_check"
+   ],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 27,
+   "name": "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
+   "stage": "stage3",
+   "declared_outputs": 1,
+   "denominator": 15,
+   "runs_probed": 15,
+   "runs_moved": 15,
+   "blocking_programs": [
+    "si_crosstalk_check",
+    "si_mcf_sta_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "si_crosstalk_check",
+    "si_mcf_sta_check"
+   ],
+   "movers": [
+    {
+     "program": "si_crosstalk_check",
+     "runs": 15,
+     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 1,
+    "already_red": 14,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "sta-review"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 28,
+   "name": "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
+   "stage": "stage3",
+   "declared_outputs": 4,
+   "denominator": 9,
+   "runs_probed": 9,
+   "runs_moved": 9,
+   "blocking_programs": [
+    "perc_signoff_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "perc_signoff_check"
+   ],
+   "movers": [
+    {
+     "program": "perc_signoff_check",
+     "runs": 9,
+     "example": "benchmark-data/ic/caravel_user_project: CLEAN/rc=0 -> NO-INPUT/rc=2"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 29,
+   "name": "Post-Layout Gate-Level Simulation (Post-Sim + SDF)",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "post_layout_sim_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "post_layout_sim_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 3,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "ALREADY-RED",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 30,
+   "name": "Post-Layout SPICE Verification (critical-path correlation + analog)",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "spice_correlation_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "spice_correlation_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "ams-sim"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 31,
+   "name": "🔁 Physical Verification (DRC + LVS + ERC + Density)",
+   "stage": "stage3",
+   "declared_outputs": 5,
+   "denominator": 7,
+   "runs_probed": 7,
+   "runs_moved": 3,
+   "blocking_programs": [
+    "drc_report_check",
+    "drc_vacuous_pass_check",
+    "erc_density_check",
+    "lvs_report_check",
+    "lvs_signoff_guard",
+    "pg_rail_geometry_check",
+    "provenance_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "drc_report_check",
+    "drc_vacuous_pass_check",
+    "erc_density_check",
+    "lvs_report_check",
+    "lvs_signoff_guard",
+    "pg_rail_geometry_check",
+    "provenance_check"
+   ],
+   "movers": [
+    {
+     "program": "drc_report_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/sha256/clean_run_v1427_20260715: CLEAN/rc=0 -> FINDING/rc=1"
+    },
+    {
+     "program": "lvs_report_check",
+     "runs": 2,
+     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 22,
+    "already_red": 5,
+    "never_read": 19
+   },
+   "pdk_bound_programs": [
+    "drc_report_check",
+    "lvs_report_check"
+   ],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "drc-fix",
+    "lvs-triage",
+    "perc-check"
+   ],
+   "missing_skills": [
+    "perc-check"
+   ]
+  },
+  {
+   "step": 32,
+   "name": "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
+   "stage": "stage3",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "eco_loop_audit"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "eco_loop_audit"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "sta-review"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 33,
+   "name": "Power analysis (pre/post-layout)",
+   "stage": "stage4",
+   "declared_outputs": 2,
+   "denominator": 14,
+   "runs_probed": 14,
+   "runs_moved": 11,
+   "blocking_programs": [
+    "power_report_check",
+    "power_total_vs_budget_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "power_total_vs_budget_check"
+   ],
+   "movers": [
+    {
+     "program": "power_report_check",
+     "runs": 11,
+     "example": "benchmark-data/evaluation/phase1_parity/interlaken: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 17,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [
+    "power-analysis"
+   ],
+   "missing_skills": [
+    "power-analysis"
+   ]
+  },
+  {
+   "step": 34,
+   "name": "Metal Fill (ECO-aware density fill insertion)",
+   "stage": "stage4",
+   "declared_outputs": 3,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 1,
+   "blocking_programs": [
+    "metal_fill_density_check",
+    "metal_fill_emit",
+    "spare_cell_preservation_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "metal_fill_density_check",
+    "metal_fill_emit",
+    "spare_cell_preservation_check"
+   ],
+   "movers": [
+    {
+     "program": "metal_fill_density_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/subservient: CLEAN/rc=0 -> FINDING/rc=1"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 3,
+    "already_red": 2,
+    "never_read": 3
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 35,
+   "name": "DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)",
+   "stage": "stage4",
+   "declared_outputs": 1,
+   "denominator": 9,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [],
+   "advisory_programs": [
+    "dfm_screen_check"
+   ],
+   "blocking_reads_content": [],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "NO-BLOCKING-RULER",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 36,
+   "name": "Tapeout checklist (final sign-off confirmation)",
+   "stage": "stage4",
+   "declared_outputs": 1,
+   "denominator": 15,
+   "runs_probed": 15,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "step_internal_fail_bubble_up_check",
+    "tapeout_signoff_check"
+   ],
+   "advisory_programs": [
+    "report_belongs_to_project_check"
+   ],
+   "blocking_reads_content": [
+    "step_internal_fail_bubble_up_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 6,
+    "already_red": 24,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "RULER-BLIND",
+   "declared_skills": [
+    "tapeout-checklist"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 37,
+   "name": "GDSII output (only if Step 31 PV fully clean)",
+   "stage": "stage4",
+   "declared_outputs": 1,
+   "denominator": 10,
+   "runs_probed": 10,
+   "runs_moved": 10,
+   "blocking_programs": [
+    "gds_port_label_check",
+    "gds_size_check",
+    "gds_substance_check",
+    "provenance_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "gds_port_label_check",
+    "gds_size_check",
+    "gds_substance_check",
+    "provenance_check"
+   ],
+   "movers": [
+    {
+     "program": "gds_port_label_check",
+     "runs": 1,
+     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: FINDING/rc=1 -> NO-INPUT/rc=2"
+    },
+    {
+     "program": "gds_substance_check",
+     "runs": 10,
+     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> NO-INPUT/rc=0"
+    }
+   ],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 29
+   },
+   "pdk_bound_programs": [],
+   "moves_today": true,
+   "cause": null,
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 38,
+   "name": "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)",
+   "stage": "stage4",
+   "declared_outputs": 5,
+   "denominator": 4,
+   "runs_probed": 4,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "foundry_handoff_package_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "foundry_handoff_package_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 4,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "ALREADY-RED",
+   "declared_skills": [
+    "tapeout-checklist"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 39,
+   "name": "FPGA final sign-off (recompile + on-board test)",
+   "stage": "stage4",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "fpga_on_board_attestation_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "fpga_on_board_attestation_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "fpga-test-harness",
+    "fpga-signaltap"
+   ],
+   "missing_skills": [
+    "fpga-test-harness"
+   ]
+  },
+  {
+   "step": "M1",
+   "name": "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)",
+   "stage": "stage_mixed_signal",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "mixed_signal_merge_check"
+   ],
+   "advisory_programs": [
+    "mixed_signal_top_lvs_run"
+   ],
+   "blocking_reads_content": [
+    "mixed_signal_merge_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "analog-flow-orchestrate",
+    "flow-orchestrate"
+   ],
+   "missing_skills": [
+    "flow-orchestrate"
+   ]
+  },
+  {
+   "step": "M2",
+   "name": "Mixed-Signal Power Domain + Level Shifter / Isolation Verification",
+   "stage": "stage_mixed_signal",
+   "declared_outputs": 3,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "isolation_cell_required_check",
+    "level_shifter_required_check",
+    "power_domain_crossing_check",
+    "power_domain_signal_crossing_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "isolation_cell_required_check",
+    "level_shifter_required_check",
+    "power_domain_crossing_check",
+    "power_domain_signal_crossing_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "ir-drop-triage"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "M3",
+   "name": "Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)",
+   "stage": "stage_mixed_signal",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "mixed_signal_cosim_check",
+    "mixed_signal_interface_si_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "mixed_signal_cosim_check",
+    "mixed_signal_interface_si_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "mixed-signal-cosim",
+    "ams-sim"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": "M4",
+   "name": "Mixed-Signal Sign-Off (top-level PV + final verdict)",
+   "stage": "stage_mixed_signal",
+   "declared_outputs": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "mixed_signal_signoff_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "mixed_signal_signoff_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [
+    "tapeout-checklist"
+   ],
+   "missing_skills": []
+  },
+  {
+   "step": 40,
+   "name": "Fabrication (foundry mask-set + wafer fab — external)",
+   "stage": "stage5_manufacturing",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "manufacturing_fab_intake_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "manufacturing_fab_intake_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 41,
+   "name": "Wafer Sort / Probe Test (ATE + probe card)",
+   "stage": "stage5_manufacturing",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "wafer_sort_yield_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "wafer_sort_yield_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 42,
+   "name": "Packaging (assembly: wirebond / FC-CSP / WLCSP)",
+   "stage": "stage5_manufacturing",
+   "declared_outputs": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "packaging_intake_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "packaging_intake_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 43,
+   "name": "Final Test (ATE: functional + parametric + burn-in)",
+   "stage": "stage5_manufacturing",
+   "declared_outputs": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "final_test_attestation_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "final_test_attestation_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": 44,
+   "name": "Reliability qualification (HTOL / FIT attestation)",
+   "stage": "stage5_manufacturing",
+   "declared_outputs": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [
+    "htol_attestation_check"
+   ],
+   "advisory_programs": [],
+   "blocking_reads_content": [
+    "htol_attestation_check"
+   ],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  },
+  {
+   "step": "P0",
+   "name": "Structural-RTL pre-flight (chip-AGNOSTIC structural gates)",
+   "stage": "stage1",
+   "declared_outputs": 0,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
+   "blocking_programs": [],
+   "advisory_programs": [],
+   "blocking_reads_content": [],
+   "movers": [],
+   "arm_pattern": {
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
+   },
+   "pdk_bound_programs": [],
+   "moves_today": false,
+   "cause": "DENOMINATOR",
+   "declared_skills": [],
+   "missing_skills": []
+  }
+ ],
+ "two_arm_cells_planned": 372,
+ "run_cap_dropped": {},
+ "corpus_clean_after_sweep": true
+}

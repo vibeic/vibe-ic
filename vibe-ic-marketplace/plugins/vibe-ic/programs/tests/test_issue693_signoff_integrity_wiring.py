@@ -347,24 +347,10 @@ def test_checkpoint_gate_check_is_disclosed_as_deliberately_unwired():
     assert len(d["checkpoint_gate_check.py"]) >= W._MIN_DECISION_REASON
 
 
-# WHY THE FOUR TESTS BELOW TAKE `wiring_haystack` (vibe-ic — FRONT 2).
-#
-# All six call sites in this file asked `checker_execution_wiring_audit` the
-# same question about the same unchanged checkout, and each one rebuilt the
-# whole-repo haystack to answer it: 4024 files walked, `ast.parse` + `tokenize`
-# over 3891 of them, 18.93 s a time. Measured with `--durations=0` on an idle
-# 32-core host, this file was 144.83 s and those six rebuilds were 134.19 s of
-# it (31.37 + 22.01 + 21.37 + 20.69 + 19.61 + 19.14).
-#
-# `wiring_haystack` (programs/tests/conftest.py) builds it once and re-hashes
-# every input file's CONTENT on each hand-out, so a re-use that is no longer
-# current is rebuilt rather than served. NOTHING here is weakened: the tokens, the
-# same `runners()` calls, the same assertions. The only thing that stops
-# happening is doing identical read-only work six times.
-def test_the_disclosure_is_re_derived_not_asserted(wiring_haystack):
+def test_the_disclosure_is_re_derived_not_asserted():
     """It must go stale the moment anything machine-wires it. Otherwise the
     record is a permanent licence rather than a disclosure."""
-    rep = W.audit(_PLUGIN, _ROOT, hay=wiring_haystack(_PLUGIN, _ROOT))
+    rep = W.audit(_PLUGIN, _ROOT)
     assert not rep["machine_runners"].get("checkpoint_gate_check.py"), (
         "checkpoint_gate_check.py now has a machine runner — the "
         "`unwired_by_decision` record is false and must be removed")
@@ -378,17 +364,16 @@ def test_the_disclosure_is_re_derived_not_asserted(wiring_haystack):
     ("step_internal_fail_bubble_up_check.py", "TOOLS"),
     ("silent_decline_audit.py", "TOOLS"),
 ])
-def test_the_wired_four_are_reachable_from_an_executable_location(
-        gate, expected_runner, wiring_haystack):
+def test_the_wired_four_are_reachable_from_an_executable_location(gate, expected_runner):
     """#693's actual subject. A gate wired somewhere that never executes is the
     same defect moved, so assert the runner CLASS, not merely a mention."""
-    hay = wiring_haystack(_PLUGIN, _ROOT)
+    hay = W._tokenise(W._haystacks(_PLUGIN, _ROOT))
     r = W.runners(gate[:-3], hay, str(_PROGRAMS / gate))
     assert expected_runner in r, f"{gate}: runners={sorted(r)}"
 
 
-def test_a_stale_or_falsified_decision_record_is_rejected(wiring_haystack):
-    rep = W.audit(_PLUGIN, _ROOT, hay=wiring_haystack(_PLUGIN, _ROOT))
+def test_a_stale_or_falsified_decision_record_is_rejected():
+    rep = W.audit(_PLUGIN, _ROOT)
     assert W.check_unwired_by_decision(
         rep, {"no_such_program_check.py": "x" * 200}, [])
     assert W.check_unwired_by_decision(

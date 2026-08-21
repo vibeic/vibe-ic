@@ -363,6 +363,15 @@ alternate bit inside onreadtype onwritetype
 # --------------------------------------------------------------------------
 import _corpus_location            # sibling program, one seam for all gates
 import _published_tree
+import _semantic_child_progress as _semantic_progress
+
+PROGRESS_SCOPE = "issue1710:l4-systemrdl-audit-corpus"
+_ACTIVE_PROGRESS = None
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
 
 def _sanitise_ident(raw: str, fallback: str) -> Tuple[str, bool]:
     """Return (identifier, changed). SystemRDL identifiers are C-like."""
@@ -1397,7 +1406,8 @@ def _structural_self_check(rdl_text: str) -> Dict[str, Any]:
 _L4_GLOB = "L4_REGMAP.json"
 
 
-def _l4_documents(root: Path) -> Tuple[List[Path], int, bool]:
+def _l4_documents(root: Path, *,
+                  semantic_strict: bool = False) -> Tuple[List[Path], int, bool]:
     """`(published documents, raw hits on disk, root is a published tree)`.
 
     The two numbers are returned together because the DIFFERENCE between them is
@@ -1413,13 +1423,27 @@ def _l4_documents(root: Path) -> Tuple[List[Path], int, bool]:
     presenting a disk walk as a statement about a published corpus.
     """
     hits = list(_iter_l4(root))
-    published = _published_tree.published_paths(root)
+    if semantic_strict:
+        # A loose run directory is an explicitly supported population: there
+        # is no published index, so its disk is the only possible answer.  A
+        # semantic caller first classifies that state with an unbounded Git
+        # probe.  Only a real checkout reaches strict index enumeration; probe
+        # launch/stall/protocol failure raises and becomes NORECORD instead of
+        # silently selecting the loose-directory branch.
+        loose = _corpus_location.not_a_checkout_reason(
+            root, f"published {_L4_GLOB} paths", timeout=None, strict=True)
+        if loose:
+            return hits, len(hits), False
+    published = _published_tree.published_paths(
+        root, timeout=None if semantic_strict else 180,
+        strict=semantic_strict)
     if published is None:
         return hits, len(hits), False
     # The filter itself stays in `_published_tree`: a second copy of "is this
     # path in the published set" here would be a predicate that looks
     # authoritative and tracks nothing.
-    return _published_tree.filter_to_published(root, hits), len(hits), True
+    return _published_tree.filter_to_published(
+        root, hits, published=published), len(hits), True
 
 
 def _iter_l4(root: Path) -> Iterable[Path]:
@@ -1452,6 +1476,37 @@ def _iter_l4(root: Path) -> Iterable[Path]:
     yield from hits
 
 
+def _progress_document_unit(path: Path, roots: Sequence[Path]) -> str:
+    for index, root in enumerate(roots, 1):
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        return f"document:{index}:{rel}"
+    raise ValueError(f"L4 progress document is outside every declared root: {path}")
+
+
+def semantic_progress_units(root: Path,
+                            extra_roots: Sequence[Path] = ()) -> List[str]:
+    """Exact finite work manifest for a trusted audit-corpus parent."""
+    roots: List[Path] = []
+    for candidate in [root, *extra_roots]:
+        candidate = candidate.resolve()
+        if candidate not in roots:
+            roots.append(candidate)
+    units: List[str] = []
+    files: List[Path] = []
+    for index, candidate in enumerate(roots, 1):
+        kept, _found, _published = _l4_documents(
+            candidate, semantic_strict=True)
+        units.append(f"root:{index}")
+        files.extend(kept)
+    for path in sorted(set(files)):
+        units.extend(_semantic_progress.file_progress_units(
+            path, _progress_document_unit(path, roots)))
+    return units
+
+
 def audit_corpus(root: Path,
                  extra_roots: Sequence[Path] = ()) -> Tuple[int, Dict[str, Any]]:
     """Is the disposition table still TOTAL over the published L4 corpus?
@@ -1469,12 +1524,15 @@ def audit_corpus(root: Path,
 
     files: List[Path] = []
     per_root: List[Dict[str, Any]] = []
-    for r in roots:
-        kept, found, is_published = _l4_documents(r)
+    for index, r in enumerate(roots, 1):
+        kept, found, is_published = _l4_documents(
+            r, semantic_strict=(_ACTIVE_PROGRESS is not None
+                                and _ACTIVE_PROGRESS.enabled))
         per_root.append({"root": str(r), "documents_on_disk": found,
                          "documents_published": len(kept),
                          "published_tree": is_published})
         files.extend(kept)
+        _checkpoint(f"root:{index}")
     files = sorted(set(files))
 
     if not files:
@@ -1504,13 +1562,25 @@ def audit_corpus(root: Path,
     parsed = 0
     unreadable: List[str] = []
     for p in files:
+        identity = _progress_document_unit(p, roots)
         try:
-            d = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            text = _semantic_progress.read_text_chunks(
+                p, identity, _ACTIVE_PROGRESS)
+        except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
+            unreadable.append(_rel(p))
+            continue
+        try:
+            d = json.loads(text)
         except Exception:
             unreadable.append(_rel(p))
+            _checkpoint(_semantic_progress.file_judged_unit(p, identity))
             continue
         if not isinstance(d, dict):
             unreadable.append(_rel(p))
+            _checkpoint(_semantic_progress.file_judged_unit(p, identity))
             continue
         parsed += 1
         for reg in d.get("registers") or []:
@@ -1529,6 +1599,7 @@ def audit_corpus(root: Path,
                         unclassified.setdefault("field:%s" % k, {
                             "scope": "field", "key": k,
                             "first_seen": _rel(p)})
+        _checkpoint(_semantic_progress.file_judged_unit(p, identity))
     report = {
         "verdict": "FAIL" if unclassified else "PASS",
         "l4_documents_scanned": parsed,
@@ -1805,5 +1876,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entrypoint())

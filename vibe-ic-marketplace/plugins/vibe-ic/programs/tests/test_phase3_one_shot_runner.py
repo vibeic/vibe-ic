@@ -72,7 +72,12 @@ _ACK_OSS = "--allow-oss-pdk-fallback"
 #: half the budget and two calls in one test would end the SESSION.
 #: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 --
 #: the bound is a parameter default, which the gate could not read.
-def _run(args: list, timeout: int = 150) -> subprocess.CompletedProcess:
+# 90 s, not 150 s. The file's `@pytest.mark.timeout(600)` does NOT buy a 200 s
+# ceiling: the driver classifies a session hung after 300 s with no validated
+# pytest lifecycle event, and a blocking call emits none, so the applicable bound
+# is min(600, 300) // 3 = 100. Measured: the slowest call in this file is 34.6 s
+# and the whole file runs in 147 s, so 90 s is ~2.6x headroom over the worst case.
+def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
     if args and not args[0].startswith("-") and _ACK_OSS not in args:
         args = args + [_ACK_OSS]
     return subprocess.run(
