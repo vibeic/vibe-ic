@@ -155,3 +155,52 @@ binds the corpus will see a ninth red (`an argued direction is pinned`) that has
 no row. That is not an argument for a ninth row written blind; it is an argument
 for the landing path to state which corpus it measured against, which the
 hygiene record already does.
+
+---
+
+# ADDENDUM 2026-08-22 — THE CORPUS MOVED AND TOOK BOTH VERDICTS WITH IT
+
+Everything above was measured against `/home/reyerchu/benchmark-data` as it
+stood on 2026-08-21. That clone has since advanced to `b971220` (06:26) and
+**shrank from 1037 enumerated files to 70**. Re-measured:
+
+    L-doc field producer       then 48 L-docs, 3 fields present in 4 docs and
+                                    populated in 0            -> a producer finding
+                               NOW  "0 of them carry a `fields` object, so 0
+                                    document(s) were scanned against 18
+                                    field(s)"                 -> rc 2 UNDETERMINED
+
+    evidence citation resolves then 149 contributing docs of 1037, 105 citations,
+                                    113 baseline resolved, 4 dangling
+                               NOW  66 of 70, 28 citations, 132 baseline
+                                    resolved, 5 dangling
+
+**`L-doc field producer` has moved from the owner's first branch to the second.**
+The ruling was: *either a real finding about the design that stays red until
+fixed, or its population is genuinely empty and it must report rc=2 NOT CHECKED
+with the measured population count.* Its population is now genuinely empty and it
+reports exactly that, naming both counts. **The gate is behaving correctly.**
+
+**So the defect is the DISPATCH, not the gate.** `repo_hygiene_gates.sh` runs it
+with a plain blocking `run`, under which rc 2 is recorded **FAIL** — a gate that
+correctly says "I could not look" reaches the roll-up as "I looked and it was
+bad". `run_tolerating_uncheckable` plus a dated `uncheckable_until` is the
+mechanism that exists for exactly this. That file is a PROTECTED path, so the
+change is not made here.
+
+**`evidence citation resolves` stays on the first branch**: 66 documents and 28
+citations is not an empty population, and both findings are real.
+
+The figures above are kept and dated rather than edited in place. They were true
+when measured and they are the evidence for the reasoning that follows them; a
+verdict that silently restates itself against a moved corpus is the shelf-life
+failure this addendum exists to record.
+
+## ONE MORE STATE WORTH NAMING
+
+`L-doc field producer` and `evidence citation resolves` are now **501 commits
+behind** against `MAX_BOUND_COMMITS = 500`. No legal bound can cover them any
+more: they can be renewed by moving `since` forward, or fixed, and there is no
+third option. That is the ceiling doing its job — it forbids an unattended
+remediation, not a long one — but it means neither row can be honestly
+re-acknowledged as it stands.
