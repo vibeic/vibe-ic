@@ -28,7 +28,7 @@ is what surfaced them.
 |---|----|--------------------|---------------|
 | 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
 | 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | reason recorded below; closes with the fourth-state ruling |
-| 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | NOT_MEASURED (quiet host) | PASSES in the full-file run at load 3.45 |
+| 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED** | thin margin (2.1x); killed BETWEEN collections, not at startup — see below |
 | 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED (quiet host) | PASSES at load 3.45. It is also the test that PINS the fail-closed-fast choice — see 10, 11, 13 below |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
 | 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED (quiet host) | `1 passed in 163.79s` alone |
@@ -149,7 +149,47 @@ strengthens rather than weakens the reading that they are not repository
 defects — and it is stated here so nobody quotes a rate this work never
 measured.
 
-## 10, 11, 13 — the host, proved rather than asserted
+## 10 — the same disease as 12, one notch less acute, and I nearly missed it
+
+This was filed as host contention for most of this work, on the strength of it
+passing on a quiet box. Then its actual failure text was read, which should have
+happened first:
+
+```
+WATCHDOG_STALLED: ... did not advance for > 0.3s
+PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing (stage=collecting)
+```
+
+**`stage=collecting` is the load-bearing word.** The child had STARTED and was
+emitting events; it was killed BETWEEN two collections. That is red 12's
+disease, not red 11's startup problem — and the construction says so: seven
+files each sleeping `0.14` against a `0.30` window is a **2.1x** margin, and
+2.1x is not much once per-file import and collection machinery land on top of
+the sleep.
+
+Same treatment as 12, and **the window is untouched at `0.30`**: 21 files at a
+SIXTH of the window (`1.05 s` total, still over the `0.8 s` bound the test
+exists to prove work may cross), with the ratio asserted rather than commented.
+
+Two mutations, run, each reddening the arm it aims at:
+
+```
+window 0.30 -> 0.02  (renewals cannot keep up)  -> 1 failed, WATCHDOG_STALLED
+ratio  /6   -> /2    (the old thin shape)       -> assert (0.15*6) <= 0.3 fails
+                                                   before the run even starts
+```
+
+Stability: **10/10 green alone** (~2.1 s each), and green in three CONCURRENT
+full-file runs at load 31.54.
+
+**One honest observation from those concurrent runs, which is not a new red.**
+`test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved` failed
+in 2 of the 3. It appears in NO prior unbound run of this file. Three concurrent
+full-file runs genuinely starve the nested outcome run, which is the exact
+condition that test detects — the harness catching an abusive measurement
+configuration this work created, not a defect and not caused by this change.
+
+## 11 and 13 — the host, proved rather than asserted
 
 All three pass without any change to the repository once the box is not being
 saturated by this file's own nested pytest children: 10 and 11 in the full-file
