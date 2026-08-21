@@ -172,11 +172,24 @@ def _spec(name: str, cls: str, unit: str, what: str, is_extent: bool = True
 #: a new proxy quietly arriving on the physical side.
 AREA_METRICS: Dict[str, AreaMetricSpec] = dict([
     # --- RTL_PROXY: counts and the reductions computed from counts ------------
-    _spec("area.proxy.cell_count", RTL_PROXY, "cells",
+    #
+    # THE UNIT OF A COUNT IS `count`, NOT THE NAME OF THE THING COUNTED.
+    # These three read "cells", "wires" and "wire_bits" until v1.11.33, and
+    # every record built from them was refused by the canonical index:
+    # `_ppa/metrics.unit_suffix_of` reads the `_count` suffix on the metric
+    # NAME as a claim about the `unit` field, and "cells" is not "count".
+    # Six records per run, from a producer and a consumer in the same lane.
+    #
+    # The name is what moved, not the rule. WHAT is counted is already stated
+    # twice -- in the metric name and in the `what` string below -- so putting
+    # it in `unit` bought nothing and cost the one cross-check that catches an
+    # order-of-magnitude unit error. See PPA_INTERFACES.md §2, "a name that
+    # ends in a unit suffix is a claim about the unit field".
+    _spec("area.proxy.cell_count", RTL_PROXY, "count",
           "cells in a yosys netlist (generic or technology-mapped)"),
-    _spec("area.proxy.wire_count", RTL_PROXY, "wires",
+    _spec("area.proxy.wire_count", RTL_PROXY, "count",
           "wires in a yosys netlist"),
-    _spec("area.proxy.wire_bit_count", RTL_PROXY, "wire_bits",
+    _spec("area.proxy.wire_bit_count", RTL_PROXY, "count",
           "wire bits in a yosys netlist"),
     _spec("area.proxy.cell_count_reduction_pct", RTL_PROXY, "%",
           "100*(orig-opt)/orig over cell counts", is_extent=False),

@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+from _ppa import backends as BK
 from _ppa import canonical_json as cj
 from _ppa import metrics as M
 
@@ -122,18 +123,30 @@ def collect(paths: List[Path]) -> Dict[str, Any]:
         entry["read"] = "OK"
         entry["records"] = len(recs)
         report["documents"].append(entry)
-        for i, rec in enumerate(recs):
-            try:
-                index.add(rec)
-            except M.MetricError as exc:
-                report["refusals"].append({
-                    "path": str(path), "record_index": i,
-                    "metric": rec.get("metric") if isinstance(rec, dict) else None,
-                    "code": exc.code, "message": exc.message,
-                })
+        index_records(index, recs, str(path), report)
     report["records"] = len(index)
     report["_index"] = index
     return report
+
+
+def index_records(index: "M.MetricIndex", recs: List[Any], origin: str,
+                  report: Dict[str, Any]) -> None:
+    """Validate and index one producer's records, recording every refusal.
+
+    ONE implementation for `--records` and `--backend` on purpose: a record
+    extracted by driving a backend must face exactly the checks a record read
+    from a file faces, or the CLI would have two standards for one shape and
+    the looser one would be the one nobody tested.
+    """
+    for i, rec in enumerate(recs):
+        try:
+            index.add(rec)
+        except M.MetricError as exc:
+            report["refusals"].append({
+                "path": origin, "record_index": i,
+                "metric": rec.get("metric") if isinstance(rec, dict) else None,
+                "code": exc.code, "message": exc.message,
+            })
 
 
 def _expectations(path: Optional[Path], report: Dict[str, Any]):
@@ -162,17 +175,40 @@ def _expectations(path: Optional[Path], report: Dict[str, Any]):
     return doc
 
 
+class _Parser(argparse.ArgumentParser):
+    """`argparse` exits 2 on a usage error, and PPA_INTERFACES §1 gives 2 to
+    UNDETERMINED — "I could not check". A misspelled flag is not a statement
+    about the evidence; it is a bad invocation, which §1 numbers 3.
+
+    `RC_BAD_INVOCATION` was defined in this file and never used, so every usage
+    error here has been indistinguishable from "the input was unreadable" since
+    the program landed. A caller switching on the exit code could not tell a
+    typo from a run that opened its inputs and could not read them.
+    """
+
+    def error(self, message: str):                    # noqa: D102
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}", file=sys.stderr)
+        raise SystemExit(RC_BAD_INVOCATION)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
+    ap = _Parser(
         description="Assemble PPA metric records into one validated bundle.")
     ap.add_argument("--records", nargs="+", metavar="PATH", default=None,
                     help="record documents, or directories of them")
     ap.add_argument("--expect", metavar="FILE", default=None,
                     help="the declared denominator, carried into the bundle")
     ap.add_argument("--backend", metavar="TOOL", default=None,
-                    help="extract from a tool artefact via _ppa/backends/TOOL.py "
-                         "(no backend exists yet: this exits 2, it does not "
-                         "emit an empty bundle)")
+                    help="extract from a tool artefact via "
+                         "_ppa/backends/TOOL.py; needs --from PATH. A backend "
+                         "that cannot be driven exits 2 with its own reason, "
+                         "never an empty bundle")
+    ap.add_argument("--from", metavar="PATH", dest="from_path", default=None,
+                    help="the artefact or run directory --backend reads")
+    ap.add_argument("--stage", metavar="STAGE", default=None,
+                    help="the scope stage a backend cannot derive from its "
+                         "artefact (yosys: one transcript holds two)")
     ap.add_argument("--out", metavar="FILE", default=None,
                     help="write the bundle here")
     ap.add_argument("--json", metavar="FILE", default=None,
@@ -180,35 +216,84 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     if args.backend is not None:
-        # THE SEAM, AND IT REFUSES. Emitting an empty bundle for a tool nobody
-        # has taught this system to read is the exact defect the contract
-        # exists to remove: the run produces an artefact, the artefact is
-        # well-formed, and it asserts that nothing was found.
+        # THE SEAM. It DRIVES the backends that declare a driver and refuses,
+        # with the module's own reason, for the ones that do not. It still
+        # never emits an empty bundle for a tool nobody taught this system to
+        # read: that is the defect the contract exists to remove.
+        # ORDER MATTERS. "this tool has no backend" and "you forgot --from"
+        # are both refusals, but only the first is a fact about this system,
+        # and a caller who named a tool that does not exist is not helped by
+        # being told which argument that tool would have wanted.
         try:
-            __import__(f"_ppa.backends.{args.backend}")
+            BK.load(args.backend)
         except ImportError:
             print(f"[CANNOT CHECK] no backend module `_ppa/backends/"
                   f"{args.backend}.py`, so no record was extracted from any "
                   f"artefact. This is NOT an empty result — nothing looked. "
                   f"rc=2.", file=sys.stderr)
             return RC_UNDETERMINED
-        print(f"[CANNOT CHECK] backend `{args.backend}` exists but "
-              f"ppa_metric_extract does not drive backends yet; the domain "
-              f"lane that owns it does. rc=2.", file=sys.stderr)
-        return RC_UNDETERMINED
+        try:
+            driver = BK.driver_for(args.backend)
+        except BK.BackendNotDrivable as exc:
+            print(f"[CANNOT CHECK] backend `{args.backend}` cannot be driven "
+                  f"from a path: {exc.reason} Drivable backends: "
+                  f"{', '.join(BK.drivable()) or 'none'}. rc=2.",
+                  file=sys.stderr)
+            return RC_UNDETERMINED
+        if not args.from_path:
+            ap.error("--backend TOOL needs --from PATH: the artefact or run "
+                     "directory to extract from. Without it there is nothing "
+                     "to read, and a backend that read nothing must not "
+                     "produce a record set at all.")
+        missing = [k for k in BK.requirements(args.backend)
+                   if not getattr(args, k, None)]
+        if missing:
+            ap.error(f"backend `{args.backend}` requires "
+                     f"{', '.join('--' + k for k in missing)}: it will not "
+                     f"guess a value that changes which fact a record states.")
+        src = Path(args.from_path)
+        if not src.exists():
+            print(f"[CANNOT CHECK] {src}: no such artefact, so backend "
+                  f"`{args.backend}` read nothing. rc=2.", file=sys.stderr)
+            return RC_UNDETERMINED
+        report = {"program": "ppa_metric_extract.py",
+                  "inputs": [str(src)], "backend": args.backend,
+                  "documents": [], "unreadable": [], "refusals": [],
+                  "records": 0}
+        index = M.MetricIndex()
+        try:
+            recs = driver(src, **{k: getattr(args, k, None)
+                                  for k in BK.requirements(args.backend)})
+        except Exception as exc:                     # noqa: BLE001 — reported
+            print(f"[CANNOT CHECK] backend `{args.backend}` could not read "
+                  f"{src}: {exc.__class__.__name__}: {exc}. Nothing was "
+                  f"extracted, so nothing is claimed. rc=2.", file=sys.stderr)
+            return RC_UNDETERMINED
+        report["documents"].append({"path": str(src), "read": "OK",
+                                    "records": len(recs)})
+        index_records(index, recs, str(src), report)
+        report["records"] = len(index)
+        return _emit(args, report, index, n_docs=1, n_bad=0, expected=None)
 
     if not args.records:
-        ap.error("give --records PATH [PATH ...] or --backend TOOL")
+        ap.error("give --records PATH [PATH ...] or --backend TOOL --from PATH")
 
     paths = [Path(p) for p in args.records]
     report = collect(paths)
     index: M.MetricIndex = report.pop("_index")
     expected = _expectations(Path(args.expect) if args.expect else None, report)
-
     n_docs = len(report["documents"])
     n_bad = len(report["unreadable"])
+    return _emit(args, report, index, n_docs=n_docs, n_bad=n_bad,
+                 expected=expected)
+
+
+def _emit(args, report: Dict[str, Any], index: "M.MetricIndex",
+          *, n_docs: int, n_bad: int, expected) -> int:
+    """Print the summary, decide the rc, and write the artefacts."""
+    n_read = n_docs - n_bad
     print(f"ppa_metric_extract: {n_docs} document(s) named, "
-          f"{n_docs - n_bad} read, {n_bad} unreadable, "
+          f"{n_read} read, {n_bad} unreadable, "
           f"{report['records']} record(s) indexed, "
           f"{len(report['refusals'])} refused")
 
@@ -229,6 +314,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = RC_UNDETERMINED
 
     doc = M.bundle(index, expected=expected)
+    # THE FILE MUST BE AS HONEST AS THE EXIT CODE. A caller that opens the
+    # bundle and not the exit code has to be able to see that some input was
+    # unreadable, so the incompleteness travels IN the document.
+    if report["unreadable"]:
+        doc["inputs_unreadable"] = [
+            {"path": u.get("path"), "read": u.get("read")}
+            for u in report["unreadable"]]
     report["records_digest"] = doc["records_digest"]
     report["rc"] = rc
     # PPA_INTERFACES §1: a machine-readable code on every verdict, including
@@ -237,17 +329,30 @@ def main(argv: Optional[List[str]] = None) -> int:
                       RC_REFUSED: "RECORD_REFUSED",
                       RC_UNDETERMINED: ("NOTHING_TO_READ" if n_docs == 0
                                         else "INPUT_UNREADABLE")}[rc]
-    if args.out and rc != RC_REFUSED:
-        # A bundle is written for rc 0 and rc 2 (the second is a real, honest,
-        # partial set) and NEVER for rc 1: a refused record set must not leave
-        # an artefact behind that a later step can pick up as if it were one.
+
+    # A bundle is written when at least one document was READ. It is never
+    # written for rc=1, and -- since v1.11.33 -- never when NOTHING was read.
+    #
+    # The second case is the one that was wrong. `{"records": []}` from a run
+    # where every input was unreadable is byte-identical to a run that read a
+    # tree and found nothing, and rule 9 says those two must never reach a
+    # caller as the same answer. The exit code was honest and the FILE was not,
+    # and a downstream step that opens the file is the reader this contract is
+    # written for.
+    if args.out and rc != RC_REFUSED and n_read > 0:
         atomic_write_text(Path(args.out), cj.dumps(doc) + "\n",
                           encoding="utf-8")
         print(f"bundle -> {args.out}  {doc['records_digest']}")
-    elif args.out:
+    elif args.out and rc == RC_REFUSED:
         print(f"[REFUSE] no bundle written to {args.out}: the record set was "
               f"refused, and an artefact left behind would be picked up as if "
               f"it were one.", file=sys.stderr)
+    elif args.out:
+        print(f"[CANNOT CHECK] no bundle written to {args.out}: not one "
+              f"document was read, so there is no record set — empty or "
+              f"otherwise — to write. A bundle of zero records here would be "
+              f"indistinguishable from a clean run that found nothing.",
+              file=sys.stderr)
     if args.json:
         atomic_write_text(Path(args.json),
                           json.dumps(report, indent=2, sort_keys=True) + "\n",
