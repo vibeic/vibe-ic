@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus
+
 SCRIPT = Path(__file__).parent.parent / "enhancement_emit.py"
 ROUTING = Path(__file__).parent.parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
 assert SCRIPT.exists(), f"missing program: {SCRIPT}"
@@ -1148,15 +1150,54 @@ def _repo_root():
     return None
 
 
+# ── WHERE THE BENCHMARK CORPORA LIVE NOW ────────────────────────────────────
+# The datasets these negative controls are measured against — the VerilogEval-v2
+# problem list, the RTLLM `pass_at_1.json` runs, and the tracked paths that
+# carry CVDP cell ids — moved out of this repository with the rest of the
+# published benchmark data (vibeic/benchmark-data). Nothing about the FLOORS
+# changed: they are still counted over the same names, so they are resolved
+# here through `_published_corpus` instead of through this checkout alone.
+#
+# MEASURED on this branch, which is why the harvest is a UNION of the two trees
+# rather than a swap of one for the other — the ids live on BOTH sides, in
+# plugin source comments and fixtures as well as in benchmark run dirs:
+#
+#     tracked-PATH cvdp cell ids   vibe-ic  96   benchmark-data  63   union 126
+#     cvdp design leaf-names       vibe-ic 226   benchmark-data 182   union 229
+#
+# 126 and 229 are exactly `_CVDP_CELL_ID_PATH_CORPUS_FLOOR` and the 229 the
+# docstrings above quote, so the union restores the corpus the floors were
+# measured on rather than re-cutting it to fit.
+def _corpus_tree():
+    """The published benchmark-data tree, or None when there is none here."""
+    return corpus_root()
+
+
+def _harvest_trees():
+    """Every distinct git tree to harvest cvdp ids from: this checkout, plus
+    the benchmark-data corpus when it is a SEPARATE checkout (in a tree that
+    still carries the corpus in-repo, `git ls-files` already covers it and
+    listing it twice would only walk the same files again)."""
+    trees = []
+    repo = _repo_root()
+    if repo is not None:
+        trees.append(repo)
+    corpus = _corpus_tree()
+    if corpus is not None:
+        inside = repo is not None and (
+            corpus == repo or repo in corpus.resolve().parents)
+        if not inside:
+            trees.append(corpus)
+    return trees
+
+
 def _verilogeval_leaf_names():
     import re as _re2
-    root = _repo_root()
-    if root is None:
-        pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
-    src = root / "benchmark-data/evaluation/verilogeval_v2/problems.list"
+    corpus = _corpus_tree()
+    src = corpus / "evaluation/verilogeval_v2/problems.list"
     assert src.is_file(), (
-        f"benchmark-data/ is present but the corpus this floor is measured "
-        f"against is missing: {src}")
+        f"the published benchmark corpus is present at {corpus} but the "
+        f"corpus this floor is measured against is missing: {src}")
     probs = [l.strip() for l in src.read_text().splitlines() if l.strip()]
     return probs, [_re2.sub(r"^Prob\d+_", "", p) for p in probs]
 
@@ -1166,38 +1207,40 @@ def _cvdp_design_leaf_names():
     DESIGN name, which is what a leaking author writes when the record is
     about the design rather than the dataset row."""
     import re as _re4, subprocess as _sp
-    root = _repo_root()
-    if root is None:
+    trees = _harvest_trees()
+    if not trees:
         pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
     # Harvest over every GIT-TRACKED file, not just benchmark-data/: these ids
     # also appear in plugin source comments and fixtures, and scoping the sweep
     # narrower than the reported measurement would pin a floor against a
     # different corpus than the one the change was measured on (182 vs 229).
-    try:
-        # 30s, not 120: `ci_harness_timeout_ceiling_check` caps an inner
-        # subprocess bound at harness//3 = 60s, because a longer one outlives
-        # the 180s pytest harness and kills the SESSION instead of the test.
-        # Measured here: 0.01s for 21216 tracked files.
-        tracked = _sp.run(["git", "-C", str(root), "ls-files"],
-                          capture_output=True, text=True,
-                          timeout=30).stdout.split()
-    except (OSError, _sp.SubprocessError):  # pragma: no cover - env-dependent
-        pytest.skip("git not available to enumerate the tracked corpus")
-    if not tracked:
-        pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
     cell = _re4.compile(r"cvdp_(?:copilot|agentic)_([A-Za-z0-9_]*?)_\d{4}")
     leaves = set()
-    for rel in tracked:
-        leaves.update(cell.findall(rel))
-        f = root / rel
+    for root in trees:
         try:
-            if f.is_file() and f.stat().st_size <= 4_000_000:
-                leaves.update(cell.findall(f.read_text(errors="ignore")))
-        except OSError:
-            pass
+            # 30s, not 120: `ci_harness_timeout_ceiling_check` caps an inner
+            # subprocess bound at harness//3 = 60s, because a longer one
+            # outlives the 180s pytest harness and kills the SESSION instead of
+            # the test. Measured here: 0.01s for 21216 tracked files.
+            tracked = _sp.run(["git", "-C", str(root), "ls-files"],
+                              capture_output=True, text=True,
+                              timeout=30).stdout.split()
+        except (OSError, _sp.SubprocessError):  # pragma: no cover - env-dependent
+            pytest.skip("git not available to enumerate the tracked corpus")
+        if not tracked:
+            pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
+        for rel in tracked:
+            leaves.update(cell.findall(rel))
+            f = root / rel
+            try:
+                if f.is_file() and f.stat().st_size <= 4_000_000:
+                    leaves.update(cell.findall(f.read_text(errors="ignore")))
+            except OSError:
+                pass
     return sorted(x for x in leaves if x)
 
 
+@needs_corpus
 def test_backtick_guard_catches_cvdp_design_leaf_names_at_or_above_floor():
     """#798 NEGATIVE (load-bearing) — the corpus this change actually LOST
     coverage on, pinned so the loss is a number and not a surprise.
@@ -1243,6 +1286,7 @@ def test_backtick_guard_catches_cvdp_design_leaf_names_at_or_above_floor():
             f"cell id `{cell_id}` must still be refused as a family leak; got {w}"
 
 
+@needs_corpus
 def test_backtick_guard_catches_verilogeval_leaf_names_at_or_above_floor():
     """#798 NEGATIVE (load-bearing) — the corpus that can actually MOVE when
     the digit rule changes.
@@ -1357,24 +1401,26 @@ def _cvdp_cell_ids_in_tracked_paths():
     PATHS ONLY — including file contents makes the corpus self-referential,
     since this module itself contains cell-id literals."""
     import re as _re5, subprocess as _sp2
-    root = _repo_root()
-    if root is None:
+    trees = _harvest_trees()
+    if not trees:
         pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
-    try:
-        tracked = _sp2.run(["git", "-C", str(root), "ls-files"],
-                           capture_output=True, text=True,
-                           timeout=30).stdout.split()
-    except (OSError, _sp2.SubprocessError):  # pragma: no cover - env-dependent
-        pytest.skip("git not available to enumerate the tracked corpus")
-    if not tracked:
-        pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
     rx = _re5.compile(r"cvdp_(?:copilot|agentic)_[A-Za-z0-9_]*?_\d{4}")
     ids: set[str] = set()
-    for rel in tracked:
-        ids.update(rx.findall(rel))
+    for root in trees:
+        try:
+            tracked = _sp2.run(["git", "-C", str(root), "ls-files"],
+                               capture_output=True, text=True,
+                               timeout=30).stdout.split()
+        except (OSError, _sp2.SubprocessError):  # pragma: no cover - env-dependent
+            pytest.skip("git not available to enumerate the tracked corpus")
+        if not tracked:
+            pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
+        for rel in tracked:
+            ids.update(rx.findall(rel))
     return sorted(ids)
 
 
+@needs_corpus
 def test_every_tracked_cell_id_is_refused_as_a_family_leak():
     """#798 NEGATIVE (load-bearing) — the corpus form of the test above, and
     the executable version of the cardinal quoted in `enhancement_emit.py`.
@@ -1477,6 +1523,7 @@ def test_vocabulary_allowlist_categories_are_pinned():
     }, "encoding_and_width changed without updating this pin"
 
 
+@needs_corpus
 def test_industry_allowlist_never_contains_a_benchmark_leaf_name():
     """#798 NEGATIVE (load-bearing) — the allowlist is now the ONLY thing
     standing between `ddr4` (accepted) and `lemmings1` (refused), which have
@@ -1506,23 +1553,24 @@ def test_industry_allowlist_never_contains_a_benchmark_leaf_name():
     import json as _json, re as _re3
     loaded = _emit_mod._load_industry_tech_allowlist()
     assert len(loaded) > 40, f"allowlist sanity: got {len(loaded)} entries"
-    repo = _repo_root()
-    if repo is None:
-        pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
+    corpus = _corpus_tree()
 
-    # Once benchmark-data/ is present, every corpus is REQUIRED and carries its
-    # OWN floor. The earlier shape guarded the VerilogEval and RTLLM reads with
-    # `if …is_file():` under a single aggregate `len(leaves) > 150` that CVDP
-    # alone (227 case-folded) already satisfied: removing either file left this
-    # control GREEN with a third to two-thirds of its corpus gone (measured
-    # 699 -> 619 -> 479 -> 398 names, PASS in all four states). `dff8`,
-    # `lfsr32`, `count10` and `fsm3` are VerilogEval leaf-names of exactly the
-    # shape this control exists to catch, so the missing corpus is not a
-    # cosmetic loss. A corpus is now either present or a loud failure.
-    ve_src = repo / "benchmark-data/evaluation/verilogeval_v2/problems.list"
+    # Once the corpus is present, every dataset in it is REQUIRED and carries
+    # its OWN floor. The earlier shape guarded the VerilogEval and RTLLM reads
+    # with `if …is_file():` under a single aggregate `len(leaves) > 150` that
+    # CVDP alone (227 case-folded) already satisfied: removing either file left
+    # this control GREEN with a third to two-thirds of its corpus gone
+    # (measured 699 -> 619 -> 479 -> 398 names, PASS in all four states).
+    # `dff8`, `lfsr32`, `count10` and `fsm3` are VerilogEval leaf-names of
+    # exactly the shape this control exists to catch, so the missing corpus is
+    # not a cosmetic loss. A dataset is now either present or a loud failure —
+    # and "the whole corpus is elsewhere" is the SKIP on this test, which is a
+    # different statement from "the corpus is here and a dataset is missing".
+    ve_src = corpus / "evaluation/verilogeval_v2/problems.list"
     assert ve_src.is_file(), (
-        f"benchmark-data/ is present but the VerilogEval corpus this negative "
-        f"control depends on is missing: {ve_src}")
+        f"the published benchmark corpus is present at {corpus} but the "
+        f"VerilogEval corpus this negative control depends on is missing: "
+        f"{ve_src}")
     ve_leaves = {_re3.sub(r"^Prob\d+_", "", l.strip()).lower()
                  for l in ve_src.read_text().splitlines() if l.strip()}
 
@@ -1530,12 +1578,11 @@ def test_industry_allowlist_never_contains_a_benchmark_leaf_name():
     # `pass_at_1.json` siblings under evaluation/rtllm/ and pinning a single
     # `run_cleanroom_v1388/` makes the whole corpus vanish the day that run dir
     # is pruned or renamed. Their union is the same 50-design set.
-    rt_srcs = sorted(
-        (repo / "benchmark-data/evaluation/rtllm").rglob("pass_at_1.json"))
+    rt_srcs = sorted((corpus / "evaluation/rtllm").rglob("pass_at_1.json"))
     assert rt_srcs, (
-        "benchmark-data/ is present but no "
-        "benchmark-data/evaluation/rtllm/**/pass_at_1.json exists — the RTLLM "
-        "corpus this negative control depends on is missing")
+        f"the published benchmark corpus is present at {corpus} but no "
+        f"evaluation/rtllm/**/pass_at_1.json exists under it — the RTLLM "
+        f"corpus this negative control depends on is missing")
     rt_leaves: set[str] = set()
     for _p in rt_srcs:
         try:

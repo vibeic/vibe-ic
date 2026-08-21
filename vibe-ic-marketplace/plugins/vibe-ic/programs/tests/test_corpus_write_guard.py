@@ -24,6 +24,14 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
+#: v1.10.69 (7c376e348) moved the routed-DEF loop's population out of an inline
+#: `git ls-files` and into its own producer, which in turn imports the shared
+#: corpus resolver from the plugin tree. A fixture that ships only the two files
+#: above now makes the producer fail to even start, and a loop whose PRODUCER
+#: failed declares no per-cell gates at all — which this test would otherwise
+#: read as "the fan-out lost its coverage".
+_CORPUS_PRODUCER = _REPO / "tools" / "ci" / "routed_def_corpus.py"
+_CORPUS_LOCATION = _PROGRAMS / "_corpus_location.py"
 
 #: Every fixture gate returns instantly; this only stops a hung one from taking
 #: the pytest session down (#542). It must stay UNDER the 60 s ceiling
@@ -291,18 +299,68 @@ def test_the_hygiene_lane_declares_a_host_independent_number_of_gates():
 
 def test_the_tracked_cells_are_still_reached():
     """The paired half: a denominator that ignores the disk must not ignore the
-    published cells too, or the fix would be a silent coverage cut."""
-    out = subprocess.run(["bash", str(_HYGIENE), "--list"], cwd=str(_REPO),
-                         capture_output=True, text=True, timeout=_T)
-    assert out.returncode == 0, out.stderr
-    percell = [ln for ln in out.stdout.splitlines()
-               if ln.startswith("macro OBS not crossed")]
-    tracked = subprocess.run(
-        ["git", "-C", str(_REPO), "ls-files", "--",
-         "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
-        capture_output=True, text=True, timeout=_T).stdout.split()
-    assert len(percell) == len(tracked) > 0, (
-        "the per-cell gates no longer cover every PUBLISHED cell: %d gate(s) "
+    TRACKED cells too, or the fix above would be a silent coverage cut.
+
+    DRIVEN ON A FIXTURE, NOT ON THIS CHECKOUT — and that is a repair, not a
+    retreat. It used to count the per-cell gates the real lane declares over
+    this repository and compare that to `git ls-files` on the same glob. Both
+    sides are the same corpus, so the pairing says nothing whenever the corpus
+    is empty: with the result cells moved to `vibeic/benchmark-data` it read
+    `0 == 0 > 0` and failed, reporting a coverage cut in a fan-out that is
+    perfectly intact. It was also a test whose STRENGTH depended on how many
+    cells somebody had published that week.
+
+    Two TRACKED cells are planted here instead, so the population is one this
+    test chose and the expected count is a number rather than a hope. The
+    untracked half — a leftover on the disk must NOT add a gate — is the
+    sibling test above; together they pin both directions.
+    """
+    import shutil
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        clone = Path(td) / "c"
+        (clone / "tools" / "ci").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        shutil.copy2(_LIB, clone / "tools/ci/_gate_dispatch.sh")
+        shutil.copy2(_HYGIENE, clone / "tools/ci/repo_hygiene_gates.sh")
+        shutil.copy2(_CORPUS_PRODUCER, clone / "tools/ci/routed_def_corpus.py")
+        resolver = (clone / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+                    / "programs")
+        resolver.mkdir(parents=True)
+        shutil.copy2(_CORPUS_LOCATION, resolver / "_corpus_location.py")
+        # ONE routed-DEF version per DESIGN. The producer refuses a design that
+        # publishes more than one ("a two-phase identity migration is required
+        # before this population can expand without duplicate gate owners"), so
+        # the older `ic/fam/{alpha,beta}` shape — two versions of one design —
+        # is now an illegal corpus and produced an empty population, not two
+        # cells. Two designs keep the planted count at two and stay legal.
+        for name in ("alpha", "beta"):
+            cell = (clone
+                    / f"benchmark-data/ic/fam_{name}/v1/phase3/stage3/pnr")
+            cell.mkdir(parents=True)
+            (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(["git", "-C", str(clone), "config", k, v], check=True)
+        subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"],
+                       check=True)
+
+        out = subprocess.run(
+            ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
+            cwd=str(clone), capture_output=True, text=True, timeout=_T)
+        assert out.returncode == 0, out.stderr
+        percell = [ln for ln in out.stdout.splitlines()
+                   if ln.startswith("macro OBS not crossed")]
+        tracked = subprocess.run(
+            ["git", "-C", str(clone), "ls-files", "--",
+             "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
+            capture_output=True, text=True, timeout=_T).stdout.split()
+
+    assert len(tracked) == 2, (
+        "the fixture did not track the two cells it planted, so the assertion "
+        f"below would be about nothing: {tracked}")
+    assert len(percell) == len(tracked), (
+        "the per-cell gates no longer cover every TRACKED cell: %d gate(s) "
         "for %d tracked routed.def" % (len(percell), len(tracked)))
 
 

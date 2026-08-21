@@ -93,6 +93,10 @@ import _flow_verdict_tiers as _T
 # this module reads `_flow_verdict_tiers` and nothing from here, so the verdict
 # path above cannot acquire a dependency on a classification.
 import _blocker_classification as _bc
+# The GUARD on the list `_bc` builds. Same downward direction: it reads
+# `_blocker_classification` and `_flow_verdict_tiers` and nothing from here, so
+# importing it cannot give the verdict path a dependency on a classification.
+import blocker_classification_check as _bcc
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -1640,6 +1644,28 @@ class StepResult:
     # fails for another reason the FAIL stands and this flag is what puts the
     # disclosure on the tally line anyway.
     structure_only_disclosed: bool = False
+    # vibe-ic#901 - True when SOME (not all) of this step's dispatched gate
+    # clauses declared, in their own --json report, that they examined nothing.
+    # The step KEEPS whatever tier its other clauses earned, because those DID
+    # examine the design; this field, the `reasons` line beside it and the
+    # tally annotation are what stop that partial emptiness from vanishing into
+    # a bare PASS. False on a step whose EVERY dispatched clause was vacuous -
+    # that one is VACUOUS_PASS, which already says so.
+    partial_vacuity_disclosed: bool = False
+    # vibe-ic#901 - True when THIS step reached VACUOUS_PASS through the
+    # structured-JSON channel added here rather than through the pre-existing
+    # rc=2 / stdout channel. Read by the ordering-violation pass so the new
+    # channel cannot DELETE a `PASS voided: dependency ...` line that origin/main
+    # would have printed. Never read as a tier.
+    json_vacuity_promoted: bool = False
+    # W4 - one entry per `optional_program_exit_zero` clause on this step whose
+    # `condition_files_exist` matched NO path, so the program never ran and the
+    # clause concluded nothing. Each entry carries the command and the reason
+    # the clause DECLARED for why an absent input is a genuine not-applicable;
+    # a clause that declares none is a FAIL and never reaches this list. Empty
+    # on a step where every declared clause was executed, which is the only
+    # state in which a bare PASS means what it says.
+    declared_not_applicable: List[str] = field(default_factory=list)
     # #497 step 1 — the STRUCTURED per-gate payload, emitted ALONGSIDE
     # `reasons` and read by nothing yet.
     #
@@ -1673,6 +1699,27 @@ class StepResult:
     #   {"name": str, "verdict": one of P0_GATE_VERDICTS,
     #    "message": str, "evidence": dict}
     gate_records: Optional[List[Dict[str, Any]]] = None
+    # WHICH QUESTION THIS STEP'S `required_outputs` VERDICT ANSWERS.
+    #
+    # Until this field existed, a `required_outputs` PASS meant only "a file
+    # matching the glob exists somewhere under the project" and was printed
+    # identically whether or not anything tied that file to this step. This
+    # says which of the two it is, per step:
+    #
+    #   {"mode": "step_attributed" | "project_glob" | "mixed",
+    #    "n_specs": int, "n_step_attributed": int, "n_project_glob": int,
+    #    "source": "step_folder" | "run_ledger" | None,
+    #    "notes": [str, ...]}
+    #
+    # `None` means the step declares no `required_outputs` — there was no
+    # resolution to attribute, which is a third state and not a degraded one.
+    # `project_glob` is the BACKWARD-COMPATIBLE path and is never silent: the
+    # `notes` say why (`no_steps_tree` for a published cell or a phase-driven
+    # run, `no_step_record`, a named resolver disagreement), and a PASS-tier
+    # step additionally carries a line in `reasons` so a reader of the TEXT
+    # report can tell a step-attributed PASS from a project-wide one without
+    # opening the JSON.
+    output_binding: Optional[Dict[str, Any]] = None
 
 
 # reports/ subdirs to also probe when a yaml-pattern starts with `reports/`.
@@ -1688,19 +1735,144 @@ _REPORTS_SUBDIR_FALLBACK = (
 )
 
 
+def _resolves_to_real_artefact(p: Path) -> bool:
+    """True when a glob hit is a path that ACTUALLY EXISTS once links are
+    followed — i.e. when something was really produced there.
+
+    `Path.glob` answers a question about DIRECTORY ENTRIES, not about files.
+    For a wildcard component it walks `os.scandir` and yields every matching
+    NAME without ever following it, so a symlink whose target was never
+    written — or was deleted afterwards — comes back as a match. `stat` (and
+    therefore `Path.exists`) follows the link and answers about the TARGET,
+    which is the thing the flow step was required to produce.
+
+    That split is already visible INSIDE `Path.glob` itself and is the whole
+    bug. A pattern with NO wildcard is served by pathlib's precise selector,
+    which existence-checks the name before yielding it, so a literal pattern
+    ALREADY drops a dangling link; a pattern with a wildcard is served by the
+    scandir selector and does not. Measured on CPython 3.10.12 with
+    `sub/chip.gds -> ./nowhere.gds`:
+
+        d.glob("sub/*.gds")    -> ['chip.gds']     # dangling link yielded
+        d.glob("sub/chip.gds") -> []               # dangling link dropped
+
+    So `phase3/stage4/gds/*.gds` (step 37's `required_outputs`) counted a
+    link-to-nowhere as a produced tape-out GDS while
+    `phase2/stage2/synth/post_dft_netlist.v` (step 12's, no wildcard) did not.
+    This predicate removes the inconsistency by giving every pattern the
+    literal pattern's already-correct behaviour.
+
+    Non-symlinks are returned True UNCONDITIONALLY and deliberately: `glob`
+    only yields entries `scandir` just reported, so re-stat'ing an ordinary
+    file could only ever manufacture a FALSE absence (EACCES on a parent, a
+    racing writer) for an artefact that is really there. Narrowing the new
+    rejection to `is_symlink()` is what keeps this fix from being able to
+    invent a new MISSING for any non-symlink path.
+
+    A symlink is NOT rejected for being a symlink — it is judged on what it
+    points at. Link -> real file (or real dir, or a chain ending at one) is
+    kept and every downstream read of it follows through to the target's own
+    bytes, size and mtime, because every such read goes through `stat`/`open`.
+    Only link -> nothing is dropped. A symlink LOOP resolves to nothing and is
+    therefore dropped too (`Path.exists` swallows the ELOOP `OSError` and
+    returns False).
+
+    This is the same rule `chip_gds_canonical_real_file_check.py` already
+    ships for the canonical GDS paths, quoted from its own module docstring:
+    "Existing `gds_size_check` follows symlinks transparently and reports the
+    target's size, so a symlink masking a missing tape-out artefact passes
+    audit." That gate is stricter — it bans symlinks at canonical GDS paths
+    outright. This one is the weakest rule that closes the falsely-green hole
+    everywhere, and it is deliberately weaker so that a symlink TREE stays
+    legal: see `_glob_first`.
+    """
+    try:
+        if not p.is_symlink():
+            return True
+        return p.exists()
+    except OSError:
+        return False
+
+
+def _glob_real(root: Path, pattern: str) -> List[Path]:
+    """`root.glob(pattern)`, sorted, with dangling symlinks removed.
+
+    Applied at EACH probe site in `_glob_first` rather than once over the
+    final result: a probe that matched nothing but dangling links must count
+    as a MISS so the `reports/<subdir>/` and canonical-analog fallbacks still
+    get their turn. Filtering only at the end would let a link-to-nowhere in
+    the first probe suppress the fallbacks and turn a findable artefact into
+    a spurious MISSING.
+
+    A pattern that names the ROOT rather than something under it matches no
+    artefact, and is answered here instead of being handed to `Path.glob`,
+    which THROWS on all three of its spellings (3.12 — each compiles to no
+    selectable part):
+
+        Path.glob(".")   IndexError: tuple index out of range
+        Path.glob("")    ValueError: Unacceptable pattern
+        Path.glob("./")  AttributeError: '_TerminatingSelector' object has no
+                         attribute 'select_from'
+
+    None is hypothetical. `"."` is what `Path("seed.flag").parent` is for ANY
+    project-root-relative declaration, and `_sibling_self_skip_for_missing`
+    hands that parent straight to this function for every missing `files_exist`
+    pattern; `""` is what the analog-remap branch of `_glob_first` computes as
+    `tail` when a pattern equals its own prefix. `check_step` runs in a
+    `ThreadPoolExecutor` and `main()` re-raises via `_fut.result()`, so the
+    throw does not fail one gate — it aborts the entire audit with a traceback,
+    no report and no exit code, which is strictly worse than the MISSING it was
+    on its way to computing.
+
+    Empty rather than "the root itself": the root is not an artefact any caller
+    is looking for, and the one caller that wants it as a DIRECTORY
+    (`_sibling_self_skip_for_missing`) already holds it as `project /
+    parent_rel` — `Path(p) / "." == Path(p)` — so nothing is lost.
+    """
+    if pattern.strip() in ("", ".", "./"):
+        return []
+    return sorted(m for m in root.glob(pattern)
+                  if _resolves_to_real_artefact(m))
+
+
 def _glob_first(project: Path, pattern: str) -> List[str]:
     """Return list of paths (relative to project) matching the glob pattern.
+
+    Only paths that RESOLVE are returned. A dangling symlink is a directory
+    entry, not a produced artefact, and this is the function every caller uses
+    to decide whether a flow step delivered what it declared: `check_step`'s
+    `required_outputs` probe and the `files_exist` gate
+    (`_check_files_exist`) both go through here. MEASURED before the fix on
+    the tracked run root `benchmark-data/ic/spm/v1.5.66_gf180mcuD`, step 1
+    (`required_outputs: phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v`,
+    gate `files_exist`): move every RTL file out of the project and leave a
+    symlink to a name that exists nowhere, and `check_step` returns
+    status='PASS' evidence=['phase2/stage1/rtl/spm.v']; delete those same
+    files outright and it returns 'FAIL'. Both trees contain no RTL, so
+    LEAVING A LINK TO NOTHING scored strictly BETTER than deleting the file —
+    the audit rewarded the tidier way of shipping nothing.
+
+    A symlink to a real file is kept and is judged on its target. That is not
+    a loophole, it is required: the owner's step-folder design IS a symlink
+    tree — `<run>/steps/<n>_<name>/<artefact> -> ../../phase2/...` — and the
+    tracked run roots carry 142 such links. 111 of them point at real files
+    and this function still returns every one; the 31 that point at files
+    which no longer exist (e.g.
+    `steps/9_synthesis_yosys_mapped_netlist/netlist.v ->
+    ../../phase2/stage2/synth/netlist.v`, target absent) are exactly the
+    artefacts-that-exist-nowhere this rule refuses to count. The step-folder
+    design is unaffected; only its broken entries stop counting as delivery.
 
     For patterns starting with ``reports/`` and finding no direct match,
     also probe ``reports/<subdir>/<rest>`` to accommodate the post-
     generate sweep that moves flat reports/ artefacts into category
     subdirs (sourced by `_REPORTS_SUBDIR_FALLBACK`).
     """
-    matches = sorted(project.glob(pattern))
+    matches = _glob_real(project, pattern)
     if not matches and pattern.startswith("reports/"):
         rest = pattern[len("reports/"):]
         for sd in _REPORTS_SUBDIR_FALLBACK:
-            matches = sorted(project.glob(f"reports/{sd}/{rest}"))
+            matches = _glob_real(project, f"reports/{sd}/{rest}")
             if matches:
                 break
     # v0.2.55 — canonical-analog-dir tolerance. The flow-def pins analog
@@ -1718,13 +1890,588 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
                 tail = pattern[len(_pref):]
                 try:
                     canon = _pl.analog_dir(project)
-                    canon_matches = sorted(canon.glob(tail))
+                    canon_matches = _glob_real(canon, tail)
                     if canon_matches:
                         matches = canon_matches
                         break
                 except Exception:
                     pass
     return [str(m.relative_to(project)) for m in matches]
+
+
+# ── STEP-ATTRIBUTED OUTPUT RESOLUTION ───────────────────────────────────────
+#
+# `_glob_first` answers "does a file matching this glob exist SOMEWHERE under
+# the project". `check_step` then reads that answer as "did THIS step produce
+# its declared output". Those are two different questions and the report has
+# never distinguished them: every `required_outputs` PASS in the 63xN matrix
+# looks the same whether the artefact sits where this step writes it or merely
+# somewhere a project-wide glob could reach.
+#
+# `step_output_collector.materialize()` builds `steps/<phase>/<stage>/
+# <id>_<slug>/` per step, and `step_write_ledger` writes the OBSERVATION half
+# beside it (`written.json`, plus the run-level `reports/write_ledger.json`).
+# Until this change NOTHING read either of them —
+#   grep -rl 'write_ledger' programs/*.py flow/*.yaml
+# returned only the two programs that WRITE it. This is the consumer.
+#
+# WHICH FILE IN THE STEP FOLDER IS THE SOURCE, AND WHY NOT THE OTHER ONE
+# ---------------------------------------------------------------------
+# The folder holds two files and only one of them is evidence.
+#
+#   outputs.json  is built from `required_outputs` via
+#                 flow_dashboard_data._resolve_spec. It is a RESTATEMENT of
+#                 the declaration; reading it to check the declaration is
+#                 reading a cache of the question. It also LIES on a real run:
+#                 on $HOME/_car15_evidence (a converged run,
+#                 phase23_completion_audit = PASS_WITH_WAIVERS) the step
+#                 folders record 90 outputs, and 7 of them — steps 15, 17, 19,
+#                 20, 21, 22 and 34, every one of those folders carrying
+#                 "status": "pass" — name a `rel` that does not exist in the
+#                 run directory at all (floorplan.def, placed.def,
+#                 post_cts.def, post_hold.def, routed.def,
+#                 user_project_wrapper.spef, filled.def). Trusting it would
+#                 have turned 7 currently-MISSING steps GREEN.
+#   written.json  is the lstat observation: kind, size, mtime, and the
+#                 declared-vs-landed residual, per THIS step's own specs.
+#                 That is what this resolver binds to.
+#
+# WHAT "PRODUCED BY THIS STEP" CAN AND CANNOT MEAN HERE
+# ----------------------------------------------------
+# CAN: the resolution is scoped to the step's OWN declaration and the answer
+# is recorded in the step's OWN folder, so a PASS is auditable at the step
+# instead of re-derived from a project-wide scan; and the artefact the PASS
+# rests on is the one that step's record names, re-verified live.
+# CANNOT: name the writing STEP. The flow declares `programs:` / `mcp_tools:`
+# per step; `provenance.jsonl` records EDA BINARIES (yosys/openroad/klayout)
+# and, where it carries a `step` field at all, phase-scoped labels like
+# "phase2:yosys_synth" (ONE distinct non-null value across the 32 records of
+# $HOME/_sky130A_r3_run). There is no mapping between those
+# vocabularies in this repo and this change does not invent one. So this is
+# STEP-SCOPED ATTRIBUTION, not producer attribution, and it says so in the
+# field name (`output_binding.mode = "step_attributed"`) rather than claiming
+# more.
+#
+# SHARED ARTEFACTS ARE NOT A FAILURE — BY CONSTRUCTION
+# ---------------------------------------------------
+# Some outputs are legitimately written once and read by many. Measured on the
+# shipped flow: of 161 distinct output patterns across 61 steps, exactly TWO
+# are declared by more than one step (`phase2/stage2/synth/netlist.v` by steps
+# 9 and 14; `phase3/mixed_signal/cosim/mixed_signal_results.json` by A9 and
+# M3). Because the unit of attribution is the step's DECLARATION and not a
+# single producer, both declaring steps resolve the same path independently
+# and BOTH stay green — the ledger builds each step's row against the same
+# snapshot. Had this been bound to "exactly one step may claim this write",
+# one of each pair would have gone red for doing nothing wrong. It is not.
+#
+# MONOTONE ON PURPOSE — IT CAN ONLY TAKE AWAY
+# -------------------------------------------
+# Every branch below either returns the project-wide answer unchanged or
+# returns a STRICTER one. There is no path on which a spec the project-wide
+# glob calls MISSING becomes satisfied. A step-folder record can therefore
+# never manufacture a green — which is what the `_car15_evidence` measurement
+# above says it would have done if it could.
+_STEP_BINDING_SCHEMA = 1
+
+
+def _binding_stat_key(project: Path) -> Tuple[Any, ...]:
+    """Cache key that INVALIDATES when the record changes.
+
+    Keyed on (project, stat of steps/index.json, stat of the run ledger)
+    rather than on the path alone: `check_step` is called ~63 times per audit
+    in a thread pool and re-reading 63 `written.json` files per step would be
+    63x the I/O, but a plain path-keyed cache would go stale the moment a
+    caller (a test, a re-run) regenerates the tree inside one process."""
+    def k(p: Path) -> Optional[Tuple[int, int]]:
+        try:
+            st = p.stat()
+        except OSError:
+            return None
+        return (int(st.st_mtime_ns), int(st.st_size))
+    return (str(project),
+            k(project / "steps" / "index.json"),
+            k(project / "reports" / "write_ledger.json"))
+
+
+def _index_ledger_row(row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """One `written.json` / run-ledger step row -> {spec: verdict}.
+
+    The ledger emits exactly one of the two per declared spec: a `produced`
+    entry (regular file, size > 0) or a D3 `declared_output_not_produced`
+    finding carrying the reason it is not one (`absent` / `zero_byte` /
+    `dangling_symlink` / `symlink_alias`). Both directions are indexed; a spec
+    the row does not mention at all stays ABSENT from this map and is treated
+    as "this step has no record for it", never as "not produced"."""
+    specs: Dict[str, Dict[str, Any]] = {}
+    for entry in (row.get("produced") or []):
+        if not isinstance(entry, dict):
+            continue
+        spec = str(entry.get("spec", ""))
+        rel = entry.get("rel")
+        if not spec or not rel:
+            continue
+        slot = specs.setdefault(spec, {"produced": [], "not_produced": None})
+        slot["produced"].append(str(rel))
+    for finding in (row.get("findings") or []):
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("dimension") != "D3":
+            continue
+        spec = str(finding.get("spec", ""))
+        if not spec:
+            continue
+        slot = specs.setdefault(spec, {"produced": [], "not_produced": None})
+        if slot["not_produced"] is None:
+            slot["not_produced"] = str(finding.get("reason") or "not_produced")
+    return specs
+
+
+@functools.lru_cache(maxsize=32)
+def _load_step_binding_cached(key: Tuple[Any, ...]) -> Dict[str, Any]:
+    project = Path(key[0])
+    steps_root = project / "steps"
+    index_path = steps_root / "index.json"
+
+    def unavailable(reason: str) -> Dict[str, Any]:
+        return {"schema": _STEP_BINDING_SCHEMA, "available": False,
+                "reason": reason, "rows": {}, "sources": {}}
+
+    if not index_path.is_file():
+        # The BACKWARD-COMPATIBLE path, and the common one. Published cells
+        # carry no `steps/` (benchmark_evidence_publish excludes it by name as
+        # "per-step scratch"), and any run driven straight at a phase runner
+        # never built one. Those runs get today's behaviour EXACTLY, and the
+        # verdict records that they did.
+        return unavailable("no_steps_tree")
+    try:
+        index = json.loads(index_path.read_text())
+        folders = {str(s.get("id")): str(s.get("folder"))
+                   for s in (index.get("steps") or [])
+                   if isinstance(s, dict) and s.get("folder")}
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return unavailable(f"steps_index_unreadable ({type(exc).__name__})")
+
+    rows: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    sources: Dict[str, str] = {}
+    for sid, folder in folders.items():
+        wj = steps_root / folder / "written.json"
+        try:
+            row = json.loads(wj.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(row, dict) or str(row.get("id")) != sid:
+            # A slice whose own `id` does not match the folder it sits in was
+            # grafted from somewhere else. It is not this step's record.
+            continue
+        rows[sid] = _index_ledger_row(row)
+        sources[sid] = "step_folder"
+
+    # Run-level ledger fills gaps. It is the SAME observation written by the
+    # same call (step_write_ledger.emit writes reports/write_ledger.json and
+    # then slices it into the step folders), so it is step-scoped evidence
+    # too — but a reader is told which of the two answered, because "the step
+    # folder said so" and "the run ledger said so" are not the same claim.
+    ledger_path = project / "reports" / "write_ledger.json"
+    if ledger_path.is_file():
+        try:
+            led = json.loads(ledger_path.read_text())
+            for row in (led.get("steps") or []):
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get("id"))
+                if sid and sid not in rows:
+                    rows[sid] = _index_ledger_row(row)
+                    sources[sid] = "run_ledger"
+        except (OSError, ValueError, TypeError):
+            pass
+
+    if not rows:
+        return unavailable("steps_tree_without_write_record")
+    return {"schema": _STEP_BINDING_SCHEMA, "available": True, "reason": None,
+            "rows": rows, "sources": sources}
+
+
+def _load_step_binding(project: Path) -> Dict[str, Any]:
+    try:
+        return _load_step_binding_cached(_binding_stat_key(project))
+    except Exception as exc:                                  # noqa: BLE001
+        # An unreadable record degrades to today's behaviour and SAYS SO. It
+        # never fails a step: the thing that would be lost is an attribution,
+        # not a verdict.
+        return {"schema": _STEP_BINDING_SCHEMA, "available": False,
+                "reason": f"binding_unreadable ({type(exc).__name__})",
+                "rows": {}, "sources": {}}
+
+
+def _live_artefact_state(p: Path) -> Tuple[bool, str]:
+    """(is a produced artefact, kind) — decided LIVE, from lstat, right now.
+
+    The step folder's record says WHICH path this step's spec resolved to;
+    this says whether that path is still an artefact. Both halves are needed
+    and neither is sufficient: a record alone is a claim about the past (the
+    `_car15_evidence` folders claim 7 files that are not there), and a live
+    scan alone is the project-wide glob this change exists to replace.
+
+    `produced` mirrors step_write_ledger._classify's rule — a regular file
+    with size > 0 — with ONE deliberate widening: a symlink that RESOLVES to a
+    non-empty regular file counts. The ledger records that as `symlink_alias,
+    produced=False` because an alias is not a write; but `_glob_first` accepts
+    it today (its own docstring: "the owner's step-folder design IS a symlink
+    tree ... the step-folder design is unaffected"), and rejecting it here
+    would be a NEW red on a path whose bytes are really there. Measured across
+    the 20 real run directories on this host that carry a `steps/` tree, ZERO
+    of the 92-106 declared outputs per run is a symlink, so the widening
+    costs nothing measurable and the narrowing would have been an unmeasured
+    risk taken for free. A DANGLING link and a ZERO-BYTE file are not
+    artefacts either way.
+    """
+    try:
+        st = os.lstat(str(p))
+    except OSError:
+        return False, "absent"
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        try:
+            tst = os.stat(str(p))
+        except OSError:
+            return False, "dangling_symlink"
+        if _stat.S_ISDIR(tst.st_mode):
+            return True, "symlink_to_dir"
+        if not _stat.S_ISREG(tst.st_mode):
+            return False, "symlink_to_non_file"
+        return (tst.st_size > 0), (
+            "symlink_alias" if tst.st_size > 0 else "symlink_to_empty_file")
+    if _stat.S_ISREG(st.st_mode):
+        return (st.st_size > 0), ("file" if st.st_size > 0 else "empty_file")
+    if _stat.S_ISDIR(st.st_mode):
+        # `_glob_first` accepts a directory match today; keeping that keeps
+        # this resolver monotone.
+        return True, "dir"
+    return False, "other"
+
+
+_GLOB_MAGIC = "*?["
+
+
+def _alt_is_wildcard(alt: str) -> bool:
+    """Does this ONE " OR " alternative name a set, or a path?
+
+    `phase2/stage1/rtl/*.sv` names a set; `phase2/stage1/sim/results.xml`
+    names a path. The distinction decides whether a live file that the step's
+    write record does NOT name may stand in for one that it does — see
+    WHAT A WILDCARD BINDS TO below. Split per ALTERNATIVE, not per spec,
+    because the shipped flow really does mix the two inside one entry (step
+    4: `phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR ...`;
+    step 22: `.../parasitic.spef OR .../*.spef`)."""
+    return any(c in alt for c in _GLOB_MAGIC)
+
+
+def _bind_detail(code: str, **kw: Any) -> Dict[str, Any]:
+    """One typed record of HOW a spec resolved, for a machine to act on.
+
+    The prose `note` is for a person; this is the field a caller branches on.
+    Closed vocabulary of `code` (anything else is a bug):
+
+      step_attributed      the record names it, it is still an artefact
+      recorded_set_partial the record names N, M<N survive — satisfied, and
+                           the residual is stated as a NUMBER, not a mood
+      wildcard_unbound     the record names N for a wildcard, ZERO survive,
+                           and the only live matches are files this step
+                           never recorded -> NOT satisfied
+      recorded_but_absent  the record names N, zero survive, nothing else
+                           matches -> not satisfied (pre-existing behaviour)
+      credited_unrecorded_alt  a LITERAL " OR " alternative the spec names by
+                           path is live while the recorded one is not — the
+                           any-of the OR spelling exists for
+      resolver_disagreement the record says not-produced, the project-wide
+                           glob (with its reports/ sweep + analog remap)
+                           found something live
+      not_produced         the record says not-produced and nothing live
+      no_step_record       this run's record does not mention this spec
+      no_binding           this run has no usable record at all (the
+                           BACKWARD-COMPATIBLE path: published cells,
+                           phase-driven runs, corrupt index)
+      audit_created        credited to a file this audit's own gate wrote
+                           (set by the caller, after the gate has run)
+    """
+    d: Dict[str, Any] = {"code": code}
+    d.update(kw)
+    return d
+
+
+def _resolve_required_output(project: Path, sid: Any, spec: str,
+                             binding: Dict[str, Any]
+                             ) -> Tuple[bool, List[str], str, Optional[str],
+                                        Dict[str, Any]]:
+    """Resolve ONE `required_outputs` entry for ONE step.
+
+    Returns (satisfied, evidence_rels, mode, note, detail) where mode is
+    "step_attributed" or "project_glob". `project_glob` is today's answer,
+    unchanged, and always carries a note saying why the step-scoped record
+    could not be used. `detail` is the same answer TYPED — see `_bind_detail`.
+
+    WHAT A WILDCARD BINDS TO
+    ========================
+    `phase2/stage1/rtl/*.sv` had no binding force at all: rename the recorded
+    `spm.v` to `spm_copy.v` and step 1 still PASSED, downgraded only to
+    `mode: "mixed"` with a sentence a human was asked to read. Three readings
+    of that pattern, and only one of them survives contact with the flow:
+
+      "exactly the files the record names" — WRONG. A design legitimately
+        gains an RTL file between runs, and set equality would red a step for
+        someone adding a module. Additions are still green here, and the new
+        file still enters the evidence list through the glob union below.
+      "any file at all that matches the glob" — WRONG, and it is the defect.
+        Under it, a file some OTHER step wrote, or a copy someone left
+        behind, discharges this step's declaration. That is what the rename
+        exploited.
+      "the recorded output set still EXISTS, in part or in whole" — the rule
+        implemented here. A wildcard spec whose record names N outputs is
+        satisfied when at least ONE of those N is still an artefact.
+        M-of-N is reported as `recorded_set_partial` with both numbers,
+        because "recorded 5, resolves 4" and "recorded 5, resolves 0" are
+        different facts and only the second is an absence.
+
+    WHY "AT LEAST ONE" AND NOT "ALL N"
+    ----------------------------------
+    Measured on the three real ledger-bearing runs ($HOME/_sky130A_r3_run,
+    campaign_v1544 gf180mcuD, campaign_v1574 sky130A, ledger generated by
+    `step_write_ledger.emit`): 24 wildcard specs per run, 6-7 of
+    them carrying a record, and the M-of-N state occurs ZERO times — every
+    recorded wildcard output is either wholly present or wholly absent. So
+    "all N" and "at least one" are INDISTINGUISHABLE on every real run
+    available, and the choice must be made on which failure they invent.
+    "All N" reds a step for a partial residual it has no evidence is a defect,
+    and it keys the verdict on a list `step_write_ledger` truncates at
+    `_MAX_LISTED` (4000) on a large SoC. "At least one" closes the measured
+    hole — the demonstrated rename goes MISSING — and hands the residual to
+    the caller as a number instead of spending it on a verdict it cannot
+    justify.
+
+    A LITERAL ALTERNATIVE IS NOT A WILDCARD, and keeps its any-of credit. The
+    " OR " spelling exists for one artefact with two accepted names; a spec
+    that NAMES `results.xml` by path and finds it is satisfied by it whether
+    or not the record happens to name the other alternative. Only the
+    wildcard alternatives lose the right to be discharged by a file the step
+    never recorded writing.
+
+    EVIDENCE SHAPE IS PRESERVED, and that is not cosmetic. The pre-change loop
+    appended the FIRST hit of EVERY matching " OR " alternative, not one hit
+    per spec, and `_evidence_integrity_scan` (#433/#434) then scans each
+    entry — a shorter evidence list is a smaller scan and therefore a WEAKER
+    check. Measured on real runs, 9 specs across four run roots really do
+    contribute more than one entry (step 4's four-way sim spec, step 27's
+    `si_crosstalk.rpt OR .json`, step 34's `filled.def OR metal_fill.done`),
+    so collapsing to one would have quietly reduced what gets scanned.
+    """
+    alts = [a.strip() for a in str(spec).split(" OR ") if a.strip()]
+    glob_ev: List[str] = []       # exactly what the pre-change loop collected
+    glob_hits: List[str] = []     # every hit, for classification
+    literal_hits: List[str] = []  # hits a NON-wildcard alternative NAMED
+    n_wild = 0
+    for sp in alts:
+        if _alt_is_wildcard(sp):
+            n_wild += 1
+        hits = _glob_first(project, sp)
+        if hits:
+            glob_ev.append(hits[0])
+            glob_hits.extend(hits)
+            if not _alt_is_wildcard(sp):
+                literal_hits.extend(hits)
+    glob_sat = bool(glob_hits)
+
+    if not binding.get("available"):
+        return (glob_sat, glob_ev, "project_glob", binding.get("reason"),
+                _bind_detail("no_binding", reason=binding.get("reason")))
+    rec = (binding.get("rows") or {}).get(str(sid), {}).get(str(spec))
+    if rec is None:
+        return (glob_sat, glob_ev, "project_glob", "no_step_record",
+                _bind_detail("no_step_record"))
+
+    # (a) THE STEP'S OWN RECORD NAMES THE PATH(S). Re-verify live; the record
+    #     is a statement about the past and must not outlive the file. Every
+    #     one that survives is evidence, for the reason in the docstring.
+    live_rec: List[str] = []
+    for rel in rec["produced"]:
+        if _live_artefact_state(project / rel)[0] and rel not in live_rec:
+            live_rec.append(rel)
+    if live_rec:
+        # Emit the pre-change evidence SHAPE — the record's paths intersected
+        # with what the old loop would have listed — rather than every path
+        # the record names. Two reasons, both measured. (1) It keeps the
+        # population `_evidence_integrity_scan` reads IDENTICAL, so any verdict
+        # difference this change produces is attributable to the binding and
+        # not to a scan that ran over a different set. (2) The record lists
+        # EVERY match of a wildcard spec: on $HOME/_car15_evidence
+        # step 1's `phase2/stage1/rtl/*.v` grew the evidence list from 1 entry
+        # to 5, and #525 already had to stop that scan reading whole files
+        # because it dominated audit wall-time on a large SoC. Falling back to
+        # the record's own first path when the two do not intersect keeps the
+        # step-attributed claim honest.
+        # UNION, NOT INTERSECTION. This was
+        #     ev = [r for r in glob_ev if r in live_rec] or live_rec[:1]
+        # and it SHRANK the population `_evidence_integrity_scan` reads, which is
+        # the one thing this binding must never do. MEASURED on a real run: with
+        # `phase2/stage2/synth/area.rpt` truncated to 0 bytes, step 9 went
+        # FAIL (#433, "evidence 0 bytes") -> PASS, because the 0-byte artefact was
+        # not in the ledger's produced list and the intersection dropped it — a
+        # change written to CATCH zero-byte outputs filtered a zero-byte output
+        # out of view.
+        #
+        # A path the glob resolves is a path the scan must judge, whether or not
+        # this step's ledger claims it. The ledger adds attribution; it does not
+        # get to remove evidence.
+        _seen: set = set()
+        ev = [r for r in list(live_rec) + list(glob_ev)
+              if not (r in _seen or _seen.add(r))]
+        # Set-backed, not list-scan: `step_write_ledger` lists up to
+        # `_MAX_LISTED` (4000) paths per row and this runs once per spec per
+        # step in a thread pool. An O(n^2) dedup here is 16M comparisons on a
+        # large SoC for a number nobody's verdict depends on.
+        _seen_rec: set = set()
+        _recorded = [r for r in rec["produced"]
+                     if not (r in _seen_rec or _seen_rec.add(r))]
+        _live_set = set(live_rec)
+        _lost = [r for r in _recorded if r not in _live_set]
+        if _lost:
+            # M OF N. Satisfied — the recorded output set still exists in
+            # part, and a design that drops one file of a wildcard set has
+            # not failed to produce the set. Reported as two NUMBERS so a
+            # consumer can act on the residual; a wildcard whose whole
+            # recorded set is gone is the branch below, and it is not this.
+            return True, ev, "step_attributed", (
+                f"{len(live_rec)} of {len(_recorded)} recorded output(s) for "
+                f"this pattern are still artefacts; no longer present: "
+                f"{_lost[:3]}"), _bind_detail(
+                    "recorded_set_partial", recorded=len(_recorded),
+                    live=len(live_rec), lost=_lost[:6],
+                    wildcard_alternatives=n_wild)
+        return True, ev, "step_attributed", None, _bind_detail(
+            "step_attributed", recorded=len(_recorded), live=len(live_rec))
+    if rec["produced"]:
+        detail = "; ".join(
+            f"{r} ({_live_artefact_state(project / r)[1]})"
+            for r in rec["produced"][:2])
+        _rec_set = set(rec["produced"])
+        alt = [h for h in glob_hits
+               if h not in _rec_set and _live_artefact_state(project / h)[0]]
+        _lit_set = set(literal_hits)
+        alt_literal = [h for h in alt if h in _lit_set]
+        if alt_literal:
+            # ANY-OF, and it is the reason " OR " exists. The spec NAMES this
+            # path — it is not a set the step happened to land in — so a live
+            # one discharges the entry whichever alternative the record
+            # happened to resolve. Do NOT invent an absence: today's verdict
+            # stands, disclosed. Evidence is the pre-change list so the
+            # integrity scan sees what it saw.
+            return True, glob_ev, "project_glob", (
+                f"step record names {detail}; credited instead to "
+                f"{alt_literal[0]}, a literal alternative this spec names"
+            ), _bind_detail("credited_unrecorded_alt",
+                            recorded=len(rec["produced"]), live=0,
+                            credited=alt_literal[0])
+        if alt:
+            # THE WILDCARD DID NOT BIND. Every live match came from a
+            # wildcard alternative and NONE of them is on this step's write
+            # record: the pattern proves that SOME file of that shape exists
+            # under the project, which is exactly what a file another step
+            # wrote also proves. The step's own recorded output set is gone,
+            # and that is an absence — reported as one instead of as a note.
+            return False, [], "step_attributed", (
+                f"wildcard did not bind: this step's write record names "
+                f"{len(rec['produced'])} output(s) for this pattern "
+                f"({detail}) and none is still an artefact; {alt[0]} matches "
+                f"the pattern but is on no write record of this step, so it "
+                f"evidences that a file of this shape exists, not that THIS "
+                f"step produced one"
+            ), _bind_detail("wildcard_unbound",
+                            recorded=len(rec["produced"]), live=0,
+                            unrecorded_matches=alt[:6],
+                            wildcard_alternatives=n_wild)
+        return False, [], "step_attributed", (
+            f"this step's own write record names {detail}"
+        ), _bind_detail("recorded_but_absent",
+                        recorded=len(rec["produced"]), live=0)
+
+    # (b) THE STEP'S OWN RECORD SAYS NOTHING WAS PRODUCED FOR THIS SPEC.
+    reason = rec.get("not_produced") or "not_produced"
+    live = [h for h in glob_hits if _live_artefact_state(project / h)[0]]
+    if live:
+        # The project-wide glob reaches places the ledger's plain glob does
+        # not (the `reports/<subdir>/` sweep fallback, the canonical-analog
+        # remap). A disagreement between two resolvers is not evidence of
+        # absence, so the green stands and the disagreement is disclosed.
+        #
+        # NOT TIGHTENED with the wildcard rule above, deliberately. Here the
+        # two resolvers disagree about whether ANYTHING was produced, and the
+        # documented reason they can disagree — `_glob_first`'s reports/
+        # sweep and its canonical-analog remap, neither of which
+        # `step_write_ledger._spec_candidates` implements — is a resolver
+        # limitation, not an absence. It occurs ZERO times on the three real
+        # ledger-bearing runs measured, all of them digital; the remap fires
+        # on ANALOG steps and no ledger-bearing analog run exists on this
+        # host to measure it against. Refusing it on that evidence would be
+        # taking an unmeasured risk for free. Typed as its own code so the
+        # decision is a field, not a silence.
+        return True, glob_ev, "project_glob", (
+            f"resolver disagreement — this step's write record says "
+            f"{reason!r}, the project-wide glob matched {live[0]}"
+        ), _bind_detail("resolver_disagreement", recorded=0,
+                        not_produced_reason=reason, credited=live[0])
+    if glob_sat:
+        return False, [], "step_attributed", (
+            f"not produced ({reason}); the project-wide glob matched "
+            f"{glob_hits[:1]}, which is not a produced artefact"
+        ), _bind_detail("not_produced", recorded=0,
+                        not_produced_reason=reason)
+    return (False, [], "step_attributed", f"not produced ({reason})",
+            _bind_detail("not_produced", recorded=0,
+                         not_produced_reason=reason))
+
+
+def _disclose_output_binding(result: "StepResult") -> "StepResult":
+    """Put the attribution on the TEXT report, for every step that has one.
+
+    BOTH directions are stated, deliberately. Annotating only the degraded
+    case would make "step-attributed" the meaning of SILENCE, and a reader
+    would be inferring the stronger claim from the absence of a line — which
+    is the shape this repo keeps finding under other names. One line per step
+    that declares outputs (at most 61 on the shipped flow), stating which
+    question the verdict above it answered."""
+    b = result.output_binding
+    if not b or not b.get("n_specs"):
+        return result
+    if any(r.startswith("OUTPUT ATTRIBUTION:") for r in result.reasons):
+        return result                       # both exits can reach this helper
+    n, k = b["n_specs"], b["n_step_attributed"]
+    # The typed codes go on the line in BOTH directions. `mixed` used to be a
+    # word whose content lived only in prose; a reader (human or grep) now
+    # gets the closed vocabulary that produced it.
+    codes = [c for c in (b.get("codes") or []) if c != "step_attributed"]
+    tail = f" codes={codes}" if codes else ""
+    if b["mode"] == "step_attributed":
+        src = b.get("source") or "step record"
+        where = ("steps/<phase>/<stage>/<id>_<slug>/written.json"
+                 if src == "step_folder" else "reports/write_ledger.json")
+        # A step-attributed verdict can still carry a residual
+        # (`recorded_set_partial`: the record named 5, 4 survive). Printing
+        # notes only on the degraded branch would have made that residual
+        # visible in the JSON and invisible in the report a person reads.
+        notes = "; ".join(b.get("notes") or [])
+        result.reasons.append(
+            f"OUTPUT ATTRIBUTION: step-attributed ({k}/{n} declared output(s) "
+            f"resolved against THIS step's own write record in {where}, "
+            f"re-verified live){tail}"
+            + (f" [{notes[:400]}]" if notes else ""))
+        return result
+    head = ("PROJECT-WIDE" if k == 0 else f"MIXED ({k}/{n} step-attributed)")
+    notes = "; ".join(b.get("notes") or []) or "no reason recorded"
+    result.reasons.append(
+        f"OUTPUT ATTRIBUTION: {head} — {n - k} of {n} declared output(s) were "
+        f"resolved by the project-wide glob, which answers 'a file matching "
+        f"this pattern exists somewhere under the project', NOT 'this step "
+        f"produced it'{tail} [{notes[:400]}]")
+    return result
 
 
 def _check_files_exist(project: Path, patterns: List[str], any_of: bool) -> tuple[bool, List[str], List[str]]:
@@ -2321,6 +3068,15 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         verdict, rc = "INVOCATION_ERROR", None
     else:
         verdict, rc = ("PASS", 0) if ok else ("FAIL", 1)
+        if verdict == "PASS" and _json_report_signals_vacuous(project, cmd_str):
+            # vibe-ic#901 — the ledger row is the GATE-granular verdict, and a
+            # gate that wrote `{"verdict": "NOT_APPLICABLE"}` into the report
+            # this very command named did not PASS anything. rc stays 0 (that
+            # is what the process returned, and the row states both) while the
+            # word matches what the gate said about itself. Derived from the
+            # SAME helper `_evaluate_gate` uses, so the ledger row and the step
+            # tier cannot disagree about one gate's own report.
+            verdict = "VACUOUS_PASS"
     _record_gate_execution(cmd_str, rc, verdict)
     return ok, out
 
@@ -2794,6 +3550,98 @@ def python_traceback_summary(stderr: str) -> str:
 # appears on the step line and in the JSON report whatever the tier.
 _ADVISORY_HINT_PREFIX = "__ADVISORY_HINT__: "
 
+# vibe-ic#901 - THE DENOMINATOR OF "EVERY SUB-GATE".
+#
+# The VACUOUS_PASS tier says "the step ran and every executed sub-gate was
+# vacuously satisfied", and it was decided by `vacuous_hints and not
+# non_hint_reasons`. That is not the same statement: a sub-gate that PASSES
+# SUBSTANTIVELY appends NOTHING, so silence and vacuity are indistinguishable
+# to it and ONE vacuous clause beside nine substantive ones reads as "every".
+#
+# MEASURED on a published 63-step run root: wiring `_json_report_signals_vacuous`
+# into the rc-0 path WITHOUT a denominator turned step 2 (Lint) from PASS into
+# VACUOUS_PASS on the strength of 1 vacuous clause out of 10 that ran. That
+# mis-fire is what withdrew the first #901 fix (v1.10.14 -> v1.10.18).
+#
+# So every gate clause that DISPATCHES A PROGRAM now says so. This marker is
+# the denominator; the vacuity markers are the numerator. Held out of
+# `non_hint_reasons` exactly like every other marker, so it can never itself
+# become a reason a step failed.
+_RAN_HINT_PREFIX = "__RAN_HINT__: "
+
+# vibe-ic#901 - vacuity disclosed through the gate's OWN --json report, kept
+# in a SEPARATE bucket from `_VACUOUS_HINT_PREFIX` on purpose.
+#
+# The legacy bucket (rc=2 sentinel, or `VACUOUS_PASS` at line-start in stdout)
+# keeps its existing tier power byte-for-byte: a repo that pinned "an analog
+# step that closed in simulation with no bench measurement must NOT be a bare
+# PASS" must keep that pin. Making the count govern the LEGACY bucket breaks
+# exactly those pins - MEASURED: 6 shipped test failures, three of them steps
+# leaving a disclosure tier and rejoining the executed-PASS numerator.
+#
+# This bucket is therefore strictly ONE-DIRECTIONAL. It can only ever turn a
+# step that would have been a BARE PASS into VACUOUS_PASS, and only when the
+# count says every clause that dispatched a program examined nothing. It can
+# never take a step OUT of a tier origin/main gave it.
+_JSON_VACUOUS_HINT_PREFIX = "__JSON_VACUOUS_HINT__: "
+
+# vibe-ic W4 - AN UNMET OPTIONAL CONDITION IS A NON-VERDICT, AND IT MUST BUY IT.
+#
+# `optional_program_exit_zero` runs its program only when at least one
+# `condition_files_exist` glob matches. When none match, this file returned
+# `True, reasons` — no marker, no reason, no record — and the clause became
+# indistinguishable from one that ran and found nothing. The comment above the
+# OPTIONAL branch stated the intent honestly ("no inputs -> N/A -> pass") and
+# the intent is the defect: an absent input means the gate CONCLUDED NOTHING,
+# and the whole of #539/#584/#1025 is the same sentence one layer up — "I could
+# not look" must not reach a reader as "I looked and it was clean".
+#
+# THE OPPOSITE IDIOM, FOR CONTRAST. OpenROAD-flow-scripts' `util/checkMetadata.py`
+# reads a rule set and exits 1 on `len(rules) == 0` ("No rules"), and exits 1
+# again for a rule whose metric is absent from `metadata.json`
+# ("[ERROR] Value not found for {field}"). Absent input is its FAILURE case. It
+# is why a stage skipped with `SKIP_DETAILED_ROUTE=1` — which still produces a
+# GDS and still lets `make finish` succeed — is caught: the missing
+# `detailedroute__route__drc_errors` fails `make metadata-check`. This repo's
+# default was the mirror image of that, and the same skipped stage would pass.
+#
+# WHAT REPLACES IT. An unmet condition now FAILS unless the clause DECLARES,
+# at its own wiring site in the flow YAML, why an absent input is a genuine
+# not-applicable:
+#
+#     optional_program_exit_zero:
+#       command: "..."
+#       condition_files_exist: ["..."]
+#       absent_condition_reason: "<why nothing to check is legitimate here>"
+#
+# DECLARED AT THE WIRING SITE AND NOT IN A REGISTRY, for the reason
+# `tools/ci/_gate_dispatch.sh` writes out at length for `uncheckable_until`: a
+# separate list keyed by step id and program name desynchronises silently — a
+# renamed program loses its entry, a deleted clause leaves a rotting one.
+# Deleting the clause deletes its exemption with it.
+#
+# NOT THE SAME QUESTION AS `flow_condition_reachability_check`. That program
+# asks whether a condition can be false EXACTLY WHEN the defect it guards
+# occurs (the self-disabling shape). This asks what the RUN learned when the
+# condition was in fact false, and demands that the answer be written down and
+# visible in the record. A condition can be perfectly reachable and still leave
+# a silent hole in every run where it does not fire.
+#
+# VISIBLE, NOT TIER-CHANGING. A declared not-applicable is held out of
+# `non_hint_reasons` and re-appended after the tier resolves, exactly like
+# `_ADVISORY_HINT_PREFIX`. It cannot promote or demote a step; it makes the
+# non-verdict readable. Whether a step every one of whose clauses was skipped
+# should leave the PASS tier is a separate decision with a corpus sweep in
+# front of it, and this change deliberately does not take it.
+_NOT_APPLICABLE_HINT_PREFIX = "__NA_HINT__: "
+
+#: An `absent_condition_reason` shorter than this is refused. A one-word
+#: "N/A" / "optional" is a declaration nobody can check, which is the hole
+#: with a label on it rather than the hole closed. The number is a floor on
+#: EFFORT, not a claim that length is truth; the shortest reason shipped in
+#: `flow/phase1_phase2_phase3.yaml` is well above it.
+_MIN_ABSENT_CONDITION_REASON = 40
+
 
 def _stdout_signals_waiver(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet contains
@@ -2816,6 +3664,80 @@ def _stdout_signals_token(snippet: str, token: str) -> bool:
     if not snippet:
         return False
     return any(line.lstrip().startswith(token) for line in snippet.splitlines())
+
+
+#: vibe-ic#901 — verdicts a gate writes to its OWN --json report that mean
+#: "I examined nothing". Read from the FILE, not from stdout: #887 established
+#: that a disclosure a project-path length can delete is not a disclosure, and
+#: stdout is exactly that channel (the consumer sees only the last 300 chars).
+_VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
+                          "VACUOUS_PASS", "NO_BUILD", "NOT_RUN"}
+
+
+def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
+    """True iff the gate's own JSON report declares it examined nothing.
+
+    ⚠️ NOT CURRENTLY WIRED INTO THE STEP TIER — see vibe-ic#901 follow-on.
+
+    Wiring this into the VACUOUS_PASS branch (v1.10.14) caused a MEASURED
+    regression: it turned a genuinely converged cell red. Controlled proof —
+    same run directory, byte-identical artefacts, only the audit binary
+    changed:
+
+        1.10.11  PASS=36 FAIL=0            -> PASS_WITH_WAIVERS
+        1.10.16  PASS=25 FAIL=0 VOIDED=8   -> FAIL
+
+    Root cause: the tier branch is `passed and vacuous_hints and not
+    non_hint_reasons`, and its own docstring says the intent is "EVERY executed
+    sub-gate was vacuously satisfied". `not non_hint_reasons` only approximates
+    that, because a gate that passes SUBSTANTIVELY says nothing at all. Reading
+    gates' JSON made far more gates emit a vacuity hint, so a step with one
+    legitimately-inapplicable gate (`drv_promotion_corroboration_check`: "no
+    route promotion this run") and several siblings that measured real design
+    content flipped to VACUOUS_PASS — cascading into 8
+    PASS_VOIDED_BY_DEPENDENCY and an overall FAIL with `failed_gate_count: 0`.
+
+    A FAIL that enumerates nothing as failed is the same defect class this
+    campaign exists to remove, so the hook is withdrawn rather than left in
+    while a better fix is designed.
+
+    Closing #901 properly needs the tier decision to compare vacuous hints
+    against the NUMBER OF GATE CLAUSES THAT RAN, so "every sub-gate" is
+    counted rather than inferred from silence. Until then the original #901
+    hole (a gate declaring NOT_APPLICABLE in JSON the consumer never opened)
+    remains open and is the lesser evil.
+
+    vibe-ic#901. Six gates exited 0 on an empty project without the consumer
+    seeing a disclosure — and the two sharpest were SELF-AWARE, printing
+    `{"verdict": "NOT_APPLICABLE", "reason": "... (step did not run)"}` into a
+    report the consumer never opened. `vacuous_testbench_check` was one of
+    them, which is the whole campaign in one line: the gate against vacuous
+    passes was itself consumed as a substantive pass.
+
+    The clause already knows the path — it is the `--json <path>` in the
+    command string it just ran — so this reads a channel that already exists
+    rather than asking gates to print something new. Doing it here also covers
+    gates written LATER, which patching six emitters would not.
+    """
+    m = re.search(r"--json[= ]+(\S+)", cmd or "")
+    if not m:
+        return False
+    p = Path(m.group(1).strip("'\""))
+    if not p.is_absolute():
+        p = project / p
+    try:
+        if not (p.is_file() and p.stat().st_size > 0):
+            return False
+        d = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return False
+    if not isinstance(d, dict):
+        return False
+    for key in ("verdict", "status"):
+        v = d.get(key)
+        if isinstance(v, str) and v.strip().upper() in _VACUOUS_JSON_VERDICTS:
+            return True
+    return False
 
 
 def _stdout_signals_vacuous(snippet: str) -> bool:
@@ -6796,6 +7718,31 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `files_exist` - top-level (any_of / all_of via flag)
     if "files_exist" in gate:
+        # W4 — `len(rules) == 0` IS THE FAILURE CASE, and it was the pass case.
+        # MEASURED on origin/main (397b3f25f) against an empty project tree:
+        #
+        #     _evaluate_gate(p, {"files_exist": []})  -> (True, [])
+        #     _evaluate_gate(p, {"all_of": []})       -> (True, [])
+        #     _evaluate_gate(p, {"any_of": []})       -> (False, ['no sub-gate
+        #                                                 passed in any_of'])
+        #
+        # Two of the three empty predicates certified a tree they had not
+        # looked at, and `any_of` — the one that got it right — shows the
+        # convention was already available. This is the same sentence
+        # `util/checkMetadata.py` writes as `if len(rules) == 0: exit(1)`.
+        #
+        # LANDING WITH NO DEBT: the shipped `flow/phase1_phase2_phase3.yaml`
+        # declares ZERO empty `files_exist` / `all_of` / `any_of` lists
+        # (measured over every step gate, step condition and the final gate),
+        # so the ratchet costs nothing today and refuses the first author who
+        # writes one tomorrow.
+        if not gate["files_exist"]:
+            reasons.append(
+                "files_exist: the required-file list is EMPTY, so this "
+                "predicate examined nothing and concluded nothing. An empty "
+                "corpus is a FAIL, not a pass — name the files this gate is "
+                "about, or delete the predicate.")
+            return False, reasons
         any_of = gate.get("any_of", False)
         all_of = gate.get("all_of", True) and not any_of
         passed, found, missing = _check_files_exist(
@@ -6854,6 +7801,19 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # accept the flag (byte-identical command otherwise).
         _cmd = _maybe_forward_skip_analog(project, _cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, _cmd)
+        # vibe-ic#901 - this clause DISPATCHED A PROGRAM. Recorded before
+        # anything is decided about it, so the denominator cannot depend on the
+        # outcome.
+        reasons.append(f"{_RAN_HINT_PREFIX}{_cmd}")
+        if passed and _json_report_signals_vacuous(project, _cmd):
+            # vibe-ic#901 - the gate exited 0 and declared, in the `--json`
+            # report THIS clause named, that it examined nothing. That is a
+            # disclosure and it was reaching no consumer. Read from the FILE,
+            # not from stdout: #887 established that a channel a project-path
+            # length can truncate is not a disclosure channel. Recorded
+            # unconditionally alongside whatever the legacy channels say, and
+            # counted - never tiered - below.
+            reasons.append(f"{_JSON_VACUOUS_HINT_PREFIX}{_cmd}")
         # Read BEFORE the pass/fail split and on the FULL snippet: the
         # 200-char truncation below would drop the sentinel, and the
         # disclosure is about what the gate certified, not about whether it
@@ -6904,8 +7864,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
     # when one or more `condition_files_exist` paths exist. Used for
     # gates that apply to a subset of projects (e.g. L10/L12 conformance
     # only when L10/L12 docs exist; FPGA verification audit only when
-    # the human report exists). Skipping returns True so the gate
-    # doesn't block projects that legitimately don't ship the input.
+    # the human report exists). Skipping no longer returns a bare True: since
+    # W4 it returns True only for a clause that DECLARED why an absent input
+    # is a genuine not-applicable, and it says so in the record. See
+    # `_NOT_APPLICABLE_HINT_PREFIX` for what that costs and why.
     if "optional_program_exit_zero" in gate:
         spec = gate["optional_program_exit_zero"]
         if not isinstance(spec, dict):
@@ -6927,7 +7889,30 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for pat in cond_files:
             present.extend(project.glob(pat))
         if not present:
-            return True, reasons  # no inputs -> N/A -> pass
+            # NOTHING TO CHECK IS NOT A PASS. The condition matched no path,
+            # so `cmd` did not run and this clause concluded nothing about its
+            # subject. That is a legitimate state — and it has to be BOUGHT at
+            # the wiring site, not assumed, or it is indistinguishable from a
+            # gate that quietly stopped covering anything.
+            why = spec.get("absent_condition_reason")
+            why = why.strip() if isinstance(why, str) else ""
+            if len(why) < _MIN_ABSENT_CONDITION_REASON:
+                reasons.append(
+                    f"optional_program_exit_zero: condition_files_exist "
+                    f"{cond_files} matched 0 path(s) under {project}, so "
+                    f"`{cmd}` did NOT run and this clause examined nothing — "
+                    f"and the clause declares no usable "
+                    f"`absent_condition_reason` "
+                    f"({'absent' if not why else f'only {len(why)} char(s)'}; "
+                    f"{_MIN_ABSENT_CONDITION_REASON} required). Nothing to "
+                    f"check is a FAIL, not a pass; declare at the clause why "
+                    f"an absent input is a genuine not-applicable here.")
+                return False, reasons
+            reasons.append(
+                f"{_NOT_APPLICABLE_HINT_PREFIX}{cmd} — condition_files_exist "
+                f"{cond_files} matched 0 path(s), so the program did not run "
+                f"and nothing was checked. Declared not-applicable: {why}")
+            return True, reasons
         # GAP-B (#789) — forward --skip-analog (+ reviewable --analog-anchor)
         # when the run defers the analog track AND this optional gate's program
         # declares the flag (e.g. l10/l12 tb-conformance, #773). Verbatim
@@ -6936,6 +7921,16 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # hands over the flag the gate already knows how to honour.
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, cmd)
+        # vibe-ic#901 - the clause's condition files existed, so it dispatched
+        # a program. An optional clause whose condition is UNMET returns above
+        # without reaching here and is deliberately NOT counted: it examined
+        # nothing AND declared nothing, which is a different hole.
+        reasons.append(f"{_RAN_HINT_PREFIX}{cmd}")
+        if passed and _json_report_signals_vacuous(project, cmd):
+            # vibe-ic#901 - the same structured disclosure, read in the OPTIONAL
+            # slot too. A disclosure only counts if the consumer reads it in
+            # BOTH slots; the same programs are wired through each.
+            reasons.append(f"{_JSON_VACUOUS_HINT_PREFIX}{cmd}")
         if _stdout_signals_structure_only(out):
             reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
                            f"{_structure_only_note(out) or cmd}")
@@ -7000,7 +7995,42 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             for pat in cond_files:
                 present.extend(project.glob(pat))
             if not present:
-                return True, reasons  # no inputs -> not applicable -> silent
+                # W4 — SILENT was the word, and it was the defect. Three lines
+                # below, this same branch refuses to let an rc-2 disclosed skip
+                # read as a clean result because "recorded nothing must never
+                # be indistinguishable from found nothing"; an unmet condition
+                # records nothing AT ALL, which is the same substitution with
+                # the program not even started. `fpga_led_probe_lint`'s own
+                # SKILL.md states the exposure in the shipped flow: "over the
+                # 28 published run roots it executes on 1 and is silent on 27".
+                #
+                # A MISSING DECLARATION IS A FAIL HERE TOO, advisory tier
+                # notwithstanding — this branch already treats a malformed
+                # advisory spec as "a real gate-authoring FAIL, not an advisory
+                # one", and an undeclared not-applicable is the same class of
+                # authoring defect. What the tier protects is the gate's
+                # FINDINGS, not its wiring.
+                why = spec.get("absent_condition_reason")
+                why = why.strip() if isinstance(why, str) else ""
+                if len(why) < _MIN_ABSENT_CONDITION_REASON:
+                    reasons.append(
+                        f"advisory_program_exit_zero: condition_files_exist "
+                        f"{cond_files} matched 0 path(s) under {project}, so "
+                        f"`{cmd}` did NOT run and recorded nothing — and the "
+                        f"clause declares no usable `absent_condition_reason` "
+                        f"({'absent' if not why else f'only {len(why)} char(s)'}"
+                        f"; {_MIN_ABSENT_CONDITION_REASON} required). An "
+                        f"advisory slot never blocks on a FINDING; it does not "
+                        f"get to be silent about not having looked.")
+                    return False, reasons
+                # Recorded on the slot's OWN channel, which the `all_of`
+                # whitelist already carries, so the disclosure cannot be
+                # dropped one level up.
+                reasons.append(
+                    f"{_ADVISORY_HINT_PREFIX}n/a (declared; condition "
+                    f"{cond_files} matched 0 path(s), so it did not run): "
+                    f"{cmd} — {why}")
+                return True, reasons
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         ok, out = _check_program_exit_zero(project, cmd)
         if ok and out.startswith(_VACUOUS_HINT_PREFIX):
@@ -7019,6 +8049,17 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `all_of` - list of sub-gates, all must pass
     if "all_of" in gate and isinstance(gate["all_of"], list):
+        # W4 — an empty conjunction is vacuously true in logic and vacuously
+        # CERTIFYING here, which is the difference that matters: `all_of: []`
+        # is a step declaring a gate and running none of it. Refused for the
+        # same reason as the empty `files_exist` list above, and with the same
+        # measured zero debt on the shipped flow.
+        if not gate["all_of"]:
+            reasons.append(
+                "all_of: the sub-gate list is EMPTY, so this gate dispatched "
+                "nothing and concluded nothing. A gate that ran no sub-gate "
+                "is a FAIL, not a pass.")
+            return False, reasons
         # Wave 93 — preserve VACUOUS_HINT reasons from passing sub-gates so
         # the step-level handler can promote a step whose every executed
         # sub-gate was vacuously satisfied.
@@ -7048,7 +8089,16 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                             if h.startswith(_ADVISORY_HINT_PREFIX))
                 return False, reasons
             for hint in r:
-                if hint.startswith(_VACUOUS_HINT_PREFIX):
+                if hint.startswith(_RAN_HINT_PREFIX):
+                    # vibe-ic#901 - the DENOMINATOR travels with the numerator.
+                    # This loop is a whitelist, so a `__RAN_HINT__` dropped here
+                    # would leave the step-level count comparing vacuous clauses
+                    # against a denominator of zero - i.e. straight back to
+                    # "silence means substance".
+                    reasons.append(hint)
+                elif hint.startswith(_JSON_VACUOUS_HINT_PREFIX):
+                    reasons.append(hint)
+                elif hint.startswith(_VACUOUS_HINT_PREFIX):
                     reasons.append(hint)
                 elif hint.startswith(_WAIVER_HINT_PREFIX):
                     # #651 — a PASS_WITH_WAIVERS sub-gate makes the whole
@@ -7076,6 +8126,31 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     # which is precisely the shape of defect the tier exists
                     # to make visible.
                     reasons.append(hint)
+                elif hint.startswith(_SUBSTANTIVE_HINT_PREFIX):
+                    reasons.append(hint)
+                elif hint.startswith(_NOT_APPLICABLE_HINT_PREFIX):
+                    # W4 — the whitelist's own warning, come true a THIRD time.
+                    # MEASURED before this branch existed, on a tree carrying
+                    # step 2's required_outputs and an RTL directory but none
+                    # of the Phase-1 documents its optional clauses read: five
+                    # of the nine clauses did not run, each emitted its
+                    # declared not-applicable record, and every one of the five
+                    # was dropped at this line. `check_step` then reported
+                    # `declared_not_applicable: 0` and a bare PASS — the
+                    # disclosure dying one level below the line meant to carry
+                    # it, which is the shape the comment above predicts.
+                    reasons.append(hint)
+                elif hint.startswith(_INCOMPLETE_HINT_PREFIX):
+                    # The whitelist's own warning, come true. #599 added these
+                    # two tiers to `program_exit_zero` and did NOT add them
+                    # here, so a sub-gate that printed `INCOMPLETE:` inside an
+                    # `all_of` had its refusal dropped at this line and the
+                    # step was reported as a bare PASS — the exact failure the
+                    # comment above describes. MEASURED: step 25's and step
+                    # 33's new authority clauses print the token, exit 0, and
+                    # before this branch existed `check_step` returned PASS
+                    # with the hint absent from `reasons` entirely.
+                    reasons.append(hint)
         return True, reasons
 
     # `any_of` - list of sub-gates, any one passes
@@ -7096,8 +8171,18 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     "consulted. Put the advisory gate in an `all_of` "
                     "alongside them instead (#306).")
                 return False, reasons
-            p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if p:
+                # W4 — an `any_of` satisfied by a branch that DID NOT RUN is
+                # the group's whole verdict resting on a non-verdict. The
+                # branch still passes (a declared not-applicable is a legal
+                # pass), but the record has to say which branch carried the
+                # group and that it examined nothing; otherwise this is the
+                # dropped-disclosure shape of the `all_of` whitelist above,
+                # one branch over.
+                reasons.extend(
+                    h for h in r
+                    if h.startswith(_NOT_APPLICABLE_HINT_PREFIX))
                 return True, reasons
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
@@ -7961,8 +9046,10 @@ def _analog_trigger_undecidable(project: Path, pat: str) -> bool:
 def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
     """Does this analog block list declare at least one block?
 
-    True  — a non-empty `blocks` / `analog_blocks` array, and not `no_analog`.
-    False — parsed cleanly and positively declares none.
+    True  — a non-empty `blocks` / `analog_blocks` array.
+    False — parsed cleanly and positively declares none: an empty
+            `blocks` / `analog_blocks` array, OR a bare `no_analog: true`
+            with no block array at all.
     None  — could not be read or parsed; the caller must NOT read that as
             "no analog". Unreadable is not evidence of absence.
     """
@@ -7976,7 +9063,26 @@ def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
     if blocks is None:
         blocks = d.get("analog_blocks")
     if not isinstance(blocks, list):
-        # No block array at all — this file is not the shape we can judge.
+        # No usable block array. A bare `no_analog: true` is nonetheless a
+        # PARSEABLE, AFFIRMATIVE declaration of none — the strongest one the
+        # schema has — so it is decidable, not undecidable. Reading it as
+        # "unknown shape" re-creates for the flag-only form the exact defect
+        # this whole guard exists to fix: the emitters' A-step gates already
+        # stand down on it (`_analog_a_check_common.load_block_list` yields
+        # [] -> VACUOUS_PASS "no analog blocks declared"), so the flow would
+        # hold thirteen steps applicable that every gate certifies as
+        # inapplicable, and each would land MISSING on a design with no
+        # analog work TO do.
+        #
+        # Scoped as narrowly as the evidence allows, to keep the fail-LOUD
+        # property intact: the flag decides ONLY when NEITHER block key is
+        # present (`blocks is None` after both lookups). A block array that
+        # is present but MALFORMED (`"blocks": "oops"`) contradicts the flag,
+        # and a self-contradictory list stays undecidable so somebody has to
+        # look at it — the same polarity as the named-block-beats-the-flag
+        # rule below.
+        if blocks is None and d.get("no_analog") is True:
+            return False
         return None
     # A named block WINS over a `no_analog` flag that contradicts it. The two
     # disagreeing is a Phase-1 defect, and the non-suppressive reading of a
@@ -8190,6 +9296,32 @@ def _coverage_selfskip_superseded_by_professional_tb(
     return bool(_NO_TRANSCRIPT_PREMISE_RE.search(reason or ""))
 
 
+#: A declared output whose own machine-readable ``verdict`` field says the
+#: producing run FAILED. Same #433c verdict-self-report contract the
+#: SKIPPED-CONDITION branch below already honours, read off the same field of
+#: the same already-parsed document — only the value differs.
+#:
+#: MEASURED, and this is why it exists (63x9 matrix, dimension 8, 2026-08-19):
+#: over the 16 steps whose REAL gate reaches a PASS tier on a synthesized tree,
+#: rewriting every declared JSON output to self-report SKIPPED-CONDITION moved
+#: the verdict on 3 of the 3 that reach a plain PASS — the channel works — while
+#: rewriting the SAME files, at the SAME field, to self-report FAIL moved
+#: 0 of 16. `check_step` opened the artefact, parsed it, read `verdict`,
+#: compared it against exactly one value and reported the step green on an
+#: output whose own content says the run failed.
+#:
+#: BLOCKING. A step whose declared output self-reports FAIL resolves to FAIL,
+#: which stops a strict flow. It is a DEMOTION rule and can only ever move a
+#: plain PASS downwards: it never creates, promotes or waives a verdict.
+#:
+#: Deliberately NARROW: only the ``verdict`` field (the one this scan already
+#: reads), only on a plain PASS (the tier this scan already guards), only these
+#: three values. `status`, `summary.*` and the wider SELF_SKIP vocabulary that
+#: `test_matrix_d6_skip_discipline.SELF_SKIP_VERDICTS` recognises are NOT read
+#: here, and that limit is stated rather than left to be discovered.
+_SELF_FAIL_VERDICTS = frozenset({"FAIL", "FAILED", "FAILURE"})
+
+
 def _evidence_integrity_scan(project: Path,
                              result: "StepResult") -> "StepResult":
     if result.status != "PASS" or not result.evidence:
@@ -8197,6 +9329,7 @@ def _evidence_integrity_scan(project: Path,
     stub_hits: List[str] = []
     broken: List[str] = []
     self_skipped: List[str] = []
+    self_failed: List[str] = []
     superseded: List[str] = []
     # Computed lazily on the first coverage self-skip encountered.
     _pro_pass: Optional[Dict[str, Any]] = None
@@ -8225,8 +9358,11 @@ def _evidence_integrity_scan(project: Path,
             except ValueError:
                 d = None
             if isinstance(d, dict):
-                if str(d.get("verdict", "")).upper().replace("_", "-") \
-                        == "SKIPPED-CONDITION":
+                _verdict = str(d.get("verdict", "")).upper().replace("_", "-")
+                if _verdict in _SELF_FAIL_VERDICTS:
+                    self_failed.append(f"{rel}: verdict={d.get('verdict')!r}")
+                    continue
+                if _verdict == "SKIPPED-CONDITION":
                     reason = str(d.get("reason", ""))
                     if not _pro_computed:
                         _pro_pass = _srb.find_professional_tb_pass(project)
@@ -8248,12 +9384,24 @@ def _evidence_integrity_scan(project: Path,
                     if not tgt.is_file() or tgt.stat().st_size == 0:
                         broken.append(
                             f"{rel} → evidence '{ev_ptr}' missing/empty")
-    if broken:
+    # Both buckets resolve to FAIL, so they are reported TOGETHER rather than
+    # through an elif: a step can carry a 0-byte artefact AND another whose
+    # verdict says FAIL, and an elif would silently drop one of the two
+    # reasons while the status stayed the same. Nothing about the pre-existing
+    # EVIDENCE_MISSING branch changes when `self_failed` is empty.
+    if self_failed or broken:
         result.status = "FAIL"
-        result.reasons.append(
-            "EVIDENCE_MISSING (#433): verdict artifact(s) reference "
-            "evidence that does not exist or is empty — a PASS nothing "
-            "substantiates is not a PASS: " + "; ".join(broken[:4]))
+        if self_failed:
+            result.reasons.append(
+                "VERDICT_SELF_REPORTS_FAIL (#433c): declared output(s) carry a "
+                "machine-readable verdict saying the run FAILED — a PASS "
+                "contradicted by its own evidence is not a PASS: "
+                + "; ".join(self_failed[:4]))
+        if broken:
+            result.reasons.append(
+                "EVIDENCE_MISSING (#433): verdict artifact(s) reference "
+                "evidence that does not exist or is empty — a PASS nothing "
+                "substantiates is not a PASS: " + "; ".join(broken[:4]))
     elif stub_hits:
         result.status = "WAIVED"
         result.reasons.append(
@@ -8558,23 +9706,65 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # area.rpt AND stats.json were both absent and it reported PASS because
     # netlist.v was there. A declared output nobody verifies is not a
     # requirement, and a step that never produced it has not been measured.
+    #
+    # RESOLVED PER STEP (see `_resolve_required_output`). The question asked
+    # of each entry is no longer "does a file matching this glob exist
+    # somewhere under the project" but "does THIS step's own folder record
+    # this artefact as written, and is it still one". A run with no `steps/`
+    # tree — every published cell, every phase-driven run — falls back to the
+    # project-wide glob UNCHANGED and the fallback is recorded in
+    # `output_binding`, never taken silently.
     outputs = step.get("required_outputs", [])
     missing_entries: List[str] = []
+    _binding = _load_step_binding(project) if outputs else None
+    _bind_notes: List[str] = []
+    _bind_modes: Dict[str, str] = {}
+    _bind_specs: List[Dict[str, Any]] = []
+    _n_attr = 0
+    _n_glob = 0
     for pat in outputs:
-        # split "A OR B"
-        hit_any = False
-        for sp in (p.strip() for p in pat.split(" OR ")):
-            if _glob_first(project, sp):
-                hit_any = True
-                break
-        if hit_any:
-            # record evidence
-            for sp in (p.strip() for p in pat.split(" OR ")):
-                for h in _glob_first(project, sp):
-                    result.evidence.append(h)
-                    break
+        _sat, _ev, _mode, _note, _detail = _resolve_required_output(
+            project, sid, pat, _binding or {})
+        _bind_modes[pat] = _mode
+        if _mode == "step_attributed":
+            _n_attr += 1
+        else:
+            _n_glob += 1
+        # TYPED, per spec — the half of `mixed` a machine can branch on.
+        # `mode` alone conflated "this run predates the record" with "the
+        # green rests on a file this step never recorded writing", and the
+        # only place the difference lived was a sentence in `notes`.
+        _bind_specs.append(dict(_detail, spec=pat, mode=_mode,
+                                satisfied=bool(_sat)))
+        if _note:
+            _bind_notes.append(f"{pat}: {_note}")
+        if _sat:
+            result.evidence.extend(_ev)
         else:
             missing_entries.append(pat)
+    if outputs:
+        _src = None
+        if _binding and _binding.get("available"):
+            _src = (_binding.get("sources") or {}).get(str(sid))
+        elif _binding:
+            # RUN-LEVEL degradation (no steps/ tree at all, unreadable index).
+            # One note, not one per spec: the reason is a property of the run,
+            # and repeating it 14 times for step D1 would bury the per-spec
+            # notes that ARE per-spec under a wall of the same sentence.
+            _bind_notes = [f"whole run: {_binding.get('reason')}"]
+        result.output_binding = {
+            "mode": ("step_attributed" if _n_glob == 0 else
+                     "project_glob" if _n_attr == 0 else "mixed"),
+            "n_specs": len(outputs), "n_step_attributed": _n_attr,
+            "n_project_glob": _n_glob, "source": _src,
+            # `codes` is the machine handle: a closed vocabulary (see
+            # `_bind_detail`) that says WHICH degradation `mixed` is made of.
+            # A consumer asks `"wildcard_unbound" in codes`, not "does the
+            # note contain the word credited".
+            "codes": sorted({str(d.get("code")) for d in _bind_specs}),
+            "specs": _bind_specs[:16],
+            "notes": _bind_notes[:12],
+        }
 
     # PARTIAL evidence keeps the gate in play. Two different promotions live
     # downstream of here and both must survive: the gate's own per-file
@@ -8704,7 +9894,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                         f"marker owns, so its verdict would restate that "
                         f"absence, not add a finding.")
         return _apply_capability_gap(
-            _evidence_integrity_scan(project, result), sid)
+            _evidence_integrity_scan(project, _disclose_output_binding(result)),
+            sid)
 
     # Now evaluate the gate predicate
     gate = step.get("gate")
@@ -8810,6 +10001,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # after the status is decided.
         advisory_hints = [r for r in reasons
                           if r.startswith(_ADVISORY_HINT_PREFIX)]
+        # W4 — a clause whose `condition_files_exist` matched nothing, which
+        # therefore ran no program and concluded nothing, and which DECLARED
+        # why that is a genuine not-applicable. Held out here and re-appended
+        # visibly below, exactly like `advisory_hints`: it must not become a
+        # reason a step failed, and it must not silently vanish either. It
+        # deliberately does not move the tier — see `_NOT_APPLICABLE_HINT_PREFIX`.
+        na_hints = [r for r in reasons
+                    if r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
         # The structure-only disclosure is NOT a reason the step failed and
         # NOT a reason it passed; it says what the step produced. It is read
         # on both paths and never suppresses another verdict.
@@ -8827,14 +10026,34 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                              if r.startswith(_SUBSTANTIVE_HINT_PREFIX)]
         incomplete_hints = [r for r in reasons
                             if r.startswith(_INCOMPLETE_HINT_PREFIX)]
+        # vibe-ic#901 - the DENOMINATOR: clauses that dispatched a gate program.
+        # Predicate-only clauses (`files_exist`, `json_field_true`) are
+        # deliberately NOT counted: they cannot populate the numerator, so
+        # counting them would let a step leave the vacuous tier without any
+        # clause having said it examined anything.
+        ran_hints = [r for r in reasons
+                     if r.startswith(_RAN_HINT_PREFIX)]
+        # vibe-ic#901 - the NUMERATOR contributed by the structured channel,
+        # kept apart from the legacy bucket above so it cannot alter any tier
+        # the legacy bucket already decides.
+        json_vacuous_hints = [r for r in reasons
+                              if r.startswith(_JSON_VACUOUS_HINT_PREFIX)]
+        # Every clause that disclosed emptiness, by whichever channel, without
+        # double-counting a clause that used both.
+        all_vacuous_cmds = {r[len(_VACUOUS_HINT_PREFIX):] for r in vacuous_hints}
+        all_vacuous_cmds |= {r[len(_JSON_VACUOUS_HINT_PREFIX):]
+                             for r in json_vacuous_hints}
         non_hint_reasons = [r for r in reasons
-                            if not r.startswith(_VACUOUS_HINT_PREFIX)
+                            if not r.startswith(_RAN_HINT_PREFIX)
+                            and not r.startswith(_JSON_VACUOUS_HINT_PREFIX)
+                            and not r.startswith(_VACUOUS_HINT_PREFIX)
                             and not r.startswith(_SKIP_HINT_PREFIX)
                             and not r.startswith(_WAIVER_HINT_PREFIX)
                             and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
                             and not r.startswith(_ADVISORY_HINT_PREFIX)
                             and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
-                            and not r.startswith(_INCOMPLETE_HINT_PREFIX)]
+                            and not r.startswith(_INCOMPLETE_HINT_PREFIX)
+                            and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints and not vacuous_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
@@ -8912,9 +10131,62 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # The step ran and produced its declared artefact — from a library
             # default. PASS would say the artefact is design-bound; it is not.
             result.status = "STRUCTURE-ONLY"
+        elif (passed and json_vacuous_hints and not non_hint_reasons
+                and not skip_hints
+                and len(all_vacuous_cmds) >= len(ran_hints)):
+            # vibe-ic#901 - the structured channel, COUNTED.
+            #
+            # Placed LAST on purpose: every other tier is resolved before this
+            # branch is reached, so the only verdict this can ever displace is a
+            # BARE PASS. It cannot take a step out of WAIVED, SKIPPED-CONDITION,
+            # INCOMPLETE, STRUCTURE-ONLY or the legacy VACUOUS_PASS, and `passed`
+            # being false falls through to the FAIL arm below - a FAIL can never
+            # be silenced by a vacuous sibling.
+            #
+            # The count is what the first attempt lacked. `>=` and not `==`
+            # because a vacuous clause may be reached by a path that emits no
+            # RAN marker; the comparison may only ever WITHHOLD this tier from a
+            # step some clause substantively examined, never grant it to one no
+            # clause did.
+            result.status = "VACUOUS_PASS"
+            result.json_vacuity_promoted = True
+            for c in sorted(all_vacuous_cmds):
+                result.reasons.append(
+                    f"vacuous: the gate's own --json report declares it "
+                    f"examined nothing, and it is {len(all_vacuous_cmds)} of "
+                    f"{len(ran_hints)} gate clause(s) that ran here: {c}")
         else:
             result.status = "PASS" if passed else "FAIL"
             result.reasons.extend(non_hint_reasons)
+        # vibe-ic#901 - the tier is a per-STEP word and a partially vacuous step
+        # has no such word: some of its clauses examined the design and some
+        # examined nothing. Both facts are true and one label can carry only
+        # one. Whichever tier resolved above, the clauses that disclosed
+        # emptiness through the structured channel are named HERE - on the step
+        # line, in `reasons`, in a typed field and in the tally - rather than
+        # being dropped for failing to be unanimous.
+        if result.status != "VACUOUS_PASS" and json_vacuous_hints:
+            result.partial_vacuity_disclosed = True
+            for h in json_vacuous_hints:
+                result.reasons.append(
+                    f"PARTIALLY-VACUOUS ({len(all_vacuous_cmds)} of "
+                    f"{max(len(ran_hints), len(all_vacuous_cmds))} gate "
+                    f"clause(s) examined nothing): "
+                    f"{h[len(_JSON_VACUOUS_HINT_PREFIX):]}")
+        # W4 — whatever tier was chosen, every clause that did NOT run because
+        # its condition matched nothing is named on the step line and carried
+        # into the JSON report, with the reason its wiring site declared. A
+        # step whose gate list is half unexecuted must not read as a step whose
+        # gate list was executed; the count is stated so a reader can see how
+        # much of the declared gate actually spoke.
+        if na_hints:
+            result.declared_not_applicable = [
+                h[len(_NOT_APPLICABLE_HINT_PREFIX):] for h in na_hints]
+            for h in na_hints:
+                result.reasons.append(
+                    f"NOT-APPLICABLE (declared, {len(na_hints)} of "
+                    f"{len(na_hints) + len(ran_hints)} gate clause(s) here "
+                    f"examined nothing): {h[len(_NOT_APPLICABLE_HINT_PREFIX):]}")
         # #306 — whatever tier was chosen, the advisory verdicts are printed
         # on the step line and carried into the JSON report. An advisory gate
         # that ran and said nothing would make the run LOOK audited while
@@ -8981,6 +10253,38 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                         for h in _glob_first(project, sp)]
                 if hits:
                     result.evidence.append(hits[0])
+                    # This credit is PROJECT-WIDE by construction and can be
+                    # nothing else: the artefact was absent when the audit
+                    # began, so no write record made before the audit can name
+                    # it. Counted as such so `output_binding` never reports a
+                    # step-attributed total that includes an artefact this
+                    # program itself caused to exist.
+                    if result.output_binding:
+                        _ob = result.output_binding
+                        if _bind_modes.get(pat) == "step_attributed":
+                            _bind_modes[pat] = "project_glob"
+                            _ob["n_step_attributed"] -= 1
+                            _ob["n_project_glob"] += 1
+                        _ob["mode"] = ("step_attributed"
+                                       if _ob["n_project_glob"] == 0 else
+                                       "project_glob"
+                                       if _ob["n_step_attributed"] == 0
+                                       else "mixed")
+                        # Retyped on `_bind_specs`, the UNTRUNCATED list —
+                        # `_ob["specs"]` is a 16-entry slice of the same dicts
+                        # and recomputing `codes` from the slice would drop
+                        # the code of any spec past the cut.
+                        for _sp in _bind_specs:
+                            if _sp.get("spec") == pat:
+                                _sp["code"] = "audit_created"
+                                _sp["mode"] = "project_glob"
+                                _sp["satisfied"] = True
+                                _sp["credited"] = hits[0]
+                        _ob["codes"] = sorted(
+                            {str(d.get("code")) for d in _bind_specs})
+                        _ob["notes"] = (_ob["notes"] + [
+                            f"{pat}: credited to an artefact this audit's own "
+                            f"gate created during this run"])[:12]
                     continue
             _still_missing.append(pat)
         missing_entries = _still_missing
@@ -9024,11 +10328,15 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # did not produce it, and reported INCOMPLETE kept its tier.
     if _T.is_done_claim(result.status) and missing_entries:
         result.status = "MISSING"
+        _by_record = [p for p in missing_entries
+                      if _bind_modes.get(p) == "step_attributed"]
         result.reasons.append(
             f"required_outputs missing: {missing_entries} "
             f"(satisfied: {len(outputs) - len(missing_entries)}/{len(outputs)}"
             f" — the gate passed, but every declared output must be produced, "
-            f"not just one)")
+            f"not just one)"
+            + (f" — {len(_by_record)} of them on this step's OWN write record: "
+               f"{_by_record}" if _by_record else ""))
 
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
@@ -9053,7 +10361,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # v0.2.64 (#433/#434) — evidence-integrity scan on the natural PASS,
     # then v0.2.63 (#430) capability-gap conversion (the early
     # required_outputs exit applies the same helpers).
-    result = _evidence_integrity_scan(project, result)
+    result = _evidence_integrity_scan(project, _disclose_output_binding(result))
     return _apply_capability_gap(result, sid)
 
 
@@ -9519,6 +10827,148 @@ def _attribute_cascade_verdicts(
     return info
 
 
+def _published_tree_advisory(project: Path) -> Optional[str]:
+    """Warn when `project` looks like a PUBLISHED benchmark-data evidence
+    folder rather than a live run directory (informational only — changes
+    no verdict, no count, no exit code).
+
+    caravel_user_project/v1.9.43_sky130A shipped a RESULT.md claiming
+    Overall PASS_WITH_WAIVERS side by side with a committed
+    reports/audit/phase23_completion_audit.json recording Overall FAIL from
+    the SAME run. Root cause, confirmed by re-running THIS program against
+    the committed tree: `benchmark-data/PUBLISHING.md` deliberately excludes
+    `phase3/stage3/*` (PnR + extraction working files) and `*.log` from what
+    gets committed ("Excluded by construction" / `NOT_PUBLISHED` routing).
+    Steps whose `files_exist` target lives under `phase3/stage3/*` — pre-
+    and post-route STA, routing, spare-cell insertion, metal fill, SPEF-
+    dependent SI/DRC, foundry handoff — therefore read FAIL or MISSING when
+    THIS checker is re-run against a published tree, independent of whether
+    the run that produced the evidence actually converged. Measured
+    identically against `spm/v1.9.94_sky130A` and `spm/v1.9.96_gf180mcuD`
+    (both independently converged reference cells whose OWN committed
+    `phase23_completion_audit.json` records PASS_WITH_WAIVERS): a fresh
+    re-run of THIS checker against either published tree also reports
+    Overall FAIL on the identical `phase3/stage3/sta/pre_pnr_timing.rpt`
+    absence. A published tree's authoritative verdict is therefore the
+    audit captured at ORIGINAL RUN TIME (already committed at
+    `reports/audit/phase23_completion_audit.json`) — never a re-run of this
+    checker against the published copy, which structurally cannot reproduce
+    a stage3-dependent PASS.
+
+    Detection is chip-AGNOSTIC and purely structural: the GDS_MANIFEST that
+    `benchmark_evidence_publish.py` writes for every published cell is
+    present, and the `phase3/stage3/` subtree that publishing excludes is
+    absent. A live run directory has stage3 present and no manifest, so it
+    never matches.
+    """
+    manifest = project / "phase3" / "stage4" / "gds" / "GDS_MANIFEST.txt"
+    stage3 = project / "phase3" / "stage3"
+    if manifest.is_file() and not stage3.is_dir():
+        return (
+            "PUBLISHED-TREE DETECTED: phase3/stage4/gds/GDS_MANIFEST.txt is "
+            "present and phase3/stage3/ is absent — this project_dir looks "
+            "like a committed benchmark-data evidence folder, not a live "
+            "run directory. Per benchmark-data/PUBLISHING.md, "
+            "phase3/stage3/* (PnR + extraction working files) and *.log "
+            "are intentionally excluded from publish. Any step here whose "
+            "files_exist target lives under phase3/stage3/* (pre/post-route "
+            "STA, routing, spare-cell insertion, metal fill, SPEF-dependent "
+            "SI/DRC, foundry handoff) will read FAIL or MISSING even for a "
+            "genuinely converged run — that is a property of the published "
+            "layout, not evidence of a live regression. The authoritative "
+            "verdict for a published cell is the audit captured at "
+            "original-run time and already committed at "
+            "reports/audit/phase23_completion_audit.json; do not overwrite "
+            "it by re-running this checker against the published tree."
+        )
+    return None
+
+
+def completion_audit_verdict(
+    overall: str,
+    invoked_gate_count: Optional[int],
+    step_counts: Dict[str, int],
+    structural_fail_lines: List[str],
+    step_artifact_fail_lines: List[str],
+    registered_gate_count: Optional[int] = None,
+) -> Tuple[str, Optional[str]]:
+    """The `verdict` this run is ENTITLED to write into the completion audit.
+
+    vibe-ic#1001 — A VERDICT ABOUT A DESIGN THIS AUDIT NEVER READ.
+
+    `verdict` in `phase23_completion_audit.json` is the ONE field every
+    content-reading consumer keys on: `step_internal_fail_bubble_up_check`
+    walks `reports/**/*.json` for exactly this key and reads a `FAIL` in it as
+    "a step-internal gate found a defect in this design".
+
+    MEASURED — point `flow_compliance_check.py` at a directory holding no
+    design at all (`mkdir empty && flow_compliance_check.py . --phase all`) and
+    it writes:
+
+        verdict              FAIL
+        invoked_gate_count   0        (of 246 registered)
+        step_counts          PASS 0 / FAIL 0 / MISSING 40 / SKIPPED-COND 23
+        structural_fail_lines      []
+        step_artifact_fail_lines   []
+
+    while its own stdout says, in this file's words, ``GATE EXECUTION LEDGER:
+    no program gate was invoked in this run`` and tags the run
+    ``[whole run: no_steps_tree]``. Not one gate ran. Not one step was decided
+    in either direction. There is no finding — and the artefact asserts one
+    anyway, to every consumer that reads the key.
+
+    That is not hypothetical: one PUBLISHED run carries this artefact
+    byte-comparably (same `step_counts`, `invoked_gate_count: 0`), because the
+    audit was invoked from inside the run's own `reports/` directory, so its
+    project root resolved to a tree with no design in it. The SAME plugin
+    version re-audited the real root 3.5 seconds later and recorded PASS. The
+    stale wrong-root copy is one of the reds the Step-36 gate raises.
+
+    So: a run that measured NOTHING REFUSES. It says `INSUFFICIENT_DATA` —
+    this repo's existing token for "the tool did not run / the data is
+    missing", already in `step_internal_fail_bubble_up_check._NEUTRAL_VERDICTS`
+    — and DISCLOSES the denominator that made it refuse, per the house rule
+    that a verdict must say how much it looked at.
+
+    WHAT THIS DELIBERATELY DOES NOT DO — it does not touch `overall`. The exit
+    code, the stdout verdict line, the step table and every other consumer keep
+    the FAIL, so the run stays red and nothing can route around it. Refusing is
+    not passing; the only thing that changes is that a report stops CLAIMING a
+    step-internal finding it never made.
+
+    §4.05 NO-LEAK — this is a guard-RELAXING change, so the predicate is
+    conjunctive and every conjunct removes a way it could wave through a real
+    finding. ONE gate invoked, ONE step decided in EITHER direction, or ONE
+    structural / step-artifact failure line, and the FAIL stands unchanged. It
+    fires only when the numerator is empty on all four axes at once.
+
+    `invoked_gate_count is None` (a stage-3/4 invocation where the umbrella did
+    not run) is NOT zero-proof and deliberately keeps the FAIL: `None` means
+    "not asked", and only a measured 0 is evidence that nothing answered.
+
+    Returns (verdict, refusal_reason); refusal_reason is None whenever the
+    verdict is `overall` unchanged. chip-AGNOSTIC — reads counts, not designs.
+    """
+    if overall != "FAIL":
+        return overall, None
+    if invoked_gate_count != 0:
+        return overall, None
+    if (step_counts or {}).get("PASS", 0) or (step_counts or {}).get("FAIL", 0):
+        return overall, None
+    if structural_fail_lines or step_artifact_fail_lines:
+        return overall, None
+    denom = ("of an unresolved registered-gate population"
+             if registered_gate_count is None
+             else f"of {registered_gate_count} registered")
+    return "INSUFFICIENT_DATA", (
+        f"REFUSED, not FAILED: 0 gate(s) {denom} were invoked and 0 step(s) "
+        f"were decided (PASS 0 / FAIL 0), with no structural and no "
+        f"step-artifact failure line. Nothing about this design was measured, "
+        f"so this audit has no step-internal finding to report and does not "
+        f"claim one. The run's own status is UNCHANGED and still {overall} — "
+        f"refusing is not passing.")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
@@ -9748,6 +11198,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         import atexit as _atexit
         _atexit.register(_shutil.rmtree, str(_ro_scratch), True)
 
+    # ── the design this verdict is about, measured BEFORE anything judges it ──
+    #
+    # The tally this program publishes carried no record of its own
+    # population: the same run directory, byte-identical, scored PASS=22 under
+    # 1.9.76 and PASS=6 under a newer plugin, and nothing in the artefact let a
+    # reader tell "the design got worse" from "the ruler got better". Sixteen
+    # of the twenty-two were never real.
+    #
+    # Taken HERE because this is the last moment before any sub-gate writes:
+    # ~250 of them emit `--json` reports into the tree, so a digest taken later
+    # would be a digest of this program's own opinion. The auditor's footprint
+    # is then subtracted by MEASUREMENT (pre/post stat), not by a path
+    # allowlist — `reports/phase3/` holds the DRC and LVS sign-off reports as
+    # well as the checkers' JSON, and excluding it by prefix would blind the
+    # digest to arriving sign-off evidence and make the artefact assert that a
+    # design which really moved had not.
+    #
+    # Every failure mode here degrades to a null digest with a stated reason.
+    # It must never cost the audit or move the verdict: this is a record of
+    # what was measured, not a measurement.
+    _did_scan = None
+    _did_error = None
+    try:
+        if str(PROGRAMS_DIR) not in sys.path:
+            sys.path.insert(0, str(PROGRAMS_DIR))
+        import design_input_digest as _did
+    except Exception as _exc:            # pragma: no cover - import guard
+        _did = None
+        _did_error = f"design_input_digest unavailable: {_exc}"
+    if _did is not None:
+        try:
+            _did_scan = _did.scan_inputs(project)
+        except Exception as _exc:
+            _did_error = f"design-input scan failed: {_exc}"
+
     flow_path = Path(args.flow_def) if args.flow_def else DEFAULT_FLOW_DEF
     if not flow_path.exists():
         print(f"flow_compliance_check: flow def not found: {flow_path}", file=sys.stderr)
@@ -9784,17 +11269,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     # v1.6.15 Wave 91: phase-3 cap raised 39 → 40 (pre-PnR Yosys gate
     # promoted to Step 14, stage3-5 cascade +1).
     if args.phase != "all":
-        phase_range = (1, 6) if args.phase == "2" else (7, 40)
+        # THE UPPER BOUND IS DERIVED, NOT TYPED. It was hard-coded at 40 and the
+        # flow has since grown to 44, so steps 41-44 (the manufacturing steps)
+        # fell into NEITHER scope: `--phase 2` excluded them for being > 6 and
+        # `--phase 3` excluded them for being > 40. A step in neither scope can
+        # never be reported MISSING by a phase-scoped run -- it is invisible
+        # rather than out-of-scope, and nothing said so. Every past raise of
+        # this cap (39 -> 40) was a symptom of the constant existing at all.
+        _int_ids = [s["id"] for s in steps if isinstance(s.get("id"), int)]
+        _max_id = max(_int_ids) if _int_ids else 0
+        phase_range = (1, 6) if args.phase == "2" else (7, _max_id)
         kept = []
+        _agnostic = []
         for s in steps:
             sid = s.get("id")
             if isinstance(sid, int):
                 if phase_range[0] <= sid <= phase_range[1]:
                     kept.append(s)
             else:
-                # Non-integer id (stage* / A*) — phase-agnostic, keep.
+                # Non-integer id (A* / DT* / FS* / M* / P0) — phase-agnostic,
+                # kept in BOTH scopes. That is a deliberate choice and it means
+                # `--phase 2` and `--phase 3` are NOT a partition of the flow:
+                # these steps are counted once in each. Assigning each of them
+                # to a phase is a judgement about that step, made by whoever
+                # knows it; guessing them here would bury the ambiguity instead
+                # of showing it. So it is DISCLOSED rather than resolved, and a
+                # reader adding the two scopes together is told not to.
                 kept.append(s)
+                _agnostic.append(str(sid))
         steps = kept
+        if _agnostic:
+            print(f"flow_compliance_check: NOTE — {len(_agnostic)} "
+                  f"phase-agnostic step(s) are in scope for BOTH `--phase 2` "
+                  f"and `--phase 3`, so the two scopes are not a partition and "
+                  f"their step counts must not be added: "
+                  f"{', '.join(sorted(_agnostic))}")
         if not steps:
             print(f"flow_compliance_check: no steps for phase {args.phase}",
                   file=sys.stderr)
@@ -10049,6 +11558,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []
 
+    # caravel_user_project/v1.9.43_sky130A self-contradiction (RESULT.md
+    # PASS_WITH_WAIVERS beside a committed phase23_completion_audit.json
+    # FAIL) — surface the published-tree caveat before anyone reads a
+    # re-run's FAIL as a live regression. Informational only.
+    _pub_tree_note = _published_tree_advisory(project)
+    if _pub_tree_note:
+        advisories.append(_pub_tree_note)
+
     # #216 — a rejected ENV_UNAVAILABLE waiver is reported, never dropped.
     # Without this the step showed a bare MISSING and the reader could not
     # tell that a waiver had been attempted, let alone why it did not apply.
@@ -10094,12 +11611,55 @@ def main(argv: Optional[List[str]] = None) -> int:
               "INCOMPLETE": 0}
     for r in results:
         counts[r.status] = counts.get(r.status, 0) + 1
-    # v1.6.97 (issue #29 Bugs 1+2) — thin-input waivers count toward
-    # the WAIVED bucket so Overall verdict resolves to
-    # PASS_WITH_WAIVERS (not bare PASS) whenever the --allow-thin-input
-    # waiver actually fired. Each waiver is review_required=true and
-    # carries a ticket id so foundry tape-out review can close them.
-    counts["WAIVED"] += len(structural_waivers)
+    # vibe-ic#924 — `counts` IS A TALLY OF STEPS AND NOTHING ELSE.
+    #
+    # It is built one line above by `for r in results: counts[r.status] += 1`,
+    # so every unit in it is one canonical step. What used to stand here added
+    # `len(structural_waivers)` — a count of P0 SUB-GATE records, all of them
+    # inside the ONE step P0 — into that step tally, and the mixed number then
+    # reached four consumers at once:
+    #
+    #   * `total_required = len(steps) - <excused> + …`, where WAIVED is
+    #     EXCUSED (`_flow_verdict_tiers.EXCUSED`), so N waived SUB-GATES
+    #     removed N STEPS from a 63-step denominator. Numerator unchanged,
+    #     denominator smaller: the published ratio ROSE, and it rose with the
+    #     number of things waived.
+    #   * the headline `… N DEFERRED via waiver`, which says steps;
+    #   * the tally line `WAIVED-DEFERRED=N`, whose parts must sum to the step
+    #     total and no longer could;
+    #   * `⚠ N step(s) DEFERRED via waiver`, which says "step(s)" in words.
+    #
+    # MEASURED on the shipped CLI (0..4 sub-gate waivers, identical project,
+    # only the P0 records varying): Y went 8, 7, 6, 5, 4 and X/Y went 12.5%,
+    # 14.3%, 16.7%, 20.0%, 25.0% while ZERO steps carried a WAIVED status.
+    # It is also visible in published data: one committed audit log reads
+    # `Steps: 21 total (4/3 executed PASS, 3 DEFERRED via waiver)` — a
+    # numerator LARGER than its denominator, over a tally summing 22 of 21.
+    #
+    # WHY NOT "EXCUSE AT MOST ITS OWN STEP" (contribute `min(1, N)`). That
+    # reading assumes a waived sub-gate leaves P0 itself excused. It does not:
+    # `_p0_umbrella_status` returns only SKIPPED-CONDITION / FAIL / INCOMPLETE
+    # / PASS and CANNOT return WAIVED, and with a WAIVED record present the
+    # reachable set is {PASS, FAIL} — neither of which is EXCUSED. So `min(1,
+    # N)` would remove from the denominator a step that is simultaneously
+    # counted in the numerator. Same unit error, magnitude 1. The committed log
+    # above is that case in the wild: its P0 row reads `[PASS]` — the step was
+    # in the numerator — while its one sub-gate waiver took a step off the
+    # denominator, which is how `4/3` happened.
+    #
+    # WHAT THE ADDEND WAS FOR is preserved exactly. Its stated purpose (v1.6.97,
+    # issue #29) was to keep Overall at PASS_WITH_WAIVERS rather than a bare
+    # PASS whenever a --allow-thin-input waiver fired, and its only consumer for
+    # that is `elif counts["WAIVED"] > 0` — a BOOLEAN threshold that never
+    # needed a magnitude. It is carried below by this same-unit signal, so no
+    # run changes its verdict word or its exit code.
+    #
+    # Each waiver is still review_required=true with a ticket id; they remain
+    # published verbatim as `thin_input_waivers` in the --json report, are
+    # named per gate in P0's own reasons, and are disclosed on the headline and
+    # under the tally IN THEIR OWN UNIT below — so nothing goes silent, which
+    # is the failure mode the "ON THE LINE" note further down exists to forbid.
+    p0_subgate_waivers = len(structural_waivers)
 
     # THE VIOLATION MUST BE KNOWN BEFORE THE TABLE IS RENDERED.
     #
@@ -10148,9 +11708,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     for _v in _ordering_violations:
         _tid = str(_v.get("terminal_id"))
         for _r in results:
-            if str(_r.id) != _tid or _r.status != "PASS":
+            if str(_r.id) != _tid:
                 continue
-            _r.status = "PASS_VOIDED_BY_DEPENDENCY"
+            if _r.status == "PASS":
+                _r.status = "PASS_VOIDED_BY_DEPENDENCY"
+            elif getattr(_r, "json_vacuity_promoted", False):
+                # vibe-ic#901 - this step would have been a bare PASS on
+                # origin/main and would have been VOIDED here, printing the
+                # dependency line below. The structured channel moved it to
+                # VACUOUS_PASS, which is the label this program pins as the
+                # more specific one (see test_POSITIVE_CONTROL_the_blocking_
+                # slot_deletes_the_voided_line) - so the STATUS stays
+                # VACUOUS_PASS and the dependency line is appended anyway. A
+                # new disclosure must not cost an old one. Every other step
+                # reaches the `continue` below and behaves as before.
+                pass
+            else:
+                continue
             # One line per DISTINCT dependency. The violation list carries one
             # entry per (terminal, dependency) pair and a step can reach the same
             # failed dependency by several paths, so appending blindly repeats it.
@@ -10164,7 +11738,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         counts = {k: 0 for k in counts}
         for _r in results:
             counts[_r.status] = counts.get(_r.status, 0) + 1
-        counts["WAIVED"] += len(structural_waivers)
+        # vibe-ic#924 — the re-application of the sub-gate addend went with it.
+        # This branch RESETS `counts` and re-tallies from `results`, so it
+        # reproduces the step tally exactly; re-adding a sub-gate population
+        # here would reinstate the unit mismatch on precisely the runs that
+        # already have an ordering violation. `p0_subgate_waivers` is unchanged
+        # by the reset — it is not a bucket of `counts`, which is the point.
         # NO `pass_count` HERE. The re-tally above is load-bearing (the tally
         # line, `total_required` and the sole numerator assignment all read
         # `counts`), but a `pass_count` store on this branch is dead: the
@@ -10401,8 +11980,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     vacuous_head += (
         f", {counts['STRUCTURE-ONLY']} STRUCTURE-ONLY excluded from executed"
         if counts.get("STRUCTURE-ONLY") else "")
+    # vibe-ic#924 — the sub-gate waivers keep their place on the line a
+    # reader actually reads, now NAMING THEIR UNIT so the number cannot be
+    # read as steps. Appended AFTER the two fields every existing parser keys
+    # on (`X/Y executed PASS,` then `W DEFERRED`) and with no `=`, per the
+    # note above, so `final_report_generate._parse_audit_tally` still cannot
+    # mistake this line for the per-verdict tally.
+    subgate_head = (f", {p0_subgate_waivers} P0 sub-gate waiver(s) "
+                    f"(not steps)" if p0_subgate_waivers else "")
     print(f"Steps: {len(steps)} total ({pass_count}/{total_required} executed PASS, "
-          f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head})")
+          f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head}{subgate_head})")
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
@@ -10454,11 +12041,47 @@ def main(argv: Optional[List[str]] = None) -> int:
                      f"artefact, see STRUCTURE-ONLY below)")
     so_str = (f"  STRUCTURE-ONLY={counts['STRUCTURE-ONLY']}"
               if counts.get("STRUCTURE-ONLY") else "")
+    # vibe-ic#901 - an ANNOTATION over the buckets, never a bucket. These steps
+    # are already counted in whatever tier they resolved to (usually PASS);
+    # adding them again would stop the parts summing to the total. What it says
+    # is the thing the tier word cannot: N steps here contain at least one gate
+    # clause that ran and examined nothing.
+    partial_vacuous = sum(1 for r in results
+                          if getattr(r, "partial_vacuity_disclosed", False))
+    pv_str = (f"  ({partial_vacuous} step(s) PARTIALLY-VACUOUS: a gate clause "
+              f"ran and examined nothing)" if partial_vacuous else "")
+    # W4 — the SAME kind of annotation for the clauses that never ran at all,
+    # and kept apart from PARTIALLY-VACUOUS because they are a different fact:
+    # that one is a clause that ran and found nothing to look at, this one is a
+    # clause that was not dispatched because its input was absent. Both leave
+    # the tier alone (an ANNOTATION over the buckets, never a bucket, so the
+    # parts still sum to the total); without this line the only trace of an
+    # unexecuted clause is the per-step reason, and the number a reviewer reads
+    # is the tally.
+    na_steps = sum(1 for r in results
+                   if getattr(r, "declared_not_applicable", None))
+    na_clauses = sum(len(getattr(r, "declared_not_applicable", ()) or ())
+                     for r in results)
+    na_str = (f"  ({na_clauses} gate clause(s) across {na_steps} step(s) "
+              f"NOT-APPLICABLE: the declared input was absent, so the clause "
+              f"did not run)" if na_clauses else "")
     print(
         f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}{incomplete_str}\n"
+        f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}"
+        f"{incomplete_str}{pv_str}{na_str}\n"
     )
+    if p0_subgate_waivers:
+        # vibe-ic#924 — ITS OWN LINE, deliberately not a token on the tally
+        # line above. That line's contract is that its parts sum to the step
+        # total; a sub-gate count sitting among them is what broke the sum.
+        print(
+            f"  P0 sub-gate waivers: {p0_subgate_waivers} (deferred structural "
+            f"sub-gate(s) INSIDE step P0, review_required — NOT steps, and "
+            f"NOT subtracted from the {total_required} required steps above; "
+            f"see `thin_input_waivers` in the --json report and P0's own "
+            f"reasons for the per-gate detail)\n"
+        )
     if counts.get("STRUCTURE-ONLY") or so_failing:
         print(
             "  STRUCTURE-ONLY = the step ran and produced its declared "
@@ -10570,6 +12193,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invariant here as a NON-promotable hard fail (set before the verdict and
     # the open-source-constraints promotion so it cannot be softened away).
     ordering_fail_lines: List[str] = []
+    ordering_gating_lines: List[str] = []
     try:
         import flow_step_execution_coverage_check as _cov
         _cov_graph = {
@@ -10583,15 +12207,119 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"[{v['terminal_id']}] {v['terminal']} = "
                 f"{v['terminal_status']} marked done while dependency "
                 f"[{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
-        if ordering_fail_lines:
+        # vibe-ic#1429 — BLOCKING, and it stays BLOCKING. A violation inside
+        # the run's verdict scope still sets `forced_fail` before the verdict
+        # and before the open-source-constraints promotion, so it still cannot
+        # be softened away — the sentence above is unchanged. What changes is
+        # WHICH violations are inside the scope, and only in the one mode that
+        # narrows the scope at all.
+        #
+        # THE GUARD READS THE SAME VERDICT SCOPE EVERY OTHER BUCKET READS.
+        # `scoped` above IS that scope: it is `results` in every
+        # mode except `--phase 2 --strict-structural`, where it narrows to the
+        # `P0` umbrella plus the analog track (#634). Filtering on it is
+        # therefore a NO-OP in every other mode BY CONSTRUCTION — not a mode
+        # branch that can be got wrong, and not a second list of step ids that
+        # can drift from the one the verdict actually uses.
+        #
+        # WHAT IT FIXES. `--phase 2 --strict-structural` declares step-level
+        # FAIL/MISSING informational, and says so in THREE places: the `scoped`
+        # list above, the `structural_fail_lines` / `step_artifact_fail_lines`
+        # split ("With --strict-structural alone they are info-only"), and the
+        # report's own "Step-level gates (informational, not gating
+        # --strict-structural)" heading. This guard was the ONE place that did
+        # not, so a step-level MISSING re-entered the verdict through a side
+        # door and the report contradicted itself two lines apart. MEASURED on
+        # the fixture in `test_flow_compliance_check_gate.py::
+        # test_strict_structural_only_structural_gates` — RTL present, no
+        # L-docs, no structural FAIL:
+        #
+        #   Overall: FAIL  (strict=True)
+        #   Step-level gates (informational, not gating --strict-structural): 5
+        #   ✗ [1] Spec-to-RTL = PASS marked done while dependency
+        #         [D1] Phase 1 Doc Extraction = MISSING      <- the sole cause
+        #
+        # `D1 = MISSING` IS a step-level MISSING. Left as it was, the flag can
+        # only ever return FAIL on the input class it was built for (v0.119.53
+        # Wave 21: "a structurally clean Phase-2 project was rejected because
+        # lint/CDC/coverage/formal step artefacts were incomplete"), and
+        # `--strict-step-artifacts` already exists for the other reading.
+        #
+        # SCOPED, NOT SUPPRESSED. `ordering_fail_lines` still carries EVERY
+        # violation, so the printed block and the JSON `ordering_violations`
+        # field are unchanged in every mode; only which of them reach
+        # `forced_fail` changes, and the ones that do not are named on their
+        # own line below rather than going quiet.
+        _scoped_ids = {str(r.id) for r in scoped}
+        # vibe-ic#1446 — THE ONE CASE THE DEPENDENCY TEST CANNOT SEE: a terminal
+        # in scope that returned NO VERDICT AT ALL.
+        #
+        # #1429's rule above is right about what it measured. Its worked example
+        # is a terminal that RAN, AUDITED and PASSED, and whose PASS is then
+        # voided by an out-of-scope dependency — `PASS_VOIDED_BY_DEPENDENCY`.
+        # For that step the void is a statement about CERTIFICATION, not about
+        # measurement: the gates did look, and what they saw was clean. Calling
+        # it informational in the mode that declares step-level state
+        # informational is exactly right, and nothing here changes it.
+        #
+        # `INCOMPLETE` is the other thing entirely. It is the empty-denominator
+        # tier (#599/#901/#947) — "the input was applicable and was NOT
+        # examined". There is no measurement to hold informational, because
+        # none was taken. MEASURED on the bare Phase-2 tree under `--phase 2
+        # --strict-structural`, the mode that narrows the verdict scope to P0
+        # ALONE:
+        #
+        #   [INCOMPLETE] Step P0: Structural-RTL gates
+        #                (P0 umbrella, 0 of 246 checkers returned a verdict)
+        #   ✗ [P0] … = INCOMPLETE marked done while dependency [D1] … = MISSING
+        #   Overall: PASS   rc=0
+        #
+        # Zero of 246 checkers answered, the chain under them never ran, and the
+        # only step in scope published a green verdict about it. That is the
+        # input `test_strict_structural_does_not_excuse_a_broken_p0_ancestry`
+        # (#923/#1078) owns, and it went red when #1429 landed three minutes
+        # after it in the same batch, neither PR rebased on the other.
+        #
+        # A CONJUNCTION, AND BOTH HALVES ARE LOAD-BEARING. Neither condition
+        # gates on its own, and the repo has already settled both halves
+        # separately — this reads those decisions rather than reopening them:
+        #   * INCOMPLETE ALONE STAYS GREEN. "gates that never ran must not force
+        #     the verdict" (test_issue497_step2…::test_a_not_invocable_record_
+        #     is_never_a_failing_gate) and "INCOMPLETE is a disclosure tier, not
+        #     a failure — it must not turn a run red on its own"
+        #     (test_p0_umbrella_verdict_coverage). Those fixtures run over a
+        #     SATISFIED `blocks_on` chain, so they raise no ordering violation
+        #     and never reach this list.
+        #   * A BROKEN ANCESTRY ALONE STAYS GREEN, which is #1429 itself: the
+        #     PASS_VOIDED terminal above is not INCOMPLETE, so it is not in
+        #     `_no_verdict_ids` and does not gate.
+        # Together they say the verdict scope holds no evidence: nothing was
+        # measured, AND the inputs that would have been measured were never
+        # produced. `_no_verdict_ids` is built from `scoped`, so it is a SUBSET
+        # of `_scoped_ids` by construction and this stays a no-op in every mode
+        # that does not narrow the scope.
+        _no_verdict_ids = {str(r.id) for r in scoped
+                           if r.status == "INCOMPLETE"}
+        ordering_gating_lines = [
+            line for line, v in zip(ordering_fail_lines, _ordering_violations)
+            if str(v['signoff_id']) in _scoped_ids
+            or str(v['terminal_id']) in _no_verdict_ids]
+        if ordering_gating_lines:
             forced_fail = True
     except Exception:  # nosec — additive enforcement must never crash the audit
         ordering_fail_lines = []
+        ordering_gating_lines = []
         _ordering_violations = []
 
     if not ok or forced_fail:
         overall = "FAIL"
-    elif counts["WAIVED"] > 0:
+    elif counts["WAIVED"] > 0 or p0_subgate_waivers > 0:
+        # vibe-ic#924 — the second disjunct is what the removed addend was
+        # actually for (v1.6.97 / issue #29: "so Overall verdict resolves to
+        # PASS_WITH_WAIVERS (not bare PASS) whenever the --allow-thin-input
+        # waiver actually fired"). It was expressed as an addend into a step
+        # counter, but the consumer is this `> 0` test, so a boolean carries
+        # it exactly and no run changes its verdict word.
         overall = "PASS_WITH_WAIVERS"
     else:
         overall = "PASS"
@@ -10717,7 +12445,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"\nOverall: {overall}  (strict={not args.lenient})")
     if overall == "PASS_WITH_WAIVERS":
-        print(f"  ⚠ {counts['WAIVED']} step(s) DEFERRED via waiver — production tapeout review must close them.")
+        # vibe-ic#924 — this sentence says "step(s)", so it gets the STEP
+        # count. The sub-gate waivers are a second sentence in their own unit
+        # rather than a silent addition to this one; a run waived only at
+        # sub-gate level used to print "N step(s) DEFERRED" with N steps
+        # deferred being zero.
+        if counts["WAIVED"]:
+            print(f"  ⚠ {counts['WAIVED']} step(s) DEFERRED via waiver — production tapeout review must close them.")
+        if p0_subgate_waivers:
+            print(f"  ⚠ {p0_subgate_waivers} P0 sub-gate(s) DEFERRED via "
+                  f"waiver (structural sub-gates inside step P0, not steps) — "
+                  f"production tapeout review must close them.")
     if overall == "PASS_WITH_OPEN_SOURCE_CONSTRAINTS":
         print(f"  ⚠ {len(os_constraints_deferrals)} step(s) DEFERRED — "
               f"required commercial tools unavailable in iic-osic-tools "
@@ -10772,6 +12510,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"before a step it depends on completed:")
         for line in ordering_fail_lines:
             print(f"  ✗ {line}")
+        # vibe-ic#1429 — DEGRADE LOUDLY. A violation this run's verdict scope
+        # does not reach is still printed above; this line says so by name, so
+        # "reported but not gating" is a statement the reader can SEE rather
+        # than a difference they have to infer from the verdict word. Emitted
+        # only when the two lists actually differ, so no existing mode's
+        # output gains a line. Counted by LENGTH, not by set difference: two
+        # violations can render the same line and a set would report one of
+        # them as missing from a list it is in.
+        _n_info = len(ordering_fail_lines) - len(ordering_gating_lines)
+        if _n_info > 0:
+            print(f"  ({_n_info} of {len(ordering_fail_lines)} "
+                  f"reported, NOT gating: the dependency named is outside "
+                  f"this run's verdict scope. Use --strict-step-artifacts to "
+                  f"gate on these too.)")
 
     if advisories:
         print("\nAdvisories:")
@@ -10837,6 +12589,55 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocker_class_counts = _bc.class_counts(blockers)
     blocker_sub_class_counts = _bc.sub_blocker_class_counts(blockers)
 
+    # ── the contract guard on the list above, run BY THE PRODUCER ──────────
+    #
+    # `blocker_classification_check` is the guard on exactly the artefact this
+    # block just built: the list is complete over the non-PASS steps, invents
+    # none, names in `basis` the rule that decided each class, and the headline
+    # counts sum to the list. It shipped with NOTHING but its own unit test
+    # running it — zero coverage of real reports, a fixture the author wrote
+    # proving the logic and never the artefacts (vibe-ic#381). Compliance
+    # reports are produced HERE, so this is the one place the guard is handed a
+    # real one every time one exists.
+    #
+    # ADVISORY HERE, DELIBERATELY, and it is the same rule the block above
+    # states rather than a hedge: nothing in this section may move a verdict
+    # about a chip. `overall`, `counts`, every promotion tier and every
+    # exit-code decision are settled above and none of them reads this. A
+    # contract violation is a defect in the CLASSIFIER, not a fact about the
+    # design, and a classifier that could fail a chip would immediately be
+    # worth gaming. So it is disclosed by name — on stderr and in the report —
+    # and the verdict is left alone.
+    #
+    # The BLOCKING copy of the same guard is the sweep over committed reports
+    # in `tools/ci/repo_hygiene_gates.sh`, which is where a violation that
+    # reaches the corpus is refused.
+    #
+    # Wrapped for the same reason the classifier call is: a defect in the guard
+    # must not be able to break a flow run. A guard that could not run is
+    # itself recorded, never silently empty.
+    blocker_contract_violations: List[str] = []
+    try:
+        blocker_contract_violations, _bcc_facts = _bcc.check_report({
+            "overall": overall,
+            "steps": [asdict(r) for r in results],
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_list_error": blocker_list_error,
+        })
+    except Exception as _bcc_exc:  # pragma: no cover - defence in depth
+        blocker_contract_violations = [
+            f"the blocker-list contract guard could not run: "
+            f"{type(_bcc_exc).__name__}: {_bcc_exc}"]
+    if blocker_contract_violations:
+        print(f"flow_compliance_check: WARN — the classified blocker list "
+              f"breaks its own contract in "
+              f"{len(blocker_contract_violations)} place(s). The list is "
+              f"published WITH this disclosure beside it; the verdict above is "
+              f"about the design and is untouched.", file=sys.stderr)
+        for _v in blocker_contract_violations:
+            print(f"  - {_v}", file=sys.stderr)
+
     if args.json:
         out = {
             "flow": args.flow,
@@ -10865,6 +12666,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
             "ordering_violations": ordering_fail_lines,
+            # vibe-ic#1429 — the SUBSET that reached `forced_fail`. The field
+            # above is unchanged (every violation, every mode); this one says
+            # which of them this run's verdict scope actually reached, so a
+            # consumer never has to re-derive the scope to know why a run with
+            # a reported violation is nonetheless green.
+            "ordering_violations_gating": ordering_gating_lines,
             # THE CLASSIFIED BLOCKER LIST, machine-readable, beside the tally.
             # `counts` says how many; this says what each one IS, with the rule
             # that decided it named in `basis` so a reader can audit the
@@ -10879,6 +12686,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # is empty because the classifier failed, which is a completely
             # different fact from "nothing is blocked".
             "blocker_list_error": blocker_list_error,
+            # Empty list on the normal path. Non-empty means the list above
+            # breaks its own contract — a defect in the classifier, disclosed
+            # rather than folded into the design's verdict. A reader who trusts
+            # `blockers` must read this first.
+            "blocker_contract_violations": blocker_contract_violations,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
@@ -10970,15 +12782,115 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not any((project / c).exists() for c in cands):
                 missing_required.append(label)
 
+        # v1.6.27: route via auto-router so the audit lands at
+        # reports/audit/ (canonical), not stray reports/ root. Resolved HERE,
+        # ahead of the dict, because the footprint subtraction below has to
+        # name it: it is written after the post-scan is taken, so measurement
+        # cannot see it, and leaving it in would make the PREVIOUS run's audit
+        # an input to THIS run's design hash.
+        audit_path = _pl.report_path(project, "phase23_completion_audit.json")
+
+        # ── what this tally was computed OVER ────────────────────────────
+        # Two hashes, because "did the design change?" and "did the ruler
+        # change?" are independent questions with four answers between them.
+        # Both blocks are null-with-a-reason on any failure; neither can move
+        # the verdict.
+        _digest_block: Any = None
+        _measurement_block: Any = None
+        _prior_audit: Any = None
+        # Asked directly, not read back out of the measurement block: the
+        # release that produced an artefact is a fact this file owes its
+        # reader even when the digest could not be computed.
+        try:
+            import plugin_manifest_discovery as _pmd
+            _running_version = _pmd.running_plugin_version()
+        except Exception:
+            _running_version = "UNRESOLVED"
+        # The audit being OVERWRITTEN is the other half of the comparison, and
+        # it is on disk right now. This is the exact shape the finding came
+        # from — the same run directory, re-judged — so the artefact can state
+        # which of the two moved without any consumer coordinating. It is also
+        # where the previous run's footprint is carried from.
+        try:
+            if audit_path.exists():
+                _loaded = json.loads(audit_path.read_text(encoding="utf-8"))
+                if isinstance(_loaded, dict):
+                    _prior_audit = _loaded
+        except (OSError, ValueError):
+            _prior_audit = None
+        _carried = []
+        try:
+            _pb = (_prior_audit or {}).get("design_input_digest") or {}
+            _carried = [p for p in (_pb.get("auditor_written_paths") or [])
+                        if isinstance(p, str)]
+        except Exception:
+            _carried = []
+        if _did is not None and _did_scan is not None:
+            try:
+                _also_written = [str(audit_path.relative_to(project))]
+                if args.json:
+                    _rep = Path(args.json).resolve()
+                    if project in _rep.parents:
+                        _also_written.append(str(_rep.relative_to(project)))
+                _post = _did.scan_inputs(project)
+                _digest_block = _did.build_digest(
+                    _did_scan,
+                    _did.auditor_footprint(_did_scan, _post, _also_written,
+                                           _carried))
+            except Exception as _exc:
+                _digest_block = {"schema_version": _did.SCHEMA_VERSION,
+                                 "sha256": None,
+                                 "unusable_reason": f"digest failed: {_exc}"}
+        elif _did_error:
+            _digest_block = {"schema_version": 1, "sha256": None,
+                             "unusable_reason": _did_error}
+        if _did is not None:
+            try:
+                _measurement_block = _did.build_measurement(
+                    _running_version, flow_path, vars(args))
+            except Exception as _exc:
+                _measurement_block = {"schema_version": _did.SCHEMA_VERSION,
+                                      "id": None,
+                                      "unusable_reason": str(_exc)}
+
+        # vibe-ic#1001 — the verdict this audit is ENTITLED to write. Computed
+        # here rather than inline in the dict so the decision is one testable
+        # function; `overall` itself is untouched, so the exit code and every
+        # other consumer keep the FAIL. See `completion_audit_verdict`.
+        _audit_verdict, _audit_refusal = completion_audit_verdict(
+            overall,
+            structural_invoked_count,
+            counts,
+            structural_fail_lines,
+            step_artifact_fail_lines,
+            structural_registered_count,
+        )
+
         from datetime import datetime, timezone
         audit = {
             "schema_version": 1,
-            "version": "0.119.62",
+            # Was the string literal "0.119.62" from the initial public
+            # release: all 28 tracked audit artefacts carry it, so an audit
+            # written by 1.0.0 and one written by 1.9.79 made byte-identical
+            # claims about which ruler produced them. It is READ now, from the
+            # one manifest `gatekeeper_assign_version --write` owns. #800 did
+            # this for `emitted_by`/`generated_by`/`extracted_by`; the key here
+            # is `version`, which is not in that gate's attribution-key list,
+            # which is how it survived.
+            "version": _running_version,
             "run_at": datetime.now(timezone.utc).isoformat(),
             "phase": args.phase,
             "strict_structural": bool(args.strict_structural),
             "strict_step_artifacts": bool(args.strict_step_artifacts),
-            "verdict": overall,
+            "verdict": _audit_verdict,
+            # Non-null ONLY when this audit refused (`INSUFFICIENT_DATA`): the
+            # denominator that made it refuse, so the refusal can be read
+            # without re-deriving it from the counts below.
+            "verdict_refusal_reason": _audit_refusal,
+            # The run's own status, ALWAYS — unchanged by the refusal above and
+            # identical to the exit code and the stdout verdict line. A refusal
+            # narrows what the audit CLAIMS, never what the run IS.
+            "run_status": overall,
             "gates": per_gate,
             "failed_gates": failed_gate_names,
             "failed_gate_count": len(failed_gate_names),
@@ -11039,14 +12951,41 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_class_counts": blocker_class_counts,
             "blocker_sub_class_counts": blocker_sub_class_counts,
             "blocker_list_error": blocker_list_error,
+            "blocker_contract_violations": blocker_contract_violations,
             "command_argv": list(sys.argv),
+            # THE POPULATION, beside the tally. `design_input_digest` is what
+            # the verdict was computed over; `measurement` is what computed
+            # it. A consumer holding two of these artefacts can state which of
+            # the two moved — which is the one thing no reader of this file
+            # could do before, and the reason a day of inflated PASS counts
+            # was reported as design progress.
+            "design_input_digest": _digest_block,
+            "measurement": _measurement_block,
         }
-        # v1.6.27: route via auto-router so the audit lands at
-        # reports/audit/ (canonical), not stray reports/ root.
-        audit_path = _pl.report_path(project, "phase23_completion_audit.json")
+        # And when there IS a prior audit at this path — the re-judge of one
+        # run directory, exactly the shape the finding came from — the
+        # artefact says it itself rather than waiting for a consumer to.
+        if _did is not None:
+            try:
+                audit["tally_delta"] = _did.classify(_prior_audit, audit)
+            except Exception as _exc:
+                audit["tally_delta"] = {
+                    "classification": "NOT_COMPARABLE",
+                    "statement": f"comparison failed: {_exc}"}
         audit_path.parent.mkdir(parents=True, exist_ok=True)
         audit_path.write_text(
             json.dumps(audit, indent=2, ensure_ascii=False))
+        # Printed, not only serialised: the reader who acts on the tally reads
+        # the log, and a refusal that only exists in a JSON field is a refusal
+        # nobody sees. Advisory — it never moves the verdict or the exit code,
+        # because it is a statement ABOUT the measurement, not one of the
+        # gates being measured.
+        _td = audit.get("tally_delta") or {}
+        if _td.get("classification") in ("MEASUREMENT_CHANGE",
+                                         "UNEXPLAINED_TALLY_MOVE",
+                                         "NOT_ATTRIBUTABLE"):
+            print(f"flow_compliance_check: TALLY_DELTA "
+                  f"{_td.get('classification')} — {_td.get('statement')}")
     except Exception as e:
         # Never let the audit-emission step fail the gate itself.
         # Surface a stderr warning so a human reviewer can spot it.
