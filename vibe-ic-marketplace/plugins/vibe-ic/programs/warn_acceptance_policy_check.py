@@ -27,7 +27,17 @@ General pattern (IC-agnostic):
 Usage:
     python3 warn_acceptance_policy_check.py --project-dir <dir> [--reports-dir <dir>] [--json <report.json>] [--threshold N]
 
-Exit: 0 = PASS (no unaddressed WARNs), 1 = WARN_PRESENT or FAIL, 2 = IO error.
+Exit codes:
+    0 = PASS: gate reports were read and every WARN in them is addressed
+    1 = WARN_PRESENT or FAIL
+    2 = VACUOUS: nothing was examined — the project has no reports directory,
+        so not a single gate report was read and "every WARN is addressed" is
+        true only because no WARN was ever loaded. #521: this used to be
+        rc 0. It was one of three leads #515 could not reproduce, because a
+        probe that passes a bare project directory is rejected by this gate's
+        argparse (it takes `--project-dir`). Driven through its documented
+        interface it reproduces on a tracked project root. Also rc 2 for an
+        IO error.
 """
 from __future__ import annotations
 
@@ -38,6 +48,8 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -229,7 +241,14 @@ def main(argv: List[str] = None) -> int:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json_out).write_text(out)
     print(out)
-    return 0 if is_pass else 1
+    # #521 — routed from the gate's OWN `skipped` flag, never from the report
+    # text (which is printed to STDOUT here, so the sentinel goes to stderr to
+    # keep that document parseable).
+    skipped = _vx.summary_is_skipped(report["summary"])
+    if is_pass and skipped:
+        _vx.announce_vacuous("warn_acceptance_policy_check",
+                             _vx.skip_reason(report["summary"]))
+    return _vx.exit_code(is_pass, skipped)
 
 
 if __name__ == "__main__":

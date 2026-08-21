@@ -55,6 +55,7 @@ TESTED_TOOLS = {
 # meaningfully). Each entry MUST include a one-line rationale. Anything
 # not listed here and not in TESTED_TOOLS will FAIL the inventory.
 DEFERRED_TOOLS = {
+    "eda_professional_tb": "requires Icarus Verilog to compile/run the generated TB; covered by Phase-2 full-stack-tb integration",
     "eda_synth": "requires Yosys + PDK liberty; covered by integration runs",
     "eda_simulate": "requires Icarus Verilog; covered by Phase-2b benchmark",
     "eda_formal": "requires SymbiYosys + yices",
@@ -79,7 +80,7 @@ DEFERRED_TOOLS = {
     "eda_scope_protocol_decode": "requires scope CSV + L2 timing fixtures",
     "eda_pass_reference_scope_diff": "requires reference scope baseline",
     "eda_rtl_signaltap_autogen": "requires Quartus; covered by hardware lab smoke",
-    "eda_spinalhdl_gen": "requires OpenJDK 17 + sbt in iic-eda + Maven Central; covered by VexRiscv GenSmallest generation smoke",
+    "eda_spinalhdl_gen": "requires OpenJDK 17 + sbt in vibeic-eda + Maven Central; covered by VexRiscv GenSmallest generation smoke",
     "eda_analog_layout": "requires Magic; covered by analog A1-A8 suite",
     "eda_fpga_adc_read": "requires DE10-Lite hardware + ADC test pattern",
     "device_camera_capture": "requires connected webcam",
@@ -94,7 +95,11 @@ DEFERRED_TOOLS = {
     "eda_gate_netlist_gen": "wrapped Python program; covered by plugin tests test_gate_netlist_rtl_gen.py",
     "eda_vector_op_gen": "wrapped Python program; covered by plugin tests test_vector_op_rtl_gen.py",
     "eda_rtl_dispatch": "wrapped Python program; covered by plugin tests test_deterministic_rtl_dispatcher.py",
-    "eda_rtl_name_semantic_check": "wrapped Python program; covered by plugin tests test_rtl_name_semantic_check.py",
+    # The tool name and the program it spawns differ (`rtl_signal_name_...`),
+    # and the deferral rationale had drifted to the TOOL name — citing
+    # `test_rtl_name_semantic_check.py`, which exists nowhere. The coverage
+    # itself was real; the sentence pointing at it was not.
+    "eda_rtl_name_semantic_check": "wrapped Python program (rtl_signal_name_semantic_check); covered by plugin tests test_rtl_signal_name_semantic_check.py",
     "eda_chip_top_gate_wrapper_gen": "wrapped Python program (chip_top_gate_wrapper_gen); covered by plugin tests",
     "eda_fpga_gate_attestation_check": "requires Quartus gate-level compile artifacts (FPGA lab)",
     "eda_fpga_gds_reverify": "requires the FPGA gate-level reverify chain (Quartus + scope/UDP shim)",
