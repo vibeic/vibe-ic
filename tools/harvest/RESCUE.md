@@ -233,3 +233,28 @@ refuses to run on an empty authority and names which authority it used.
 
 This one failed *loud* — 21 false findings — and I only caught it because one of the 21 was
 obviously impossible. With no impossible row in the set, I would have believed it.
+
+## `comm` was in my judge too — the exact line that decides DROP
+
+jharv3 traced their wrong number to `comm -12` with stderr discarded: **comm requires both inputs
+in the collation order it expects; on a mismatch it warns and still emits, usually empty.** An
+empty intersection reads as "no differing files".
+
+That line was the core of my registered-worktree verdict, in three shipped scripts:
+
+    comm -12 "$T/own" "$T/vsmain" > "$T/differ"      # ndiff==0  ->  DROP  ->  LANDED
+
+**Blast radius, checked rather than assumed: zero.** Of my 204 LANDED rows, 156 own nothing (their
+`nown` comes from `git diff --name-only | grep -c`, no comm, and was re-derived independently at 0)
+and 40 are pruned rows whose judge never used comm. That leaves 8 rows resting on "it owns files
+and none of them differ" — the only place an empty intersection could have manufactured a LANDED.
+All 8 re-derived by sha256 on both sides of every owned file, no comm anywhere:
+
+    _jppa_runner/tree  3/0    _jppa_skills/tree 28/0   _after 633/0   _after2 633/0
+    _jppae2e/wt      534/0    _wfwt_gwaiv        3/0   _wt_903  5/0   _wt_988    3/0
+
+**8/8 CONFIRMED.** No published verdict of mine is a comm artefact — but that is luck, not design.
+
+Fixed at the producer in all four scripts: `awk 'NR==FNR{a[$0]=1;next} ($0 in a)'`, which has no
+collation precondition. Verified equivalent on a real row (89 files both ways). Zero `comm` left in
+the tooling. `bin_jharv2/nocomm_check.sh` is the re-derivation, so anyone can repeat it.
