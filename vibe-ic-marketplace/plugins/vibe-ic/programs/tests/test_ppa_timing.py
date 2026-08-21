@@ -568,12 +568,15 @@ def test_the_domain_schema_exists_and_is_draft7():
 def test_every_emitted_document_validates_against_that_schema(tmp_path):
     """A schema nobody validates against is decoration.
 
-    Skipped rather than silently passed where `jsonschema` is absent: a skip is
-    visible in the summary line and a silent pass is not. The shape itself is
-    ALSO asserted without the dependency, by the scope/value tests above, so
-    this is reinforcement and not the only guard.
+    The engine is RESOLVED (`_ppa/schema_validation.py`), not imported: this
+    used to `importorskip("jsonschema")` and therefore ran only where somebody
+    happened to have the library. With the validator bundled it runs on a bare
+    install too, and the skip arm survives for the case where no engine can
+    apply the schema at all -- a skip is visible in the summary line and a
+    silent pass is not. The shape itself is ALSO asserted without any engine,
+    by the scope/value tests above, so this is reinforcement not the only guard.
     """
-    jsonschema = pytest.importorskip("jsonschema")
+    from _ppa import schema_validation as _SV
     schema = json.loads(_SCHEMA_PATH.read_text())
     proj = _project(
         tmp_path,
@@ -586,7 +589,7 @@ def test_every_emitted_document_validates_against_that_schema(tmp_path):
     out = tmp_path / "rows.json"
     assert _cli(proj, "--json", out).returncode == 0
     doc = json.loads(out.read_text())
-    jsonschema.Draft7Validator(schema).validate(doc)
+    assert _SV.engine_or_skip(schema).errors(doc) == []
     # the document must be worth validating: all three statuses present
     assert {r["status"] for r in doc["rows"]} >= {"MEASURED", "NOT_MEASURED"}
 
@@ -598,7 +601,7 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
     schema: it is a green check over the exact defect. So this feeds it the
     forbidden shape and requires a rejection.
     """
-    jsonschema = pytest.importorskip("jsonschema")
+    from _ppa import schema_validation as _SV
     schema = json.loads(_SCHEMA_PATH.read_text())
     bad = {
         "schema": "vibeic.ppa.metric.v1",
@@ -611,16 +614,18 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
         "source": {"path": None, "sha256": None, "tool": "opensta",
                    "tool_commit": None, "parser": "x", "parser_sha256": None},
     }
-    validator = jsonschema.Draft7Validator(
-        schema["definitions"]["metric_row"],
-        resolver=jsonschema.RefResolver.from_schema(schema))
-    with pytest.raises(jsonschema.ValidationError):
-        validator.validate(bad)
+    # The row schema plus the pocket its `$ref`s point into, so the subschema
+    # is self-contained and no engine needs a resolver bolted on.
+    validator = _SV.engine_or_skip(
+        {**schema["definitions"]["metric_row"],
+         "definitions": schema["definitions"]})
+    assert validator.errors(bad), (
+        "the schema accepted the sentinel it exists to forbid")
     # positive control: the same row without the value must be ACCEPTED, or
     # this test would pass against a schema that rejects everything.
     ok = dict(bad)
     del ok["value"]
-    validator.validate(ok)
+    assert validator.errors(ok) == []
 
 
 # ── fixtures captured from the REAL tool, not reconstructed ────────────────
