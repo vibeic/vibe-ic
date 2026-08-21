@@ -604,3 +604,81 @@ not establish from the evidence whether that is the forked tool or the
 invocation, and Bucket T requires that answer — a T record naming the wrong
 layer sends the fix to the wrong repository. It is stated here rather than
 filed, and it needs one reproduction with the tool's own stderr retained.
+
+---
+
+## Summary
+
+**STATUS**: 15 records emitted and validated — 13 Bucket A, 1 C, 1 T, zero B,
+zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
+each. All 18 findings carry a stated rule. No gate implemented, no version
+bumped, no baseline written, nothing pushed to main.
+
+### The Bucket-A ladder, resolved four ways
+
+The skill splits Bucket A into ALREADY-PROGRAM / EXTRACT-NEW / AUGMENT-EXISTING /
+KEEP-JUDGMENT, and the implementing lane needs the split more than it needs the
+bucket. My 13 resolve as:
+
+| resolution | n | records |
+|---|---:|---|
+| ALREADY-PROGRAM | 16 | not records — listed above with their enforcing program |
+| **AUGMENT-EXISTING** | 9 | A-1, A-2, A-5, A-6, A-7, A-8, A-9, A-10, A-11 |
+| **EXTRACT-NEW** | 4 | A-3, A-4, A-12, A-13 |
+| KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
+
+**Two conflict warnings for whoever applies these**, because the skill asks for
+augments to be reported rather than applied by N agents in parallel:
+
+* **A-2, A-5 and A-11 all edit `ppa_head_to_head_check.py`.** Three rules, one
+  file. Apply them together or serialise them.
+* **A-3 and A-4 share a helper** — the relation-derived population is the input
+  both need, and computing it twice is how the two answers start to disagree.
+  A-13 wants the same test-population plumbing, so all three want one new
+  program, not three.
+
+### Corpus sweep: these fire on the current repo, and that is CORRECT
+
+The skill's rule is that a new Bucket-A guard must run CLEAN before it ships,
+because *"a guard that flags the very state you just shipped is not a guard, it's
+a bug."* That rule is about **false** positives. **At least 11 of these 13 fire on
+this tree today, and every one of them is a TRUE positive** — each names a
+measured defect quoted in its record.
+
+The failure mode to avoid is therefore the opposite of the usual one: an
+implementer who reads "must run clean" and narrows a correct guard until the tree
+goes green has deleted the finding, not shipped the fix. **Fix the defect the
+guard names; do not tune the guard to stop naming it.** The clean-run requirement
+applies from the commit that fixes the last true positive onward.
+
+### Dual-track, which every one of these owes
+
+The skill binds every NEW deterministic gate to ship with (a) **evidence
+emission** — the measured value, the excerpt, the count it judged on, so a second
+track can re-judge the same input — and (b) a **named AI cross-check plus a
+converge step**, run even when the program says PASS. None of my `fix_action`
+fields says this individually; it applies to all 13 and is stated once here so it
+is not lost. A verdict with no attached evidence cannot be cross-checked and is
+incomplete.
+
+### The 4th distill target was considered and is empty
+
+`agents/ic_expert_db/ic_expert_db.json` holds generalizable design-CLASS CRAFT
+keyed by IC class. **None of these 15 records routes there, and the reason is
+structural rather than an oversight:** every one is about the FLOW — a gate's
+vocabulary, a producer/consumer seam, an exit code, a population guard — and none
+is knowledge about what makes a class of circuit correct. Recording the empty
+route so the next reader can see it was asked rather than skipped.
+
+## Next
+
+**Next: implement the 13 Bucket-A rules** — a separate lane, per the brief. Take
+`pattern` and `fix_action` from `ppa-capture/recoveries.json`; the emitted
+sketches in `ppa-capture/candidates/` are already filed beside the program that
+owns each fix. Start with **A-13** (it names a live seam nobody has looked at)
+and **A-1** (one axis is unanswerable today, so no candidate can be promoted).
+
+Then **proceed to** the two items this lane could not close: F-16's
+tool-versus-invocation question, which needs one reproduction retaining the
+tool's stderr; and the Bucket-C provenance plumbing, which is the precondition
+for the header rule.
