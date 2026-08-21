@@ -2,6 +2,60 @@
 """area_total_vs_budget_check.py — the synthesised area figure must reach a
 COMPARISON, or the step must REFUSE and name the authority it lacks.
 
+ENFORCEMENT: advisory — no runner spawns this gate inline, so its exit status
+cannot stop step 9 while step 9 is running. That is the ONLY axis this token
+names and the one `flow_gate_enforcement_audit` measures. The other two axes are
+unchanged, and are stated here so the declaration can never be read as
+permission to defang the gate:
+
+  * FLOW SLOT — unchanged and BLOCKING. Step 9 wires this clause in
+    `program_exit_zero`, never `advisory_program_exit_zero`.
+  * VERDICT SEVERITY — unchanged. rc 1 when the cell area exceeds the declared
+    die, rc 2 on INCOMPLETE. See "INCOMPLETE EXITS 2, NOT 0" below.
+
+WHY ADVISORY, MEASURED RATHER THAN PREFERRED
+--------------------------------------------
+The inline wiring this repo uses — `phase3_one_shot_runner.
+_DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` — turns rc 0 into PASS
+and rc 1 into a FAIL of the run. Through its step-9 clause this gate can reach
+NEITHER. MEASURED on this tree, on a project carrying BOTH a declared
+`L19.die_area_budget_um` ('1300x1300') and a synth `chip_area`, invoked exactly
+as the flow clause invokes it — no `--area-unit-um2`:
+
+    INCOMPLETE: synthesised area was NOT compared against anything — missing
+    authority: the area figure's UNIT — phase2/stage2/synth/stats.json states
+    chip_area_unit='cell-library area unit (as declared by the library the
+    synthesis script loaded)', which does not name um^2            -> rc 2
+
+`synth_area_stats_emit` is the ONLY producer of that figure in this flow
+(`design_one_shot_runner.step_yosys_synth` calls its `emit_stats_json`), and it
+declines to name the unit ON PURPOSE — its own comment reads "naming a concrete
+unit here would be an invention". So rc 2 is the only verdict reachable through
+the flow today, and an inline wiring would install a control-flow decision on
+rc 1 that no run can arrive at. A wiring that cannot go red on any real project
+is not a wiring; it is a subprocess on the hot path of every synthesis.
+
+Making rc 0/1 reachable by adding `--area-unit-um2` to the flow clause is
+REFUSED, not overlooked: it asserts a unit the PRODUCING artefact declined to
+assert, which is the ART-POWER-FIGURES-X1000 defect this gate exists to remove.
+
+WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
+-----------------------------------------------------
+One thing, and it is not in this file. `synth_area_stats_emit` must record the
+area unit the loaded Liberty DECLARES, so that `chip_area_unit` names um^2 — any
+spelling in `_UM2_SPELLINGS` — when that is what the library says. From that
+moment this gate reaches rc 0 and rc 1 on real runs and has a verdict worth
+carrying inline, and the wiring belongs in `design_one_shot_runner.
+step_yosys_synth` immediately after the `_ystat.emit_stats_json(...)` call that
+writes the figure this gate reads: rc 1 returning `StepResult(..., "FAIL", ...)`
+the way the `synth_netlist_check` call site four lines further on already does,
+rc 2 disclosed and non-green rather than silently dropped.
+
+That precondition is not left as prose. `test_two_gates_declare_where_their_
+verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this
+paragraph cannot quietly become false. This is NOT a claim that the gate is
+audit-only forever.
+
 THE SIBLING OF `power_total_vs_budget_check`, ONE AXIS OVER
 ===========================================================
 Power got its comparison in #1026 and the flow's power edge in this change's
