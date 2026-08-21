@@ -1956,6 +1956,64 @@ rather than as a claim. **A blocker is a claim about the world and needs the sam
 evidence as a finding.**
 
 
+## M31 — escalations 3 and 4 audited; the four-escalation audit, closed
+
+**Escalation 3** (re-found the thirteen guards) is no longer a blocker: A and C
+are implemented and verified, B is specified with both channels confirmed and a
+safety bound, D's mechanism is fully described. What is left of it is a decision
+about B and D, not an unknown.
+
+**Escalation 4** (the CI image has no Docker CLI) — the FACTUAL claim holds. I
+verified it directly, not by inference: `command -v docker` returns nothing in
+`sha256:66c33ff2…`, and all 22 image-lane failures return
+`rc 2 = RC_CANNOT_MEASURE` in consequence.
+
+**But my OPTION SET was incomplete, and there is a third.**
+`hermetic_candidate_runner.py` already carries the seam:
+
+```
+:2028   run_parser.add_argument("--docker-bin", default="docker")
+```
+
+and `gatekeeper-verify-merge.sh` never invokes docker itself — it delegates every
+container operation to the runner, and simply never passes that flag. So the
+verifier COULD thread a `--docker-bin` through, and the landing-verdict
+end-to-end tests could drive a fake docker binary exactly as
+`test_hermetic_candidate_runner.py` already does — which is why THAT file runs
+16 passed in the image while these 22 cannot run at all.
+
+**The cost, and it is the same tension as everywhere else in this document:**
+
+* A fake docker proves the verifier drives the right SEQUENCE. It does not prove
+  the arms are isolated. The landing verdict's whole value is that they are, so
+  this converts an unrunnable strong guarantee into a runnable weaker one — worth
+  something, but it must be labelled, not quietly swapped.
+* Adding a `--docker-bin` override to the VERIFIER means letting a caller
+  substitute the container engine, on a PROTECTED AUTHORITY path. Gated
+  test-only, it reintroduces exactly the hole I refused to punch in
+  `_LAND_REVIEWED_ENV_NAMES` for M13. **A seam that lets a test replace the
+  isolation mechanism is a seam that lets a candidate replace it.**
+
+So option three is real, cheap to build, and carries a security question that
+options one and two do not. It belongs on the decision list with that label
+attached, not omitted because I did not think of it.
+
+### The audit, closed
+
+| # | escalation | verdict |
+|---|---|---|
+| 1 | flow-gate `ENFORCEMENT` | **MIS-STATED (M29)** — `program_exit_zero` blocks nothing, so `advisory` contradicts nothing; smaller and better-posed |
+| 2 | a run root for `flow_manifest_declaration_parity` | **WRONG (M30)** — 10/15 declared roots are here and 2 carry the artefact |
+| 3 | re-found the thirteen guards | **PARTLY EXECUTED** — A and C done, B and D specified |
+| 4 | Docker CLI in the CI image | **FACT VERIFIED, option set incomplete** — a third option exists, with a security cost |
+
+**Four escalations, and not one survived audit unchanged.** Two were wrong, one
+was mis-stated, one was incomplete. Every one had sat unexamined while I audited
+the repository's guards with far more rigour than my own claims about what could
+not be done. **The things you declare impossible are the claims least likely to
+be checked, including by you.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
