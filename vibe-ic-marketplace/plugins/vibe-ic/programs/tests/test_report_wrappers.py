@@ -8,6 +8,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 
 # Padding to clear MIN_REPORT_BYTES thresholds (1-2 KB per mode).
@@ -160,13 +170,25 @@ class TestTapeoutSignoffCheck:
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 1
 
     def test_with_evidence_passes(self, tmp_path):
-        (tmp_path / "design.gds").write_text("GDS")
+        _gdsii.write_declared_streamout(tmp_path, "design.gds")
         (tmp_path / "netlist.v").write_text("module top; endmodule")
         (tmp_path / "timing.rpt").write_text("WNS=0")
         # #437(a): the tapeout DRC slot now gates on a PARSED violation
         # count — an unparseable "clean" stub is refused, so the fixture
         # carries a parseable zero-count signoff shape.
         (tmp_path / "drc.rpt").write_text("Total violations: 0\n")
+        # 2026-07-27: tapeout mode gained a fifth pillar (LVS) — a tape-out is
+        # DEFINED by a genuine layout-vs-schematic match, so "with evidence"
+        # now means five slots, not four.
+        (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "reports/phase3/lvs.rpt").write_text(
+            "Netlists match uniquely.\n"
+            "Final result: Circuits match uniquely.\n")
+        # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+        # condition — a run whose crosstalk-delay check proved nothing, or
+        # never ran, no longer certifies. "With evidence" now includes a
+        # PROVED SI verdict.
+        _si_signoff_fixture.write_proved_si_report(tmp_path)
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 0
 
 

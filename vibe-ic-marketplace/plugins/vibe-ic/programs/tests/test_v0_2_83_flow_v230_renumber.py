@@ -60,7 +60,11 @@ def test_renumbered_steps_kept_identity():
     assert "Gate-Level Simulation" in _STEPS[29]["name"]
     assert "SPICE" in _STEPS[30]["name"]
     assert "Physical" in _STEPS[31]["name"] or "DRC" in _STEPS[31]["name"]
-    assert "ECO" in _STEPS[32]["name"]
+    # v1.8.87 renamed step 32: it was labelled an ECO step, but what it runs is
+    # a multi-corner repair_design + repair_timing + reroute pass, and its skill
+    # moved from eco-plan to sta-review to match. The identity this line pins is
+    # "step 32 is the post-route timing repair", not the old word.
+    assert "timing repair" in _STEPS[32]["name"].lower()
     assert "Power" in _STEPS[33]["name"]
     assert "fill" in _STEPS[34]["name"].lower()
     assert "DFM" in _STEPS[35]["name"]
@@ -82,7 +86,21 @@ def test_step44_htol_conditional():
     s = _STEPS[44]
     assert "HTOL" in s["name"]
     assert s["blocks_on"] == [43]
-    assert "htol_results.json" in json.dumps(s.get("condition", {}))
+    # Step 44 stays CONDITIONAL — reliability qual is genuinely N/A for a
+    # design that was never fabricated. What changed in vibe-ic#220 is WHICH
+    # artefact scopes it. This used to assert the condition named
+    # `htol_results.json`, which is also step 44's own required_output, so the
+    # assertion pinned the self-disabling shape: missing HTOL results are the
+    # defect the attestation exists to catch, and naming them in the condition
+    # meant the step vanished exactly when it had something to report. The
+    # scope now comes from the silicon-intake declaration that steps 40-43
+    # already use, so an absent htol_results.json reaches the required_outputs
+    # check and reports MISSING.
+    cond = json.dumps(s.get("condition", {}))
+    assert "silicon_received.json" in cond
+    assert "htol_results.json" not in cond, (
+        "step 44 must not be gated on its own required_output")
+    assert "htol_results.json" in json.dumps(s.get("required_outputs", []))
 
 
 def test_file_order_is_numeric():
@@ -92,9 +110,14 @@ def test_file_order_is_numeric():
 
 
 def test_capability_gaps_follow_renumber():
-    assert F._PLATFORM_CAPABILITY_GAPS[29] == "cap:sdf_annotated_gatelevel_sim"
-    assert F._PLATFORM_CAPABILITY_GAPS[30] == "cap:post_layout_spice_correlation"
+    # v1.3.94 — Steps 29 (SDF sim) + 30 (SPICE corr) were CLOSED this campaign
+    # with real OSS tools (iverilog $sdf_annotate; ngspice NLDM correlation), so
+    # they gate normally now and are no longer cap-gaps. 28 (PERC) is enforced.
+    # v1.3.99 — 5 (formal) closed via formal_property_run: the table is EMPTY.
+    assert 29 not in F._PLATFORM_CAPABILITY_GAPS
+    assert 30 not in F._PLATFORM_CAPABILITY_GAPS
     assert 28 not in F._PLATFORM_CAPABILITY_GAPS  # PERC is enforced, not a gap
+    assert F._PLATFORM_CAPABILITY_GAPS == {}
 
 
 def test_env_map_matches_yaml():
