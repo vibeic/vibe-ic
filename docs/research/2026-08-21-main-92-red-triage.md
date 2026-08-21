@@ -311,6 +311,104 @@ in `ABSENT-FROM-RUN`, never in a clean bucket. Re-run with `mapfile` /
 
 ---
 
+# 9. WHY NOTHING CAUGHT IT FOR FIVE COMMITS — the answer is (c)
+
+The question posed was: is the pin regeneration **(a)** in a list nothing
+iterates, **(b)** run but its verdict never made fatal, or **(c)** run, fatal,
+and bypassed.
+
+**It is (c).** Saying so plainly, as asked.
+
+## (a) EXCLUDED — the selector does iterate it
+
+`ci_targeted_test_select.py --base 7fcbc7397~1` on the commit that added step
+`1.6x` selects **444 test files, 17 of them the matrix family** — including
+`test_matrix_63x8_census_freshness.py`, `test_matrix_63x8_ledger.py`,
+`test_matrix_mutation_ledger.py` and every `test_matrix_d1..d8`. The tests that
+later produced 35 of the 92 reds **were in the selection for the very commit
+that broke them.**
+
+One deliberate removal exists and does not change this: the `63x8 census
+freshness` gate was deleted from `tools/ci/repo_hygiene_gates.sh` at `e22cce75f`
+— *"MOVED OUT OF THE LANDING PATH (owner decision, 2026-08-16)"* — on the stated
+grounds that *"a stale census breaks nothing … it simply no longer sits between a
+fix and main"*, with the fallback named as *"`test_matrix_63x8_census_freshness.py`
+still enforces it in the suite"*. **That fallback is real and is selected.**
+
+## (b) EXCLUDED for the detector — the targeted arm is fatal
+
+`gatekeeper-land.sh` sets `FAILED=1` on a red targeted arm and ends
+`exit "$FAILED"`. On failure it does the opposite of stamping:
+
+```
+git rev-parse HEAD > "…/gatekeeper-stamp"
+echo "=== ALL GATES PASS — stamped … ==="
+else
+rm -f "…/gatekeeper-stamp"
+echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+```
+
+The only BEST-EFFORT thing in this family is the **repairer**, not the detector:
+`--prepare`'s census re-derivation is documented *"Alone among the steps above it
+is BEST EFFORT"*, and `--prepare` is **OFF BY DEFAULT**.
+
+## (c) — and the precise shape matters, so here it is exactly
+
+The entire chain rests on one client-side hook, which says so itself:
+
+> *"pre-push — **the ONLY enforced gate on what reaches `main`, by necessity.**
+> `gatekeeper-ci.yml` … has never run once. Actions is disabled at the ACCOUNT
+> level … So the checks CI would enforce are enforced HERE or nowhere."*
+
+and it is the hook — not `gatekeeper-land.sh` — that makes the expensive tier
+compulsory, via the stamp:
+
+```
+if [ ! -f "$STAMP" ];                        then pre-push: FAILED — the full suites have not been run
+elif [ "$(cat "$STAMP")" != "$HEAD_SHA" ];   then pre-push: FAILED — stamp is for a different commit
+```
+
+**MEASURED on this host, in the landing checkout:**
+
+```
+/home/reyerchu/vibe-ic/.git/hooks/pre-push                     -> No such file or directory
+ls /home/reyerchu/vibe-ic/.git/hooks/ | grep -v '\.sample$'    -> (nothing)
+git config --get core.hooksPath                                -> unset
+find /home/reyerchu -maxdepth 4 -path '*/.git/hooks/pre-push' -not -name '*.sample'
+                                                               -> (nothing)
+/home/reyerchu/vibe-ic/.git/gatekeeper-stamp                   -> No such file or directory
+```
+
+Every hook in that repository is a disabled `.sample`; `core.hooksPath` is unset;
+its **104 worktrees all share that same empty hooks directory**;
+`tools/install-git-hooks.sh` exists and has evidently not been run here.
+
+### The part that is about the operator, stated plainly — and the part that is not
+
+The answer is (c), so the class of finding is the one you asked me to name: the
+gate is run-and-fatal, and it is not what stands between a change and `main`.
+A habit of pushing with `--no-verify` is exactly the shape that turns a
+client-side gate into no gate, and it is worth writing down as such.
+
+**But on this host `--no-verify` is not what let the 1.6x drift through, and it
+would be wrong to let you conclude that it was.** There was no hook to bypass:
+the pre-push hook is not installed in the landing checkout at all, so the stamp
+check never ran, with or without the flag. The proximate cause is a MISSING
+INSTALL of the only enforcement point the repository has — not a flag used to
+step over one that was there.
+
+Both statements are true and neither should be dropped: the enforcement model is
+client-side and optional by construction (because Actions is disabled at the
+account level and the appeal was rejected), and on this machine the client side
+was never armed. `--no-verify` is belt-and-braces over an absent gate.
+
+**The one-line repair is `tools/install-git-hooks.sh`.** I have not run it — it
+mutates the operator's own checkout, which is not mine to change, and doing it
+silently would be exactly the kind of unattributed edit the gates in this repo
+exist to prevent.
+
+---
+
 ## REQUESTS TO THE LANDER
 
 1. **Step `1.6x` needs its 63x8 rows before any of the 35 in §1 can go green.**
@@ -330,6 +428,18 @@ in `ABSENT-FROM-RUN`, never in a clean bucket. Re-run with `mapfile` /
    will, and they will look like defects.
 5. Nothing here bumps a version, touches `plugin.json` / `marketplace.json`, or
    writes a hygiene baseline.
+6. **RUN `tools/install-git-hooks.sh` IN THE LANDING CHECKOUT.** §9: the
+   pre-push hook — which the repository itself calls "the ONLY enforced gate on
+   what reaches `main`" — is not installed in `/home/reyerchu/vibe-ic`, every
+   hook there is a disabled `.sample`, `core.hooksPath` is unset, and the 104
+   worktrees share that empty hooks directory. Until it is installed, the
+   gatekeeper stamp is never checked and `gatekeeper-land.sh` is advisory in
+   practice however fatal it is in code. I did not run the installer: it mutates
+   a checkout that is not mine.
+7. **Decide whether a stale 63x8 census should block a landing.** `e22cce75f`
+   moved that gate out of the landing path by owner decision on the grounds that
+   "a stale census breaks nothing". That reasoning is defensible, and it held —
+   the fallback test IS still selected. What failed was the layer below it.
 
 ---
 
