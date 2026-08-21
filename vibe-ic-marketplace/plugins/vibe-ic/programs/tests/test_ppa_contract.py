@@ -46,6 +46,7 @@ from test_ppa_contract_fixtures import (  # noqa: E402
 )
 
 from _ppa import contract as C, identity as ident, provenance as prov  # noqa: E402
+from _ppa import schema_validation as _SV  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -518,22 +519,19 @@ def test_the_json_report_is_written_when_it_is_asked_for(tmp_path):
 
 @needs_draft_2020_12
 def test_the_shipped_schemas_are_valid_json_schema():
-    jsonschema = pytest.importorskip("jsonschema")
     for name in ("contract.v1.schema.json", "run_manifest.v1.schema.json"):
         path = SCHEMA_DIR / name
         assert path.exists(), f"{path} is not in the tree"
-        jsonschema.Draft202012Validator.check_schema(
-            json.loads(path.read_text()))
+        assert _SV.check_schema(json.loads(path.read_text())) == [], name
 
 
 @needs_draft_2020_12
 def test_the_schema_and_the_validator_agree_on_a_clean_contract(tmp_path):
     """Two independent statements of the same rules must not drift apart."""
-    jsonschema = pytest.importorskip("jsonschema")
     build_contract(tmp_path, base_declaration())
     document = json.loads((tmp_path / "contract.json").read_text())
     schema = json.loads((SCHEMA_DIR / "contract.v1.schema.json").read_text())
-    errors = list(jsonschema.Draft202012Validator(schema).iter_errors(document))
+    errors = _SV.engine_or_skip(schema).errors(document)
     assert not errors, [e.message for e in errors]
     assert C.validate(document) == [] or all(
         f["severity"] == C.SEV_NOTE for f in C.validate(document))
@@ -543,10 +541,9 @@ def test_the_schema_and_the_validator_agree_on_a_clean_contract(tmp_path):
 def test_the_schema_refuses_a_sentinel_on_a_not_measured_metric():
     """The no-sentinel rule is stated declaratively as well as in code, so a
     consumer that only has the schema still gets it."""
-    jsonschema = pytest.importorskip("jsonschema")
     schema = json.loads((SCHEMA_DIR / "contract.v1.schema.json").read_text())
     metric_schema = {"$defs": schema["$defs"], **schema["$defs"]["metric"]}
-    validator = jsonschema.Draft202012Validator(metric_schema)
+    validator = _SV.engine_or_skip(metric_schema)
     bad = {"metric": "area.core_um2", "status": "NOT_MEASURED", "value": 0,
            "reason": "x"}
     assert list(validator.iter_errors(bad)), (

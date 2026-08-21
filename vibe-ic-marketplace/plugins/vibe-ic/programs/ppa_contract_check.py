@@ -51,11 +51,24 @@ emits them the way it already did once.
 
 WHY A MISSING VALIDATOR IS NOT A PASS
 -------------------------------------
-If `jsonschema` cannot be imported, or the schema file is not in the tree, this
+If no engine can apply the schema, or the schema file is not in the tree, this
 program reports PPA-C-010 and exits 2. It does NOT skip the schema check and
 report on the rest, because "I could not apply the schema" and "the schema
 found nothing" would then produce the same output — which is the defect this
 whole package exists to remove, reappearing in the tool that removes it.
+
+WHICH ENGINE, AND WHY IT IS RESOLVED RATHER THAN IMPORTED (R11)
+---------------------------------------------------------------
+`_ppa/schema_validation.resolve` picks the engine. It prefers the `jsonschema`
+library and falls back to `_ppa/jsonschema_bundled.py`, which ships with the
+plugin so the contract's shape is checked on a host that has nothing installed.
+
+The fall-through is not only for an ABSENT library. `import jsonschema` used to
+be the whole test here, and it is the wrong question: version 3.2.0 -- what a
+current distribution's system package installs -- imports fine and has no
+`Draft202012Validator`, which the shipped schemas' declared draft needs. This
+program attributed it anyway and died with an uncaught AttributeError, exiting
+1: a crash publishing itself as a finding about a design.
 
 chip-AGNOSTIC: it reads one JSON document and one schema.
 
@@ -88,6 +101,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import contract as C  # noqa: E402
+from _ppa import schema_validation as SV  # noqa: E402
 
 #: The plugin root is this file's grandparent; the schemas live beside
 #: `programs/`. Resolved from `__file__` so the program measures the tree it
@@ -115,27 +129,13 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             f"a pile of shape violations from applying the wrong schema would "
             f"read as a broken contract rather than as the wrong document",
             declared=declared)]
-    try:
-        import jsonschema
-    except ImportError:
-        return [C.finding(
-            "PPA-C-010", C.SEV_UNDETERMINED,
-            "jsonschema is not importable here, so the contract's shape was "
-            "NOT validated. This is not the schema passing")]
-    # The SAME defect the ImportError branch above exists for, one version
-    # check further along: `Draft202012Validator` arrived in jsonschema 4.0.
-    # On an older library the attribute lookup raises AttributeError, which
-    # `raise SystemExit(main())` turns into exit code 1 -- and §1 says 1 is a
-    # finding about the DESIGN. Measured on this machine (jsonschema 3.2.0):
-    # every invocation crashed and reported rc=1, so a missing library was
-    # indistinguishable from a broken contract.
-    if not hasattr(jsonschema, "Draft202012Validator"):
-        return [C.finding(
-            "PPA-C-010", C.SEV_UNDETERMINED,
-            f"jsonschema {getattr(jsonschema, '__version__', 'unknown')} has "
-            f"no Draft202012Validator (it arrived in 4.0), so the contract's "
-            f"shape was NOT validated. This is not the schema passing",
-            jsonschema_version=getattr(jsonschema, "__version__", None))]
+    # R11, RECONCILED. The `import jsonschema` + `hasattr(Draft202012Validator)`
+    # guard that stood here is not deleted, it MOVED: `SV.resolve()` below
+    # answers both of its questions (ABSENT and PRESENT-BUT-TOO-OLD) and
+    # returns the same PPA-C-010 UNDETERMINED verdict, so keeping both would
+    # have meant two guards racing to report one fact. The guard's rule is
+    # unchanged and is restated below: a schema that could not be applied is
+    # never the schema passing.
     path = Path(schema_dir) / "contract.v1.schema.json"
     schema, reason = C.load_json(path)
     if reason is not None:
@@ -144,9 +144,19 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             f"the contract schema could not be read ({reason}), so the "
             f"document's shape was NOT validated",
             schema_path=str(path))]
+    # R11. The engine is RESOLVED, never assumed. `import jsonschema` is not
+    # the question -- 3.2.0 imports and has no Draft202012Validator, and the
+    # previous code went straight on to attribute it and died with an uncaught
+    # AttributeError, returning rc=1 (a finding about a DESIGN) from a crash.
+    engine, notes = SV.resolve(schema)
+    if engine is None:
+        return [C.finding(
+            "PPA-C-010", C.SEV_UNDETERMINED,
+            "the contract's shape was NOT validated: " + " ".join(notes)
+            + ". This is not the schema passing",
+            schema_path=str(path))]
     out: List[Dict[str, Any]] = []
-    out.extend(_apply(jsonschema, schema, document, "contract.v1",
-                      "<document root>"))
+    out.extend(_apply(engine, document, "contract.v1", "<document root>"))
 
     # The run manifest is embedded, and `contract.v1` types it only as an
     # object. Validating it here is what stops `run_manifest.v1.schema.json`
@@ -161,18 +171,28 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             f"the run-manifest schema could not be read ({reason}), so the "
             f"embedded run manifest was NOT validated"))
     else:
-        out.extend(_apply(jsonschema, manifest_schema,
-                          document.get("run_manifest"), "run_manifest.v1",
-                          "run_manifest"))
+        m_engine, m_notes = SV.resolve(manifest_schema)
+        if m_engine is None:
+            out.append(C.finding(
+                "PPA-C-010", C.SEV_UNDETERMINED,
+                "the embedded run manifest was NOT validated: "
+                + " ".join(m_notes)))
+        else:
+            out.extend(_apply(m_engine, document.get("run_manifest"),
+                              "run_manifest.v1", "run_manifest"))
     return out
 
 
-def _apply(jsonschema, schema: Any, instance: Any, name: str,
+def _apply(engine: Any, instance: Any, name: str,
            root_label: str) -> List[Dict[str, Any]]:
-    """Every violation of one schema, as findings, sorted so reports diff."""
-    validator = jsonschema.Draft202012Validator(schema)
+    """Every violation of one schema, as findings, sorted so reports diff.
+
+    `engine` is whatever `_ppa.schema_validation.resolve` handed back. Its
+    errors carry `.message` and `.path` whichever engine produced them, so
+    nothing here branches on which one ran.
+    """
     rows: List[Dict[str, Any]] = []
-    for err in sorted(validator.iter_errors(instance), key=lambda e: list(e.path)):
+    for err in sorted(engine.iter_errors(instance), key=lambda e: list(e.path)):
         where = "/".join(str(p) for p in err.path)
         where = f"{root_label}/{where}" if where else root_label
         rows.append(C.finding(
