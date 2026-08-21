@@ -45,11 +45,15 @@ Two things, and the first is structural rather than a decision:
      property is a blocker here exactly like a violated one, so every run that
      does not carry all 17 metrics returns rc 1 — which, wired inline, stops the
      run at 37.5ic. `_DECLARED_SIGNOFF_GATES` was wired only after its blast
-     radius was measured over 14 published phase-3 run roots; the published
-     corpus carries 4 cells today and not one of those 14 roots, so that
-     measurement cannot currently be repeated. Wiring on an unmeasured blast
-     radius is what that table's own comment refuses, and this declaration does
-     not do it by another route.
+     radius was measured over 14 published phase-3 run roots under
+     `benchmark-data/ic`. That corpus is no longer in this repository at all,
+     and `step_internal_fail_bubble_up_baseline.json` records what became of it
+     — measured at both ends by that gate's own `check_corpus`: 16 run trees at
+     the commit that last recorded it, 4 at `vibeic/benchmark-data` 146d665,
+     "12 run trees left, 0 arrived". So the measurement that licensed the last
+     inline wiring cannot currently be repeated for this one. Wiring on an
+     unmeasured blast radius is what that table's own comment refuses, and this
+     declaration does not do it by another route.
 
 Both preconditions are re-measured by `test_two_gates_declare_where_their_
 verdict_is_consumed.py`, which fails when either stops holding. This is NOT a
