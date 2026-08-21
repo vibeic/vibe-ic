@@ -174,6 +174,15 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         "ppa_contract_build.py":       ["--declaration", a, "--root", d,
                                         "--out", str(absent.parent / "o.json")],
         "ppa_contract_check.py":       ["--contract", a],
+        # The design-for-ECO producer. Its vacuous input is a spare plan that
+        # is not there, and the point of the arm for THIS program is sharper
+        # than the general one: a producer that read a missing plan as
+        # "0 spares" would emit a measured zero, and a measured zero below a
+        # declared floor is INFEASIBLE at the gate -- convicting a run nobody
+        # looked at. rc=2 is the only honest answer and its records carry no
+        # `value` key at all.
+        "ppa_eco_spare_records.py":    ["--spare-plan", a, "--stage",
+                                        "post_route"],
         "ppa_feasibility_check.py":    ["--candidates", a],
         "ppa_head_to_head_check.py":   [a],
         "ppa_measurement_check.py":    ["--coverage", a, "--expect", a],

@@ -35,10 +35,13 @@ Per AXIS the search manifest publishes a term vector, and `audit_manifest`
 refuses an ELIGIBLE candidate whose nine terms do not all PASS or state
 NOT_APPLICABLE. So the axis translation has to be exact in the same direction:
 
-    SATISFIED     -> PASS
-    VIOLATED      -> FAIL
-    UNDETERMINED  -> NOT_CHECKED
-    WAIVED        -> WAIVED             (see below -- unreachable from here)
+    SATISFIED       -> PASS
+    VIOLATED        -> FAIL
+    UNDETERMINED    -> NOT_CHECKED
+    NOT_APPLICABLE  -> NOT_APPLICABLE   (an axis whose applicability the design
+                                         declares, and this design declared it
+                                         needs none -- or declared nothing)
+    WAIVED          -> WAIVED           (see below -- unreachable from here)
 
 NO WAIVER TRAVELS THIS BRIDGE, ON PURPOSE
 =========================================
@@ -90,12 +93,13 @@ TERM_MAP: Dict[str, str] = {
     F.AXIS_SATISFIED: "PASS",
     F.AXIS_VIOLATED: "FAIL",
     F.AXIS_UNDETERMINED: "NOT_CHECKED",
+    F.AXIS_NOT_APPLICABLE: "NOT_APPLICABLE",
     F.AXIS_WAIVED: "WAIVED",
 }
 
 
 def _axis_names_match_terms() -> bool:
-    """Do the gate's default axes name exactly the search lane's nine terms?
+    """Do the gate's default axes name exactly the search lane's terms?
 
     Asserted by MEASUREMENT at import-check time rather than by comment,
     because the two tuples live in two files and the failure mode of them

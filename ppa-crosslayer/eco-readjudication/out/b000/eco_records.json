@@ -1,0 +1,280 @@
+{
+  "not_measured_by_this_program": [
+    {
+      "property": "eco_reachability",
+      "reason": "whether a metal-only ECO could actually route from a given failing net to a given spare depends on the routing resources left around BOTH, and no artefact here is a routability answer. Distinct placement positions are a spread PROXY and are reported as one"
+    },
+    {
+      "property": "kind_sufficiency",
+      "reason": "whether the declared kind mix can implement the repairs this design will actually need is a judgement about future bugs. This axis checks the mix against the declaration and makes no claim that the declaration is the right mix"
+    },
+    {
+      "property": "post_eco_timing",
+      "reason": "whether a repair built from these spares would still meet timing is a question for an STA run on the ECO netlist, which does not exist yet"
+    }
+  ],
+  "program": "ppa_eco_spare_records",
+  "records": [
+    {
+      "metric": "design_for_eco.spares.count",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 10
+    },
+    {
+      "metric": "design_for_eco.spares.kind.aoi.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 1
+    },
+    {
+      "metric": "design_for_eco.spares.kind.dff.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 1
+    },
+    {
+      "metric": "design_for_eco.spares.kind.inverter.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 3
+    },
+    {
+      "metric": "design_for_eco.spares.kind.mux2.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 1
+    },
+    {
+      "metric": "design_for_eco.spares.kind.nand2.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 2
+    },
+    {
+      "metric": "design_for_eco.spares.kind.nor2.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 2
+    },
+    {
+      "metric": "design_for_eco.spares.kind.oai.count",
+      "provenance": {
+        "counted_from": "the plan's own `instances` list",
+        "population": 10,
+        "zero_is_a_measurement": "the instance list IS the population, so a kind absent from it has none. This is not the absence of a measurement"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "metric": "design_for_eco.spares.distinct_positions.count",
+      "provenance": {
+        "definition": "distinct (llx, lly) pairs over the plan's own instance list, via spare_cell_coverage_check.compute_distribution -- the same function the readiness gate uses, so the two cannot disagree about what a position is",
+        "is_not": "a reachability measurement. Two spares at distinct positions may still both be unreachable from the net a future ECO has to repair"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 10
+    },
+    {
+      "metric": "design_for_eco.spares.tie_off.verdict",
+      "provenance": {
+        "candidates": 20,
+        "connected": 20,
+        "reason": "measured 20/20 spare input(s) tied to their per-spare tie-low net"
+      },
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "verdict",
+      "value": "TIED_OFF"
+    },
+    {
+      "metric": "design_for_eco.spare_pads.count",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "source": {
+        "parser": "ppa_eco_spare_records.py",
+        "path": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+        "role": "spare_plan",
+        "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "MEASURED",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "metric": "design_for_eco.spares.surviving.count",
+      "reason": "no spare-preservation report was supplied, so whether the inserted spares are still named by the shipped artefacts was not established by this run",
+      "schema": "vibeic.ppa.metric.v1",
+      "scope": {
+        "stage": "post_route",
+        "tool": "phase3_one_shot_runner"
+      },
+      "status": "NOT_MEASURED"
+    }
+  ],
+  "schema": "vibeic.ppa.metric_bundle.v1",
+  "sources": {
+    "preservation": null,
+    "preservation_sha256": null,
+    "preservation_unreadable": null,
+    "spare_plan": "/home/reyerchu/_agentjob_jeco/wt/ppa-crosslayer/records/trials/b000/spare_cells.json",
+    "spare_plan_sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+    "spare_plan_unreadable": null
+  }
+}
