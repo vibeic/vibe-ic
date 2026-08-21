@@ -55,3 +55,14 @@ def rule_upstream_convention_not_inverted(sample_text, ports):
     # Expected signal: ERROR
     # Suggested fix action: Declare the upstream mapping beside our own and assert they agree, and take the upstream half from the tool's DOCUMENTED contract rather than from the argument names. Here, measured side by side: ours sends the horizontal-named variable to the south and north sides and the vertical-named one to the west and east sides; the tool documents the opposite for both. The two mappings are four entries each, so the check is a dict comparison.
     return []  # list of findings — TODO implement
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: A re-implementation derives the opposite of a symmetric pair with the wrong TRANSFORM -- a half turn where the upstream mirrors, or the reverse. For a rectangular footprint the two occupy the SAME bounding box, so every geometric check downstream agrees under both and the defect passes fit, spacing, abutment and coverage alike. What differs is where the cell's PINS end up. The artefact is internally consistent, passes its own gates, and faces the wrong way.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_opposite_side_transform_matches_upstream(sample_text, ports):
+    """Where a step derives one member of a symmetric pair from the other, the transform must be the transform the upstream uses. Mirroring and half-turning are interchangeable for a bounding box and are not interchangeable for a cell. The check compares two named transforms and is a program's decision once the upstream one is declared -- the same declare-then-check shape the other pins in this batch arrive at."""
+    # Expected signal: ERROR
+    # Suggested fix action: Declare the upstream transform beside ours and assert they agree. Upstream derives the opposite side by MIRRORING on both axes -- north from south by a flip about X, east from west by a flip about Y -- and states it in two lines of its own source. Ours applies a half turn on both axes through a helper whose docstring says 'one quarter turn clockwise'. Any bounding-box-based test will pass under either, so the test that pins this must compare the ORIENTATION TOKEN, never the extents.
+    return []  # list of findings — TODO implement

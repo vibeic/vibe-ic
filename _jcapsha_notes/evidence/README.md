@@ -62,3 +62,10 @@ upstream's source, not our measurement.
 | file | the claim it backs |
 |---|---|
 | `test_red_under_load_MEASURED.txt` | the late-session red is a 55s subprocess timeout at load 64 on 32 cores, against a documented 18.9–20.3s baseline; the timing-out program has zero references to the file this branch changes. The timeout was NOT raised. |
+
+## F3d — the opposite-side transform
+
+| file | the claim it backs |
+|---|---|
+| `f3c_our_recorded_orientation_probe.py` | drives our step and reads the orientation it RECORDS per side, so the comparison against the tool is between two measurements rather than between a measurement and a reading of code. |
+| `f3d_mirror_vs_halfturn_MEASURED.txt` | at the DEFAULT, ours derives the north side by a half turn and the tool by a mirror. Same bounding box, different cell orientation — which is why every geometric gate in the step passes under both. |
