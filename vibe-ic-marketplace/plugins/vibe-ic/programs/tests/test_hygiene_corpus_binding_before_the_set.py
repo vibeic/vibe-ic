@@ -32,7 +32,7 @@ WHAT THESE TESTS PIN
 3. A resolvable corpus is BOUND: the child sees both `VIBE_IC_BENCHMARK_DATA`
    and `GATEKEEPER_BENCHMARK_DATA_SHA`, the latter equal to that checkout's
    HEAD. The bound SHA is what stops `_corpus_location.resolve()` from
-   preferring some candidate-local shadow (`_corpus_location.py:137-156`), and
+   preferring some candidate-local shadow (`_corpus_location.py:156-175`), and
    it is what reaches the record as `corpus_inputs.benchmark_data_sha`.
 
 NEGATIVE CONTROL, which is the point of 2 and 3: every assertion here is about
