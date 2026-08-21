@@ -23,6 +23,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -33,7 +36,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
@@ -815,7 +820,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "processor + ADU framer/parser for one or more of the three published transports "
             "(RTU, ASCII, TCP). Exposes the four data tables plus diagnostic counters and an "
             "optional Encapsulated Interface (FC 0x2B) handler.")
-        d["top_module"] = "modbus_server_top"
+        _ptm.apply(d, "modbus_server_top")
         d.setdefault("integration_overview", {
             "host_side":         "Two memory-mapped regions: (a) configuration/control/status registers, (b) the four MODBUS data tables.",
             "wire_side_rtu":     "UART TX/RX plus optional RTS for RS-485 transceiver direction control.",

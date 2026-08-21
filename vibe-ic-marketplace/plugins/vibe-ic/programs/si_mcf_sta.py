@@ -492,18 +492,24 @@ def net_grounded_totals(spef_text: str) -> Dict[str, float]:
 
 
 def count_coupling_caps(spef_text: str) -> int:
-    """Number of coupling (2-node, 4-token) *CAP entries in a SPEF."""
+    """Number of coupling (2-node, 4-token) *CAP entries in a SPEF.
+
+    ANY directive ends a ``*CAP`` body. The earlier form listed the closers
+    explicitly (``*RES`` / ``*CONN`` / ``*D_NET`` / ``*END``), which silently
+    missed ``*D_PNET`` — ``"*D_PNET".startswith("*D_NET")`` is False — so a
+    physical-net block following a ``*CAP`` section kept feeding body lines to
+    the counter. That made this function and ``spef_extraction_check.scan_spef``
+    (which has always ended the body on any directive) agree only empirically,
+    on OpenROAD-shaped files; they now agree by construction, which is what
+    lets either be cited as a cross-check of the other."""
     n = 0
-    section: Optional[str] = None
+    in_cap = False
     for raw in spef_text.splitlines():
         s = raw.strip()
-        if s.startswith("*CAP"):
-            section = "cap"
+        if s.startswith("*"):
+            in_cap = s.startswith("*CAP")
             continue
-        if s.startswith(("*RES", "*CONN", "*D_NET", "*END")):
-            section = None if not s.startswith("*CAP") else section
-            continue
-        if section == "cap":
+        if in_cap:
             toks = _cap_tokens(raw)
             if toks is not None and len(toks) == 4:
                 n += 1
@@ -645,6 +651,78 @@ def _to_container_path(host_path: str, container: str) -> str:
         if p.startswith(src + "/"):
             return dst + p[len(src):]
     return p
+
+
+# OpenSTA / OpenROAD read_liberty syntax:
+#   read_liberty [-corner <name>] [-min] [-max] [-infer_latches] <filename>
+# The liberty FILE is the sole positional argument (always last); the leading
+# tokens may be option flags, and -corner carries a value. A naive
+# `read_liberty\s+(\S+)` capture returns "-corner" for the multi-corner PnR
+# form (`read_liberty -corner ss /.../ss.lib`), which then makes si_mcf emit a
+# malformed `read_liberty -corner` that OpenSTA rejects with "read_liberty
+# -corner missing value" -> a self-inflicted ERROR verdict on a design that
+# actually meets SI timing. Extract the real liberty path instead.
+# chip / PDK / flow-AGNOSTIC: only OpenSTA's own option grammar, no PDK literal.
+_READ_LIBERTY_VALUE_OPTS = {"-corner", "-min_corner", "-max_corner"}
+
+
+def _liberty_path_from_read_liberty(line: str) -> Optional[str]:
+    """Return the liberty FILE named on a `read_liberty ...` line, skipping any
+    leading option flags (and the value of a value-taking option like -corner).
+    Returns None when the line is not a read_liberty or names no file."""
+    m = re.match(r"read_liberty\b(.*)$", line)
+    if not m:
+        return None
+    toks = [t.strip('{}"') for t in m.group(1).split()]
+    toks = [t for t in toks if t]
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.startswith("-"):
+            i += 2 if t in _READ_LIBERTY_VALUE_OPTS else 1
+            continue
+        # first non-option positional token = the liberty filename; accept it
+        # only if it looks like a file/path (guards against a stray corner name)
+        if ("/" in t) or t.lower().endswith((".lib", ".lib.gz", ".db")):
+            return t
+        return None
+    return None
+
+
+def _resolve_flow_liberty(project: Path) -> Optional[str]:
+    """Recover the primary std-cell liberty the phase-3 flow ALREADY resolved,
+    by reading the first `read_liberty <path>` out of the PnR / STA TCLs the
+    flow emitted. Many flows (e.g. the caravel harness) never STAGE a liberty
+    under input/pdk/liberty/ — the PDK liberty lives only inside the EDA
+    container (/foss/pdks/...), and that container path is exactly what the
+    flow's own read_liberty already points at (it passes through the container-
+    path translation below unchanged). chip/PDK-AGNOSTIC: returns whatever
+    liberty the flow used, no PDK / cell / corner literal. Returns None when no
+    flow TCL carries a read_liberty."""
+    cands = [
+        project / "phase3/stage3/pnr/pnr.tcl",
+        project / "phase3/stage3/sta/sta_mcorner_ocv_setup.tcl",
+        project / "phase3/stage3/sta/sta_spef_setup.tcl",
+        project / "phase3/stage3/sta/sta_spef_based.tcl",
+    ]
+    cands += sorted(project.glob("phase3/stage3/sta/*.tcl"))
+    seen = set()
+    for c in cands:
+        if c in seen or not c.is_file():
+            continue
+        seen.add(c)
+        try:
+            txt = c.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in txt.splitlines():
+            s = line.strip()
+            if s.startswith("#"):
+                continue
+            lib = _liberty_path_from_read_liberty(s)
+            if lib:
+                return lib
+    return None
 
 
 def _docker_exec(container: str, cmd: str, timeout: int = 1800
@@ -810,7 +888,37 @@ def run(project: PathLike, *, container: str = "vibeic-eda",
         if not libs:
             libs = sorted((project / "input" / "pdk" / "liberty").glob("*.lib"))
         liberty = str(libs[0]) if libs else ""
+        # field (caravel SI-STA liberty) — a flow that keeps its PDK liberty
+        # only in the container (no staged input/pdk/liberty/) otherwise left
+        # liberty="" here; `_abs("")` resolves to the project DIR, so the emitted
+        # `read_liberty <dir>` made OpenSTA fail with "line 1, syntax error" and
+        # the whole SI STA reported a SELF-INFLICTED ERROR instead of a real
+        # verdict. Recover the liberty the phase-3 flow already resolved.
+        if not liberty:
+            liberty = _resolve_flow_liberty(project) or ""
     macro_libs = macro_libs or []
+
+    # field (caravel SI-STA liberty) — hard guard: a genuinely UNRESOLVABLE
+    # liberty is a CLEAR, NAMED ERROR — never a malformed `read_liberty <dir>`
+    # that produces an opaque OpenSTA syntax error a reader cannot diagnose. The
+    # gate still FAILs (ERROR) on a truly-missing liberty — this only makes the
+    # failure honest and self-describing (not vacuous).
+    if not str(liberty).strip():
+        report = {
+            "program": _PROGRAM, "version": _VERSION,
+            "tool": "opensta-mcf-bounded-si-sta", "design_top": top,
+            "verdict": "ERROR",
+            "error": ("no timing liberty resolvable: none staged under "
+                      "input/pdk/liberty/ and no read_liberty found in the "
+                      "phase-3 PnR/STA TCLs — cannot run SI STA without a "
+                      "liberty."),
+        }
+        out_json_p = (Path(out_json) if out_json
+                      else _pl.report_path(project, "si_mcf_sta.json"))
+        out_json_p.parent.mkdir(parents=True, exist_ok=True)
+        out_json_p.write_text(json.dumps(report, indent=2) + "\n")
+        report["out_json"] = str(out_json_p)
+        return report
 
     work = ex / "si_mcf"
     work.mkdir(parents=True, exist_ok=True)

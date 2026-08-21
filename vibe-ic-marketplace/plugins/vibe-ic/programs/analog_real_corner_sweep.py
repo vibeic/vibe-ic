@@ -1,12 +1,31 @@
 #!/usr/bin/env python3
 """analog_real_corner_sweep.py — v1.6.207 (ORGANIC-20260512).
 
-Per-block real ngspice driver. Chip-AGNOSTIC: picks a parameterised
-testbench based on the L5 'type' field (NOT topology.md keyword
-matching — that leaked across blocks because Brokaw bandgap docs
-mention LDO supply etc.).
+Per-block real ngspice driver. Chip-AGNOSTIC.
 
-Supported block types (sweep templates):
+WHAT IT SIMULATES — read this before the table below.
+The circuit under test is the DELIVERED BLOCK NETLIST when the upstream
+netlist step produced one (`phase{3,2}/analog/<block>/<block>.sp`, driven by
+the stimulus deck emitted beside it). Only the process-corner `.lib` section
+and the `.temp` card are re-stamped per corner; no device, geometry, source
+value or measurement command in the delivered pair is touched. `<block>.sp`
+with no stimulus deck beside it is REFUSED, not improvised over.
+
+With NO delivered netlist the step measures nothing: it writes a BLOCKED
+`corner_results.json` naming the missing input and returns rc=2. The built-in
+per-block-type table below is then reachable only behind an explicit opt-in
+(`ANALOG_ALLOW_BUILTIN_NETLIST=1`), and every artefact it touches — the JSON,
+the sizing-loop record, and the head of every deck on disk — is stamped
+`netlist_provenance: builtin_template`, `design_traceable: false` and a
+`deck_authored_by` that says BUILT-IN, so a corner_results.json can never read
+as design-traceable when the deck came from this file. The A4 gate refuses to
+certify such a run. The table survives because it is the only thing that
+exercises this file's PDK/corner/simulator machinery where no design netlist
+exists — never as a stand-in for one.
+
+BUILT-IN FALLBACK block types (selected on the L5 'type' field, NOT on
+topology.md keyword matching — that leaked across blocks because Brokaw
+bandgap docs mention LDO supply etc.). These carry NO design content:
   ldo         | Vout target (sweep m_pass)
   bandgap     | Vbg target (sweep R-ratio surrogate via 1-corner DC)
   por        | Vtrip detection (sweep Vdd; report trip Vdd)
@@ -26,16 +45,30 @@ Supported block types (sweep templates):
   (delta_sigma.sp, integrator_settle.sp, comparator.sp, adc.sp) — topology
   and device values are taken verbatim, not invented (ORGANIC-20260528-a4).
 
-Each template returns a `meas` dict containing at minimum the
-canonical `vout` key plus block-specific extras. Provenance flag
-`_provenance: "real_ngspice"` is written into corner_results.json so
-analog_a4_corner_sweep_check.py can distinguish from stub.
+Each built-in template returns a `meas` dict containing at minimum the
+canonical `vout` key plus block-specific extras; a delivered deck returns
+whatever its own measurement commands report, and when that is not the metric
+the static `TARGETS` table grades, the measured metric is graded with NO target
+rather than discarded or fitted to an invented one.
+
+`_provenance: "real_ngspice"` says HOW the number was measured. It has always
+been silent about WHAT was measured, and that silence is what let a template
+self-test read as a design measurement — `design_traceable` / `deck_source` /
+`netlist_source` are the fields that answer that, and the A4 gate reads them.
 
 Falls back rc=2 if simulator unreachable. chip-AGNOSTIC.
 """
 from __future__ import annotations
-import argparse, json, os, re, shlex, subprocess, sys, time
+import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+
+try:
+    from . import _container_exec                            # type: ignore
+except ImportError:                                          # standalone gate
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _container_exec                                   # type: ignore
 
 _MEAS_LINE_RE = re.compile(r"^.*MEAS\b(.*)$", re.MULTILINE)
 _KV_RE = re.compile(r"(\w+)=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)")
@@ -735,6 +768,31 @@ TARGETS = {
     "comparator":  {"key":"vout","target":None, "tol":None,  "label":"latch decision split (V)"},
 }
 
+# R6-FIX-3 — block-type SPELLING aliases: a type name the L5 extractor may emit
+# that denotes a deck this module ALREADY has, under a different word.
+#
+# `TARGETS["trim"]["label"]` is literally `"DAC out (V)"` and `T["trim"]` is the
+# deck that sweeps it — i.e. the trim deck IS the DAC deck. But a Phase-1
+# extractor that reads the word "DAC" in the input emits `type="dac"`, which is
+# in neither `TARGETS` nor `T`, so `l5_analog_block_spec_actionable_check`
+# reported `type='dac' has no deck in the consumer's own table (known: 12
+# types)` and `analog_real_corner_sweep` built no testbench for it. That is a
+# VOCABULARY gap, not a missing capability — so the fix is an alias, NOT a
+# duplicated deck (a second `dac` deck would drift from `trim`'s).
+#
+# chip-AGNOSTIC: circuit-topology synonyms only; no part number, no chip class.
+BLOCK_TYPE_ALIASES = {
+    "dac": "trim",
+}
+
+
+def canonical_block_type(btype):
+    """Resolve a block-type spelling to the one this module decks.
+
+    Identity for a type already in `TARGETS`/`T`. chip-AGNOSTIC."""
+    t = str(btype or "").strip().lower()
+    return BLOCK_TYPE_ALIASES.get(t, t)
+
 # ─────────────────── Helpers ───────────────────
 
 def _docker(container, cmd, timeout=120):
@@ -743,9 +801,17 @@ def _docker(container, cmd, timeout=120):
     # UnicodeDecodeError inside the container `cat` reader, which then reported
     # the (perfectly valid) lib as UNREADABLE and dead-ended a native PDK deck
     # at NEEDS_NATIVE_TEMPLATE. chip-AGNOSTIC: byte-decoding policy only.
-    return subprocess.run(["docker","exec",container,"bash","-lc",cmd],
-                           capture_output=True,text=True,errors="replace",
-                           timeout=timeout)
+    #
+    # The deadline is enforced INSIDE the container (_container_exec). The
+    # previous `subprocess.run(["docker","exec",...], timeout=)` bounded only
+    # the local docker CLIENT: on expiry Python killed the client and the tool
+    # kept running in the container, unsignalled, holding its cores and never
+    # finishing its output file. Measured on vibeic-eda with `sleep 600` and
+    # timeout=5 — client raised TimeoutExpired at 5.0s, container-side
+    # survivors = 2; with the deadline inside, rc=124 at 5.1s and survivors =
+    # 0. That orphan is why a sizing-loop point can consume CPU-hours and
+    # never create its `.measure.json`. chip-AGNOSTIC: process lifetime only.
+    return _container_exec.run_in_container(container, cmd, deadline_s=timeout)
 
 
 # v1.6.218 (#95) — iic-osic-tools ships ngspice under
@@ -864,12 +930,14 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     There is no `-I` / search-path option, and `set sourcepath` does not apply.
 
     So for a staged PDK whose libs span several directories, a shim's bare-name
-    cross-directory hop satisfies NEITHER and is fatal. Pointing cwd at any one
-    EXISTING directory cannot fix that (no existing directory holds the whole
-    closure) — which is why build_lib_include_farm CREATES one, and why `cwd`
-    must then be that farm: co-location supplies the first hop, cwd supplies
-    every hop after it. Both halves are required; each alone still fails. See
-    analog_pdk_deck_context.build_lib_include_farm.
+    cross-directory hop satisfies NEITHER and is fatal, and pointing cwd at any
+    one EXISTING directory cannot fix it (no existing directory holds the whole
+    closure). A symlink farm that CREATES such a directory used to exist for
+    exactly this, paired with cwd — but only ever under the entry-lib primary
+    strategy, which vibe-ic#193 retired; see
+    analog_pdk_deck_context.RETIRED_PRIMARY_STRATEGIES, which records how to
+    bring both halves back together if a consumer needs them. Note that BOTH
+    halves were required and neither was wired: every call below passes cwd=None.
 
     When cwd is None the invocation is unchanged (the open-PDK sky130/gf180
     decks include their model lib by ABSOLUTE path). chip-AGNOSTIC."""
@@ -998,20 +1066,23 @@ def _run_ngspice(container, sp_in_container, cwd=None):
 def _pick_block_type(block, project):
     """L5-driven type selection — does NOT use topology.md keyword match."""
     # Try analog_block_list.json first
+    # R6-FIX-3: every return goes through canonical_block_type() so a spelling
+    # this module decks under another word (`dac` -> `trim`) resolves instead of
+    # dead-ending at "no deck in the consumer's own table".
     bl = project / "phase3" / "analog" / "analog_block_list.json"
     if bl.is_file():
         d = json.load(open(bl))
         for b in d.get("blocks", []):
             if b.get("name") == block:
-                return b.get("type", block)
+                return canonical_block_type(b.get("type", block))
     # Try L5
     l5 = project / "phase1" / "generated_docs" / "L5_ADI_SPEC.json"
     if l5.is_file():
         d = json.load(open(l5))
         for b in d.get("analog_blocks", []):
             if b.get("name") == block:
-                return b.get("type", block)
-    return block  # fallback: name == type
+                return canonical_block_type(b.get("type", block))
+    return canonical_block_type(block)  # fallback: name == type
 
 def _verdict(meas, target):
     if target["target"] is None or target["key"] not in meas:
@@ -1045,16 +1116,104 @@ _SPEC_NAME_ALIASES = {
     "dropout": {"dropout", "vdropout", "headroom"},
     "psrr":    {"psrr", "supplyrejection"},
     "iq":      {"iq", "iquiescent", "quiescentcurrent"},
+    # R6-FIX-2 (a) — `reff` was MISSING, and it is `TARGETS["pull"]["key"]`.
+    # Every one of the six original canonical keys is an LDO quantity, so a
+    # `pull` block could never inherit an L5 value however well Phase 1
+    # extracted it: `_normalize_spec_name("Reff")` returned None and
+    # `l5_block_specs` dropped the entry, while
+    # `l5_analog_block_spec_actionable_check` simultaneously DEMANDED a
+    # numerically-bounded spec for that block. The gate was unsatisfiable.
+    "reff":    {"reff", "rpull", "rpullup", "rpulldown", "pullresistance",
+                "pullupresistance", "pulldownresistance",
+                "effectiveresistance", "rout", "routput"},
+    # ── generic analog quantities (every block type, not just regulators) ──
+    "vref":    {"vref", "vreference", "referencevoltage"},
+    "vdd":     {"vdd", "vddcore", "vcore", "corevoltage", "vcc"},
+    # ── converter / modulator family ──
+    # Every entry below is standard data-converter spec vocabulary; no design
+    # name appears. Without these the table's whole vocabulary was regulator-
+    # only, so l5_block_specs() returned {} for ANY non-LDO analog block and
+    # l5_analog_block_spec_actionable_check blocked Phase 1 on it.
+    "enob":    {"enob", "effectivebits", "effectivenumberofbits",
+                "effectiveresolution"},
+    "osr":     {"osr", "oversampling", "oversamplingratio"},
+    "order":   {"order", "looporder", "loopfilterorder", "modulatororder"},
+    "fclk":    {"fclk", "fclock", "clockfrequency", "clkfreq", "fs",
+                "fsample", "samplingfrequency", "samplingrate",
+                "modulatorclock"},
+    "vindiff": {"vindiff", "vindifferential", "differentialinput",
+                "inputrange", "vinrange", "fullscale", "vfs"},
+    "sndr":    {"sndr", "sinad", "signaltonoiseanddistortion"},
+    "snr":     {"snr", "signaltonoise"},
+    "resolution": {"resolution", "nbits", "numberofbits", "bits"},
+}
+
+# R6-FIX-2 (b) — per-block-TYPE symbol vocabulary.
+#
+# THE INVARIANT THIS RESTORES: for every block type `t`, a spec named with the
+# symbol this module's OWN `TARGETS[t]["label"]` uses must normalize to
+# `TARGETS[t]["key"]`. It did not. The module labels a bandgap's graded
+# quantity `"Vbg (V)"`, an ESD clamp's `"Vfwd (V)"` and a charge pump's
+# `"V_doubled (V)"`, keys all three to `vout`, and then `_SPEC_NAME_ALIASES`
+# accepted none of `VBG`/`Vfwd`/`V_doubled` — so those blocks could not inherit
+# an L5 spec either. Kept per-TYPE rather than folded into the global `vout`
+# set so that, e.g., an LDO does NOT silently accept a bandgap reference
+# voltage as its output target.
+#
+# ADMISSION RULE, and it is the load-bearing constraint: a token goes in here
+# ONLY if it is an unambiguous conventional SYMBOL for the quantity the type's
+# own label names. Generic measurement words that could denote a DIFFERENT
+# quantity in the same document are deliberately EXCLUDED — notably bare
+# `threshold`/`thresholdvoltage`, which in a real input names an over-voltage
+# REGISTER field far more often than a POR trip point. Admitting it is exactly
+# how a spec the design never stated gets manufactured.
+#
+# chip-AGNOSTIC: analog circuit-topology vocabulary; no part number/chip class.
+_TYPE_SPEC_ALIASES = {
+    "ldo":         {"ldovoltage": "vout", "ldoout": "vout",
+                    "ldooutput": "vout", "regulatedvoltage": "vout"},
+    "bandgap":     {"vbg": "vout", "vref": "vout", "bandgapvoltage": "vout",
+                    "bgvoltage": "vout", "referencevoltage": "vout"},
+    "por":         {"vpor": "vout", "portrip": "vout",
+                    "portripvoltage": "vout"},
+    "esd":         {"vfwd": "vout", "vforward": "vout",
+                    "forwardvoltage": "vout", "clampvoltage": "vout"},
+    "charge_pump": {"vdoubled": "vout", "vpump": "vout",
+                    "pumpoutput": "vout", "pumpedvoltage": "vout"},
+    "pull":        {"reff": "reff", "rpull": "reff"},
+    "trim":        {"dacout": "vout", "dacoutput": "vout",
+                    "trimvoltage": "vout"},
+    "oscillator":  {"biasvoltage": "vout"},
 }
 
 
-def _normalize_spec_name(name):
-    """Map an L5 spec `name` to a canonical key (or None). chip-AGNOSTIC."""
+def _normalize_spec_name(name, btype=None):
+    """Map an L5 spec `name` to a canonical key (or None). chip-AGNOSTIC.
+
+    `btype` (optional) additionally admits the block TYPE's own conventional
+    symbols — see `_TYPE_SPEC_ALIASES`. Without it the behaviour is exactly
+    the pre-R6 global-vocabulary lookup, so no existing caller changes."""
     tok = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    if not tok:
+        return None
     for canon, aliases in _SPEC_NAME_ALIASES.items():
         if tok in aliases:
             return canon
+    if btype:
+        per_type = _TYPE_SPEC_ALIASES.get(canonical_block_type(btype))
+        if per_type and tok in per_type:
+            return per_type[tok]
     return None
+
+
+def normalize_spec_label(label, btype=None):
+    """PUBLIC: the single source of truth for "does this text name a quantity
+    this module can grade?".
+
+    Exported so the Phase-1 PRODUCER can emit spec names in the vocabulary the
+    consumer actually reads, instead of maintaining a second copy of it that
+    drifts. Returns the canonical key or None. chip-AGNOSTIC."""
+    return _normalize_spec_name(label, btype)
 
 
 def _spec_num(entry, *keys):
@@ -1106,7 +1265,7 @@ def l5_block_specs(project, block, btype=None):
     for e in specs:
         if not isinstance(e, dict):
             continue
-        canon = _normalize_spec_name(e.get("name"))
+        canon = _normalize_spec_name(e.get("name"), btype)
         if not canon or canon in out:
             continue
         val, bound = _spec_num(e, "target", "min", "max")
@@ -1206,9 +1365,149 @@ def resolve_spec(project, block, btype):
     return res
 
 
+# ── geometry-unit normalisation for METRIC-declaring PDK device subckts ──────
+# `.option scale=1u` + bare `w=8 l=1` is the sky130 idiom the corner templates
+# are authored in. It is WRONG for a foundry whose MOS `.subckt` declares metric
+# defaults and computes `as/ad/ps/pd` from the caller's `w` against hard-coded
+# metric constants. Rewrite the geometry of the affected instantiation lines
+# into explicit metres and drop the now-meaningless scale card.
+#
+# Touches `w=` / `l=` ONLY. `m=` is a device MULTIPLIER, not a length, and must
+# never be scaled (`m='m_pass'` is the LDO sweep knob). Both literal values
+# (`w=8`) and quoted expressions (`w='0.5 + 0.5*code'`) are handled.
+_SCALE_CARD_RE = re.compile(r"(?im)^[ \t]*\.option[ \t]+scale[ \t]*=[ \t]*1u[ \t]*\r?\n")
+_WL_LITERAL_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])([wl])=([0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)(?![\w.])")
+_WL_EXPR_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])([wl])='([^']*)'")
+
+
+def _emit_metric_geometry(deck: str, metric_devs) -> str:
+    """Convert `w=`/`l=` on every device line instantiating one of
+    `metric_devs` from scaled-micron to explicit metres, and remove the
+    `.option scale=1u` card. Pure text; chip-AGNOSTIC.
+
+    NO metric device -> the deck is returned UNCHANGED, scale card included.
+    The caller already guards on this, but a converter that strips the scale
+    card while converting no geometry would silently reinterpret every
+    dimension in the deck as metres; that must not depend on the caller."""
+    if not metric_devs:
+        return deck
+    out = []
+    for ln in deck.splitlines(keepends=True):
+        body = ln.lstrip()
+        if body[:1].lower() == "x" and any(d in ln for d in metric_devs):
+            ln = _WL_EXPR_RE.sub(lambda m: f"{m.group(1)}='({m.group(2)})*1u'", ln)
+            ln = _WL_LITERAL_RE.sub(lambda m: f"{m.group(1)}={m.group(2)}u", ln)
+        out.append(ln)
+    deck = "".join(out)
+    # Only drop the card once the geometry it governed has been converted.
+    return _SCALE_CARD_RE.sub("", deck)
+
+
+def _deck_card_head(line):
+    """The dot-card token the SIMULATOR would read on this deck line, or None.
+
+    Faithful to ngspice's own tokenisation, because that is what decides
+    whether a card fires:
+      * a line whose first non-blank character is `*` is a COMMENT — it is not
+        a card however many times it spells one;
+      * everything after `;` is an inline comment;
+      * otherwise the leading whitespace-delimited token is the card.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("*"):
+        return None
+    code = stripped.split(";", 1)[0].strip()
+    if not code:
+        return None
+    return code.split()[0]
+
+
+def stamp_temp_card(deck_text, temp_c):
+    """Place the per-corner `.temp` card so the SIMULATOR actually reads it.
+
+    Returns `(deck_text, applied)` where `applied` records the temperature and
+    WHICH anchor was used, so a caller can tell a placed card from a dropped
+    one instead of having to trust that one happened.
+
+    WHY THIS IS NOT A SUBSTRING REPLACE. This card used to be stamped with
+
+        deck.replace(".control", f".temp {temp_c}\\n.control", 1)
+
+    `str.replace(..., 1)` takes the first occurrence ANYWHERE in the file, and
+    a deck comment that *explains* control-mode behaviour contains the token
+    `.control` as prose. When such a comment precedes the real card the single
+    edit produces two distinct faults:
+
+      (1) SILENT — the `.temp <T>` text lands inside a line that still begins
+          with `*`, so the card is never read and the corner temperature is
+          never applied: a PVT sweep that is not swept in T, and nothing says
+          so;
+      (2) FATAL — the comment's tail then starts at column 1 with `.control`,
+          so the simulator reads a SECOND control block and aborts
+          ("Nesting of .control statements is not allowed").
+
+    (1) is the dangerous one — it does not announce itself. The two sibling
+    override substitutions in `render_deck` were already line-anchored
+    (`re.subn(r"(?m)^(v_vref\\s+…)")`); only this one was not.
+
+    A writer must know whether a token is being USED or DISCUSSED. Anchoring
+    on the card POSITION rather than on the string does that.
+
+    chip-AGNOSTIC: generic ngspice deck syntax and a numeric temperature; no
+    design, block, vendor or PDK literal anywhere.
+    """
+    applied = {}
+    if temp_c is None:
+        return deck_text, applied
+
+    lines = deck_text.split("\n")
+
+    # Idempotence — a real `.temp` card already present is UPDATED, never
+    # duplicated. Two `.temp` cards would leave which one wins up to the
+    # simulator, which is the same class of silent defect this fixes.
+    for idx, line in enumerate(lines):
+        if _deck_card_head(line) == ".temp":
+            lines[idx] = f".temp {temp_c}"
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "existing"
+            return "\n".join(lines), applied
+
+    # Preferred anchor: immediately before the real `.control` card. `.temp` is
+    # a NETLIST directive, so it must sit outside the control block.
+    for idx, line in enumerate(lines):
+        head = _deck_card_head(line)
+        if head is not None and head.startswith(".control"):
+            lines.insert(idx, f".temp {temp_c}")
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "control"
+            return "\n".join(lines), applied
+
+    # No control block. The card still has to be READ, so place it before the
+    # netlist terminator. Matched by EQUALITY, not prefix: `.endc`/`.ends` also
+    # begin with `.end` and are not the terminator.
+    for idx, line in enumerate(lines):
+        if _deck_card_head(line) == ".end":
+            lines.insert(idx, f".temp {temp_c}")
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "end"
+            return "\n".join(lines), applied
+
+    # Neither anchor exists. Append rather than drop — a silently dropped
+    # temperature is the very fault this function exists to remove — and say
+    # through `applied` which path was taken.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.append(f".temp {temp_c}")
+    lines.append("")
+    applied["temp_c"] = temp_c
+    applied["temp_c_anchor"] = "append"
+    return "\n".join(lines), applied
+
+
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck_overrides=None, temp_c=None, devices=None,
-                device_terminals=None):
+                device_terminals=None, device_geometry_units=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
@@ -1260,6 +1559,26 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck = re.sub(
                     rf"(?im)^(\s*x\w+(?:\s+\S+){{4}})\s+({re.escape(fam)})\b",
                     rf"\1 {extra} \2", deck)
+        # GEOMETRY UNITS — the templates are authored in the sky130 idiom
+        # (`.option scale=1u` + bare `w=8 l=1`). ngspice applies `.option scale`
+        # to PRIMITIVE device geometry; it does NOT rescale a bare number handed
+        # to a SUBCKT before that subckt's own arithmetic consumes it. A foundry
+        # whose MOS subckt declares METRIC defaults computes its junction
+        # `as/ad/ps/pd` from the caller's `w` mixed with hard-coded metric
+        # constants, so a bare `w=8` arrives ~1e6x too large there. Measured on
+        # IHP sg13g2: an OFF pass device conducted 843 uA at 125 C and the LDO
+        # loop opened at every 125 C corner and every pass size. When the
+        # resolved family declares metric geometry, emit explicit metres and
+        # drop the scale card. chip-AGNOSTIC: keyed on the PDK's OWN declared
+        # convention, not on a family name; a family with no metric device (incl.
+        # sky130, whose ctx takes the known-family fast path and passes None
+        # here) is a NO-OP and its deck stays byte-identical.
+        if device_geometry_units:
+            metric_devs = {devices.get(r) for r, u in
+                           device_geometry_units.items()
+                           if u == "metric" and devices.get(r)}
+            if metric_devs:
+                deck = _emit_metric_geometry(deck, metric_devs)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1272,12 +1591,13 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                           rf"\g<1>{ov['vdd']}", deck)
         if n:
             applied["vdd"] = ov["vdd"]
-    # GAP-ANALOG-3 — stamp a REAL operating temperature for the corner. ngspice
-    # treats deck line 1 as the (ignored) title, so the .temp card is injected
-    # just before the `.control` block (present in every template), never as
-    # the title line. chip-AGNOSTIC: a numeric temperature, no chip literal.
+    # GAP-ANALOG-3 — stamp a REAL operating temperature for the corner, anchored
+    # to a real `.control` CARD rather than to the first occurrence of that
+    # string (a comment may MENTION the card before the card appears; see
+    # `stamp_temp_card`). chip-AGNOSTIC: a numeric temperature, no chip literal.
     if temp_c is not None:
-        deck = deck.replace(".control", f".temp {temp_c}\n.control", 1)
+        deck, _temp_applied = stamp_temp_card(deck, temp_c)
+        applied.update(_temp_applied)
     return deck, applied
 
 
@@ -1371,7 +1691,8 @@ def _pdk_has_section(container, pdk_lib, section):
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
                      process_corners=None, devices=None, typ_section="tt",
-                     device_terminals=None):
+                     device_terminals=None, device_geometry_units=None,
+                     origin=None, render=None, metric_key=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1387,19 +1708,27 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
     real_sims = {}
     if base_tt is not None:
         real_sims[(typ_section, "27c")] = base_tt
-    tkey = TARGETS.get(btype, {}).get("key", "vout")
+    tkey = metric_key or TARGETS.get(btype, {}).get("key", "vout")
     for proc, _po in corners:
         if not _pdk_has_section(container, pdk_lib, proc):
             continue                      # section absent → all its temps derive
         for tlbl, temp_c, _to in PVT_TEMPS:
             if (proc, tlbl) in real_sims:
                 continue                  # already have the base typ@27C
-            deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
-                                  deck_overrides=deck_overrides, temp_c=temp_c,
-                                  devices=devices,
-                                  device_terminals=device_terminals)
+            if render is not None:
+                try:
+                    deck, _ = render(proc, knob, val, temp_c)
+                except RuntimeError:
+                    continue          # corner stays honestly DERIVED
+            else:
+                deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob,
+                                      val, deck_overrides=deck_overrides,
+                                      temp_c=temp_c, devices=devices,
+                                      device_terminals=device_terminals,
+                                      device_geometry_units=device_geometry_units)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
-            sp.write_text((subst_header or "") + deck)
+            sp.write_text(deck_origin_header(origin or {})
+                          + (subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
                 container, _container_path(container, host_root, sp))
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
@@ -1459,7 +1788,7 @@ def _make_lib_reader(container):
     return R
 
 
-def _deck_context(project, container, pdk, btype):
+def _deck_context(project, container, pdk, btype, block=None):
     """Resolve the family-agnostic deck context for one block. Delegates the
     L19-target native resolution to analog_pdk_availability and the deck-shape
     resolution to analog_pdk_deck_context. On ANY import / probe failure it
@@ -1477,13 +1806,516 @@ def _deck_context(project, container, pdk, btype):
             res = _apa.resolve_pdk(declared, project=project, container=container)
         except Exception:
             res = None
-    required = _template_required_roles(btype)
+    # A design deck's devices are the ones the DELIVERED netlist instantiates,
+    # not the ones this file's template would have. Reading the template here
+    # would hold a design deck to a role it never uses (or miss one it does).
+    required = (design_deck_required_roles(project, block) if block else None) \
+        or _template_required_roles(btype)
     reader = _make_lib_reader(container)
     try:
         return _apdc.resolve_deck_context(pdk, res=res, required=required,
                                           reader=reader)
     except Exception:
         return None
+
+
+# ───────── A3→A4 netlist provenance: the upstream-output precondition ──────
+#
+# WHAT WENT WRONG (measured on a real run). A4 ran real ngspice over ten blocks × nine
+# PVT corners and wrote `_provenance: "real_ngspice"` for each, while A1/A2/A3
+# were WAIVED for all ten blocks with `output_files=[]` — A3's declared output
+# `phase3/analog/<block>/<block>.sp` existed for ZERO of them. Every deck
+# ngspice consumed came from the built-in table `T[block_type]` in THIS file:
+# a pure function of (canonical block type, PDK section, one sweep knob) with
+# no design content whatsoever. The decks were byte-identical to the previous
+# round's for all 126 files. `_provenance: "real_ngspice"` was true about the
+# SIMULATOR and silent about the SUBJECT, and that silence is what let the
+# analog result read as a measurement of the design.
+#
+# THE RULE. A step must not consume a substitute for an upstream step's
+# declared output while that output is absent. A4's declared upstream input is
+# A3's `<block>.sp`; when it is missing, A4 refuses — it does not reach for the
+# simulator, and it records an honest BLOCKED artefact naming the missing input
+# and the skill that produces it, so the block lands in a NAMED failure rather
+# than an anonymous MISSING.
+#
+# THE OTHER HALF OF THE SAME RULE (this change). Refusing when the upstream
+# output is ABSENT is only half of "do not substitute for it". The other half is
+# CONSUMING it when it is PRESENT: until now a block WITH a netlist on disk was
+# still simulated as `T[block_type]`, and the artefact said `builtin_template`
+# honestly — an honest label on a measurement nobody asked for. So:
+#
+#   * `<block>.sp` present  → the corner deck IS that netlist, instantiated by
+#     the stimulus A3 emitted beside it (`tb_<block>.sp`), with only the corner
+#     `.lib` section and `.temp` re-stamped. The built-in table is not consulted
+#     for the circuit at all, and cannot be — see `builtin_netlist_allowed`.
+#   * `<block>.sp` absent   → refuse (above). No deck, no simulator, a named
+#     BLOCKED artefact.
+#   * absent + explicit opt-in → the built-in table runs, and EVERY artefact it
+#     touches is stamped `netlist_provenance: builtin_template`,
+#     `design_traceable: false` and `deck_authored_by`, in the JSON and in the
+#     deck head, so a `corner_results.json` can never read as design-traceable
+#     when the deck was built-in.
+#
+# NO SIZING KNOB ON A DESIGN DECK. The built-in decks carry a `.param` sweep
+# knob (pass-device multiplier, divider ratio, code, …) and A4 picks the value
+# that lands closest to target. A delivered netlist has literal geometry: to
+# "sweep" it A4 would have to REWRITE the design's devices, which is sizing —
+# a different step, with a different producer and a declared handoff. A design
+# deck therefore runs at exactly the geometry it was delivered with, and the
+# artefact records `sizing_knob_swept: null` with the reason.
+#
+# chip-AGNOSTIC; NDA-safe (paths and step names only).
+
+A3_STEP = "A3_netlist_gen"
+A3_SKILL = "analog-netlist-gen"
+
+#: `netlist_provenance` vocabulary written into corner_results.json.
+NETLIST_PROV_A3 = "a3_netlist"            # deck derived from A3's <block>.sp
+NETLIST_PROV_BUILTIN = "builtin_template"  # deck authored by THIS program
+NETLIST_PROV_ABSENT = "absent"             # A3 produced nothing; A4 refused
+
+_BUILTIN_OK_ENV = "ANALOG_ALLOW_BUILTIN_NETLIST"
+
+# ── design_content: inherited, not re-derived ─────────────────────────────
+# WHERE THE DECK CAME FROM is not the same question as WHAT IS IN IT.
+# `netlist_provenance` answers the first: the deck derives from the upstream
+# artefact. The upstream artefact itself records the second — whether any bound
+# spec value reached a device parameter, or whether the geometry is the
+# topology library's nominal. Until this change that second answer stopped at
+# the upstream sidecar and nothing downstream read it, so a corner result
+# rendered from a library topology was byte-indistinguishable, in every field a
+# consumer grades, from one rendered from a designed netlist. That is the same
+# defect one layer up: `_provenance: real_ngspice` was true of the simulator and
+# silent about the subject.
+#
+# THE RULE, with no tool or step name in it: an artefact derived from another
+# artefact INHERITS the upstream record of what that artefact contains, and
+# republishes it. A field that says what an artefact is made of is not
+# disclosure until a consumer that grades the artefact reads it.
+DESIGN_CONTENT_NONE = "none"           # no design content: deck authored here
+DESIGN_CONTENT_UNDECLARED = "undeclared"   # upstream shipped no such record
+DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
+DESIGN_CONTENT_SIZED = "structure_and_geometry"
+
+#: The upstream sidecar this program inherits `design_content` from. Named
+#: once so the reader of a corner result can find the record it came from.
+_UPSTREAM_SIDECAR = "netlist_provenance.json"
+
+_DESIGN_CONTENT_MEANING = {
+    DESIGN_CONTENT_NONE: (
+        "none — the simulated deck's circuit was authored by this program's "
+        "built-in table, so it carries no content of this design at all"),
+    DESIGN_CONTENT_UNDECLARED: (
+        "undeclared — the upstream netlist shipped no record of what it "
+        "contains, so this result cannot say whether any bound spec value "
+        "reached a device parameter. Absence of the record is not evidence "
+        "of design content"),
+    DESIGN_CONTENT_STRUCTURE_ONLY: (
+        "structure_only — the circuit class came from a topology library and "
+        "NO bound spec value reached any device parameter; every geometry is "
+        "a library nominal. The corners below are real measurements OF THAT "
+        "TOPOLOGY, not of a design sized to this spec"),
+    DESIGN_CONTENT_SIZED: (
+        "structure_and_geometry — at least one device parameter was solved "
+        "against a bound spec value"),
+}
+
+
+def upstream_design_content(netlist_path: Path) -> tuple:
+    """`(design_content, source_rel_or_None, provenance_ref_or_None)` read from
+    the sidecar the upstream producer wrote beside its netlist.
+
+    READ, never re-derived: this program cannot look at a `.sp` and know
+    whether a number in it came from a spec or from a library default — only
+    the producer that resolved the parameters knows that, and it wrote the
+    answer down. Missing sidecar is reported as `undeclared`, which is a third
+    answer and not a synonym for either of the other two.
+
+    WHICH ANSWERS COUNT AS AN ANSWER is decided by the SHARED whitelist, not by
+    a tuple restated here. This program republishes the record into
+    `corner_results.json`, which is the artefact the gate of record grades — so
+    a local list of accepted tokens is a second copy of the predicate the gate
+    certifies on, and a token this list accepted while the gate did not (or the
+    reverse) would put a value into the artefact its own gate then refuses.
+    Fail-closed and deliberately in ONE direction: if the shared module cannot
+    be reached at all, EVERY token reads `undeclared`. That is the safe answer —
+    it can only ever move a result down the ordering, never promote one — and it
+    leaves no second copy of the whitelist to drift."""
+    side = netlist_path.parent / _UPSTREAM_SIDECAR
+    if not side.is_file():
+        return DESIGN_CONTENT_UNDECLARED, None, None
+    try:
+        doc = json.loads(side.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return DESIGN_CONTENT_UNDECLARED, str(side), None
+    prov = doc.get("_provenance") if isinstance(doc, dict) else None
+    if not isinstance(prov, dict):
+        return DESIGN_CONTENT_UNDECLARED, str(side), None
+    dc = prov.get("design_content")
+    if not _content_disclosed(dc):
+        dc = DESIGN_CONTENT_UNDECLARED
+    return dc, str(side), prov.get("provenance_ref")
+
+
+def _content_disclosed(value) -> bool:
+    """`_analog_a_check_common.content_disclosed` — the ONE whitelist that says
+    whether a token NAMES a content. Imported, never restated."""
+    try:
+        if str(Path(__file__).resolve().parent) not in sys.path:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _analog_a_check_common as _acc
+        return _acc.content_disclosed(value)
+    except Exception:  # pragma: no cover — fail-closed, as before
+        return False
+
+
+def a3_netlist_path(project: Path, block: str):
+    """Resolve A3's declared per-block output. Returns `(path, found)`.
+
+    Search order mirrors `analog_a3_netlist_gen_check.resolve_block_artefact`:
+    the analog runner's `phase3/analog/<block>/` root first, then the
+    `phase2/analog/<block>/` root the flow declares as A3's required_output.
+    The returned path is the phase3 (canonical) one when nothing is found, so
+    the refusal message names the location a reader should look at."""
+    for phase in ("phase3", "phase2"):
+        p = project / phase / "analog" / block / f"{block}.sp"
+        if p.is_file():
+            return p, True
+    return project / "phase3" / "analog" / block / f"{block}.sp", False
+
+
+def a3_testbench_path(project: Path, block: str):
+    """Resolve A3's per-block STIMULUS deck. Returns `(path, found)`.
+
+    Only reported found when the netlist it drives sits beside it: a stimulus
+    file whose DUT is missing is not a testbench, and searching the two roots
+    independently could pair one root's stimulus with the other root's netlist.
+    """
+    for phase in ("phase3", "phase2"):
+        d = project / phase / "analog" / block
+        if (d / f"tb_{block}.sp").is_file() and (d / f"{block}.sp").is_file():
+            return d / f"tb_{block}.sp", True
+    return project / "phase3" / "analog" / block / f"tb_{block}.sp", False
+
+
+#: `.include <name>` card, line-anchored (a comment MENTIONING one is not one).
+_INCLUDE_CARD_RE = re.compile(r"(?im)^[ \t]*\.include[ \t]+(\S+)[ \t]*\r?$")
+#: `.lib <path> <section>` card — the corner selector A4 owns.
+_LIB_CARD_RE = re.compile(
+    r"(?im)^[ \t]*\.lib[ \t]+(\S+)[ \t]+(\w+)[ \t]*\r?$")
+
+
+def build_design_deck(project: Path, block: str, pdk_lib: str, corner: str,
+                      temp_c=None):
+    """Build ONE corner deck whose circuit under test is the DESIGN netlist.
+
+    Returns `(deck_text, info)`, or `(None, info)` when the delivered pair
+    cannot be turned into a runnable deck — never a silent fall-back to the
+    built-in table.
+
+    WHAT IT DOES, AND ONLY THIS:
+      * inlines `<block>.sp` at A3's `.include` card, so the emitted corner deck
+        is SELF-CONTAINED (it is run by absolute path inside a container from an
+        unrelated cwd, where a relative `.include` resolves against neither the
+        including file's directory nor the process cwd reliably);
+      * re-stamps the `.lib` card to A4's resolved model lib + THIS corner's
+        process section — corner selection is A4's job and the only reason the
+        deck differs between corners;
+      * stamps `.temp` through the shared card-anchored stamper.
+
+    WHAT IT DOES NOT DO: it does not touch a device, a geometry, a source value
+    or a measurement command. Every electrical decision in the deck is A3's,
+    which is what makes the resulting measurement traceable to the design rather
+    than to this file.
+    """
+    info = {"block": block, "corner": corner}
+    sp_path, sp_found = a3_netlist_path(project, block)
+    tb_path, tb_found = a3_testbench_path(project, block)
+    if not sp_found:
+        info["reason"] = "no A3 netlist"
+        return None, info
+    if not tb_found:
+        info["reason"] = (
+            f"the block netlist {sp_path.name} exists but the stimulus deck "
+            f"{tb_path.name} that instantiates it does not, so there is no "
+            f"declared way to excite this design; authoring one here would be "
+            f"this program inventing the operating conditions")
+        return None, info
+    if tb_path.parent != sp_path.parent:
+        # The two roots are searched independently; pairing one root's stimulus
+        # with the other root's netlist would simulate a DUT its testbench was
+        # never written against, and nothing downstream could see it.
+        info["reason"] = (
+            "the block netlist and the stimulus deck that instantiates it "
+            "resolve to different analog roots; refusing to pair them")
+        return None, info
+    try:
+        tb_text = tb_path.read_text()
+        sp_text = sp_path.read_text()
+    except OSError as exc:
+        info["reason"] = f"unreadable: {exc.__class__.__name__}"
+        return None, info
+
+    inlined = []
+    hits = 0
+    for line in tb_text.split("\n"):
+        m = _INCLUDE_CARD_RE.match(line)
+        if m and Path(m.group(1)).name == sp_path.name:
+            hits += 1
+            inlined.append(f"* --- inlined {sp_path.name} (A3 block netlist) ---")
+            inlined.extend(sp_text.split("\n"))
+            inlined.append(f"* --- end {sp_path.name} ---")
+        else:
+            inlined.append(line)
+    if hits != 1:
+        info["reason"] = (
+            f"the stimulus deck names the block netlist on {hits} `.include` "
+            f"card(s); exactly one is required to know what is being simulated")
+        return None, info
+    deck = "\n".join(inlined)
+
+    found_lib = _LIB_CARD_RE.findall(deck)
+    if len(found_lib) != 1:
+        info["reason"] = (
+            f"the delivered deck carries {len(found_lib)} `.lib` corner "
+            f"card(s); exactly one is required for A4 to select a process "
+            f"corner without guessing which one governs")
+        return None, info
+    declared_lib, declared_section = found_lib[0]
+    info["declared_model_lib"] = declared_lib
+    info["declared_model_section"] = declared_section
+    info["sim_model_lib"] = pdk_lib
+    if Path(declared_lib).name != Path(pdk_lib).name:
+        info["reason"] = (
+            f"the delivered deck is bound to model set {declared_lib!r} and "
+            f"this step resolved {pdk_lib!r}; re-stamping the corner section is "
+            f"this step's job, re-stamping the MODEL SET is not — the device "
+            f"names in the delivered netlist were chosen against the first")
+        return None, info
+    # Same file name, different directory: a staged copy of the same lib. Real,
+    # so it is recorded rather than refused — but never silently.
+    info["model_lib_path_changed"] = declared_lib != pdk_lib
+    deck, nlib = _LIB_CARD_RE.subn(
+        lambda m: f".lib {pdk_lib} {corner}", deck)
+    info["lib_cards_restamped"] = nlib
+    deck, applied = stamp_temp_card(deck, temp_c)
+    info.update(applied)
+    info["netlist_lines"] = len(sp_text.split("\n"))
+    return deck, info
+
+
+def design_deck_required_roles(project: Path, block: str):
+    """Device roles the DELIVERED netlist instantiates, read off the netlist
+    itself rather than off a template this deck is not made of."""
+    sp_path, found = a3_netlist_path(project, block)
+    if not found:
+        return None
+    try:
+        txt = sp_path.read_text()
+    except OSError:
+        return None
+    roles = []
+    if "sky130_fd_pr__nfet_01v8" in txt:
+        roles.append("nmos")
+    if "sky130_fd_pr__pfet_01v8" in txt:
+        roles.append("pmos")
+    return tuple(roles) or None
+
+
+def builtin_netlist_allowed(env=None) -> bool:
+    """True when the caller has EXPLICITLY opted in to running the built-in
+    testbench library with no A3 netlist present (`ANALOG_ALLOW_BUILTIN_NETLIST=1`).
+
+    This is a disclosure escape hatch, not a pass: the artefact it produces is
+    stamped `netlist_provenance: "builtin_template"` and the A4 gate refuses to
+    certify it (`A4_NETLIST_NOT_FROM_A3`). It exists so the template library can
+    still be exercised deliberately — never so a run can quietly reach PASS."""
+    src = os.environ if env is None else env
+    return str(src.get(_BUILTIN_OK_ENV, "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def netlist_origin(project: Path, block: str, env=None) -> dict:
+    """The subject-of-measurement record for one block, as written into
+    corner_results.json and `sizing_loop/results.json`.
+
+    `netlist_provenance` is the load-bearing field: `a3_netlist` when the deck
+    derives from A3's output, `builtin_template` when this program authored the
+    circuit itself, `absent` when A3 produced nothing. `netlist_sha256` ties the
+    record to the exact bytes so a later reader can prove which netlist it was.
+
+    `a3_netlist` is claimed ONLY when both halves of the delivered pair are on
+    disk — the netlist AND the stimulus that instantiates it. A netlist with no
+    stimulus cannot be simulated without this program inventing the operating
+    conditions, so it does not entitle the artefact to a design provenance; it
+    reports `absent` with `netlist_present_but_unusable` naming the missing half.
+    """
+    path, found = a3_netlist_path(project, block)
+    tb_path, tb_found = a3_testbench_path(project, block)
+    rel = str(path.relative_to(project)) if str(path).startswith(str(project)) \
+        else str(path)
+    tb_rel = str(tb_path.relative_to(project)) \
+        if str(tb_path).startswith(str(project)) else str(tb_path)
+    if not found:
+        return {"netlist_source": None, "netlist_provenance": NETLIST_PROV_ABSENT,
+                "netlist_sha256": None, "netlist_expected_path": rel,
+                "netlist_testbench": None,
+                "netlist_expected_testbench_path": tb_rel,
+                "netlist_produced_by": A3_STEP,
+                "design_content": DESIGN_CONTENT_NONE,
+                "design_content_source": None,
+                "netlist_provenance_ref": None,
+                "design_traceable": False}
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        digest = None
+    if not tb_found:
+        return {"netlist_source": None, "netlist_provenance": NETLIST_PROV_ABSENT,
+                "netlist_sha256": digest, "netlist_expected_path": rel,
+                "netlist_testbench": None,
+                "netlist_expected_testbench_path": tb_rel,
+                "netlist_present_but_unusable": rel,
+                "netlist_produced_by": A3_STEP,
+                "design_content": DESIGN_CONTENT_NONE,
+                "design_content_source": None,
+                "netlist_provenance_ref": None,
+                "design_traceable": False}
+    try:
+        tb_digest = hashlib.sha256(tb_path.read_bytes()).hexdigest()
+    except OSError:
+        tb_digest = None
+    # The deck this program emits IS this netlist, driven by this stimulus.
+    # `design_content` is INHERITED from the upstream record, never inferred
+    # here — see `upstream_design_content`.
+    dc, dc_src, dc_ref = upstream_design_content(path)
+    dc_src_rel = None
+    if dc_src is not None:
+        dc_src_rel = (str(Path(dc_src).relative_to(project))
+                      if str(dc_src).startswith(str(project)) else str(dc_src))
+    return {"netlist_source": rel,
+            "netlist_provenance": NETLIST_PROV_A3,
+            "netlist_sha256": digest, "netlist_expected_path": rel,
+            "netlist_testbench": tb_rel,
+            "netlist_testbench_sha256": tb_digest,
+            "netlist_expected_testbench_path": tb_rel,
+            "netlist_produced_by": A3_STEP,
+            "design_content": dc,
+            "design_content_source": dc_src_rel,
+            "netlist_provenance_ref": dc_ref,
+            "design_traceable": True}
+
+
+def deck_origin_header(origin: dict) -> str:
+    """SPICE comment block stamping a deck with the circuit it actually
+    contains. Emitted at the head of every deck this program writes to disk, so
+    a deck read on its own — years later, out of context — still says whether
+    the circuit in it came from the design or from this file's template table.
+
+    Comment-only: ngspice ignores it, so a deck's electrical content is
+    byte-unchanged. Kept out of `render_deck` deliberately — the rendered text
+    is compared byte-for-byte by the corpus regression guards."""
+    prov = origin.get("netlist_provenance")
+    if prov == NETLIST_PROV_A3:
+        authored = (f"{A3_STEP} (this deck's circuit is the block netlist; "
+                    f"only the corner .lib section and .temp are re-stamped "
+                    f"here)")
+    else:
+        authored = ("analog_real_corner_sweep.T[block_type] (BUILT-IN "
+                    "testbench, NOT the block netlist — this deck carries no "
+                    "design content)")
+    dc = origin.get("design_content") or DESIGN_CONTENT_UNDECLARED
+    # The five original lines keep their positions. Consumers read this header
+    # through fixed-width windows (a shipped gate scans the first 24 lines; a
+    # regression guard reads the first 6), so a new field inserted ABOVE an
+    # existing one silently pushes that one out of somebody's window — the
+    # same class of defect as a disclosure nobody reads. New fields go after.
+    return (f"* netlist_provenance: {prov}\n"
+            f"* netlist_source: {origin.get('netlist_source')}\n"
+            f"* netlist_testbench: {origin.get('netlist_testbench')}\n"
+            f"* design_traceable: "
+            f"{str(bool(origin.get('design_traceable'))).lower()}\n"
+            f"* deck_authored_by: {authored}\n"
+            # WHERE the deck came from and WHAT IS IN IT are two questions, and
+            # a deck read on its own years later has to answer both.
+            # `a3_netlist` + `structure_only` is a real design netlist whose
+            # geometry is a library nominal — the pair a reader must not have
+            # to reconstruct.
+            f"* design_content: {dc}\n"
+            f"* design_content_meaning: "
+            f"{_DESIGN_CONTENT_MEANING.get(dc, dc)}\n"
+            f"* netlist_provenance_ref: "
+            f"{origin.get('netlist_provenance_ref')}\n")
+
+
+def _write_upstream_netlist_gap(bdir: Path, project: Path, block: str,
+                                btype, origin: dict) -> dict:
+    """Honest A4 artefact for a block whose A3 netlist never arrived.
+
+    Written as `corner_results.json` ON PURPOSE: A4's declared output existing
+    with `status: BLOCKED` puts the step in a NAMED failure that says what is
+    missing, where a silent absence would have made it an anonymous MISSING that
+    no reader can act on. Nothing in it can be misread as a measurement —
+    `corners` and `spec_results` are empty, `simulator_run` is false, and the
+    provenance names the gap."""
+    rec = {
+        "block": block, "block_type": btype,
+        "status": "BLOCKED",
+        "_provenance": "upstream_netlist_missing",
+        "design_traceable": False,
+        "deck_authored_by": None,
+        "sizing_knob_swept": None,
+        "blocked_on": A3_STEP,
+        "required_input": origin.get("netlist_expected_path"),
+        "required_skill": A3_SKILL,
+        "deck_unbuildable_reason": origin.get("deck_unbuildable_reason"),
+        "netlist_present_but_unusable": origin.get(
+            "netlist_present_but_unusable"),
+        "reason": ((f"A4 refuses to simulate: A3's declared output "
+                    f"{origin.get('netlist_expected_path')!r} is on disk but "
+                    f"cannot be turned into a runnable corner deck — "
+                    f"{origin.get('deck_unbuildable_reason')}. "
+                    if origin.get("deck_unbuildable_reason") else
+                    f"A4 refuses to simulate: A3's declared output "
+                    f"{origin.get('netlist_expected_path')!r} exists but the "
+                    f"stimulus deck "
+                    f"{origin.get('netlist_expected_testbench_path')!r} that "
+                    f"instantiates it does not, so the design cannot be "
+                    f"excited without this program inventing its operating "
+                    f"conditions. "
+                    if origin.get("netlist_present_but_unusable") else
+                    f"A4 refuses to simulate: A3's declared output "
+                    f"{origin.get('netlist_expected_path')!r} does not exist, so "
+                    f"there is no netlist of this design to measure. ")
+                  + f"Running the "
+                   f"built-in testbench library here would measure this "
+                   f"program's own template, not the design — a result that "
+                   f"reads as design evidence and is not. Emit the netlist "
+                   f"(skill `{A3_SKILL}`), or set "
+                   f"{_BUILTIN_OK_ENV}=1 to exercise the template library "
+                   f"deliberately (the artefact is then stamped "
+                   f"`{NETLIST_PROV_BUILTIN}` and the A4 gate will not certify "
+                   f"it)."),
+        "simulator": None,
+        "simulator_run": False,
+        "corners": [],
+        "total_corners": 0,
+        "results_found": 0,
+        "corners_executed": 0,
+        "corners_derived": 0,
+        "full_pvt_sweep_executed": False,
+        "spec_results": [],
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    rec.update(origin)
+    # A refusal measured nothing, so it contains no design content — stated,
+    # not left to be inferred from an absent field.
+    rec["design_content"] = DESIGN_CONTENT_NONE
+    rec["design_content_meaning"] = _DESIGN_CONTENT_MEANING[DESIGN_CONTENT_NONE]
+    bdir.mkdir(parents=True, exist_ok=True)
+    _aa.write_text(bdir / "corner_results.json", json.dumps(rec, indent=2))
+    return rec
 
 
 def _write_native_template_gap(bdir, block, btype, ctx):
@@ -1595,6 +2427,33 @@ def run_block(project, block, container, pdk, topology_override):
     if not bdir.is_dir():
         print(f"[real_sim] block dir missing: {bdir}", file=sys.stderr)
         return 2
+
+    # ── A3→A4 precondition: refuse to substitute for an absent upstream output.
+    # FIRST, before the simulator is probed and before a single deck is written:
+    # a block with no A3 netlist has nothing of this design to measure, and the
+    # 82-222 s of ngspice this would otherwise spend per block would be spent on
+    # this program's own template. See `netlist_origin` above for the measured
+    # failure this rule comes from.
+    origin = netlist_origin(project, block)
+    if origin["netlist_provenance"] == NETLIST_PROV_ABSENT \
+            and not builtin_netlist_allowed():
+        btype_for_rec = (topology_override
+                         if topology_override and topology_override != "auto"
+                         else _pick_block_type(block, project))
+        _write_upstream_netlist_gap(bdir, project, block, btype_for_rec, origin)
+        print(f"[real_sim] block={block} BLOCKED on {A3_STEP}: "
+              f"{origin['netlist_expected_path']} absent — not simulating a "
+              f"built-in template in its place (skill `{A3_SKILL}`)",
+              file=sys.stderr)
+        return 2
+    if origin["netlist_provenance"] == NETLIST_PROV_ABSENT:
+        # Escape hatch taken: a deck WILL be written, and it is this program's
+        # built-in one. Record what the deck is, not what A3 failed to deliver —
+        # `netlist_source: None` already carries the second fact.
+        origin = dict(origin, netlist_provenance=NETLIST_PROV_BUILTIN,
+                      builtin_override=_BUILTIN_OK_ENV, design_traceable=False)
+    design_deck = origin["netlist_provenance"] == NETLIST_PROV_A3
+
     if not _ngspice_available(container):
         print(f"[real_sim] ngspice not in container {container}", file=sys.stderr)
         return 2
@@ -1604,7 +2463,11 @@ def run_block(project, block, container, pdk, topology_override):
         if "AI_IC_design" in str(project) else project
     btype = topology_override if topology_override and topology_override != "auto" \
             else _pick_block_type(block, project)
-    if btype not in T:
+    # The built-in table is consulted for a CIRCUIT only when there is no design
+    # netlist. With one on disk the block type is still recorded (and still
+    # selects the grading target below), but a type this file happens not to
+    # have a template for is no longer a reason to refuse a delivered design.
+    if not design_deck and btype not in T:
         print(f"[real_sim] no template for block_type={btype} — defer", file=sys.stderr)
         return 2
 
@@ -1618,11 +2481,12 @@ def run_block(project, block, container, pdk, topology_override):
     # A resolved-but-not-emittable family FAILS HONESTLY here
     # (NEEDS_NATIVE_TEMPLATE) rather than emit a cross-family sky130 deck. The
     # known open PDKs (sky130 / gf180) take the byte-identical fast path.
-    ctx = _deck_context(project, container, pdk, btype)
+    ctx = _deck_context(project, container, pdk, btype, block=block)
     if ctx is None or ctx.source == "known_family":
         pdk_lib = PDK_LIB.get(pdk)
         devices = None
         device_terminals = None
+        device_geometry_units = None
         typ_section = (ctx.typ_section if ctx else None) or "tt"
         grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
     else:
@@ -1645,6 +2509,7 @@ def run_block(project, block, container, pdk, topology_override):
         pdk_lib = _container_path(container, host_root, model_lib_host)
         devices = ctx.device_map
         device_terminals = ctx.device_terminals
+        device_geometry_units = ctx.device_geometry_units
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
 
@@ -1668,25 +2533,67 @@ def run_block(project, block, container, pdk, topology_override):
               "tol": spec["tol"], "label": spec["label"]}
     deck_overrides = spec["deck_overrides"]
 
+    # ── the ONE place the circuit under test is chosen ──────────────────────
+    # `_render(corner, knob, val, temp_c) -> (deck_text, applied)`. Both corner
+    # loops below go through it, so a design deck cannot be used for the nominal
+    # point and a built-in one for the PVT grid (or the reverse).
+    design_deck_info: dict = {}
+    if design_deck:
+        def _render(corner, knob, val, temp_c):
+            deck, info = build_design_deck(project, block, pdk_lib, corner,
+                                           temp_c=temp_c)
+            if deck is None:
+                raise RuntimeError(info.get("reason", "design deck unbuildable"))
+            design_deck_info.update(info)
+            return deck, {k: v for k, v in info.items()
+                          if k in ("temp_c", "temp_c_anchor",
+                                   "lib_cards_restamped")}
+        # A delivered netlist has literal geometry; sweeping it would mean
+        # rewriting the design's devices. See the module note above.
+        sweep_points = [("__noop__", 0)]
+        # Computed for DISCLOSURE only. The deck's stimulus is A3's, bound to
+        # the extracted spec upstream; A4 overwriting it with its own L5 read
+        # would put two different derivations of the same condition in the same
+        # deck and record only one of them.
+        l5_overrides_not_applied = deck_overrides
+        deck_overrides = {}
+    else:
+        def _render(corner, knob, val, temp_c):
+            return render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
+                               deck_overrides=deck_overrides, temp_c=temp_c,
+                               devices=devices,
+                               device_terminals=device_terminals,
+                               device_geometry_units=device_geometry_units)
+        sweep_points = SWEEPS.get(btype, [("__noop__", 0)])
+        l5_overrides_not_applied = {}
+
     runs = []
     # #464 — accumulate per-block partial-measurement evidence across runs.
     block_sim_warnings: list[str] = []
     block_failed_analyses: set[str] = set()
     block_nulled_metrics: set[str] = set()
-    for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
+    for knob, val in sweep_points:
         # The knob sweep runs at the NOMINAL corner / 27 °C base (ngspice
         # default temp). The full process × temp PVT grid is REALLY simulated at
         # the sized point below (GAP-ANALOG-3); a corner that cannot really run
         # stays honestly DERIVED from this nominal@27C base. `typ_section` /
         # `devices` come from the resolved PDK deck context (open PDK → tt /
         # sky130 tokens; custom family → its own section / device names).
-        tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
-                                   knob, val, deck_overrides=deck_overrides,
-                                   temp_c=None, devices=devices,
-                                   device_terminals=device_terminals)
+        try:
+            tb, _applied = _render(typ_section, knob, val, None)
+        except RuntimeError as exc:
+            _write_upstream_netlist_gap(
+                bdir, project, block, btype,
+                dict(origin, netlist_provenance=NETLIST_PROV_ABSENT,
+                     netlist_source=None, design_traceable=False,
+                     design_content=DESIGN_CONTENT_NONE,
+                     netlist_present_but_unusable=origin.get("netlist_source"),
+                     deck_unbuildable_reason=str(exc)))
+            print(f"[real_sim] block={block} BLOCKED: {exc}", file=sys.stderr)
+            return 2
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
-        tb = subst_header + tb
+        tb = deck_origin_header(origin) + subst_header + tb
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
@@ -1726,6 +2633,42 @@ def run_block(project, block, container, pdk, topology_override):
                      "nulled_metrics": sim_status["nulled_metrics"],
                      **meas})
 
+    # ── which metric the verdict is about ───────────────────────────────────
+    # The built-in decks are authored to report `TARGETS[btype]["key"]`, so the
+    # graded key is a property of this file. A delivered deck reports whatever
+    # its own measurement commands report, and that set is a property of the
+    # DESIGN. When the two agree, the graded target applies unchanged. When they
+    # do not, A4 grades the metric the design actually reports and carries NO
+    # target for it — inventing one would be this file deciding what the design
+    # is for. `spec_results[].target: null` is the same PASS_INFORMATIONAL shape
+    # the target-less block types already use.
+    metric_substituted = None
+    if design_deck and runs:
+        measured_keys = sorted(
+            k for r in runs for k, v in r.items()
+            if isinstance(v, float) and v is not None
+            and k not in ("val",))
+        if target["key"] not in measured_keys:
+            pick = next((k for k in measured_keys), None)
+            if pick is None:
+                print(f"[real_sim] block={block}: the delivered deck reported "
+                      f"no measurement", file=sys.stderr)
+                return 2
+            metric_substituted = {
+                "graded_key": pick,
+                "static_table_key": target["key"],
+                "reason": (f"the delivered deck measures {measured_keys}; this "
+                           f"program's static target table grades "
+                           f"{target['key']!r}, which the design's own "
+                           f"measurement commands do not report. Graded on the "
+                           f"design's metric with no target — a target for it "
+                           f"is spec content, not a constant of this file."),
+            }
+            target = {"key": pick, "target": None, "tol": None,
+                      "label": f"{pick} (design deck metric)"}
+            spec["target_source"] = "design_deck_metric_no_target"
+            spec["disclosure"] = metric_substituted["reason"]
+
     # Pick the sized point per the (L5-inherited) target — this is the knob
     # value the PVT sweep is really simulated at.
     best = None
@@ -1760,7 +2703,9 @@ def run_block(project, block, container, pdk, topology_override):
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
         process_corners=grid_corners, devices=devices, typ_section=typ_section,
-        device_terminals=device_terminals)
+        device_terminals=device_terminals,
+        device_geometry_units=device_geometry_units, origin=origin,
+        render=_render, metric_key=target["key"])
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)
@@ -1790,7 +2735,15 @@ def run_block(project, block, container, pdk, topology_override):
     # (tran is present in every template; ac only in the converter family, which
     # surfaces ac metric keys ugbw/dcgain/gain — present even when nulled). The
     # ones that ERRORed are marked FAILED, the rest OK.
-    deck_blob = T.get(btype, "")
+    # The deck that actually ran — the delivered one when there is one. Reading
+    # `T[btype]` here would report the analyses of a deck this run never used.
+    if design_deck:
+        try:
+            deck_blob = _render(typ_section, "__noop__", 0, None)[0]
+        except RuntimeError:
+            deck_blob = ""
+    else:
+        deck_blob = T.get(btype, "")
     deck_analyses = set()
     for _kind in ("tran", "ac", "dc", "noise"):
         if re.search(rf"(?m)^\s*{_kind}\b", deck_blob):
@@ -1810,6 +2763,60 @@ def run_block(project, block, container, pdk, topology_override):
         "block": block,
         "block_type": btype,
         "_provenance": block_provenance,
+        # SUBJECT of the measurement, stamped alongside the simulator that made
+        # it. `_provenance` above says HOW it was measured (real ngspice);
+        # these say WHAT was measured. Without them a corner_results.json reads
+        # as design-traceable no matter where its deck came from — the exact
+        # silence that let a real run's analog section read stronger than it was.
+        "netlist_source": origin["netlist_source"],
+        "netlist_provenance": origin["netlist_provenance"],
+        "netlist_sha256": origin["netlist_sha256"],
+        "netlist_produced_by": origin["netlist_produced_by"],
+        "netlist_testbench": origin.get("netlist_testbench"),
+        "netlist_testbench_sha256": origin.get("netlist_testbench_sha256"),
+        # The single field a reader can sort on. True ONLY when the simulated
+        # deck's circuit came from the design; false for every deck this file
+        # authored, no matter how real the simulator run was.
+        "design_traceable": bool(origin.get("design_traceable")),
+        # ...and the field that says what that design content IS. Inherited
+        # from the upstream artefact's own record, republished here so a
+        # corner result can never read as design-traceable-and-sized when the
+        # netlist it was rendered from said `structure_only`. `design_traceable`
+        # answers WHERE the circuit came from; this answers WHAT IS IN IT, and
+        # the two are not the same claim.
+        "design_content": (origin.get("design_content")
+                           or DESIGN_CONTENT_UNDECLARED),
+        "design_content_meaning": _DESIGN_CONTENT_MEANING.get(
+            origin.get("design_content") or DESIGN_CONTENT_UNDECLARED, ""),
+        "design_content_source": origin.get("design_content_source"),
+        "netlist_provenance_ref": origin.get("netlist_provenance_ref"),
+        "deck_authored_by": (
+            A3_STEP if design_deck
+            else "analog_real_corner_sweep.T[block_type] (BUILT-IN template — "
+                 "this deck carries no design content)"),
+        "deck_source": (NETLIST_PROV_A3 if design_deck
+                        else NETLIST_PROV_BUILTIN),
+        # Names the opt-in that unlocked the fallback, so a reader of THIS file
+        # can tell a deliberate exercise of the template library from a default.
+        "builtin_override": origin.get("builtin_override"),
+        # A delivered netlist runs at the geometry it was delivered with.
+        "sizing_knob_swept": (None if design_deck else
+                              (runs[0].get("knob") if runs else None)),
+        "sizing_knob_disclosure": (
+            "the delivered netlist has literal device geometry; sweeping it "
+            "would mean rewriting the design's devices, which is sizing (skill "
+            "`analog-sizing`), not corner verification. Simulated as delivered."
+            if design_deck else
+            "built-in deck: the sizing knob is a `.param` of this file's "
+            "template, not of any design"),
+        # What the delivered deck was bound to, and what this step ran it
+        # against. Equal on a clean run; never silently unequal.
+        "netlist_declared_model_lib": design_deck_info.get("declared_model_lib"),
+        "netlist_declared_model_section": design_deck_info.get(
+            "declared_model_section"),
+        "model_lib_path_changed": design_deck_info.get("model_lib_path_changed"),
+        "graded_metric_substituted": metric_substituted,
+        "l5_deck_overrides_not_applied": l5_overrides_not_applied,
         # #464 — first-class partial-measurement evidence so downstream gates
         # and human review never have to dig the failure out of the raw log.
         "partial_measurement": block_partial,
@@ -1825,6 +2832,12 @@ def run_block(project, block, container, pdk, topology_override):
         "pdk_arg": pdk,
         "pdk_model_lib_resolved": (getattr(ctx, "model_lib", None)
                                    if ctx is not None else None),
+        # vibe-ic#193 — WHICH primary-selection strategy produced that lib. Two
+        # are live in analog_pdk_deck_context and `farm_dir` switches between
+        # them, so a sweep result that records only the path cannot say which
+        # world it ran in. Records; endorses neither.
+        "pdk_primary_policy": (getattr(ctx, "primary_policy", None)
+                               if ctx is not None else None),
         "spec_label": target["label"],
         # GAP-ANALOG-2 — first-class L5-inheritance provenance: whether the
         # verdict target came from the block's L5 spec or the static default,
@@ -1887,12 +2900,23 @@ def run_block(project, block, container, pdk, topology_override):
                 "real_ngspice_partial.") if block_partial else "")),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    (bdir / "corner_results.json").write_text(json.dumps(real_corner, indent=2))
-    (sl_dir / "results.json").write_text(json.dumps(
+    _aa.write_text(bdir / "corner_results.json", json.dumps(real_corner, indent=2))
+    _aa.write_text(sl_dir / "results.json", json.dumps(
         {"block":block,"block_type":btype,"sized_point":best,
          "runs":runs,"verdict":verdict,
          "partial_measurement":block_partial,
          "sim_warnings":block_sim_warnings_dedup,
+         "netlist_source":origin["netlist_source"],
+         "netlist_provenance":origin["netlist_provenance"],
+         # The sizing-loop record is derived from the same deck, so it carries
+         # the same statement of what that deck contains. An artefact derived
+         # from a structure-only netlist must not be readable as a sized one
+         # in ANY of the files the run leaves behind.
+         "design_content":(origin.get("design_content")
+                           or DESIGN_CONTENT_UNDECLARED),
+         "design_content_meaning":_DESIGN_CONTENT_MEANING.get(
+             origin.get("design_content") or DESIGN_CONTENT_UNDECLARED, ""),
+         "netlist_provenance_ref":origin.get("netlist_provenance_ref"),
          "_provenance":block_provenance}, indent=2))
     print(f"[real_sim] block={block} type={btype} {verdict} "
           f"{target['key']}={best.get(target['key'])} target={target['target']}")

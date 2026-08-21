@@ -52,6 +52,9 @@ try:
 except ImportError:
     _HAS_YAML = False
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fpga_board_capability as _fpga_cap  # noqa: E402
+
 
 @dataclass
 class Finding:
@@ -154,6 +157,25 @@ def _validate(topo: dict, source: str) -> list[Finding]:
 def check(project: Path) -> tuple[list[Finding], str | None]:
     topo, source = _find_topology(project)
     if topo is None:
+        # A hardware rig topology is meaningless without hardware to wire it
+        # to. When this run HONESTLY discloses no FPGA board is part of it
+        # (#607's predicate, shared via fpga_board_capability.py — the same
+        # signal that already exempts the dedicated FPGA-board flow steps),
+        # a missing rig_topology.json is not a gap; it is correctly absent.
+        # Still DISCLOSED, not silent: an INFO finding is emitted either way,
+        # and if FPGA bring-up is later added to this project, the ERROR
+        # returns the moment quartus_map_audit.json no longer discloses SKIP.
+        # The NARROW predicate: waiving a documentation requirement needs
+        # "no board was ever part of this run", not merely "no .sof exists".
+        if _fpga_cap.fpga_absent_from_run(project):
+            return [Finding(
+                "INFO", "rig_topology_na_no_fpga_run",
+                str(project),
+                "No rig topology declared, and none is needed: this run "
+                "discloses no FPGA board is part of it "
+                "(reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, "
+                "sof_present=false).",
+            )], None
         return [Finding(
             "ERROR", "rig_topology_not_found",
             str(project),

@@ -1,0 +1,18 @@
+{
+  "trial": "p02",
+  "levers": {
+    "rtl_variant": "base",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.40",
+    "spare_cell_density": "0.00"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 331.498,
+    "cpu_seconds": 437.972,
+    "peak_rss_mb": 621.3
+  }
+}

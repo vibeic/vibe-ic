@@ -105,11 +105,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 
 try:
     import _path_layout as _pl  # type: ignore
@@ -163,6 +173,54 @@ DEFAULT_PER_FAULT_SAT_TIMEOUT = 180   # s; generous (normal solves finish first)
 _CALIBRATION_FAULTS = 3               # tiny strided probe to measure per-fault s
 _BUDGET_SAFETY = 0.85                 # leave head-room for parse / SIGKILL slack
 _SETUP_MARKER = "VIBEICTDF_SETUP_DONE"
+
+# ── external CDCL SAT solver for the ATPG prove (fork enhancement) ───────────
+# The built-in ezMiniSAT (MiniSAT-2.2, 2008-era) that yosys `sat` uses by
+# default TIMES OUT on the large 2-frame launch-off-capture miter CNFs this
+# producer builds (measured on a real bit-serial core: ~5.5e5 vars / ~1.4e6
+# clauses per fault; MiniSAT ~25 s/fault and ABORTs the hard cones at the
+# per-fault timeout). A modern CDCL solver decides the SAME CNF in seconds — and
+# reaches the UNSAT proofs MiniSAT never finishes, correctly classifying some
+# "aborts" as REDUNDANT instead of leaving them undetected. The vibeic/yosys
+# fork registers `kissat` and `cadical` as selectable `sat` backends (see
+# kernel/register.cc ExtCdclSat); this producer selects one via
+# `sat -select-solver <name>` WHEN the image provides it, and otherwise falls
+# back to the built-in engine with no behaviour change. Preference order + a
+# hard override are exposed via VIBEIC_ATPG_SAT_SOLVER
+# (auto|kissat|cadical|minisat|none). chip/PDK/vendor-AGNOSTIC — pure CNF
+# solving, no design knowledge.
+_ATPG_SAT_SOLVER_PREFERENCE = ("kissat", "cadical")
+_SAT_SOLVER_PROBE_CACHE: dict = {}
+
+# ── size-scaled at-speed ATPG wall budget ───────────────────────────────────
+# The per-fault SAT solve on the 2-frame LOC miter dominates, and BOTH its
+# per-fault cost AND the one-time miter flatten grow with the design's flop
+# count. A FIXED wall (the old 1800 s) therefore does two harmful things on a
+# large design and nothing on a small one:
+#   (a) it grades only a small strided slice of the disclosed sample — measured
+#       on subservient×GF180MCU (1272 scan flops, ~24 k-cell flat 2-frame miter,
+#       isolated --cpus=20 container): flatten ~8 s, per-fault SAT ~25 s, so a
+#       1800 s wall right-sizes to only ~57 of the 400-fault disclosed sample,
+#       while a 65-flop design grades its full sample; and
+#   (b) under host contention the fixed calibration ceiling can kill the
+#       one-time flatten BEFORE the probe emits its setup marker (yosys exit
+#       124, setup_done=False), which the producer then books as a hard ERROR —
+#       a false timeout, not an honest coverage number.
+# So the wall AND the calibration setup-allowance SCALE with the design's own
+# measured scale (the scan-flop count the cut exposed). The caller's --timeout
+# is the FLOOR (small designs are unchanged); a large design earns proportially
+# more wall, capped. Chip/PDK/vendor-AGNOSTIC — keyed ONLY on flop count, never
+# on a chip / SKU / library literal.
+WALL_PER_SCAN_FLOP = 3.0              # s/flop added above the floor. Measured:
+                                     # 1272 flops → 1800+3·1272 ≈ 5.6 k s →
+                                     # right-sizes to ~190 of the 400 disclosed
+                                     # faults (vs ~57 under the fixed 1800 s).
+WALL_BUDGET_MAX = 7200               # s (2 h) — campaign safety ceiling so an
+                                     # arbitrarily large design cannot run away.
+SETUP_ALLOWANCE_FLOOR = 120          # s — min one-time flatten allowance (was a
+                                     # fixed 60 s baked into cal_wall).
+SETUP_ALLOWANCE_PER_SCAN_FLOP = 0.5  # s/flop — the miter flatten grows with the
+                                     # flop count; 1272 flops → +636 s head-room.
 
 _DISCLOSURE = (
     "TDF LOGIC coverage (each fault's transition is LAUNCHED in frame-1 and "
@@ -385,6 +443,15 @@ def build_loc_miter(top: str, prim_in, prim_out, pairs,
 # Docker / Yosys execution (impure)
 # ══════════════════════════════════════════════════════════════════════════
 
+def _as_text(v) -> str:
+    """Coerce a subprocess output (str, bytes, or None) to str. Pure."""
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", errors="replace")
+    return str(v)
+
+
 def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
                    pdk_dir: Path | None = None,
                    extra_mounts: list[tuple[str, str]] | None = None
@@ -395,8 +462,16 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     extra_mounts: additional (host, container) bind mounts — used when a
     liberty/PDK file resolves (via symlink) to a path OUTSIDE the project, so
     a fresh `docker run -v project:/work` container can still read it."""
+    # A unique --name so that if the wall fires we can REAP the container: a
+    # `subprocess.run(timeout=)` SIGKILLs only the `docker run` CLIENT, leaving
+    # the yosys process inside the container orphaned and burning a full CPU
+    # indefinitely (observed). Naming it lets the timeout handler `docker rm -f`
+    # the orphan.
+    cname = f"vibeic_tdf_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     docker_cmd = [
-        "docker", "run", "--rm", "--entrypoint", "bash",
+        "docker", "run", "--rm", "--name", cname,
+        *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
     for host, ctr in (extra_mounts or []):
@@ -415,8 +490,22 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
         r = subprocess.run(docker_cmd, capture_output=True, text=True,
                            timeout=timeout)
         return r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired:
-        return 124, "", "docker command timed out"
+    except subprocess.TimeoutExpired as exc:
+        # SALVAGE the partial stdout yosys already emitted before the wall fired
+        # so the COMPLETED-fault PREFIX can still be graded (a real, disclosed
+        # partial verdict) instead of being discarded → the false exit-124
+        # ERROR / "docker command timed out" that this producer used to book.
+        # `subprocess.run` attaches the captured-so-far output to the exception.
+        out = _as_text(getattr(exc, "stdout", "") or getattr(exc, "output", ""))
+        err = _as_text(getattr(exc, "stderr", ""))
+        # Reap the orphaned container so its yosys stops burning a CPU.
+        try:
+            subprocess.run(["docker", "rm", "-f", cname],
+                           capture_output=True, text=True, timeout=30)
+        except Exception:
+            pass
+        return 124, out, (err + "\ndocker command timed out (partial output "
+                          "salvaged)")
     except FileNotFoundError:
         return 127, "", "docker binary not found in PATH"
 
@@ -436,17 +525,46 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
     guess about the library's spelling conventions."""
     cut_abs = project / cut_rel
     if cut_abs.exists() and cut_abs.stat().st_size > 0:
-        # Only reuse a REAL full-scan cut — one with NO residual flop cells (a
-        # cut turns every flop into a pseudo-PI/PO pair). A stale/bogus file that
-        # still instantiates flops (e.g. a prior run cut with the wrong --dff
-        # seed, so `fault cut` cut nothing) is NOT a cut; regenerate it, else
-        # parse_cut_ports finds 0 pairs → a FALSE NOT_APPLICABLE on a sequential
-        # design (which the coverage gate would silently pass — gaming).
-        if not _far.detect_dff_cells(cut_abs.read_text(errors="replace"),
-                                     liberty_sequential):
-            return True, f"reused existing cut netlist: {cut_rel}"
-        print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a real "
-              f"cut, regenerating", file=sys.stderr)
+        # Only reuse a REAL full-scan cut. TWO ways an existing file fails to be
+        # one, and BOTH must force a regenerate — else a SEQUENTIAL design
+        # silently scores 0 pseudo-PI/PO pairs, which the producer can only read
+        # as a NOT_APPLICABLE / ENGINE_LIMITED self-skip the coverage gate cannot
+        # distinguish from a real one (gaming):
+        #   (a) it still instantiates flop cells — a prior run cut with the wrong
+        #       --dff seed, so `fault cut` cut NOTHING (residual flops present);
+        #   (b) it instantiates NO flops AND exposes 0 pseudo-PI/PO pairs while
+        #       the SOURCE netlist DOES have flops — a DEGENERATE/empty cut (e.g.
+        #       taken from the GENERIC pre-map netlist whose `$_DFF_*` primitives
+        #       `fault cut` cannot detect, leaving the flops neither cut NOR
+        #       present, or a cut written before the tech-mapped netlist existed).
+        #       A real full-scan cut of a sequential design ALWAYS carries one
+        #       `.d/.q` pair per flop.
+        # A genuinely combinational source legitimately yields 0 pairs — reused.
+        # chip/PDK-AGNOSTIC: the flop set comes from the design's own Liberty.
+        _cut_text = cut_abs.read_text(errors="replace")
+        _cut_has_flops = bool(_far.detect_dff_cells(_cut_text, liberty_sequential))
+        try:
+            _, _, _, _cut_pairs = parse_cut_ports(_cut_text)
+        except Exception:
+            _cut_pairs = []
+        _src_seq = False
+        if not _cut_has_flops and not _cut_pairs:
+            try:
+                _src_seq = bool(_far.detect_dff_cells(
+                    (project / netlist_rel).read_text(errors="replace"),
+                    liberty_sequential))
+            except OSError:
+                _src_seq = False
+        if not _cut_has_flops and (_cut_pairs or not _src_seq):
+            return True, (f"reused existing cut netlist: {cut_rel} "
+                          f"({len(_cut_pairs)} scan pair(s))")
+        if _cut_has_flops:
+            print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a "
+                  f"real cut, regenerating", file=sys.stderr)
+        else:
+            print(f"{_PROGRAM}: existing {cut_rel} exposes 0 scan pairs on a "
+                  f"sequential design → degenerate cut, regenerating from "
+                  f"{netlist_rel}", file=sys.stderr)
     # Auto-detect the flop cells from the mapped netlist (union with any seed).
     try:
         ntext = (project / netlist_rel).read_text(errors="replace")
@@ -638,9 +756,61 @@ def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
     return lec_run.DEFAULT_LIBERTY
 
 
+def _detect_sat_solver(project: Path, pdk_dir: Path | None,
+                       timeout: int = 90) -> str:
+    """Probe the EDA image ONCE for a modern external CDCL `sat` backend
+    (kissat/cadical) and return the name to pass to `sat -select-solver`, or ""
+    to use the built-in ezMiniSAT.
+
+    SELF-VALIDATING: for each candidate it runs a trivial KNOWN-SAT prove through
+    the WHOLE chain — `assign y = a; sat -prove y 0 -select-solver <name> -set a
+    1` must find a model (y=1≠0). It selects a solver ONLY when that prove
+    returns `model found: FAIL!`, which is true iff (a) the fork registers the
+    solver, (b) its binary is on PATH, and (c) the backend returns the correct
+    verdict end-to-end. A stale image (solver unknown → `Unknown SAT solver`), a
+    missing binary, or a backend regression therefore ALL fall back to the
+    built-in engine with NO change in grading — so wiring the external solver can
+    never itself turn a real detection into an abort. Result is cached per image.
+    chip/PDK/vendor-AGNOSTIC — no design/library knowledge. Env override
+    VIBEIC_ATPG_SAT_SOLVER: auto (default) | kissat | cadical | minisat | none."""
+    pref = (os.environ.get("VIBEIC_ATPG_SAT_SOLVER") or "auto").strip().lower()
+    if pref in ("none", "minisat", "builtin", "off"):
+        return ""
+    if pref in ("auto", ""):
+        candidates = list(_ATPG_SAT_SOLVER_PREFERENCE)
+    else:
+        candidates = [pref]
+    key = (_far.DOCKER_IMAGE, tuple(candidates))
+    if key in _SAT_SOLVER_PROBE_CACHE:
+        return _SAT_SOLVER_PROBE_CACHE[key]
+    chosen = ""
+    for name in candidates:
+        probe = (
+            "printf 'module p(input a, output y); assign y = a; endmodule\\n' "
+            "> /tmp/_vibeic_satprobe.v 2>/dev/null; "
+            "yosys -p 'read_verilog /tmp/_vibeic_satprobe.v; prep -top p; "
+            f"sat -prove y 0 -select-solver {name} -set a 1' 2>&1"
+        )
+        try:
+            _ec, out, err = _run_in_docker(project, probe,
+                                           timeout=min(int(timeout), 120),
+                                           pdk_dir=pdk_dir)
+        except Exception:
+            continue
+        blob = (out or "") + "\n" + (err or "")
+        if "Unknown SAT solver" in blob:
+            continue                       # stale image: backend not registered
+        if "model found: FAIL" in blob:    # known-SAT prove detected end-to-end
+            chosen = name
+            break
+    _SAT_SOLVER_PROBE_CACHE[key] = chosen
+    return chosen
+
+
 def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
                         faults: list, prim_in_names: list[str],
-                        sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT) -> str:
+                        sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT,
+                        select_solver: str = "") -> str:
     """One Yosys script that solves every fault in the sample in a single
     process. #154 FLATTEN-ONCE: the faulty core copy is created and the 3×-core
     2-frame miter is resolved + flattened EXACTLY ONCE, then snapshotted with
@@ -668,6 +838,14 @@ def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
     let the parser tell a fault that was NEVER REACHED (batch killed by the wall
     budget before its block) from one that was attempted-but-undecided."""
     show = " ".join(f"-show {n}" for n in prim_in_names)
+    # #ATPG-SAT: route the per-fault prove at a modern external CDCL solver
+    # (kissat/cadical) wired into the fork's `sat` command when the image
+    # supports it. The built-in ezMiniSAT (MiniSAT-2.2) times out (ABORT) on the
+    # ~5.5e5-var 2-frame LOC miter that kissat decides in seconds; those aborts
+    # were counted UNDETECTED and collapsed coverage. `-select-solver` is EMPTY
+    # → built-in engine (unchanged behaviour) when the probe found no external
+    # backend, so this is a no-op fallback on an image without the backend.
+    sel = f"-select-solver {select_solver} " if select_solver else ""
     L = [
         f"read_verilog /work/{flat_rel} /work/{miter_rel}",
         # Build + flatten the faulty miter ONCE, then snapshot.
@@ -687,7 +865,7 @@ def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
             f"connect -nomap -set fb.{net} {stuck}",
             f"log VIBEICTDF {raw} {kind}",
             f"sat -prove trig 0 -timeout {int(sat_timeout)} "
-            f"-set f1.{net} {init} {show}".rstrip(),
+            f"{sel}-set f1.{net} {init} {show}".rstrip(),
         ]
     return "\n".join(L) + "\n"
 
@@ -709,6 +887,29 @@ def _parse_time_spent(log: str) -> "tuple[int, int, int]":
     if m:
         flatten_sec = int(m.group(2))
     return sat_calls, sat_sec, flatten_sec
+
+
+def _scaled_wall_budget(floor_wall: int, scan_flops: int) -> int:
+    """The at-speed ATPG wall budget for THIS design: the caller's floor plus a
+    per-scan-flop term, capped at WALL_BUDGET_MAX. A design with no/few flops
+    keeps the floor unchanged; a large design earns proportionally more wall so
+    its disclosed sample is not starved and its one-time flatten is never killed
+    by a fixed ceiling. Chip-AGNOSTIC — keyed ONLY on the flop count the cut
+    exposed. Monotonic non-decreasing in scan_flops. Pure."""
+    if scan_flops <= 0:
+        return int(floor_wall)
+    want = floor_wall + WALL_PER_SCAN_FLOP * scan_flops
+    return int(min(WALL_BUDGET_MAX, max(floor_wall, want)))
+
+
+def _scaled_setup_allowance(scan_flops: int) -> int:
+    """One-time flatten (setup) time allowance for the calibration probe, scaled
+    with flop count so a large 2-frame miter's flatten is not killed before it
+    emits the setup marker (the yosys-exit-124 / setup_done=False false-ERROR
+    that a fixed 60 s allowance produced under host contention). Chip-AGNOSTIC —
+    keyed ONLY on flop count. Pure."""
+    return int(SETUP_ALLOWANCE_FLOOR
+               + SETUP_ALLOWANCE_PER_SCAN_FLOP * max(0, scan_flops))
 
 
 def _rightsize_sample(per_fault_sec: float, setup_sec: float,
@@ -879,6 +1080,46 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     base["sequential_evidence"] = evidence
 
     if not pairs:
+        # ENGINE-LIMITED (generic/unmapped netlist) — distinguished from a real
+        # scan-insertion ERROR. The OSS `fault` engine parses the netlist with
+        # pyverilog, which cannot recognise a GENERIC yosys netlist's flops
+        # (`$_DFF_*` primitives have no module body) — `fault cut` then emits
+        # "Failed to detect any flip-flop cells" and cuts nothing → 0 pairs, even
+        # with the correct --dff/--clock. This is the SAME OSS capability gap the
+        # sibling stuck-at ATPG already discloses (design_one_shot_runner Step 11:
+        # "a library-MAPPED netlist with real stdcell DFFs is required ... Fault
+        # is not turnkey on the sky130 generic/UDP DFF forms" → cap:atpg_signoff_
+        # coverage). At-speed TDF has the identical limit. On a MAPPED netlist
+        # (real sky130/gf180/commercial stdcell DFFs) 0 pairs stays a hard ERROR.
+        # Detection is structural + chip-AGNOSTIC: generic yosys seq cell present
+        # AND no library sequential cell present.
+        _nl = src_text or ""
+        _has_generic_seq = ("$_DFF_" in _nl or "$_SDFF_" in _nl
+                            or "$_DFFE_" in _nl or "$_DLATCH_" in _nl)
+        _has_lib_seq = bool(re.search(
+            r"sky130_fd_sc_\w+__[se]?d[fr]|gf180mcu_\w+__dff|\b[A-Z]{1,6}S?DFF[A-Z0-9]*\b",
+            _nl))
+        if _has_generic_seq and not _has_lib_seq:
+            base.update({
+                "verdict": "ENGINE_LIMITED", "status": "ENGINE_LIMITED",
+                "scan_flops": 0,
+                "engine_limited": True,
+                "capability_flag": "cap:at_speed_timing_graded_atpg",
+                "pdk_detected": "generic_unmapped",
+                "reasons": ["at-speed TDF ATPG is ENGINE-LIMITED on this netlist: "
+                            "it is a GENERIC (unmapped) yosys netlist whose flops "
+                            "are `$_DFF_*` primitives, which the OSS `fault` engine "
+                            "cannot detect (fault cut: 'Failed to detect any "
+                            "flip-flop cells') → 0 pseudo-PI/PO pairs. A library-"
+                            "MAPPED netlist (real stdcell DFFs) is required; the "
+                            "SAME disclosed OSS capability gap the stuck-at ATPG "
+                            "records (cap:atpg_signoff_coverage). The design HAS "
+                            "sequential cells ("
+                            + "; ".join(evidence["reasons"])
+                            + ") — coverage is UNMEASURED (never claimed); a "
+                            "mapped-netlist or commercial ATPG path closes it"],
+            })
+            return 0, base
         if evidence["verdict"] == _far.SEQ_PRESENT:
             base.update({
                 "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
@@ -914,10 +1155,18 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     # 3. ENUMERATE
     nets = enumerate_fault_sites(flat_text)
     all_faults = enumerate_tdf_faults(nets)
+    scan_flops = len(pairs)
+    # SIZE-SCALED WALL: the caller's --timeout is the FLOOR; the effective wall
+    # (and, below, the calibration setup-allowance) scales with THIS design's
+    # own flop count so a large design's sample is not starved and its one-time
+    # flatten is never killed by a fixed ceiling. See _scaled_wall_budget.
+    wall = _scaled_wall_budget(timeout, scan_flops)
     base.update({
-        "scan_flops": len(pairs),
+        "scan_flops": scan_flops,
         "fault_sites_total": len(nets),
         "tdf_faults_total": len(all_faults),
+        "wall_budget_floor_sec": timeout,
+        "wall_budget_sec": wall,
     })
 
     # Build the 2-frame LOC miter ONCE (reused by the calibration probe and the
@@ -925,9 +1174,17 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     miter_text = build_loc_miter(_top, prim_in, prim_out, pairs)
     (project / miter_rel).write_text(miter_text)
 
+    # Select a modern external CDCL `sat` backend (kissat/cadical) if the fork
+    # image provides one — this is the fix for the MiniSAT-timeout aborts that
+    # collapsed at-speed coverage. Self-validating + fail-safe to the built-in
+    # engine (see _detect_sat_solver). Probed ONCE, reused by both batches.
+    select_solver = _detect_sat_solver(project, pdk_dir, timeout=min(timeout, 120))
+    base["sat_solver"] = select_solver or "minisat (built-in ezSAT)"
+
     def _run_batch(sample, wall, tag):
         batch = _build_batch_script(flat_rel, miter_rel, _top, sample,
-                                    prim_in_names, sat_timeout=sat_timeout)
+                                    prim_in_names, sat_timeout=sat_timeout,
+                                    select_solver=select_solver)
         batch_rel = f"phase2/stage2/dft/tdf/_tdf_{tag}.ys"
         (project / batch_rel).write_text(batch)
         t0 = time.time()
@@ -942,7 +1199,12 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     # the whole budget.
     cal_n = min(_CALIBRATION_FAULTS, len(all_faults))
     cal_faults, _ = sample_faults(all_faults, cal_n)
-    cal_wall = min(timeout // 3, 60 + cal_n * sat_timeout)
+    # The calibration probe must survive the one-time flatten of THIS design's
+    # miter (which grows with flop count) plus its `cal_n` SAT solves; the
+    # setup-allowance therefore scales with scan_flops instead of a fixed 60 s.
+    # Bounded by half the scaled wall so calibration can never eat the budget.
+    cal_wall = min(wall // 2,
+                   _scaled_setup_allowance(scan_flops) + cal_n * sat_timeout)
     cal_ec, cal_log, cal_elapsed = _run_batch(cal_faults, cal_wall, "cal")
     (tdf_dir / "cal_run.log").write_text(cal_log[-100000:])
     sat_calls, sat_sec, flatten_sec = _parse_time_spent(cal_log)
@@ -966,12 +1228,15 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     if not cal_setup_done and cal_graded == 0:
         base.update({"verdict": "ERROR", "status": "ERROR",
                      "reasons": [f"ATPG calibration produced no setup marker or "
-                                 f"verdict (yosys exit {cal_ec}); cannot measure "
-                                 f"TDF coverage", (cal_log[-400:] or "").strip()]})
+                                 f"verdict (yosys exit {cal_ec}) within the "
+                                 f"{cal_wall}s size-scaled calibration wall "
+                                 f"(setup-allowance {_scaled_setup_allowance(scan_flops)}s "
+                                 f"for {scan_flops} flops); cannot measure TDF "
+                                 f"coverage", (cal_log[-400:] or "").strip()]})
         return 1, base
 
     # 3b. RIGHT-SIZE + SPREAD the real sample against the remaining budget.
-    remaining = timeout - cal_elapsed
+    remaining = wall - cal_elapsed
     n_target = _rightsize_sample(per_fault_sec, setup_sec, remaining,
                                  max_faults, len(all_faults))
     faults, _ = sample_faults(all_faults, n_target)
@@ -983,7 +1248,10 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
         "probe_faults": cal_n,
         "per_fault_sat_sec": round(per_fault_sec, 2),
         "setup_sec": round(setup_sec, 2),
-        "wall_budget_sec": timeout,
+        "wall_budget_sec": wall,
+        "wall_budget_floor_sec": timeout,
+        "cal_wall_sec": cal_wall,
+        "setup_allowance_sec": _scaled_setup_allowance(scan_flops),
         "per_fault_sat_timeout_sec": sat_timeout,
         "sized_to_budget": budget_bounded,
         "n_target": n_target,
@@ -1031,10 +1299,11 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     if unreached:
         reasons.append(
             f"DISCLOSED budget-truncation: {unreached} of {len(faults)} sampled "
-            f"faults were not reached within the {timeout}s wall budget and are "
-            f"EXCLUDED from the graded sample (NOT counted undetected); coverage "
-            f"is over the {cov['sampled_faults']} graded faults. Raise --timeout "
-            f"or lower --max-faults for a fuller sample.")
+            f"faults were not reached within the {wall}s size-scaled wall budget "
+            f"(floor {timeout}s + {WALL_PER_SCAN_FLOP:g}s/scan-flop, {scan_flops} "
+            f"flops) and are EXCLUDED from the graded sample (NOT counted "
+            f"undetected); coverage is over the {cov['sampled_faults']} graded "
+            f"faults. Raise --timeout or lower --max-faults for a fuller sample.")
     base.update({
         "ge_floor": ge_floor,
         "launch_capture_pattern_count": det,   # each detection IS a 2-pattern
@@ -1046,6 +1315,64 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
         "reasons": reasons,
     })
     return (0 if ge_floor else 1), base
+
+
+# The mapped-netlist emit name is NOT uniform across the flow: the DFT/synth
+# chain writes `<top>_synth.v` in some paths, but the canonical Phase-2 synth
+# step (design_one_shot_runner) emits `phase2/stage2/synth/netlist.v` (+
+# `netlist_yosys.v`) — the SAME file the LEC gold read and the SHA-attestation
+# reference. Discovering ONLY `*_synth.v`/`synth.v` MISSES that canonical
+# netlist, so on a run whose synth produced `netlist.v` the producer cannot
+# find an existing mapped netlist, writes a not-run sentinel ("cannot derive
+# --top"), and the DT1 gate books it BLOCKED → FAIL — a false FAIL on a netlist
+# that is right there (measured on opentitan_aes × sky130A). Ordered so the
+# DFT-chain `<top>_synth.v` still wins when present. chip/tool-AGNOSTIC.
+_MAPPED_NETLIST_GLOBS = (
+    "phase2/stage2/synth/*_synth.v",        # phase2/phase3 tech-mapped synth
+    "phase3/stage3/pnr/*_pnr_repaired.v",   # post-route, real stdcells
+    "phase3/stage3/pnr/*_pnr.v",            # post-place, real stdcells
+    "phase2/stage2/synth/netlist.v",        # MAY be generic — last-resort only
+    "phase2/stage2/synth/netlist_yosys.v",
+)
+_MAPPED_NETLIST_FALLBACK = "phase2/stage2/synth/synth.v"
+
+# A yosys GENERIC (un-tech-mapped) netlist keeps its flops as `$_DFF_*`
+# primitives, which the OSS `fault` engine (pyverilog) cannot detect — `fault
+# cut` then cuts NOTHING → 0 pseudo-PI/PO pairs, and the at-speed engine cannot
+# grade. Such a netlist is NOT a valid ATPG input; a tech-mapped netlist (real
+# stdcell DFFs) is. chip/PDK-AGNOSTIC — keyed on yosys's own generic cell
+# vocabulary, never a library name.
+_GENERIC_SEQ_PRIM_RE = re.compile(r"\$_(?:S?DFFE?|DFFSR|DLATCH|SDFFCE)_")
+
+
+def _is_generic_seq_netlist(text: str) -> bool:
+    """True iff `text` is a generic yosys netlist whose flops are `$_DFF_*`
+    primitives (un-tech-mapped) — not gradable by the OSS at-speed engine. A
+    design with no flops at all is NOT generic (nothing to map). PURE."""
+    return bool(_GENERIC_SEQ_PRIM_RE.search(text or ""))
+
+
+def discover_mapped_netlist(project: Path) -> str:
+    """Project-relative path to a genuinely TECH-MAPPED netlist (real stdcell
+    flops that `fault cut` can detect), trying each canonical emit in order and
+    SKIPPING any candidate that is still a generic `$_DFF_*` netlist. The phase2
+    DFT step and the phase3 re-run share this: in phase2 only the generic
+    `netlist.v` may exist (→ returned as a last resort, and the producer records
+    an honest engine-limited note); by phase3 the tech-mapped `<top>_synth.v` /
+    routed netlist exists and IS selected here. Returns the first generic
+    candidate only when NO mapped one is present. PURE."""
+    first_any = None
+    for pat in _MAPPED_NETLIST_GLOBS:
+        for hit in sorted(project.glob(pat)):
+            rel = str(hit.relative_to(project))
+            if first_any is None:
+                first_any = rel
+            try:
+                if not _is_generic_seq_netlist(hit.read_text(errors="replace")):
+                    return rel   # genuinely tech-mapped → usable by `fault cut`
+            except OSError:
+                continue
+    return first_any or _MAPPED_NETLIST_FALLBACK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1103,27 +1430,49 @@ def main(argv: list[str] | None = None) -> int:
         return str(hits[0].relative_to(project)) if hits else fallback
 
     if args.netlist is None:
-        args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
-                                  "phase2/stage2/synth/synth.v")
+        args.netlist = discover_mapped_netlist(project)
     if args.liberty is None:
         # Chip/PDK-AGNOSTIC: project PDK glob → the flow's recorded corner
         # Liberty (pvt_matrix.json) → shared OSS default. NEVER a dead relative
         # fallback (which made gate-levelise read a missing file → false FAIL).
         args.liberty = _resolve_design_liberty(project, None)
     if args.top is None:
-        stem = Path(args.netlist).stem
-        if stem.endswith("_synth"):
-            args.top = stem[: -len("_synth")]
-        else:
-            _nl = project / args.netlist
-            _m = re.search(r"(?m)^\s*module\s+([A-Za-z_]\w*)",
-                           _nl.read_text(errors="replace")) \
-                if _nl.is_file() else None
+        # The top must name a module of the netlist this run will ACTUALLY
+        # gate-levelise. When a cut netlist is already present it is REUSED
+        # verbatim (see load_or_build_cut_netlist) and the mapped netlist is
+        # never read — so deriving the top from the mapped netlist asks yosys
+        # `hierarchy -top <A>` about a file that only contains <B>. A project
+        # that emits more than one *_synth.v (e.g. a chip-top wrapper beside
+        # the core) picks the wrong one by glob order and the whole TDF run
+        # dies with "ERROR: Module `<A>' not found!" — recorded as "ATPG could
+        # not run", i.e. no transition-coverage statement at all.
+        # So: when the cut netlist exists, IT is the subject; derive from it.
+        _cut = project / args.cut_netlist
+        _subject = _cut if _cut.is_file() else None
+        if _subject is not None:
+            _m = re.search(r"(?m)^\s*module\s+\\?([A-Za-z_]\w*)",
+                           _subject.read_text(errors="replace"))
             if not _m:
-                print(f"{_PROGRAM}: cannot derive --top (no mapped netlist "
-                      f"at {args.netlist})", file=sys.stderr)
+                print(f"{_PROGRAM}: cannot derive --top (no module in cut "
+                      f"netlist {args.cut_netlist})", file=sys.stderr)
                 return 2
             args.top = _m.group(1)
+        else:
+            # No cut netlist yet — `fault cut` will build one FROM the mapped
+            # netlist, so the mapped netlist is the subject. Unchanged.
+            stem = Path(args.netlist).stem
+            if stem.endswith("_synth"):
+                args.top = stem[: -len("_synth")]
+            else:
+                _nl = project / args.netlist
+                _m = re.search(r"(?m)^\s*module\s+([A-Za-z_]\w*)",
+                               _nl.read_text(errors="replace")) \
+                    if _nl.is_file() else None
+                if not _m:
+                    print(f"{_PROGRAM}: cannot derive --top (no mapped netlist "
+                          f"at {args.netlist})", file=sys.stderr)
+                    return 2
+                args.top = _m.group(1)
 
     pdk_dir = None
     if args.pdk_dir:

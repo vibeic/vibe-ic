@@ -57,7 +57,43 @@ Usage:
 Exit codes:
     0  PASS — every plugin's marketplace + plugin.json versions match.
     1  FAIL — at least one mismatch (run with --fix to auto-correct).
-    2  IO / parse error.
+    2  IO / parse error, OR this gate compared nothing. THREE branches, and
+       this list is one-to-one with them:
+         (a) no .claude-plugin/marketplace.json found within 8 levels
+             -> reason `no-marketplace-json`
+         (b) the primary manifest parsed, but its `plugins` key is present
+             and is NOT a list -> reason `manifest-has-no-plugins-array`
+         (c) zero plugin entries were compared across EVERY manifest — the
+             `plugins` key is absent, or the list is empty, or no entry is a
+             usable object -> reason `no-plugin-entries-compared`
+
+    #528 — the missing-input branches used to return 0 while the branches
+    BESIDE them ("--marketplace-dir not a directory", "cannot parse
+    <manifest>") already returned 2. Both conventions were live in one
+    `main()`, twelve lines apart. "The input I audit does not exist" is this
+    repo's canonical rc-2 case: `flow_compliance_check._check_program_exit_zero`
+    maps rc 2 to the VACUOUS tier, and `gatekeeper_review.GateResult.green` is
+    `rc in (0, -1)`, so rc 0 here credited a plain PASS to a run that never
+    compared a version — in a MERGE gate.
+
+    WHY (c) IS PHRASED AS A DENOMINATOR AND NOT AS AN INPUT SHAPE. The first
+    round of this fix wrote (b) only, and its docstring said "a manifest with
+    no plugins[] array" — which reads like (c) but is not what the code did:
+    `.get("plugins", [])` hands back the default `[]`, which IS a list, so an
+    ABSENT key sailed past (b) and printed `[PASS] ... 0 plugin entr(ies)`.
+    Two further shapes did the same (`plugins: []`, and a list holding no
+    usable object). A sentinel default in place of `[]` would have closed the
+    first of those three and left the other two. (c) is tested against
+    `matched` — the gate's OWN record of what it compared — so it needs no
+    guess about which malformed spelling appears next.
+
+    The landing usages all supply a directory where the manifest exists AND
+    carries comparable entries (`tools/ci/pre_commit_check.sh` guards on
+    `[ -d "$SYNC_DIR/.claude-plugin" ]` before invoking at all;
+    `tools/ci/repo_hygiene_gates.sh` runs it from the plugin directory;
+    `.github/workflows/gatekeeper-ci.yml` passes `$MARKETPLACE_DIR`), so none
+    of the three branches fires there — verified by executing all five, see
+    `test_marketplace_version_sync_check`.
 """
 from __future__ import annotations
 
@@ -66,6 +102,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+import _vacuous_exit as _vx
 
 
 def _find_marketplace_json(start: Path) -> Optional[Path]:
@@ -228,10 +265,15 @@ def main() -> int:
 
     primary = _find_marketplace_json(start)
     if primary is None:
+        # #528 — rc 2, matching the two branches above and below. Routed
+        # through the shared site so the printed verdict and the exit code
+        # come from the same pair and cannot drift apart again.
+        _vx.announce_vacuous("marketplace_version_sync_check",
+                             "no-marketplace-json")
         print(f"[SKIP] marketplace_version_sync_check: "
               f"no .claude-plugin/marketplace.json found within 8 levels of "
               f"{start}")
-        return 0
+        return _vx.exit_code(passed=True, skipped=True)
 
     try:
         primary_mkt = json.loads(primary.read_text())
@@ -240,9 +282,14 @@ def main() -> int:
         return 2
 
     if not isinstance(primary_mkt.get("plugins", []), list):
+        # #528 — same class as the branch above: the manifest parsed, but the
+        # array this gate compares versions from is not there, so nothing was
+        # compared. Its immediate neighbour ("cannot parse") is already rc 2.
+        _vx.announce_vacuous("marketplace_version_sync_check",
+                             "manifest-has-no-plugins-array")
         print(f"[SKIP] marketplace_version_sync_check: "
               f"{primary} has no plugins[] array")
-        return 0
+        return _vx.exit_code(passed=True, skipped=True)
 
     # Build the manifest list: primary + any OUTER manifest that resolves to the
     # SAME plugin.json (the repo-root manifest is exactly this — its source
@@ -286,6 +333,35 @@ def main() -> int:
         _check_manifest(mkt_json, mkt, findings, matched)
 
     n_manifests = len(manifests)
+    if not findings and not matched:
+        # #528 follow-up — THE DENOMINATOR IS THE TEST, NOT THE INPUT SHAPE.
+        #
+        # `matched` is this gate's own record of what it actually compared.
+        # Empty means zero version comparisons happened, and a PASS over zero
+        # comparisons is the thing this whole issue closes — here in a MERGE
+        # gate (`gatekeeper_review.GateResult.green` is `rc in (0, -1)`).
+        #
+        # The first fix guarded ONE input shape (`plugins` present but not a
+        # list) and left three more, all of which printed
+        # `[PASS] ... 0 plugin entr(ies)`. MEASURED against the pre-#528 file:
+        #
+        #     plugins key ENTIRELY ABSENT   OLD rc 0 -> NEW rc 2
+        #     plugins: []  (empty list)     OLD rc 0 -> NEW rc 2
+        #     plugins: ["a", "b"]  (no dict) OLD rc 0 -> NEW rc 2
+        #
+        # `.get("plugins", [])` makes "absent" and "empty" indistinguishable,
+        # and a sentinel default would have fixed only the first of the three.
+        # Routing from `matched` fixes all of them and needs no guess about
+        # which malformed shape someone will write next — including the case
+        # where entries exist but none is a usable object, which no
+        # input-shape guard placed before the walk could have seen.
+        _vx.announce_vacuous("marketplace_version_sync_check",
+                             "no-plugin-entries-compared")
+        print(f"[SKIP] marketplace_version_sync_check: "
+              f"{n_manifests} manifest(s) carry no comparable plugins[] "
+              f"entry, so no version was compared")
+        return _vx.exit_code(passed=True, skipped=True)
+
     if not findings:
         print(f"[PASS] marketplace_version_sync_check: "
               f"{n_manifests} manifest(s), {len(matched)} plugin entr(ies) — "

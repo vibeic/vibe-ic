@@ -79,6 +79,11 @@ _PROG_DIR = str(Path(__file__).resolve().parent)
 if _PROG_DIR not in sys.path:
     sys.path.insert(0, _PROG_DIR)
 
+import _reused_ip_predicate as _reused_ip  # noqa: E402
+# Imported, never re-typed — a local copy of the key silently stops
+# excluding it the day the key is renamed.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
+
 # Wave 36 (v0.119.68) — IC class profile lets us drop layer
 # requirements that don't apply (e.g. L3 / L6 on a pure-analog
 # PMIC). Imported lazily so the program still runs standalone.
@@ -102,10 +107,14 @@ _BLOB_FIELD_PREFIXES = ("LX_DUMP", "all_input_literals_", "raw_", "RAW_")
 # the typed-field tally.  schema_version + layer + source_files are
 # bookkeeping; extraction_evidence is structured pointer metadata
 # (legitimate but does not represent extracted design data on its
-# own).
+# own); `_generator` records which plugin release wrote the file, so it
+# is present on EVERY document and carries no extracted design data at
+# all — counting it would lift every layer's tally by exactly one and
+# hand a thin document a floor it did not earn.
 _BOOKKEEPING_FIELDS = frozenset({
     "schema_version", "layer", "source_files",
     "extraction_evidence",
+    _GENERATOR_STAMP_KEY,
 })
 
 
@@ -479,6 +488,114 @@ def _has_honest_no_regmap(data: dict) -> bool:
     return False
 
 
+_L4_OTP_REAL_SUBFIELDS = ("fields", "read_map", "write_map", "lockbits",
+                          "otp_ip_specs", "trim_registers", "mask_sources")
+
+
+def _l4_otp_layout_has_no_real_content(otp_layout) -> bool:
+    """True when the L4 otp_layout carries NO real OTP content — every
+    meaningful OTP sub-field (image fields / read_map / write_map / lockbits /
+    otp_ip_specs / trim_registers / mask_sources) is empty/None. Bookkeeping
+    defaults such as depth_bytes / width_bits do NOT count as content. Used to
+    confirm the OTP alternative source is genuinely absent before crediting a
+    complete minimal regmap (below the ≥5 floor)."""
+    if not isinstance(otp_layout, dict):
+        return True
+    for k in _L4_OTP_REAL_SUBFIELDS:
+        v = otp_layout.get(k)
+        if v not in (None, "", [], {}):
+            return False
+    return True
+
+
+_REGDOC_ADDR_COLS = ("offset", "address", "addr", "reg_addr", "base")
+_REGDOC_NAME_COLS = ("name", "register", "reg", "field")
+
+
+def _count_input_declared_registers(project) -> "int | None":
+    """Count the registers DECLARED in the design's input docs by tallying the
+    data rows of every GFM pipe-table that is clearly a register map (a header
+    carrying BOTH an address-like column — offset/address/addr/… — AND a
+    name/register column). Reads only staged INPUT docs (phase1/input_doc/ +
+    input/docs/), never generated_docs / golden (§4.05).
+
+    Returns the total declared-register count, or None when no register-map
+    table is found (the caller then keeps the strict floor — fail-closed, so a
+    doc whose register source cannot be located never rides the credit).
+
+    chip-AGNOSTIC: identifies a register-map table by its column semantics, not
+    by any chip/register name; a pin/port/signal table (no address column) is
+    NOT counted."""
+    if project is None:
+        return None
+    try:
+        import re as _re
+        from pathlib import Path as _P
+        roots = [
+            _P(project) / "phase1" / "input_doc",
+            _P(project) / "input" / "docs",
+            _P(project) / "input",
+        ]
+        files = []
+        seen = set()
+        seen_stems = set()
+        for root in roots:
+            if root.is_dir():
+                for ext in ("*.txt", "*.md"):
+                    for f in sorted(root.rglob(ext)):
+                        if f in seen:
+                            continue
+                        seen.add(f)
+                        # De-dupe STAGED COPIES of the same doc (e.g.
+                        # phase1/input_doc/L5_register_map.txt vs
+                        # input/docs/L5_register_map.md) by filename stem so a
+                        # register table is not counted twice.
+                        st = f.stem.lower()
+                        if st in seen_stems:
+                            continue
+                        seen_stems.add(st)
+                        files.append(f)
+        if not files:
+            return None
+        total = None
+        for f in files:
+            try:
+                lines = f.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                if line.count("|") >= 2 and i + 1 < len(lines) \
+                        and _re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$",
+                                      lines[i + 1]):
+                    header = [c.strip().lower()
+                              for c in line.strip().strip("|").split("|")]
+                    has_addr = any(any(a in h for a in _REGDOC_ADDR_COLS)
+                                   for h in header)
+                    has_name = any(any(nm == h or nm in h.split()
+                                       for nm in _REGDOC_NAME_COLS)
+                                   for h in header)
+                    if has_addr and has_name:
+                        # Count contiguous data rows after the separator.
+                        j = i + 2
+                        rows = 0
+                        while j < len(lines) and lines[j].count("|") >= 2 \
+                                and lines[j].strip().startswith("|"):
+                            cells = [c.strip() for c in
+                                     lines[j].strip().strip("|").split("|")]
+                            if any(cells):
+                                rows += 1
+                            j += 1
+                        total = (total or 0) + rows
+                        i = j
+                        continue
+                i += 1
+        return total
+    except Exception:
+        return None
+
+
 def _detect_l_layer(name: str) -> int | None:
     """Return the L layer integer (1..13) inferred from filename, or
     None if the file does not name an L doc."""
@@ -630,6 +747,67 @@ def _class_sparse_analog_blocks(ic_class: str) -> bool:
     return False
 
 
+def _class_non_analog_phantom_only(ic_class: str, blocks) -> bool:
+    """ORGANIC #676 PARITY for the L5 typed-analog-block floor.
+
+    #676 established the doctrine for the 3 analog P0 gates
+    (`_analog_a_check_common._ic_class_says_non_analog` +
+    `_all_blocks_low_confidence`): a gate must not hard-FAIL a
+    POSITIVELY non-analog IC over a PHANTOM `low_confidence` block that the
+    Phase-1 keyword harvester fabricated from an analog token occurring in
+    digital prose. The sibling analog gates already self-skip as N/A on such
+    an IC; the ones that lacked class awareness were given this predicate.
+
+    This L5 floor is a FOURTH gate in that family and never received it. Its
+    only escapes were the doc's own `no_analog` flag and #634's
+    `sparse_analog_block_set` (which means SPARSE analog, not NO analog) —
+    neither keyed on `analog_applicable`. So a class the registry declares
+    `analog_applicable: false` is held to a ≥3-analog-block floor it can never
+    meet, with the `no_analog: true` escape unavailable precisely BECAUSE the
+    harvester wrote `no_analog: false` off the phantom hit. The gate becomes
+    unsatisfiable through no fault of the design.
+
+    §4.05 no-leak — returns True (→ floor N/A) ONLY when BOTH hold:
+      * the registry marks the detected class `analog_applicable is False`
+        (explicitly; a missing/unknown class is fail-closed), AND
+      * EVERY declared block is tagged `low_confidence: true` — a phantom
+        keyword hit, never a spec-backed block.
+    A real analog class keeps the strict floor. A spec-backed
+    (high-confidence) block on a non-analog class still FAILs — that is a
+    genuine class/doc contradiction and must stay visible. An EMPTY block
+    list returns False so the existing floor still demands the honest
+    `no_analog: true` declaration; this predicate never converts an
+    under-populated doc into a pass.
+
+    chip-AGNOSTIC: a registry semantic flag + the per-block confidence tag;
+    no chip / vendor / PDK / class-name literal drives the decision."""
+    if not ic_class or ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+    except (OSError, ValueError):
+        return False
+    entry = None
+    for e in reg.get("classes", []):
+        if (e.get("name") == ic_class
+                or ic_class in (e.get("synonyms") or [])):
+            entry = e
+            break
+    # Fail-closed: unknown class, or a class that is not EXPLICITLY
+    # non-analog, keeps the strict floor.
+    if entry is None or entry.get("analog_applicable") is not False:
+        return False
+    # An empty / non-list block set is NOT this path.
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("low_confidence") is not True:
+            return False
+    return True
+
+
 def _class_minimal_honest_absence(ic_class: str) -> bool:
     """ORGANIC #677 — True iff the registry marks this class as a genuinely
     MINIMAL register-mapped peripheral whose input spec legitimately carries
@@ -711,6 +889,16 @@ _TYPEDEF_ENUM_RE = _re.compile(
 )
 
 
+# Both halves of the reused-IP predicate used to be implemented here — the
+# class-registry half as `_class_rtl_gen_null`, the staged-RTL half as
+# `_staged_vendor_rtl_text`, whose docstring admitted it "mirrors
+# flow_compliance_check._detected_class_rtl_gen_null_and_vendor_rtl's KEY-(a.2)
+# vendor-RTL probe". #504 removed the mirror: the predicate lives once, in
+# `_reused_ip_predicate`, and this gate reads it. The `bare_fpga` rejection this
+# gate applies on top (its floors are PROTOCOL floors — a bare FPGA target has
+# no protocol) travels as the explicit `fail_closed` argument, so the difference
+# between this caller and the composite one is written at the call site instead
+# of being buried in a second copy.
 def _class_rtl_gen_null(ic_class: str) -> bool:
     """True iff the registry marks this class with rtl_gen=null (a from-spec /
     reused-IP class — processor_cpu / digital_arithmetic_primitive /
@@ -718,45 +906,14 @@ def _class_rtl_gen_null(ic_class: str) -> bool:
     literal). bare_fpga / unknown_protocol_class are rejected up front
     (fail-closed): an unclassified design earns NO relaxation. Any read/parse
     error → False (fail-closed)."""
-    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
-        return False
-    try:
-        reg = json.loads(
-            (Path(__file__).resolve().parent / "ic_class_registry.json")
-            .read_text())
-        for e in reg.get("classes", []):
-            if e.get("name") == "unknown_protocol_class":
-                continue  # never an eligibility target (fail-closed)
-            if (e.get("name") == ic_class
-                    or ic_class in (e.get("synonyms") or [])):
-                return e.get("rtl_gen") is None
-    except (OSError, ValueError):
-        pass
-    return False
+    return _reused_ip.class_rtl_gen_null(
+        ic_class, fail_closed=_NO_PROTOCOL_FAIL_CLOSED)
 
 
-def _staged_vendor_rtl_text(project) -> str | None:
-    """Return the concatenated text of every staged vendor/reused RTL file
-    (`input/vendor_rtl/**.v|.sv`), or None when no such directory / file exists.
-    Mirrors flow_compliance_check._detected_class_rtl_gen_null_and_vendor_rtl's
-    KEY-(a.2) vendor-RTL probe. Read errors on an individual file are skipped
-    (best-effort harvest); a wholly absent dir → None (fail-closed signal)."""
-    if project is None:
-        return None
-    try:
-        vendor_dir = Path(project) / "input" / "vendor_rtl"
-    except Exception:
-        return None
-    if not vendor_dir.is_dir():
-        return None
-    chunks: list[str] = []
-    for pat in ("*.v", "*.sv"):
-        for f in sorted(vendor_dir.rglob(pat)):
-            try:
-                chunks.append(f.read_text(errors="replace"))
-            except OSError:
-                continue
-    return "\n".join(chunks) if chunks else None
+#: The staged vendor/reused RTL text harvest — the shared prober, re-exported
+#: under this gate's original name so the #748 harvest call sites below read
+#: unchanged.
+_staged_vendor_rtl_text = _reused_ip.staged_vendor_rtl_text
 
 
 def _strip_v_comments(src: str) -> str:
@@ -1074,6 +1231,37 @@ def _check_l_doc(layer: int, data: dict,
         if (max(n_regs, n_otp_subfields) == 0 and _honest_empty_regs
                 and _class_no_cmd_protocol(ic_class)):
             return True, ""
+        # field (caravel L4 minimal regmap) — COMPLETE minimal-regmap credit,
+        # DOUBLE-KEYED per the #428/#419/#677 doctrine (class flag AND a
+        # per-doc completeness PROOF, fail-closed). The #677 honest-absence
+        # escape (above) covers a peripheral with ZERO regmap; a genuinely
+        # minimal peripheral with a COMPLETE-but-small regmap (e.g. a
+        # Wishbone-mapped counter = 1 register) is neither zero nor ≥5, and the
+        # "1-4 entries = extraction defect" doctrine would wrongly FAIL it.
+        # Distinguish a COMPLETE minimal regmap from a dropped-registers
+        # extraction defect by PROVING completeness against the INPUT register
+        # doc: credit ONLY when (1) the class is a registry-flagged minimal
+        # peripheral, (2) the typed regmap is non-empty AND captured EVERY
+        # register declared in the input (n_regs ≥ declared ≥ 1), AND (3) the
+        # doc carries no real OTP content (the ≥5-otp alternative source is
+        # genuinely absent). A partial extraction (n_regs < declared), an empty
+        # regmap, a class without the flag, or a doc with real OTP content all
+        # keep the ≥5 floor — guard (d) (partial-content-still-FAILs) preserved.
+        # chip-AGNOSTIC: registry semantic flag + input-completeness proof, no
+        # chip/register-name literal; reads only staged input docs (§4.05).
+        if (max(n_regs, n_otp_subfields) < 5
+                and n_regs >= 1
+                and _class_minimal_honest_absence(ic_class)
+                and _l4_otp_layout_has_no_real_content(otp_layout)):
+            _declared = _count_input_declared_registers(project)
+            if (_declared is not None and _declared >= 1
+                    and n_regs >= _declared):
+                return True, (
+                    f"SKIP — L4 complete minimal regmap: captured "
+                    f"n_regs={n_regs} == {_declared} register(s) declared in "
+                    f"the input register doc (minimal_honest_absence class, no "
+                    f"OTP content); a complete minimal regmap is not an "
+                    f"extraction defect.")
         if max(n_regs, n_otp_subfields) < 5:
             return False, (
                 f"L4 regmap+otp_layout must carry ≥5 typed register "
@@ -1089,6 +1277,16 @@ def _check_l_doc(layer: int, data: dict,
         blocks = (data.get("analog_blocks") or data.get("blocks")
                   or data.get("adi_blocks"))
         n_blocks = _list_len_of_dicts(blocks)
+        # ORGANIC #676 PARITY — a POSITIVELY non-analog class whose only
+        # declared blocks are phantom `low_confidence` keyword hits is N/A
+        # here, exactly as it already is for the 3 analog P0 gates #676
+        # covered. Without this the floor is unsatisfiable for such a class:
+        # ≥3 analog blocks is impossible for a design with no analog, and the
+        # `no_analog: true` escape is unavailable precisely BECAUSE the
+        # harvester set it false off the phantom hit. Fail-closed and
+        # no-leak — see `_class_non_analog_phantom_only`.
+        if _class_non_analog_phantom_only(ic_class, blocks):
+            return True, ""
         # ORGANIC #634 — IC-class-aware analog-block floor. The ≥3 default is
         # tuned for a multi-block analog SYSTEM (multi-rail PMIC / analog front-
         # end). A data-converter / mixed-signal class (delta-sigma / SAR /
@@ -1325,6 +1523,23 @@ def _check_l_doc(layer: int, data: dict,
         # L6 note above); NOT `_class_no_cmd_protocol` (protocol classes keep
         # the strict ≥10 floor). bare_fpga / unknown stay fail-closed.
         l8_min = 3 if _class_sparse_control_timing(ic_class) else 10
+        # field (caravel L8 minimal timing) — a genuinely MINIMAL register-
+        # mapped peripheral documents only a handful of timing facts (a single
+        # clock + bus-ack latency), so the sparse ≥3 floor fits, not the
+        # protocol-genre ≥10. Key this on an INSTANCE-level minimality PROOF —
+        # a minimal_honest_absence_ok class whose INPUT declares a small,
+        # COMPLETE register map (1-4 registers) — NOT on the class-wide
+        # `sparse_control_timing` predicate (which stays False for bus_peripheral
+        # per #748r2). This deliberately does NOT relax a wire-level
+        # bus_interconnect_protocol (no register map → declared is None → stays
+        # ≥10, so test_protocol_stays_strict holds) nor a rich (≥5-register)
+        # peripheral (stays ≥10). Non-vacuous: ≥3 is a REAL floor (empty / <3
+        # typed timing still FAILs). chip-AGNOSTIC: registry semantic flag +
+        # input-completeness proof, no chip literal.
+        if l8_min > 3 and _class_minimal_honest_absence(ic_class):
+            _decl_regs = _count_input_declared_registers(project)
+            if _decl_regs is not None and 1 <= _decl_regs < 5:
+                l8_min = 3
         if n < l8_min:
             return False, (
                 f"L8 timing_waveform must carry ≥{l8_min} typed timing "

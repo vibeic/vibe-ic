@@ -1,1 +1,0 @@
-/home/reyerchu/vibe-ic/benchmark-data/ic/u_hawaii_adc/clean_run_v1427_20260715/reports/phase1/extraction_coverage_report.md

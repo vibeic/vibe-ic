@@ -29,21 +29,30 @@ STA is meaningless. That is exactly the stub Liberty emitted at the
 A7 stub tier (`library(ldo_stub) { cell(ldo) { area : 10000 ; } }`).
 
 Honesty rules (NO vacuous PASS):
-  * No analog blocks                 -> SKIP (exit 0, INFO).
+  * No analog blocks                 -> VACUOUS (rc 2).
   * .lib missing for a spec'd block  -> FAIL (cannot sign off STA).
   * .lib present but unparseable     -> FAIL.
   * .lib has a cell but NO timing-bearing attribute at all -> FAIL
     (area-only stub, the documented zero-delay defect).
   * .lib has a timing attribute whose value is 0 / 0.0 -> FAIL.
+  * .lib is non-degenerate, and NOTHING says what circuit those delays
+    model -> FAIL (LIB_SUBJECT_UNDECLARED). Asked LAST, after every rule
+    above. A model that records a library default still signs off, in the
+    PASS_STRUCTURE_ONLY tier; only silence costs.
 
 Usage:
     python3 analog_liberty_nonzero_delay_check.py <project_dir>
     python3 analog_liberty_nonzero_delay_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS (every block has a non-degenerate Liberty) or SKIP
+    0 = PASS: at least one analog block was found and every Liberty is
+        non-degenerate
     1 = FAIL (>=1 zero-delay / stub / missing Liberty)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — this project declares no analog block,
+        so there is no Liberty to prove non-degenerate. #521: the header
+        already said "Honesty rules (NO vacuous PASS)" and this branch was
+        exactly that, exiting 0 on 197 of the 200 tracked project roots. Also
+        rc 2 for an IO / argument error.
 """
 from __future__ import annotations
 
@@ -59,6 +68,63 @@ try:
     import _path_layout as _pl
 except ImportError:  # pragma: no cover
     _pl = None
+
+import _vacuous_exit as _vx
+import _analog_a_check_common as _acc
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+
+
+# ── A NON-ZERO DELAY IS A DELAY OF SOMETHING ──────────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A gate that signs off a model another tool will consume is certifying
+#   what that model represents. It must read what the model represents, and
+#   an artefact that declines to say what it contains must not certify the
+#   step it is the evidence for.
+#
+# MEASURED, on three synthetic trees identical in every artefact except the
+# one recorded `design_content` value: this gate signed off the Liberty that
+# INTEGRATION STA WILL CONSUME with `[PASS]` rc 0 and a byte-identical
+# `--json` on all three — including the tree whose corner artefact records,
+# in as many words, that its circuit came from a topology library and that no
+# bound input reached any device parameter. A non-degenerate delay taken from
+# a library nominal is a real number about a library nominal; STA closed on it
+# is closed on a circuit this project did not design.
+#
+# WHERE THE ANSWER IS READ, and why it is not this file's own record. Nothing
+# writes `design_content` into a `.lib`; asking the Liberty its own question
+# would classify EVERY tree undisclosed and fail the honest one too. The
+# record belongs to the artefact the delays are DERIVED FROM — the corner
+# sweep, which this gate ALREADY opens for exactly this purpose. Until now it
+# read `_provenance` from it and reported `corner provenance=real_ngspice`:
+# true of the simulator, silent about the subject, which is the defect this
+# whole track started from, one field along. The chain is ordered nearest
+# first and ends at the corner artefact — the gate of record for that content
+# — so this gate can never certify a tree its own gate of record refuses.
+#
+# THREE OUTCOMES, ranked so that disclosure is never the expensive answer:
+#   design-bound   -> PASS, unchanged.
+#   structure-only -> PASS_STRUCTURE_ONLY. Certifies, in its own tier.
+#   undisclosed    -> does not certify. Including the case where NO corner
+#                     artefact exists at all: then nothing anywhere says what
+#                     circuit these delays model, and a Liberty that will not
+#                     name its subject must not be signed off for STA.
+#
+# ASKED LAST, after every value rule (missing / unreadable / no cell / no
+# timing / all-zero), each of which already `continue`s. Those name a deeper
+# cause and answer this one as a side effect; the reverse is not true.
+#
+# THE SITE MOVED, THE BEHAVIOUR DID NOT. This gate was the first to get the
+# rule right, and it kept the rule in a PRIVATE constant. Two other gates over
+# the same package (`analog_hardmacro_check`, which is the one the FLOW
+# declares for A8, and `analog_a8_hardmacro_gen_check`) then answered
+# PASS / PASS / PASS on the three trees this one reads
+# PASS / PASS_STRUCTURE_ONLY / FAIL over. A private constant is how that
+# happened, so the rule now lives at ONE site,
+# `_analog_a_check_common.hardmacro_content`, and every gate over the package
+# calls it. This name is kept, pointing at the shared constant, so a reader of
+# this file still sees what is read.
+_CONTENT_CHAIN = (_acc.CONTENT_GATE_OF_RECORD_ARTEFACT,)
 
 
 # Timing-bearing scalar attributes (single `attr : value ;`).
@@ -186,6 +252,8 @@ def run_audit(project: Path) -> Result:
     an_dir = _analog_dir(project)
     ok_blocks: List[str] = []
     failed: List[str] = []
+    structure_only: List[str] = []
+    design_bound: List[str] = []
 
     for block in blocks:
         lib = hm_dir / block / f"{block}.lib"
@@ -250,20 +318,73 @@ def run_audit(project: Path) -> Result:
                          f"SPICE-measured delays.")))
             continue
 
+        # ── the certification question, asked LAST ────────────────────────
+        # `provenance` above says the numbers came out of a simulator.
+        # `content` says what the simulator was pointed at.
+        _bounded = _acc.hardmacro_content(an_dir / block)
+        content, content_src = _bounded.klass, _bounded.source
+        cited = (str(content_src.relative_to(project))
+                 if content_src is not None else None)
+
+        if content == _acc.CONTENT_UNDISCLOSED:
+            res.passed = False
+            failed.append(block)
+            said = ("no corner artefact exists to say"
+                    if not corner.exists() else
+                    f"`{corner.name}` records no answer to")
+            res.findings.append(Finding(
+                rule="LIB_SUBJECT_UNDECLARED", severity="ERROR", block=block,
+                message=(f"Block '{block}': Liberty cell '{cell_name}' has "
+                         f"{len(nonzero)} non-zero timing value(s), and "
+                         f"{said} what circuit those delays model "
+                         f"(`design_content`). Integration STA will consume "
+                         f"this model as this design's; a Liberty that will "
+                         f"not name its subject must not be signed off for "
+                         f"it. Naming a library default "
+                         f"(`{_acc.CONTENT_STRUCTURE_ONLY}`) signs off in its "
+                         f"own tier; declining to answer does not, or saying "
+                         f"nothing would cost less than saying so.")))
+            continue
+
         ok_blocks.append(block)
-        res.findings.append(Finding(
-            rule="LIB_NONZERO_OK", severity="INFO", block=block,
-            message=(f"Block '{block}': Liberty cell '{cell_name}' has "
-                     f"{len(nonzero)} non-zero timing value(s); corner "
-                     f"provenance={provenance}.")))
+        if content == _acc.CONTENT_STRUCTURE_ONLY:
+            structure_only.append(block)
+            res.findings.append(Finding(
+                rule="LIB_STRUCTURE_ONLY", severity="WARNING", block=block,
+                message=(f"Block '{block}': Liberty cell '{cell_name}' has "
+                         f"{len(nonzero)} non-zero timing value(s) measured "
+                         f"OF A LIBRARY TOPOLOGY — `{cited}` records that its "
+                         f"circuit came from a topology library and that no "
+                         f"bound input reached any device parameter. The "
+                         f"delays are real and they are the default's; STA "
+                         f"closed on them is not closed on a designed "
+                         f"macro. corner provenance={provenance}.")))
+        else:
+            design_bound.append(block)
+            res.findings.append(Finding(
+                rule="LIB_NONZERO_OK", severity="INFO", block=block,
+                message=(f"Block '{block}': Liberty cell '{cell_name}' has "
+                         f"{len(nonzero)} non-zero timing value(s); corner "
+                         f"provenance={provenance}; design content "
+                         f"design-bound per `{cited}`.")))
 
     if failed:
         res.passed = False
 
+    # Same ranking as the sibling corner gates: the tier reaches the verdict
+    # word only when NO block was signed off as design-bound. A project with
+    # both has a design-bound macro to report and the structure-only subset is
+    # named beside it.
+    verdict_tier = ("PASS_STRUCTURE_ONLY"
+                    if (res.passed and structure_only and not design_bound)
+                    else "PASS")
     res.summary = {
         "skipped": False,
         "total_blocks": len(blocks),
         "passed_blocks": ok_blocks,
+        "design_bound_blocks": design_bound,
+        "structure_only_blocks": structure_only,
+        "verdict_tier": verdict_tier,
         "failed_blocks": failed,
         "pass": res.passed,
     }
@@ -284,17 +405,39 @@ def main(argv: List[str] = None) -> int:
     res = run_audit(args.project_dir)
     out = json.dumps(asdict(res), indent=2, ensure_ascii=False)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(res.summary)
+    reason = _vx.skip_reason(res.summary)
+
+    so_blocks = (res.summary or {}).get("structure_only_blocks") or []
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
-        status = "PASS" if res.passed else "FAIL"
-        print(f"[{status}] analog_liberty_nonzero_delay_check")
+        # The tier travels on the verdict WORD — `pass_token` is the seam
+        # `_vacuous_exit` already provides for it — so a reader of the one
+        # line can tell a designed macro's timing from a library topology's.
+        print(_vx.verdict_line(
+            "analog_liberty_nonzero_delay_check", res.passed, skipped, reason,
+            pass_token=((res.summary or {}).get("verdict_tier") or "PASS")))
         for f in res.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if res.passed else 1
+    if res.passed and skipped:
+        _vx.announce_vacuous(res.program, reason)
+    # LAST, SHORT, and on every path — the disclosure the flow auditor reads
+    # from a fixed-width TAIL of this stream, whatever the verdict was. To
+    # stderr for the same reason `announce_vacuous` is: `--json` puts a
+    # document on stdout and a sentinel mixed into it would not parse.
+    if so_blocks:
+        names = ", ".join(str(b) for b in so_blocks)
+        if len(names) > 60:
+            names = f"{names[:57]}..."
+        print(f"{_acc.STRUCTURE_ONLY_TOKEN} {len(so_blocks)} Liberty "
+              f"artefact(s) ({names}) model a library default, not a bound "
+              f"input [analog_liberty_nonzero_delay_check]", file=sys.stderr)
+    return _vx.exit_code(res.passed, skipped)
 
 
 if __name__ == "__main__":

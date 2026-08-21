@@ -40,8 +40,14 @@ def test_pass_import_mode_value_flag_not_a_path():
 
 
 # ---- FAIL cases ---------------------------------------------------------
-def test_fail_only_programs_tests():
-    assert fsr.main(["--command", "python3 -m pytest -q programs/tests/"]) == 1
+def test_only_programs_tests_is_full_since_the_v0219_merge():
+    """UPDATED at the v1.6.0 land — this test used to pin the PRE-merge
+    reality (programs/tests alone == subset). Since v0.2.19 the integration
+    tree holds no test files and pytest.ini's testpaths is programs/tests
+    alone, so an explicit programs/tests run IS the full suite (measured:
+    both collect 19504). The pre-merge meaning survives as the negative
+    control test_two_tree_rule_reinstates_when_integration_tree_grows_tests."""
+    assert fsr.main(["--command", "python3 -m pytest -q programs/tests/"]) == 0
 
 
 def test_fail_only_integration_tests():
@@ -76,15 +82,22 @@ def test_file_scan_subset_then_full(tmp_path):
     assert rep["pytest_invocations"] == 2
 
 
-def test_file_scan_only_subset_fails(tmp_path):
+def test_file_scan_with_programs_tests_is_full_since_the_merge(tmp_path):
+    """UPDATED at the v1.6.0 land, same reason as
+    test_only_programs_tests_is_full_since_the_v0219_merge. A file-scan of a
+    log carrying `pytest programs/tests` now reads as full; a genuinely
+    narrowed run (a -k selector) in a scanned log must still read as subset —
+    both directions kept."""
     f = tmp_path / "log.txt"
     f.write_text("python3 -m pytest -q programs/tests/\n")
     out = tmp_path / "r.json"
     rc = fsr.main([str(f), "--json", str(out)])
-    assert rc == 1
+    assert rc == 0
     rep = json.loads(out.read_text())
-    assert rep["full_suite_found"] is False
-    assert rep["invocations"][0]["full_suite"] is False
+    assert rep["full_suite_found"] is True
+    f2 = tmp_path / "log2.txt"
+    f2.write_text("python3 -m pytest -q programs/tests/ -k foo\n")
+    assert fsr.main([str(f2)]) == 1
 
 
 def test_empty_input_is_honest_fail(tmp_path):
@@ -101,3 +114,45 @@ def test_missing_file_is_error(tmp_path):
 
 def test_no_args_is_error():
     assert fsr.main([]) == 2
+
+
+# ── v0.2.19 merged-tree awareness (added at the v1.6.0 land) ─────────────────
+# The two-tree rule predates the v0.2.19 merge: conftest.py records the merge
+# and pytest.ini's testpaths is programs/tests alone. Measured on this tree,
+# `pytest -q --collect-only` == `pytest programs/tests -q --collect-only`
+# (19504 == 19504). The gate now detects the empty integration tree LIVE, so
+# it self-corrects in both directions.
+
+def test_explicit_programs_tests_is_full_when_integration_tree_is_empty(tmp_path):
+    """Today's reality: tests/ holds no test files, so an explicit
+    programs/tests run IS the full suite."""
+    import full_suite_run_check as F
+    assert F._integration_tree_has_tests(tmp_path) is False  # empty root
+    ok, reason = F._classify_pytest(
+        ["python3", "-m", "pytest", "programs/tests", "-q"])
+    assert ok is True, reason
+    assert "integration tree holds no test files" in reason
+
+
+def test_two_tree_rule_reinstates_when_integration_tree_grows_tests(tmp_path):
+    """NEGATIVE CONTROL, the direction that keeps this from being a loophole:
+    the moment tests/ holds a test file again, programs/tests alone is a
+    subset once more — with no one editing the gate."""
+    import full_suite_run_check as F
+    t = tmp_path / "tests"
+    t.mkdir()
+    (t / "test_revived.py").write_text("def test_x():\n    pass\n")
+    assert F._integration_tree_has_tests(tmp_path) is True
+
+
+def test_no_path_invocation_still_full(tmp_path):
+    import full_suite_run_check as F
+    ok, reason = F._classify_pytest(["python3", "-m", "pytest", "-q"])
+    assert ok is True
+
+
+def test_subset_flags_still_narrow_regardless_of_tree_state():
+    import full_suite_run_check as F
+    ok, _ = F._classify_pytest(
+        ["python3", "-m", "pytest", "programs/tests", "-q", "-k", "foo"])
+    assert ok is False

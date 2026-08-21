@@ -106,6 +106,23 @@ _STRING_LIT_RE = re.compile(r'"(?:[^"\\\n]|\\.)*"')
 # A functional TB prints a single deterministic verdict line; accept the
 # common conventions (VerilogEval/CVDP `Mismatches: N in M`, a bare PASS/FAIL
 # token, or an `ALL_TESTS_PASSED`-style banner). chip-AGNOSTIC.
+#
+# The plugin's OWN oracle-TB generators (`arith_oracle_tb_gen.py`,
+# `oracle_tb_gen.py`) emit a structured `ORACLE_TB_DONE pass=<n>/<m>` summary
+# and, on a serial-framing miss, an `ORACLE_MISMATCH:` line. NEITHER form
+# matches any generic convention below (`pass=` is not `\bPASSED\b`;
+# `ORACLE_MISMATCH` carries no FAIL/ERROR token), so before this pattern gate C
+# reported INCONCLUSIVE for the plugin's own TB — and because INCONCLUSIVE does
+# not block, the overall gate printed `PASS (all enforced gates passed)` for a
+# functionally BROKEN design. Measured on spm x ihp-sg13g2 (v1.5.85): four
+# independent RTL mutants (carry majority, accumulator shift, output bit,
+# dropped carry) drove the TB to pass=16/28, 8/28, 26/28, 16/28 each with an
+# explicit ORACLE_MISMATCH — and gate C called every one INCONCLUSIVE, overall
+# PASS. `design_one_shot_runner.py` already parses this exact summary; the two
+# must agree, so the same regex is used here — a format change breaks both
+# together rather than silently blinding one of them.
+_TB_ORACLE_RE = re.compile(r"\bORACLE_TB_DONE\s+pass=(\d+)/(\d+)")
+_TB_ORACLE_MISMATCH_RE = re.compile(r"\bORACLE_MISMATCH\b")
 _TB_PASS_RE = re.compile(
     r"\bALL[_\s]?TESTS?[_\s]?PASS|"
     r"\bTEST[_\s]?PASS|"
@@ -453,9 +470,27 @@ def gate_b_verilator_lint(rtl_path: Path, top: str, workdir: Path,
 def _tb_verdict(sim_out: str) -> Tuple[Optional[bool], str]:
     """Parse a functional-TB run's stdout into PASS/FAIL/inconclusive.
 
-    Order: an explicit `Mismatches: N in M` summary (VerilogEval/CVDP) wins;
-    then a FAIL/ERROR token; then a PASS token. None = inconclusive (no
-    recognised verdict line — reported, never assumed PASS)."""
+    Order: a structured vector-count summary wins — the plugin's own
+    `ORACLE_TB_DONE pass=<n>/<m>` first, then an explicit `Mismatches: N in M`
+    (VerilogEval/CVDP); then a FAIL/ERROR token; then a PASS token. None =
+    inconclusive (no recognised verdict line — reported, never assumed PASS)."""
+    # The plugin's own oracle TBs. An explicit vector count is authoritative, so
+    # it is tested BEFORE the token heuristics: an ORACLE_MISMATCH line carries
+    # no FAIL/ERROR token, so a token-only reading of a FAILING oracle run is
+    # blind to it.
+    m = _TB_ORACLE_RE.search(sim_out)
+    if m:
+        npass, ntot = int(m.group(1)), int(m.group(2))
+        mismatched = bool(_TB_ORACLE_MISMATCH_RE.search(sim_out))
+        if ntot > 0 and npass == ntot and not mismatched:
+            return True, f"oracle TB: {npass}/{ntot} golden vectors matched"
+        return False, (f"oracle TB: {npass}/{ntot} golden vectors matched"
+                       + (" (ORACLE_MISMATCH reported)" if mismatched else ""))
+    # An ORACLE_MISMATCH with no parsable summary is still a FAILURE, never
+    # inconclusive — the TB ran and reported that the stream does not
+    # reassemble to the golden.
+    if _TB_ORACLE_MISMATCH_RE.search(sim_out):
+        return False, "oracle TB printed ORACLE_MISMATCH (no summary line)"
     m = _TB_MISMATCH_RE.search(sim_out)
     if m:
         mism, tot = int(m.group(1)), int(m.group(2))

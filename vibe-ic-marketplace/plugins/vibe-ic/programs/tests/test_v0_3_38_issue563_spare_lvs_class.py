@@ -12,6 +12,14 @@ Fixes (both reopen-suggested paths):
     LVS-match like functional cells even in the all-variants-used case;
     the plan's tied_off flag is now an honest claim (was constant True
     with no backing TCL).
+
+#563 r3 CORRECTION to that last sentence: it was still not honest. The flag
+went from constant True to `bool(tie_cell_discovered and instances)` — the mere
+EXISTENCE of a tie cell in the PDK liberty, computed BEFORE OpenROAD ran. The
+backing TCL existed but RAISED on every run (ODB-0369, dont_touch), so zero
+sinks were ever connected while `tied_off: true` shipped and the coverage gate
+PASSed. It is measured from the run's own log as of r3 — see
+`test_issue563r3_spare_tieoff_measured_and_legalized.py`.
 """
 import subprocess
 import sys
@@ -118,7 +126,12 @@ def test_postfix_tcl_ties_off_spare_inputs():
     assert "odb::dbITerm_connect" in tcl
     assert 'getIoType] eq "INPUT"' in tcl
     assert "SPARE_TIEOFF_DONE" in tcl
-    assert "place_inst -name spare_tielo_drv" in tcl
+    # r4 — one tie driver PER SPARE, so the driver name is derived from the
+    # spare inside the loop instead of being the single literal
+    # `spare_tielo_drv`. The property this line defends — a tie DRIVER is
+    # actually placed, not just a net created — is unchanged.
+    assert "place_inst -name ${_dnm}_drv" in tcl
+    assert "set _dnm spare_tielo_$_sn" in tcl
     # FIRM lock + check_placement (#562) preserved after the tie-off block
     assert "SPARE_FIRM_LOCKED" in tcl
     assert "check_placement" in tcl

@@ -224,10 +224,14 @@ def test_float_coercion_short_circuits_when_tests_gt_zero():
 def _need_iic_eda():
     if not shutil.which("docker"):
         pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", "vibeic-eda"],
+    # --type=container: a bare `docker inspect vibeic-eda` also resolves the
+    # IMAGE of that name, so on any host with the image pulled this guard
+    # passed and the test failed inside `docker exec` instead of skipping.
+    r = subprocess.run(["docker", "inspect", "--type=container",
+                        "-f", "{{.State.Running}}", "vibeic-eda"],
                        capture_output=True, text=True)
-    if r.returncode != 0:
-        pytest.skip("vibeic-eda container not available")
+    if r.returncode != 0 or r.stdout.strip() != "true":
+        pytest.skip("vibeic-eda container not available or not running")
 
 
 def _find_encoder_project():
@@ -247,7 +251,7 @@ def test_priority_encoder_functional_pass_with_coverage_gate_flagged(tmp_path):
         ["python3", str(SCRIPT), "--project", str(proj),
          "--top", "priority_encoder_8x3",
          "--mount-root", str(require_corpus())],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     score_json = proj / "reports" / "cocotb_score.json"
     assert score_json.is_file(), r.stdout + r.stderr
     d = json.loads(score_json.read_text())

@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Step-30 ERC + sign-off density-rule verification (real substance).
+"""Step-31 ERC + sign-off density-rule verification (real substance).
 
-This is the Step-30 *physical-verification* density + ERC checker. It is a
-DIFFERENT check from `metal_fill_density_check` (Step 33): Step 30 runs BEFORE
-metal fill, so `filled.def` / `metal_fill.done` do not exist yet and the
-fill-marker logic of `metal_fill_density_check` would wrongly FAIL here.
+This is the Step-31 *physical-verification* density + ERC checker. It is a
+DIFFERENT check from `metal_fill_density_check` (Step 34): the flow's step
+ORDER puts Step 31 before Step 34, so this checker must not key off
+`filled.def` / `metal_fill.done` — the fill-marker logic of
+`metal_fill_density_check` would wrongly FAIL here.
+
+The density artefact it reads, reports/density.{json,rpt}, is written by the
+metal-fill emitter and is declared as Step 34's required_output. The runner
+emits metal fill before the ERC report inside one pass, so the artefact is on
+disk when this gate runs; when it genuinely is not, that is DENSITY_MISSING
+(ERROR, rc=1) — see the exit-code policy in main().
 
 What this verifies (no fabrication, real parsing of the produced artefact):
 
-  DENSITY sub-check (gate condition: a density report exists):
+  DENSITY sub-check (UNCONDITIONAL — see the exit-code policy in main()):
     * The density artefact (reports/density.json or reports/density.rpt, also
       reports/phase3/...) must parse, be non-empty, carry a recognizable EDA
       tool provenance signature, AND contain a real numeric density metric.
@@ -46,6 +53,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -186,7 +194,7 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         findings.append(Finding(
             "ERROR", "DENSITY_MISSING",
             "No density artefact (reports/density.json or reports/density.rpt) "
-            "found — the Step-30 density sub-check cannot verify substance"))
+            "found — the Step-31 density sub-check cannot verify substance"))
         return
 
     stats["density_checked"] = True
@@ -221,6 +229,48 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
             "ERROR", "DENSITY_NO_PROVENANCE",
             "Density artefact carries no recognizable EDA-tool signature "
             f"(one of {_DENSITY_TOOL_SIGNATURES[:5]}...) — cannot trust"))
+        return
+
+    # Is this artefact about THIS design? (vibe-ic#1119, A3_CROSS_DESIGN)
+    #
+    # THE FINDING. Copying `sha256/clean_run_v1427_20260715`'s same-named
+    # artefacts over `spm/v1.9.96_gf180mcuD` and re-running this gate left it
+    # green: rc 0 -> 0. It could not have done otherwise —
+    # `reports/density.{rpt,json}` named no design anywhere, and differed
+    # between the two runs only in their numbers. The tool-signature check
+    # above asks "did a tool write this"; it cannot ask "about what".
+    #
+    # phase3_one_shot_runner now stamps `measured_design:` plus the sha256 of
+    # the DEF the filler read, so the question is answerable. A report written
+    # before that carries no stamp and is recorded NOT_DETERMINED — never
+    # failed for it, because the gap was in the producer and reddening honest
+    # older evidence for it would get this check removed.
+    #
+    # THE STAMP IS NOT A MEASUREMENT. It makes the artefact ATTRIBUTABLE and
+    # nothing more: every substance check below still has to pass, an absent
+    # artefact is still DENSITY_MISSING, and an empty one is still
+    # DENSITY_EMPTY. Both of those are reached BEFORE this point and return.
+    _binding = "NOT_DETERMINED"
+    try:
+        import eda_report_audit as _era
+        _declared = _era._report_declared_designs(text)
+        _own = _era._project_design_names(project_dir)
+    except Exception:                                   # noqa: BLE001
+        _declared, _own = set(), set()
+    if _declared and _own:
+        _foreign = sorted(n for n in _declared if n not in _own)
+        if _foreign:
+            _binding = False
+            findings.append(Finding(
+                "ERROR", "DENSITY_IS_ABOUT_ANOTHER_DESIGN",
+                f"Density artefact states it measured "
+                f"{', '.join(_foreign)}, which this project's Verilog does not "
+                f"declare — this is another design's fill report (#1119 "
+                f"A3_CROSS_DESIGN)"))
+        else:
+            _binding = True
+    stats["design_binding"] = _binding
+    if _binding is False:
         return
 
     # 1) Per-layer metal CMP density (the genuine 20-80% rule target).
@@ -359,6 +409,9 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         "density_checked": False, "per_layer_density": False,
         "layers_ok": 0, "layers_bad": 0, "row_utilization_pct": None,
         "erc_checked": False, "erc_floating_nets": None, "erc_clean": False,
+        # True / False / "NOT_DETERMINED" — a third value, published rather
+        # than resolved into a colour. See _check_density.
+        "design_binding": "NOT_DETERMINED",
     }
     _check_density(project_dir, findings, stats)
     _check_erc(project_dir, findings, stats)
@@ -372,6 +425,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         "project_dir": project_dir,
         "summary": {
             "density_checked": stats["density_checked"],
+            "design_binding": stats["design_binding"],
             "per_layer_density": stats["per_layer_density"],
             "layers_ok": stats["layers_ok"],
             "layers_bad": stats["layers_bad"],
@@ -389,7 +443,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
 
 def main(argv: list = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Step-30 ERC + sign-off density-rule verification")
+        description="Step-31 ERC + sign-off density-rule verification")
     ap.add_argument("project_dir", help="Project root directory")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
@@ -405,25 +459,35 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     print(out)
 
     # Exit code policy (honest, never vacuous):
-    #   * The Step-30 gate fires this checker only when reports/density.rpt
-    #     exists, so a missing density artefact at runtime is unexpected and
-    #     is recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL), NOT a
-    #     vacuous pass on absence.
-    #   * rc=2 (SKIP) is reserved for the genuine "step did not apply" case:
-    #     zero findings AND nothing examined (no density artefact present and
-    #     no ERC report). Because a missing density artefact is an ERROR, this
-    #     SKIP path is only reachable when invoked outside the gate condition
-    #     and there is literally nothing to check.
+    #   * The Step-31 gate fires this checker UNCONDITIONALLY (vibe-ic#220 made
+    #     it a plain `program_exit_zero`; it used to be conditional on one of
+    #     the density/ERC artefacts already existing, which disarmed exactly the
+    #     absence case it is here to catch). A missing density artefact is
+    #     therefore recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL),
+    #     NOT a vacuous pass on absence.
+    #   * "examined nothing" FAILS CLOSED (rc=1). It is not rc=0 and it is not
+    #     rc=2. A `nothing_examined and not has_error -> return 2` guard used to
+    #     sit here, describing itself as reachable "when the program is invoked
+    #     directly with literally nothing to check". That was false, and
+    #     measurably so: invoked directly on an empty project directory this
+    #     program exits 1 with DENSITY_MISSING, because `_check_density` runs on
+    #     every invocation and records that ERROR whenever it found no artefact
+    #     — so `nothing_examined and not has_error` could not hold, and the
+    #     branch was dead.
+    #     It is not merely deleted, because deleting it would route that state
+    #     into `report["summary"]["pass"]`, i.e. a VACUOUS rc=0, the moment any
+    #     future sub-check gains a quiet "not applicable" early return. Nothing
+    #     examined is a FAIL: this gate has no not-applicable verdict to offer.
     has_error = report["summary"]["errors_count"] > 0
     nothing_examined = (not stats["density_checked"]
                         and not stats["erc_checked"])
     if nothing_examined and not has_error:
-        return 2
+        return 1
     return 0 if report["summary"]["pass"] else 1
 
 

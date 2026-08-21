@@ -1,9 +1,0 @@
-{
-  "doc_id": "L11",
-  "extraction_source": "claude-opus-4.7-fresh-2026-05-30",
-  "fields": {
-    "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)"
-  },
-  "evidence": [],
-  "rationale": "ACE is a bus/interconnect protocol; it has no one-time-programmable fuses, no factory-trim values, no calibration codes. Not applicable."
-}

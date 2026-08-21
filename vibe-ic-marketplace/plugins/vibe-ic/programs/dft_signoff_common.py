@@ -8,8 +8,12 @@ same way flow_compliance_check's `_sibling_self_skip_for_missing` already
 does for the formal step.
 
 Background: the OSS Fault ATPG engine is validated on the commercial PDK and
-is NOT turnkey on sky130 generic / UDP DFF netlist forms — a documented
-capability gap where the engine genuinely CANNOT MEASURE sign-off coverage.
+is NOT turnkey on generic / UDP DFF netlist forms — a documented capability
+gap where the engine genuinely CANNOT MEASURE sign-off coverage. (This said
+"sky130 generic / UDP DFF netlist forms"; the gap is not sky130-specific. It
+was measured on an ihp-sg13g2 run whose netlist sniffed as
+`generic_unmapped`, and the producer's reason string now names whichever PDK
+the run actually detected.)
 When that happens, `design_one_shot_runner.step_dft_lec_chain` makes the
 canonical step-11 outputs ABSENT and drops a co-located sibling sentinel
 `phase2/stage2/dft/dft_atpg_not_run.json` whose top-level `verdict` is

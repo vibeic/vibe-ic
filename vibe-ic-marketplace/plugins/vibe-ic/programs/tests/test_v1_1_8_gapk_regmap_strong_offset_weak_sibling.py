@@ -66,10 +66,30 @@ def test_weak_only_value_table_still_no_phantom_registers():
     assert _rows(weak) == []
 
 
-def test_weak_value_with_genuine_hex_still_extracts():
-    # the weak-HEX gate still admits a genuine 0x token in a weak column.
+def test_weak_value_only_table_yields_nothing_even_for_a_genuine_hex():
+    """REVERSED by #512 (was `test_weak_value_with_genuine_hex_still_extracts`,
+    which asserted `[("0x40", "BASE")]`).
+
+    gapK stopped a `| Field | Value |` spec table from promoting a BARE DECIMAL
+    to an address but still let a hex one through, and this assertion pinned
+    that residue. #512 measured what the residue actually produces: on a real
+    corpus doc it turned seven enumerated one-hot FIELD VALUES into registers
+    (`AES_ECB @ 0x01`, `AES_NONE @ 0x3f`, …) and welded three more onto real
+    registers as `also_named`. A `Value` header states what a thing is SET TO,
+    not where it LIVES; the hex under it is a constant whichever base it is
+    written in. A table whose ONLY address role is such a column yields no
+    registers — and says so (see the disclosure assertion below).
+
+    The gapK POSITIVE case this file exists for is untouched: a STRONG `Offset`
+    column beside a weak sibling still extracts every row (tests above).
+    """
     weak = "| Field | Value |\n|-------|-------|\n| BASE | 0x40 |\n"
-    assert _rows(weak) == [("0x40", "BASE")]
+    assert _rows(weak) == []
+    disc = []
+    R.extract_regmap_table(weak, "regs.md", disclosures=disc)
+    assert [d["reason"] for d in disc] == [
+        R.NOT_REGISTERS_VALUE_COLUMN_ONLY], disc
+    assert disc[0]["addresses_read_and_dropped"] == ["0x40"], disc
 
 
 def test_weak_before_strong_offset_strong_wins():

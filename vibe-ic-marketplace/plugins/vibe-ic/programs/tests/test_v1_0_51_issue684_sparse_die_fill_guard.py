@@ -119,21 +119,29 @@ class _Pdk:
 
 
 def test_tapcell_guard_gates_full_die_tapcell_on_sparse():
-    # R6 (v1.3.52) — the sparse-die tapcell no longer SKIPS the well-tie; it
-    # inserts taps then bounds them to the occupied region (prune over empty
-    # silicon). The full-die-flood must still be gated by the util check
-    # (getCoreArea), and the 0-placed-cell edge case still emits a SKIP.
-    block = r._build_tapcell_tcl(_Pdk())
-    assert "getCoreArea" in block
-    # the sparse branch is entered on util < threshold and RUNS tapcell,
-    # then PRUNES the taps that fell over empty silicon.
-    assert "SPARSE_DIE_TAPCELL_BOUNDED" in block
-    assert "odb::dbInst_destroy" in block
-    # empty silicon is still not flooded: the prune keeps only the taps in
-    # the occupied bbox (+ latch-up margin).
-    assert "_tap_margin" in block
-    # the 0-placed-cell edge case still skips (nothing to tie).
-    assert "SPARSE_DIE_TAPCELL_SKIPPED" in block
+    # v1.5.x — the tap flow is SPLIT: `_build_tapcell_tcl` ALWAYS inserts the
+    # full-die well-tie taps (pre-placement, so global_placement flows logic
+    # around the FIXED taps → every cell gets a tie), and the #684 anti-flood
+    # prune moved to `_build_tapcell_prune_tcl`, which runs POST-placement on
+    # the REAL geometry. The earlier in-place prune measured the occupied
+    # region BEFORE global_placement (every cell still stacked at the origin),
+    # so it kept only the origin-corner taps and stripped every tap over what
+    # later became the placed logic → a conclusive PERC latch-up tap-spacing
+    # GAP ("std cell ... infinitely (no tap in neighbourhood)").
+    insert = r._build_tapcell_tcl(_Pdk())
+    prune = r._build_tapcell_prune_tcl(_Pdk())
+    # insertion is unconditional + full-die; NO prune machinery lives in it
+    assert ("tapcell -distance 14.0 -tapcell_master "
+            "sky130_fd_sc_hd__tapvpwrvgnd_1") in insert
+    assert "odb::dbInst_destroy" not in insert
+    # the prune is util-gated (getCoreArea) and only fires on a sparse die
+    assert "getCoreArea" in prune
+    assert "SPARSE_DIE_TAPCELL_BOUNDED" in prune
+    assert "odb::dbInst_destroy" in prune
+    # empty silicon is still not flooded — taps are kept by cell LOCALITY
+    # (a placed cell within 2x the tapcell distance), not by bounding box.
+    assert "_cbin" in prune
+    assert "getDbUnitsPerMicron" in prune
 
 
 def test_dense_branch_still_taps():
@@ -154,3 +162,7 @@ def test_tapcell_guard_no_master_skips():
 
 def test_tapcell_guard_tcl_is_brace_complete():
     assert _info_complete(r._build_tapcell_tcl(_Pdk()))
+    assert _info_complete(r._build_tapcell_prune_tcl(_Pdk()))
+    # with spare anchor points injected the block stays brace-complete too
+    assert _info_complete(
+        r._build_tapcell_prune_tcl(_Pdk(), [(155, 185), (1025, 1235)]))

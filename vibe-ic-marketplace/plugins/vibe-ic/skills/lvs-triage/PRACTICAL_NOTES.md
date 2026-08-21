@@ -23,7 +23,7 @@ Circuit 1 contains 2716 devices, Circuit 2 contains 2716 devices.
 Circuit 1 contains 2722 nets,    Circuit 2 contains 2722 nets.
 Netlists match uniquely.
 Cell pin lists are equivalent.
-Device classes sn2025_synth_wrapper and sn2025_synth_wrapper are equivalent.
+Device classes example_synth_wrapper and example_synth_wrapper are equivalent.
 Final result: Circuits match uniquely.
 ```
 

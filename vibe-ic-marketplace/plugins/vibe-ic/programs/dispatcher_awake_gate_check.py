@@ -113,13 +113,18 @@ def _find_dispatcher(project: Path) -> Optional[Path]:
     return None
 
 
-def main():
+def main(argv=None) -> int:
+    # `argv` injectable, matching the 200 other gates here that take it. This
+    # one read `sys.argv` unconditionally, so `main()` could not be driven from
+    # a test at all — and `gate_cli_mutation_probe` reported it SILENT for
+    # exactly that reason: nothing could exercise the path from verdict to exit
+    # code, because nothing could call it with arguments.
     ap = argparse.ArgumentParser(description=(
         "Verify dispatcher RTL gates non-wake commands behind awake state."
     ))
     ap.add_argument("project_dir")
     ap.add_argument("--json", nargs="?", const="-", default=None)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
     if not project.is_dir():

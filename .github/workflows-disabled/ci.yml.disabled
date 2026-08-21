@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:        # manual baseline trigger (used during the CI-honesty triage)
+
+jobs:
+  plugin-tests:
+    name: Plugin tests + chip-AGNOSTIC guard
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the commit-MESSAGE NDA guard below walks a commit
+      # RANGE, which a shallow (depth-1) clone cannot do.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml pytest-timeout
+
+      # The plugin suite exercises real EDA paths: the shape-C / port-rule
+      # gates compile fixtures with iverilog (gates_atomic.py), the pnr.tcl
+      # emitter tests parse/eval the generated Tcl in tclsh, and the #531/#604
+      # synthesizability smoke REFUSES to silently no-op when yosys is absent
+      # (a yosys-less host is an honest ERROR, not a pass) — so yosys+verilator
+      # are required for the suite to reach its green-or-honestly-skipped state.
+      # This matches the toolchain the suite baseline was triaged against;
+      # tools NOT installed here (openroad/klayout/magic/netgen/ngspice) are
+      # handled by the tests' own shutil.which() skip-guards.
+      - name: Install EDA tools (iverilog + tclsh + yosys + verilator)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
+
+      # The repo-wide invariant gates live in ONE script that this workflow and
+      # gatekeeper-ci.yml both call. They used to be listed inline HERE and were
+      # absent from gatekeeper-ci, which is the only workflow that fires on
+      # `merge_group` — so the merge queue, the last thing to run before a
+      # change lands, executed a strictly weaker gate set than the PR check it
+      # supersedes. #394 hand-fixed one instance of exactly that; a second hand
+      # sync would drift again. Per-gate rationale lives in the script.
+      # GH_TOKEN: the artefact-defect close gate (#381) reads the issue
+      # tracker. Without a token it prints SKIPPED and passes, which is
+      # exactly the "wired to nothing" state #381 is about — so give it the
+      # corpus rather than let it be decoration.
+      - name: repo-hygiene gates (shared with the merge gate)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash tools/ci/repo_hygiene_gates.sh
+
+      # The guard above scans FILES only — a commit MESSAGE naming the
+      # commercial foundry / SKU / process is an equally permanent public leak
+      # and used to pass every gate. Scan the messages this event introduces.
+      # Output is MASKED (token ROLE, never the literal), so this log is safe.
+      - name: NDA guard — commit MESSAGES
+        run: |
+          set -euo pipefail
+          CHECK=vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # An empty / all-zero / unknown base (first push, force-push, a base
+          # not in this clone) has no honest range: fall back to the tip commit
+          # rather than reporting a vacuous clean scan.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "base unresolvable — scanning HEAD only" >&2
+            RANGE="HEAD~1..HEAD"
+            git cat-file -e 'HEAD~1^{commit}' 2>/dev/null || RANGE="HEAD"
+          else
+            RANGE="${BASE}..HEAD"
+          fi
+          echo "Scanning commit messages in: $RANGE" >&2
+          python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
+
+          # The message guard above scans only the commit TEXT. The same NDA
+          # token is equally permanent when it arrives as added CONTENT or as
+          # an added PATH — and the path carrier is not hypothetical: local
+          # run directories on this fleet carry a commercial SKU in their
+          # NAME, they are untracked only by luck (no .gitignore rule covers
+          # them), and one `git add -A` would commit that path into a public
+          # repo. `nda_diff_scan_check` already scans `+++ b/<path>`; it was
+          # simply never wired here, so CI could not stop it.
+          #
+          # An ignore rule is NOT the fix: writing the pattern would put the
+          # SKU itself into a tracked .gitignore — a carrier this project has
+          # already been burned by. Scanning is the form that does not
+          # publish what it protects.
+          echo "Scanning added content + paths in: $RANGE" >&2
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/nda_diff_scan_check.py \
+            --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
+
+      # Informational fast signal on every push/PR: run the TARGETED subset for
+      # the changed modules (+ doctrine smoke), not the full 17k-test suite which
+      # is ~90min on a 2-core runner and would pile up on every direct-push. The
+      # full both-tree suite runs at x.y.0 milestones (gatekeeper-ci full-suite).
+      # --timeout bounds any single test (helper tests can spawn a hanging
+      # flow_dashboard --web / subprocess); thread method interrupts stuck C calls.
+      - name: pytest (targeted subset)
+        run: |
+          set -uo pipefail
+          cd vibe-ic-marketplace/plugins/vibe-ic
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # An empty / all-zero / unresolvable base (first push, force-push,
+          # workflow_dispatch) has no honest range: fall back to the tip's parent.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          echo "Targeted base: $BASE"
+          python3 programs/ci_targeted_test_select.py --base "$BASE" > /tmp/sel.txt
+          echo "Selected test files:"; cat /tmp/sel.txt
+          # the selector guarantees a non-empty list (doctrine smoke set minimum)
+          xargs -a /tmp/sel.txt pytest -q --maxfail=10 --timeout=180 --timeout-method=thread
+
+  server-tests:
+    name: mcp tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/package.json
+
+      - name: Install
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
+          # `npm ci`, not `npm install`: ci installs EXACTLY the lockfile and
+          # fails if it drifts from package.json. With `npm install` the lock
+          # was advisory, so CI could resolve a different dependency tree from
+          # the one the security review was performed against (vibe-ic#422).
+          npm ci
+
+      - name: Smoke test
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
+          node -e "import('./src/index.js').then(() => console.log('import OK')).catch(e => { console.error(e); process.exit(1); })"
+
+  lint:
+    name: Lint (markdown + json + yaml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          bad = []
+          for p in pathlib.Path(".").rglob("*.json"):
+              # Lint OUR source only. Exclude: node_modules/.git; benchmark-data/
+              # (generated result artifacts — huge, some intentionally truncated,
+              # not source); and */vendor/ (third-party vendored code, e.g. JSONC
+              # with comments that is legitimately not strict JSON).
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
+                  continue
+              try:
+                  json.load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID JSON (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all JSON valid")
+          PY
+
+      - name: Validate YAML
+        run: |
+          python3 -m pip install pyyaml
+          python3 - <<'PY'
+          import yaml, pathlib, sys
+          bad = []
+          for p in list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml")):
+              # Lint OUR source only. Exclude: node_modules/.git; benchmark-data/
+              # (generated result artifacts — huge, some intentionally truncated,
+              # not source); and */vendor/ (third-party vendored code, e.g. JSONC
+              # with comments that is legitimately not strict JSON).
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
+                  continue
+              try:
+                  yaml.safe_load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID YAML (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all YAML valid")
+          PY
