@@ -90,7 +90,7 @@
     "backlog_slug": "generated-header-derived-from-recorded-inputs",
     "backlog_type": "enhancement",
     "severity": "P1",
-    "component": "phase3 report emitters, shared provenance",
+    "component": "program:phase3_one_shot_runner",
     "session_context": "Raised while distilling an end-to-end drive of the measurement layer over one routed core. The instance that produced it has since been fixed in its own emitter by exactly this technique, which is what makes the general form worth building: the technique is known to work and is applied in one place out of many."
   },
   {
@@ -109,7 +109,27 @@
     "backlog_slug": "postroute-repair-faults-after-route-completes",
     "backlog_type": "bug",
     "severity": "P1",
-    "component": "forked place-and-route tool, post-route repair stage",
+    "component": "program:phase3_one_shot_runner",
     "session_context": "Ten of ten reproductions in one seventy-arm cross-layer sweep, all in the same design family, none in the fifty-two arms of the other family. Samples are committed in the sweep's own record tree."
+  },
+  {
+    "step": "benchmark.verify_claim_done",
+    "design": "the capture tooling itself; no design involved",
+    "bucket": "A",
+    "rule_name": "a writer enforces the field shapes its declared consumer requires",
+    "pattern": "One tool WRITES a document and a second tool VALIDATES it. The writer's own schema documents a field as free text; the validator requires that field to match a fixed prefixed form. Each side is self-consistent and each side's tests pass. The writer accepts and emits the malformed document with no complaint, so the refusal arrives later, from a different tool, in a different run, and only if somebody thinks to run it — by which time the document has been filed and the author has moved on.",
+    "docstring": "A writer that produces a document for a declared validator must apply that validator's field-shape rules AT WRITE TIME, not leave them to be discovered downstream. The two rule sets must come from one place: a shape restated in a second file is a shape that will disagree with the first. Measured cost of the split: the writer's own documentation gave no hint the field was constrained at all, so the natural reading produced a document its sibling refused.",
+    "expected_signal": "ERROR",
+    "fix_action": "Import the validator's field-shape rules into the writer and apply them to every field the validator constrains, before the file is written; refuse with the validator's own message so the two tools cannot disagree about what is wrong. State the constrained shape in the writer's schema documentation as well, since an author reads the writer's contract and never the validator's. Add a two-directional test: a well-shaped field writes and validates, and a free-text field is refused BY THE WRITER rather than only by the validator."
+  },
+  {
+    "step": "benchmark.verify_claim_done",
+    "design": "the capture tooling itself; no design involved",
+    "bucket": "A",
+    "rule_name": "an accepted-value branch must be able to express its own vocabulary",
+    "pattern": "A validator accepts a prefixed value and names, per prefix, the vocabulary the suffix is drawn from. One branch's suffix pattern cannot express any member of the vocabulary it names — every member carries a character the pattern excludes. The branch is therefore dead: it matches nothing, it has never matched anything, and it never will. Nothing detects this, because a branch that refuses everything looks exactly like a branch nobody has used yet, and the error message lists it among the supported forms.",
+    "docstring": "Where a validator's accepted form names a vocabulary that exists in the tree, at least one member of that vocabulary must satisfy the form; a branch satisfied by no member is dead and must fail the suite rather than sit in the help text. The check is the vocabulary itself run through the pattern — a single pass over a list that is already machine-readable — so it stays true as either side changes, which is the only way it catches the case where the vocabulary gains its separator later.",
+    "expected_signal": "ERROR",
+    "fix_action": "For every branch of an accepted-value pattern that names an enumerable in-tree vocabulary, run every member of that vocabulary through the branch and assert at least one is accepted. Report the branch, the vocabulary size, and the accepted count. Measured on this tree: the branch naming the flow's canonical steps accepts 0 of 42 of them, because every canonical step identifier is dotted and the branch's suffix admits only word characters and hyphens. Widen the suffix to the vocabulary's real character set, and add the census so the next divergence fails at the suite rather than at a filing."
   }
 ]
