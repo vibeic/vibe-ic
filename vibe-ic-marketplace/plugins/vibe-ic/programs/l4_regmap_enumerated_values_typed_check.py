@@ -90,6 +90,34 @@ from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ic_class_profile import detect_ic_class  # noqa: E402
+# v1.7.72 — for #499. The code-literal reader moved to a shared module
+# so the Phase-1 encoding LIFTER reads exactly the bytes this gate
+# derives its requirement from. Before the move the two had separate
+# notions of what a code looks like and the detector was strictly
+# stronger than the extractor: a field whose description read "Always
+# set to 2'b01 to indicate vectored interrupt handling" was reported as
+# declaring one code and carrying zero bindings, and no amount of input
+# completeness could have satisfied it. Same regex, same key list, same
+# distinct-literal list, on both sides.
+from _code_literal import (  # noqa: E402
+    CODE_LITERAL_RE,
+    FIELD_TEXT_KEYS,
+    declared_codes as _shared_declared_codes,
+    field_text as _shared_field_text,
+)
+# v1.7.74 — for #507. This gate's PASS used to state a numerator with no
+# denominator: "2 multi-bit enum-eligible fields all carry typed
+# code->meaning enumerated_values", on an L4 that held 61 of the 145
+# register address bindings its own input declares. The gate is right
+# about what it audits — the fields that are PRESENT — but a verdict
+# that never says how many units it reached reads as coverage over the
+# whole layer. Every exit path below now states what it examined.
+#
+# WHAT THIS GATE STILL DOES NOT DO: it does not measure whether the
+# register SET is complete against the input. That denominator has a
+# different unit and belongs to a different rule; it is
+# `l4_regmap_declared_register_coverage_check`.
+from _gate_denominator import Denominator  # noqa: E402
 
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
@@ -152,20 +180,14 @@ _FIELD_NAME_KEYS = ("name", "field", "bit_field", "field_name",
 # Free-text keys carrying the field's own documentation. S3 derives the
 # required enum cardinality from these — the design's own input — so the
 # gate can never demand a code the input does not declare.
-_FIELD_TEXT_KEYS = ("description", "meaning", "notes", "note", "comment",
-                    "detail", "details", "evidence", "doc")
+# v1.7.72 (#499) — sourced from `_code_literal`; the lifter reads the
+# same tuple. Names kept for anything pinned to them.
+_FIELD_TEXT_KEYS = FIELD_TEXT_KEYS
 
 # A literal code binding as vendor docs write it. Value-shaped and
 # radix-explicit so ordinary prose numbers are not mistaken for codes.
-_CODE_LITERAL_RE = re.compile(
-    r"""(?:
-        \b\d+'[bBhHdDoO][0-9a-fA-FxXzZ_]+      # 2'b01, 4'hF
-      | \b0[xX][0-9a-fA-F]+\b                   # 0x3
-      | \b0[bB][01_]+\b                         # 0b01
-      | (?<![\w'])[01]{2,8}(?=\s*(?:=|:|->|=>|—|--)\s*\S)  # 00 = idle
-    )""",
-    re.VERBOSE,
-)
+# v1.7.72 (#499) — one pattern, shared with the lifter.
+_CODE_LITERAL_RE = CODE_LITERAL_RE
 
 # Keys an enum entry may use for the two halves of a code -> meaning
 # binding. S2 requires BOTH halves; a bare token list is not a binding.
@@ -240,17 +262,12 @@ def _field_name(field: dict) -> str:
 
 
 def _field_text(field: dict) -> str:
-    """The field's own documentation text, from the design's own input."""
-    parts = []
-    for k in _FIELD_TEXT_KEYS:
-        v = field.get(k)
-        if isinstance(v, str) and v.strip():
-            parts.append(v)
-        elif isinstance(v, dict):
-            for vv in v.values():
-                if isinstance(vv, str) and vv.strip():
-                    parts.append(vv)
-    return " ".join(parts)
+    """The field's own documentation text, from the design's own input.
+
+    v1.7.72 (#499) — delegates to `_code_literal.field_text` so the
+    Phase-1 lifter walks the same keys this gate reads.
+    """
+    return _shared_field_text(field)
 
 
 def _declared_codes(field: dict) -> List[str]:
@@ -259,16 +276,13 @@ def _declared_codes(field: dict) -> List[str]:
     Derived from the design's own input text, never from a hardcoded
     expectation. The gate requires the enum to capture at least this
     many codes, so it can never force the invention of a code the
-    input does not state."""
-    text = _field_text(field)
-    if not text:
-        return []
-    seen: List[str] = []
-    for m in _CODE_LITERAL_RE.findall(text):
-        tok = str(m).strip()
-        if tok and tok not in seen:
-            seen.append(tok)
-    return seen
+    input does not state.
+
+    v1.7.72 (#499) — delegates to `_code_literal.declared_codes`, which
+    the Phase-1 lifter also calls: the list this gate counts and the
+    list the lifter emits from are now the same list by construction.
+    """
+    return _shared_declared_codes(field)
 
 
 def _binding_entries(field: dict) -> int:
@@ -309,6 +323,26 @@ def _has_enum(field: dict, required: int = 2) -> bool:
     return _binding_entries(field) >= max(1, required)
 
 
+# v1.7.74 — for #507. The unit this gate is denominated in, spelled once.
+DENOMINATOR_UNIT = "multi-bit enum-eligible register fields"
+
+
+def denominator(examined: int, considered: int,
+                not_applicable_reason: str = "") -> Denominator:
+    """This gate's denominator, in the shape every disclosing gate uses.
+
+    ``examined`` counts fields the enum-typing rule was APPLIED to —
+    multi-bit AND either keyword-eligible or declaring codes of their
+    own. ``considered`` counts every register field collected before
+    those preconditions filtered them out; a large ``considered`` with a
+    small ``examined`` is what a reader needs to see to know the verdict
+    covers a slice of the layer rather than the layer.
+    """
+    return Denominator(unit=DENOMINATOR_UNIT, examined=int(examined),
+                       considered=int(considered),
+                       not_applicable_reason=not_applicable_reason)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: l4_regmap_enumerated_values_typed_check <project_dir>",
@@ -321,15 +355,19 @@ def main() -> int:
     profile = detect_ic_class(project)
     ic_class = profile.get("ic_class", "unknown")
     if ic_class in _SKIP_CLASSES:
+        _d = denominator(0, 0, f"ic_class={ic_class} has no command-driven "
+                               f"register file to audit")
         print(f"[SKIP] l4_regmap_enumerated_values_typed_check: "
               f"ic_class={ic_class} (no command-driven regmap for "
-              f"this IC class; gate not applicable)")
+              f"this IC class; gate not applicable) — {_d.line()}")
         return 2
 
     l4 = _find_l4(project)
     if l4 is None:
+        _d = denominator(0, 0, "no L4_REGMAP.json was emitted, so no "
+                               "register field exists to audit")
         print("[SKIP] l4_regmap_enumerated_values_typed_check: "
-              "L4_REGMAP.json not found")
+              f"L4_REGMAP.json not found — {_d.line()}")
         return 2
 
     try:
@@ -343,8 +381,12 @@ def main() -> int:
     _collect_register_fields(data, pairs)
 
     if not pairs:
+        _d = denominator(0, 0, "L4 declares no registers[]/fields[], so "
+                               "the enum-typing rule has no field to "
+                               "apply to")
         print("[SKIP] l4_regmap_enumerated_values_typed_check: "
-              "no registers[]/fields[] in L4 (gate not applicable)")
+              f"no registers[]/fields[] in L4 (gate not applicable) — "
+              f"{_d.line()}")
         return 2
 
     eligible: List[Tuple[str, str]] = []
@@ -377,16 +419,23 @@ def main() -> int:
                 f"(need {required})")
 
     if not eligible:
+        _d = denominator(
+            0, len(pairs),
+            f"none of the {len(pairs)} register field(s) L4 carries is "
+            f"multi-bit AND enum-eligible, so the typing rule was never "
+            f"applied")
         print("[SKIP] l4_regmap_enumerated_values_typed_check: "
-              "no multi-bit enum-eligible fields detected")
+              f"no multi-bit enum-eligible fields detected — {_d.line()}")
         return 2
 
+    _d = denominator(len(eligible), len(pairs))
     if missing:
         waived, rationale = _waived(project)
         if waived:
             print("[PASS] l4_regmap_enumerated_values_typed_check: "
                   f"waived by waivers.{WAIVER_KEY} "
-                  f"({len(missing)} suppressed): {rationale[:70]}…")
+                  f"({len(missing)} suppressed): {rationale[:70]}… — "
+                  f"{_d.line()}")
             for msg in missing[:5]:
                 print(f"  • {msg}")
             return 0
@@ -395,7 +444,8 @@ def main() -> int:
               f"fields lack an actionable enumerated_values[] "
               f"(code -> meaning bindings). Without it the register-block "
               f"emitter collapses the field to an opaque numeric and "
-              f"cannot instantiate the decoder the spec describes.")
+              f"cannot instantiate the decoder the spec describes — "
+              f"{_d.line()}")
         for msg in missing[:6]:
             print(f"  • {msg}")
         print()
@@ -408,7 +458,10 @@ def main() -> int:
 
     print(f"[PASS] l4_regmap_enumerated_values_typed_check: "
           f"{len(eligible)} multi-bit enum-eligible fields all carry "
-          f"typed code->meaning enumerated_values")
+          f"typed code->meaning enumerated_values — {_d.line()}. This "
+          f"verdict is denominated in FIELDS THAT ARE PRESENT; whether "
+          f"the register set is complete against the input is "
+          f"l4_regmap_declared_register_coverage_check.")
     return 0
 
 

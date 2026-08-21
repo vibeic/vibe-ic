@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -283,3 +285,230 @@ def test_rc2_when_l1_absent(tmp_path):
 
 def test_rc2_when_project_dir_absent(tmp_path):
     assert mod.main([str(tmp_path / "nope")]) == 2
+
+
+# ============================================================== #
+# STRUCTURED SYMBOLIC WIDTH (`width_symbolic`)
+#
+# The gate used to report two OPPOSITE states with one sentence:
+# extraction produced NOTHING (real defect) and extraction produced a
+# structured parameterised width (legitimate). These assert the split,
+# and — the load-bearing half — that the second does NOT become a free
+# pass. Direction 1 of every pair is the state that must still FAIL.
+# ============================================================== #
+
+_PARAM_PINS = [
+    dict(_GOOD_PINS[0]),
+    dict(_GOOD_PINS[1]),
+    {"name": "accum_bus", "mode": "output",
+     "width": "N-bit ([DEPTH-1:0], parameter DEPTH default 16)",
+     "width_symbolic": "DEPTH-1:0", "msb": None, "lsb": None},
+    dict(_GOOD_PINS[3]),
+]
+
+
+def test_symbolic_width_resolves_against_an_hdl_parameter_declaration(tmp_path):
+    """Structured symbolic width + `parameter DEPTH = 16` in the inputs."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    assert rep["verdict"] == "PASS"
+    got = {d["pin"]: d["bits"] for d in rep["symbolic_widths_resolved"]}
+    assert got == {"accum_bus": 16}, rep
+
+
+def test_symbolic_width_resolves_against_a_doc_interface_table(tmp_path):
+    """Docs-only design: the parameter default lives in a table row.
+
+    No RTL is staged at all, so the HDL dialect cannot fire. This is the
+    shape a doc-driven phase1 actually produces.
+    """
+    _write_input(tmp_path, "docs/interface.md", (
+        "| signal | width | dir |\n|---|---|---|\n"
+        "| `sample_bus` | 24-bit (`[23:0]`) | in |\n"
+        "| `accum_bus` | N-bit (`[DEPTH-1:0]`) | out |\n\n"
+        "### Parameters\n\n| name | default | notes |\n|---|---|---|\n"
+        "| `DEPTH` | 16 | any positive integer >= 4 |\n"))
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    assert rep["verdict"] == "PASS"
+    d = rep["symbolic_widths_resolved"][0]
+    assert d["bits"] == 16 and "doc-table" in d["resolved_from"], rep
+
+
+def test_symbolic_width_naming_an_undefined_parameter_still_fails(tmp_path):
+    """THE RUBBER-STAMP GUARD.
+
+    `width_symbolic` is present and well-formed, but nothing in the
+    design's own inputs gives `DEPTH` a value. Nobody can produce a
+    number, so this must still FAIL. Without this, "carries a
+    width_symbolic" would itself become the new vacuous pass.
+    """
+    _write_input(tmp_path, "vendor_rtl/synth_block.v",
+                 _SYNTH_RTL.replace("#(parameter DEPTH = 16) ", ""))
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["verdict"] == "FAIL"
+    assert rep["violations"][0]["pin"] == "accum_bus"
+    assert rep["symbolic_widths_resolved"] == [], rep
+
+
+def test_symbolic_width_that_is_not_a_range_still_fails(tmp_path):
+    """A `width_symbolic` the grammar cannot parse resolves nothing."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    pins = [dict(p) for p in _PARAM_PINS]
+    pins[2] = dict(pins[2], width_symbolic="see the parameter section")
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["violations"][0]["pin"] == "accum_bus"
+
+
+def test_symbolically_resolved_width_is_still_checked_against_the_bound(tmp_path):
+    """Resolution does not exempt a pin from the numeric lower bound.
+
+    The inputs index bit 23 of `sample_bus`, and the parameter resolves
+    it to 8 — below what the design's own inputs prove. Still FAIL, now
+    as below-bound rather than unresolvable.
+    """
+    _write_input(tmp_path, "vendor_rtl/synth_block.v",
+                 _SYNTH_RTL.replace("DEPTH = 16", "NARROW = 8"))
+    pins = [dict(p) for p in _GOOD_PINS]
+    pins[1] = {"name": "sample_bus", "mode": "input",
+               "width": "N-bit ([NARROW-1:0])",
+               "width_symbolic": "NARROW-1:0", "msb": None, "lsb": None}
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["violations"][0]["kind"] == "bus_width_below_input_bound"
+    assert rep["violations"][0]["required_min_bits"] == 24, rep
+
+
+def test_an_hdl_declaration_outranks_a_doc_table_row(tmp_path):
+    """Both dialects present and disagreeing -> the declaration wins."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    _write_input(tmp_path, "docs/params.md",
+                 "| name | default |\n|---|---|\n| `DEPTH` | 4 |\n")
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    d = rep["symbolic_widths_resolved"][0]
+    assert d["bits"] == 16, rep
+    assert "hdl-declaration" in d["resolved_from"], rep
+
+
+# ── gatekeeper addition at merge (#427): the published layout ───────────────
+
+def test_a_published_cell_resolves_via_the_shared_per_IC_input():
+    """#427's corpus table says the three spm cells move FAIL -> PASS. On the
+    PUBLISHED cells they did not, and that is the layout the repo points at.
+
+    A published cell is `ic/<IC>/v<ver>_<PDK>/` and has NO `input/` of its
+    own — the design input is shared once per IC at `ic/<IC>/input/`.
+    `_iter_input_files` looked only at `project/input`, so the symbolic
+    resolution found no parameters and the cell still FAILed, while
+    `size = 32` sits in `ic/spm/input/docs/L3_external_interface.md`. The fix
+    reached source run directories and not the deliverable.
+    """
+    root = Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+    cell = root / "spm" / "v1.5.58_ihp-sg13g2"
+    if not (cell / "phase1/generated_docs/L1_DATASHEET.json").is_file():
+        import pytest
+        pytest.skip("published cell not present")
+    assert not (cell / "input").is_dir(), \
+        "fixture assumption: a published cell carries no input/ of its own"
+    assert (cell.parent / "input").is_dir()
+    r = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent.parent
+                             / "l1_pin_bus_width_actionable_check.py"),
+         str(cell)], capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert out.lstrip().startswith("PASS"), out[:300]
+
+
+def test_the_shared_input_fallback_does_not_rescue_a_genuinely_missing_width():
+    """The paired half, on a real cell. `caravel_user_project` HAS its own
+    `input/` and an `irq` pin with no width at all; reaching further for
+    parameters must not turn that into a pass."""
+    root = Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+    cell = root / "caravel_user_project"
+    if not (cell / "phase1/generated_docs/L1_DATASHEET.json").is_file():
+        import pytest
+        pytest.skip("published cell not present")
+    r = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent.parent
+                             / "l1_pin_bus_width_actionable_check.py"),
+         str(cell)], capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert out.lstrip().startswith("FAIL"), out[:300]
+    assert "irq" in out
+
+
+# ── the same pair, on a fixture that OWNS ITS PREMISE ───────────────────────
+#
+# The two tests above read published cells out of the corpus, so each skips
+# when its cell is not in the tree. That makes the both-directions property
+# above only as durable as the corpus: a retirement that removes one cell
+# disarms one half and leaves the other half passing, which proves nothing —
+# a fallback that rescued everything would look identical.
+#
+# These two assert the SAME property on a SYNTHESIZED tree laid out the way
+# a published cell is: the design input shared once per IC at `<ic>/input/`,
+# and the cell itself carrying no `input/` of its own. They cannot skip, so
+# the negative control survives any deletion.
+_SHARED_DOCS = (
+    "| signal | width | dir |\n|---|---|---|\n"
+    "| `sample_bus` | 24-bit (`[23:0]`) | in |\n"
+    "| `accum_bus` | N-bit (`[DEPTH-1:0]`) | out |\n\n"
+    "### Parameters\n\n| name | default | notes |\n|---|---|---|\n"
+    "| `DEPTH` | 16 | any positive integer >= 4 |\n")
+
+
+def _shared_input_cell(ic_root: Path, pin_table) -> Path:
+    """Lay out `<ic>/input/docs/` + `<ic>/<cell>/phase1/generated_docs/` and
+    return the CELL, which deliberately carries no `input/` of its own."""
+    docs = ic_root / "input" / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "interface.md").write_text(_SHARED_DOCS, encoding="utf-8")
+    rtl = ic_root / "input" / "vendor_rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "synth_block.v").write_text(_SYNTH_RTL, encoding="utf-8")
+    cell = ic_root / "v0.0.0_synthpdk"
+    _write_l1(cell, pin_table)
+    assert not (cell / "input").is_dir(), \
+        "fixture assumption: a published cell carries no input/ of its own"
+    return cell
+
+
+def test_shared_per_IC_input_resolves_a_cell_with_no_input_of_its_own(tmp_path):
+    """CAN-PASS half. `accum_bus` is symbolic and nothing in the cell can
+    resolve it; reaching up to the shared per-IC input finds `DEPTH = 16`."""
+    cell = _shared_input_cell(tmp_path / "synth_ic_pass", _PARAM_PINS)
+    rc, rep = _run(cell)
+    assert rc == 0, rep
+    assert rep["verdict"] == "PASS"
+    got = {d["pin"]: d["bits"] for d in rep["symbolic_widths_resolved"]}
+    assert got == {"accum_bus": 16}, rep
+
+
+def test_the_shared_input_fallback_does_not_invent_a_missing_width(tmp_path):
+    """CAN-FAIL half, on the identical layout. The shared input is what
+    confirms `sample_bus` is a 24-bit bus, and the cell's L1 gives it no
+    width at all. Reaching further for parameters must report that, not
+    paper over it — otherwise the half above would pass for the wrong
+    reason and nobody would be able to tell."""
+    gutted = [dict(p) for p in _PARAM_PINS]
+    gutted[1] = {"name": "sample_bus", "mode": "input",
+                 "width": None, "msb": None, "lsb": None}
+    cell = _shared_input_cell(tmp_path / "synth_ic_fail", gutted)
+    rc, rep = _run(cell)
+    assert rc == 1, rep
+    assert rep["verdict"] == "FAIL"
+    kinds = {v["kind"] for v in rep["violations"]}
+    assert kinds == {"bus_width_unresolvable"}, rep
+    v = rep["violations"][0]
+    assert v["pin"] == "sample_bus", rep
+    assert v["required_min_bits"] == 24, rep

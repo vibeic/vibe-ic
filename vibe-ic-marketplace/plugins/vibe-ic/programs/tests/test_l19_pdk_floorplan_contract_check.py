@@ -42,7 +42,7 @@ OPENLANE_CFG = {
 def _run(project: Path):
     proc = subprocess.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
@@ -281,3 +281,31 @@ def test_gate_reuses_the_consumers_own_die_resolvers():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+# --- the consumer binding is LIVE, not frozen at first import (v1.9.63) ------
+
+def test_a_failed_consumer_import_does_not_permanently_downgrade_the_gate():
+    """MEASURED: this file's identity assertion passed alone and FAILED in the
+    full suite, and the gate went on answering.
+
+    The binding was a module-level import inside `except Exception: = None`,
+    and the runtime read that name before falling back to a REIMPLEMENTATION of
+    the same rule kept in this gate. So one failed import — during the moment
+    some other module was mid-import, in a suite that imports 500 of them —
+    silently turned "reuse the consumer's resolver" into "use my own copy",
+    which is the exact drift the doctrine forbids. Import-time binding cannot
+    be retried; this proves the lazy one is."""
+    import importlib
+    sys.path.insert(0, str(PROGRAMS))
+    saved = sys.modules.pop("phase3_one_shot_runner", None)
+    try:
+        sys.modules["phase3_one_shot_runner"] = None       # import raises
+        mod = importlib.import_module("l19_pdk_floorplan_contract_check")
+        assert mod._consumer_l19_die is None, "the window must really be shut"
+    finally:
+        sys.modules.pop("phase3_one_shot_runner", None)
+        if saved is not None:
+            sys.modules["phase3_one_shot_runner"] = saved
+    import phase3_one_shot_runner as p3
+    assert mod._consumer_l19_die is p3._l19_declared_die_area, (
+        "the gate stayed downgraded after the import became possible again")

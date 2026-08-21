@@ -715,6 +715,51 @@ faithful — the prose already bound the machine type). Cross-ref the "A Moore m
 output" skill. (A genuine spec-defect flag stays reserved for a function that is provably correct
 under BOTH machine types yet still mismatches — not for choosing the wrong type against a stated one.)
 
+### Skill: a FREE interface choice is DECLARED at the moment it is made, never recovered afterwards from prose
+**When to apply:** any design whose spec asks the implementer to record interface/build decisions
+in a structured file (a "MUST declare `<path>`" clause followed by a field table), and, more
+generally, whenever you are about to make a choice the spec leaves open.
+
+A **free choice** is a decision no downstream tool can recover from the artifacts by inference:
+serial bit order, the latency from reset release to the first valid beat, integer encoding, reset
+polarity, the parameter value this build actually ran at, which optional feature axis was selected.
+Two correct designs disagree on every one of them, so a comparison procedure that is not TOLD
+cannot pair its reference output — and if it guesses, a correct design fails for a reason that has
+nothing to do with its function.
+
+The rule: **record every free choice in the spec-declared machine-readable file BEFORE you author
+the RTL that embodies it, then write RTL that conforms to what you declared.** Do not make the
+choice implicitly while writing RTL and leave it to be reconstructed later.
+
+An RTL header comment — even the well-meant `DECLARED CHOICES: bit_order = …` block — is **prose**.
+It is not schema-checked, it is not diffable against a consumer's expectation, and a consumer that
+scrapes it is one reformat away from silently guessing. Prose is an acceptable ADDITIONAL copy for
+a human reader; it is not the artifact.
+
+Three consequences that are easy to get wrong:
+- **Never invent a value to fill the file.** A default-filled declaration is strictly worse than an
+  absent one: it turns the required-artifact gate green while the comparison pairs against a value
+  nobody chose. If a required choice is genuinely undetermined, the honest output is a refusal that
+  NAMES the field.
+- **Never adopt the spec's example value as your choice.** The example column records what a
+  reference implementation happened to pick. Copying it makes the document author the designer.
+- **An informational field you did not decide is OMITTED, not placeholder-filled.** Every consumer
+  in this flow resolves a missing key to "cannot pair" already; a placeholder would have to be
+  special-cased by each of them, and one that forgot would read it as a value.
+
+This convention is a deterministic program (`programs/spec_declaration_emit.py`). It reads the
+field list, the required/informational tier and the target path out of the PROJECT'S OWN Phase-1
+documents — never a table baked into the program — so a design that declares a completely
+different field set gets the same treatment. `--contract` surfaces the free-choice list at the
+RTL-authoring handoff, before any RTL exists (staged automatically by
+`design_one_shot_runner._stage_author_knowledge_digests`, so every authoring WAIVE branch gets it);
+the emit mode writes the declaration and refuses, naming the field, while any REQUIRED choice is
+undetermined. Cross-ref the two skills above that already depend on a declaration existing
+("functional-TB golden authoring for a declared-function datapath" needs `bit_order` /
+`latency_cycles` / `integer_encoding` to place its golden, and "an L10 case conditioned on an
+OPTIONAL Plugin-selectable feature" WAIVES when the declaration is silent) — both of them DEFER
+when the declaration is missing, which is honest but is a hole this rule closes at the source.
+
 ## Cross-Layer Consistency Matrix
 
 Run this check after every layer completes:

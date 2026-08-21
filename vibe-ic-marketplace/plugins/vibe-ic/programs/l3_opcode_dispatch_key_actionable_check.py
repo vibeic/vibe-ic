@@ -59,10 +59,16 @@ Three limbs, all derived from L3 itself + the consumer's keying rule
   2. DISPATCH KEY UNIQUE — normalised hex values must be distinct.
      A collision makes `l3_by_hex[h] = op` overwrite, so at most one
      of the colliding entries survives into the oracle.
-  3. ORACLE LOOKUP KEY UNIQUE — mnemonics must be distinct, since the
-     L3<->L15 reconciliation in `opcode_field_width_consistency_check`
-     indexes `out[name.strip().lower()] = ...` and a repeated mnemonic
-     silently resolves to whichever row came last.
+  3. ORACLE LOOKUP KEY UNIQUE — mnemonics of real commands must be
+     distinct, since the L3<->L15 reconciliation in
+     `opcode_field_width_consistency_check` indexes
+     `out.setdefault(name.strip().lower(), ...)`: only the FIRST row
+     with a given mnemonic is ever reconciled against L15, and every
+     later one is silently dropped from the comparison.
+     EXEMPT: a mnemonic that denotes an ABSENT command (`reserved`,
+     `unused`, ...) is expected to repeat, one per hole in the command
+     space. It has no command row to lose, and requiring uniqueness
+     would force a design to invent a distinct name per hole.
 
 Chip-AGNOSTIC: no design name, PDK name, vendor part number, opcode
 value or mnemonic literal appears in this file. Every value examined
@@ -72,9 +78,14 @@ Verdicts
 ------------------------------------------------------------------
   PASS         every opcode carries a unique, parseable dispatch key
   VACUOUS_PASS L3.opcodes empty/absent (non-protocol IP — the
-               `no_opcodes_in_input: true` case)
+               `no_opcodes_in_input: true` case) AND every staged
+               document was read
+  NOT_CHECKED  L3.opcodes empty/absent but the Phase-1 ingester left a
+               staged document unread, so the emptiness cannot be
+               attributed to the design (#499). rc 2.
   FAIL         any unparseable hex, hex collision, or mnemonic collision
-  rc 2         L3 absent / unparseable / project dir absent
+  rc 2         L3 absent / unparseable / project dir absent /
+               NOT_CHECKED
 
 Waiver: `waivers.json` key `l3_opcode_dispatch_key_intentional`
 (>= 40 chars) downgrades FAIL to PASS_WITH_WAIVER.
@@ -94,6 +105,9 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
+# v1.7.72 — for #499. A vacuous pass asserts something about the input;
+# the assertion is only available once the input has been read.
+import _input_ingest as _ingest  # noqa: E402
 
 GATE = "l3_opcode_dispatch_key_actionable_check"
 WAIVER_KEY = "l3_opcode_dispatch_key_intentional"
@@ -110,6 +124,31 @@ _SENTINELS = frozenset({"__TODO__", "0X__TODO__", "TODO", "TBD", "TBA",
                         "<HALLUCINATION_SCRUBBED>"})
 # Fields that may carry the dispatch key, in the consumer's order.
 _HEX_KEYS = ("hex", "opcode_hex", "opcode", "code", "value")
+
+# Generic register-map vocabulary for "there is no command at this code point".
+# A mnemonic from this vocabulary is EXPECTED to repeat — one per hole — so it is
+# exempt from limb 3's uniqueness requirement. This is register-map vocabulary,
+# not a design identifier: no chip, vendor, part number or opcode literal appears
+# here, and the neighbouring `_SENTINELS` set already handles this class of
+# generic token for the hex field.
+_ABSENT_COMMAND_MNEMONICS = frozenset({
+    "reserved", "reserve", "rsvd", "rsv", "resv",
+    "unused", "not used", "notused", "nc", "no connect",
+    "spare", "undefined", "unimplemented", "unassigned",
+    "none", "n/a", "na", "-", "--", "illegal", "invalid",
+})
+# Tolerate an index/annotation suffix the extractor may append to a hole's name
+# (`reserved_1`, `reserved 2`, `RESERVED(3)`), which would otherwise read as a
+# distinct mnemonic and defeat both the exemption AND the collision detection.
+_ABSENT_SUFFIX_RE = re.compile(r"[\s_\-]*[\(\[]?\d+[\)\]]?\s*$")
+
+
+def _denotes_absent_command(mnemonic: str) -> bool:
+    """True when the mnemonic names a hole in the command space, not a command."""
+    s = (mnemonic or "").strip().lower()
+    if s in _ABSENT_COMMAND_MNEMONICS:
+        return True
+    return _ABSENT_SUFFIX_RE.sub("", s) in _ABSENT_COMMAND_MNEMONICS
 
 
 def _hex_value(entry: Dict[str, Any]) -> Optional[int]:
@@ -173,12 +212,28 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     opcodes = l3.get("opcodes")
     if not isinstance(opcodes, list) or not opcodes:
+        # v1.7.72 — for #499. The VACUOUS_PASS sentence is a claim about
+        # the INPUT, and it is only available once the input has been
+        # read. Measured on a real CPU: this gate and its sibling both
+        # certified "no command protocol in input" while the document
+        # declaring eleven opcodes sat in the ingester's skip log.
+        unread_docs = _ingest.unread_input_documents(project)
+        if unread_docs:
+            return {"gate": GATE, "verdict": "NOT_CHECKED", "rc": 2,
+                    "reason": "L3.opcodes empty/absent, but the input was "
+                              "not fully read — no conclusion about the "
+                              "design is available."
+                              + _ingest.absence_claim_disclosure(project),
+                    "total": 0, "violations": [],
+                    "unread_input_documents": unread_docs}
         return {"gate": GATE, "verdict": "VACUOUS_PASS", "rc": 0,
                 "reason": "L3.opcodes empty/absent — no command protocol in "
                           "input (structurally correct for non-protocol IPs).",
-                "total": 0, "violations": []}
+                "total": 0, "violations": [],
+                "unread_input_documents": []}
 
     violations: List[Dict[str, Any]] = []
+    exempted: List[Dict[str, Any]] = []
     by_hex: Dict[int, List[str]] = defaultdict(list)
     by_name: Dict[str, List[str]] = defaultdict(list)
 
@@ -223,14 +278,32 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     for mn, where in sorted(by_name.items()):
         if len(where) > 1:
+            if _denotes_absent_command(mn):
+                # Repetition is CORRECT here, not a defect: a mnemonic that
+                # denotes the ABSENCE of a command carries no per-row identity
+                # to collide, so there is no oracle row for the reconciliation
+                # to resolve WRONGLY — only holes it never had to resolve at
+                # all. A register map with several reserved slots is a complete
+                # design, and FAILing here would force it to invent a distinct
+                # name per hole: a fabricated dispatch entry per hole, strictly
+                # worse than the ambiguity it would cure.
+                exempted.append({
+                    "mnemonic": mn, "entries": where,
+                    "why": ("mnemonic denotes an absent/unimplemented command; "
+                            "repetition is expected and no command row is lost "
+                            "by it"),
+                })
+                continue
             violations.append({
                 "kind": "mnemonic_collision", "opcode": mn,
                 "entries": where,
                 "detail": (
                     f"mnemonic `{mn}` appears {len(where)} times "
-                    f"({', '.join(where)}). The L3<->L15 reconciliation "
-                    f"indexes by lowercased mnemonic, so a repeated name "
-                    f"silently resolves to whichever row came last."),
+                    f"({', '.join(where)}). Two DISTINCT commands cannot share "
+                    f"an oracle lookup key: the L3<->L15 reconciliation indexes "
+                    f"by lowercased mnemonic with `setdefault`, so only the "
+                    f"FIRST row is ever reconciled against L15 and every later "
+                    f"one is silently dropped from the comparison."),
             })
 
     report: Dict[str, Any] = {
@@ -238,11 +311,18 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "total": len(opcodes),
         "distinct_dispatch_keys": len(by_hex),
         "violations": violations,
+        # Reported, never hidden: an exemption the reader cannot see is
+        # indistinguishable from a check that never ran.
+        "exempted_absent_command_mnemonics": exempted,
     }
     if not violations:
+        _exn = (f"; {len(exempted)} repeated mnemonic(s) exempt as "
+                f"absent-command holes ("
+                + ", ".join(f"`{e['mnemonic']}`x{len(e['entries'])}"
+                            for e in exempted) + ")") if exempted else ""
         report.update(verdict="PASS", rc=0, reason=(
             f"all {len(opcodes)} opcode(s) carry a unique, parseable "
-            f"dispatch key and a unique mnemonic."))
+            f"dispatch key and a unique command mnemonic{_exn}."))
         return report
     if _waived(project):
         report.update(verdict="PASS_WITH_WAIVER", rc=0, reason=(

@@ -140,10 +140,19 @@ def test_multicorner_extract_recipe_loops_corners():
 def test_multicorner_disclosure_is_honest():
     # the stance JSON must carry both the multi-corner claim AND an honest
     # single-corner disclosure branch.
+    #
+    # #563 r3 — the fallback text was re-derived. It used to read
+    # "SINGLE-CORNER (nom) only — this PDK did not ship the min/max OpenRCX
+    # captables", which asserted a CAUSE the code never checked (measured
+    # counter-example: the failing run's own log named all three captables it
+    # read). "Honest" now means it reports the observation and names no cause,
+    # so this assertion tracks the observation wording instead of the old
+    # PDK-blaming sentence.
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("multi_corner_spef_stance.json")
-    window = src[i:i + 4000]
-    assert "SINGLE-CORNER (nom) only" in window   # honest fallback text
+    window = src[i:i + 8000]
+    assert "SINGLE-CORNER only (extracted:" in window   # honest fallback text
+    assert "NOT attributed to the PDK" in window
     assert '"multi_corner"' in window
     assert '"setup_corner"' in window and '"hold_corner"' in window
     # ...and the corner->liberty resolution, so the corner COUNT can never be

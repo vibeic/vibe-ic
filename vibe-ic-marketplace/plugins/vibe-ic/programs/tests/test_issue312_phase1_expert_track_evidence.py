@@ -81,16 +81,73 @@ def test_312_wired_detection_separates_two_different_zeros(tmp_path):
     assert E.expert_track_wired(fake) is True
 
 
-def test_312_the_repo_today_really_is_never_ran(tmp_path):
-    """Non-vacuous: this asserts the DEFECT is present in this tree. When the
-    expert track is finally wired, this test fails and must be updated
-    deliberately — that is the point."""
-    assert E.expert_track_wired(_PROGRAMS) is False, (
-        "a Phase-1 runner now invokes the expert hand-off — #312 is fixed; "
-        "update this test to reflect the new reality")
+def test_312_the_track_is_now_wired(tmp_path):
+    """UPDATED DELIBERATELY. This test previously asserted the defect was still
+    present — `expert_track_wired(_PROGRAMS) is False` — and carried the note
+    "when the expert track is finally wired, this test fails and must be
+    updated". It has been: `phase1_one_shot_runner` now invokes
+    `phase1_expert_parse_track`, which imports the hand-off module, in both
+    input modes.
+
+    The assertion is inverted rather than deleted, so it stays non-vacuous in
+    the other direction: if the wiring is ever removed, this fails."""
+    assert E.expert_track_wired(_PROGRAMS) is True, (
+        "the Phase-1 expert track is no longer wired — #312 has regressed")
+
+    # A project the track has not run on is still NEVER_RAN. `wired` is what
+    # keeps the two zeros apart, and it now reads True.
     rep = E.assess(_proj(tmp_path), _PROGRAMS)
-    assert rep["state"] == "NEVER_RAN" and rep["wired"] is False
-    assert "NOT because it ran and found nothing" in rep["detail"]
+    assert rep["state"] == "NEVER_RAN" and rep["wired"] is True
+    assert "did not reach it" in rep["detail"]
+
+
+def test_312_the_track_report_is_execution_evidence(tmp_path):
+    """The track deliberately does NOT write the sidecar — the gates that read
+    the sidecar merge it into the haystack they then measure, so a track
+    writing there would supply its own score. Its own report is therefore the
+    honest evidence of execution, and reading only the sidecar would report
+    NEVER_RAN for a track that demonstrably ran."""
+    proj = _proj(tmp_path)
+    rpt = proj / "reports" / "phase1" / "expert_parse_track.json"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+
+    rpt.write_text(json.dumps({
+        "verdict": "PASS", "findings": [],
+        "ai_subtrack": {"status": "SKIPPED-CONDITION"}}))
+    ran_empty = E.assess(proj, _PROGRAMS)
+    assert ran_empty["state"] == "RAN_EMPTY"
+    assert ran_empty["ai_subtrack"] == "SKIPPED-CONDITION"
+
+    rpt.write_text(json.dumps({
+        "verdict": "FINDINGS",
+        "findings": [{"rule": "X", "layer": "L21_POWER_INTENT"}],
+        "ai_subtrack": {"status": "SKIPPED-CONDITION"}}))
+    ran = E.assess(proj, _PROGRAMS)
+    assert ran["state"] == "RAN" and ran["patch_count"] == 1
+    assert ran["layers"] == ["L21_POWER_INTENT"]
+
+    # Same rule as for the sidecar: unreadable evidence is not evidence.
+    rpt.write_text("{not json")
+    assert E.assess(proj, _PROGRAMS)["state"] == "MALFORMED"
+
+
+def test_312_wiring_needs_both_ends_real(tmp_path):
+    """One hop of indirection counts, but only when BOTH ends are real. A
+    runner naming a track program that never reaches the hand-off is not wired
+    — the same lesson as the bare-mention case, one level down."""
+    fake = tmp_path / "programs"
+    fake.mkdir()
+    (fake / "phase1_one_shot_runner.py").write_text(
+        '_EXPERT_TRACK = "phase1_expert_parse_track.py"\n')
+    # No track program at all -> the hop leads nowhere.
+    assert E.expert_track_wired(fake) is False
+    # A track program that does not reach the hand-off -> still not wired.
+    (fake / "phase1_expert_parse_track.py").write_text("# nothing here\n")
+    assert E.expert_track_wired(fake) is False
+    # Both ends real -> wired.
+    (fake / "phase1_expert_parse_track.py").write_text(
+        "import ic_expert_backup_pack as _p\n")
+    assert E.expert_track_wired(fake) is True
 
 
 def test_312_sidecar_path_matches_what_the_readers_read():
@@ -111,9 +168,13 @@ def test_312_enforcement_is_opt_in():
     assert "ENFORCEMENT: advisory" in src
 
 
-def test_312_handoff_module_exists_but_is_orphaned():
-    """ic_expert_backup_pack is not missing — it is UNWIRED. That distinction
-    matters: the mechanism was designed and measured, then never connected."""
+def test_312_handoff_module_is_no_longer_orphaned():
+    """UPDATED DELIBERATELY. This previously asserted `callers == []` with the
+    note "no longer orphaned — #312 progressed". It has: the Phase-1 expert
+    PARSE track imports the hand-off module, which is what un-orphans it.
+
+    Kept as an assertion rather than deleted, so removing the only caller fails
+    here instead of silently returning the module to the shelf it sat on."""
     import re
     assert (_PROGRAMS / "ic_expert_backup_pack.py").is_file()
     # An IMPORT or a CALL — never a bare mention. This detector itself names
@@ -126,7 +187,9 @@ def test_312_handoff_module_exists_but_is_orphaned():
     callers = [f.name for f in _PROGRAMS.glob("*.py")
                if f.name != "ic_expert_backup_pack.py"
                and pat.search(f.read_text(errors="replace"))]
-    assert callers == [], f"no longer orphaned (called by {callers}) — #312 progressed"
+    assert "phase1_expert_parse_track.py" in callers, (
+        f"the hand-off module is orphaned again (callers: {callers}) — the "
+        f"Phase-1 expert track no longer uses the doctrine's own assembler")
 
 
 def test_312_wired_detection_ignores_a_bare_mention(tmp_path):

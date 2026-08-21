@@ -76,6 +76,28 @@ records, the declared constraint files, the top-level port list, the design's ow
 L-docs. Test fixtures must be **synthesized neutral data**, never a copy of a real
 design's files.
 
+**What that does NOT mean (vibe-ic#400).** "No copy of a real design's files" forbids
+HARDCODING a chip into a fixture. It does not forbid a test from READING a
+checked-in artefact — and read literally it pushed authors into a suite that is
+100 % synthetic, which is a different failure:
+
+> A change whose tests are all fixtures authored alongside it **cannot distinguish
+> itself from its own absence.** Measured: mutating a guard killed 10 of 31 tests —
+> every one of them hand-typed in the same commits — while all 4 tests that read a
+> checked-in artefact still passed. No document in the repo could tell that guard
+> from its absence.
+
+So, for a BEHAVIOURAL change: at least one test must be driven by a real in-repo
+artefact, through `programs/tests/_hostpaths.require_repo` / `repo_path` (which
+hardcodes nothing — `source_chip_agnostic_check` passes on trees that use it), or
+by sweeping a repo data root. `real_artefact_test_backing_check` reports the split
+per changed test module, ADVISORY.
+
+A real-artefact test is still not automatically non-vacuous — an implication whose
+antecedent is always false passes either way. What proves a test bites is the
+MUTATION RUN criterion 1 already asks for; the split report is what makes a
+reviewer ask for it.
+
 > *Measured:* a supply-intent gate was verified chip-agnostic by confirming the only
 > `VDD/VSS` occurrence in the new logic was inside a *comment*, and that the pin-type
 > decision came from the macro's LEF, not from a name list.
@@ -127,6 +149,19 @@ the form it needs. "The token exists somewhere in the corpus" is not that.
 ## Before you land
 
 - [ ] negative control fails pre-fix, passes post-fix, **both asserted**
+- [ ] the pre-fix control was **graded, not asserted** — capture it and hand it
+      to the program, because "the tests fail pre-fix" is true of every new file
+      ever written:
+
+      ```
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest <the new tests> \
+          -q -p no:cacheprovider --junitxml=/tmp/control.xml     # on clean main
+      python3 programs/control_substance_check.py --junit /tmp/control.xml
+      ```
+
+      and pass the same file to the merge gate, which BLOCKS on a control whose
+      every failure is an absence:
+      `gatekeeper_review.py --base <b> --head <h> --control-junit /tmp/control.xml`
 - [ ] no `*_clears` assertion presented as a standalone control
 - [ ] corpus sweep run; zero false positives; coverage limits stated honestly
 - [ ] if BLOCKING: **prove-by-run**, with the stopped-flow evidence quoted
@@ -145,8 +180,9 @@ Program-first applies to this skill too. These criteria are mechanically checkab
 and should become deterministic checks rather than relying on an author remembering:
 
 - every gate declares BLOCKING vs ADVISORY (missing declaration ⇒ fail)
-- every new gate's test suite contains at least one assertion that fails against the
-  parent revision
+- ~~every new gate's test suite contains at least one assertion that fails against
+  the parent revision~~ — LANDED as `control_substance_check`, and sharpened: the
+  criterion is that an assertion OBSERVED A VALUE, not merely that it failed
 - no flow-level program under `programs/` matches a design/PDK/vendor literal list
 - every `if <remedy> is not None:` decision point has an `else` that records the
   decline
@@ -166,8 +202,41 @@ Landed, so the criterion is checked rather than remembered:
 | §6 | `silent_decline_audit` — AST audit for remedy call sites whose refusal discloses nothing | #307, #312 |
 | §4 | `source_chip_agnostic_check` | CI |
 | "empty vs clean" | `phase1_expert_track_evidence_check` — NEVER_RAN vs RAN_EMPTY | #312 |
+| §1 | `control_substance_check` — reads the pre-fix control's OWN pytest report and counts how many failures observed a VALUE, as against only noticing that something was absent. Composed by `gatekeeper_review --control-junit`, which BLOCKS on a tautological control | #381 |
 
 Still prose, worth promoting:
-- every new gate's tests must contain at least one assertion that FAILS on the
-  parent revision (§1 — mechanically checkable by running them against `HEAD~1`)
 - corpus-sweep evidence should be an artefact, not a claim in a PR body (§2)
+
+PROMOTED, and the reason it needed promoting: "every new gate's tests must
+contain at least one assertion that FAILS on the parent revision" is not the
+property that matters, and running them against `HEAD~1` does not measure it.
+Measured on two live PRs — one control collected NOTHING (a
+`ModuleNotFoundError` for the module the fix introduces; 551 lines of new test,
+zero assertions executed) and another reported "4 of 4 behavioural" when three
+of the four failed on the ABSENCE of a field the fix adds. Both "failed on the
+parent revision". `control_substance_check` grades the difference, and
+`gatekeeper_review --control-junit` is where it blocks.
+
+## Compliance gate (mandatory)
+
+This skill ships `compliance.yaml`, and its patterns are enforced by
+`tests/test_compliance.py` in this directory. Before landing a change that
+claims to follow this doctrine, run the deterministic gate:
+
+```bash
+python3 -m pytest -q \
+    plugins/vibe-ic/skills/flow-change-acceptance/tests/test_compliance.py
+```
+
+The gate is the point of the doctrine, not a formality: every criterion
+above exists because a change that skipped it shipped a false certificate.
+A criterion asserted in prose and not measured by the gate is exactly the
+kind of unenforced declaration §5 tells you to refuse.
+
+**This section was missing until 2026-07-26.** The skill was landed during
+the #306/#307/#312 campaign with its `compliance.yaml` and tests in place
+but no Compliance-gate section in `SKILL.md`, so
+`test_every_skill_md_has_compliance_gate` had been RED on `main` — unseen,
+because CI runs the cadence-correct targeted subset rather than the full
+suite. A doctrine file about unenforced declarations shipped with an
+unenforced declaration of its own.

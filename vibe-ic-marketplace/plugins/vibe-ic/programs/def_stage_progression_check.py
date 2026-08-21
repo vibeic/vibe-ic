@@ -22,6 +22,13 @@ Checks performed:
   4. Routing presence check  — routed.def MUST contain SPECIALNETS or
                                NETS with routing geometry (`+ ROUTED`)
                                that floorplan.def lacks
+  4b. Signal-routing check   — of that geometry, the NETS section (design
+                               interconnect) must carry some. Check 4 alone is
+                               satisfied by the power grid, which the PDN
+                               writes before detailed routing runs, so it
+                               answers "yes" for four of the five stages and
+                               cannot distinguish "detailed routing completed"
+                               from "detailed routing aborted".
 
 Usage:
     python3 def_stage_progression_check.py <project_dir> [--json out.json]
@@ -65,8 +72,10 @@ class StageInfo:
     size: int = 0
     sha256: str = ""
     num_components: int = 0   # COMPONENTS section count
-    has_routing: bool = False  # routed-wire indicator
-    routing_segments: int = 0  # total wire/via geometry line count (Check 2)
+    has_routing: bool = False  # routed-wire indicator (ANY section)
+    signal_route_stmts: int = 0   # `+ ROUTED`/`+ SHAPE` inside NETS
+    special_route_stmts: int = 0  # ... inside SPECIALNETS (the power grid)
+    declared_signal_nets: int = 0  # `NETS <n> ;`
 
 
 @dataclass
@@ -118,38 +127,6 @@ def _hold_clean_noop_ok(project: Path) -> bool:
     return worst >= 0.0
 
 
-def _count_routing_segments(path: Path) -> int:
-    """Count DEF wire/via GEOMETRY lines: `NEW <layer> ...` continuation
-    segments and `+ ROUTED`/`+ SHAPE` first-segment statements, in NETS and
-    SPECIALNETS alike.
-
-    This is the TOTAL routing/PDN geometry volume a DEF actually carries — as
-    opposed to raw byte size, which also reflects how VERBOSELY a net's
-    pin-connectivity list is written. `global_connect` (re-applied after
-    routing to attach late-created instances' PG pins — ORGANIC #571's
-    `_build_pg_reconnect_tcl`) legitimately REWRITES a SPECIALNETS pin list
-    from thousands of explicit `( inst pin )` entries down to the standard DEF
-    wildcard `( * pin )` token, which can shrink a DEF by hundreds of KB with
-    ZERO geometry lost (measured: caravel_user_project sky130A, post_hold.def
-    -> routed.def dropped ~425,000 B in pin-list notation while its routing
-    segment count only GREW, 479,307 -> 485,009, and COMPONENTS only grew,
-    10,030 -> 10,139). A genuine fabricated/truncated stage cannot show this
-    signature (it loses or freezes geometry, never gains it), so this metric
-    lets Check 2 tell the two apart. Chip/PDK-AGNOSTIC: pure DEF syntax token
-    counting, no design literal."""
-    count = 0
-    try:
-        with path.open(errors="replace") as f:
-            for line in f:
-                s = line.strip()
-                if (s.startswith("NEW ") or s.startswith("+ ROUTED")
-                        or s.startswith("+ SHAPE")):
-                    count += 1
-    except OSError:
-        return 0
-    return count
-
-
 def _count_components(path: Path) -> int:
     """Count instances in COMPONENTS section."""
     in_components = False
@@ -187,6 +164,80 @@ def _has_routing(path: Path) -> bool:
     return False
 
 
+def _routing_by_section(path: Path) -> tuple[int, int, int]:
+    """Split routing geometry by the DEF section that carries it.
+
+    Returns ``(signal_route_stmts, special_route_stmts, declared_signal_nets)``.
+
+    `_has_routing` above answers "does this DEF contain ANY routed-wire
+    geometry", and that is the question Check 4 used to ask. It is not the
+    question Check 4 means. A DEF's power grid lives in ``SPECIALNETS`` and is
+    written by the PDN step, which runs BEFORE detailed routing — so from
+    `placed.def` onward every stage answers "yes" whether or not the detailed
+    router ever ran. The column is constant across four of the five stages and
+    therefore carries no information about the one event it is read for.
+
+    The property Check 4 means is *design interconnect*: routing statements
+    inside the ``NETS`` section. This function separates the two, and also
+    reports the declared signal-net count so "0 routed" can be distinguished
+    from "0 declared" (a design with no signal nets is not unrouted, it is
+    empty, and that is a different finding).
+
+    chip-AGNOSTIC: DEF grammar only — no PDK, library, or design literal.
+    """
+    sig = spc = declared = 0
+    in_special = in_nets = False
+    try:
+        with path.open(errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("SPECIALNETS"):
+                    in_special, in_nets = True, False
+                    continue
+                if s.startswith("END SPECIALNETS"):
+                    in_special = False
+                    continue
+                if s.startswith("NETS"):
+                    in_nets, in_special = True, False
+                    m = re.match(r"NETS\s+(\d+)\s*;", s)
+                    if m:
+                        declared = int(m.group(1))
+                    continue
+                if s.startswith("END NETS"):
+                    in_nets = False
+                    continue
+                if "+ ROUTED" in line or "+ SHAPE" in line:
+                    if in_nets:
+                        sig += 1
+                    elif in_special:
+                        spc += 1
+    except OSError:
+        return 0, 0, 0
+    return sig, spc, declared
+
+
+def _count_route_segments(path: Path) -> int:
+    """Count routed-wire statements in a DEF: each `+ ROUTED` / `+ SHAPE` wire
+    start plus every `NEW <layer> …` continuation segment. This is a monotone
+    proxy for routing WORK: detailed routing can only ADD segments over the
+    global/estimated routing carried by the prior stage, and a truncated or
+    stubbed DEF cannot inflate it. Used to prove a post_hold -> routed byte
+    SHRINK is a compact re-encoding (more segments, fewer bytes), not a
+    truncation. Pure aside from the read; PDK-agnostic (DEF syntax, not a
+    chip literal)."""
+    n = 0
+    try:
+        with path.open(errors="replace") as f:
+            for line in f:
+                if "+ ROUTED" in line or "+ SHAPE" in line:
+                    n += 1
+                elif line.lstrip().startswith("NEW "):
+                    n += 1
+    except OSError:
+        return 0
+    return n
+
+
 # v1.6.179 (#72 P1-5) — global-route-only marker. The phase3 PnR
 # Tcl wraps `detailed_route` in a `catch` block and emits
 # `DETAILED_ROUTE_NONFATAL:` to `openroad.log` when the custom PDK
@@ -203,6 +254,41 @@ def _has_routing(path: Path) -> bool:
 _GLOBAL_ROUTE_LOG_MARKER = "DETAILED_ROUTE_NONFATAL:"
 _GLOBAL_ROUTE_JSON_KEY = "mode"
 _GLOBAL_ROUTE_JSON_VAL = "global_only"
+
+# The implicit marker above is emitted by `catch {detailed_route}`, so it
+# fires for BOTH states it is asked to tell apart:
+#   (a) the PDK has no detailed-router rule files, the router refuses at
+#       setup, and an unrouted DEF is the expected, declared outcome; and
+#   (b) the router loaded the tech, started on the design, and ABORTED —
+#       an unrouted DEF that is a failure.
+# Keyed on the marker alone, a routing abort is silently reclassified as the
+# intentional mode, which is the one reading that must never be automatic.
+# These markers are printed only once the router is past tech/rule setup and
+# working on the design, so their presence is positive evidence of (b).
+# chip-AGNOSTIC: router phase markers, not chip, PDK or library literals.
+_DETAILED_ROUTER_REACHED_DESIGN = (
+    "Start pin access",      # DRT-0165 — per-instance pin work has begun
+    "No access point for",   # DRT-0073 — a finding about a design instance
+)
+
+
+def _detailed_router_ran_on_design(project: Path) -> bool:
+    """True when the PnR log proves the detailed router got past tech setup
+    and began working on the design. Distinguishes a routing ABORT from a
+    genuine global-route-only PDK, which cannot reach these phases."""
+    pnr_dir = _pl.pnr_dir(project) if hasattr(_pl, "pnr_dir") else (
+        project / "phase3" / "stage3" / "pnr")
+    if not pnr_dir.is_dir():
+        return False
+    for log in pnr_dir.rglob("*.log"):
+        try:
+            with log.open(errors="replace") as f:
+                for line in f:
+                    if any(m in line for m in _DETAILED_ROUTER_REACHED_DESIGN):
+                        return True
+        except OSError:
+            continue
+    return False
 
 
 def _is_global_route_only(project: Path) -> bool:
@@ -257,7 +343,9 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
         info.sha256 = _sha(path)
         info.num_components = _count_components(path)
         info.has_routing = _has_routing(path)
-        info.routing_segments = _count_routing_segments(path)
+        (info.signal_route_stmts,
+         info.special_route_stmts,
+         info.declared_signal_nets) = _routing_by_section(path)
         infos.append(info)
 
     if any(not i.exists for i in infos):
@@ -315,33 +403,25 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
     # and a skipped/empty stage by Check 3 (instance-count growth), so this
     # relaxes no fraud gate. chip-AGNOSTIC — no chip literal, and the evidence
     # is OpenROAD's own hold-slack number.
-    # ORGANIC (post-#571 interaction) — a SECOND legitimate shrink, orthogonal
-    # to the hold no-op above: a PG-net CONNECTIVITY-NOTATION collapse. After
-    # routing, `_build_pg_reconnect_tcl` (#571) re-applies `global_connect` so
-    # physical-only cells created after the PDN's one-shot connect (repair/CTS
-    # buffers, antenna diodes, decap/fill) get their PG pins attached. On a
-    # design where many such cells exist, `global_connect` rewrites a
-    # SPECIALNETS pin list from thousands of explicit `( inst pin )` entries
-    # down to the standard DEF wildcard `( * pin )` token — correct and, if
-    # anything, MORE complete (it also covers instances added later), but it
-    # can shave hundreds of KB off a DEF that never lost a single wire.
-    # MEASURED: caravel_user_project x sky130A, post_hold.def (39,005,262 B)
-    # -> routed.def (38,580,931 B) — a 424,331 B / 1.1% shrink — while
-    # `_count_routing_segments` (NEW/+ROUTED/+SHAPE geometry lines) went
-    # 479,307 -> 485,009 (grew) and COMPONENTS went 10,030 -> 10,139 (grew).
-    # A truncated/fabricated stage cannot show growth on BOTH axes at once, so
-    # requiring both — AND requiring the later stage's geometry count be
-    # POSITIVE (never waived on a 0-vs-0 vacuity, which proves nothing) — is
-    # the narrow, positive-evidence gate: any real geometry or instance LOSS,
-    # or a shrink with no routing evidence at all, still FAILs outright.
-    # chip/PDK-AGNOSTIC — keyed on the DEF's own geometry/instance counts, no
-    # design or PDK literal.
+    # A SECOND legitimate byte-shrink lives at the post_hold -> routed pair.
+    # Detailed routing REPLACES the prior stage's global/estimated routing with
+    # the final per-net geometry, and that re-encoding can come back a few
+    # percent SMALLER while carrying strictly MORE routing — the routed DEF is a
+    # compact superset, not a truncation. Measured on caravel_user_project x
+    # sky130A: routed.def 38,573,330 B vs post_hold.def 38,998,185 B (-1.09%)
+    # while COMPONENTS grew 9,991 -> 10,078 and routed-wire segments grew
+    # 479,307 -> 484,980. A byte-monotone rule false-FAILs that, cascading Steps
+    # 22/24/25/26/27/28/32-37. The exemption is gated on POSITIVE proof that
+    # routing WORK did not shrink — instances non-decreasing AND routing present
+    # AND route-segment count non-decreasing — so a genuinely truncated routed
+    # DEF (which loses segments) still FAILs, and Check 3 (instance count) /
+    # Check 4 (routing presence) remain the truncation guards. chip-AGNOSTIC:
+    # the evidence is the DEF's own COMPONENTS / routed-segment counts.
     _NOOP_SHRINK_TOL = 0.01  # 1% — a re-ordering, not a truncation
     _noop_pair_ok = _hold_clean_noop_ok(project)
     prev_size = 0
     prev_name = None
-    prev_components = 0
-    prev_routing_segments = 0
+    prev_info = None
     for i in infos:
         if i.size < prev_size:
             benign_noop = (
@@ -349,19 +429,15 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 and _noop_pair_ok
                 and i.size >= prev_size * (1.0 - _NOOP_SHRINK_TOL)
             )
-            benign_geom_preserved = (
-                # POSITIVE evidence required: the LATER stage must show REAL
-                # routing/PDN geometry (not a 0-vs-0 "preserved" by
-                # vacuity — a fixture/design with no routing markers at
-                # either stage proves nothing about geometry and must not
-                # be waved through on component count alone; Check 3 already
-                # owns component-count regression, this exemption is about
-                # GEOMETRY specifically).
-                i.routing_segments > 0
-                and i.routing_segments >= prev_routing_segments
-                and i.num_components >= prev_components
+            benign_route = (
+                prev_name == "post_hold" and i.name == "routed"
+                and prev_info is not None
+                and i.num_components >= prev_info.num_components
+                and i.has_routing
+                and _count_route_segments(project / i.path)
+                    >= _count_route_segments(project / prev_info.path)
             )
-            if not (benign_noop or benign_geom_preserved):
+            if not (benign_noop or benign_route):
                 findings.append(Finding(
                     severity="error",
                     rule="size-non-monotone",
@@ -373,8 +449,7 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 ))
         prev_size = i.size
         prev_name = i.name
-        prev_components = i.num_components
-        prev_routing_segments = i.routing_segments
+        prev_info = i
 
     # --- Check 3: instance-count growth (routed ≥ floorplan) ---
     fp = next(i for i in infos if i.name == "floorplan")
@@ -426,6 +501,44 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                     "A real post-route DEF must record net routing."
                 ),
             ))
+    # --- Check 4b: the routing that is present must be DESIGN routing ---
+    # Check 4 above is satisfied by ANY `+ ROUTED` statement, including the
+    # ones the PDN writes into SPECIALNETS before detailed routing begins.
+    # A run whose `detailed_route` aborts therefore still ships a routed.def
+    # that answers "routing: yes" on the strength of its power grid alone,
+    # while every signal net in it is bare. Downstream that state does not
+    # present as "unrouted" — it presents as a large DRC count, an LVS
+    # extraction with no interconnect and an EM report with no current, i.e.
+    # three sign-off failures attributed to sign-off rather than to routing.
+    # Ask the question directly.
+    if rt.declared_signal_nets > 0 and rt.signal_route_stmts == 0:
+        _msg = (
+            f"routed.def declares {rt.declared_signal_nets} signal net(s) in "
+            f"NETS but ZERO of them carry routing geometry — every "
+            f"`+ ROUTED` / `+ SHAPE` statement in the file "
+            f"({rt.special_route_stmts}) is in SPECIALNETS, i.e. the power "
+            f"grid, which is written before detailed routing runs. The design "
+            f"interconnect is absent from this DEF."
+        )
+        _aborted = _detailed_router_ran_on_design(project)
+        if _is_global_route_only(project) and not _aborted:
+            findings.append(Finding(
+                severity="warning",
+                rule="signal-nets-unrouted-global-route-only",
+                message=_msg + " Demoted from error to warning: this run is "
+                               "declared global-route-only and the PnR log "
+                               "shows the detailed router never reached the "
+                               "design.",
+            ))
+        else:
+            findings.append(Finding(
+                severity="error",
+                rule="signal-nets-unrouted",
+                message=_msg + (
+                    " The PnR log shows the detailed router DID reach the "
+                    "design and then stopped, so this is an aborted route, "
+                    "not global-route-only mode." if _aborted else ""),
+            ))
     if fp.has_routing:
         findings.append(Finding(
             severity="warning",
@@ -464,7 +577,8 @@ def main(argv: List[str] | None = None) -> int:
             continue
         print(f"  ✓ {i.name:<12} {i.size:>10,} B  "
               f"components={i.num_components:>5}  "
-              f"routing={'yes' if i.has_routing else 'no':<3}  "
+              f"sig_route={i.signal_route_stmts:>6}/{i.declared_signal_nets:<5} "
+              f"pg_route={i.special_route_stmts:<5} "
               f"sha={i.sha256[:10]}")
 
     if errors:
@@ -487,7 +601,17 @@ def main(argv: List[str] | None = None) -> int:
     if errors:
         print("\nResult: FAIL — one or more stages fabricated or missing.")
         return 1
-    print("\nResult: OK — 5 stages present, distinct, monotone, routed geometry present.")
+    # Only claim routed geometry when the SIGNAL nets carry it. Saying
+    # "routed geometry present" on the strength of the power grid is the
+    # sentence this gate exists to make impossible.
+    _rt = next((i for i in infos if i.name == "routed"), None)
+    if _rt is not None and _rt.signal_route_stmts > 0:
+        print("\nResult: OK — 5 stages present, distinct, monotone, "
+              f"{_rt.signal_route_stmts} signal-net routing statement(s) "
+              "present.")
+    else:
+        print("\nResult: OK (with warnings) — 5 stages present, distinct, "
+              "monotone; NO signal-net routing recorded in routed.def.")
     return 0
 
 

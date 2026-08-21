@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 """l4_regmap_phase2_emitter_contract_check.py — SEMANTIC layer gate for L4.
 
+THE CONSUMER MODEL (#509)
+=========================
+``phase2_scaffold_gen`` is an ORACLE, not a flow step: no runner and no
+step of ``flow/phase1_phase2_phase3.yaml`` calls it, at any version. It
+is the EXECUTABLE SPECIFICATION of what a conforming Phase 2 must be
+able to build from L4, and this gate drives it as such. Every sentence
+below is accordingly counterfactual — what a conforming phase 2 WOULD
+emit, never what phase 2 does emit. The requirement is unaffected: an L4
+that cannot yield a buildable register file is underspecified whether or
+not any program consumes it.
+
 BLOCKS (exit 1). Rationale for blocking rather than advising
 =============================================================
-This gate's failure mode is an UNCOMPILABLE register file discovered
-several steps downstream behind an opaque tool error. ``emit_regs_v()``
-writes one ``reg`` declaration per L4 register using a sanitized
-identifier; when two L4 registers sanitize to the same identifier the
-emitted ``<top>_regs.v`` declares the same signal twice and every later
-step — lint, synth, simulation, LEC — fails with a message that names
+What this gate protects against is an UNCOMPILABLE register file — a
+defect that, in any phase 2 conforming to the contract, surfaces several
+steps downstream behind an opaque tool error. ``emit_regs_v()`` writes
+one ``reg`` declaration per L4 register using a sanitized identifier;
+when two L4 registers sanitize to the same identifier the emitted
+``<top>_regs.v`` would declare the same signal twice, and every later
+step — lint, synth, simulation, LEC — would fail with a message naming
 the *identifier*, not the L4 record that produced it. The layer that
 caused it is five steps upstream. An advisory verdict here buys
 nothing: the flow cannot proceed either way, and the only difference is
@@ -21,10 +33,10 @@ The contract this gate enforces
     somewhere.
 
 This is the L4 check that DIFFS the layer against the register block
-``phase2_scaffold_gen`` actually emits. It does not restate the
-emitter's rules: it imports ``derive_registers()`` and ``emit_regs_v()``
-and inspects their real output, so it stays correct when the emitter
-changes. It is deliberately disjoint from
+``phase2_scaffold_gen`` — the contract oracle — would emit from it. It
+does not restate the emitter's rules: it imports ``derive_registers()``
+and ``emit_regs_v()`` and inspects their real output, so it stays
+correct when the specification changes. It is deliberately disjoint from
 ``l4_regmap_enumerated_values_typed_check`` (field-level enum typing) —
 this one is about whether the register FILE can be built at all.
 
@@ -34,9 +46,10 @@ Requirements
       non-empty, UNIQUE Verilog identifier. Measured on a real Phase-1
       output: two L4 entries with ``name: ""`` both sanitized to the
       same fallback identifier, and nine counter registers collided
-      pairwise — ``emit_regs_v()`` duly emitted ten duplicated ``reg``
-      declarations. The names were "present" in L4; they were not
-      present in a form the emitter could turn into distinct signals.
+      pairwise — ``emit_regs_v()`` duly produced ten duplicated ``reg``
+      declarations when driven on it. The names were "present" in L4;
+      they were not present in a form the emitter could turn into
+      distinct signals.
 
   R2  a register whose OWN record states an address must state it under
       a key ``derive_registers()`` reads (``offset`` / ``address``).
@@ -46,10 +59,11 @@ Requirements
       A record that carries ``0x1a110000`` under some other key while
       the emitter sees an empty offset is the exact defect this whole
       family of gates exists for — the address is in the layer, and the
-      consumer cannot see it, so ``emit_regs_v()`` writes
-      ``// TODO — address decode (per L4 offsets)`` and no decode is
-      ever generated. Measured on a real Phase-1 output: 32 of 80
-      registers carried their address under ``addr_hex``.
+      contract's reader cannot see it, so ``emit_regs_v()`` writes
+      ``// TODO — address decode (per L4 offsets)`` and no conforming
+      phase 2 could generate the decode. Measured on a real Phase-1
+      output: 32 of 80 registers carried their address under
+      ``addr_hex``.
 
   R3  two registers must not claim the same decoded address — an
       ambiguous decode. Derived from L4's own contents.
@@ -336,8 +350,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
         detail = "; ".join(f"{a} <- {ns}" for a, ns in list(clashes.items())[:4])
         failures.append(
             f"{len(clashes)} address(es) are claimed by more than one "
-            "register — the address decode emit_regs_v() scaffolds is "
-            f"ambiguous. {detail}")
+            "register — the address decode emit_regs_v() would scaffold "
+            f"is ambiguous. {detail}")
 
     out["failures"] = failures
     out["warnings"] = warnings

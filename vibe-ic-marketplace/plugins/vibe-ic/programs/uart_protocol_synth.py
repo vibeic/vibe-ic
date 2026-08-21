@@ -18,6 +18,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -28,7 +31,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def apply_uart_synth(generated_docs_dir: Path, is_uart: bool,
@@ -540,7 +545,7 @@ def apply_uart_synth(generated_docs_dir: Path, is_uart: bool,
         d = _read(p)
         d.setdefault("module_role",
             "Stand-alone 40-pin UART peripheral connecting an 8-bit CPU bus (D7-D0 + A0-A2 + CS0-CS2 + RD/WR + INTR) to a serial async + modem-control interface (SIN/SOUT + CTS/RTS/DSR/DTR/DCD/RI).")
-        d["top_module"] = "PC16550D"
+        _ptm.apply(d, "PC16550D")
         d.setdefault("integration_overview", {
             "host_bus_side": "8-bit data bus + 3 address pins + 3 chip-select pins + RD/WR strobes + optional ADS latch + INTR + DDIS bus-direction signal.",
             "serial_side":   "SIN + SOUT for data; CTS/RTS/DSR/DTR/DCD/RI for modem handshaking; OUT1/OUT2 as user GPOs; TXRDY/RXRDY for DMA handshake.",

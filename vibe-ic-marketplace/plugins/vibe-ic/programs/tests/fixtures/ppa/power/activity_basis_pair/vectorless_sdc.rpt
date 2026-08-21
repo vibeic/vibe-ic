@@ -1,0 +1,30 @@
+# OpenSTA report_power — FIXTURE, generated for programs/tests/fixtures/ppa.
+# Activity basis: vectorless_sdc — declared uniform input activity 0.1, duty 0.5. No VCD read.
+#
+# This file and its sibling in this directory differ in ONE thing: the activity
+# basis. Same design, same netlist, same liberty, same SDC, same tool, same
+# image. Everything a scope must match on is identical EXCEPT the basis, so the
+# two Totals below are NOT comparable and a gate that compares them is wrong.
+#
+#   design   spm — 50-line public serial-parallel (carry-save) multiplier
+#   netlist  chip_top_synth.v  sha256:59d48a1e762533eb7f8da668d73a829febdb82b14b7c958a778d4a16092f8f38
+#   liberty  /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
+#   sdc      constraint.sdc    sha256:cc07accfabe7a4ef13a1fd0680bb1726d6a010c9e7d584ca0255490b64c61282
+#   tcl      power_vectorless.tcl
+#   tool     OpenSTA 2.7.0 in ghcr.io/vibeic/vibeic-eda:0.3.16
+#   command  sta -no_init -no_splash -exit power_vectorless.tcl
+#
+# === Begin OpenSTA Power Report ===
+POWER_ANALYSIS_MODE: vectorless_sdc
+ACTIVITY_BASIS: declared uniform input activity 0.1, duty 0.5; no VCD read
+Group                  Internal  Switching    Leakage      Total
+                          Power      Power      Power      Power (Watts)
+----------------------------------------------------------------
+Sequential           1.4153e-03 4.1942e-05 2.5735e-08 1.4572e-03  88.3%
+Combinational        1.4805e-04 4.4328e-05 2.5951e-08 1.9240e-04  11.7%
+Clock                0.0000e+00 0.0000e+00 0.0000e+00 0.0000e+00   0.0%
+Macro                0.0000e+00 0.0000e+00 0.0000e+00 0.0000e+00   0.0%
+Pad                  0.0000e+00 0.0000e+00 0.0000e+00 0.0000e+00   0.0%
+----------------------------------------------------------------
+Total                1.5633e-03 8.6270e-05 5.1686e-08 1.6496e-03 100.0%
+                          94.8%       5.2%       0.0%

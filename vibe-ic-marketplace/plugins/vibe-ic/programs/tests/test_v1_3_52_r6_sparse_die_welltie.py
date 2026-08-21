@@ -51,6 +51,8 @@ import pytest
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 import phase3_one_shot_runner as r  # noqa: E402
+from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
+                               probe_skip_reason)
 
 
 class _Pdk:
@@ -199,22 +201,31 @@ def test_no_bound_no_skip_writes_no_attestation(tmp_path):
 
 
 # ── LIVE end-to-end proof (auto-skips without the container) ────────────
-def _container_available() -> bool:
-    if os.environ.get("VIBEIC_R6_LIVE") != "1":
-        return False
-    try:
-        p = subprocess.run(
-            ["docker", "exec", "vibeic-eda", "bash", "-lc",
-             "command -v openroad >/dev/null && echo ok"],
-            capture_output=True, text=True, timeout=30)
-        return "ok" in p.stdout
-    except Exception:
-        return False
+# vibe-ic#1283 — TWO questions, and the old single bool answered them with one
+# word. "the live proof was not asked for" is an ordinary N/A (the first mark);
+# "the probe for openroad did not answer" is NOT a finding that openroad is
+# missing (the second). The `except Exception: return False` this replaces
+# collapsed the timeout into the opt-in reason, so a host that lost the race
+# was reported as a host that had not opted in.
+_R6_LIVE_REQUESTED = os.environ.get("VIBEIC_R6_LIVE") == "1"
+# Not requested -> the probe is NOT RUN AT ALL: the mark above already skips,
+# and spending the budget on a container nobody asked about would only make a
+# loaded host slower. PRESENT here means "nothing to report", not "measured".
+_R6_STATE, _R6_DETAIL = (
+    probe(["docker", "exec", "vibeic-eda", "bash", "-lc",
+           "command -v openroad >/dev/null && echo ok"])
+    if _R6_LIVE_REQUESTED else (PROBE_PRESENT, ""))
 
 
-@pytest.mark.skipif(not _container_available(),
-                    reason="live OpenROAD container proof (set VIBEIC_R6_LIVE=1"
-                           " with the vibeic-eda container up)")
+@pytest.mark.skipif(not _R6_LIVE_REQUESTED,
+                    reason="live OpenROAD container proof not requested (set"
+                           " VIBEIC_R6_LIVE=1 with the vibeic-eda container up)")
+@pytest.mark.skipif(
+    _R6_STATE != PROBE_PRESENT,
+    reason=probe_skip_reason(_R6_STATE, _R6_DETAIL,
+                             "openroad not reachable in the vibeic-eda"
+                             " container",
+                             "bash tools/vibeic-eda/restart-eda.sh"))
 def test_live_emitted_block_ties_wells_and_prunes():
     """Run the ACTUAL emitted R6 block on a caravel-scale (2920x3520 um)
     fixed die with a tiny 4-cell cluster; prove taps are kept in the
@@ -267,7 +278,7 @@ def test_live_emitted_block_ties_wells_and_prunes():
     p = subprocess.run(
         ["docker", "exec", "vibeic-eda", "bash", "-lc",
          "cd /tmp && openroad -exit _r6_live.tcl 2>&1"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     out = p.stdout
     assert "SPARSE_DIE_TAPCELL_BOUNDED" in out, out[-2000:]
     # placed-cell wells tied

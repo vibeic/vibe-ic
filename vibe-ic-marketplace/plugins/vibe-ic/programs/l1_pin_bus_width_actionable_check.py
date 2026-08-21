@@ -4,16 +4,29 @@
 VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL).
 ------------------------------------------------------------------
 Why blocking and not advisory: the artefact this gate protects is the
-*top-module port list*. Phase2 (`programs/_specrtl_common.py`,
-`programs/phase2_scaffold_gen.py`) derives every port DECLARATION from
-`L1.pin_table[]`, and `l9_rtl_pin_consistency_check` later diffs that
-emitted RTL back against the same table. A pin whose width is not
-resolvable to an integer is emitted as a 1-bit scalar port. Nothing
-downstream errors at that moment — the failure surfaces many steps
-later as a width-mismatch, a truncated datapath, or an
-`l9_rtl_pin_consistency` diff with an opaque cause. Advising here
-would reproduce the documented failure mode where a layer gate said
-FAIL and the flow continued anyway. So: FAIL => rc 1.
+*top-module port list*. A pin recorded here reaches that list
+THROUGH L9 — `phase1_doc_one_shot_runner` promotes each L1 pin's
+`{width, msb, lsb, width_symbolic, optional}` into the matching L9 entry, and
+`phase2_scaffold_gen.derive_signals` reads `L17.channels[]` then
+`L9.top_ports` / `L9.ports`. It never reads `pin_table` (ORGANIC #404
+measured `grep -c pin_table` = 0 in both `phase2_scaffold_gen.py` and
+`_specrtl_common.py`). The earlier wording here said phase2 derived every
+port declaration FROM `L1.pin_table[]` directly; that sent the next author
+to the wrong file, which is how #404 cost a day. The gate itself is
+unchanged and still correct — L1 is where the width must become actionable.
+`l9_rtl_pin_consistency_check` later diffs the emitted RTL back against the
+same table.
+
+`phase2_scaffold_gen.derive_signals` is a CONTRACT ORACLE, not a flow step
+(#509): no runner and no step of `flow/phase1_phase2_phase3.yaml` calls it,
+at any version. It is the executable statement of the derivation a
+conforming phase 2 owes, and this gate names it for that reason. So a pin
+whose width is not resolvable to an integer is a pin any conforming phase 2
+would emit as a 1-bit scalar port — and nothing errors at that moment. The
+failure surfaces many steps later as a width-mismatch, a truncated
+datapath, or an `l9_rtl_pin_consistency` diff with an opaque cause.
+Advising here would reproduce the documented failure mode where a layer
+gate said FAIL and the flow continued anyway. So: FAIL => rc 1.
 
 The principle it embodies
 ------------------------------------------------------------------
@@ -34,9 +47,9 @@ declaration can be emitted from. Measured on real Phase-1 output
      "msb": null, "lsb": null}
 
 `width` is PRESENT — a presence-shaped check reports CAPTURED — but it
-is a prose sentence. `int(width)` is impossible, so phase2 emits a
-1-bit `x` for what the design's own interface table declares as an
-N-bit multiplicand bus.
+is a prose sentence. `int(width)` is impossible, so a conforming phase 2
+would emit a 1-bit `x` for what the design's own interface table
+declares as an N-bit multiplicand bus.
 
 What is derived, and from what
 ------------------------------------------------------------------
@@ -153,12 +166,20 @@ def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def _resolved_width(pin: Dict[str, Any]) -> Optional[int]:
-    """Bit width the port-list consumer can actually emit, or None.
+def _resolved_width(
+    pin: Dict[str, Any],
+    params: Optional[Dict[str, Tuple[int, str]]] = None,
+) -> Optional[int]:
+    """Bit width the port-list contract can actually be met with, or None.
 
     Accepts an integer `width`, an integer `msb`/`lsb` pair, or a
-    pure-numeric string (`"32"`) — phase2 int()s that successfully.
+    pure-numeric string (`"32"`) — the oracle int()s that successfully.
     A prose string is NOT actionable and returns None.
+
+    Finally, a STRUCTURED symbolic width (`width_symbolic`) is resolved
+    against parameter defaults recovered from the design's own inputs.
+    See `_symbolic_width_bits` for why that is a different state from
+    prose, and for what still fails.
     """
     w = pin.get("width")
     if _is_int(w) and w > 0:
@@ -170,7 +191,140 @@ def _resolved_width(pin: Dict[str, Any]) -> Optional[int]:
     msb, lsb = pin.get("msb"), pin.get("lsb")
     if _is_int(msb) and _is_int(lsb):
         return abs(msb - lsb) + 1
+    if params:
+        bits, _src = _symbolic_width_bits(pin, params)
+        if bits is not None:
+            return bits
     return None
+
+
+# --------------------------------------------------------------------
+# Structured symbolic width  (`width_symbolic`)
+# --------------------------------------------------------------------
+# MEASURED, on the three published spm cells and on caravel_user_project:
+# this gate was collapsing two OPPOSITE states into one FAIL.
+#
+#   extraction FAILED     caravel `irq`:
+#       width=None, width_symbolic=None, msb=None, lsb=None
+#       The design's own inputs index bit 2, so it is >= 3 bits, and
+#       nothing in L1 says so. A conforming phase 2 really would emit a
+#       1-bit port. This is a real defect and MUST keep failing.
+#
+#   extraction SUCCEEDED  spm `x`:
+#       width='N-bit(`[size-1:0]`,parameter `size` ...)'   <- prose
+#       width_symbolic='size-1:0'                          <- STRUCTURED
+#       The width is not missing; it is legitimately PARAMETERISED,
+#       which is what the design's own interface table declares.
+#
+# The second was reported with the first's words ("no port declaration
+# can be emitted from") while the cell's own committed artefacts show
+# one was: phase2 emitted `input wire [size-1:0] x` and the synthesised
+# netlist carries `input [31:0] x`, through to signed-off GDS.
+#
+# `width_symbolic` was merged by the extractor (see the module docstring)
+# but no code path here ever read it. Requiring an integer on this shape
+# also asks L1 to hard-code the one thing the spec declares parametric.
+#
+# The teeth are preserved by resolving rather than excusing: the symbolic
+# range must name parameters whose DEFAULTS are recoverable from the
+# design's own inputs. A `width_symbolic` naming a parameter nobody
+# defines still yields None, and still FAILs — otherwise "has a
+# width_symbolic" would become a new rubber stamp.
+
+# `parameter size = 32`, `localparam int W = 8`, `parameter logic [3:0] N = 4`
+_HDL_PARAM_DEF = re.compile(
+    r"\b(?:parameter|localparam)\b[^=;\n]*?"
+    r"(?<![A-Za-z0-9_])([A-Za-z_]\w*)\s*=\s*(\d+)")
+# A doc table row whose first cell is the parameter name and whose next
+# cell is a bare integer:  | `size` | 32 | typical 8/16/32 ... |
+_DOC_PARAM_ROW = re.compile(
+    r"^\s*\|\s*`?([A-Za-z_]\w*)`?\s*\|\s*`?(\d+)`?\s*\|", re.MULTILINE)
+# One identifier with an optional integer offset: `size-1`, `W`, `N+1`.
+_SYM_TERM = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:([+-])\s*(\d+)\s*)?$")
+
+
+def derive_parameter_defaults(
+    project: Path,
+) -> Dict[str, Tuple[int, str]]:
+    """Parameter -> (default, dialect) from the design's OWN inputs.
+
+    Two dialects, because the input corpus differs: HDL sources declare
+    `parameter size = 32`; docs-only designs (no RTL staged) carry the
+    same fact as an interface-table row. Nothing about any design, PDK
+    or vendor is hardcoded — both patterns are grammar, not literals.
+
+    HDL wins over a doc row when both name the same parameter: a
+    declaration is stronger evidence than a table cell, whose column
+    could in principle be a minimum rather than a default. The dialect
+    is returned with the value so the report can disclose which was
+    used and a reader can audit the weaker one.
+    """
+    out: Dict[str, Tuple[int, str]] = {}
+    for path in _iter_input_files(project):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _DOC_PARAM_ROW.finditer(text):
+            name, val = m.group(1), int(m.group(2))
+            if name.lower() in _HDL_KEYWORDS:
+                continue
+            out.setdefault(name, (val, "doc-table"))
+        for m in _HDL_PARAM_DEF.finditer(text):
+            name, val = m.group(1), int(m.group(2))
+            if name.lower() in _HDL_KEYWORDS:
+                continue
+            prev = out.get(name)
+            if prev is None or prev[1] != "hdl-declaration":
+                out[name] = (val, "hdl-declaration")
+    return out
+
+
+def _eval_term(term: str, params: Dict[str, Tuple[int, str]]) -> Optional[int]:
+    """`32` / `size` / `size-1` -> int, using ONLY known parameters.
+
+    Deliberately not an expression evaluator: one identifier with an
+    optional integer offset covers the port-declaration grammar, and
+    anything richer is left unresolved rather than guessed.
+    """
+    term = term.strip().strip("`").strip()
+    if re.fullmatch(r"\d+", term):
+        return int(term)
+    m = _SYM_TERM.match(term)
+    if not m:
+        return None
+    hit = params.get(m.group(1))
+    if hit is None:
+        return None
+    val = hit[0]
+    if m.group(2):
+        off = int(m.group(3))
+        val = val + off if m.group(2) == "+" else val - off
+    return val
+
+
+def _symbolic_width_bits(
+    pin: Dict[str, Any], params: Dict[str, Tuple[int, str]]
+) -> Tuple[Optional[int], Optional[str]]:
+    """Resolve `width_symbolic` ("size-1:0") to a bit count, or None."""
+    ws = pin.get("width_symbolic")
+    if not isinstance(ws, str) or ":" not in ws:
+        return None, None
+    hi_s, _, lo_s = ws.strip().strip("[]").partition(":")
+    hi, lo = _eval_term(hi_s, params), _eval_term(lo_s, params)
+    if hi is None or lo is None:
+        return None, None
+    bits = abs(hi - lo) + 1
+    if bits <= 0:
+        return None, None
+    used = sorted({m.group(1) for m in (_SYM_TERM.match(hi_s.strip()),
+                                        _SYM_TERM.match(lo_s.strip())) if m}
+                  & set(params))
+    dialects = sorted({params[n][1] for n in used}) or ["literal"]
+    src = "%s via %s" % (
+        ", ".join("%s=%d" % (n, params[n][0]) for n in used) or ws,
+        "+".join(dialects))
+    return bits, src
 
 
 def _pin_names(pin_table: List[Any]) -> List[str]:
@@ -185,6 +339,17 @@ def _pin_names(pin_table: List[Any]) -> List[str]:
 
 def _iter_input_files(project: Path):
     root = project / "input"
+    if not root.is_dir():
+        # A PUBLISHED CELL has no `input/` of its own — the design input is
+        # shared once per IC at `ic/<IC>/input/`, one level up from
+        # `ic/<IC>/v<ver>_<PDK>/`. Without this the symbolic resolution can
+        # never find the parameter in the layout the repository actually
+        # publishes: measured on `spm/v1.5.58_ihp-sg13g2`, the resolver saw
+        # no inputs at all and the cell still FAILed, while `size = 32` sits
+        # in `ic/spm/input/docs/L3_external_interface.md` line 31. A fix that
+        # only reaches source run directories leaves the deliverable — the
+        # thing this repo points at — exactly as it was.
+        root = project.parent / "input"
     if not root.is_dir():
         return
     for dirpath, dirnames, filenames in os.walk(root):
@@ -292,8 +457,10 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     names = _pin_names(pin_table)
     numeric, symbolic, files_read = derive_bus_evidence(project, names)
+    params = derive_parameter_defaults(project)
 
     violations: List[Dict[str, Any]] = []
+    resolved_symbolically: List[Dict[str, Any]] = []
     bus_confirmed = 0
     for pin in pin_table:
         if not isinstance(pin, dict):
@@ -302,8 +469,19 @@ def evaluate(project: Path) -> Dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             continue
         name = name.strip()
-        got = _resolved_width(pin)
+        got = _resolved_width(pin, params)
         lower = numeric.get(name)
+        # Disclose every width that came from a resolved parameter rather
+        # than from an integer L1 already carried: it is the weaker of the
+        # two provenances and a reader must be able to audit the number.
+        if got is not None and _resolved_width(pin) is None:
+            _bits, _src = _symbolic_width_bits(pin, params)
+            if _bits is not None:
+                resolved_symbolically.append({
+                    "pin": name, "bits": _bits,
+                    "width_symbolic": pin.get("width_symbolic"),
+                    "resolved_from": _src,
+                })
 
         if lower is not None and lower > 1:
             bus_confirmed += 1
@@ -318,7 +496,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         f"`{name}`, so it is at least {lower} bits wide, but "
                         f"L1 carries width={pin.get('width')!r} / "
                         f"msb={pin.get('msb')!r} / lsb={pin.get('lsb')!r} — "
-                        f"phase2 emits a 1-bit port."),
+                        f"a conforming phase 2 would emit a 1-bit port."),
                 })
             elif got < lower:
                 violations.append({
@@ -353,6 +531,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "input_files_scanned": files_read,
         "bus_confirmed": bus_confirmed,
         "violations": violations,
+        "symbolic_widths_resolved": resolved_symbolically,
     }
     if not violations:
         if bus_confirmed == 0:
@@ -372,7 +551,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
         return report
     report.update(verdict="FAIL", rc=1, reason=(
         f"{len(violations)}/{bus_confirmed} bus-confirmed pin(s) carry no "
-        f"width phase2 can emit a port declaration from."))
+        f"width a conforming phase 2 could emit a port declaration from."))
     return report
 
 

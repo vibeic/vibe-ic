@@ -38,6 +38,32 @@ layer.
 ``SEQUENCE_ARRAY_KEYS`` is now the single declared alias set, exported so
 that ``l12_sequences_in_consumed_layer_check`` imports it instead of
 re-spelling it — the two cannot drift apart again.
+
+#496 — DENOMINATOR DISCLOSURE (classified: EXTRACTION CANNOT REACH ITS INPUT)
+----------------------------------------------------------------------------
+``sequences_checked: 0`` on all 107 tracked ``rtl`` directories under
+``benchmark-data``. This is NOT because the corpus declares no sequences. It is
+because ``--l12-json`` is optional, nothing supplies it, and the gate has no way
+to find its own input from an RTL directory. Measured for #496 by locating each
+project's L12 document and passing it in:
+
+  * 105 of 106 project trees containing a tracked ``rtl`` directory ALSO ship a
+    discoverable ``L12_*.json``;
+  * supplying it moves ``sequences_checked`` above zero in 7 of them;
+  * on those 7 the gate emits ERROR findings (3-4 each) rather than passing.
+
+So the gate is silent over an input that is present, reachable and non-clean.
+The v1.1.0 note above records the same failure one layer in (reading the wrong
+key); this is the same shape one layer out (never being handed the file).
+
+The PLUMBING is not fixed here, deliberately. Every one of those findings
+inspected is ``NO_IMPL_MODULE`` against a MONOLITHIC design — e.g. the eSPI
+project implements all three declared sequences inside a single ``chip_top.v``,
+which the rule reads as three missing modules because it matches sequence ids
+against file BASENAMES. Supplying the input without first fixing that rule
+would convert a silent gate into a loud wrong one. What lands here is the
+disclosure: the zero now names the missing ``--l12-json`` as its cause, so the
+gate can no longer be read as having found the design clean.
 """
 from __future__ import annotations
 
@@ -48,6 +74,11 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _gate_denominator as GD
+
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = "declared L12 behavioural sequences"
 
 
 @dataclass
@@ -332,17 +363,53 @@ def audit(rtl_dir: Path, l12_json: Path | None) -> Tuple[List[Finding], Dict]:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def build_report(findings: List[Finding], rtl_dir: Path, summary: Dict) -> Dict:
+def _denominator(summary: Dict, l12_json: Path | None) -> GD.Denominator:
+    checked = summary.get("sequences_checked", 0)
+    total = summary.get("sequences_total", 0)
+    if checked:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=checked,
+                              considered=total,
+                              details={"sequence_array_key":
+                                       summary.get("sequence_array_key", "")})
+    if l12_json is None:
+        reason = (
+            "--l12-json was not supplied, so no L12 document was opened. This "
+            "is a CALLER gap, not a design verdict: the gate has no way to "
+            "discover its own input from an RTL directory, and 105 of the 106 "
+            "project trees in this repo that contain a tracked rtl/ directory "
+            "do ship a reachable L12 document (#496). Read this as 'not "
+            "checked', never as 'every declared sequence is implemented'.")
+    elif not l12_json.exists():
+        reason = (f"--l12-json points at {l12_json}, which does not exist — "
+                  "no sequence was read.")
+    elif total == 0:
+        reason = (
+            f"{l12_json.name} was parsed but holds no non-empty sequence "
+            f"array under any of {list(SEQUENCE_ARRAY_KEYS)}. This project "
+            "declares no behavioural sequence to implement.")
+    else:
+        reason = (
+            f"all {total} declared sequence(s) were skipped as "
+            "info_only / documentation_only, so none carries an "
+            "implementation requirement.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=total,
+                          not_applicable_reason=reason,
+                          details={"sequence_array_key":
+                                   summary.get("sequence_array_key", "")})
+
+
+def build_report(findings: List[Finding], rtl_dir: Path, summary: Dict,
+                 l12_json: Path | None = None) -> Dict:
     has_err = any(f.severity == "ERROR" for f in findings)
     return {
         "program": "l12_sequence_implementation_check",
         "version": "1.1.0",
         "rtl_dir": str(rtl_dir),
-        "summary": {
+        "summary": GD.attach({
             **summary,
             "findings_count": len(findings),
             "pass": not has_err,
-        },
+        }, _denominator(summary, l12_json)),
         "findings": [asdict(f) for f in findings],
     }
 
@@ -370,7 +437,7 @@ def main(argv: List[str] = None) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
-    report = build_report(findings, rtl_dir, summary)
+    report = build_report(findings, rtl_dir, summary, l12_json)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json_out:
