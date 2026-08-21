@@ -37148,6 +37148,79 @@ catch {{set_wire_rc -clock -layer {mp}5}}
     return ir_ok, em_ok
 
 
+def _measured_subject(project: Path, top: str,
+                      inputs: Sequence[Optional[Path]],
+                      tool_log: Optional[Path] = None) -> Dict[str, Any]:
+    """WHOSE design this report is about, and WHICH bytes were read to make it.
+
+    THE DEFECT THIS EXISTS FOR (vibe-ic#1119, attack A3_CROSS_DESIGN). Copying a
+    different design's same-named artefacts over a published cell and re-running
+    that cell's own sign-off gates left `antenna_report_check` and
+    `erc_density_check` green. They could not do otherwise:
+    `reports/phase3/antenna.rpt` was BYTE-IDENTICAL between
+    `spm/v1.9.96_gf180mcuD` and `sha256/clean_run_v1427_20260715` — two designs,
+    two PDKs — a 487-byte summary reading "0 net violations, 0 pin violations"
+    with no name in it anywhere. `reports/density.{rpt,json}` differed only in
+    their numbers. Every other sign-off report in the flow states its design
+    somewhere (KLayout's `<top-cell>`, OpenROAD ODB's `Design:`, netgen's
+    `Device classes`), so a gate could bind those and not these. The gap was in
+    the PRODUCER, and this is the producer end of it.
+
+    WHAT A STAMP IS AND IS NOT. It makes a report ATTRIBUTABLE. It does not make
+    it a MEASUREMENT, and nothing downstream may read it as one: a report that
+    is empty, absent or unreadable stays exactly as unusable as it was, and a
+    stamp on it changes nothing except that its subject is now known. The two
+    questions — "could I read this" and "was what I read clean" — stay separate
+    at the gate.
+
+    THE PATHS ARE RESOLVED, NOT TEMPLATED. `antenna.json` carried
+    `"source": "phase3/stage3/pnr/openroad.log"` as a typed constant, and the
+    published cell does not contain that file — the citation named a path rather
+    than a thing. Anything recorded here is stat-ed and hashed, and what could
+    not be read is recorded as `null` with the path still named, so "the input
+    was absent" and "the input was not looked at" stay different facts.
+    """
+    def _one(p: Optional[Path]) -> Optional[Dict[str, Any]]:
+        if p is None:
+            return None
+        try:
+            rel = str(Path(p).resolve().relative_to(Path(project).resolve()))
+        except ValueError:
+            rel = str(p)
+        rec: Dict[str, Any] = {"path": rel, "sha256": None, "bytes": None}
+        try:
+            data = Path(p).read_bytes()
+        except OSError:
+            return rec
+        rec["sha256"] = hashlib.sha256(data).hexdigest()
+        rec["bytes"] = len(data)
+        return rec
+
+    return {
+        "design": top,
+        "inputs": [r for r in (_one(i) for i in inputs) if r is not None],
+        "tool_log": _one(tool_log),
+    }
+
+
+def _measured_subject_lines(subject: Dict[str, Any]) -> str:
+    """The same facts as text, for the `.rpt` half.
+
+    `measured_design:` is spelled so it cannot be mistaken for a tool's own
+    output — the RUNNER is asserting this, not OpenROAD — and so the auditor's
+    dialect for it is separate from the ODB one.
+    """
+    out = [f"measured_design: {subject['design']}"]
+    for rec in subject["inputs"]:
+        out.append(f"measured_from: {rec['path']} sha256:"
+                   f"{rec['sha256'] or 'UNREADABLE'}")
+    log = subject.get("tool_log")
+    if log is not None:
+        out.append(f"tool_log: {log['path']} sha256:"
+                   f"{log['sha256'] or 'UNREADABLE'}")
+    return "\n".join(out) + "\n"
+
+
 def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                          container: str, antenna_rpt: Path,
                          notes: List[str]) -> bool:
@@ -37243,7 +37316,10 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "# routing. Reported FAIL, never a silent antenna-clean pass on an\n"
                     "# unrouted design.\n"
                     if routing_incomplete else "")
+                _subject = _measured_subject(project, top, [def_file],
+                                             tool_log=pnr_log)
                 antenna_rpt.write_text(
+                    _measured_subject_lines(_subject) +
                     "# OpenROAD antenna check (gate-oxide protection) — IN-SESSION\n"
                     "# post-repair result captured during PnR (incremental loop:\n"
                     "# repair_antennas -iterations 1 -> incremental detailed_route ->\n"
@@ -37269,7 +37345,12 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "routing_incomplete": routing_incomplete,
                     # #552 — its own field, not folded into routing_incomplete.
                     "pins_unaccessed": pins_unaccessed,
-                    "source": "phase3/stage3/pnr/openroad.log",
+                    # RESOLVED, not templated. This read
+                    # "phase3/stage3/pnr/openroad.log" as a constant, and the
+                    # published cell does not carry that file.
+                    "source": (_subject["tool_log"]["path"]
+                               if _subject["tool_log"] else None),
+                    "measured_subject": _subject,
                     "verdict": verdict,
                 }, indent=2) + "\n")
                 notes.append(
@@ -37329,7 +37410,10 @@ exit
         notes.append(f"antenna check produced no ANT output (rc={rc})")
         return False
     total = net_viol + pin_viol
+    _subject = _measured_subject(project, top, [def_file],
+                                 tool_log=out_dir / "antenna.log")
     body = (
+        _measured_subject_lines(_subject) +
         "# OpenROAD antenna check (gate-oxide protection) — emitted by\n"
         "# phase3_one_shot_runner (ORGANIC-20260531 sign-off-chain step).\n"
         "# Tool: openroad / check_antennas (ANT). The detailed router runs\n"
@@ -37350,6 +37434,7 @@ exit
         "pin_violations": pin_viol,
         "clean": total == 0,
         "source": str(antenna_rpt.relative_to(project)),
+        "measured_subject": _subject,
         "verdict": "PASS" if total == 0 else "FAIL",
     }, indent=2) + "\n")
     return True
@@ -37941,7 +38026,14 @@ exit
     density_rpt = project / "reports" / "density.rpt"
     density_json = project / "reports" / "density.json"
     density_rpt.parent.mkdir(parents=True, exist_ok=True)
+    # The DEF the filler actually read and the DEF it wrote, plus the tool's own
+    # log — all resolved and hashed. Before this, density.{rpt,json} named no
+    # design at all and differed between two designs only in their numbers, so
+    # nothing could tell one run's fill report from another's.
+    _subject = _measured_subject(project, top, [def_file, filled_def],
+                                 tool_log=out_dir / "metal_fill.log")
     density_rpt.write_text(
+        _measured_subject_lines(_subject) +
         "# Metal-fill / density report — OpenROAD filler_placement\n"
         "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
@@ -37980,6 +38072,7 @@ exit
                  "core_utilization_pct = report_design_area (logic/core); "
                  "per-layer metal CMP density screened by KLayout "
                  "met_min_ca_density at sign-off DRC"),
+        "measured_subject": _subject,
     }, indent=2) + "\n")
     notes.append(
         f"metal fill: {placed_n} fillers placed → filled.def "
