@@ -82,10 +82,29 @@ run at load 3.45, 13 alone at load 18-30 (`1 passed in 163.79s`). The failure
 signature to recognise is `PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress
 stream was produced` — the child was killed before it emitted anything, i.e.
 interpreter startup was scored as a hang. **That is a real weakness**: the
-watchdog's stall clock starts before the child can possibly report. The fix
-belongs in `pytest_per_file_junit.py`, the driver every tier runs through, and
-showing it harms nothing needs the full `programs/tests` suite this host cannot
-carry. It is written down here rather than half-landed.
+watchdog's stall clock starts before the child can possibly report, so
+"has not started yet" and "stopped reporting" are the same state to it — the
+same conflation this repository has already removed from `_vacuous_exit`,
+`UNCHECKABLE` and rc=127.
+
+**It was scoped before being declined, and the blast radius is measured, not
+guessed.** There is no startup-grace concept anywhere: `stall_grace_s` is ONE
+uniform window in `_owned_process_supervisor.run_owned`, and six programs feed
+it —
+
+    _docker_watchdog.py        EDA container runs
+    gatekeeper_review.py       THE LANDING GATE
+    repo_hygiene_parallel.py   the hygiene tier (~57 min)
+    phase3_one_shot_runner.py  real PnR / DRC / LVS runs
+    pytest_per_file_junit.py   every test tier
+    _watchdog.py               the 1800 s generic lease
+
+Separating the two states is the right fix and it changes kill timing for the
+landing gate, the hygiene tier, container runs and Phase 3. Showing that harms
+nothing needs the full `programs/tests` suite (forbidden here — measured load
+276, 0 free memory), plus a hygiene tier that perturbs itself, plus EDA
+container runs. It is written down with its scope rather than half-landed on a
+validation surface that cannot reach it.
 
 ### Why 10 and 11 were NOT given 12's fix, though the technique fits
 
