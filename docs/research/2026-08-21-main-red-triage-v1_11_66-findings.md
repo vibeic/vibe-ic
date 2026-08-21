@@ -1682,6 +1682,55 @@ was an assertion. Had it been a line whose absence weakened the test, nothing
 would have complained.
 
 
+## M25 — where the re-founding pattern STOPS, and why
+
+A and C both worked. It is worth writing down precisely why, because the same
+move fails on the two knob reds that remain, and someone will otherwise try it.
+
+**A and C were re-foundable because a real event left a trace.**
+
+* A: the arms genuinely run, so the verdict document carries their records
+  (`base_land`, `land`, `base_total`, `candidate_total`). The assertion moved to
+  a channel that was already carrying the truth.
+* C: the tamper attempt genuinely happens — the planted test executes inside the
+  arm and fails — so there are positive facts to assert: it appears in
+  `delta.new_failures`, and `expected_tree == verified_tree` proves it achieved
+  nothing.
+
+**The remaining two are not re-foundable this way, because NO EVENT OCCURS.**
+
+`..._relinked_parent_selection_is_norecord` and
+`..._b2_corpus_mutation_is_post_attested_and_norecord` deliver their attack
+purely through an env knob. The knob never arrives, so there is no relink and no
+mutation — the verifier performs an ordinary clean run. **There is no trace to
+assert about an attempt that was never made.** Re-pointing their assertions
+would produce a test that passes because nothing happened, which is the vacuous
+green this document exists to hunt.
+
+**And the selection relink is doubly undeliverable — checked, not assumed.** The
+stub's block targets
+`run_dir="$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")"`, and that
+variable is **absent from `hermetic_candidate_runner.py` entirely** (the same
+fact that made my M13 prewrite control inconclusive). So `run_dir` resolves to
+`.` on a read-only rootfs. Even if the knob DID arrive, the attack would write
+nowhere: it aims at the parent's run directory, which is not mounted into the
+arm at all.
+
+So its guarantee — an arm cannot relink the parent-owned selection — **is
+structurally true**, and partially covered already by M15's read-only bind test.
+It is the same disposition as `..._cannot_prewrite_base_wave_artifacts`
+(vacuous but guaranteed), except that this one asserts a DETECTION and so shows
+up red rather than green. Red and green, same underlying non-event.
+
+**The boundary, stated for whoever continues this:** re-found a guard by
+re-pointing its assertions ONLY when the behaviour it names still occurs. When
+the behaviour no longer occurs, the honest options are to deliver the attack
+through a channel that crosses (D's open question for the corpus; nothing
+available for the selection), or to retire the guard against the structural
+property that replaced it — and to say plainly that coverage was retired, not
+relocated.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
