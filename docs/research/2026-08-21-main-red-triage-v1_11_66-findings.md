@@ -2014,6 +2014,80 @@ not be done. **The things you declare impossible are the claims least likely to
 be checked, including by you.**
 
 
+## M32 — escalation 2 FIXED: the D3 manifest entry, measured
+
+M30 found the blocker false. This is the fix.
+
+The gate's own complaint was exact:
+
+```
+FAIL — the flow declares paths the d3 evidence manifest has never measured.
+  step 31: reports/phase3/drc_signoff.json
+164 declared required_outputs path(s) across 67 step(s); 1 not covered
+```
+
+**Measured, not asserted.** `benchmark-data/ic/spm/v1.9.96_gf180mcuD` — the SAME
+declared run root step 31's other entries already cite — carries
+`provenance.jsonl` AND `reports/orchestrator/`, so it is admissible under the
+manifest's own criterion, and its `reports/phase3/drc_signoff.json` is
+**1919 bytes**. Entry added in the sibling schema with a provenance note.
+
+| check | before | after |
+|---|---|---|
+| `d3_manifest_declaration_parity_check` | 1 not covered | **0 not covered** |
+| `test_d3_manifest_declaration_parity` | 1 failed, 12 passed | **13 passed** |
+| `test_flow_manifest_declaration_parity` | 2 failed, 10 passed | **12 passed** |
+
+**Three reds closed by measuring a real artefact.** Not a baseline rewrite, not a
+relaxation.
+
+### The blast radius, checked — including the one the GATE told me to check
+
+The gate's failure text names its own downstream risk: *"if that step is a
+mutation witness (see `matrix_mutation_ledger.py`) it also disables the proof
+that the mutation is still caught — LOCK 2 requires the unmutated cell to PASS."*
+That is a warning about this exact change, and it is only visible if you run the
+gate directly — the test asserts a bare `main() == RC_OK` and shows none of it.
+
+| consumer | result |
+|---|---|
+| `test_matrix_d7_outputs_list_complete` | 97 passed, 3 skipped, 4 xfailed |
+| `test_matrix_a3_live_production_reads_its_inputs` | 2 skipped |
+| `test_matrix_mutation_ledger` | 3 failed, 121 passed — **identical ID set to the pristine baseline** |
+
+Control asserted both directions (`control VERIFIED: manifest is pristine` /
+`control VERIFIED: my entry is in place`). Newly red: none. Fixed: none. Step 31
+appears only in `applies_to` lists, never as a `witness`.
+
+### Instrument defect #7 — `tail` is not a capture, and it flattered me
+
+My first ledger run was captured with `tail -3`, truncating the `FAILED` list to
+two lines. Diffed against a COMPLETE baseline, that manufactured a difference and
+reported **"fixed by my change: `[step0.5ic]`"**. I had fixed nothing.
+
+It belongs with the other six, and in their worst category: like the `git stash`
+control and the rename-vs-fix diff, **it produced a flattering answer rather than
+an error.** The only reason it did not survive was a `3 failed` / two-`FAILED`-lines
+discrepancy I flagged as needing explanation before either number was trusted.
+
+**`tail` is not a capture.** Any comparison in this document that used a
+truncating capture is suspect on the same grounds; the ones that mattered were
+re-run with full lists.
+
+### A pre-existing red I never documented: `[step0.5ic]`
+
+`1.6x` appears twice in this document. **`0.5ic` appears zero times.** Both are
+`test_every_enforced_cell_carries_a_named_mutation` failures in the pristine
+baseline, and my earlier account named only `1.6x` as the remaining unnamed-mutation
+cell. The ledger's comments record `1.6x` as replayed and confirmed reddened
+(`--replay D1-BLIND-GATE-PROGRAMS --step 1.6x -> REDDENED`); there is no
+equivalent note for `0.5ic`.
+
+Not mine, not new, and **not previously named by me** — "pre-existing" and
+"known" are different properties and I had been treating them as one. It is a
+third mutation-ledger red awaiting a named mutation, and it is now written down.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
