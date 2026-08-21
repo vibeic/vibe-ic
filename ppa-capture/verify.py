@@ -209,6 +209,24 @@ for y in yamls:
 check("every emitted backlog passes its own sanitiser",
       not bad_yaml, f"{len(yamls)} checked, refused: {bad_yaml}")
 
+# 14. the emitted artefacts are IN SYNC with the records that produced them.
+#     candidates/ is generated. Edit recoveries.json without re-emitting and
+#     the sketches go stale silently — they still resolve by name (check 8),
+#     they still carry a plausible docstring, and they describe the previous
+#     version of the rule. Name resolution cannot see content drift.
+def _n(s: str) -> str:
+    return " ".join(str(s).split())
+_sk = _n("".join(f.read_text() for f in CAND.glob("*.py")))
+_yl = _n("".join(f.read_text() for f in CAND.rglob("*.yaml")))
+control("emitted-sync", _n("a field value that was never emitted anywhere") not in _sk)
+drift = [(r.get("rule_name") or r.get("title"), f)
+         for r in RECS
+         for f in (("pattern", "docstring", "fix_action") if r["bucket"] == "A"
+                   else ("pattern", "suggested_fix"))
+         if _n(r.get(f, "")) and _n(r.get(f, "")) not in (_sk if r["bucket"] == "A" else _yl)]
+check("every emitted artefact is in sync with its record",
+      not drift, f"{len(drift)} stale field(s): {drift[:2]}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

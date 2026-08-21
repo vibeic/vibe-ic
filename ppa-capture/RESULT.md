@@ -1469,7 +1469,15 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Twenty checks now.**
+again in silence. **Twenty-one checks now**, the last of them the one that closes the loop:
+`candidates/` is *generated*, so editing `recoveries.json` without re-emitting
+leaves sketches that still resolve by name, still read plausibly, and describe
+the previous version of the rule. Name resolution cannot see content drift.
+
+That check was **proven live rather than argued**: perturbing one record's
+docstring makes it fail and name the record and the field; restoring the record
+makes it pass. A control that has actually failed on the real artefact is worth
+more than any constructed one.
 
 **Both new controls were weak and were replaced.** One asserted a row number
 that could never appear; the other asserted the sanitiser file exists. Neither
