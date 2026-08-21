@@ -47,6 +47,7 @@ process-node or design name appears in this file.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -566,12 +567,47 @@ def test_a_declared_value_the_pdk_does_not_carry_is_still_refused(
 # ══════════════════════════════════════════════════════════════════════════
 # 8. THE SEAL RING — declaration section 2C
 # ══════════════════════════════════════════════════════════════════════════
+#: The environment variables `resolve_script` consults, steps 4 and 5 of its
+#: own documented order: `$KLAYOUT_SEALRING_SCRIPT` (LibreLane's variable) and
+#: `$PDK_ROOT/$PDK/` + the conventional script path.
+_PDK_ENV = ("PDK", "PDK_ROOT", "KLAYOUT_SEALRING_SCRIPT")
+
+
 def _seal(tmp_path: Path, answers, raw=None) -> tuple:
+    """Drive the seal path over a DECLARATION, with the PDK condition PINNED.
+
+    WHY THE ENVIRONMENT IS CLEARED, and it is not a relaxation. Every test that
+    uses this helper is about what the DESIGN DECLARED; none is about which PDK
+    the host happens to have installed. `resolve_script` reads `$PDK_ROOT/$PDK`
+    and `$KLAYOUT_SEALRING_SCRIPT`, so leaving them set makes the branch taken a
+    property of the machine:
+
+        host  (PDK unset)                     -> "no seal-ring generator is
+              declared for the … PDK" -> marker=True
+        image (PDK=…, PDK_ROOT=/foss/pdks with real PDKs installed)
+              -> a generator RESOLVES, so that branch never fires and control
+                 reaches "no streamed GDS to seal" -> marker=False
+
+    MEASURED 2026-08-21: unpinned, three tests in this file pass on a host with
+    no PDK and fail in the pinned runner image, which is the lane CI actually
+    uses. BOTH results were the program behaving correctly — `_skip`'s docstring
+    makes "the PDK ships no generator" a DECIDED not-applicable that earns the
+    marker, and "no streamed GDS" an absent INPUT that must not. The defect was
+    that the fixture never stated which of the two conditions it meant, so the
+    assertion was answered by the machine instead of by the test.
+    """
     root = tmp_path / "seal"
     (root / TD.DECLARATION_REL).parent.mkdir(parents=True, exist_ok=True)
     _declaration(root, answers, raw=raw)
-    res = DFG.run(root, None, None, None, None, None, None, "python3", None,
-                  None, None, None, False, str(root / "die_finishing.json"))
+    saved = {k: os.environ.pop(k, None) for k in _PDK_ENV}
+    try:
+        res = DFG.run(root, None, None, None, None, None, None, "python3",
+                      None, None, None, None, False,
+                      str(root / "die_finishing.json"))
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
     marker = root / DFG._SKIPPED_REL
     return res["seal_ring"], marker
 

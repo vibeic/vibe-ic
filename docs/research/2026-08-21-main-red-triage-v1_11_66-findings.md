@@ -539,3 +539,56 @@ because on a host with no PDK the code never reaches the failing branch. It
 remains the single best argument in this whole thread for running the control
 lane: it is not a phantom, it is the opposite — a real defect only the CI lane
 can see.
+
+# ===== I WAS WRONG ABOUT THE SEAL-RING TRIO, FIVE TIMES. HERE IS THE FIX. =====
+
+I called these three "a real defect only the CI lane can see" and "the best
+argument in this thread for running the control", at v1.11.47, .51, .57, .62 and
+.66. **They are not a defect in the program. The program is correct in BOTH
+lanes, and the test was reading the machine.**
+
+`_skip`'s own docstring draws the distinction and cites the regression it exists
+for:
+
+> `marker=True` means "die finishing was considered and legitimately does not
+> apply here" — the PDK ships no seal-ring generator. That is a DECIDED outcome
+> and it earns `die_finishing.SKIPPED.txt`.
+> `marker=False` … means "the step could not run": no streamed GDS … Those are
+> absences of the step's own INPUTS … and they must NOT leave a "skipped" marker
+> behind, because the flow reads that marker as the step having produced one of
+> its two declared outcomes.
+
+MEASURED:
+
+```
+HOST : PDK=<unset>                                  -> "no generator declared" -> marker True  -> PASS
+IMAGE: PDK=ihp-sg13g2 PDK_ROOT=/foss/pdks (real PDKs installed)
+                                                    -> a generator RESOLVES, so that branch
+                                                       never fires; control reaches
+                                                       "no streamed GDS"      -> marker False -> FAIL
+```
+
+`resolve_script`'s documented order includes `$KLAYOUT_SEALRING_SCRIPT` and
+`$PDK_ROOT/$PDK/`. The fixture never pinned which of the two conditions it
+meant, so **the assertion was answered by whether the host had a PDK installed**.
+
+**THE FIX** — in `_seal`, clear the three variables `resolve_script` consults for
+the duration of the call, so the fixture states its own precondition. Not a
+relaxation: every test using this helper is about what the DESIGN DECLARED, none
+is about the host's PDK, and the assertion now means the same thing everywhere.
+
+**PROOF, both directions:**
+
+```
+unmodified, image lane        3 failed, 43 passed
+FIXED,      image lane       46 passed
+FIXED,      host lane        46 passed        (no regression)
+fix REVERTED, image lane      3 failed, 43 passed   <- mutation arm
+```
+
+**What this costs my earlier reporting:** IMAGE-ONLY was 3 at five consecutive
+versions and I attributed it to main every time. The correct count of IMAGE-ONLY
+defects in main across this whole thread is **zero**. The image control still did
+its job — it surfaced a test that could not survive a PDK being installed — but
+what it surfaced was a fixture defect, not a program defect, and I should have
+read `_skip`'s docstring the first time instead of the fifth.
