@@ -459,8 +459,9 @@ their own populations, and every one of them was refuted by the same cheap move:
 | F2: the arithmetic pin generalises | the shape it keys on occurs at **224 sites** |
 | F4: (implied) a general vocabulary rule | population is **1** — a single instance, not a class |
 | F1 formulation 3 is silent on the rest "by construction" | over-fires on real PDKs — that was an argument, not a measurement |
+| F1 is a general rule | its population is **1 of 10** — a correct single-site rule |
 
-None of the six was visible from the one case that motivated it. All six took
+None of the seven was visible from the one case that motivated it. All seven took
 a single sweep to expose. Two are sharpest: **F2**, because I wrote the lesson
 into this document and then did not apply it to F2 for two more rounds; and
 **formulation 3's "by construction"**, because a by-construction argument is
@@ -576,6 +577,52 @@ plausible-but-absent 'core'      silent                    silent
 
 Clean on both, on every probe. The rule survives; the implementation of it that
 I published did not.
+
+---
+
+## CORRECTION — F1's population is one, and it is not the general rule I kept calling it
+
+The amendment above says the falsification must use the step's **own**
+declaration parser. That has a consequence I did not check when I wrote it: the
+rule applies only where such a parser exists.
+
+Measured over the 10 in-scope modules — those that refuse on a named absence
+after a lookup into a distribution view — **exactly one owns a declaration
+parser.**
+
+So after four formulations, a measured red/green pair, and a clean
+false-positive profile on two real distributions, the honest description of F1
+is: **a correct, well-measured, SINGLE-SITE rule.** Not the general one this
+document called it in every earlier version. It sits beside F4, which is also a
+population of one.
+
+### The widening I did not take, named so it is not lost
+
+There is a stronger reading available: instead of *use the parser you have*,
+demand that **any** step refusing on absence **own** a parser for the
+declaration grammar of the thing it refuses about. Under that reading the
+population is 10 and the rule fires on 9.
+
+I did not adopt it, and the reason is this document's own history: 9-of-10 is
+the exact shape that has been wrong six times here, and I have not measured
+whether those nine refuse about things that have a declaration grammar at all —
+several refuse about our own artefacts, which have none. It is recorded as
+**UNSWEPT**, so that nobody adopts it the way I adopted formulation 2.
+
+### What the capture actually delivers, stated plainly
+
+Of the five rules proposed, measured honestly:
+
+| rule | status after sweeping |
+|---|---|
+| F1 | correct, single-site (population 1 of 10) |
+| F2 | does not generalise as detection; becomes *declare the correspondence, then check it* |
+| F3a | a measured, reproducible defect in a forked tool — the strongest item here |
+| F3b | a real class with **four** instances and zero absorbed — the most valuable rule |
+| F4 | correct, single instance (population 1 of 1232) |
+
+The item most worth someone's time is **F3b**, and it is the one I first
+dismissed as having no population.
 
 ---
 
