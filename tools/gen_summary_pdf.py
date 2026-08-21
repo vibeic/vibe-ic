@@ -96,7 +96,7 @@ E.append(Spacer(1, 6*mm))
 
 # 3. MCP Server
 E.append(Paragraph('3. MCP EDA Server (7 Tools for AI Agent)', sH1))
-E.append(Paragraph('Location: ~/AI_IC_design/mcp-eda-server/ | Runtime: Node.js + @modelcontextprotocol/sdk', sSmall))
+E.append(Paragraph('Location: the bundled MCP server (plugins/vibe-ic/mcp-eda/) | Runtime: Node.js + @modelcontextprotocol/sdk', sSmall))
 E.append(Spacer(1, 3*mm))
 
 E.append(T([

@@ -10,7 +10,7 @@ description: Closed-loop hardware debug methodology for half-duplex protocol ICs
 > MDV-A1101 <benchmark> reference project as concrete evidence for the
 > rules below. The rules themselves are chip-AGNOSTIC and apply to
 > any IC of the matching `ic_class` (see
-> `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
+> `vibe-ic-marketplace/plugins/vibe-ic/programs/ic_class_profile.py`).
 > When you adopt this skill on a different IC, swap `<chip-class>` →
 > `<your IC name>` and `<half-duplex-tester>` → `<your host-tester name>`; the
 > structural gates and rule bodies do not depend on those SKUs.
@@ -33,7 +33,7 @@ C. Two classes of failure remain:
 
   - **Category B** — vendor doc disagrees with silicon (e.g. v099
     oracle returns 18 bytes for 0xE6 but the doc says 22). Plugin
-    extractor cannot detect this from L1-L13 alone; the only ground
+    extractor cannot detect this from L1-L27 alone; the only ground
     truth is silicon.
 
   - **Category C residual** — sub-microsecond pad / FPGA-pad-inference
@@ -196,7 +196,7 @@ verdict, the frame bytes, the SOF sha256.
 After byte[6]=0xF2 PASS:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/hw_acceptance_test_passed_check.py \
+python3 plugins/vibe-ic/programs/hw_acceptance_test_passed_check.py \
     <project_dir>
 ```
 
@@ -235,7 +235,7 @@ references), and Phase 2+3 is closed.
 2. **Silently copying oracle bytes** — every spec → silicon delta
    must land in `waivers.json` with a link to the dump file. The
    waiver IS the spec correction; the agent who reads the spec
-   next must see why the L1-L13 → RTL flow needed a delta.
+   next must see why the L1-L27 → RTL flow needed a delta.
 
 3. **Adding fixes without a structural gate** — every C-class fix
    must be accompanied by a structural gate (or an extension of an

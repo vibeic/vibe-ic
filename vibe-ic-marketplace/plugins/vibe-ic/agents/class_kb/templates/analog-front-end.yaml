@@ -75,7 +75,7 @@ spec_floor:
   L9_top_level_port_count_min: 8       # AIN0..3 + SDA/SCL + ADDR + ALERT + VDD/GND/VREF
   L9_internal_wire_count_min: 10
 
-  # Phase 2a extension layers
+  # Phase 1 extension layers
   L10_test_cases_min: 5                # FS-input / zero / mid / threshold-cross / power-down
   L10_cmd_response_min: 3              # CONVERSION-read / CONFIG-write / threshold-write
   L11_calibration_tables_min: 1        # offset / gain trim table

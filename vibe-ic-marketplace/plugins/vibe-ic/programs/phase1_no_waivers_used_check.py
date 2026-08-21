@@ -36,7 +36,7 @@ Behavior
 - If `<project>/waivers.json` lists 0 forbidden waivers → PASS.
 - If 1+ forbidden waiver names appear → FAIL listing each one.
 
-Non-Phase-2a waivers (e.g. `nba_shift_register_intentional`,
+Non-Phase 1 waivers (e.g. `nba_shift_register_intentional`,
 `open_drain_active_drive_intentional`, `vendor_fpga_table_alternative`)
 remain valid and DO NOT trigger this gate. The intent is to forbid
 silencing the Phase 1 (doc-extraction) coverage / evidence gates only.

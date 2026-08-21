@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-Append the standard vibe-ic-d "Compliance gate" paragraph to every
-vibe-ic-core SKILL.md that doesn't already have one.
+Append the standard "Compliance gate" paragraph to every
+vibe-ic SKILL.md that doesn't already have one.
 """
 from pathlib import Path
 import sys
 
 GATE = """\
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \\
-    --requirements plugins/vibe-ic-d/skills/{SKILL}/compliance.yaml \\
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \\
+    --requirements plugins/vibe-ic/skills/{SKILL}/compliance.yaml \\
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 
@@ -33,7 +32,7 @@ across different agents.
 def main():
     d_plugin = Path(__file__).resolve().parent.parent
     marketplace = d_plugin.parent.parent
-    core_skills = marketplace / 'plugins' / 'vibe-ic-core' / 'skills'
+    core_skills = marketplace / 'plugins' / 'vibe-ic' / 'skills'
     n = 0
     for md in core_skills.glob('*/SKILL.md'):
         content = md.read_text(errors='replace')

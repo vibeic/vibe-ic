@@ -43,6 +43,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _path_layout as _pl  # noqa: E402  — #525 shared timeout resolver
+
 
 @dataclass
 class Finding:
@@ -66,7 +69,24 @@ def _run_compliance(project: Path, strict: bool = True) -> tuple[int, str]:
     cmd = [sys.executable, str(fcc), str(project)]
     if strict:
         cmd.append("--strict")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    # #525 — size-adaptive budget (shared resolver) instead of the old fixed
+    # 300s, which a large SoC's legitimate 8-9 min --strict audit exceeded;
+    # AND the TimeoutExpired no longer crashes the whole acceptance gate
+    # with a traceback: it returns a named AUDIT_TIMEOUT overall so the
+    # caller emits a structured INCONCLUSIVE verdict (timeout ≠ verdict).
+    budget = _pl.audit_timeout_s(project)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=budget)
+    except subprocess.TimeoutExpired as e:
+        partial = (e.stdout or "")
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        return 124, (f"Overall: AUDIT_TIMEOUT\n"
+                     f"AUDIT TIMEOUT after {budget}s — the compliance audit "
+                     f"did not run to completion; this is NOT a verdict on "
+                     f"the project (INCONCLUSIVE, #525). Raise "
+                     f"{_pl.AUDIT_TIMEOUT_ENV} to extend.\n" + partial)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -79,7 +99,8 @@ _SUMMARY_LEGACY_RE = re.compile(
     r"Steps:\s*(\d+)\s*total\s*\((\d+)/(\d+)\s*non-waived\s*PASS\)",
     re.IGNORECASE,
 )
-_OVERALL_RE = re.compile(r"Overall:\s*(PASS_WITH_WAIVERS|PASS|FAIL)", re.IGNORECASE)
+_OVERALL_RE = re.compile(
+    r"Overall:\s*(PASS_WITH_WAIVERS|PASS|FAIL|AUDIT_TIMEOUT)", re.IGNORECASE)
 _TOTAL_REQ = 34
 
 
