@@ -36,6 +36,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import serial_parallel_mul_synth as spm  # noqa: E402
+import design_one_shot_runner as runner  # noqa: E402
 
 _HAVE_IVERILOG = shutil.which("iverilog") is not None
 
@@ -256,3 +257,57 @@ def test_declaration_is_not_written_on_a_deferred_shape(tmp_path):
     rc = spm.main([str(proj), "--emit"])
     assert rc == 2
     assert not (proj / "plugin_output" / "declaration.json").exists()
+
+
+def test_runner_serial_multifile_commit_rolls_back_as_one_transaction(
+        tmp_path, monkeypatch):
+    """RTL and the L7 declaration cannot become a torn two-root commit."""
+    proj = _mk_project(
+        tmp_path, ports=_SPM_PORTS,
+        l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
+    before_binding = runner._Phase1ProjectBinding.open(proj)
+    try:
+        before = runner._phase1_tree_manifest_fd(
+            before_binding.project_fd, proj)
+    finally:
+        before_binding.close()
+    generator_roots = []
+    real_run = runner.subprocess.run
+
+    def _observe_generator(cmd, *args, **kwargs):
+        if (len(cmd) >= 3
+                and Path(cmd[1]).name == "serial_parallel_mul_synth.py"):
+            generator_roots.append(Path(cmd[2]))
+        return real_run(cmd, *args, **kwargs)
+
+    real_rename = runner._phase1_rename_noreplace
+    injected = False
+
+    def _fail_second_top(src_fd, src, dst_fd, dst):
+        nonlocal injected
+        if dst == "plugin_output" and not injected:
+            injected = True
+            raise OSError("injected declaration publication failure")
+        return real_rename(src_fd, src, dst_fd, dst)
+
+    monkeypatch.setattr(runner.subprocess, "run", _observe_generator)
+    monkeypatch.setattr(runner, "_phase1_rename_noreplace", _fail_second_top)
+
+    result = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+
+    assert result.status == "BLOCKED"
+    assert result.extras["output_refusal"]["reason"] == (
+        "RTL_TRANSACTION_COMMIT_REFUSED")
+    assert result.output_files == []
+    assert injected and len(generator_roots) == 1
+    assert generator_roots[0] != proj
+    assert not (proj / "phase2").exists()
+    assert not (proj / "plugin_output").exists()
+    assert not any(p.name.startswith(".vibeic-rtl-txn.")
+                   for p in proj.iterdir())
+    binding = runner._Phase1ProjectBinding.open(proj)
+    try:
+        assert runner._phase1_tree_manifest_fd(
+            binding.project_fd, proj) == before
+    finally:
+        binding.close()

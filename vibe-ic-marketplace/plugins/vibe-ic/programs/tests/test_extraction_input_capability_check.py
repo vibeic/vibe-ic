@@ -28,7 +28,7 @@ import extraction_input_capability_check as E  # noqa: E402
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
 from not_verified_tier import skip_not_verified  # noqa: E402
-PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 
@@ -57,7 +57,9 @@ end
 #: report's own `missing` list — four rounds of fitting a fixture to a checker,
 #: which measures how well I can satisfy it, not whether a real PDK passes.
 _REAL_TECH_IN_IMAGE = "/foss/pdks/sky130A/libs.tech/magic/sky130A.tech"
-_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.0"
+import _eda_image as _img
+
+_IMAGE = _img.local_image() or (_img.IMAGE_REPO + ":latest")
 
 
 def _real_tech(tmp_path):

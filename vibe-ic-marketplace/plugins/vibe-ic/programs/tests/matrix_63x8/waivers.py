@@ -1142,13 +1142,20 @@ WAIVERS: Tuple[Waiver, ...] = (
             "`rep = Path(report) if report else (project / _REPORT_REL)`, so "
             "the constant is reached only when --json is absent; the runner "
             "invocation that reaches it is "
-            "programs/phase3_one_shot_runner.py:22551 "
-            "(`\"--cell\", top, \"--in-place\"],` — the last argv element, so "
-            "the whole argv is visible and carries no --json), guarded by the "
-            "two early returns at "
-            "programs/phase3_one_shot_runner.py:22525-22527 "
-            "(\"no GDS to fill\" / \"metal_fill_density config has no "
-            "layers\"). The competing path the gate really reads is "
+            "programs/phase3_one_shot_runner.py::`\"--cell\", top, "
+            "\"--in-place\"],` — the last argv element, so the whole argv is "
+            "visible and carries no --json — guarded by the two early returns, "
+            "programs/phase3_one_shot_runner.py::`return False, "
+            "\"metal_fill_density config has no layers\"` and the "
+            "`return False, \"no GDS to fill\"` on the line directly above "
+            "it. (That second guard is written identically at two places in "
+            "the file, so it cannot carry a content anchor of its own; the "
+            "unique guard beside it carries the citation, and the pair is "
+            "read there. BOTH of these were line numbers until 2026-08-19, "
+            "when a change 7000 lines higher up moved them by forty-one and "
+            "`validate()` reported both unresolvable — the third and fourth "
+            "citations in this one waiver to rot exactly as the note below "
+            "predicts.) The competing path the gate really reads is "
             "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
             "--verify-only --json reports/phase2/gates/cmp_fill_emit.json\" "
             "(a CONTENT anchor, converted from the line-number form it "
@@ -1156,8 +1163,38 @@ WAIVERS: Tuple[Waiver, ...] = (
             "written and had drifted by forty lines a day later, which is the "
             "rot the content grammar exists to end). The oracle rule that "
             "conflates the two is "
-            "programs/tests/matrix_d7_artifact_graph.py:1074-1085 "
-            "(_gate_consumers, `for lit in program_literals(prog)`). "
+            "programs/tests/matrix_d7_artifact_graph.py::"
+            "`for lit in program_literals(prog)` (the mining loop of "
+            "_gate_consumers). "
+            # vibe-ic#1289/#1290 — CONTENT anchors, not line numbers. BOTH of
+            # the citations above were written by line and BOTH had rotted by
+            # 2026-08-15, in the two different ways this notation exists to
+            # end. The yaml citation named 4242 and the flow grew 40 lines
+            # above it, so 4242 now reads a comment and `validate()` reported
+            # the citation unresolvable — a HARD red on
+            # test_waivers_meet_the_registry_standard. The oracle citation
+            # named 1074-1085, which held exactly that loop when it was
+            # written (9167b162e) and now holds the body of a DIFFERENT
+            # function, `flow_consumers`; `_gate_consumers` has moved to 1184
+            # and its `for lit in program_literals(prog)` to 1190. That
+            # citation still RESOLVED — `flow_consumers` calls
+            # `gate_input_paths`, a token this waiver also names in
+            # `gate_input_paths("34")` — so it went on READING as evidence
+            # while pointing at unrelated code, which is the worse of the two
+            # failures because nothing reports it.
+            # Historical numbers above carry no leading colon on purpose: a
+            # bare `:NNNN` inherits the last-named file and would be graded as
+            # a live citation.
+            #
+            # The remaining `path:line` citations in this entry are NOT
+            # converted, and the reason is measured rather than editorial: a
+            # content anchor must resolve to exactly ONE line, and
+            # `rep = Path(report) if report else (project / _REPORT_REL)`
+            # occurs twice in metal_fill_emit.py (at 133 and 319 — the pair is
+            # the point of the claim) while "no GDS to fill" occurs twice in
+            # phase3_one_shot_runner.py. Both would be refused as AMBIGUOUS by
+            # this registry's own rule, so the line form is the only form
+            # available there.
             "MEASURED 2026-08-14 on the rebased tree: "
             "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
             "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "
@@ -1201,8 +1238,14 @@ def validate(waiver: Waiver) -> Tuple[str, ...]:
     citation was false while this function returned ``()``.
     """
     problems = []
-    if waiver.dim not in range(1, 9):
-        problems.append(f"dim {waiver.dim!r} is not in 1..8")
+    # Local import: `cells` is the single declaration of how many dimensions
+    # exist, and hard-coding the range here is how this check went on saying
+    # "1..8" after a ninth dimension landed. Imported inside the function so the
+    # module-level import graph stays one-directional.
+    from . import cells as _cells
+    if waiver.dim not in _cells.DIMENSIONS:
+        problems.append(
+            f"dim {waiver.dim!r} is not one of {list(_cells.DIMENSIONS)}")
     if not flowref.has_step(waiver.step_id):
         problems.append(f"step {waiver.step_id!r} is not declared in the flow yaml")
     reason = (waiver.reason or "").strip()

@@ -192,20 +192,13 @@ NO_BASELINE rather than compare. That is the safe direction — a missed
 comparison, never a wrong one — and it is stated because the failure it produces
 looks like "no predecessor" and could otherwise be mistaken for absence of data.
 
-NOT WIRED YET — SAID PLAINLY
-============================
-Nothing invokes this program. It appears in no `flow/*.yaml` step, in no
-`benchmark/CAPTURE_ROUTING.json` entry, in no runner, and in none of
-`flow_compliance_check.py`'s registered gates: on this commit the only files in
-the repository naming `tool_diagnostic_id_gate` are its own source, its test, its
-acceptance list and its `programs/INDEX.md` row.
-
-An unwired checker is the D9 defect class this campaign is actively removing, so
-it is not left to a reader to discover: `test_the_unwired_state_is_disclosed_or_gone`
-MEASURES the wiring and fails in BOTH directions — while unwired it requires this
-paragraph to exist, and the moment somebody wires it the test fails and forces
-the paragraph out. What it cannot do is decide WHICH step should own the clause;
-that is a flow declaration and it needs the ruling, not a guess.
+ROUTED RECEIPT OWNER
+====================
+`tools/ci/routed_def_corpus.py` invokes this program for every published cell
+that carries a routed DEF and records the independent result in the trusted
+landing manifest.  The routed-corpus parent, rather than a filename trigger in
+one flow step, owns the population because the comparison spans whole-cell tool
+output and its predecessor.
 
 Exit codes: 0 = compared and clean, 1 = BLOCKING, 2 = could not compare (no
 previous run, or this run yields zero gated ids so the comparison would be
@@ -216,16 +209,31 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import stat
 import sys
 from functools import lru_cache
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 import _prose_polarity as _polarity   # vibe-ic#1241
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
 import step_metrics as _metrics       # vibe-ic#1080 — the per-step schema
 
 SCHEMA = "tool_diagnostic_id_census/v1"
+PROGRESS_SCOPE = "routed-def:tool-diagnostic-id"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+_ACTIVE_OWNER_PATHS: Optional[Tuple[Path, ...]] = None
+_ACTIVE_CELL_ROOT: Optional[Path] = None
+
+
+def _read_input_text(path: Path, *, encoding: str | None = None,
+                     errors: str = "strict") -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(
+            path, encoding=encoding, errors=errors)
+    return Path(path).read_text(encoding=encoding, errors=errors)
 
 #: The `<domain>` this program owns inside #1080's `<step>__<domain>__<name>`.
 METRIC_DOMAIN = "tool"
@@ -364,6 +372,83 @@ def scan_log(text: str) -> Dict[str, Any]:
 _SCANNED_SUFFIXES = (".log", ".rpt", ".json")
 
 
+def _input_plan(
+        cell: Path,
+) -> Tuple[_routed_progress.FiniteInputPlan, Tuple[Path, ...], Path]:
+    cell = Path(cell)
+    design = cell.parent
+    index = _routed_progress.IndexSnapshot(design)
+
+    # find_previous() consults every sibling in the same naming family before
+    # it decides which lower ordinal owns the comparison.  Git does not track
+    # directories, so bind those directory names to at least one indexed path;
+    # an untracked or sparse sibling must not silently change the predecessor.
+    mine = _cell_ordinal(cell.name)
+
+    def relevant_owner(name: str) -> bool:
+        if name == cell.name:
+            return True
+        theirs = _cell_ordinal(name)
+        return bool(mine is not None and theirs is not None
+                    and theirs[0] == mine[0])
+
+    indexed_owners = {
+        PurePosixPath(relative).parts[0]
+        for relative in index.relative_paths
+        if PurePosixPath(relative).parts
+        and relevant_owner(PurePosixPath(relative).parts[0])
+    }
+    disk_owners = set()
+    for sibling in design.iterdir():
+        if not relevant_owner(sibling.name):
+            continue
+        try:
+            sibling_stat = sibling.lstat()
+        except OSError as exc:
+            raise _semantic_progress.ProgressProtocolError(
+                f"tool diagnostic predecessor cannot be inspected: {exc}") from exc
+        if stat.S_ISLNK(sibling_stat.st_mode):
+            raise _semantic_progress.ProgressProtocolError(
+                f"tool diagnostic predecessor traverses a symlink: {sibling}")
+        if not stat.S_ISDIR(sibling_stat.st_mode):
+            continue
+        disk_owners.add(sibling.name)
+    if indexed_owners != disk_owners:
+        raise _semantic_progress.ProgressProtocolError(
+            "tool diagnostic predecessor directory population differs "
+            f"between Git and disk; missing={sorted(indexed_owners-disk_owners)}, "
+            f"untracked={sorted(disk_owners-indexed_owners)}")
+
+    scanned = index.select(
+        lambda relative: Path(relative).suffix in _SCANNED_SUFFIXES,
+        _routed_progress.disk_files(
+            design, lambda path: path.suffix in _SCANNED_SUFFIXES),
+        population="tool diagnostic design log population")
+
+    acceptance = Path(__file__).with_name(
+        "tool_diagnostic_id_acceptance.json")
+    acceptance_index = _routed_progress.IndexSnapshot(acceptance.parent)
+    acceptance_inputs = acceptance_index.select(
+        lambda relative: relative == acceptance.name,
+        [acceptance] if acceptance.exists() else [],
+        population="tool diagnostic acceptance input")
+    reads = [
+        *_routed_progress.planned_reads("design-scan", scanned),
+        *_routed_progress.planned_reads("acceptance", acceptance_inputs),
+    ]
+    plan = _routed_progress.FiniteInputPlan(
+        [index.population_unit("tool-diagnostic:design-index"),
+         acceptance_index.population_unit(
+             "tool-diagnostic:acceptance-index")], reads)
+    owners = tuple(index.root / name for name in sorted(disk_owners))
+    return plan, owners, index.root / cell.name
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell))[0].units
+
+
 def _is_our_own_artifact(text: str) -> bool:
     """Skip this program's own output.
 
@@ -406,13 +491,19 @@ def census(cell_root: Path) -> Dict[str, Any]:
     steps: Dict[str, Any] = {}
     logs_scanned = 0
     skipped_own = 0
-    candidates = sorted(p for p in cell_root.rglob("*")
-                        if p.suffix in _SCANNED_SUFFIXES)
+    if _ACTIVE_INPUT_PLAN is not None:
+        candidates = sorted(
+            p for p in _ACTIVE_INPUT_PLAN.paths("design-scan")
+            if p.is_relative_to(cell_root)
+            and p.suffix in _SCANNED_SUFFIXES)
+    else:
+        candidates = sorted(p for p in cell_root.rglob("*")
+                            if p.suffix in _SCANNED_SUFFIXES)
     for log in candidates:
-        if not log.is_file():
+        if _ACTIVE_INPUT_PLAN is None and not log.is_file():
             continue
         try:
-            text = log.read_text(errors="replace")
+            text = _read_input_text(log, errors="replace")
         except OSError:
             continue
         if _is_our_own_artifact(text):
@@ -561,9 +652,12 @@ _REQUIRED_FIELDS = ("id", "reason", "accepted_on", "expires_on",
 
 
 def load_acceptance(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
+    if (_ACTIVE_INPUT_PLAN is not None
+            and not _ACTIVE_INPUT_PLAN.contains(path)):
         return []
-    doc = json.loads(path.read_text())
+    if _ACTIVE_INPUT_PLAN is None and not path.exists():
+        return []
+    doc = json.loads(_read_input_text(path))
     return list(doc.get("accepted") or [])
 
 
@@ -676,11 +770,16 @@ def measured_pdk(cell_dir: Path) -> Optional[str]:
     `"pdk": "..."` field is the run's own statement about itself.
     """
     seen: Dict[str, int] = {}
-    for p in sorted(cell_dir.rglob("*.json")):
-        if not p.is_file():
+    paths = (sorted(
+        p for p in _ACTIVE_INPUT_PLAN.paths("design-scan")
+        if p.is_relative_to(cell_dir) and p.suffix == ".json")
+        if _ACTIVE_INPUT_PLAN is not None else
+        sorted(cell_dir.rglob("*.json")))
+    for p in paths:
+        if _ACTIVE_INPUT_PLAN is None and not p.is_file():
             continue
         try:
-            text = p.read_text(errors="replace")
+            text = _read_input_text(p, errors="replace")
         except OSError:
             continue
         for m in _RE_PDK_FIELD.finditer(text):
@@ -764,8 +863,11 @@ def find_previous(cell_dir: Path) -> Optional[Path]:
     if my_pdk is None:
         return None
     best: Optional[Tuple[Tuple[int, ...], Path]] = None
-    for sib in sorted(cell_dir.parent.iterdir()):
-        if not sib.is_dir() or sib.name == cell_dir.name:
+    siblings = (_ACTIVE_OWNER_PATHS if _ACTIVE_OWNER_PATHS is not None else
+                tuple(sorted(cell_dir.parent.iterdir())))
+    for sib in siblings:
+        if ((_ACTIVE_OWNER_PATHS is None and not sib.is_dir())
+                or sib.name == cell_dir.name):
             continue
         theirs = _cell_ordinal(sib.name)
         if theirs is None or theirs[0] != family:
@@ -892,8 +994,47 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--today", help="ISO date for expiry evaluation (testing)")
     args = ap.parse_args(argv)
 
-    cell = Path(args.cell_dir)
-    if not cell.is_dir():
+    global _ACTIVE_INPUT_PLAN, _ACTIVE_OWNER_PATHS, _ACTIVE_CELL_ROOT
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                cell = Path(args.cell_dir)
+                expected_acceptance = Path(__file__).with_name(
+                    "tool_diagnostic_id_acceptance.json")
+                try:
+                    supplied_acceptance = Path(args.acceptance).resolve(strict=True)
+                    expected_acceptance = expected_acceptance.resolve(strict=True)
+                except OSError as exc:
+                    raise _semantic_progress.ProgressProtocolError(
+                        f"tool diagnostic acceptance input is unavailable: {exc}") from exc
+                if (not cell.is_dir() or args.json is not None
+                        or args.census_only
+                        or args.previous is not None
+                        or args.emit_metrics is not None
+                        or args.today is not None
+                        or supplied_acceptance != expected_acceptance):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default cell "
+                        "comparison only")
+                (_ACTIVE_INPUT_PLAN, _ACTIVE_OWNER_PATHS,
+                 _ACTIVE_CELL_ROOT) = _input_plan(cell)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(args)
+            if _ACTIVE_INPUT_PLAN is not None:
+                fresh_plan, _, _ = _input_plan(Path(args.cell_dir))
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(fresh_plan=fresh_plan)
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+            _ACTIVE_OWNER_PATHS = None
+            _ACTIVE_CELL_ROOT = None
+
+
+def _main_parsed(args) -> int:
+
+    cell = (_ACTIVE_CELL_ROOT if _ACTIVE_CELL_ROOT is not None
+            else Path(args.cell_dir))
+    if _ACTIVE_INPUT_PLAN is None and not cell.is_dir():
         print(f"[FAIL] tool_diagnostic_id_gate: no such cell: {cell}")
         return 2
 
@@ -905,7 +1046,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _emit_metrics_cli(cen, args.emit_metrics)
 
     prev = Path(args.previous) if args.previous else find_previous(cell)
-    if prev is None or not prev.is_dir():
+    if (prev is None
+            or (_ACTIVE_INPUT_PLAN is None and not prev.is_dir())):
         cen = census(cell)
         report = {"schema": SCHEMA, "cell": cell.name, "previous_cell": None,
                   "verdict": "NO_BASELINE",

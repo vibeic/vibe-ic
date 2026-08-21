@@ -74,7 +74,20 @@ except ImportError:                                     # pragma: no cover
 # fails on by design ("a declared entry point but now has dependencies").
 # Measured before the shrink: with the YAML edge declared and this line
 # unchanged, the checker returns rc 1 on exactly that message.
-DECLARED_ROOTS = {"D1"}
+# vibe-ic#1744 — 0.5ic (Submission Template Ingest) JOINS the set, which is a
+# GROWTH and therefore has to carry its argument rather than a note. The test
+# the two shrinks above applied is whether the step's own declarations agree
+# that it begins a chain. A1 failed that test: it declared two `required_inputs`
+# `from: D1` while carrying `blocks_on: []`, so its root status was contradicted
+# by its own YAML and the honest fix was the edge, not the entry. 0.5ic passes
+# it: its ONLY `required_inputs` entry is `from: external, check: none` — the
+# shuttle operator's published template, which this flow fetches and no step of
+# it produces. `submission_template_ingest` confirms that from the other side;
+# it reads `--template` / `--slot` argv and the external tree, and no artefact
+# of any prior step. Giving it a `blocks_on` edge to manufacture a predecessor
+# would declare an ordering constraint that does not exist, which is the defect
+# this checker exists to make visible, inverted.
+DECLARED_ROOTS = {"D1", "0.5ic"}
 
 
 def load_steps(path: Path) -> Optional[List[dict]]:
