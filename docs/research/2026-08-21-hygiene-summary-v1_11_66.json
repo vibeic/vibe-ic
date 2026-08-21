@@ -1,0 +1,1758 @@
+{
+  "listed_only": false,
+  "declared": 85,
+  "ran": 85,
+  "decided": 70,
+  "passed": 64,
+  "failed": 6,
+  "not_checked": 15,
+  "not_checked_unexempted": [
+    "corpus \"published cells carrying a routed DEF\" is EMPTY — nothing was checked over it"
+  ],
+  "exemptions_expired": [],
+  "wiring_errors": [],
+  "today": "2026-08-21",
+  "wrote_corpus": 0,
+  "deferred": 0,
+  "other_shard": 0,
+  "out_of_scope": 0,
+  "shard": null,
+  "corpora": [
+    {
+      "name": "published cells carrying a routed DEF",
+      "items": 0,
+      "gates": 1,
+      "expansion": "EXPANDED"
+    }
+  ],
+  "corpus_inputs": {
+    "benchmark_data_sha": null
+  },
+  "undisclosed_loops": [],
+  "seconds": 288,
+  "gates": [
+    {
+      "label": "chip-AGNOSTIC source guard",
+      "state": "PASS",
+      "seconds": 6,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "shipped-path portability",
+      "state": "PASS",
+      "seconds": 11,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA head-to-head records",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "validates a RECORD rather than a design, and the corpus carries none yet (#1121's first head-to-head has not run), so rc 2 says the population is empty instead of printing PASS over it. Goes live by itself on the first head-to-head committed",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA measurement contract",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "validates a measurement CONTRACT rather than a design, and no run in this repository has filed one yet; rc 2 names the absent document instead of printing PASS over it",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA measurement coverage",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "validates a RECORD SET against a declared denominator, and no run in this repository has filed one yet; rc 2 names the absent bundle instead of computing a vacuous 100% coverage",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA promotion feasibility",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "adjudicates a CANDIDATE SET for promotion, and no run in this repository has filed one yet; rc 2 names the absent candidates instead of reporting every candidate feasible over an empty list",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA frontier recomputes",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "recomputes a PUBLISHED frontier, and no run in this repository has published one yet; rc 2 names the absent candidates instead of certifying a frontier it never recomputed",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PPA arms solved one problem",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "compares TWO contracts to establish that both arms solved the same problem, and no run in this repository has filed a pair yet; rc 2 names the absent baseline instead of reporting two runs comparable",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "plugin version stated in prose",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "container exec deadlines",
+      "state": "PASS",
+      "seconds": 10,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "container login-banner parses",
+      "state": "PASS",
+      "seconds": 2,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "rc 2 here is NOT a missing prerequisite: it means NO caller passes a login shell any more, i.e. either the hazard is gone or the detector stopped matching the call sites, and the checker says neither is a PASS",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "fork downgrades stay visible",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "severity=ERROR is consumed",
+      "state": "PASS",
+      "seconds": 23,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "watchdog compliance",
+      "state": "PASS",
+      "seconds": 9,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "marketplace version sync",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "plugin full audit",
+      "state": "PASS",
+      "seconds": 24,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "openroad TCL deprecations",
+      "state": "PASS",
+      "seconds": 6,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "practical notes specificity",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "P0 disposition backing",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "no upstream forked twice",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs an AUTHENTICATED gh + network: it lists the org's repos live, and rc 2 means the org could not be asked (a duplicate it CAN see is rc 1)",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PR bases reach main",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs an AUTHENTICATED gh + network: it reads live queue state over the network, and rc 2 means the queue could not be asked at all (a base that genuinely does not reach main is rc 1)",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "flow-gate enforcement audit",
+      "state": "FAIL",
+      "seconds": 23,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "stage membership declared once",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "closed-loop executable census",
+      "state": "PASS",
+      "seconds": 2,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "L-doc field producer",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "tracked-symlink portability",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "tracked-symlink target present",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "backlog items are tracked",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "STA engines agree",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs a vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside the digest this host resolves, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1). It does NOT pull -- pass --allow-pull if that is what you mean",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "P0 gate invocability drift",
+      "state": "PASS",
+      "seconds": 2,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "tracked JSON/YAML parses",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "evidence citation resolves",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "citation routing is true",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "checker execution wiring",
+      "state": "FAIL",
+      "seconds": 17,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "gates are wired to something",
+      "state": "FAIL",
+      "seconds": 13,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "prose extractors read polarity",
+      "state": "PASS",
+      "seconds": 11,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "per-source record merges",
+      "state": "PASS",
+      "seconds": 25,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "declaration scans strip comments",
+      "state": "FAIL",
+      "seconds": 7,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "corpus \"published cells carrying a routed DEF\" is EMPTY — nothing was checked over it",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "corpus": "published cells carrying a routed DEF",
+      "corpus_item": 0,
+      "corpus_items": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "triage notes state a true reason",
+      "state": "PASS",
+      "seconds": 34,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "NDA scan of the TRACKED tree",
+      "state": "PASS",
+      "seconds": 2,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "vendored attribution retained",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PDK registry selectable",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "PDK via patch vs layer min width",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs a vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of the digest this host resolves, and rc 2 means the PDKs could not be read at all. It does NOT pull -- pass --allow-pull if that is what you mean",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "tracked blob size ceiling",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "layout-artefact size policy",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "provenance correction notes",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "declared outputs are findable",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "artefact-defect close discipline",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "cross-layer reference regression",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "step FAIL bubbles up",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "blocker list contract on committed reports",
+      "state": "NOT_CHECKED",
+      "seconds": 1,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "per-PDK table coverage",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "L4 -> SystemRDL disposition",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "published-evidence index honest",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "programs index fresh",
+      "state": "PASS",
+      "seconds": 7,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "engineering evidence fresh",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs a COMPLETE clone: it REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; CI checks out complete and genuinely checks. A hand-edited figure is still rc 1",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "inner timeouts fit the harness",
+      "state": "PASS",
+      "seconds": 7,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "gates disclose their denominator",
+      "state": "PASS",
+      "seconds": 45,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "stated corpus figures are derived, not typed",
+      "state": "PASS",
+      "seconds": 15,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "a zero denominator refuses",
+      "state": "PASS",
+      "seconds": 6,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "d3 declaration/manifest parity",
+      "state": "FAIL",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "gate skips reach the vacuous tier",
+      "state": "PASS",
+      "seconds": 9,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "no gate is left neutered",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "liar census controls still fire",
+      "state": "FAIL",
+      "seconds": 23,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "no retired pytest plugin request",
+      "state": "PASS",
+      "seconds": 15,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "argparse help format",
+      "state": "PASS",
+      "seconds": 13,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "dead plugin path",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "ic_expert_db health",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "verdict token propagation",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "signoff gate self-skip",
+      "state": "PASS",
+      "seconds": 9,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "waveform artifact hygiene",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "gitignore scratch guard",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "bundled work is named in NOTICE",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "silent remedy decline",
+      "state": "PASS",
+      "seconds": 15,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "final-summary roll-up consistency",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "published records not superseded",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "input-doc claims vs installed PDK",
+      "state": "NOT_CHECKED",
+      "seconds": 1,
+      "exempt_until": "2026-11-30",
+      "exempt_reason": "needs a vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from the digest this host resolves and reads the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "a step whose gate cannot fail",
+      "state": "PASS",
+      "seconds": 0,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "flow-gate grid",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "flow dependency graph",
+      "state": "PASS",
+      "seconds": 1,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "image-gated verifications are not silently skipped",
+      "state": "NOT_CHECKED",
+      "seconds": 6,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs the vibeic-eda CONTAINER IMAGE on the host: the check exits 2 when the image is unreachable, which a host that has not pulled it legitimately is. Refusing landings from such a host is a policy call with a measured blast radius — zero on a host carrying the anchored image — and one word changes it when that is wanted",
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "an argued direction is pinned",
+      "state": "PASS",
+      "seconds": 119,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "declared reports are written atomically",
+      "state": "PASS",
+      "seconds": 8,
+      "exempt_until": null,
+      "exempt_reason": null,
+      "exemption_expired": false,
+      "scope": null
+    },
+    {
+      "label": "gates are host-independent",
+      "state": "PASS",
+      "seconds": 124,
+      "exempt_until": "2027-02-28",
+      "exempt_reason": "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)",
+      "exemption_expired": false,
+      "scope": null
+    }
+  ],
+  "process_attestations": [
+    {
+      "argv_sha256": "a12e63845f8ce8ace58e5b0b9728bc59c757dd8a2463c00407f0905e4edbef8b",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA measurement coverage",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "9077fdddac42aa1f7209cfb0a294957c9f1ad36aca7c6531ada67807c2b57d48",
+      "state": "",
+      "verdict_line": "[CANNOT CHECK] INPUT_ABSENT: no such bundle: <TREE>/benchmark-data/ppa/coverage.json rc=2."
+    },
+    {
+      "argv_sha256": "847d40320a1a316bdff144ed8544b1fba0bfa61326cc33a4234e932f4b62df09",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA promotion feasibility",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "103cd4e30a814ea2aa20b3ee691b9b41d9b7fe993a0dbc649924dfb1ecfc9dbd",
+      "state": "",
+      "verdict_line": "[CANNOT CHECK] candidates not found: <TREE>/benchmark-data/ppa/candidates.json"
+    },
+    {
+      "argv_sha256": "1a4f6e6449760390d58743001c9d922d89373ce2af8731f43ffe8b665dad8551",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA arms solved one problem",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "dfbcaf329869dc291b486745dd28db354b9200d80d508f6d3c8921f85dbd8b68",
+      "state": "",
+      "verdict_line": "   No comparison was attempted. This is NOT a finding about either design."
+    },
+    {
+      "argv_sha256": "77a8eefb894a2e199528fbbdf8ec640a7dbbab39c72aa19c6abd9a866524cc32",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA measurement contract",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "d564edd8c0e7e7332eedcb56c6782a1eb93a82ba3e0843df123aee1bd0b937eb",
+      "state": "",
+      "verdict_line": "   No contract was read, so nothing has been established about this run. This is NOT a finding about the design."
+    },
+    {
+      "argv_sha256": "b76fcb2c6eb6c9289b5bef4fd8d73214b21983b501a04c8c46e89955ee67a359",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA frontier recomputes",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "103cd4e30a814ea2aa20b3ee691b9b41d9b7fe993a0dbc649924dfb1ecfc9dbd",
+      "state": "",
+      "verdict_line": "[CANNOT CHECK] candidates not found: <TREE>/benchmark-data/ppa/candidates.json"
+    },
+    {
+      "argv_sha256": "66d5a08291803ce40522028c91d8ce2a4ece1cb8ca722c2c11d5227c24429691",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PPA head-to-head records",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "4b39c0088da92c7ff75cc8828d648d44abca77105a3591db652e83531fa75ad7",
+      "state": "",
+      "verdict_line": "[PPA head-to-head records] UNDETERMINED: no corpus at <TREE>/benchmark-data, so this gate scanned nothing and examined 0 published head-to-head record(s). A check that could not look has not passed. Point VIBE_IC_BENCHMARK_DATA at a clone of the published-corpus repository, or pass --corpus-may-be-absent if this repo need not carry one."
+    },
+    {
+      "argv_sha256": "aa5fea12c7fb775f78adf16f1a6cc4d53bd1812fa9c0dc20f3821a97b8200825",
+      "complete": true,
+      "finding_identities": [],
+      "label": "plugin version stated in prose",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "8af2dd7295312e087cbe4f313c94d1d94a694a4636dffbb7420c27ca31031c73",
+      "state": "",
+      "verdict_line": "plugin_version_prose_sync_check: PASS — 6 prose version claim(s) across 3 document(s) all state the shipped 1.11.66"
+    },
+    {
+      "argv_sha256": "ded61945e0c24f55af03f25cdbfbb0a0e72a846725f25a7bb9cf355768e5d4ef",
+      "complete": true,
+      "finding_identities": [],
+      "label": "fork downgrades stay visible",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "b1450ded907143577746c66bc426a8f47602f36b9b223c449d2200294ed7af3c",
+      "state": "",
+      "verdict_line": "[PASS] all 1 registered fork downgrade(s) are referenced by the consumer that must notice them (registry only — pass --audit-fork to scan a fork for unregistered warn ids)"
+    },
+    {
+      "argv_sha256": "466e7243b42b074a5005bdd93f6f7a726c9d797b1694f936e34bdacc930426d3",
+      "complete": true,
+      "finding_identities": [],
+      "label": "marketplace version sync",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "398136f781269029428271f7f99ce3739e348f97df7f618c4870acf031af985b",
+      "state": "",
+      "verdict_line": "[PASS] marketplace_version_sync_check: 2 manifest(s), 2 plugin entr(ies) — all marketplace + plugin.json versions in sync ([<TREE>/vibe-ic-marketplace/.claude-plugin/marketplace.json] vibe-ic=1.11.66, [<TREE>/.claude-plugin/marketplace.json] vibe-ic=1.11.66)"
+    },
+    {
+      "argv_sha256": "969c36f0113e0b172843396b70edc81b7c7d74f6478d567fad3c18ccbdbc3a58",
+      "complete": true,
+      "finding_identities": [],
+      "label": "container login-banner parses",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "e716a8cbfc70264cec82c0dbfcbf298470852fcc56289dbc99ce0cbf97cfa1cb",
+      "state": "",
+      "verdict_line": "[PASS] container_login_banner_parse_check: 27 program(s) run the container through a login shell, and none of them reads the captured stdout in a shape the two prepended [INFO] lines corrupt (no numeric conversion, no [0], no whole-value capture)."
+    },
+    {
+      "argv_sha256": "ea6a48c72e94954492676a007619668b8a967066a12861a2113f11cf3bb588c4",
+      "complete": true,
+      "finding_identities": [],
+      "label": "practical notes specificity",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "befecfe6224d6221960a32303b780374b8e44f7b990036379e45fbaafe808a92",
+      "state": "",
+      "verdict_line": "PASS"
+    },
+    {
+      "argv_sha256": "13b91b566144f44b5b4a330d40da529e522ae24bf57167949d4187a090935467",
+      "complete": true,
+      "finding_identities": [],
+      "label": "P0 disposition backing",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "d0d0f037227cf29ad2848f310ff828911abe6112422b8bba240f9bd4160a7ac4",
+      "state": "",
+      "verdict_line": "  backed    practical_notes_specificity_check"
+    },
+    {
+      "argv_sha256": "b9c5a21e0f68ee46dd1908d3505013eaa5ee40a63cafb1416716d3153f85685c",
+      "complete": true,
+      "finding_identities": [
+        "[NOT CHECKED] gh repo list failed (rc=127): gh not found. This is NOT 'no duplicates'."
+      ],
+      "label": "no upstream forked twice",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "a123fed0d7ca371bde7c69b7b2b83a64fd9bd29747549338fb13f8ed5a4432c2",
+      "state": "",
+      "verdict_line": "[NOT CHECKED] gh repo list failed (rc=127): gh not found. This is NOT 'no duplicates'."
+    },
+    {
+      "argv_sha256": "c25904751bcf24474269fe342268806e2acad1d78d4b377d9970a4df3cb10046",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PR bases reach main",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "1cdc9e0562f9602defc76a64cc5418dbe12e0c9b7a0fd2301dd8a2eda3bf3c81",
+      "state": "",
+      "verdict_line": "REFUSE — no PR data could be read, so nothing was established about base reachability. An API failure is not evidence that every base is healthy."
+    },
+    {
+      "argv_sha256": "a0d7fdc2f84d22d77981e808180aeadc03ddbefdee8d7e1571af07bf2f207cbd",
+      "complete": true,
+      "finding_identities": [],
+      "label": "chip-AGNOSTIC source guard",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "2cf1f375dab8e025acc7335d3edad42288590516d4d5271b3d92f203aa944401",
+      "state": "",
+      "verdict_line": "PASS (1544 file(s) scanned): no forbidden chip / vendor / SKU tokens in plugin source (programs/ skills/ commands/); NDA panel read 4667 of 4667 file(s) tree-wide"
+    },
+    {
+      "argv_sha256": "4a5e9b1e8b10bf7406b570cf2b5ffd8057caf9925145f43488e57a1d981bd057",
+      "complete": true,
+      "finding_identities": [],
+      "label": "openroad TCL deprecations",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "36916d33eb8ba287e30fc2d2a6b7dcaec548c5bf3fd200a84c16d790b79b6f0e",
+      "state": "",
+      "verdict_line": "ok: no OpenROAD TCL deprecations found (examined 4546 file(s))"
+    },
+    {
+      "argv_sha256": "c1763a8d48c3a018f097bc0ae403b65ada2f81552ead45cb709ff7604b9c51e7",
+      "complete": true,
+      "finding_identities": [],
+      "label": "stage membership declared once",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "ed9ff0e348dfcfe6755b389df375e151054b269e9f94eaf244fa6892d7d09943",
+      "state": "",
+      "verdict_line": "flow_stage_membership_single_declaration_check: PASS — 69 step(s) across 8 declared stage(s); membership declared once, on the step. Sizes: stage1=8, stage2=12, stage3=20, stage4=9, stage5_manufacturing=5, stage_analog=9, stage_mixed_signal=4, stage_phase1=2"
+    },
+    {
+      "argv_sha256": "c0411f8b2726816f3ea84c15d74d0d9c67ade8778c90326f79e51214ef91d1af",
+      "complete": true,
+      "finding_identities": [],
+      "label": "L-doc field producer",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "3b92c22375bfcc7085e67f3a5f49d08ec57c058408834b5e2849a4335f7963e7",
+      "state": "",
+      "verdict_line": "[l_doc_field_producer_check] NO_CORPUS: nothing at benchmark-data/ic and VIBE_IC_BENCHMARK_DATA is unset. The published corpus moved to its own repository in v1.10.56 and this repo is not required to carry it. NOTHING WAS SCANNED, 0 published L-doc(s) were examined and nothing is claimed about them — point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "e5405effdb24b2ab7099f99541e5ad16ca08cbdc41120d3d1edea5e7652cd986",
+      "complete": true,
+      "finding_identities": [],
+      "label": "tracked-symlink portability",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "3938d931dd905bac46d5fed3ccded100085b1eb4196edbcb766f5877fb9d186a",
+      "state": "",
+      "verdict_line": "NO_CORPUS: nothing at benchmark-data and VIBE_IC_BENCHMARK_DATA is unset. The published corpus lives in its own repository and this repo is not required to carry it. NOTHING WAS SCANNED, 0 tracked symlinks were examined and nothing is claimed — point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "b4f8c3c995d2609113a3af226971b4f350ee79f48c46adba37b62c55d3498725",
+      "complete": true,
+      "finding_identities": [],
+      "label": "tracked-symlink target present",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "501cdd399c591ebad7b243912b65b1ded8785fe6452b04a96041c12204852a83",
+      "state": "",
+      "verdict_line": "NO_CORPUS: git tracks nothing under benchmark-data in <TREE> and VIBE_IC_BENCHMARK_DATA is unset. The published corpus lives in its own repository and this repo is not required to carry it. NOTHING WAS SCANNED — 0 tracked paths, 0 tracked symlinks, 0 pointers adjudicated, and the 0-entry register was NOT evaluated. Point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "28ebe00c026d46a892993a43cc4362aab0657bcda6461bb5133a4352d19c06a1",
+      "complete": true,
+      "finding_identities": [],
+      "label": "backlog items are tracked",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a3dbbbaebf38b454e1873e698e3a39f52639eac1d23d302467f876c2bda747d8",
+      "state": "",
+      "verdict_line": "}"
+    },
+    {
+      "argv_sha256": "bad64f5d24819afe878852958d8729a9d10a41b216e544acadfec8823317dffe",
+      "complete": true,
+      "finding_identities": [],
+      "label": "STA engines agree",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "c867188f04ffdfe72f3db8f64ccd1c2b6a019d139f87b9985c6483f82d87dbc6",
+      "state": "",
+      "verdict_line": "[CANNOT CHECK] sta_engine_parity_check: no ghcr.io/vibeic/vibeic-eda image is present on this host; this gate does not pull, because a multi-gigabyte download is the operator's call, not a gate's (pass --allow-pull, or --image, if that is what you mean). Nothing was measured."
+    },
+    {
+      "argv_sha256": "fc40ce9522a2b60d4178a3e1e9fcda813948c336b6fbac8a40aa8440a5b1a7b5",
+      "complete": true,
+      "finding_identities": [],
+      "label": "closed-loop executable census",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "5001a194c79e83ee850232add9634173c3868482ec77b9e78173242f9cf2c5bb",
+      "state": "",
+      "verdict_line": "  claim audit: NOT_CHECKED — no claim source was present (no --claims document and no phase3/stage3/eco/eco_log.json under the project) — zero claims were EXAMINED, which is not the same as zero claims being clean"
+    },
+    {
+      "argv_sha256": "3ee94f9c9500a7a3913e212a7f8d063b7e73f623092a14a2bdb12dc9c0bf8dd7",
+      "complete": true,
+      "finding_identities": [],
+      "label": "P0 gate invocability drift",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "5086f6f1e16753e8dd7a855b752448b16ac774c815430850e14e4f141b592fb2",
+      "state": "",
+      "verdict_line": "       of those, 36 carry a recorded #492/#496 measurement and 0 carry no decision anywhere — the second number is what #559 has left to triage."
+    },
+    {
+      "argv_sha256": "a2ed7ed29e11553b7a6915a057be85857e2f60243e9eb335852b53333bd87be1",
+      "complete": true,
+      "finding_identities": [],
+      "label": "evidence citation resolves",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "102d4dd82c873076e9f270965b1bce8758f56472d542543492164d0408005894",
+      "state": "",
+      "verdict_line": "[evidence_citation_resolves_check] NO_CORPUS: nothing at benchmark-data/ic and VIBE_IC_BENCHMARK_DATA is unset. The published corpus moved to its own repository in v1.10.56 and this repo is not required to carry it. NOTHING WAS SCANNED, 0 published sign-off document(s) were examined and nothing is claimed about them — point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "60e4aa93b0715dc93c0d7941eb6a007446ef59f91ffff3b876bb05563212b513",
+      "complete": true,
+      "finding_identities": [],
+      "label": "citation routing is true",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "62b330851c9c90b46458460d6c2068360a2f26811038ad68da86e40e88a2414a",
+      "state": "",
+      "verdict_line": "NO_CORPUS: no tracked CITATION_ROUTING.txt under <TREE> and VIBE_IC_BENCHMARK_DATA is unset. This gate's subject ships inside a published cell, and the published cells live in their own repository now. NOTHING WAS SCANNED — 0 record(s) read, 0 RESOLVES row(s) adjudicated and nothing is claimed. Point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "29b024c80a8bc89f99ce30388ee11780d2842367b0c96cf7e21df3b2e88a1966",
+      "complete": true,
+      "finding_identities": [],
+      "label": "watchdog compliance",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "01adb831b0c65e10ac75286aab92d31539a0708ed68f37368d5e0b9adb35788e",
+      "state": "",
+      "verdict_line": "loop_watchdog_compliance_check: PASS — 1232 file(s) scanned, no unguarded long sub-process or unbounded risky loop."
+    },
+    {
+      "argv_sha256": "42360e8cd354a49960b43c933b200ab5b5d868b98ec8fda5f8ec9c6f22dfc149",
+      "complete": true,
+      "finding_identities": [],
+      "label": "tracked JSON/YAML parses",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "07954d46442cd6bb23d77046b3e5e30df87bcf5f4ee0ecd5a6cdb54da4d79de5",
+      "state": "",
+      "verdict_line": "[PASS] 1452 tracked config blob(s) parse (1230 JSON, 222 YAML; symlinks are skipped by mode, not by name)."
+    },
+    {
+      "argv_sha256": "85bec7cd99dee513c2ca21e30bc7a0d2a46eaa542f1118f36fefdfbb4d9416ee",
+      "complete": true,
+      "finding_identities": [],
+      "label": "container exec deadlines",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "c9ff943f01e2789913cf9a821e05d6a45fd295bfee8b8d4f589fd67167137bda",
+      "state": "",
+      "verdict_line": "ADVISORY: container_exec_deadline_check — 60 finding(s) over 4184 file(s) scanned"
+    },
+    {
+      "argv_sha256": "5c3034054f2962af369f8684a05e31d5aa822282114b637456e7b8671b7ce551",
+      "complete": true,
+      "finding_identities": [],
+      "label": "shipped-path portability",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "daffb19e73e16a8fc1da51eddf7f13689a4d8b8bcc2652d12d625bef1cedb38f",
+      "state": "",
+      "verdict_line": "shipped_path_portability_check: PASS (4668 file(s) scanned, git-tracked) — no personal absolute paths in shipped source"
+    },
+    {
+      "argv_sha256": "760b5d5016934ce9c89219b109d02cba1ba49221c6c0d9b997469ec08b32108c",
+      "complete": true,
+      "finding_identities": [
+        "[FAIL] 5 declaration regex(es) newly scan text no stripper touched:"
+      ],
+      "label": "declaration scans strip comments",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "0e74502f22368f718451a4b59c5a1e05f2f32c350fc8c8f61b506a1ebd00ed9f",
+      "state": "",
+      "verdict_line": "  this gate reads dataflow and not presence."
+    },
+    {
+      "argv_sha256": "8f0ec0c347d1f5adf2bcf15b5ebfb3ad556e93550e990bd3b8f8910ab6c75e24",
+      "complete": true,
+      "finding_identities": [
+        "[NOT_CHECKED] EMPTY CORPUS \"published cells carrying a routed DEF\": producer rc 0 yielded 0 item(s); the per-item gates had nothing to examine."
+      ],
+      "label": "corpus \"published cells carrying a routed DEF\" is EMPTY — nothing was checked over it",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "83e120716e3442257d9c09018cf9794ccde3efd1c47b915274405a6acba26b1e",
+      "state": "",
+      "verdict_line": "[NOT_CHECKED] EMPTY CORPUS \"published cells carrying a routed DEF\": producer rc 0 yielded 0 item(s); the per-item gates had nothing to examine."
+    },
+    {
+      "argv_sha256": "a718ae717560c6d84eb9c68952cec1e6564b944dea5260eeb210daa71b4a1569",
+      "complete": true,
+      "finding_identities": [],
+      "label": "prose extractors read polarity",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a4801c61db7bb6681fceade6a3a5c20dedbd5c666a3c30ac9c1d426943246892",
+      "state": "",
+      "verdict_line": "[PASS] prose_polarity_consulted: no extractor newly reads a value without its polarity."
+    },
+    {
+      "argv_sha256": "f340a58b758754943d78d2bf3212b930c55303fd99839d7bec942e60dd871eaa",
+      "complete": true,
+      "finding_identities": [],
+      "label": "NDA scan of the TRACKED tree",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "806f4e4f437fc912e7a7062f13bc23cf133edd74d606c3aa4f5fdabe94dda021",
+      "state": "",
+      "verdict_line": "   repo root <TREE> — every requested blob was read (6361 requested)."
+    },
+    {
+      "argv_sha256": "b1cb95b4cf975f7aefc84183312a3ebe5ce25440621f2066a8a5702ce83ccca4",
+      "complete": true,
+      "finding_identities": [],
+      "label": "vendored attribution retained",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "5b890129d40962d0c123e937ae8ad93a64932f284233e32feb9fff17e98468c6",
+      "state": "",
+      "verdict_line": "[VACUOUS_PASS] no tracked file under benchmark-data declares an SPDX licence, so this gate checked nothing"
+    },
+    {
+      "argv_sha256": "f6b4ed538d3925fc7965b8de61de4283d2dcc7e3f42d7708fe6b987e1d60afb3",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PDK registry selectable",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a135d957cb517b2d28051e614a9a77b170c0a0a6d966c9d9c0a511aaa14d8484",
+      "state": "",
+      "verdict_line": "[PASS] every registry entry is selectable by its own name and states its tapcell_master explicitly (asset half not checked)."
+    },
+    {
+      "argv_sha256": "0cd1b7d492e93e6ad30ca3fce7355dbc19bd279083cf86df09e447ca3ed62224",
+      "complete": true,
+      "finding_identities": [],
+      "label": "PDK via patch vs layer min width",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "ae13a31b4f521b6f40f6aae1a84934be9cdbd142db3f77602ade99584fd9e61b",
+      "state": "",
+      "verdict_line": "[REFUSE] pdk_via_patch_meets_layer_min_width_check: no ghcr.io/vibeic/vibeic-eda image is present on this host; this gate does not pull, because a multi-gigabyte download is the operator's call, not a gate's (pass --allow-pull, or --image, if that is what you mean). Nothing was measured."
+    },
+    {
+      "argv_sha256": "0822dbdf999448f868765b8684223cfde2b1c9eb78e7b725511b871857af05f6",
+      "complete": true,
+      "finding_identities": [],
+      "label": "tracked blob size ceiling",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a6f102bbac2277df173cd6c2b130fae8451b3d26fc4f2c168063468ceebed926",
+      "state": "",
+      "verdict_line": "[PASS] tracked_blob_size_guard: 6367 tracked blob(s) at HEAD, none above 50 MB."
+    },
+    {
+      "argv_sha256": "01c38686df2b4b2e8403ab8bad138ead7487423135670c57df88ac471cca8b2d",
+      "complete": true,
+      "finding_identities": [],
+      "label": "layout-artefact size policy",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "4adc3006f5d718b0449ea67d0736faf4c83a4b1de79fac7e5003db9c192184e8",
+      "state": "",
+      "verdict_line": "       NOT covered by this gate: *.spef / *.oas (no root rule either way), and per-cell .gitignore files nested under benchmark-data/ic/** — several published cells carry one that ignores layout artefacts locally. This gate reads the root file only."
+    },
+    {
+      "argv_sha256": "3bb4040eff831d0051d72bf07a00dd386c9d847f813a78913ad63892868a8e36",
+      "complete": true,
+      "finding_identities": [],
+      "label": "provenance correction notes",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f114bc1453f820b2266e1c02cf22d08997bebaca41dd3b4960d70a7383a48984",
+      "state": "",
+      "verdict_line": "[PASS] provenance_correction_note_check: 0 tracked ledger(s), 0 corrected row(s) — every note rests on a repair the row actually received."
+    },
+    {
+      "argv_sha256": "c373b7592188c7ba71c6f5e242ebe1852b6cadec6f705345c3331a72d8f895f7",
+      "complete": true,
+      "finding_identities": [],
+      "label": "declared outputs are findable",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "3870202d710e28db09052335747c201e79b5b3fc8628cfaa6d3214588435ce70",
+      "state": "",
+      "verdict_line": "[PASS] provenance_declared_output_check: 0 tracked ledger(s), 0 declared output(s) — each is present at its declared path and hashes as declared, or is explicitly marked pruned."
+    },
+    {
+      "argv_sha256": "8b02107dfc28d4d3958c91c94c3d710fa8bbecf49888cebe259289fe2f4813d5",
+      "complete": true,
+      "finding_identities": [
+        "[FAIL] 3 gate(s) newly consulted by no automatic verdict:"
+      ],
+      "label": "gates are wired to something",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "8baa45d510bd1667a1e995be7e932af11b75b09fd6fd1b82132127cb7a6abce5",
+      "state": "",
+      "verdict_line": "  tools/ci — a skill mention runs it only if an agent remembers to."
+    },
+    {
+      "argv_sha256": "368214c3e53f82e4e134df2da18c3189ebedbfe7c8141be04e19878ecc91aeb3",
+      "complete": true,
+      "finding_identities": [],
+      "label": "artefact-defect close discipline",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f88abdec4302c3d6f63e1255884d4039123e5de33b4e5501982e89c3108a61d5",
+      "state": "",
+      "verdict_line": "[SKIPPED] artefact-defect close discipline: no issue corpus (no --issues-json, and the issue API is unavailable or unauthenticated). This is NOT a PASS."
+    },
+    {
+      "argv_sha256": "ff80d0d7df33bb8bba69dfa35f82ac2a10a20036ed625775096f034a6a89382a",
+      "complete": true,
+      "finding_identities": [],
+      "label": "cross-layer reference regression",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "8c21cdc59e98e941327fee852ee81cfbc2734abdccb45391696e3778c3e405b3",
+      "state": "",
+      "verdict_line": "[cross_layer_reference_check] NO_CORPUS: 0 cell(s) swept. The counts above were NOT RE-MEASURED by this run and nothing is claimed about whether they are still true of the corpus — only that they are unchanged since the sweep that recorded them. Point $VIBE_IC_BENCHMARK_DATA at a clone to re-measure."
+    },
+    {
+      "argv_sha256": "80a05151c923bca1883e1f82a2eaa49b98ec6c611e62a03a1b37c750a933e28c",
+      "complete": true,
+      "finding_identities": [],
+      "label": "step FAIL bubbles up",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "8e7037b5d397378a024a12ab6c3a70dca776b8dc72c3bf8dceccc1a9a0516381",
+      "state": "",
+      "verdict_line": "[step_internal_fail_bubble_up_check] NO_CORPUS: 0 published run tree(s) swept, 0 report(s) examined. The register's numbers were NOT RE-MEASURED and nothing is claimed about whether those 1 finding(s) are still unacknowledged — only that the register is internally consistent and was not widened by hand. Point $VIBE_IC_BENCHMARK_DATA at a clone to re-measure."
+    },
+    {
+      "argv_sha256": "11b6ee7cf544abe35719d84a29bbd723d4c250ff0cae44d6d427ee7bd0fcf5ec",
+      "complete": true,
+      "finding_identities": [],
+      "label": "blocker list contract on committed reports",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "05739e62c15fc3d4dd35d2957a57613346a9b0df18b542d05331a1620c20505e",
+      "state": "",
+      "verdict_line": "blocker_classification_check: --dir <TREE>/benchmark-data is not a directory"
+    },
+    {
+      "argv_sha256": "9a05d4bec7b7b941a65936320dae813dcad75c31ed4487b3da25d1ffc73bf382",
+      "complete": true,
+      "finding_identities": [],
+      "label": "per-PDK table coverage",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "4c43a478f7310bb0d5940f2bc8a4f1401ae95eed57cc6b3fcac3e7b2cc90d116",
+      "state": "",
+      "verdict_line": "[PASS] pdk_table_coverage_check: 3 per-PDK table(s) vs the registry — no new gap. 7 recorded gap(s) unchanged."
+    },
+    {
+      "argv_sha256": "f22e2e427845e1ee5e5d37822b4634ecd64e653a3d6cdc7b08da89740aa5f0a0",
+      "complete": true,
+      "finding_identities": [],
+      "label": "published-evidence index honest",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "9cf4c02b0d541a2be7fb6878d4a5e21ed17e7d5b4b317fc07653d4d78ecef1f3",
+      "state": "",
+      "verdict_line": "[benchmark_evidence_index] NO_CORPUS: nothing at <TREE>/benchmark-data/ic and VIBE_IC_BENCHMARK_DATA is unset. The published corpus lives in its own repository and this repo is not required to carry it. NOTHING WAS SCANNED, no INDEX.md was generated, and no committed INDEX.md was compared — point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "b9f6fb4e0170410e3b48f71825dec4a61bb1fce37cecc02bf485fde42712e8f8",
+      "complete": true,
+      "finding_identities": [],
+      "label": "L4 -> SystemRDL disposition",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "8240279415e8e00d050cda207fff5212bba25aa67f930acf510f98e9317036bf",
+      "state": "",
+      "verdict_line": "NO_CORPUS: no L4_REGMAP.json under <TREE> and VIBE_IC_BENCHMARK_DATA is unset. The published L4 corpus moved to its own repository in v1.10.56 and this repo is not required to carry it. NOTHING WAS SCANNED — 0 L4 document(s) parsed, 0 register/field key(s) examined and the disposition table was NOT exercised. Point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check something."
+    },
+    {
+      "argv_sha256": "907bca16c3a8ce6bfc674a0fc26905c649906b609ba47f4f4b20e81c7f4d6eba",
+      "complete": true,
+      "finding_identities": [],
+      "label": "engineering evidence fresh",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "efb6877b8e43ddaa0944cc9d2dec21cf545859603aa92ad7502423fa35ec2f85",
+      "state": "",
+      "verdict_line": "NOT_GENERATED: <TREE>/docs/ENGINEERING_EVIDENCE.md does not exist — this is NOT a pass; run `python3 tools/gen_engineering_evidence.py`."
+    },
+    {
+      "argv_sha256": "efc7009bc069192959c2152ecbee9423b9590c726583d3eeaaa91f6d063be7f5",
+      "complete": true,
+      "finding_identities": [],
+      "label": "severity=ERROR is consumed",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "686d21471908a35803a2dbba91f2cd6c7da3b06c016ebee591aff57323370a6e",
+      "state": "",
+      "verdict_line": "  note: 187 emission(s) not statically decidable — listed in the report, not counted as passing."
+    },
+    {
+      "argv_sha256": "683e8d79c701b9c0c77f5e661604b45b40c8da6e1657482ad83b225818df3949",
+      "complete": true,
+      "finding_identities": [],
+      "label": "plugin full audit",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "ce7842397dcf8a593ca319497509949a76f9b346ba5362de0bddd616644263eb",
+      "state": "",
+      "verdict_line": "=> deterministic audit PASS (D3 = run the full-test-audit skill for the skill-extractability dimension)"
+    },
+    {
+      "argv_sha256": "3d467b381880f1b2d278abff5f346c0634fb243bc045607c7599857534e0da3e",
+      "complete": true,
+      "finding_identities": [
+        "[FAIL] 3 checker(s) that NOTHING but their own test runs — a fixture the author wrote proves the logic, never the artefacts:"
+      ],
+      "label": "checker execution wiring",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "c18be980aa9c582ed0195c49e198153b58b9cceee536c51b53a403869a3abc5b",
+      "state": "",
+      "verdict_line": "   slot_pad_budget_check.py"
+    },
+    {
+      "argv_sha256": "1387dd5a82ab83e15d764f37b6671a1892e4a9cbb86b01150d1e90cd0f7c2967",
+      "complete": true,
+      "finding_identities": [
+        "[FAIL] 2 NEW gate(s) are AUDIT_ONLY and declare no intent at all — nothing invokes them where they could block, and nothing in the gate says that was the decision:"
+      ],
+      "label": "flow-gate enforcement audit",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "9b21f5f9297a0832a3980de803f2b6c8a6191c943abd4137cee8dd35ae67ea8e",
+      "state": "",
+      "verdict_line": "   undeclared::tapeout_docs_gen"
+    },
+    {
+      "argv_sha256": "781599ab0d7517e0a5129cfabdb34140be5be7a5dc3da4ea00cc10368951f5b3",
+      "complete": true,
+      "finding_identities": [
+        "FAIL — the flow declares paths the d3 evidence manifest has never measured. Re-measure the manifest in the SAME change that moves the declaration:"
+      ],
+      "label": "d3 declaration/manifest parity",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "fb771d996bc5a7fce31a6ec05c28b72b69da06001b02ae98984340b60661afd5",
+      "state": "",
+      "verdict_line": "d3 declaration parity: 164 declared required_outputs path(s) across 67 step(s) with outputs; 1 not covered by the manifest"
+    },
+    {
+      "argv_sha256": "202f833dfdb589c98f59101361330e55a54705f44f5d7c2fba0552ea07d1b41d",
+      "complete": true,
+      "finding_identities": [],
+      "label": "programs index fresh",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "835999996fbcd0cd09734e6370a5a840d4d00d3b075c79ac7f6d3f71a2d9e83a",
+      "state": "",
+      "verdict_line": "[PASS] programs index fresh: 1159 program(s) indexed, INDEX.md matches what the tree would generate."
+    },
+    {
+      "argv_sha256": "1bf41170ddc66ff7b9e26743f13e3d8faffe22f99443f9202d525f06df4f1330",
+      "complete": true,
+      "finding_identities": [],
+      "label": "inner timeouts fit the harness",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "4aa6183f2d4889521331007f6ce2c0f34d30e337a3463f692071b6cc1abdd4c5",
+      "state": "",
+      "verdict_line": "[PASS] every landing pytest population is supervised by validated lifecycle progress with no total runtime ceiling; elapsed time is not a test verdict."
+    },
+    {
+      "argv_sha256": "f7c60ee443c7aae4200d66aca563c9af3eca034e131b59fdad71d206ab46d8bd",
+      "complete": true,
+      "finding_identities": [],
+      "label": "no gate is left neutered",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f18d06ac8a93da6934b859bfe46047af8815269d4fd48496c65c18767176a492",
+      "state": "",
+      "verdict_line": "[PASS] neutered_gate_tree_check: 4018 module(s) examined; none carries an injected always-succeed entry point and no interrupted-probe sidecar is present."
+    },
+    {
+      "argv_sha256": "d302be1f439fac694844dc3f1fb94704a80cc4ab3b698ba5e795bbc0b4872c72",
+      "complete": true,
+      "finding_identities": [],
+      "label": "a zero denominator refuses",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "92ff7c980e11bfc76993c13f01c6659ad239447e1a71850541a5e613425e6ff3",
+      "state": "",
+      "verdict_line": "gate_zero_denominator_refuses_check: PASS — 565 gate(s) probed, each against its OWN fresh empty project (the population is the program registry under <TREE>/vibe-ic-marketplace/plugins/vibe-ic/programs; '.' is not read); 25 stated a zero population, of which 24 refused and 1 exited 0 (1 exempted, 0 unrunnable)"
+    },
+    {
+      "argv_sha256": "39d3102cbd159f50e44b2b2309205506fefa0e0b77b993be2560865c9aec9a92",
+      "complete": true,
+      "finding_identities": [],
+      "label": "per-source record merges",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "b88a053a0b2d269c7861c7fdab351a760c38d21b1b4691a808cc80bf749cd724",
+      "state": "",
+      "verdict_line": "[PASS] per_source_record_merge_check: 4018 file(s) under <TREE>/vibe-ic-marketplace/plugins/vibe-ic/programs — no per-source record merge decided by discovery order"
+    },
+    {
+      "argv_sha256": "cf6b9d2d5df6ba90aeeaa87089b0f38e15d15c37ad2f77b7a9029239dabc457e",
+      "complete": true,
+      "finding_identities": [],
+      "label": "gate skips reach the vacuous tier",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f065fd4373f987dbda7f1cf3cafe9a9e77f0c32147fe66f5e7db0f0aa8c0f251",
+      "state": "",
+      "verdict_line": "       residual: 95 unrouted skip path(s) in 50 gate(s); published inventory holds 95 in 50"
+    },
+    {
+      "argv_sha256": "b12cc3000a942d91e1240a634e4445ab18fcefce88b3d53a2d12bf53b1c097d9",
+      "complete": true,
+      "finding_identities": [],
+      "label": "dead plugin path",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "ed2009324834879505cf0f306e338dec6c3142915be5a9caf5a4b71a122bcd6e",
+      "state": "",
+      "verdict_line": "PASS — 0 retired-plugin reference(s); examined 4374 shipped bundle file(s) read and searched for the retired plugin token (of 4375 considered) [git-tracked]"
+    },
+    {
+      "argv_sha256": "c74b5cb0031399277cb1958bbefbe574c9da00aaf9be223806e4ef3d5a66505e",
+      "complete": true,
+      "finding_identities": [],
+      "label": "ic_expert_db health",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "3e8acecd564d18698f0b7e615b650f9d5eb460e85368c2732efbc34455a80557",
+      "state": "",
+      "verdict_line": "  ~ [functional-modification-delivery] low-retrievability: neither the ic_class name nor its lessons carry a design-family stem — reachable only by weak keyword overlap"
+    },
+    {
+      "argv_sha256": "24a52ca0e5eedb22891c8f1946d72df768ee4513bcd979964a7cd64af269d226",
+      "complete": true,
+      "finding_identities": [],
+      "label": "verdict token propagation",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "4edc5d4f601a034ffa671b452b48a39ceadb0aa987d9bb1470a8a5ed87ecc9bf",
+      "state": "",
+      "verdict_line": "CLEAN: 1 registry verdict-edge(s) satisfy emitted subset-of recognized (no silent else->FAIL propagation gap)"
+    },
+    {
+      "argv_sha256": "95f197d4630dce13ab438e01e5f91951aea5b95ab156bd85e5cdf8fc37f4d483",
+      "complete": true,
+      "finding_identities": [],
+      "label": "waveform artifact hygiene",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "97d068409cab07eb87f98f98ecfcaf5a962cd9ddeb92450b1e8432462bafccd3",
+      "state": "",
+      "verdict_line": "PASS — 0 waveform artifact(s)"
+    },
+    {
+      "argv_sha256": "45404db0f73a6f7c58339f2c3a7afe4c54c2741d3db84eed8fcc2edd375c3fb6",
+      "complete": true,
+      "finding_identities": [],
+      "label": "gitignore scratch guard",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "eb6776b24c74b32ec266a90c61fb4ef33bc424fc31aab95240bd8a876cd1436f",
+      "state": "",
+      "verdict_line": "[PASS] gitignore_scratch_guard: 4 commit-determined invariant(s) checked, 0 violation(s)"
+    },
+    {
+      "argv_sha256": "c2f952ab60de761856bd38d826a8095575f46c1ff18dfeced6d0cf459f0014ab",
+      "complete": true,
+      "finding_identities": [],
+      "label": "bundled work is named in NOTICE",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a6ea606851c247aeec6f2cbe5d22ea1cac2368aab7f15f2f077f5186a384eed5",
+      "state": "",
+      "verdict_line": "[PASS] every bundled third-party holder is named in NOTICE: 2 holder(s) over 2 SPDX-headered file(s) (own: VibeIC.AI Contributors)"
+    },
+    {
+      "argv_sha256": "13f4023b3e2fa2b093f006f0476bf005f545e002e7f0a140a8a5c76982dae185",
+      "complete": true,
+      "finding_identities": [],
+      "label": "stated corpus figures are derived, not typed",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f783433f08646b2d5d0895ef142517ce934ec62c0f8516794a52d111dd1c9f00",
+      "state": "",
+      "verdict_line": "[PASS] derived_corpus_figure_check: examined 4018 file(s), no unrecomputed corpus funnel (24 advisory)"
+    },
+    {
+      "argv_sha256": "d32288e0fe3ee67e0ce52e56629af90fa1493aec168fb98bf490e0cbec37321a",
+      "complete": true,
+      "finding_identities": [],
+      "label": "final-summary roll-up consistency",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "2d1c91fceb8c23a0935cb002949b699bf65aaef7a7196fe0ef704b962b96f060",
+      "state": "",
+      "verdict_line": "Overall: PASS"
+    },
+    {
+      "argv_sha256": "ed0755c622dfea90828166b50fa202d1c42e878652a1fe466b246c79318282f2",
+      "complete": true,
+      "finding_identities": [],
+      "label": "published records not superseded",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "9fcc8e5096b1a3d0b0006fa88f59a2d7032608d4b36e6024657077c2bf7dbb5f",
+      "state": "",
+      "verdict_line": "[published_record_staleness_check] NO_CORPUS: 0 published gate record(s) found, 0 adjudicated. NOTHING was re-adjudicated by this run — the entries above are neither confirmed still stale nor shown to be paid, and no NEW superseded record is ruled out. Point $VIBE_IC_BENCHMARK_DATA at a clone to make this gate check the records themselves."
+    },
+    {
+      "argv_sha256": "f51f1e4ec950bcbcdb7c37468dfb30bdd65487584adf68726029bb4630f9c8e1",
+      "complete": true,
+      "finding_identities": [],
+      "label": "input-doc claims vs installed PDK",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "f9b6c1464a6699ee6f1a31e9090174f2e8fb5133a7b6c456c25bdfd0c05f8568",
+      "state": "",
+      "verdict_line": "input_doc_pdk_claim_vs_installed_pdk: 4 input document(s), 0 candidate claim(s) — contradicted=0 corroborated=0 undecided=0"
+    },
+    {
+      "argv_sha256": "78cc5670d334e09047006833c4a0b8b9e20ea2f7df5ce5ff7bd81b0885348093",
+      "complete": true,
+      "finding_identities": [],
+      "label": "a step whose gate cannot fail",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "bd3c94fadecca119e6856589ed745e7ce59cb4b8c99c0fea91b14e6382cc7a9d",
+      "state": "",
+      "verdict_line": "flow_step_can_fail_check: PASS — 69 step(s); 62 can fail on content, 7 cannot and are the recorded baseline (may only shrink)"
+    },
+    {
+      "argv_sha256": "4a80465f0c21cb758d3e3fb07f9dfe4856b704e5e272c193434eda0ea6b66955",
+      "complete": true,
+      "finding_identities": [],
+      "label": "flow-gate grid",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "662b1a62dc3259987cb9109a083a7b0d3e05f7f68cddfa3a068306516f1c32d2",
+      "state": "",
+      "verdict_line": "  NOT DERIVABLE FROM SOURCE  D7 list: whether a declared output list is COMPLETE needs knowledge of what the step ought to produce"
+    },
+    {
+      "argv_sha256": "704f9703c59d575a4bdecac80a6e64facbb353eaf0ef8f6211af16b6b9064ced",
+      "complete": true,
+      "finding_identities": [],
+      "label": "flow dependency graph",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "583ff99dbad5890ce11369ec15302b2c9adfc07a2732c9dc256212e761204bb4",
+      "state": "",
+      "verdict_line": "flow_dependency_graph_check: PASS — 69 step(s), 0 dangling reference(s), 0 cycle(s), 2 root(s) all declared"
+    },
+    {
+      "argv_sha256": "6e737954546fd6673ac789d462f06b4d44846a69ade99ebc9801e6d86ebb52b9",
+      "complete": true,
+      "finding_identities": [],
+      "label": "signoff gate self-skip",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "f809b7ae5e2cd64378d7040417b35522041951a6e071924f9b7a59ea6c8bae96",
+      "state": "",
+      "verdict_line": "[PASS] signoff_gate_self_skip_consistency_check — 7 registered edges honor their disclosure; general scan clean"
+    },
+    {
+      "argv_sha256": "54791fe35d818cf51d319fc8d5d90ec32ada9a24ce05e04d9f127add6f463e4d",
+      "complete": true,
+      "finding_identities": [],
+      "label": "argparse help format",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "c00f142481958ecfe9d00c29599dfb0e1b5e85e1530a4e0bca0455828c5866d6",
+      "state": "",
+      "verdict_line": "PASS — 0 bare-% argparse help string(s)"
+    },
+    {
+      "argv_sha256": "42a183eca660d1bcc7ccaa9edbe74aace7af75c8929872b6dae42500a5d0f769",
+      "complete": true,
+      "finding_identities": [],
+      "label": "no retired pytest plugin request",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a0003b5c4caeccfd89c6e0d6e7ae4b048825fb9d00e4f310ae25957b209ba96b",
+      "state": "",
+      "verdict_line": "PASS — 0 retired pytest-plugin request(s); examined 4613 source file(s) parsed for a pytest plugin request [git-tracked]"
+    },
+    {
+      "argv_sha256": "0abacb10e0f9138fc57870dfa5cf658c550d475196ce76882249d2850316b8da",
+      "complete": true,
+      "finding_identities": [],
+      "label": "image-gated verifications are not silently skipped",
+      "returncode": 2,
+      "schema": 1,
+      "semantic_sha256": "8dca4734fb772d0bc05fdc091ac459c1468db0e14bf733fa5e67b454222b685b",
+      "state": "",
+      "verdict_line": "image_gated_verification_check: UNRUNNABLE — no ghcr.io/vibeic/vibeic-eda image is present on this host; this gate does not pull, because a multi-gigabyte download is the operator's call, not a gate's (pass --allow-pull, or --image, if that is what you mean); the question cannot be asked"
+    },
+    {
+      "argv_sha256": "efd2bf8a05c9098c78377fcbda5aaa446c9d2f2c071a9e29a66dbc2275e0628d",
+      "complete": true,
+      "finding_identities": [],
+      "label": "triage notes state a true reason",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "0c946e4e1618306b90264a57e057a2a9f74ef13a7bdb63920fea9cd084d1bd02",
+      "state": "",
+      "verdict_line": "[PASS] triage_note_answers_the_question: 34 entr(ies), no note claims a missing input that a real run always has."
+    },
+    {
+      "argv_sha256": "72b5ad9e377ddb314fab54378f7b1f84d75163da9869b19874270e438c54a62f",
+      "complete": true,
+      "finding_identities": [],
+      "label": "silent remedy decline",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "ea5e1b817e373627ff575d3cec5b32d47ffab75780f05f213633b7fc1db266e8",
+      "state": "",
+      "verdict_line": "[PASS] no NEW silent remedy decline (15 recorded over 1232 file(s))"
+    },
+    {
+      "argv_sha256": "3bc86d78dd4001950786f26a798579b6a1911aab3fe4e11fac6ccb121df6e739",
+      "complete": true,
+      "finding_identities": [
+        "E       AssertionError: {'by_kind': {'advisory_program_exit_zero': 37, 'optional_program_exit_zero': 29, 'program_exit_zero': 115}, 'declared': 181, 'non_program': {'json_field_true': 1}, 'swept': 181, ...}",
+        "E       assert 181 == 179",
+        "FAILED tools/test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept"
+      ],
+      "label": "liar census controls still fire",
+      "returncode": 1,
+      "schema": 1,
+      "semantic_sha256": "0fdd12da70e3a9543b4085204849be0b5e54aa62c2bbee0755443d3b26a81c8d",
+      "state": "",
+      "verdict_line": "1 failed, 107 passed in <TIME>s"
+    },
+    {
+      "argv_sha256": "5c8988aeab9072194ed97526ba351b8fd7e8fe2e30f32421866e78b0863de5a4",
+      "complete": true,
+      "finding_identities": [],
+      "label": "declared reports are written atomically",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "a6c1960c326f4a35d8526db79d6d3f193592d1384921c3c14e6e461a93acb744",
+      "state": "",
+      "verdict_line": "[PASS] no new non-atomic declared-report write."
+    },
+    {
+      "argv_sha256": "8b80944b5dbf99bc8eae13d67dd49a3c3fc3810319836c73538d367163f9396a",
+      "complete": true,
+      "finding_identities": [],
+      "label": "gates disclose their denominator",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "37cde99559de4b287a4426f8895b52696348d50e13d5daab04fb3c299a737f38",
+      "state": "",
+      "verdict_line": "[PASS] all 59 probed CI gate(s) of 88 declared disclose what they examined (probed against an empty tree); 29 could not be driven and are named above."
+    },
+    {
+      "argv_sha256": "0e7be60cfaa1b83631406142340c25137b45c199e60e7b8b9e4354ebd8a9b493",
+      "complete": true,
+      "finding_identities": [],
+      "label": "an argued direction is pinned",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "0262ae7eb56c9578dedf282e7ab076da465598f70ff7a5b5b9b08ae470ecd19a",
+      "state": "",
+      "verdict_line": "[PASS] policy_direction_pin_check: every argued direction dies when flipped"
+    },
+    {
+      "argv_sha256": "2e0cab16081ed71ca5d065c04a9b534003cb1f475cb774523e8405e30ff75086",
+      "complete": true,
+      "finding_identities": [],
+      "label": "gates are host-independent",
+      "returncode": 0,
+      "schema": 1,
+      "semantic_sha256": "ad27ed95933f57aedfba048d1934c5357f51290daa3fd492256839de0406ed12",
+      "state": "",
+      "verdict_line": "[PASS] all 79 probed corpus-scanning gate(s) (88 declared) give the same verdict in a working checkout and a fresh worktree; 0 untracked + 1 ignored path(s) present in the checkout and not in a fresh worktree."
+    }
+  ]
+}
