@@ -490,14 +490,69 @@ def build_space(verdict: Dict[str, Dict[str, object]]) -> Dict[str, object]:
         "admitted_count": len(admitted),
         "refused_count": len(levers) - len(admitted),
         "admitted_levers": [l["lever"] for l in admitted],
-        "pnr_levers_excluded_on_purpose": [
-            "core_utilisation", "core_aspect_ratio", "cell_padding",
-            "placement_density", "cts_cluster_size", "cts_cluster_diameter",
-            "routing_layer_adjust", "clock_period"],
+        **_pnr_exclusion(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# the PnR levers this program withholds -- and WHO owns them, MEASURED
+# ---------------------------------------------------------------------------
+#: The program that emits the place-and-route space. Named once.
+PNR_OWNER = "ppa_pnr_search_space.py"
+
+#: The names withheld when the owner cannot be asked. This list is a FALLBACK,
+#: not the source of truth: when the owner is present its own lever table is
+#: used, so the two cannot drift apart in the direction that matters (a lever
+#: named here that the owner never emits is a lever no program owns).
+_PNR_LEVERS_FALLBACK = (
+    "core_utilisation", "core_aspect_ratio", "cell_padding",
+    "placement_density", "cts_cluster_size", "cts_cluster_diameter",
+    "routing_layer_adjust", "clock_period")
+
+
+def _pnr_exclusion() -> Dict[str, object]:
+    """Which PnR levers are withheld, and the reason -- CHECKED as it is written.
+
+    THE DEFECT THIS REPLACES. This program used to publish, as the reason for
+    withholding eight levers:
+
+        "these are the place-and-route knobs the PnR-only search already owns"
+
+    and MEASURED on the tree that shipped it, there was no PnR-only search: no
+    program emitted a space containing those levers, so the sentence named an
+    owner that did not exist and a reader who went looking found nothing. That
+    is the same failure as a stub excuse that outlives its cause -- a sentence
+    about another program, published as a fact, never checked.
+
+    So the owner is looked for at the moment the sentence is written. If it is
+    there its own lever names are used and the reason cites it; if it is not,
+    the reason SAYS the levers are unowned rather than claiming an owner.
+    """
+    owner = Path(__file__).resolve().parent / PNR_OWNER
+    if not owner.is_file():
+        return {
+            "pnr_levers_excluded_on_purpose": list(_PNR_LEVERS_FALLBACK),
+            "pnr_owner": None,
+            "pnr_exclusion_reason": (
+                f"these place-and-route knobs are not searched here, and "
+                f"{PNR_OWNER} is NOT present on this tree, so no program "
+                f"emits a space containing them. They are UNOWNED, not "
+                f"delegated — checked when this sentence was written."),
+        }
+    try:
+        sys.path.insert(0, str(owner.parent))
+        import ppa_pnr_search_space as _pnr             # noqa: WPS433
+        names = sorted(str(l["lever"]) for l in _pnr.LEVERS)
+    except Exception:                                   # pragma: no cover
+        names = sorted(_PNR_LEVERS_FALLBACK)
+    return {
+        "pnr_levers_excluded_on_purpose": names,
+        "pnr_owner": PNR_OWNER,
         "pnr_exclusion_reason": (
-            "these are the place-and-route knobs the PnR-only search already "
-            "owns; a cross-layer arm that also moved them would not be "
-            "measuring the cross-layer contribution"),
+            f"these are the place-and-route knobs {PNR_OWNER} owns and emits "
+            f"a space for; a cross-layer arm that also moved them would not "
+            f"be measuring the cross-layer contribution. The owner was "
+            f"checked for, and its own lever names are the ones listed."),
     }
 
 
