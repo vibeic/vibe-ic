@@ -23,6 +23,8 @@ import sys
 import pytest
 from pathlib import Path
 
+from _published_corpus import corpus_root, needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import evidence_citation_resolves_check as E  # noqa: E402
@@ -145,6 +147,7 @@ def test_paid_debt_must_be_removed_from_the_baseline(tmp_path):
 
 # ── shipped state ────────────────────────────────────────────────────────────
 
+@needs_corpus
 def test_shipped_baseline_matches_the_shipped_tree():
     """The gate must be GREEN on main as landed — a gate that ships red is
     the failure mode it exists to remove (#306: 62 of 72 gates could describe
@@ -154,14 +157,24 @@ def test_shipped_baseline_matches_the_shipped_tree():
     TRACKED tree, so a developer whose benchmark-data holds local run
     artifacts would see a mismatch that is theirs, not the repo's. Skipping
     loudly there is what keeps this test from being deleted by the first
-    person it annoys; CI runs clean and enforces it for real."""
-    r = subprocess.run([sys.executable, str(_PROG)],
+    person it annoys; CI runs clean and enforces it for real.
+
+    THE TREE IT MEANS IS THE PUBLISHED CORPUS, WHEREVER THAT IS. The gate's
+    default root is `<checkout>/benchmark-data/ic` and its baseline lives with
+    the DATA it describes (`root.parent/evidence_citation_baseline.json`, see
+    `_BASELINE_NAME`), so when the cells moved to vibeic/benchmark-data both
+    moved together. Running the default here would compare THAT register
+    against a directory holding only the design inputs and report 135 debts
+    "paid" — a number about nothing. The scan root is therefore resolved to
+    the corpus this run actually has, and where there is none the honest answer
+    is that the shipped tree could not be looked at (skip), not that it is
+    green (pass) and not that it is broken (fail)."""
+    root = corpus_root() / "ic"
+    r = subprocess.run([sys.executable, str(_PROG), str(root)],
                        capture_output=True, text=True, timeout=60)
     if r.returncode == 2:
         pytest.skip("no benchmark-data tree in this checkout")
-    root = next((b / E._DEFAULT_ROOT_REL for b in Path(_PROG).resolve().parents
-                 if (b / E._DEFAULT_ROOT_REL).is_dir()), None)
-    if root is not None and E._working_tree_dirt(root):
+    if E._working_tree_dirt(root):
         pytest.skip("working tree under the scan root is dirty — the shipped "
                     "baseline describes the TRACKED tree; CI runs clean")
     assert r.returncode == 0, r.stdout + r.stderr
@@ -485,3 +498,196 @@ def test_the_exemption_requires_an_EXPLICIT_false(tmp_path):
     r = _run(root, tmp_path / "bl.json")
     assert r.returncode == 1, r.stdout
     assert "gone.sby" in r.stdout and "also_gone.sby" in r.stdout
+
+
+# ── #1044: the notation the extractor could not see ──────────────────────────
+
+def test_a_dangling_BRACE_citation_reddens(tmp_path):
+    """THE PAIRED GUARD. `{setup,hold}_ss.rpt` names two specific artifacts,
+    and before #1044 the token did not match `_CITE_RE` at all — `{`, `}` and
+    `,` were outside its character class — so it was never judged, never
+    counted, and never reported. The gate ran and said PASS.
+
+    Measured over the default scope on the day this landed: 284 brace tokens
+    across 36 of 328 documents, expanding to 608 paths, 12 of them carrying an
+    evidence extension and NONE resolving. `benchmark-data/ic/METHODOLOGY.md`
+    is squarely in scope and contributed ZERO citations.
+    """
+    _doc(tmp_path, "EV.md", "corners `sta/{setup,hold}_ss.rpt`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "sta/setup_ss.rpt" in r.stdout and "sta/hold_ss.rpt" in r.stdout, r.stdout
+
+
+def test_a_brace_citation_whose_artifacts_EXIST_passes(tmp_path):
+    """The other direction, without which the guard above is satisfied by a
+    gate that simply reddens on every brace."""
+    _doc(tmp_path, "EV.md", "corners `sta/{setup,hold}_ss.rpt`\n")
+    for name in ("setup_ss.rpt", "hold_ss.rpt"):
+        p = tmp_path / "sta" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_dangling_NON_EVIDENCE_citation_is_disclosed_not_dropped(tmp_path):
+    """THE OUTERMOST LAYER OF #1044, and the same shape as the inner two.
+
+    The brace fix stopped tokens being invisible to the PATTERN. `_DOCUMENT_EXT`
+    moved directory-bearing `.md` from unseen to ruled-on. A token can STILL be
+    invisible to the OUTPUT: matched, expanded, naming one specific artifact,
+    pointing at nothing — and dropped by `_is_citation` with a bare `continue`
+    because it falls outside the judged set. Not counted, not printed,
+    indistinguishable from a token that was judged and cleared.
+
+    THE FIXTURE IS `.v`/`.py` ON PURPOSE. It was `notes/DESIGN.md` when this
+    guard shipped alone, which the `_DOCUMENT_EXT` half now JUDGES — so the
+    fixture would have tested the judged path while claiming to test the
+    unjudged one. Re-pointed at a class that is still genuinely unjudged, which
+    is where the disclosure has to keep working: measured over the default
+    scope, `.py` x188, `.json` x183 and `.v` sit behind that line.
+    """
+    _doc(tmp_path, "EV.md", "see `src/top.v` and `scripts/build.py`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert "SEEN not judged" in r.stdout, r.stdout
+    assert "src/top.v" in r.stdout, r.stdout
+
+
+def test_the_disclosure_does_NOT_change_the_verdict(tmp_path):
+    """Widening past the judged set is a scope change #1044 explicitly does not
+    propose, and one this PR does not make unilaterally. A disclosure that
+    quietly reddened the tree would BE that scope change, arrived at by the
+    back door.
+
+    This is also the guard that the `_DOCUMENT_EXT` widening did not swallow
+    the disclosure channel whole: something is still both SEEN and unjudged,
+    and it is still green."""
+    _doc(tmp_path, "EV.md", "see `src/top.v`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "SEEN not judged" in r.stdout, r.stdout
+
+
+def test_a_NON_EVIDENCE_citation_that_RESOLVES_is_not_disclosed(tmp_path):
+    """The inverse, without which the guard above is satisfied by a gate that
+    lists every non-evidence token it ever saw. Only the DANGLING ones are the
+    finding; a path that points at something has nothing to disclose."""
+    _doc(tmp_path, "EV.md", "see `src/top.v`\n")
+    p = tmp_path / "src" / "top.v"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("x")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "SEEN not judged" not in r.stdout, r.stdout
+
+
+def test_a_JUDGED_citation_is_never_ALSO_disclosed_as_unjudged(tmp_path):
+    """THE SEAM BETWEEN THE TWO HALVES OF THIS PR, which neither half could
+    have a guard for on its own.
+
+    `_DOCUMENT_EXT` judges a directory-bearing `.md`; `unjudged_dangling_ext`
+    discloses what is not judged. If the second kept its own copy of the
+    extension rule — as it did before these were composed — the SAME dangling
+    token would be counted twice: once as a finding and once as "seen, not
+    ruled on". The populations must PARTITION, so the disclosure asks
+    `_is_citation`, the very predicate the verdict is computed from.
+    """
+    _doc(tmp_path, "M.md", "see `ic_alpha/RESULT.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout            # judged, and it reddens
+    assert "ic_alpha/RESULT.md" in r.stdout, r.stdout
+    # ...and it is NOT also in the not-judged channel.
+    assert "SEEN not judged" not in r.stdout, r.stdout
+
+
+def test_a_COMMA_LESS_brace_is_still_a_template(tmp_path):
+    """`{run}.log` names no particular file and a shell does not expand it
+    either: `echo {x}.log` prints `{x}.log`. Expanding it would manufacture a
+    finding against text that promised nothing — the failure mode the template
+    rule exists to prevent. The comma is the discriminator, not the brace."""
+    _doc(tmp_path, "EV.md", "placeholder `{run}.log` and `pre_{x}_post.rpt`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_the_gate_states_how_many_documents_yielded_NOTHING(tmp_path):
+    """The denominator #1044 asks for. A gate that says PASS without saying
+    over what is unfalsifiable (`gate_zero_denominator_refuses_check` ruled on
+    this), and this is the specific number that would have exposed the brace
+    blindness the day it appeared: a document in scope, read, contributing no
+    citation, and indistinguishable in the output from one that was checked
+    and cleared."""
+    _doc(tmp_path, "HAS.md", "see `a.log`\n")
+    (tmp_path / "a.log").write_text("x")
+    _doc(tmp_path, "NONE.md", "prose with no citation at all\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "contributed 0  : 1 of 2 document(s)" in r.stdout, r.stdout
+
+
+def test_an_unbounded_expansion_is_disclosed_not_dropped(tmp_path):
+    """A bound that truncates in silence reads as 'covered everything'. This
+    one announces what it declined to expand."""
+    huge = "`" + "/".join("{a,b}" for _ in range(8)) + ".log`"
+    _doc(tmp_path, "EV.md", f"see {huge}\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert "NOT expanded" in r.stdout, r.stdout
+    assert str(E._MAX_EXPANSIONS) in r.stdout, r.stdout
+
+
+# ── #1044 second half: the DOCUMENT a reader is sent to ──────────────────────
+
+def test_a_dangling_document_citation_with_a_directory_reddens(tmp_path):
+    """THE PAIRED GUARD for the second half of #1044.
+
+    The issue's consequence line is about `.md` artefacts, not logs: "#1028
+    deletes four artefacts `METHODOLOGY.md` cites, and the gate still reports
+    PASS". Teaching the brace NOTATION alone did not fix that — all four are
+    `.md`, and `_EVIDENCE_EXT` did not include it, so the gate saw them and
+    still declined to judge them. Measured on
+    `origin/withdraw/nonpassing-published-runs`: 11 of 11 expansions seen, 11 of
+    11 dangling, 0 judged.
+    """
+    _doc(tmp_path, "M.md", "see `ic_alpha/RESULT.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "ic_alpha/RESULT.md" in r.stdout, r.stdout
+
+
+def test_a_document_citation_whose_target_EXISTS_passes(tmp_path):
+    """Without this the guard above is satisfied by a gate that reddens on
+    every `.md` token it sees."""
+    _doc(tmp_path, "M.md", "see `ic_alpha/RESULT.md`\n")
+    _doc(tmp_path, "ic_alpha/RESULT.md", "the result\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_BARE_document_name_is_prose_not_a_citation(tmp_path):
+    """`RESULT.md` names a KIND of document — every run ships one, and
+    "each run ships a RESULT.md" claims no particular file exists.
+    `ic_alpha/RESULT.md` names ONE. Measured over the default scope: 56 of the
+    108 unresolved `.md` tokens are bare, so judging them would fire on 56
+    legitimately-complete documents. A gate that fires on a complete design is
+    a bug in the gate, not a finding."""
+    _doc(tmp_path, "M.md", "every run ships a `RESULT.md` and a `SOURCE_MANIFEST.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_citation_resolving_ABOVE_the_scan_root_is_disclosed_not_judged(tmp_path):
+    """The artefact EXISTS; it lives above this gate's root, and the resolution
+    ladder stops at the root on purpose (`test_resolution_never_escapes_the_
+    scan_root`). Calling it dangling would be the gate reporting its own scope
+    as the document's defect — which is the shape #1044 is about. Measured: 7
+    such citations in the real corpus."""
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    (tmp_path / "PUBLISHING.md").write_text("policy\n")
+    _doc(scope, "M.md", "see `PUBLISHING.md` at `outer/PUBLISHING.md`\n")
+    (tmp_path / "outer").mkdir()
+    (tmp_path / "outer" / "PUBLISHING.md").write_text("policy\n")
+    r = _run(scope, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "OUT OF SCOPE" in r.stdout, r.stdout

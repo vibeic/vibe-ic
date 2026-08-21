@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 import _path_layout as _pl
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def find_l9(project: Path) -> Optional[Path]:
@@ -195,7 +196,7 @@ def main(argv=None) -> int:
             "verdict": verdict,
         }
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(report, indent=2))
+        atomic_write_text(Path(args.json), json.dumps(report, indent=2))
 
     return 0 if verdict == "PASS" else 1
 
