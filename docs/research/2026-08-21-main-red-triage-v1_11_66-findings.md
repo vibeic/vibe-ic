@@ -2412,13 +2412,20 @@ I did NOT do the same to `test_end_to_end_candidate_cannot_prewrite_base_wave_ar
 which is also vacuous, because its property IS guaranteed elsewhere (the arm's
 read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
 
-## C. Three things I could not settle, and what each needs
+## C. What is left, and what each needs — CURRENT as of the last commit
 
-| item | what is missing | who can supply it |
+Nothing here is "somebody else's lane". Each row says what is MISSING, because
+every row that named a person turned out to be hiding a requirement (M34).
+
+| item | what is missing | kind |
 |---|---|---|
-| Flow-gate enforcement audit (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT: blocking\|advisory`. ~~their `program_exit_zero:` clauses make either choice wrong~~ — **struck, see M29: those clauses execute NOWHERE, so `advisory` contradicts nothing and closes all four today.** The only open question is whether these two SHOULD be able to stop a step. | a POLICY call — but a one-line one, not a wiring project |
-| ~~`flow_manifest_declaration_parity`~~ **CLOSED (M32)** — it was 3 reds, not 2 | ~~a run root from the declared 15; 0 of the 15 are on this host~~ **That blocker was false: 10 of 15 are here and two carry the artefact. Entry measured at 1919 B; gate now 0 not covered.** | nobody — done |
-| Re-founding the 10 knob-dependent tests (M13) | six test-only env knobs cannot cross the hermetic arm boundary, and `os.kill(arm_pid, 0)` is a host-namespace assertion about a container-namespace process | a POLICY call: re-found on `/evidence` + arm receipts + `landing_completion_record.py`, or punch a test-only hole in `_LAND_REVIEWED_ENV_NAMES` plus a writable mount. I recommend the former and did neither. |
+| **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
+| **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
+| **Coverage bridge** (2 reds) | *Is there a waiver id + owner reason for this cell?* If yes → `WAIVED-DEFERRED`; if no → it is not available and the pass is vacuous. A LOOKUP, not a vocabulary choice (M33). | **lookup** |
+| **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
+| **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
+| **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
+| **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 
 ## D. Corrections to my own earlier reports, so you do not act on the old ones
 
