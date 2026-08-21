@@ -1461,6 +1461,41 @@ def _f_extract_illegal_overlap(p: Path) -> None:
        ".subckt top a b\nM1 a b 0 0 nfet\n.ends\n")
 
 
+def _f_crosslayer_refuted(p: Path) -> None:
+    """A cross-layer search whose candidate is NOT the baseline RTL.
+
+    Step 1.6x landed in v1.11.15 with a blocking gate whose FAIL nothing proved
+    reachable, and EMPTY cannot reach it BY DESIGN. The gate's own docstring
+    settles why: it was first written CONDITIONAL on the baseline snapshot and
+    `flow_condition_reachability_check` refused that shape in one line — "a
+    check disabled by exactly the situation it was written for" — so it runs
+    unconditionally and answers `NOT_APPLICABLE` for a design that never ran a
+    search. On EMPTY that is the honest answer, not a defect, which is exactly
+    the position `_f_a0_skipped` was built for one gate over.
+
+    So the fixture has to make a search look ATTEMPTED and REFUTED: the
+    baseline snapshot the search writes before it touches a lever, plus a
+    rewrite-fidelity report whose status says the candidate diverges. That is
+    the step's own closed_loop trigger, spelled in the yaml — "the candidate
+    RTL is not the baseline RTL ... The candidate is DISCARDED and step 1's RTL
+    stands" — so reddening here is the gate doing the one job it exists for,
+    not an artificial break.
+
+    MEASURED: rc 1, `CLX_NOT_EQUIVALENT`. Reached through the program's own
+    status ladder rather than by malforming the file — an unparseable report
+    would redden the clause too, and would prove only that the gate can crash.
+    """
+    (p / "reports" / "crosslayer").mkdir(parents=True, exist_ok=True)
+    (p / "reports" / "crosslayer" / "baseline_rtl").write_text(
+        "cross-layer baseline snapshot marker\n", encoding="utf-8")
+    _w(p, "reports/crosslayer/rewrite_equivalence.json",
+       {"status": "NOT_EQUIVALENT",
+        "compared_points": 4,
+        "unproven_points": 0,
+        "explanation": ("candidate diverges from baseline at 1 of 4 compared "
+                        "points")})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1496,6 +1531,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "DIE_UNFINISHED": _f_die_unfinished,
     "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
+    "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1508,6 +1544,11 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # Step 1.6x (v1.11.15) — its single blocking clause answers
+    # NOT_APPLICABLE on EMPTY and banks a PASS, so nothing proved its FAIL
+    # reachable and the cell was red on main from the version it arrived in.
+    # See `_f_crosslayer_refuted` for why EMPTY cannot reach it by design.
+    ("1.6x", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
     # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
     # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
     # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the
