@@ -26,6 +26,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+# The base fixture is checked THROUGH `ppa_contract_check.py`, which applies a
+# draft-2020-12 schema. Where no such validator exists the program honestly
+# refuses (rc=2) and the fixture's cleanliness is UNCHECKED, not broken --
+# see `_ppa_jsonschema.py` for the measurement and the doctrine.
+from _ppa_jsonschema import needs_draft_2020_12
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS = PLUGIN_ROOT / "programs"
 SCHEMA_DIR = PLUGIN_ROOT / "schemas" / "ppa"
@@ -155,6 +161,7 @@ def codes(process: subprocess.CompletedProcess) -> List[str]:
     return re.findall(r"PPA-C-\d{3}", process.stdout + process.stderr)
 
 
+@needs_draft_2020_12
 def test_the_base_fixture_is_actually_clean(tmp_path):
     """The canary. Every negative test in this lane is this fixture with ONE
     field changed, so a base that had quietly stopped being clean would make

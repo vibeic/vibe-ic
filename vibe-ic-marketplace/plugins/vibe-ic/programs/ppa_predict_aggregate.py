@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+from _ppa import cli_exit  # PPA_INTERFACES §1
 from _ppa import area as _ppa_area  # noqa: E402  (PPA-009 taxonomy labels)
 
 # ─── WHAT CLASS OF NUMBER THIS PROGRAM PRODUCES (PPA-009, spec §7.3) ─────────
@@ -259,7 +260,17 @@ def estimate_to_markdown(est: PpaEstimate) -> str:
     return "\n".join(out)
 
 
-def _cli() -> int:
+def _cli(argv=None) -> int:
+    """The CLI. Exit codes are `docs/PPA_INTERFACES.md` §1.
+
+    A cell count of zero is REFUSED rather than estimated. `0` is not a design
+    with no cells; on every path that reaches here it is a count that was never
+    taken -- an unparsed synthesis log, a stage that did not run, a caller
+    passing through its own default. §2: "No numeric sentinels. `0`, `-1` and
+    `""` never mean 'not measured'." Estimating from it published
+    `Estimated area: 0.0 um^2` and `Estimated power: 0.00 uW` with rc=0, which
+    is a measurement-shaped claim resting on nothing.
+    """
     p = argparse.ArgumentParser()
     p.add_argument("--cell-count", type=int, required=True)
     p.add_argument("--pdk", default="sky130A")
@@ -269,7 +280,16 @@ def _cli() -> int:
     p.add_argument("--activity", type=float, default=1.0)
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
-    args = p.parse_args()
+    args, _rc = cli_exit.parse_or_refuse(p, argv)
+    if args is None:
+        return _rc
+    if args.cell_count <= 0:
+        print(f"{cli_exit.MARK_CANNOT_CHECK} --cell-count is "
+              f"{args.cell_count}: that is not a design, it is a count "
+              f"that was never taken. No estimate was produced. rc=2 "
+              f"(PPA_INTERFACES §2, no numeric sentinels).",
+              file=sys.stderr)
+        return cli_exit.RC_UNDETERMINED
     est = build_estimate(
         rtl_cell_count=args.cell_count, pdk=args.pdk,
         fmax_hint_mhz=args.fmax_hint_mhz,

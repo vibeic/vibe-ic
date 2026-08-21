@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json as cj
 from _ppa import metrics as M
 
@@ -177,7 +178,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write the bundle here")
     ap.add_argument("--json", metavar="FILE", default=None,
                     help="write the machine-readable report here")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     if args.backend is not None:
         # THE SEAM, AND IT REFUSES. Emitting an empty bundle for a tool nobody
@@ -198,7 +201,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return RC_UNDETERMINED
 
     if not args.records:
-        ap.error("give --records PATH [PATH ...] or --backend TOOL")
+        return cli_exit.refuse(ap.prog, "give --records PATH [PATH ...] or --backend TOOL")
 
     paths = [Path(p) for p in args.records]
     report = collect(paths)
@@ -219,13 +222,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"{r['metric']!r}: {r['code']}: {r['message']}",
                   file=sys.stderr)
         rc = RC_REFUSED
-    elif n_bad or n_docs == 0:
+    elif n_bad or n_docs == 0 or report["records"] == 0:
         for u in report["unreadable"]:
             print(f"[CANNOT CHECK] {u['path']}: {u['read']}", file=sys.stderr)
         if n_docs == 0:
             print("[CANNOT CHECK] no document was named or found under the "
                   "paths given, so no record set was assembled. An empty "
                   "bundle would read as a clean run. rc=2.", file=sys.stderr)
+        elif report["records"] == 0:
+            # THE SAME SENTENCE ONE LEVEL IN. `n_docs == 0` was guarded
+            # because an empty bundle reads as a clean run; a document that
+            # WAS read and holds no record produces the identical empty
+            # bundle, and until this branch existed it exited 0. Measured on
+            # `e36d81c0a`: `--records <a bundle with "records": []>` printed
+            # "1 document(s) named, 1 read, 0 record(s) indexed" and returned
+            # 0. Nothing was extracted and nothing said so.
+            print(f"[CANNOT CHECK] {n_docs} document(s) were read and NOT ONE "
+                  f"record was indexed, so the bundle is empty. An empty "
+                  f"bundle is indistinguishable from a clean extraction. "
+                  f"rc=2 — this is NOT a pass.", file=sys.stderr)
         rc = RC_UNDETERMINED
 
     doc = M.bundle(index, expected=expected)
@@ -236,6 +251,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     report["code"] = {RC_OK: "BUNDLE_WRITTEN",
                       RC_REFUSED: "RECORD_REFUSED",
                       RC_UNDETERMINED: ("NOTHING_TO_READ" if n_docs == 0
+                                        else "EMPTY_RECORD_SET"
+                                        if report["records"] == 0 and not n_bad
                                         else "INPUT_UNREADABLE")}[rc]
     if args.out and rc != RC_REFUSED:
         # A bundle is written for rc 0 and rc 2 (the second is a real, honest,

@@ -29,6 +29,14 @@ from pathlib import Path
 
 import pytest
 
+# Every test marked below applies a draft-2020-12 JSON Schema, directly or
+# through `ppa_contract_check.py`. On a jsonschema too old to carry
+# `Draft202012Validator` the schema is NOT applied and the honest verdict is a
+# named SKIP -- see `_ppa_jsonschema.py`. Before this marker existed those
+# tests reported a FAILURE, which made "I could not look" indistinguishable
+# from "I looked and it was broken".
+from _ppa_jsonschema import needs_draft_2020_12
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_ppa_contract_fixtures import (  # noqa: E402
@@ -44,6 +52,7 @@ from _ppa import contract as C, identity as ident, provenance as prov  # noqa: E
 # positive
 # ---------------------------------------------------------------------------
 
+@needs_draft_2020_12
 def test_a_clean_declaration_builds_and_validates(tmp_path):
     built = build_contract(tmp_path, base_declaration())
     assert built.returncode == 0, built.stderr
@@ -490,6 +499,7 @@ def test_no_program_in_this_lane_writes_a_report_nobody_asked_for(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
+@needs_draft_2020_12
 def test_the_json_report_is_written_when_it_is_asked_for(tmp_path):
     build_contract(tmp_path, base_declaration())
     out = tmp_path / "report.json"
@@ -506,6 +516,7 @@ def test_the_json_report_is_written_when_it_is_asked_for(tmp_path):
 # the schema is enforceable, not decorative
 # ---------------------------------------------------------------------------
 
+@needs_draft_2020_12
 def test_the_shipped_schemas_are_valid_json_schema():
     jsonschema = pytest.importorskip("jsonschema")
     for name in ("contract.v1.schema.json", "run_manifest.v1.schema.json"):
@@ -515,6 +526,7 @@ def test_the_shipped_schemas_are_valid_json_schema():
             json.loads(path.read_text()))
 
 
+@needs_draft_2020_12
 def test_the_schema_and_the_validator_agree_on_a_clean_contract(tmp_path):
     """Two independent statements of the same rules must not drift apart."""
     jsonschema = pytest.importorskip("jsonschema")
@@ -527,6 +539,7 @@ def test_the_schema_and_the_validator_agree_on_a_clean_contract(tmp_path):
         f["severity"] == C.SEV_NOTE for f in C.validate(document))
 
 
+@needs_draft_2020_12
 def test_the_schema_refuses_a_sentinel_on_a_not_measured_metric():
     """The no-sentinel rule is stated declaratively as well as in code, so a
     consumer that only has the schema still gets it."""
@@ -793,6 +806,7 @@ def test_a_dangling_symlink_is_not_the_same_as_an_absent_file(tmp_path):
     assert dangling["reason"] == "dangling symlink"
 
 
+@needs_draft_2020_12
 def test_the_embedded_run_manifest_is_validated_against_its_own_schema(
         tmp_path):
     """`run_manifest.v1.schema.json` ships; something must APPLY it.
@@ -825,6 +839,7 @@ def test_the_embedded_run_manifest_is_validated_against_its_own_schema(
     assert "run_manifest/" in text
 
 
+@needs_draft_2020_12
 def test_a_clean_contract_passes_both_schemas(tmp_path):
     """The green twin: adding the second schema must not start refusing the
     documents this lane itself produces."""
@@ -901,6 +916,7 @@ def test_two_runs_that_declared_nothing_are_not_reported_comparable(tmp_path):
     assert "PPA-C-007" in codes(verdict)
 
 
+@needs_draft_2020_12
 def test_a_clean_verdict_discloses_what_it_examined(tmp_path):
     """`0 finding(s)` over an empty contract and over a full one print the same
     zero, and only the denominator tells them apart. A contract is exactly the
@@ -920,6 +936,7 @@ def test_a_clean_verdict_discloses_what_it_examined(tmp_path):
     assert report["examined"]["artefacts_declared"] == 4
 
 
+@needs_draft_2020_12
 def test_the_disclosure_moves_with_the_document(tmp_path):
     """A denominator that never changes is decoration. This is the positive
     control for the disclosure itself: add a metric and an artefact and the
