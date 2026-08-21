@@ -218,6 +218,26 @@ def test_the_step_is_APPENDED_TO_THE_PLAN_not_merely_defined():
         f"plan, so it never runs. plan.append targets: {sorted(appended)[:8]}...")
 
 
+def test_the_declaration_survives_the_docstring_growing():
+    """`flow_gate_enforcement_audit.declared_intent` searches only the first
+    4000 characters of the file. That bound is invisible from inside the
+    docstring, so ADDING PROSE ABOVE the declaration silently un-declares the
+    gate — the line is still there, still opens its own line, and the audit
+    reports `declared: None`.
+
+    Measured, on this branch: two explanatory paragraphs pushed the line to
+    byte 4371 and the gate went UNDECLARED while every other check stayed
+    green. The declaration now sits at the top of the docstring, and this test
+    is the guard that keeps it there."""
+    src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
+    idx = src.find("ENFORCEMENT:")
+    assert idx >= 0, "the gate declares no enforcement intent at all"
+    assert idx < 4000, (
+        f"the ENFORCEMENT declaration sits at byte {idx}, past the 4000-byte "
+        f"window `declared_intent` reads. It is present and unread, which the "
+        f"audit reports as UNDECLARED — move it back above the prose.")
+
+
 def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
     """The doctrine property itself (§3/§5), pinned so it cannot regress to
     AUDIT_ONLY. A dict `.get(rc, ...)` instead of a branch on `rc` is enough to
