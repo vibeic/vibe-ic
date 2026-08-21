@@ -337,6 +337,54 @@ def test_two_different_declared_fractions_are_refused(tmp_path):
     assert rep["fraction"] is None and rep["ambiguous"] is True
 
 
+# ── vibe-ic#712: a DENIED derivation is not a declaration ────────────────────
+#
+# The statement this reader is built for carries an I/O token, a period token
+# and one percentage inside one window. So does a sentence that RETRACTS it,
+# and before the polarity consult the two were indistinguishable — the retracted
+# 20 % landed in the emitted SDC as a mandate, citing the design's own document
+# as the authority. That is #706 and #711 in a third field.
+
+L9_IO_DENIED = L9.replace(
+    "- some prose that mentions a period but keys nothing",
+    "- `set_input_delay` / `set_output_delay`: the I/O delay is NOT 20% of the "
+    "clock period for this revision; the interface is source-synchronous")
+
+
+def test_a_denied_io_delay_derivation_is_not_declared(tmp_path):
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path,
+                                                           L9_IO_DENIED)))
+    assert rep["fraction"] is None and not rep["ambiguous"]
+
+
+def test_a_denied_derivation_is_REFUSED_not_merely_missing(tmp_path):
+    """"No statement was made" and "the statement was retracted" are opposite
+    findings. A silent drop would give a caller that keeps its historical
+    literal no way to tell which one happened."""
+    denied = dcp.declared_io_delay_fraction(
+        dcp.docs_in(_docs(tmp_path / "a", L9_IO_DENIED)))
+    absent = dcp.declared_io_delay_fraction(
+        dcp.docs_in(_docs(tmp_path / "b", L9)))
+    # One entry per I/O token the statement carries (`set_input_delay`,
+    # `set_output_delay`, the `9.1.3 I/O delay` heading and the bullet's own
+    # `I/O delay`), each citing the line a reader can go and look at.
+    assert denied["denied"] and absent["denied"] == []
+    assert all("L9_constraints_floorplan.md:" in e for e in denied["denied"])
+    assert "REFUSED" in str(denied["note"])
+    assert "REFUSED" not in str(absent["note"])
+    assert denied["note"] != absent["note"]
+
+
+def test_a_denial_does_not_suppress_a_statement_in_another_sentence(tmp_path):
+    """NEGATIVE CONTROL. The reach is `_prose_polarity.sentence_scope`, so a
+    denial in a NEIGHBOURING statement must not retract this one — the silent
+    direction, where the reader publishes less than it read and nothing
+    reddens."""
+    txt = L9_IO + "\n\n- The clock tree is not built by this flow.\n"
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2)
+
+
 def test_a_worked_example_number_is_not_mistaken_for_the_fraction(tmp_path):
     """The declaration's own example contains `10 ns -> 2 ns`. Only the
     PERCENTAGE may be read; a bare ns figure in the same sentence must not

@@ -97,7 +97,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082
+from _atomic_artefact import (  # vibe-ic#1082
+    write_bytes as atomic_write_bytes,
+    write_json as atomic_write_json,
+)
 
 try:
     from . import _klayout_launch as _kl                     # type: ignore
@@ -576,7 +579,10 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     dest = Path(out) if out else (gds_path if in_place else filled)
     if dest != filled:
         try:
-            dest.write_bytes(filled.read_bytes())
+            # vibe-ic#1082/#1470: a declared output is renamed into place only on
+            # success. A half-written promoted layout is worse than none — a reader
+            # cannot tell a truncated GDS from a small one.
+            atomic_write_bytes(dest, filled.read_bytes())
             common["promoted_to"] = str(dest)
         except OSError as exc:                               # noqa: BLE001
             return done(dict(common, state="FAIL",

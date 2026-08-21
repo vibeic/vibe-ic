@@ -123,9 +123,21 @@ def test_undeclared_unmet_condition_fails_and_names_the_empty_corpus():
         "the FAIL must say what would buy the tolerance")
 
 
-# ── A1' — the same call against ORIGIN/MAIN's evaluator, measured ─────────
+#: The revision the defect was MEASURED on — this file's own docstring names it.
+#: PINNED, and deliberately not `origin/main`: the control below asserts that the
+#: reference code still exhibits the bug, so aiming it at a MOVING ref means the
+#: control dies the moment the fix lands there. It did. On 867de4289 the same
+#: call returned `(False, ["optional_program_exit_zero: condition_files_exist
+#: [...] matched no path"])` — the FIXED behaviour — and all three negative
+#: controls failed saying "the control no longer discriminates". A control must
+#: be built from a state that stays legitimately vulnerable, and only an
+#: immutable revision is that.
+_BASE_REV = "397b3f25f"
+
+
+# ── A1' — the same call against the PRE-FIX evaluator, measured ───────────
 def _origin_main_fcc():
-    """origin/main's `flow_compliance_check`, loaded from git at test time.
+    """The pre-fix `flow_compliance_check`, loaded from git at test time.
 
     The negative control has to be the code that actually shipped, not a
     hand-written imitation of it: a control that cannot fail proves nothing,
@@ -136,10 +148,10 @@ def _origin_main_fcc():
         repo = repo.parent
     rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
            "flow_compliance_check.py")
-    r = subprocess.run(["git", "-C", str(repo), "show", f"origin/main:{rel}"],
+    r = subprocess.run(["git", "-C", str(repo), "show", f"{_BASE_REV}:{rel}"],
                        capture_output=True, text=True, timeout=_T)
     if r.returncode != 0 or not r.stdout:
-        pytest.skip("origin/main not fetched in this checkout")
+        pytest.skip(f"{_BASE_REV} not present in this checkout")
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "base_fcc.py"
         src.write_text(r.stdout, encoding="utf-8")

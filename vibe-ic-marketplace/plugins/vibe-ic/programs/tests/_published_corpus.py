@@ -60,7 +60,16 @@ import pytest
 #: Where a caller may point us at a clone of `vibeic/benchmark-data`.
 CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
 
-_PLUGIN = Path(__file__).resolve().parents[1]
+#: OFF BY ONE, BOTH OF THEM, until this comment was written. `parents[1]` from
+#: `programs/tests/` is `programs/`, not the plugin, so `_REPO` resolved to
+#: `vibe-ic-marketplace/` and the repo-local branch of `corpus_root()` looked
+#: for `vibe-ic-marketplace/benchmark-data` — a path this repository has never
+#: had. The error was INERT and therefore invisible: the corpus left the tree at
+#: `c5d7f2d00`, so the branch that could not find it was also the branch with
+#: nothing to find. It falsified this module's own promise that "a checkout that
+#: still carries cells" runs every check as before; such a checkout would have
+#: been reported as having no corpus at all.
+_PLUGIN = Path(__file__).resolve().parents[2]
 _REPO = _PLUGIN.parents[2]
 
 
@@ -126,6 +135,47 @@ def _has_cells(root: Path) -> bool:
             if entry.is_dir() and entry.name.startswith("v"):
                 return True
     return False
+
+
+def named_cell(*parts: str) -> Optional[Path]:
+    """One SPECIFICALLY NAMED run tree under the resolved corpus, or None.
+
+    `cell_dirs()` answers "what published cells are here"; this answers "is THIS
+    one here", which is the question a check with a recorded subject asks. A
+    ratchet that re-runs the attacks it recorded names its cell, its donor and
+    its older run, and each is a separate presence question — a donor that went
+    away and a cell that went away are not the same fact and must not share one
+    boolean.
+
+    WHY THIS IS NOT `corpus_root() / "ic" / ...` AT THE CALL SITE. It is exactly
+    that, and the point is that it is written ONCE. The 63x8 adversarial
+    ratchet's test module spelled it `REPO / "benchmark-data" / "ic"` inline
+    instead, and when the corpus moved out of this repository at `c5d7f2d00`
+    that spelling could no longer resolve on ANY host: the whole ratchet went to
+    a silent skip with `VIBE_IC_BENCHMARK_DATA` set and readable, and its
+    thirteen recorded findings stopped being adjudicated in either direction.
+    The program it guards had written the failure mode down in advance — "a
+    corpus prune would silently close all thirteen and the ratchet would be
+    measuring the publication schedule instead of the gates" — and then the
+    prune happened one layer below where that sentence could act.
+
+    The module is deliberately NOT named here in full. Its own
+    `test_the_unwired_state_is_disclosed_or_gone` treats any file in the plugin
+    tree that contains the program's identifier as evidence the program is
+    WIRED, so a prose mention from this helper would be read as a caller and
+    fail a disclosure test on a docstring.
+
+    A run tree is NOT required to be a `v<version>_<PDK>` cell here. `_has_cells`
+    asks that of the corpus as a whole because PUBLISHING.md defines what a
+    corpus contains; a donor named by a recorded finding is whatever that finding
+    named, and re-spelling the publishing contract at this level would refuse the
+    `clean_run_*` trees the recorded attacks actually used.
+    """
+    root = corpus_root()
+    if root is None:
+        return None
+    p = root.joinpath("ic", *parts)
+    return p if p.is_dir() else None
 
 
 def cell_dirs() -> Tuple[Path, ...]:

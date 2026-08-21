@@ -1,6 +1,58 @@
 #!/usr/bin/env python3
-"""A PPA head-to-head is a claim about SILICON, so it has to survive the four
-ways such a claim goes wrong. vibe-ic#1121.
+"""A PPA head-to-head is a claim about SILICON, so it has to survive every way
+such a claim goes wrong. vibe-ic#1121, comparison schema v2.
+
+    SAME RTL, SAME PDK, LOWER POWER, HIGHER PERFORMANCE, SMALLER AREA -- THAT IS
+    BETTER.
+
+That sentence is the product claim, and this program exists to make it
+UNARGUABLE rather than merely asserted. v1 encoded the four refusals #1121 asked
+for and all four are still here, unchanged, below. v2 adds the five conditions
+without which the sentence stays arguable by anyone who wants to argue with it,
+and the useful property of all five is that they are CHECKABLE:
+
+    the same STAGE          synthesis area is not post-route area
+    the same corner/mode    an arm at one PVT is not an arm at another
+    the same activity basis vectorless power is not VCD power
+    both arms FEASIBLE      smaller area with DRC violations is not smaller
+    a tuned arm may tune    a win over a weakened opponent measures the setup
+
+The conditions themselves live in `_ppa/benchmark.py`, each with the argument
+for why it is not already covered; this file is their CLI, their corpus driver,
+and the place where the two halves of a verdict -- what the numbers derive and
+what the record asserts -- are put side by side.
+
+WHERE THIS SITS IN THE FLOW, DECLARED AT THE TOP BECAUSE IT IS A DECISION
+=========================================================================
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 36 while step 36 is running. That is the narrow question
+`flow_gate_enforcement_audit` scores, and `advisory` is that audit's token for
+the answer; it is NOT a licence to ignore the verdict. This gate is a leg of
+step 36 in the flow's BLOCKING slot -- wired as `optional_program_exit_zero`
+with an `absent_condition_reason`, never as `advisory_program_exit_zero`. An
+`optional_` clause whose condition IS met is evaluated exactly like the
+unconditional blocking form, and since vibe-ic W4 an UNMET condition FAILs
+outright unless the wiring site declares why an absent input is genuinely
+not-applicable. So when `flow_compliance_check` evaluates that clause an rc 1
+FAILs the step — and step 37 `blocks_on: [34, 36]`, so a record
+that cannot support its claim stops the run before stream-out. The two words are
+one axis apart and reading them as one axis is how a gate gets quietly defanged
+into the advisory slot.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING: this program validates a RECORD, not
+a design. The phase-3 runner's inline pattern spawns gates over artefacts the
+step it guards has just produced, and no step produces a head-to-head record —
+it is written by a comparison campaign, not by a flow run. There is nothing for
+an inline spawn to observe as it happens.
+
+AND IT IS AT THE TOP FOR A MEASURED REASON, not a stylistic one. This block was
+written at the END of this docstring, where it was TRUE AND UNREAD: `flow_gate_
+enforcement_audit.declared_intent` scans `text[:4000]`, and the declaration sat
+at byte 8249, so the audit reported `undeclared::ppa_head_to_head_check` --
+"AUDIT_ONLY and nothing in the gate says that was the decision" -- about a gate
+that had said so at length. A declaration that the reader it is written for
+cannot reach is not a declaration. Keep it inside the first 4000 bytes; if this
+docstring grows a longer preamble, the declaration moves up with it.
 
 WHAT #1121 SAYS, AND WHY A GATE IS THE FIRST STEP
 =================================================
@@ -22,8 +74,8 @@ refuses it when the record cannot support the claim printed on it. It has no
 opinion about which flow should win, and the LOSS verdict is derived by exactly
 the same code path as the WIN.
 
-THE FOUR REFUSALS, EACH ONE OF #1121'S OWN STATED CONSTRAINTS
-============================================================
+THE FOUR v1 REFUSALS, EACH ONE OF #1121'S OWN STATED CONSTRAINTS
+===============================================================
 C1  SAME PROBLEM (#1121 constraint 4).  Every arm must declare the same spec
     digest, PDK, clock target and corner SET. Two flows run on two different
     problems are not a comparison, however carefully each was measured.
@@ -60,28 +112,65 @@ The derived verdict is a TRIPLE of per-axis verdicts, never one word. #1121:
 "Report the triple with the constraints that produced it, or do not report it."
 There is deliberately no `overall` field to quote.
 
+THE FIVE v2 CONDITIONS, AND WHY EACH IS NOT ALREADY COVERED
+==========================================================
+F1  ONE CONTRACT, PROVEN BY HASH.  C1 compares four declared fields. A contract
+    that differs in a FIFTH thing -- a floorplan constraint, an IO budget, a
+    permitted cell set -- passes C1 and is still a different problem. Every arm
+    declares `contract.sha256` and they must be identical, or the comparison is
+    UNDETERMINED. UNDETERMINED and not REFUSED because a hash mismatch says the
+    contracts differ without saying how, and this program is not entitled to
+    pick one. A declared hash that disagrees with the contract body carried in
+    the SAME record is a different matter and is rc 1: that one IS demonstrable
+    here, by recomputing it with the canonical serializer.
+
+F2  ONE SCOPE PER AXIS.  A v1 axis is a BARE FLOAT, and a bare float cannot say
+    which stage, corner, mode or activity basis produced it. So v1 could not
+    answer three of the four arguabilities above -- not answered them badly, but
+    carried nothing capable of answering them. A v2 axis is the canonical metric
+    record and the arms' `scope` objects must be EQUAL.
+
+    Equality rather than three hand-written comparisons, deliberately: a checker
+    that compares stage, then corner, then activity basis acquires a fourth
+    blind spot the day a fifth scope key is added, whereas requiring the scopes
+    to match has none by construction. `REQUIRED_SCOPE` closes the degenerate
+    way to satisfy equality, which is for both arms to declare nothing.
+
+F3  STAGE AND BASIS MUST AGREE.  An arm declaring `signed_off_gds` while citing
+    a synthesis-stage number is claiming a measurement it did not take. This is
+    the refusal that stops a proxy standing in for the property INSIDE one arm,
+    which no comparison between arms can catch.
+
+F4  BOTH ARMS FEASIBLE, OVER THE SAME QUESTION.  An implementation that does not
+    close is not an implementation, so a number taken off it is the cost of a
+    design that does not exist. The asymmetry half matters as much: DRC + LVS +
+    antenna on the subject and DRC alone on the baseline gives two arms both
+    reporting clean over different questions, and the one asked less looks
+    exactly as good as the one asked more.
+
+F5  A TUNED ARM MUST BE ALLOWED TO TUNE.  Publishing a win over a deliberately
+    weakened opponent is the same defect as a gate that cannot fail, and worse
+    in one respect -- a gate that cannot fail merely misses defects, while a
+    rigged benchmark publishes a false one. If the opponent's flow ships a tuner
+    it gets that tuner, its OFFICIAL search space, and a budget no smaller than
+    ours. C3's `tuned_by_this_project: false` does not cover this: a campaign can
+    answer it truthfully while having authored the opponent's search space and
+    given it five trials against our five hundred.
+
+AND THE PARETO RELATION, WHICH IS NOT A REFUSAL
+===============================================
+The derived verdict carries a `pareto` relation per baseline: SUBJECT_DOMINATES,
+BASELINE_DOMINATES, EQUAL or INCOMPARABLE. INCOMPARABLE is a RESULT and it is
+the common one, because the three axes trade against each other by construction.
+A record asserting a Pareto relation the numbers do not support is refused
+exactly as an asserted per-axis verdict is -- otherwise the collapsed scalar the
+record may not CARRY simply arrives through the verdict instead.
+
 MISSING IS NOT WINNING
 ======================
 An arm with an unmeasured axis yields rc=2 UNDETERMINED, never a win on the axes
 that were measured. A comparison that could not look must not reach a reader as
 a comparison that looked and was favourable.
-
-ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
-step 36 while step 36 is running. That is the narrow question
-`flow_gate_enforcement_audit` scores, and `advisory` is that audit's token for
-the answer; it is NOT a licence to ignore the verdict. This gate is a leg of
-step 36 in the flow's BLOCKING slot (`program_exit_zero`, never
-`advisory_program_exit_zero`), so when `flow_compliance_check` evaluates that
-clause an rc 1 FAILs the step — and step 37 `blocks_on: [34, 36]`, so a record
-that cannot support its claim stops the run before stream-out. The two words are
-one axis apart and reading them as one axis is how a gate gets quietly defanged
-into the advisory slot.
-
-WHY IT IS NOT PROMOTED TO INLINE-BLOCKING: this program validates a RECORD, not
-a design. The phase-3 runner's inline pattern spawns gates over artefacts the
-step it guards has just produced, and no step produces a head-to-head record —
-it is written by a comparison campaign, not by a flow run. There is nothing for
-an inline spawn to observe as it happens.
 
 chip-AGNOSTIC, PDK-AGNOSTIC, vendor-AGNOSTIC: no design, PDK, process, vendor or
 part literal appears in the logic or can affect it. The PDK string is compared
@@ -97,19 +186,23 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 import _corpus_location as _corpus  # sibling program, one seam for all corpora
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
+from _ppa import benchmark as _bench  # the fairness conditions, and their argument
 
-RC_OK = 0
-RC_REFUSED = 1
-RC_UNDETERMINED = 2
+RC_OK = _bench.RC_OK
+RC_REFUSED = _bench.RC_REFUSED
+RC_UNDETERMINED = _bench.RC_UNDETERMINED
+
+SCHEMA_V1 = _bench.SCHEMA_V1
+SCHEMA_V2 = _bench.SCHEMA_V2
 
 #: The three axes, and which direction is better. This is the whole of the
 #: program's PPA knowledge and it is a physical fact, not a tuning choice:
 #: smaller area is better, more positive slack is better, less power is better.
-AXES: Dict[str, str] = {
-    "area_um2": "lower",
-    "timing_wns_ns": "higher",
-    "power_mw": "lower",
-}
+#: Defined once in `_ppa/benchmark.py` and bound here, so that the CLI and the
+#: library can never disagree about which direction is better -- two answers to
+#: that question is how a LOSS gets reported as a WIN with nobody lying.
+AXES: Dict[str, str] = _bench.AXES
 
 #: Fields whose presence IS the defect: a collapsed score is the number that
 #: gets quoted, and quoting it is lie-shape #12 by construction.
@@ -118,19 +211,22 @@ COLLAPSED_SCALAR_FIELDS = ("score", "ppa_score", "overall", "figure_of_merit",
 
 #: The identity of the PROBLEM. Two arms disagreeing on any of these are not
 #: running the same problem. Compared as opaque values; never interpreted.
-PROBLEM_FIELDS = ("spec_sha256", "pdk", "clock_target_ns", "corners")
+#: Defined once in `_ppa/benchmark.py` and bound here, because the v2 condition
+#: that checks `design` against the contract body compares the SAME list -- and
+#: two copies of a vocabulary is how one of them silently stops matching.
+PROBLEM_FIELDS = _bench.PROBLEM_FIELDS
 
 MEASUREMENT_BASES = ("signed_off_gds", "post_route_sta", "silicon")
 
 
-class Refusal(Exception):
-    """A record that cannot support the claim printed on it."""
-
-    def __init__(self, code: str, message: str, rc: int = RC_REFUSED):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.rc = rc
+#: ONE Refusal type, defined in the library and bound here. If this file
+#: defined its own, a refusal raised by a fairness condition would not be caught
+#: by `evaluate`'s `except Refusal`, and it would escape as a traceback -- which
+#: exits 1 on the way out. rc 1 in this program means "the record cannot support
+#: its claim", a finding about silicon, so a crash would report a hard finding
+#: over a bug. That is the exact shape `docs/PPA_INTERFACES.md` section 1
+#: records two shipped gates paying for on 2026-08-21.
+Refusal = _bench.Refusal
 
 
 def _load(path: Path) -> Dict[str, Any]:
@@ -210,9 +306,11 @@ def check_triple(arms: List[Dict[str, Any]]) -> None:
                     "and not the property (lie-shape #12). It is refused for "
                     "EXISTING: whatever else the record says, the scalar is "
                     "the number that gets quoted.")
-        missing = [ax for ax in AXES
-                   if not isinstance(ppa.get(ax), (int, float))
-                   or isinstance(ppa.get(ax), bool)]
+        # v1 wrote a bare float, v2 the canonical metric record. `axis_value`
+        # reads both, so the two shapes differ in what they can be CHECKED for
+        # and never in what the arithmetic does -- a migration that changed the
+        # arithmetic would itself become a source of disagreement.
+        missing = [ax for ax in AXES if _bench.axis_value(a, ax) is None]
         if missing:
             raise Refusal(
                 "AXIS_UNMEASURED",
@@ -270,29 +368,20 @@ def check_measurement_basis(arms: List[Dict[str, Any]]) -> List[str]:
 
 
 def derive_verdict(arms: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """C5 — per AXIS, never collapsed. LOSS is derived like WIN."""
-    subject = next(a for a in arms if a.get("role") == "subject")
-    out: Dict[str, Any] = {"subject": subject["flow"], "per_baseline": {}}
-    for b in [a for a in arms if a.get("role") == "baseline"]:
-        axes: Dict[str, Any] = {}
-        for ax, better in AXES.items():
-            s = float(subject["ppa"][ax])
-            o = float(b["ppa"][ax])
-            if s == o:
-                verdict = "TIE"
-            elif (s < o) == (better == "lower"):
-                verdict = "SUBJECT_BETTER"
-            else:
-                verdict = "BASELINE_BETTER"
-            axes[ax] = {
-                "subject": s, "baseline": o, "better_is": better,
-                "verdict": verdict,
-                "delta": round(s - o, 6),
-                "delta_pct": (round((s - o) / o * 100.0, 4)
-                              if o not in (0, 0.0) else None),
-            }
-        out["per_baseline"][b["flow"]] = axes
-    return out
+    """C5 — per AXIS plus the Pareto relation, never collapsed.
+
+    Delegated to `_ppa.benchmark.score`, which is handed `arms` AND NOTHING
+    ELSE. There is no parameter through which the record's asserted verdict
+    could reach the scorer, so it cannot agree with an assertion -- it can only
+    compute one. Whether the assertion matches is asked afterwards, by
+    `check_asserted_verdict`, over the scorer's output. A future author who
+    wants the scorer to see the assertion has to widen the signature, and that
+    is visible in a diff in a way that reading one more key off a dict is not.
+
+    LOSS is derived by the same code path as WIN; there is no branch only a win
+    takes.
+    """
+    return _bench.score(arms)
 
 
 def check_asserted_verdict(doc: Dict[str, Any], derived: Dict[str, Any]) -> None:
@@ -312,7 +401,18 @@ def check_asserted_verdict(doc: Dict[str, Any], derived: Dict[str, Any]) -> None
                 f"record asserts a verdict against {flow!r}, which is not a "
                 "baseline arm in this record")
         for ax, said in (axes or {}).items():
-            got = d.get(ax, {}).get("verdict")
+            # `pareto` sits beside the three axes and is a RELATION, not an
+            # axis verdict, so it is compared against the derived relation
+            # directly. It is checked at all because it is the remaining route
+            # for a collapsed claim: the record may not CARRY a figure of merit
+            # (C2 refuses one for existing), so an author wanting to say "we
+            # won" in one word has only the verdict left, and an unchecked
+            # `pareto: SUBJECT_DOMINATES` over a mixed triple is that word.
+            if ax == "pareto":
+                got = d.get("pareto")
+            else:
+                got = d.get(ax, {}).get("verdict") if isinstance(
+                    d.get(ax), dict) else None
             if said != got:
                 raise Refusal(
                     "VERDICT_CONTRADICTED",
@@ -320,15 +420,63 @@ def check_asserted_verdict(doc: Dict[str, Any], derived: Dict[str, Any]) -> None
                     f"numbers in the same record derive {got!r}")
 
 
+#: Schemas whose rules this program knows. A record declaring anything else is
+#: UNDETERMINED and not refused: rules we do not have are not rules a record
+#: broke, and guessing that a v3 record obeys v2's conditions would be a verdict
+#: this program is not entitled to.
+KNOWN_SCHEMAS = (SCHEMA_V1, SCHEMA_V2)
+
+
+def check_declared_schema(doc: Dict[str, Any]) -> str:
+    """Which rules this record says it was written to.
+
+    A record that declares NOTHING is v1, because every record written before
+    the fairness conditions existed declares nothing. Reading them as v2 and
+    refusing them would be charging a document with breaking a rule that did not
+    exist when it was written; reading them as v1 gives them the v1 checks and
+    then the v2 conditions find them UNDETERMINED for carrying no scope, which
+    is the true state of affairs.
+
+    And declaring v1 buys nothing. The conditions below run over EVERY record
+    whatever it declares, so the only thing the declaration changes is what the
+    report calls the document. A gate that could be switched off by a field in
+    its own input is not a gate.
+    """
+    declared = _bench.record_schema(doc)
+    if declared not in KNOWN_SCHEMAS:
+        raise Refusal(
+            "UNKNOWN_SCHEMA",
+            f"record declares schema {declared!r}; this program knows "
+            f"{list(KNOWN_SCHEMAS)}. Rules this program does not have are not "
+            "rules the record broke, so this is UNDETERMINED and not a "
+            "refusal.",
+            RC_UNDETERMINED)
+    return declared
+
+
 def evaluate(path: Path) -> Tuple[int, Dict[str, Any]]:
     report: Dict[str, Any] = {"record": str(path)}
     try:
         doc = _load(path)
+        report["declared_schema"] = check_declared_schema(doc)
         arms = _arms(doc)
+        # ORDER IS THE v1 REFUSALS FIRST, and it is not arbitrary. A record
+        # that is defective in a v1 way is defective in the way #1121 named,
+        # and it should be told so in #1121's words rather than being refused
+        # for a scope key it was never asked to carry.
         report["problem"] = check_same_problem(arms)
         check_triple(arms)
         report["roles"] = check_baseline_is_theirs(arms)
         report["measurement_bases"] = check_measurement_basis(arms)
+        # v2. Each one is argued in `_ppa/benchmark.py`; none of them can be
+        # switched off by anything the record says about itself.
+        report["contract"] = _bench.check_contract_identity(arms)
+        report["scope"] = _bench.check_scope_parity(arms)
+        _bench.check_stage_basis_agreement(arms)
+        report["feasibility"] = _bench.check_feasibility(arms)
+        subject = next(a for a in arms if a.get("role") == "subject")
+        report["tuning"] = _bench.check_tuning_parity(
+            subject, [a for a in arms if a.get("role") == "baseline"])
         derived = derive_verdict(arms)
         check_asserted_verdict(doc, derived)
         report["derived_verdict"] = derived
@@ -348,12 +496,49 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
         lines.append(f"  problem: {json.dumps(report['problem'], sort_keys=True)}")
         for flow, axes in v["per_baseline"].items():
             lines.append(f"  {v['subject']} vs {flow}:")
-            for ax, d in axes.items():
-                pct = "n/a" if d["delta_pct"] is None else f"{d['delta_pct']:+.2f}%"
+            for ax in sorted(a for a in axes if a != "pareto"):
+                d = axes[ax]
+                # A percentage is printed only where it is meaningful, and
+                # where it is not the REASON is printed instead of "n/a".
+                # "n/a" and "this quantity does not have a percentage" are two
+                # different facts and only one of them is informative.
+                pct = ("no %" if d["delta_pct"] is None
+                       else f"{d['delta_pct']:+.2f}%")
                 lines.append(
                     f"    {ax:<14} subject={d['subject']:<12} "
                     f"baseline={d['baseline']:<12} ({d['better_is']} better) "
-                    f"{pct}  -> {d['verdict']}")
+                    f"delta={d['delta']:<+12.6g} {pct}  -> {d['verdict']}")
+                if d.get("delta_pct_reason"):
+                    lines.append(f"      no percentage: {d['delta_pct_reason']}")
+            rel = axes.get("pareto")
+            lines.append(f"    {'pareto':<14} {rel}")
+            if rel == "INCOMPARABLE":
+                lines.append(
+                    "      INCOMPARABLE is a RESULT, not a missing one: this "
+                    "arm is better on some axes and worse on others, which is "
+                    "what a trade-off looks like. Reporting it as a win would "
+                    "be the collapsed figure this record is not allowed to "
+                    "carry, arriving through the verdict instead.")
+        if report.get("scope"):
+            lines.append("  scope, identical in every arm and that is what "
+                         "makes the numbers comparable:")
+            for ax in sorted(report["scope"]):
+                lines.append(f"    {ax:<14} "
+                             f"{json.dumps(report['scope'][ax], sort_keys=True)}")
+        if report.get("contract"):
+            lines.append(f"  one contract, all arms: {report['contract']}")
+        if report.get("tuning"):
+            t = report["tuning"]
+            subj = t.get("_subject", {})
+            lines.append(
+                f"  tuning: subject supported={subj.get('supported')} "
+                f"performed={subj.get('performed')} budget={subj.get('budget')}")
+            for flow in sorted(k for k in t if k != "_subject"):
+                b = t[flow]
+                lines.append(
+                    f"          {flow}: supported={b['supported']} "
+                    f"performed={b['performed']} budget={b['budget']} "
+                    f"search_space={b['search_space_source']!r}")
         if "silicon" not in report.get("measurement_bases", []):
             lines.append(
                 "  NOT SILICON: every arm here is a simulated triple "
@@ -369,10 +554,22 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
         lines.append(f"{tag} ppa_head_to_head_check: {r['code']}")
         lines.append(f"  {r['message']}")
         if rc == RC_UNDETERMINED:
+            # `[CANNOT CHECK]` is the marker `docs/PPA_INTERFACES.md` section 1
+            # names for an rc 2, and it is printed as well as `[UNDETERMINED]`
+            # rather than instead of it: the second is this repository's own
+            # established token and other programs print it, while the first is
+            # the PPA contract's. A reader or a grep looking for either finds
+            # it, and neither can be mistaken for a silent skip.
             lines.append(
-                "  Could not decide. That is not a pass and it is not a win: "
-                "a comparison that could not look must never reach a reader "
-                "as one that looked and was favourable.")
+                "  [CANNOT CHECK] Could not decide. That is not a pass and it "
+                "is not a win: a comparison that could not look must never "
+                "reach a reader as one that looked and was favourable.")
+        else:
+            lines.append(
+                "  [REFUSE] The record cannot support the claim printed on "
+                "it. rc=1 here is a finding about the comparison and through "
+                "it about silicon, not a report that something could not be "
+                "read.")
     return "\n".join(lines)
 
 
@@ -456,10 +653,14 @@ def check_corpus(named: Path, may_be_absent: bool = False) -> int:
     print(f"ppa_head_to_head_check --corpus {corpus}: "
           f"{len(recs)} head-to-head record(s) found")
     if not recs:
-        print("VACUOUS: the corpus carries no head-to-head record, so nothing "
-              "was validated. This is NOT a pass — the first head-to-head run "
-              "has not been published yet (vibe-ic#1121). rc=2.",
-              file=sys.stderr)
+        # The MARKER, not just the word. PPA_INTERFACES §1 requires
+        # `[CANNOT CHECK]` or `[REFUSE]` on a 2 so that a caller can find one
+        # by grep rather than by reading English -- and "VACUOUS", however
+        # honest, is not the string anything downstream looks for.
+        print(f"{cli_exit.MARK_CANNOT_CHECK} VACUOUS: the corpus carries no "
+              "head-to-head record, so nothing was validated. This is NOT a "
+              "pass — the first head-to-head run has not been published yet "
+              "(vibe-ic#1121). rc=2.", file=sys.stderr)
         return RC_UNDETERMINED
     rcs = [main([str(r)]) for r in recs]
     worst = worst_rc(rcs)
@@ -491,12 +692,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "excuses a $VIBE_IC_BENCHMARK_DATA that is set and "
                          "unreadable.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
     if args.corpus is not None:
         return check_corpus(Path(args.corpus).resolve(),
                             args.corpus_may_be_absent)
     if not args.record:
-        ap.error("give a record path or --corpus DIR")
+        return cli_exit.refuse(ap.prog, "give a record path or --corpus DIR")
 
     rc, report = evaluate(Path(args.record))
     print(format_report(rc, report))
