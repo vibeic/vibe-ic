@@ -462,3 +462,37 @@ class TestNestedMacroWaiver:
         assert res["inert_allow_macros"] == ["spm"]   # spm matched nothing
         assert res["advisories"]                       # surfaced as inert
         assert "spm" in res["advisories"][0]
+
+
+# --- the exit code is what the sign-off ladder reads, and no test drove _cli()
+
+class TestCliExitCode:
+    """`gate_cli_mutation_probe` reported this gate SILENT.
+
+    464 lines of tests, organised in eight classes, all driving `evaluate()`
+    and asserting the VERDICT. The sign-off ladder reads the EXIT CODE, and
+    nothing exercised the mapping — so a residual-XOR FAIL could have started
+    exiting 0 with every one of those classes still green.
+
+    It was NO_ENTRY before that: `_cli()` is the entry point (not `main()`) and
+    its `__main__` guard carries a trailing `# pragma: no cover`, which the
+    probe's `:\n`-anchored pattern could not match. The probe was widened; the
+    gap it then exposed is this one.
+    """
+
+    def test_a_residual_report_exits_non_zero(self, tmp_path):
+        import xor_layout_check as X
+        rpt = _write(tmp_path, _residual_report(by_cell=[], layer="met1"))
+        rc = X._cli(["--report", str(rpt), "--top", "user_project_wrapper"])
+        assert rc != 0, f"a residual XOR exited {rc}"
+
+    def test_a_zero_delta_report_exits_zero(self, tmp_path):
+        """The other direction, or the test above is met by always failing."""
+        import xor_layout_check as X
+        rpt = _write(tmp_path, _zero_delta_report())
+        assert X._cli(["--report", str(rpt), "--top", "user_project_wrapper"]) == 0
+
+    def test_a_missing_report_is_a_usage_error(self, tmp_path):
+        """rc 2 — could not ask, distinct from a verdict about the layout."""
+        import xor_layout_check as X
+        assert X._cli(["--report", str(tmp_path / "nope.json")]) == 2

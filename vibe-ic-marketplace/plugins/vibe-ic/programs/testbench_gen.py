@@ -346,6 +346,139 @@ def emit_unit_tb(case: dict, out_dir: Path, top: str,
     return f
 
 
+# --------------------------------------------------------------------------
+# The PRODUCER's declared SCOPE over the L10 layer  (#761)
+# --------------------------------------------------------------------------
+# ORGANIC #761 — one layer, two readers, two private scopes. The producer
+# filtered L10 on the single literal `functional_vector`; `l10_tb_conformance_
+# check` graded EVERY case in the layer. A measured run whose 95 L10 cases were
+# typed {happy_path, addr_max, len_max, pre_wake_false} therefore produced
+# `SKIP  no functional_vector L10 cases — nothing to produce` followed by
+# `{"total": 95, "ok": 0, "fail": 95}` — a statement about the FILTER reported
+# as a statement about the LAYER, and a 95-case markdown nothing in the run
+# connected to it.
+#
+# The scope is now DECLARED here, once, and both readers use this one
+# definition: the producer emits by it, and the consumer imports it to name the
+# gap in its own FAIL. It is not a relaxation — the consumer still grades all
+# 95 and still FAILs — it is the end of the two-private-filters shape.
+
+#: The L10 `kind` vocabulary the substance-floor SCAFFOLD is auto-emitted for.
+#: These are the same five tokens `l10_tb_conformance_check` recognises for its
+#: CPU functional-oracle waiver (`_FUNCTIONAL_VECTOR_KINDS`); a producer that
+#: recognised only ONE of them was the same scope defect one level down — a
+#: `kind=functional` case was waivable by the consumer and unproducible by the
+#: producer. chip-AGNOSTIC: a kind vocabulary, never a chip/vendor/SKU literal.
+SCAFFOLD_KINDS = frozenset({
+    "functional_vector",
+    "functional",
+    "functional_test",
+    "instruction_test",
+    "cpu_functional",
+})
+
+#: The kind the one-shot runner asks for. Named so the runner and the consumer
+#: gate resolve the SAME scope from the SAME constant instead of each spelling
+#: the literal out again.
+DEFAULT_SCAFFOLD_KIND = "functional_vector"
+
+#: The keys an L10 document may carry its case list under, in priority order.
+#: This producer read only the first two while `l10_tb_conformance_check.load_l10`
+#: read all five — a SECOND instance of the #761 shape hiding in the same pair of
+#: files: an L10 keyed `vectors` was 0 cases to the producer and N cases to the
+#: gate. One tuple, imported by both.
+L10_CASE_LIST_KEYS = ("test_cases", "cases", "vectors", "cmd_response", "tests")
+
+
+def case_kind(case: dict) -> str:
+    """Normalised kind/category/type token for an L10 case (lowercased).
+
+    Mirrors `l10_tb_conformance_check.case_kind` exactly — the two readers must
+    not disagree about what a case's kind IS while arguing about which kinds are
+    in scope."""
+    raw = case.get("kind", case.get("category", case.get("type", "")))
+    return str(raw or "").strip().lower()
+
+
+def kind_histogram(cases: List[dict]) -> Dict[str, int]:
+    """{kind: count} over an L10 case list, in descending count order."""
+    hist: Dict[str, int] = {}
+    for c in cases:
+        k = case_kind(c) or "(none)"
+        hist[k] = hist.get(k, 0) + 1
+    return dict(sorted(hist.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def scaffold_kind_scope(kind: "str | None") -> "frozenset | None":
+    """The set of L10 kinds the SCAFFOLD is emitted for, given a `kind` request.
+
+    `None` -> every kind. A kind inside the functional-vector family -> the
+    WHOLE family (see `SCAFFOLD_KINDS`). Any other kind -> exactly that kind."""
+    if kind is None:
+        return None
+    k = str(kind).strip().lower()
+    return SCAFFOLD_KINDS if k in SCAFFOLD_KINDS else frozenset({k})
+
+
+def load_l10_cases(project: Path) -> "List[dict] | None":
+    """The L10 case list for `project`, or None when the layer is absent.
+
+    Shared by the producer and (via import) by the consumer gate's scope
+    report, so "how many cases does this layer carry" has ONE answer."""
+    l10_path = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
+    if not l10_path.is_file():
+        return None
+    # A malformed L10 RAISES — it must not be reported as an ABSENT L10. "the
+    # layer is not there" and "the layer is unreadable" are different facts, and
+    # collapsing them is the same defect one file over (#761).
+    l10 = json.loads(l10_path.read_text())
+    if isinstance(l10, list):
+        raw = l10
+    else:
+        raw = []
+        for key in L10_CASE_LIST_KEYS:
+            v = l10.get(key)
+            if isinstance(v, list):
+                raw = v
+                break
+    return [c for c in raw if isinstance(c, dict)]
+
+
+def producer_scope(cases: List[dict],
+                   kind: "str | None" = DEFAULT_SCAFFOLD_KIND) -> Dict[str, object]:
+    """The PRODUCER's scope over `cases`, as a machine-readable record.
+
+    This is the fact the #761 SKIP message stated backwards: it reports what
+    the LAYER carries AND what the producer is scoped for, so neither number
+    can be read as the other."""
+    scope = scaffold_kind_scope(kind)
+    in_scope = [c for c in cases if scope is None or case_kind(c) in scope]
+    out_of_scope = [c for c in cases
+                    if scope is not None and case_kind(c) not in scope]
+    return {
+        "total": len(cases),
+        "kind_histogram": kind_histogram(cases),
+        "requested_kind": kind,
+        "scaffold_kinds": sorted(scope) if scope is not None else None,
+        "in_scaffold_scope": len(in_scope),
+        "out_of_scaffold_scope": len(out_of_scope),
+        "out_of_scope_kinds": kind_histogram(out_of_scope),
+    }
+
+
+def describe_scope(scope: Dict[str, object]) -> str:
+    """One-line human rendering of `producer_scope` — the LAYER fact first, the
+    FILTER fact second, so a reader cannot mistake the second for the first."""
+    hist = scope.get("kind_histogram") or {}
+    kinds = ", ".join(f"{k} {v}" for k, v in hist.items()) or "(none)"
+    scaffold = scope.get("scaffold_kinds")
+    scaffold_txt = "{" + ", ".join(scaffold) + "}" if scaffold else "every kind"
+    return (f"L10 carries {scope.get('total', 0)} case(s) [{kinds}]; the TB "
+            f"producer's scaffold scope is {scaffold_txt} — "
+            f"{scope.get('in_scaffold_scope', 0)} in scope, "
+            f"{scope.get('out_of_scaffold_scope', 0)} out of scope")
+
+
 def _detect_ic_class(project: Path) -> "str | None":
     """Best-effort ic_class detection so the per-case golden-oracle path can
     fire for the arithmetic-primitive family (chip-AGNOSTIC)."""
@@ -405,6 +538,43 @@ def _emit_case_golden_oracle(project: Path, ic_class: "str | None",
     return f
 
 
+def _emit_case_boot_latency_oracle(project: Path, case: dict,
+                                   dut_module: str,
+                                   ports: "List[Tuple[str, str, str]]",
+                                   out_dir: Path,
+                                   report: "dict | None") -> "Path | None":
+    """ORGANIC #778 companion — emit a REAL reset-to-first-bus-activity
+    LATENCY oracle TB (no ORACLE_NONE) for an L10 `functional_vector` case
+    whose own stimulus+expected text describes a "within N cycles of reset
+    release" boot-latency bound (chip-AGNOSTIC shape, any clocked core —
+    see `cpu_boot_latency_oracle_tb_gen`). Returns None (defer to the
+    substance-floor scaffold) when this case/DUT-surface pair is not a
+    groundable boot-latency oracle — fail-closed, never fabricates."""
+    name = case.get("name", "")
+    if not _LEGAL_ID_RE.match(str(name)):
+        return None
+    try:
+        import cpu_boot_latency_oracle_tb_gen as _clg  # type: ignore
+    except Exception:
+        return None
+    inputs, outputs, inouts = _classify(ports)
+    try:
+        text = _clg.emit_case_oracle_from_ports(
+            case, dut_module, inputs, outputs, inouts)
+    except Exception as e:  # pragma: no cover — never let it break the loop
+        if report is not None:
+            report.setdefault("oracle_errors", []).append(
+                {"case": name, "error": str(e)})
+        return None
+    if not text:
+        return None
+    f = out_dir / f"{name}.v"
+    f.write_text(text)
+    if report is not None:
+        report.setdefault("boot_latency_oracle_cases", []).append(str(name))
+    return f
+
+
 def emit_unit_tbs(project: Path, top: str = "chip_top",
                   kind: "str | None" = None,
                   report: "dict | None" = None) -> int:
@@ -418,24 +588,35 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
           emit a `PASS_PLACEHOLDER` skeleton with the DUT commented out, which
           is a fabricated green. `report["reason"]` carries the explanation.
 
-    `kind` (e.g. `functional_vector`) restricts emission to cases of that kind —
-    the §4.05 no-leak scoping: the runner wiring only auto-produces skeletons for
-    `functional_vector` cases (whose oracle is an id-substring trace), so a
-    `cmd_response` case whose oracle is the stricter opcode/summary path NEVER
-    gets manufactured evidence and STILL fails the Step-4 gate when uncovered."""
+    `kind` (e.g. `functional_vector`) scopes the SUBSTANCE-FLOOR SCAFFOLD to the
+    kind family it names (`scaffold_kind_scope`) — the §4.05 no-leak scoping: a
+    `cmd_response` case whose oracle is the stricter opcode/summary path never
+    gets an auto-emitted scaffold, so it STILL fails the Step-4 gate when
+    uncovered.
+
+    ORGANIC #761 — the kind filter used to drop out-of-scope cases before the
+    REAL per-case oracle emitters ever saw them. Those emitters
+    (`arith_oracle_tb_gen`, `cpu_boot_latency_oracle_tb_gen`) are keyed on the
+    case's OWN declared text and interface shape and are fail-closed: they
+    return None for anything they cannot ground. Gating them on a kind TOKEN
+    denied a genuine golden to a case whose only defect was that Phase 1 typed
+    it `happy_path` instead of `functional_vector`. They now run for EVERY case;
+    the token-scoped part is the scaffold alone. This cannot fabricate evidence
+    — a real oracle drives the declared stimulus and compares against an
+    independently computed golden, or it emits nothing.
+
+    `report["scope"]` always carries the `producer_scope` record, on every
+    return path INCLUDING the refusals, so the caller can state the LAYER fact
+    (how many cases exist, of which kinds) rather than only the FILTER fact."""
     if report is None:
         report = {}
-    l10_path = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
-    if not l10_path.is_file():
+    cases = load_l10_cases(project)
+    if cases is None:
         report["reason"] = "no L10_TEST_CASES.json"
         return -1
-    l10 = json.loads(l10_path.read_text())
-    cases = [c for c in (l10.get("test_cases") or l10.get("cases") or [])
-             if isinstance(c, dict)]
-    if kind is not None:
-        cases = [c for c in cases if c.get("kind") == kind]
+    report["scope"] = producer_scope(cases, kind)
     if not cases:
-        report["reason"] = "no matching L10 test case"
+        report["reason"] = "L10 carries no test case"
         return 0
 
     dut_module, ports, reason = resolve_dut(project, top)
@@ -458,15 +639,40 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
     # closed-form-derivable keeps the substance-floor scaffold (ORACLE_NONE), so
     # a case nobody can verify still fails the Step-4 gate honestly.
     ic_class = _detect_ic_class(project)
+    scope = scaffold_kind_scope(kind)
     emitted = 0
     for c in cases:
-        wrote = None
-        if str(c.get("kind", "")) == "functional_vector":
-            wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,
-                                             report)
+        # ORGANIC #761 — the REAL oracle emitters run for EVERY case. Both are
+        # content-keyed and fail-closed (a closed-form declared function for the
+        # arithmetic family; the case's own "within N cycles of reset release"
+        # text for the boot-latency family), so widening them to the whole layer
+        # cannot manufacture evidence: a case they cannot ground still gets
+        # None. What it CAN do is give a genuine golden to a case Phase 1 typed
+        # with some other kind token.
+        wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir, report)
         if wrote is None:
-            wrote = emit_unit_tb(c, out_dir, top, ports=ports,
-                                 dut_module=dut_module, report=report)
+            # ORGANIC #778 companion — the datapath (arith) convention
+            # didn't ground this case; try the CPU-core / clocked-core
+            # BOOT-LATENCY convention before falling back to the
+            # substance floor. chip-AGNOSTIC, fail-closed (see
+            # cpu_boot_latency_oracle_tb_gen.emit_case_oracle_from_ports).
+            wrote = _emit_case_boot_latency_oracle(
+                project, c, dut_module, ports, out_dir, report)
+        if wrote is None:
+            # The substance-floor SCAFFOLD stays kind-scoped. It is the part
+            # with a §4.05 side effect: a scaffold is a LIVE driver, and
+            # `l10_tb_conformance_check` suppresses its whole evidence blob only
+            # while NOTHING under the sim tree drives the DUT (#206). Emitting
+            # scaffolds for every case would flip that suppression off and let
+            # any vacuous testbench sitting beside them credit its case by
+            # id-substring — trading a visible FAIL for an invisible one.
+            if scope is None or case_kind(c) in scope:
+                wrote = emit_unit_tb(c, out_dir, top, ports=ports,
+                                     dut_module=dut_module, report=report)
+            else:
+                report.setdefault("out_of_scaffold_scope", []).append(
+                    {"case": c.get("name", c.get("id", "")),
+                     "kind": case_kind(c)})
         if wrote is not None:
             emitted += 1
     if emitted == 0 and report.get("skipped"):
@@ -474,6 +680,9 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
             "refused to emit any TB: "
             + "; ".join(s["reason"] for s in report["skipped"][:3]))
         return -2
+    if emitted == 0:
+        # #761 — say what the LAYER holds, not only what the filter matched.
+        report["reason"] = describe_scope(report["scope"])
     return emitted
 
 
@@ -500,6 +709,12 @@ def main() -> int:
         # printed PASS without driving the design (#209). Exit 0 so a project
         # that has not reached RTL yet is not spuriously failed; the reason is
         # printed so it is never silent.
+        print(f"[SKIP] testbench_gen: no TB emitted — {report.get('reason')}")
+        if report.get("scope"):
+            print(f"       {describe_scope(report['scope'])}")
+        return 0
+    if emitted == 0:
+        # #761 — an empty FILTER is not an empty LAYER. Print both numbers.
         print(f"[SKIP] testbench_gen: no TB emitted — {report.get('reason')}")
         return 0
     print(f"[PASS] testbench_gen: {emitted} unit TB files emitted "

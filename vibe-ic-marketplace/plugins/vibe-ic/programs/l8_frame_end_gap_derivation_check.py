@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +87,66 @@ def _load_layer(project: Path, glob_patterns: list[str]) -> dict | None:
     return None
 
 
+# v1.5.84 (layergate-3) — rate embedded in the key, at ANY frequency.
+# Replaces a hard-coded 4-entry rate table (50/5/100/25 MHz) that
+# silently returned None — and therefore SILENTLY SKIPPED the whole
+# gate — for every design clocked at any other rate. See
+# `_declared_clock_mhz` for the second, stronger resolution path.
+_KEY_RATE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*mhz", re.IGNORECASE)
+
+# Keys that carry the design's own clock rate as a bare scalar.
+_SCALAR_CLOCK_KEYS = ("clock_mhz", "clk_mhz", "internal_clock_mhz",
+                      "sys_clk_mhz", "core_clock_mhz", "master_clock_mhz")
+_CLOCK_ARRAY_KEYS = ("clock_domains", "clocks", "clock_map", "clock_topology")
+
+
+def _declared_clock_mhz(l8: dict) -> tuple[float | None, str]:
+    """Resolve the clock rate the design's OWN L8 declares, in MHz.
+
+    STRENGTHENING (layergate-3): a ticks-denominated frame-end gap is
+    only actionable if it can be converted to physical time, and the
+    only legitimate source of the conversion factor is the design's own
+    declared clock. Previously the rate had to be spelled into the field
+    NAME and had to be one of four hard-coded values; anything else made
+    the gate skip itself — the "a gate that cannot fire proves nothing"
+    failure mode.
+
+    Resolution order (scalar first, then the typed clock records, using
+    the same freq_mhz -> period_ns -> freq_hz order every other L8
+    consumer uses). Ambiguity is NOT resolved here: if the records
+    disagree this returns the first resolvable one and
+    ``l8_clock_period_actionability_check`` is the gate that flags the
+    ambiguity. chip-AGNOSTIC: schema keys only, no design literal."""
+    for k, v in l8.items():
+        if k.lower() in _SCALAR_CLOCK_KEYS and isinstance(v, (int, float)) \
+                and float(v) > 0:
+            return float(v), k
+    for key in _CLOCK_ARRAY_KEYS:
+        arr = l8.get(key)
+        if not isinstance(arr, list):
+            continue
+        # Prefer the tier every consumer prefers.
+        ordered = [r for r in arr if isinstance(r, dict)
+                   and (r.get("domain_kind") == "primary"
+                        or r.get("role") == "master")]
+        ordered += [r for r in arr if isinstance(r, dict)
+                    and r not in ordered]
+        for rec in ordered:
+            for field_name, conv in (("freq_mhz", lambda x: float(x)),
+                                     ("period_ns", lambda x: 1000.0 / float(x)),
+                                     ("freq_hz", lambda x: float(x) / 1e6)):
+                raw = rec.get(field_name)
+                if raw is None:
+                    continue
+                try:
+                    mhz = conv(raw)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                if mhz > 0:
+                    return mhz, f"{key}[{rec.get('name') or '?'}].{field_name}"
+    return None, ""
+
+
 def _frame_end_us_from_l8(l8: dict) -> tuple[float | None, str]:
     """Try to extract frame_end_gap value in microseconds from L8."""
     # Direct us field
@@ -96,20 +157,27 @@ def _frame_end_us_from_l8(l8: dict) -> tuple[float | None, str]:
         if "inter_byte_gap_timeout" in kl and "us" in kl and isinstance(v, (int, float)):
             return float(v), k
 
-    # Tick field with rate hint in name
+    # Tick field: resolve the rate from the key name at ANY frequency,
+    # else from the design's own declared clock.
+    declared_mhz, declared_src = _declared_clock_mhz(l8)
     for k, v in l8.items():
         kl = k.lower()
         if not isinstance(v, (int, float)):
             continue
         if "frame_end" not in kl and "inter_byte_gap_timeout" not in kl:
             continue
-        if "ticks" not in kl:
+        if "ticks" not in kl and "cycles" not in kl:
             continue
-        # Parse rate from key (e.g. ticks_5MHz / ticks_at_50MHz)
-        for rate_str, rate_mhz in (("50mhz", 50), ("5mhz", 5),
-                                   ("100mhz", 100), ("25mhz", 25)):
-            if rate_str in kl:
+        m = _KEY_RATE_RE.search(kl)
+        if m:
+            try:
+                rate_mhz = float(m.group(1))
+            except ValueError:
+                rate_mhz = 0.0
+            if rate_mhz > 0:
                 return float(v) / rate_mhz, k  # ticks → us
+        if declared_mhz:
+            return float(v) / declared_mhz, f"{k} @ L8.{declared_src}"
     return None, ""
 
 

@@ -1,32 +1,50 @@
-"""Corner-sweep include resolution across a MULTI-DIRECTORY staged PDK.
+"""What is LEFT of the include-farm file after vibe-ic#193 retired the farm.
 
-A PDK's composed corner shim reaches its prerequisite / device libs by BARE
-RELATIVE NAME. Measured on ngspice-46 (both `.lib <file> <sec>` and `.include`):
-such a target is found iff it sits in the INCLUDING FILE's directory OR in the
-process cwd — those two, nothing else; there is no -I option and `set
-sourcepath` does not apply. So when a PDK stages its libs across several
-directories, a cross-directory hop satisfies neither and every corner dies with
-`ERROR, library file … not found` / `exit(1)`; and since no EXISTING directory
-holds the whole closure, no choice of cwd alone can fix it either.
+THE FARM IS GONE, AND SO ARE ITS TESTS
+======================================
+This file used to pin a per-root symlink farm that co-located a split-staged
+PDK's model libs so a composed corner shim's bare relative `.include` / `.lib`
+targets resolved. That machinery existed for ONE reason: to load the resolver's
+declared ENTRY lib (`spice_libs[0]`) as the deck's primary — the second of two
+primary-selection strategies this repo carried. The owner's vibe-ic#193 decision
+keeps the device-defining rank as the single strategy, so the farm went with it:
+without the primary redirect, the farm built symlinks that nothing ever loaded.
 
-analog_pdk_deck_context therefore CREATES such a directory, farming the shim's
-include CLOSURE into one directory of symlinks. The sweep must then also RUN
-from that farm: co-location supplies the first hop, cwd supplies every hop after
-it (ngspice reverts to the PDK's real directory once it follows a farm symlink).
-Both halves are required — test_sim_cwd_is_the_farm pins the coupling.
+The strategy's epitaph — what it did, why it went, and the concrete steps to
+bring it back — lives in
+`analog_pdk_deck_context.RETIRED_PRIMARY_STRATEGIES["resolver-entry-lib"]`, and
+`test_issue193_custom_pdk_primary_selection_ngspice.py` asserts that record is
+present and substantive, keeps the ngspice measurements that informed the
+decision, and guards against the strategy returning unannounced.
 
-These tests pin BOTH halves: the farm resolves a legitimately-split staged set,
-AND it never silently substitutes a lib it had to guess at.
+Nine tests were deleted here, all of them exercising the retired path:
+`test_split_staged_libs_are_colocated_for_the_shim`,
+`test_known_open_pdk_never_farms`, `test_farm_excludes_itself_from_git`,
+`test_sim_cwd_is_the_farm`, `test_missing_include_target_fails_loudly`,
+`test_ambiguous_include_target_is_never_guessed`,
+`test_same_directory_target_wins_over_a_remote_namesake`,
+`test_two_root_sets_get_separate_farms`, `test_farm_is_idempotent`. They are
+recoverable verbatim from vibe-ic v1.7.69, which is what the restore
+instructions point at.
+
+WHAT SURVIVES, AND WHY IT IS NOT FARM-SPECIFIC
+==============================================
+* the opt-in contract test, rewritten: the elected lib is a RAW staged path.
+  Under one strategy this is no longer a statement about opting out of
+  anything — it is the plain assertion that the resolver returns a path the
+  caller staged, not a path it manufactured.
+* `_norm_host_path`'s symlinked-LEAF behaviour. The farm is what SURFACED that
+  defect (resolving a symlinked leaf silently relocates every bare-name include
+  it carries), but the defect is in the sweep's host-path normalisation and
+  applies to any PDK that stages a lib as a symlink — which is common. Deleting
+  these with the farm would be over-deletion.
 
 NDA hygiene: SYNTHETIC family names only (MyFoundry X180) — no NDA token.
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_pdk_deck_context as APDC          # noqa: E402
@@ -58,8 +76,8 @@ def _shim_text(device_basename: str, sections=("ss", "tt", "ff")) -> str:
 
 def _stage_split(tmp_path: Path, device_name="mfx180_dev.lib",
                  shim_name="mfx180_corners.lib"):
-    """Stage a shim and its device lib in DIFFERENT directories (the shape that
-    made every corner fail) and return (res, shim, device)."""
+    """Stage a shim and its device lib in DIFFERENT directories and return
+    (res, shim, device)."""
     a, b = tmp_path / "bridge", tmp_path / "models"
     a.mkdir(), b.mkdir()
     shim, dev = a / shim_name, b / device_name
@@ -72,152 +90,29 @@ def _stage_split(tmp_path: Path, device_name="mfx180_dev.lib",
     return res, shim, dev
 
 
-# ── the fix: a split staged set resolves ────────────────────────────────────
+def test_the_elected_lib_is_always_a_raw_staged_path(tmp_path):
+    """The resolver hands back a lib the CALLER staged — never one it built.
 
-def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
-    res, shim, dev = _stage_split(tmp_path)
-    ctx = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    assert ctx.status == "OK"
-    # the deck now loads the shim THROUGH the farm …
-    model_lib = Path(ctx.model_lib)
-    assert model_lib.parent.parent == tmp_path / "farm"
-    assert model_lib.is_symlink() and model_lib.resolve() == shim.resolve()
-    # … where its bare-name target is a resolvable sibling.
-    sibling = model_lib.parent / dev.name
-    assert sibling.is_symlink() and sibling.resolve() == dev.resolve()
-    assert ctx.include_farm["ambiguous"] == 0
-    assert ctx.include_farm["missing"] == 0
+    This is what is left of `test_no_farm_dir_keeps_the_raw_path` once there is
+    no farm to opt out of. It deliberately says nothing about WHICH staged lib
+    is elected; that is the #193 file's subject.
 
-
-# CAPTURED-FLOOR (architectural divergence, tracked in a backlog issue): this
-# test encodes afec053fb's ENTRY-LIB(shim)-primary intent — with no farm it
-# expects model_lib == res["spice_lib"], which the resolver sets to
-# spice_libs[0] (the FIRST staged lib). HEAD's custom_family_context instead
-# picks the DEVICE-DEFINING lib (ORGANIC #149 / v1.4.58), which is more
-# principled than "the first staged lib" and yields a directly-loadable deck for
-# this fixture. Making it green would require flipping HEAD to shim-first, which
-# changes the runtime primary-selection for EVERY custom PDK and CANNOT be
-# verified without ngspice + a commercial PDK — an owner decision, not a CI fix.
-# xfail(strict=False) keeps this VISIBLE (xfailed, not a masking skip); the farm
-# CAPABILITY itself is fully restored and exercised by the other 12 tests here.
-@pytest.mark.xfail(strict=False, reason=(
-    "architectural divergence: afec spice_libs[0]/entry-shim-primary assumption "
-    "vs HEAD #149/v1.4.58 device-defining-lib-primary. HEAD's ranking is more "
-    "principled than 'the first staged lib' and yields a deck this fixture can "
-    "run WITHOUT a farm; flipping to first-staged-lib would change the runtime "
-    "primary-selection for every custom PDK and is unverifiable without ngspice "
-    "— pending owner decision + ngspice verification (captured-floor issue)."))
-def test_no_farm_dir_keeps_the_raw_path(tmp_path):
-    """Opt-in: a caller that asks for no farm gets exactly the previous paths."""
-    res, shim, _dev = _stage_split(tmp_path)
+    MUTATION THIS CATCHES: any future re-introduction of a manufactured path
+    (a symlink farm, a copy, a rewritten lib) as the elected primary without
+    the caller being told — the elected lib would stop being a member of
+    `spice_libs`, and stop being a real file.
+    """
+    res, _shim, _dev = _stage_split(tmp_path)
     ctx = APDC.custom_family_context(res)
-    assert ctx.model_lib == str(shim)
-    assert ctx.include_farm is None
+    assert ctx.model_lib in res["spice_libs"], (
+        "the elected lib must be one of the RAW staged paths; "
+        f"got {ctx.model_lib} for staged {res['spice_libs']}")
+    assert not Path(ctx.model_lib).is_symlink()
+    # and the retired strategy's schema field is really gone from the artefact
+    assert "include_farm" not in ctx.as_json()
 
 
-def test_known_open_pdk_never_farms(tmp_path):
-    """sky130/gf180 include by ABSOLUTE path — the fast path is untouched."""
-    ctx = APDC.resolve_deck_context("sky130", farm_dir=tmp_path / "farm")
-    assert ctx.source == "known_family"
-    assert ctx.include_farm is None
-    assert not (tmp_path / "farm").exists()
-
-
-def test_farm_excludes_itself_from_git(tmp_path):
-    """The link names carry the PDK's own basenames — they must never be
-    committable."""
-    res, _shim, _dev = _stage_split(tmp_path)
-    APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    assert (tmp_path / "farm" / ".gitignore").read_text().strip() == "*"
-
-
-def test_sim_cwd_is_the_farm(tmp_path):
-    """The sweep runs ngspice from the model lib's parent. Once that lib is
-    farmed, the parent IS the farm — and it must stay that way: co-location gets
-    the first hop, cwd gets the rest, and each alone still fails."""
-    res, _shim, _dev = _stage_split(tmp_path)
-    ctx = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    sim_cwd = Path(ctx.model_lib).parent
-    assert sim_cwd == Path(ctx.include_farm["dir"])
-    # every closure member is reachable from that cwd by BARE NAME
-    for name in (Path(_shim).name, Path(_dev).name):
-        assert (sim_cwd / name).exists()
-
-
-# ── the load-bearing half: never guess ──────────────────────────────────────
-
-def test_missing_include_target_fails_loudly(tmp_path):
-    """A target genuinely absent from the staged set must NOT be papered over:
-    the context fails honestly instead of loading some other lib."""
-    res, shim, dev = _stage_split(tmp_path)
-    res["spice_libs"] = [str(shim)]              # the device lib is not staged
-    dev.unlink()
-    ctx = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    assert ctx.status == "NEEDS_NATIVE_TEMPLATE"
-    assert ctx.include_farm["missing"] >= 1
-    farm_root = tmp_path / "farm"
-    linked = [p.name for p in farm_root.rglob("*") if p.is_symlink()]
-    assert dev.name not in linked                # nothing stood in for it
-
-
-def test_ambiguous_include_target_is_never_guessed(tmp_path):
-    """Two DIFFERENT staged files claim the target's basename and neither sits
-    next to the shim → the farm must link NEITHER and the context must fail,
-    rather than picking one at random."""
-    res, shim, dev = _stage_split(tmp_path)
-    other = tmp_path / "models_alt"
-    other.mkdir()
-    decoy = other / dev.name
-    decoy.write_text(_device_lib(sections=("ss", "tt", "ff", "sf")))
-    res["spice_libs"].append(str(decoy))
-    ctx = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    assert ctx.status == "NEEDS_NATIVE_TEMPLATE"
-    assert ctx.include_farm["ambiguous"] >= 1
-    farm_root = tmp_path / "farm"
-    linked = [p for p in farm_root.rglob("*") if p.is_symlink()]
-    assert not any(p.resolve() == decoy.resolve() for p in linked)
-    assert not any(p.resolve() == dev.resolve() for p in linked)
-
-
-def test_same_directory_target_wins_over_a_remote_namesake(tmp_path):
-    """Resolution order matches ngspice's own rule: a file NEXT TO the includer
-    wins outright, so the farm can never pull in a remote namesake instead."""
-    res, shim, dev = _stage_split(tmp_path)
-    local = shim.parent / dev.name
-    local.write_text(_device_lib())
-    res["spice_libs"].append(str(local))
-    closure, ambiguous, missing = APDC._resolve_include_closure(
-        [shim], [Path(p) for p in res["spice_libs"]])
-    assert not ambiguous and not missing
-    assert local.resolve() in {p.resolve() for p in closure}
-    assert dev.resolve() not in {p.resolve() for p in closure}
-
-
-def test_two_root_sets_get_separate_farms(tmp_path):
-    """The corner shim and the MC path can disagree about a basename; their
-    farms must not shadow each other."""
-    res, shim, dev = _stage_split(tmp_path)
-    alt = tmp_path / "mc"
-    alt.mkdir()
-    mc = alt / "mfx180_mc.lib"
-    mc.write_text(_shim_text(dev.name))
-    libs = res["spice_libs"] + [str(mc)]
-    a = APDC.build_lib_include_farm(libs, tmp_path / "farm", roots=[str(shim)])
-    b = APDC.build_lib_include_farm(libs, tmp_path / "farm", roots=[str(mc)])
-    assert a["dir"] != b["dir"]
-
-
-def test_farm_is_idempotent(tmp_path):
-    """Re-running a block must not disturb an existing farm."""
-    res, shim, _dev = _stage_split(tmp_path)
-    a = APDC.build_lib_include_farm(
-        res["spice_libs"], tmp_path / "farm", roots=[str(shim)])
-    b = APDC.build_lib_include_farm(
-        res["spice_libs"], tmp_path / "farm", roots=[str(shim)])
-    assert a == b
-
-
-# ── the leaf-dereference defect that made co-location inert ─────────────────
+# ── the leaf-dereference defect (NOT farm-specific — see the module docstring) ─
 
 def test_container_path_keeps_a_symlinked_leaf(tmp_path):
     """Resolving a symlinked LEAF moves the file into its target's directory and

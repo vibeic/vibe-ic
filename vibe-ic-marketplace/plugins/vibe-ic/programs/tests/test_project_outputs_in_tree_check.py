@@ -285,3 +285,98 @@ def test_r7_plugin_root_without_pin_marker_fails(tmp_path):
     finally:
         import shutil
         shutil.rmtree(outdir, ignore_errors=True)
+
+
+# ── In-tree self-references (audit self-inflation) ───────────────────────────
+# A project audited from a volatile root (the standard way to audit without
+# mutating the original) writes its OWN absolute paths into reports/**/*.json.
+# Those are in-tree BY DEFINITION; before the fix the gate reported them as
+# external storage, so the audit manufactured its own violations.
+#
+# `tmp_path` is itself under /tmp, so these tests reproduce the real condition
+# without simulating it: the project root genuinely IS at a volatile path.
+
+def test_in_tree_self_reference_is_not_external_storage(tmp_path):
+    """The defect direction. A report citing the project's OWN absolute path
+    must not be an external-storage finding — the file is inside the tree."""
+    own = tmp_path / "phase3" / "stage4" / "gds" / "top.gds"
+    own.parent.mkdir(parents=True)
+    own.write_text("# GDS\n")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "gds_substance.json").write_text(json.dumps({
+        "gds": str(own), "status": "PASS",
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "external-storage artifact" not in r.stdout
+
+
+def test_in_tree_self_reference_is_disclosed_not_silent(tmp_path):
+    """The exemption must be visible. A silently-dropped class reads as
+    'nothing was there' — the gate has to say what it excused."""
+    own = tmp_path / "phase2" / "stage2" / "synth" / "netlist.v"
+    own.parent.mkdir(parents=True)
+    own.write_text("// netlist\n")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "synth.json").write_text(json.dumps(
+        {"netlist": str(own)}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in-tree self-reference" in r.stdout
+    assert str(tmp_path) in r.stdout
+
+
+def test_genuine_external_artifact_still_fails_from_a_volatile_project(
+        tmp_path):
+    """ANTI-RUBBER-STAMP. The project root is volatile, so a blanket
+    'everything under /tmp is fine' rule would pass this — it must not.
+    A path OUTSIDE the project is still external storage."""
+    import tempfile
+    outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="outside-"))
+    stray = outside / "chip_top.gds"
+    stray.write_text("# real GDS left outside the tree\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"the GDS is at {stray}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+        assert str(stray) in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def test_symlink_out_of_the_tree_is_still_external(tmp_path):
+    """A path that is LEXICALLY inside the project but symlinks OUT of it is
+    still external storage — the artifact does not live in the tree. Pins
+    that the containment test resolves rather than string-prefixes."""
+    import tempfile
+    outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="linktarget-"))
+    target = outside / "netlist.v"
+    target.write_text("// lives outside\n")
+    inside = tmp_path / "steps" / "9_synth"
+    inside.mkdir(parents=True)
+    link = inside / "netlist.v"
+    link.symlink_to(target)
+    try:
+        (tmp_path / "reports").mkdir()
+        (tmp_path / "reports" / "s.json").write_text(json.dumps(
+            {"netlist": str(link)}))
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def test_project_root_itself_cited_is_in_tree(tmp_path):
+    """The boundary case: a report citing the project ROOT (not a child).
+    `p == project` must count as inside, not merely `project in p.parents`."""
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "audit.json").write_text(json.dumps(
+        {"project": str(tmp_path)}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
