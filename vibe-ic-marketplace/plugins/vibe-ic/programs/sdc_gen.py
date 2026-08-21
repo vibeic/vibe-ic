@@ -33,8 +33,15 @@ CLI:
 
 Exit codes:
     0  PASS
-    1  FAIL (missing L8 / L9)
+    1  FAIL (missing L8 / L9; or, when the top module is resolvable in rtl/,
+       a deck that references a port the top does not have, a deck with no
+       create_clock on a real top port, or a deck whose I/O role split walked
+       a surface NARROWER than the design — see BOUNDARY COVERAGE in main())
     2  IO / arg error
+
+Every PASS line discloses the boundary-coverage denominator, including
+`NOT ASSERTED` when there is no resolvable top to compare the deck against,
+so a coverage claim is never confused with an unrun check.
 """
 from __future__ import annotations
 
@@ -45,6 +52,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import _path_layout as _pl
+# ONE reader for L9's top-level port contract. This generator used to read the
+# single legacy alias `top_module_pins`; on a layer written with the canonical
+# `top_ports` it therefore saw NO ports and emitted an SDC with no I/O delays
+# at all, while the sibling gate that certifies the same layer
+# (`l9_rtl_pin_consistency_check`) read the union and reported PASS.
+from l_doc_consumer_contract import l9_port_direction, l9_top_ports
 import sdc_constraints as _sdc
 
 
@@ -348,6 +361,97 @@ def _parse_module_ports(txt: str) -> List[Tuple[str, str, int]]:
     return out
 
 
+_EDGE_EVENT_RE = re.compile(
+    r"@\s*\(([^)]*)\)|@\s*(posedge|negedge)\s+([A-Za-z_]\w*)")
+_EDGE_SIG_RE = re.compile(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)")
+
+
+def _clock_ports_from_rtl(rtl_files: List[Path], surface: set) -> List[str]:
+    """Clock ports derived from the RTL's OWN edge-sensitive event controls.
+
+    ORGANIC — `_is_clock()` is a NAME heuristic (`clk`/`clock`). A design whose
+    datasheet names its clocks otherwise has NO matching port, the selection
+    falls through to the bare "clk" literal, that port does not exist, and the
+    emitted SDC is VACUOUS — no create_clock lands and STA has no clock at all.
+    Measured on a converter whose own L1 pin table names the modulator clocks
+    `CK4/CK5/CK6`: zero ports matched and sdc_gen failed
+    `vacuous SDC — 1 SDC port(s) do not exist on top: ['clk']`.
+
+    A signal appearing after `posedge`/`negedge` in an event control IS a clock
+    by the definition of the language — a PROPERTY of the design, not a guess
+    about its naming convention. Intersected with the synthesizable port
+    surface so an internal generated clock is never emitted as a `get_ports`.
+
+    Returned in first-appearance order (deterministic). Empty when the RTL is
+    unreadable/unparseable — the caller then keeps its existing behaviour."""
+    seen: List[str] = []
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        for sig in _EDGE_SIG_RE.findall(txt):
+            if surface and sig not in surface:
+                continue
+            if sig in _async_reset_signals(txt):
+                # An asynchronous reset is edge-sensitive and is NOT a clock.
+                #
+                # The caller takes `_derived[0]`, so ORDER inside the event
+                # control decided the answer:
+                #   always @(posedge CK4 or negedge rst_n)  -> CK4    correct
+                #   always @(negedge rst_n or posedge CK4)  -> rst_n  WRONG
+                # Both spellings are legal and both are common, so the SDC got
+                # a create_clock on the reset whenever the reset happened to be
+                # written first — and a create_clock on a reset is worse than
+                # the vacuous SDC this derivation exists to prevent.
+                #
+                # Recognised STRUCTURALLY, not by name: a signal that shares an
+                # event control with at least one other edge-sensitive signal
+                # AND is not the one the always-block's body is clocked on is
+                # the async set/reset by the shape of the construct. Naming
+                # (`rst`/`reset`) is the proxy this whole derivation replaced.
+                continue
+            if sig not in seen:
+                seen.append(sig)
+    return seen
+
+
+def _async_reset_signals(txt: str) -> set:
+    """Edge-sensitive signals that the block's own body TESTS — the async reset.
+
+    In a multi-edge event control exactly one signal is the clock and the rest
+    are async set/reset, and the body says which:
+
+        always @(posedge CK4 or negedge rst_n)
+          if (!rst_n) q <= 0; else q <= ~q;     <- rst_n is TESTED, CK4 is not
+
+    The reset is the signal the reset branch is conditioned on. The clock never
+    appears in that condition, because a clocked block does not ask whether its
+    clock is high.
+
+    POSITION IS NOT THE DISCRIMINATOR, which is what my first version used.
+    `always @(negedge rst_n or posedge CK4)` is legal and common, and there the
+    reset is written FIRST — a position rule picks the reset as the clock in
+    exactly the case that motivated this fix.
+
+    A single-edge control contributes nothing: there is no reset to identify.
+    `negedge` alone is not it either — `always @(negedge clk)` is a legitimate
+    falling-edge clock and must keep clk.
+    """
+    out: set = set()
+    for m in re.finditer(r"@\s*\(([^)]*)\)([^;]*)", txt):
+        edges = re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", m.group(1))
+        if len(edges) < 2:
+            continue
+        # The first `if (...)` after the event control is the reset branch.
+        cond = re.search(r"\bif\s*\(([^)]*)\)", m.group(2))
+        tested = set(re.findall(r"[A-Za-z_]\w*", cond.group(1))) if cond else set()
+        for e in edges:
+            if e in tested:
+                out.add(e)
+    return out
+
+
 def _collect_all_module_ports(rtl_files: List[Path]) -> set:
     """ORGANIC #619 — return the UNION of every port NAME declared by any
     module in the synthesizable RTL (rtl/). This is the design's actual
@@ -409,6 +513,36 @@ def _named_module_ports(rtl_files: List[Path], top_name: str) -> Optional[set]:
     return None
 
 
+def _named_module_port_records(
+        rtl_files: List[Path],
+        top_name: str) -> Optional[List[Tuple[str, str, int]]]:
+    """The FULL (name, direction, width) records declared by the TOP module
+    `top_name`, or None when that module is not found/parseable in rtl/.
+
+    `_named_module_ports` returns only the NAMES, because #207/#619 use the
+    surface as a FILTER. This returns the same surface with the RTL's own
+    declared DIRECTION attached, so the surface can also be used as a SOURCE
+    when the L9 pin list under-covers it (see the residue pass in main()).
+    Same resolution order and same parser as `_named_module_ports`, so the two
+    can never disagree about which module is the top. Chip-AGNOSTIC: Verilog
+    module-header parsing only, no chip / PDK / vendor names."""
+    pat = re.compile(r"\bmodule\s+" + re.escape(top_name) + r"\b")
+    for f in rtl_files:
+        try:
+            txt = _strip_v_comments(f.read_text(encoding="utf-8",
+                                                errors="ignore"))
+        except Exception:
+            continue
+        m = pat.search(txt)
+        if not m:
+            continue
+        recs = [(name, direction, width)
+                for name, direction, width in _parse_module_ports(
+                    txt[m.start():]) if name]
+        return recs or None
+    return None
+
+
 def _sdc_port_refs(text: str) -> Tuple[List[str], List[str]]:
     """#207 — (clock_refs, all_refs): the base port NAMES referenced by
     `[get_ports {...}]` in the SDC, bus index stripped. `clock_refs` are those
@@ -438,6 +572,58 @@ def _is_clock(name: str) -> bool:
     return ("clk" in n) or ("clock" in n)
 
 
+def _l8_declared_clocks(l8: dict) -> List[Tuple[str, Optional[float]]]:
+    """Clocks L8 DECLARES, as ``[(canonical_name, period_ns|None), ...]``.
+
+    C4/2026-07-31 — measured defect. ``_is_clock`` is a NAME-SHAPE GUESS
+    (``"clk" in n or "clock" in n``). On a design whose clock ports are
+    ``CK4/CK5/CK6`` it matches nothing, so all three were classified as
+    synchronous DATA inputs, ``clock_port`` fell back to the literal
+    ``"clk"`` — a port the design does not have — and the emitted SDC
+    constrained a non-existent port while leaving every real clock
+    unconstrained. Step 8's ``sdc_validator_check`` caught it exactly:
+    *"L8 declares clock 'CK4' but no SDC constrains it"*.
+
+    L8 is not a guess: it is the layer that DECLARES the design's clock
+    contract, with extraction evidence. When it names a clock, that
+    declaration outranks a substring test on the port name. This helper is
+    the property; ``_is_clock`` stays as the fallback for designs whose L8
+    declares nothing.
+
+    Purely ADDITIVE: returns ``[]`` when L8 declares no clock record, and
+    every call site below is guarded on a non-empty result, so a design
+    that constrains correctly today cannot change.
+    """
+    out: List[Tuple[str, Optional[float]]] = []
+    seen: set = set()
+    if not isinstance(l8, dict):
+        return out
+    for key in ("clock_domains", "clocks"):
+        for rec in (l8.get(key) or []):
+            if not isinstance(rec, dict):
+                continue
+            name = (rec.get("name") or rec.get("source_pin") or "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            period: Optional[float] = None
+            for k, conv in (("period_ns", lambda v: float(v)),
+                            ("freq_mhz", lambda v: 1000.0 / float(v)),
+                            ("freq_hz", lambda v: 1.0e9 / float(v))):
+                v = rec.get(k)
+                if v in (None, "", 0):
+                    continue
+                try:
+                    cand = conv(v)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                if cand > 0:
+                    period = cand
+                    break
+            out.append((name, period))
+    return out
+
+
 def _is_reset(name: str) -> bool:
     n = name.lower()
     return ("reset" in n) or ("rst" in n)
@@ -464,11 +650,17 @@ def _is_output(name: str, direction: str) -> bool:
 def _render_sdc(top: str, clock_port: str, period_ns: float,
                 inputs: List[str], outputs: List[str],
                 async_ports: List[str],
-                gen_clocks: Optional[List[Tuple[str, str]]] = None) -> str:
+                gen_clocks: Optional[List[Tuple[str, str]]] = None,
+                l8_clocks: Optional[
+                    List[Tuple[str, str, float]]] = None) -> str:
     period_str = f"{period_ns:.3f}".rstrip("0").rstrip(".") or "20"
     lines: List[str] = []
     lines.append("# =========================================================================")
-    lines.append("# Auto-generated by sdc_gen.py (Wave 72/73)")
+    # The banner is the SHARED emitter/checker constant, not a local literal:
+    # `sdc_validator_check` proves a deck on disk is THIS generator's output by
+    # looking for it, and a second spelling here would make the checker stop
+    # recognising what this function writes.
+    lines.append(f"# {_sdc.GENERATED_BANNER} (Wave 72/73)")
     lines.append(f"# Top entity: {top}")
     lines.append(f"# Clock: {clock_port} period={period_str} ns")
     lines.append("# DO NOT hand-edit; regenerate via sdc_gen.py.")
@@ -480,8 +672,24 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
         clock_label = "clk_50"
     elif "100" in clock_port:
         clock_label = "clk_100"
-    lines.append(f"create_clock -name {clock_label} -period {period_str} "
-                 f"[get_ports {{{clock_port}}}]")
+    if l8_clocks:
+        # C4/2026-07-31 — L8 DECLARES this design's clocks by name. Emit one
+        # create_clock per declared clock, named as L8 names it, on the port
+        # L8 binds it to, at the period L8 carries. The former single
+        # create_clock left every additional declared clock unconstrained,
+        # which is exactly what Step 8 reports. The first declared clock
+        # supplies the label the I/O delays reference, so a design with one
+        # clock renders as before apart from that clock's real name.
+        lines.append("# Clocks DECLARED by L8 (name + port + period from the "
+                     "design's own layer, not from a port-name guess)")
+        for c_name, c_port, c_period in l8_clocks:
+            p_str = f"{c_period:.3f}".rstrip("0").rstrip(".") or period_str
+            lines.append(f"create_clock -name {c_name} -period {p_str} "
+                         f"[get_ports {{{c_port}}}]")
+        clock_label = l8_clocks[0][0]
+    else:
+        lines.append(f"create_clock -name {clock_label} -period {period_str} "
+                     f"[get_ports {{{clock_port}}}]")
     lines.append("derive_pll_clocks")
     lines.append("derive_clock_uncertainty")
     lines.append("")
@@ -622,15 +830,55 @@ def main(argv: Optional[List[str]] = None) -> int:
     async_ports: List[str] = []
     clock_port: Optional[str] = None
     dropped_pins: List[str] = []
+    residue_pins: List[str] = []  # top-surface ports L9 never covered
     rtl_ports: set = set()  # synthesizable RTL surface used to filter (#619/#207)
+    # THE SURFACE THE ROLE SPLIT ACTUALLY WALKED. Every branch below records
+    # the top-surface port names it LOOKED AT here, whatever it then decided.
+    # This is what makes the coverage assertion at the end of main() able to
+    # separate "the split saw this port and routed it" from "the split never
+    # reached this port at all" — the second is the surface being narrower
+    # than the design, which is the defect the assertion exists for. An L9
+    # pin dropped by the #619/#207 surface filter is NOT recorded: that name
+    # is not on the top, so the top port it failed to describe stays unseen.
+    examined: set = set()
+
+    # C4/2026-07-31 — L8's DECLARED clock contract. Ports named here are
+    # clocks by DECLARATION, not by a substring test on their name; see
+    # _l8_declared_clocks. Empty for a design whose L8 declares nothing,
+    # in which case every use below is inert.
+    # Both L8 docs carry the clock contract — the runner's own
+    # `_CLOCK_CONTRACT_DOCS = ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM")`
+    # says so, and the Phase-1 `clocks[]` seeder writes the TIMING_WAVEFORM
+    # one. Reading only RTL_CONSTANTS is why a declared clock could be
+    # invisible here while a sibling gate saw it.
+    _l8_wave = _load_json(
+        _pl.generated_docs_dir(project) / "L8_TIMING_WAVEFORM.json") or {}
+    _l8_clocks = _l8_declared_clocks(l8)
+    _seen_l8 = {n.lower() for n, _ in _l8_clocks}
+    for _n, _p in _l8_declared_clocks(_l8_wave):
+        if _n.lower() not in _seen_l8:
+            _seen_l8.add(_n.lower())
+            _l8_clocks.append((_n, _p))
+    _l8_clock_names = {n.lower() for n, _ in _l8_clocks}
+    _l8_period_by_name = {n.lower(): p for n, p in _l8_clocks}
+    _l8_canonical = {n.lower(): n for n, _ in _l8_clocks}
+    _l8_clock_ports: List[str] = []
+
+    def _port_is_clock(nm: str) -> bool:
+        if nm and nm.lower() in _l8_clock_names:
+            return True
+        return _is_clock(nm)
 
     if wrapper and top == wrapper[0]:
         ports = _parse_module_ports(wrapper[1])
         for name, direction, width in ports:
+            examined.add(name)
             sigs = ([name] if width == 1
                     else [f"{name}[{i}]" for i in range(width)])
-            if _is_clock(name):
+            if _port_is_clock(name):
                 clock_port = name if width == 1 else f"{name}[0]"
+                if name.lower() in _l8_clock_names:
+                    _l8_clock_ports.append(name)
                 continue
             if _is_reset(name) or _is_async_io(name):
                 async_ports.extend(sigs)
@@ -656,31 +904,94 @@ def main(argv: Optional[List[str]] = None) -> int:
         # (#619) only when the top module is unresolvable; empty ⇒ no filtering.
         rtl_ports = (top_ports if top_ports is not None
                      else _collect_all_module_ports(rtl_files))
-        for port in l9.get("top_module_pins", []):
+        for port in l9_top_ports(l9):
             if not isinstance(port, dict):
                 continue
             name = port.get("name", "")
             if rtl_ports and name and name not in rtl_ports:
                 dropped_pins.append(name)
                 continue
-            mode = (port.get("mode") or "").lower()
-            if _is_clock(name):
+            if name:
+                examined.add(name)
+            # Direction via the shared accessor: the promoter writes `dir`,
+            # older writers wrote `mode`. Testing one spelling read a missing
+            # key and sent EVERY port — outputs included — down the `inputs`
+            # branch, so every output port got a `set_input_delay`.
+            _dir = l9_port_direction(port)
+            if _port_is_clock(name):
                 clock_port = name
+                if name.lower() in _l8_clock_names:
+                    _l8_clock_ports.append(name)
                 continue
-            if _is_reset(name) or "inout" in mode or _is_async_io(name):
+            if _is_reset(name) or _dir == "inout" or _is_async_io(name):
                 async_ports.append(name)
                 continue
-            if mode == "output":
+            if _dir == "out":
                 outputs.append(name)
             else:
                 inputs.append(name)
+
+        # ---- SURFACE RESIDUE -------------------------------------------
+        # The loop above filters the L9 pin list AGAINST the synthesizable top
+        # surface (#619/#207) but never reads that surface as a SOURCE. When
+        # L9 spells a pin differently from the RTL that implements it, the pin
+        # is DROPPED and the port it describes is left with no I/O constraint
+        # at all — an untimed path that STA reports nothing about and no gate
+        # sees, because an SDC missing a whole direction is still syntactically
+        # valid. In the limit every input is dropped and the deck carries no
+        # `set_input_delay` whatsoever.
+        #
+        # So: after L9 has had its say, constrain the RESIDUE — the top
+        # module's own ports that nothing above classified — using the RTL's
+        # OWN declared direction. The residue is empty whenever L9 covers the
+        # surface, so a design that constrains correctly today renders
+        # byte-identically. Ports come from the same parse #207 already trusts
+        # to VALIDATE the deck, so this can only ever name a port that exists.
+        # Chip-AGNOSTIC: set difference on parsed Verilog headers.
+        _recs = (_named_module_port_records(rtl_files, top)
+                 if top_ports is not None else None)
+        # `_parse_module_ports` DEFAULTS an undirected port to "input" — which
+        # is what a NON-ANSI header (`module m(a,b); input a; output b;`) parses
+        # as, every port included. Classifying that residue would put a
+        # `set_input_delay` on an output and make STA error. So the residue is
+        # only trusted when the header actually declares direction in-line, i.e.
+        # at least one output/inout token was parsed. A non-ANSI top renders
+        # exactly as it does today.
+        if _recs and not any((d or "").lower() in ("output", "inout")
+                             for _n, d, _w in _recs):
+            _recs = None
+        if _recs:
+            _claimed = {clock_port} | set(inputs) | set(outputs) \
+                | set(async_ports) | set(_l8_clock_ports)
+            for _name, _dir, _w in _recs:
+                if not _name or _name in _claimed:
+                    continue
+                _claimed.add(_name)
+                examined.add(_name)
+                if _port_is_clock(_name):
+                    # A clock the L9 pin list never mentioned. Record it so the
+                    # clock-resolution fallback below can bind it; do NOT give
+                    # it an I/O delay.
+                    if _name.lower() in _l8_clock_names:
+                        _l8_clock_ports.append(_name)
+                    continue
+                if _is_reset(_name) or "inout" in (_dir or "").lower() \
+                        or _is_async_io(_name):
+                    async_ports.append(_name)
+                    residue_pins.append(_name)
+                    continue
+                if _is_output(_name, _dir or ""):
+                    outputs.append(_name)
+                else:
+                    inputs.append(_name)
+                residue_pins.append(_name)
 
     if not clock_port:
         # Fallback: take first 'clk*' from L9 that EXISTS on the synthesizable
         # surface (#619), else a clock-like TOP port (#207 — never a default
         # guess that isn't actually a port), else 'clk'.
         clock_port = "clk"
-        for port in l9.get("top_module_pins", []):
+        for port in l9_top_ports(l9):
             if not (isinstance(port, dict) and _is_clock(port.get("name", ""))):
                 continue
             cand = port["name"]
@@ -699,6 +1010,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                         clock_port = pname
                         break
 
+    # Last resort BEFORE emitting a vacuous SDC: if everything above settled on
+    # a port that does not exist on the design's surface, derive the clock from
+    # the RTL's own `posedge`/`negedge` event controls (a PROPERTY, not a naming
+    # convention). Purely ADDITIVE — it can only fire in the case that currently
+    # produces `vacuous SDC ... do not exist on top`, i.e. a FAIL, so no design
+    # that constrains correctly today can change.
+    _surface = rtl_ports or (top_ports or set())
+    if _surface and clock_port not in _surface:
+        _derived = _clock_ports_from_rtl(rtl_files, _surface)
+        if _derived:
+            clock_port = _derived[0]
+            print(f"NOTE: clock port derived from RTL edge-sensitive event "
+                  f"controls: {_derived} -> using '{clock_port}' "
+                  f"(no name-matched clock port on the top surface)")
+
     fpga_dir = _pl.fpga_early_dir(project)
     fpga_dir.mkdir(parents=True, exist_ok=True)
     out = fpga_dir / f"{top}.sdc"
@@ -707,8 +1033,45 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gen_clocks = _find_register_divided_clocks(rtl_files)
+
+    # C4/2026-07-31 — assemble the per-clock create_clock set from L8's own
+    # declaration. Each entry is (name-as-L8-spells-it, port-as-the-design
+    # -spells-it, period_ns). A clock whose period L8 does not carry falls
+    # back to the period resolved above rather than being dropped, so a
+    # partially-specified L8 still constrains every port it declares.
+    # `_l8_clock_ports` is only ever appended to for a port that is BOTH on
+    # the design's surface AND named by L8, so this cannot constrain a port
+    # that does not exist.
+    l8_clock_set: List[Tuple[str, str, float]] = []
+    for _p in _l8_clock_ports:
+        _key = _p.lower()
+        _per = _l8_period_by_name.get(_key) or period_ns
+        l8_clock_set.append((_l8_canonical.get(_key, _p), _p, _per))
+    if l8_clock_set:
+        clock_port = l8_clock_set[0][1]
+        period_ns = l8_clock_set[0][2]
+        print("NOTE: clock port(s) taken from L8's DECLARED clock contract: "
+              + ", ".join(f"{n}@{p:g}ns on '{pt}'"
+                          for n, pt, p in l8_clock_set))
+
+    # DEGRADE LOUDLY. `_render_sdc` emits the `set_input_delay` block only
+    # `if inputs:` and the `set_output_delay` block only `if outputs:`, so an
+    # empty role split renders a syntactically fine SDC in which every I/O
+    # path is UNCONSTRAINED — and the old code printed nothing about it. The
+    # generator is the one place that knows the port roles came out empty
+    # while the layer it read was non-empty; say so here rather than leaving
+    # Step 8's validator to report `missing set_input_delay` several steps
+    # later with no indication of why.
+    if not inputs and not outputs:
+        _declared = len(l9_top_ports(l9))
+        print("NOTE: no I/O ports classified — the emitted SDC constrains NO "
+              "input or output path. L9 declares %d top-level port record(s); "
+              "%d were dropped as absent from the synthesizable surface. "
+              "Every remaining port was consumed as a clock/reset/async pin."
+              % (_declared, len(dropped_pins)))
+
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
-                       async_ports, gen_clocks)
+                       async_ports, gen_clocks, l8_clock_set or None)
     out.write_text(text, encoding="utf-8")
 
     # #207 — VALIDATE the generated SDC against the netlist it constrains. A
@@ -727,14 +1090,76 @@ def main(argv: Optional[List[str]] = None) -> int:
         "resolved_against": (str(out.parent) + f"::module {top} (rtl/)"
                              if top_ports is not None else None),
         "top_ports": (sorted(top_ports) if top_ports is not None else None),
+        "dropped_l9_pins": sorted(dropped_pins),
+        "residue_pins_constrained": sorted(residue_pins),
     }
+    # Denominator of the coverage assertion, for the PASS line below. Stays at
+    # NOT ASSERTED unless there is a declared port list to assert against, so
+    # "no gap reported" can never be read as "no gap".
+    _cov_note = (f"; boundary coverage NOT ASSERTED — top '{top}' is not "
+                 f"resolvable in rtl/, so the deck was not compared against "
+                 f"any declared port list")
     if top_ports is not None:
         clock_refs, all_refs = _sdc_port_refs(text)
         unresolved = sorted({r for r in all_refs if r not in top_ports})
         live_clocks = [c for c in clock_refs if c in top_ports]
+        # ---- BOUNDARY COVERAGE (the mirror of `unresolved`) --------------
+        # `unresolved` asks "does every name the deck REFERENCES exist on the
+        # design?" — the deck's claims resolved against the netlist. It is
+        # blind to the question a sign-off deck is actually judged on: does
+        # the deck REACH every port the design declares?
+        #
+        # The role split above walks the L9 pin list plus whatever residue the
+        # RTL header yields. BOTH of those can be NARROWER than the interface
+        # the design declares — e.g. a NON-ANSI top header (`module m(a,b);
+        # input a; output b;`) parses with no in-line direction, so the
+        # residue pass is deliberately disarmed and every port L9 missed is
+        # classified by nobody. The deck is still emitted, is still
+        # syntactically valid, and says nothing: "constrained the whole
+        # boundary" and "constrained part of it" were the same observable,
+        # exit code included.
+        #
+        # So compute the coverage and NAME the gap. A port referenced by ANY
+        # constraint counts as covered — create_clock, set_input_delay,
+        # set_output_delay or set_false_path — so this measures REACH, and
+        # never second-guesses a role the split legitimately chose.
+        #
+        # WHAT THE ASSERTION FAILS ON is narrower than what it NAMES, on
+        # purpose. The captured defect is a split walking a surface narrower
+        # than the design, so the gate fires on `unreached`: a declared port
+        # that no branch ever looked at AND that carries no constraint. A port
+        # the split DID examine and route (`examined`) is accounted for — if
+        # it still ends up unconstrained the cause is downstream of the split
+        # (the single `clock_port` slot being overwritten by a later
+        # clock-named port is the measured one), which is a different defect
+        # with a different fix, and failing sign-off on it here would be this
+        # rule taking credit for a hole it does not repair. Both sets are
+        # written to the gate JSON and both are printed, so neither is silent.
+        #
+        # The gate also stands down when the split produced NO I/O role at
+        # all: that tier already has its own diagnostic and its own
+        # deliberate exit-0 (#744, below) — "a layer that declares no ports is
+        # the design's problem, not this generator's". This rule is about the
+        # PARTIAL split, which had no diagnostic at all.
+        #
+        # Chip-AGNOSTIC: set arithmetic over the parsed top header and the
+        # deck's own get_ports references; no design, PDK or vendor literal.
+        _ref_set = set(all_refs)
+        uncovered = sorted(p for p in top_ports if p not in _ref_set)
+        unreached = [p for p in uncovered if p not in examined]
+        _assert_coverage = bool(inputs or outputs)
         validation.update(unresolved_ports=unresolved,
                           clock_ports=clock_refs,
-                          live_clocks=live_clocks)
+                          live_clocks=live_clocks,
+                          constrained_ports=sorted(top_ports & _ref_set),
+                          uncovered_ports=uncovered,
+                          uncovered_ports_never_examined=unreached,
+                          role_split_examined_ports=sorted(
+                              top_ports & examined),
+                          coverage_asserted=_assert_coverage,
+                          boundary_coverage=(
+                              f"{len(top_ports) - len(uncovered)}/"
+                              f"{len(top_ports)}"))
         try:
             gate_json = _pl.report_path(project, "phase2/gates/sdc_gen.json")
             gate_json.parent.mkdir(parents=True, exist_ok=True)
@@ -742,7 +1167,29 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  encoding="utf-8")
         except Exception:
             pass
-        if unresolved or not live_clocks:
+        _cov_note = (f"; boundary coverage "
+                     f"{len(top_ports) - len(uncovered)}/{len(top_ports)} "
+                     f"declared port(s) of top '{top}' constrained"
+                     + (f", {len(uncovered)} unconstrained: {uncovered}"
+                        if uncovered else "")
+                     + ("" if _assert_coverage else
+                        " (gate stood down: the role split produced no I/O "
+                        "role at all — see the #744 tier below)"))
+        # NAME THE GAP WHETHER OR NOT IT FAILS. Silence is what this rule was
+        # captured for; the exit code is only the sharpest end of it.
+        if uncovered:
+            print(f"NOTE sdc_gen: boundary coverage "
+                  f"{len(top_ports) - len(uncovered)}/{len(top_ports)} — "
+                  f"{len(uncovered)} port(s) declared by top '{top}' are "
+                  f"referenced by NO constraint in the emitted deck, so every "
+                  f"path through them is UNCONSTRAINED and STA will report "
+                  f"nothing about it: {uncovered}"
+                  + (f" (of which {unreached} the I/O role split never "
+                     f"examined)" if unreached else
+                     " (all of them were examined by the role split and lost "
+                     "downstream of it, e.g. to the single clock-port slot)"),
+                  file=sys.stderr)
+        if unresolved or not live_clocks or (unreached and _assert_coverage):
             reasons = []
             if unresolved:
                 reasons.append(
@@ -753,7 +1200,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"no create_clock landed on a real port of top '{top}' "
                     f"(clock target(s)={clock_refs or ['<none>']}); STA would "
                     f"run with NO clock in effect")
-            print("FAIL sdc_gen: vacuous SDC — " + "; ".join(reasons)
+            if unreached and _assert_coverage:
+                _covered_n = len(top_ports) - len(uncovered)
+                reasons.append(
+                    f"the I/O role split covered {_covered_n} of the "
+                    f"{len(top_ports)} port(s) top '{top}' declares and never "
+                    f"examined {len(unreached)} of them, which carry no "
+                    f"constraint of any kind: {unreached}")
+            # Keep the existing label verbatim for the existing two verdicts;
+            # under-coverage is a different defect and gets its own name.
+            _label = ("vacuous SDC" if (unresolved or not live_clocks)
+                      else "under-constrained boundary surface")
+            print(f"FAIL sdc_gen: {_label} — " + "; ".join(reasons)
                   + f"  (top interface: {sorted(top_ports)})", file=sys.stderr)
             return 1
 
@@ -765,7 +1223,28 @@ def main(argv: Optional[List[str]] = None) -> int:
           + (f"; dropped {len(dropped_pins)} L9 pin(s) absent from "
              f"synthesizable RTL surface: {sorted(dropped_pins)} (#619)"
              if dropped_pins else "")
+          + (f"; constrained {len(residue_pins)} top-surface port(s) the L9 "
+             f"pin list did not cover: {sorted(residue_pins)}"
+             if residue_pins else "")
+          # DISCLOSE THE DENOMINATOR OF THE COVERAGE ASSERTION — including
+          # when it did not run. A PASS with no top interface to compare
+          # against says NOT ASSERTED, so "no gap reported" cannot be read
+          # as "no gap".
+          + _cov_note
           + ")")
+    # AN SDC THAT CONSTRAINS NO I/O PATH IS NOT A CONSTRAINED DESIGN (#744).
+    #
+    # The file is still emitted — a layer that declares no ports is the design's
+    # problem, not this generator's, and refusing to write would strand the
+    # flow. But emitting it SILENTLY makes "constrained" and "constrained
+    # nothing" the same observable, which is the shape this whole batch is
+    # about. #744 shipped a test asserting this diagnostic and no code that
+    # prints it; the test was right and the gap was real.
+    if not inputs and not outputs:
+        print(f"NOTE sdc_gen: {out} constrains NO input or output path — the "
+              f"clock is constrained and every data path is unconstrained. "
+              f"L9 declared no ports and none were recovered from the RTL "
+              f"surface.", file=sys.stderr)
     return 0
 
 

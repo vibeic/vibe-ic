@@ -467,12 +467,20 @@ def _parse_period_ns(project: Path, sdc: str) -> float | None:
 
 
 def _build_pdf_batch(flat_rel: str, miters_rel: str, specs: list,
-                     prim_in_names: list[str]) -> str:
+                     prim_in_names: list[str], select_solver: str = "") -> str:
     """One Yosys script that solves every (path, variant) miter in a single
     process via design -save/-load. Each entry: reload base, select the miter
     module, flatten, mark, `sat -prove ok 0` with the primary inputs -show'd so
-    the sensitising 2-pattern can be recovered. specs: [(idx, variant, mod)]."""
+    the sensitising 2-pattern can be recovered. specs: [(idx, variant, mod)].
+
+    #ATPG-SAT: like DT1, route the per-path sensitisation prove at a modern
+    external CDCL solver (kissat/cadical) wired into the fork's `sat` command
+    when the image provides one — the built-in ezMiniSAT times out on the same
+    large LOC miters here (and DT3/SDD reuses these verdicts verbatim, so this
+    fix covers DT2 AND DT3). `-select-solver` is EMPTY → built-in engine
+    (unchanged) on an image without the backend. chip/PDK/vendor-AGNOSTIC."""
     show = " ".join(f"-show {n}" for n in prim_in_names)
+    sel = f"-select-solver {select_solver} " if select_solver else ""
     L = [f"read_verilog /work/{flat_rel} /work/{miters_rel}", "design -save base"]
     for idx, variant, mod in specs:
         L += [
@@ -480,7 +488,7 @@ def _build_pdf_batch(flat_rel: str, miters_rel: str, specs: list,
             f"hierarchy -top {mod}",
             "flatten",
             f"log VIBEICPDF {idx} {variant}",
-            f"sat -prove ok 0 {show}".rstrip(),
+            f"sat -prove ok 0 {sel}{show}".rstrip(),
         ]
     return "\n".join(L) + "\n"
 
@@ -698,7 +706,14 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
         return 0, base
 
     (project / miters_rel).write_text("\n".join(miters))
-    batch = _build_pdf_batch(flat_rel, miters_rel, specs, prim_in_names)
+    # Select a modern external CDCL `sat` backend (kissat/cadical) if the fork
+    # image provides one — same fix as DT1; DT3/SDD reuses these verdicts. Self-
+    # validating + fail-safe to the built-in engine (see _tdf._detect_sat_solver).
+    select_solver = _tdf._detect_sat_solver(project, pdk_dir,
+                                            timeout=min(timeout, 120))
+    base["sat_solver"] = select_solver or "minisat (built-in ezSAT)"
+    batch = _build_pdf_batch(flat_rel, miters_rel, specs, prim_in_names,
+                             select_solver=select_solver)
     batch_rel = "phase2/stage2/dft/pdf/_pdf_batch.ys"
     (project / batch_rel).write_text(batch)
     ec, out, err = _tdf._run_in_docker(

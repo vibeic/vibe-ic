@@ -447,20 +447,38 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
     sync_props = [p for p in props if not p.is_async]
     async_props = [p for p in props if p.is_async]
 
-    assert_lines = []
+    # CONCURRENT form, and the equivalence is exact rather than approximate.
+    #
+    #     always @(posedge clk) if (G) assert (X);      the immediate form
+    #     property p; @(posedge clk) G |-> X; endproperty
+    #     assert property (p);                          the concurrent form
+    #
+    # Both sample G and X at the same edge and both are vacuously true when G is
+    # false, so this is a change of spelling and not of meaning.  `|->` is the
+    # OVERLAPPING implication on purpose: `|=>` would move the consequent one
+    # cycle later and prove something the design does not claim.
+    #
+    # WHY THE SPELLING MATTERS.  Step 5's gate requires `property <name>` and
+    # `assert property`, so the immediate form left it permanently red — and
+    # until v0.2.31 of the EDA image there was no honest way out: our yosys fork
+    # could not parse a named property at all (measured: 42/42 spellings
+    # rejected, and a harness written to satisfy the gate returned rc=16 from
+    # SymbiYosys).  Emitting it then would have traded a proof that ran for a
+    # green light that did not.  The fork now parses it AND proves it — a false
+    # property FAILs with a counterexample, a true one passes — so the gate can
+    # be satisfied by real work rather than by relaxing it.
+    prop_lines, assert_lines = [], []
     idx = 0
-    for p in sync_props:
+    for p, guard in ([(p, "rst_active_q") for p in sync_props]
+                     + [(p, "rst_active") for p in async_props]):
         idx += 1
-        assert_lines.append(
-            f"    always @(posedge {clock})\n"
-            f"        if (f_past_valid && rst_active_q)\n"
-            f"            a_reset_safety_{idx}: assert ({p.output} == {p.value});")
-    for p in async_props:
-        idx += 1
-        assert_lines.append(
-            f"    always @(posedge {clock})\n"
-            f"        if (f_past_valid && rst_active)\n"
-            f"            a_reset_safety_{idx}: assert ({p.output} == {p.value});")
+        name = f"p_reset_safety_{idx}"
+        prop_lines.append(
+            f"    property {name};\n"
+            f"        @(posedge {clock})\n"
+            f"            (f_past_valid && {guard}) |-> ({p.output} == {p.value});\n"
+            f"    endproperty")
+        assert_lines.append(f"    a_reset_safety_{idx}: assert property ({name});")
 
     body_parts = [
         "\n".join(in_decls),
@@ -477,6 +495,9 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             f"    always @(posedge {clock}) rst_active_q <= rst_active;",
         ]
     body_parts.append("")
+    body_parts += prop_lines
+    if prop_lines:
+        body_parts.append("")
     body_parts += assert_lines
     body = "\n".join(bp for bp in body_parts if bp is not None)
 
@@ -572,13 +593,67 @@ def _analyze(iface: ModuleIface) -> Optional[dict]:
             "props": props}
 
 
+def _hierarchy_below(mtexts: Dict[str, Tuple[str, Path]], known: List[str],
+                     start: str) -> List[str]:
+    """Every module transitively instantiated under `start`, BFS, deterministic.
+
+    The DESIGN, not the file set. A module that sits in the same directory but
+    is instantiated nowhere under the declared top is not part of this design,
+    and a property proven there describes something the flow was not asked
+    about — the adjacent-measurement failure this whole line of work exists to
+    remove. Children are sorted at each level so the pick is reproducible.
+    """
+    order: List[str] = []
+    seen = {start}
+    queue = [start]
+    while queue:
+        cur = queue.pop(0)
+        entry = mtexts.get(cur)
+        if entry is None:
+            continue
+        iface = parse_module(entry[0], cur)
+        if iface is None:
+            continue
+        for child in sorted(_child_modules(iface.body, known, cur)):
+            if child not in seen:
+                seen.add(child)
+                order.append(child)
+                queue.append(child)
+    return order
+
+
 def _pick_provable(rtl_files: List[Path], top_name: Optional[str],
                    project: Optional[Path]
-                   ) -> Optional[Tuple[ModuleIface, Path, dict, bool]]:
+                   ) -> Optional[Tuple[ModuleIface, Path, dict, bool, str]]:
     """Pick a module with a construction-safe reset-safety property, PREFERRING
     the declared top and DESCENDING through thin single-child rename wrappers
     (e.g. an auto-emitted `chip_top` whose only job is to instantiate the leaf).
-    Returns (iface, dut_file, analysis, descended?) or None."""
+    Returns (iface, dut_file, analysis, descended?, basis) or None.
+
+    THE SEARCH USED TO BE ONE PATH WHILE ITS ANSWER CLAIMED THE WHOLE DESIGN.
+    ============================================================================
+    The descent gives up the moment a module instantiates anything other than
+    exactly one child, and `generate` then reports "no module with a
+    construction-safe reset-safety property" — a statement about every module
+    there is, derived from having examined a single chain of them.
+
+    MEASURED (subservient x sky130A). `subservient` instantiates TWO children,
+    `subservient_core` and `subservient_gpio`, so the walk broke at the top and
+    the step reported NOT_APPLICABLE. Pointing the SAME program at
+    `subservient_gpio` — same project, same RTL — emitted a complete harness
+    with two construction-safe properties (`o_rdata == '0` and `o_gpio == '0`
+    one cycle after reset, sync reset). The capability was there the whole time;
+    only the walk could not reach it. Step 5 then failed, and steps 7, 8, 10 and
+    11 went MISSING as blocked-by-upstream — one unreachable branch costing five
+    canonical steps, on every hierarchical design whose top-level outputs are
+    driven from more than one sub-module, which is essentially every SoC.
+
+    So when the single-child descent ends empty, the hierarchy BELOW the
+    declared top is scanned. Not the file set: a module nobody instantiates is
+    not part of this design. The basis is returned and recorded, because a
+    property proven on a sub-module is a WEAKER statement than one proven on the
+    top, and a reader who cannot tell the two apart has been handed the same
+    kind of answer this fix removes."""
     mtexts = _module_texts(rtl_files)
     if not mtexts:
         return None
@@ -600,7 +675,8 @@ def _pick_provable(rtl_files: List[Path], top_name: Optional[str],
             break
         analysis = _analyze(iface)
         if analysis is not None:
-            return (iface, f, analysis, descended)
+            return (iface, f, analysis, descended,
+                    "descended_wrapper" if descended else "declared_top")
         # no property here — descend if this is a thin single-child wrapper
         children = [c for c in _child_modules(iface.body, known, current)
                     if c not in visited]
@@ -608,6 +684,21 @@ def _pick_provable(rtl_files: List[Path], top_name: Optional[str],
             break
         current = children[0]
         descended = True
+
+    # The descent covered ONE PATH. Before claiming the design has no provable
+    # module, look at the rest of the hierarchy under the declared top — in
+    # deterministic order, skipping what the walk already rejected.
+    for name in _hierarchy_below(mtexts, known, start):
+        if name in visited:
+            continue
+        visited.add(name)
+        txt, f = mtexts[name]
+        iface = parse_module(txt, name)
+        if iface is None or not iface.ports:
+            continue
+        analysis = _analyze(iface)
+        if analysis is not None:
+            return (iface, f, analysis, True, "hierarchy_scan")
     return None
 
 
@@ -624,12 +715,16 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
 
     picked = _pick_provable(rtl_files, top, project)
     if picked is None:
+        # The claim names the scope it actually covered: the declared top and
+        # every module instantiated under it. It used to say "no module" after
+        # examining one chain of them.
         return {"verdict": "NOT_APPLICABLE", "rc": 2,
-                "reason": "no module with a construction-safe reset-safety "
-                          "property (needs a clock, a reset and a registered "
-                          "output with a literal reset value; no inout) — "
-                          "fail-safe skip, the flow keeps SKIPPED-CONDITION"}
-    iface, dut_file, analysis, descended = picked
+                "reason": "no module in the declared top's hierarchy has a "
+                          "construction-safe reset-safety property (needs a "
+                          "clock, a reset and a registered output with a "
+                          "literal reset value; no inout) — fail-safe skip, "
+                          "the flow keeps SKIPPED-CONDITION"}
+    iface, dut_file, analysis, descended, selection = picked
     dut_top = iface.name
     clock = analysis["clock"]
     reset_name = analysis["reset"]
@@ -647,6 +742,11 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         "top": dut_top,
         "declared_top": _resolve_top(rtl_files, top, project),
         "descended_to_leaf": descended,
+        # HOW this module was reached. A property proven on a sub-module is a
+        # weaker statement than one proven on the declared top, and a consumer
+        # that cannot tell them apart is reading an adjacent measurement.
+        "selection": selection,
+        "proves_declared_top": selection == "declared_top",
         "harness_module": f"formal_{dut_top}",
         "harness_path": str(out_path),
         "dut_file": str(dut_file),
