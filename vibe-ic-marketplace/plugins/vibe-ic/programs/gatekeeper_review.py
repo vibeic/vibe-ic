@@ -1884,18 +1884,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=("persist the complete repo-hygiene summary/attestation JSON at "
               "this path instead of keeping it only for the in-process "
               "gate-red-since adjudication"))
-    ap.add_argument(
-        "--hygiene-record-in", dest="hygiene_record_in", default=None,
-        help=("adjudicate a repo-hygiene summary JSON the CALLER already "
-              "produced instead of running the set a second time. Requires "
-              "--hygiene-record-rc. The record is checked against this tree's "
-              "declared gate set, not trusted; anything unestablished is rc 2 "
-              "UNDETERMINED and blocking"))
-    ap.add_argument(
-        "--hygiene-record-rc", dest="hygiene_record_rc", type=int, default=None,
-        help=("the exit status of the run that produced --hygiene-record-in. "
-              "Separate because the record says WHICH gates were red and only "
-              "the rc says whether the set completed"))
+    # THERE IS NO `--hygiene-record-in`, AND THERE MUST NOT BE. `review()`
+    # takes `hygiene_record_in=` as a FUNCTION KEYWORD, in the same spirit as
+    # `repo_hygiene_gate`'s `script=` seam and under the same rule that
+    # function's docstring states: no CLI flag, because a command-line way to
+    # hand this gate a substitute for running it is a skip button on the one
+    # gate whose entire purpose is that it cannot be forgotten.
+    #
+    # v1.11.67 grew one, argued as a change of RUNNER rather than of SUBJECT.
+    # The argument does not survive contact with the command line: every check
+    # `hygiene_gate_from_record` makes is a check of the record's SHAPE — it
+    # exists, it parses, an rc came with it, and it names exactly the labels a
+    # 0.12 s `--list` run reports — and a shape is not a provenance. Measured
+    # here: with `--list` naming this tree's declared labels, a record marking
+    # every one of them PASS is a few lines of JSON, and the gate returns rc 0
+    # green over a set that never ran. A caller who can pass a path can pass
+    # that path.
+    #
+    # So the handover keeps its ten tests and its callers inside this process,
+    # and `argv` cannot reach it.
     ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "
@@ -1938,10 +1945,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    hygiene_report=(Path(args.hygiene_report)
                                    if args.hygiene_report else None),
                    hygiene_progress=(Path(args.hygiene_progress)
-                                     if args.hygiene_progress else None),
-                   hygiene_record_in=(Path(args.hygiene_record_in)
-                                      if args.hygiene_record_in else None),
-                   hygiene_record_rc=args.hygiene_record_rc)
+                                     if args.hygiene_progress else None))
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
