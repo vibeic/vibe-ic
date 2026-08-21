@@ -1,9 +1,0 @@
-// Auto-derived assertions for chip_top (professional_tb_gen).
-// clock=clk edge=posedge reset=rst active_high=True
-module chip_top_asserts (input clk, input rst);
-  // p must be known (no X) when not in reset
-  property A_p_known_p;
-    @(posedge clk) disable iff (rst) !$isunknown(p);
-  endproperty
-  A_p_known: assert property (A_p_known_p);
-endmodule

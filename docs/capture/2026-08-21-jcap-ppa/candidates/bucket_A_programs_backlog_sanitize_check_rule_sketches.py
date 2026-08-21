@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/backlog_sanitize_check.py
+# Corpus-sweep REQUIRED before merging into programs/backlog_sanitize_check.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.66
+# Pattern: A validator accepts a prefixed value and names, per prefix, the vocabulary the suffix is drawn from. One branch's suffix pattern cannot express any member of the vocabulary it names — every member carries a character the pattern excludes. The branch is therefore dead: it matches nothing, it has never matched anything, and it never will. Nothing detects this, because a branch that refuses everything looks exactly like a branch nobody has used yet, and the error message lists it among the supported forms.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_an_accepted_value_branch_must_be_able_to_express_its_own_vocabulary(sample_text, ports):
+    """Where a validator's accepted form names a vocabulary that exists in the tree, at least one member of that vocabulary must satisfy the form; a branch satisfied by no member is dead and must fail the suite rather than sit in the help text. The check is the vocabulary itself run through the pattern — a single pass over a list that is already machine-readable — so it stays true as either side changes, which is the only way it catches the case where the vocabulary gains its separator later."""
+    # Expected signal: ERROR
+    # Suggested fix action: For every branch of an accepted-value pattern that names an enumerable in-tree vocabulary, run every member of that vocabulary through the branch and assert at least one is accepted. Report the branch, the vocabulary size, and the accepted count. Measured on this tree: the branch naming the flow's canonical steps accepts 0 of 42 of them, because every canonical step identifier is dotted and the branch's suffix admits only word characters and hyphens. Widen the suffix to the vocabulary's real character set, and add the census so the next divergence fails at the suite rather than at a filing.
+    return []  # list of findings — TODO implement

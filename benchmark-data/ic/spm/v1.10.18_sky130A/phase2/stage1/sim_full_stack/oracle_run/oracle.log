@@ -1,6 +1,0 @@
-[INFO] Final PATH variable: /headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/usr/local/sbin:/headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool
-[INFO] Final PYTHONPATH variable: /headless/.local/lib/python3.12/site-packages:/foss/tools/yosys/share/yosys/python3:/usr/lib/python312.zip:/usr/lib/python3.12:/usr/lib/python3.12/lib-dynload:/usr/local/lib/python3.12/dist-packages:/opt/vibeic-forks/cocotb/src:/usr/lib/python3/dist-packages:/foss/tools/ngspyce/local/lib/python3.12/dist-packages:/foss/tools/openems/local/lib/python3.12/dist-packages:/foss/tools/pyopus/local/lib/python3.12/dist-packages:/foss/tools/yosys/share/yosys/python3:/foss/tools/klayout/pymod:/foss/tools/vacask/lib/vacask/python
-ORACLE_TB_DONE pass=28/28
-ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=2
-/home/reyerchu/_c14b_spm_sky130A/phase2/stage1/sim_full_stack/tb_spm_oracle.v:98: $finish called at 54880000 (1ps)
-

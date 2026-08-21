@@ -67,3 +67,42 @@ NEEDS_SIM = pytest.mark.skipif(
     bool(MISSING),
     reason="cvdp_gate needs iverilog AND yosys; missing on this host: "
            + ", ".join(MISSING or ("-",)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ORACLE GATE NEEDS A DIFFERENT PAIR, AND THE DIFFERENCE IS LOAD-BEARING.
+#
+# `kmap_truth_table_oracle_check` compiles with iverilog and RUNS with vvp; it
+# never invokes yosys. Reusing `NEEDS_SIM` here would skip on a host carrying
+# iverilog and vvp but no yosys — coverage lost for a tool the gate does not
+# use, which is exactly the too-broad predicate this module's own docstring
+# warns about ("a skip is green, and a green that does not say what it stopped
+# checking is unauditable"). Same doctrine, second population.
+_ORACLE_REQUIRED = ("iverilog", "vvp")
+
+#: Resolved once at import, like MISSING above.
+ORACLE_MISSING = tuple(t for t in _ORACLE_REQUIRED if shutil.which(t) is None)
+
+
+def expect_verdict(actual: str, wanted: str) -> None:
+    """Assert the gate's FULL contract, on a simulator-bearing host and without.
+
+    NOT a skip. `kmap_truth_table_oracle_check` documents four verdicts
+    (PASS|SKIP|BLOCK|TOOL_ERR) and already returns `TOOL_ERR` with the reason
+    when iverilog or vvp is absent — the production side is correct and has
+    been. What was missing is that the TESTS asserted `== "PASS"` / `== "BLOCK"`
+    unconditionally, demanding of a tool-less host a result it cannot produce
+    and turning an honest NOT_CHECKED back into a red.
+
+    Skipping would have been the easy repair and a worse one: it trades a real
+    assertion for a green. Asserting the absent-tool branch keeps the test
+    load-bearing on EVERY host — a gate that returned a bare `PASS` with no
+    simulator on PATH, or crashed instead of declaring, still fails here.
+    """
+    if ORACLE_MISSING:
+        assert actual == "TOOL_ERR", (
+            f"expected the declared TOOL_ERR verdict on a host missing "
+            f"{', '.join(ORACLE_MISSING)}, got {actual!r} — an absent simulator "
+            f"must reach a declared verdict, never a bare pass")
+    else:
+        assert actual == wanted

@@ -37,9 +37,33 @@ number grow back; a hard fail on day one would be reverted within the hour. The
 residual is printed on every run precisely so it cannot be forgotten, and it
 may only ever shrink — `--strict` fails if it GREW, which is the ratchet.
 
+WHAT "NEW" MEANS, AND WHEN IT MEANS NOTHING (vibe-ic#1462)
+=========================================================
+Every verdict this gate renders is a COMPARISON: `new = current - baseline`.
+That subtraction is only an attribution if the baseline is a measurement of the
+tree in front of it. An ABSENT baseline is not a measurement of zero — it is
+the absence of one, and the two must never reduce to the same `set()`. They did,
+and the gate then spoke with full confidence in both directions:
+
+  * pointed at a tree with no residual artefact, it reported the ENTIRE
+    pre-existing population as regressions — `576 program(s) newly write …` on
+    clean main, where the true finding is that main was never measured at all;
+  * pointed at a tree with no residual artefact and no offender, it reported
+    `[PASS] no new non-atomic declared-report write` — a clean sweep over a
+    comparison it never had.
+
+The second is how vibe-ic#1462's reporter got a false zero. The first is how the
+two programs main gained via #1196 read as introduced by this batch. Same line
+of code, opposite verdicts, and neither was earned. So: a baseline that does not
+STATE a measurement makes this gate NOT CHECKED. An explicitly empty one
+(`{"offenders": []}`) is a measurement — of a clean tree — and still fails on
+the first offender.
+
 exit 0 = PASS         no new offender (residual may still be non-zero, and is named)
 exit 1 = FAIL         a new offender, or the residual grew
-exit 2 = NOT CHECKED  the programs directory is unreadable / no program parsed
+exit 2 = NOT CHECKED  the programs directory is unreadable / no program parsed,
+                      or the residual baseline states no measurement to compare
+                      against (absent, unreadable, truncated)
 """
 from __future__ import annotations
 
@@ -49,6 +73,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Set
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HELPER_MODULE = "_atomic_artefact"
 
@@ -153,13 +178,24 @@ def audit(programs_dir: Path) -> Dict[str, Any]:
             "offender_count": len(offenders)}
 
 
-def _load_baseline(path: Path) -> Set[str]:
+def _load_baseline(path: Path) -> Set[str] | None:
+    """The recorded residual, or None when the artefact states no measurement.
+
+    None and `set()` are DIFFERENT answers and the caller must not collapse
+    them: `set()` says "measured, and nothing offended"; None says "I could not
+    look". A truncated residual reaches this function as the latter — which is
+    the failure this whole gate exists to prevent, arriving in the gate's own
+    input, so it gets the same refusal any other unreadable evidence gets.
+    """
     if not path.is_file():
-        return set()
+        return None
     try:
-        return set(json.loads(path.read_text()).get("offenders", []))
+        doc = json.loads(path.read_text())
     except (OSError, ValueError):
-        return set()
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("offenders"), list):
+        return None
+    return {str(n) for n in doc["offenders"]}
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -186,6 +222,18 @@ def main(argv: List[str] | None = None) -> int:
     bl_path = Path(args.baseline) if args.baseline \
         else pdir / "_atomic_artefact_residual.json"
     baseline = _load_baseline(bl_path)
+    if baseline is None:
+        # Deliberately BEFORE the summary line: printing "residual baseline 0"
+        # and then refusing would leave the number that is not a number on the
+        # record, and it is that number the reader carries away.
+        print(f"NOT CHECKED: no residual baseline states a measurement at "
+              f"{bl_path} — {rep['offender_count']} of {rep['programs_parsed']} "
+              f"program(s) here write their declared report destination "
+              f"non-atomically, but with nothing to compare against, none of "
+              f"them can be called NEW. Measure this tree and record the "
+              f"residual before asking this gate to attribute anything. "
+              f"See vibe-ic#1462.", file=sys.stderr)
+        return 2
     current = set(rep["offenders"])
     new = sorted(current - baseline)
     fixed = sorted(baseline - current)
@@ -212,7 +260,7 @@ def main(argv: List[str] | None = None) -> int:
             from _atomic_artefact import write_json
             write_json(args.json_out, rep)
         except ImportError:                      # pragma: no cover
-            Path(args.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+            atomic_write_text(Path(args.json_out), json.dumps(rep, indent=2) + "\n")
 
     if new:
         print(f"[FAIL] {len(new)} program(s) newly write a declared report "

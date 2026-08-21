@@ -71,6 +71,7 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _prose_polarity import (  # noqa: E402
     DENIAL_CORE_RE, is_denied, sentence_scope)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 #: Source extensions carrying an SPDX header. Deliberately the HDL set plus the
 #: scripting set: this gate is about work BUNDLED as source, and a licence
@@ -284,7 +285,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(report, indent=1), encoding="utf-8")
+        atomic_write_text(args.json, json.dumps(report, indent=1), encoding="utf-8")
 
     if not result:
         # A census over nothing matches an empty NOTICE trivially. That is the

@@ -511,11 +511,35 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: these three are named, evidenced and pointed at the issue rather than
 #: silently forgiven. When #1070 lands, this set empties and
 #: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+# 2026-08-14: EMPTIED. vibe-ic#1070 landed for all three edges, so the debt
+# this register recorded no longer exists and the shrink-only doctrine above
+# says the entry goes. Measured live on `ab5a23a28` — each edge is both still
+# READ and now ORDERED, which is exactly the condition
+# `test_d5_the_deferred_register_only_shrinks` was written to detect:
+#
+#     A1 -> D1 : reads_it=True  ORDERED=True    (A1 gained `blocks_on: [D1]`)
+#     25 -> 24 : reads_it=True  ORDERED=True
+#     M1 -> 37 : reads_it=True  ORDERED=True
+#
+# Emptied rather than deleted outright: a NEW step entering this state must
+# still land here and be named, evidenced and pointed at an issue rather than
+# silently forgiven.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
+
+#: The edges the register carried until #1070 paid the debt.
+#:
+#: This exists for ONE reason: with the register empty, the paired control
+#: below compares an empty measured set against an empty registered set and
+#: passes while asserting NOTHING. A control that forgives nothing and checks
+#: nothing is worse than no control, because the file still reads as though it
+#: were policing three defects. So the control now also asserts the debt STAYED
+#: paid, which is a live guard rather than a vacuous one: drop any of these
+#: three `blocks_on` declarations again and it reddens.
+_FORMERLY_DEFERRED_LAYER3_EDGES: Tuple[Tuple[str, str], ...] = (
+    ("A1", "D1"),
+    ("25", "24"),
+    ("M1", "37"),
+)
 
 
 
@@ -661,6 +685,32 @@ def d5_problems(step_id) -> List[str]:
                 f"that same order (flow_compliance_check.py:7070-7088), so "
                 f"{parent!r} can never cut {sid}'s cascade"
             )
+
+    # ── CL-* — the closed_loop FALLBACK edge, dimension 5's other edge set
+    # A `closed_loop.fallback_to` IS a dependency edge, and until 2026-08-20
+    # nothing in this repository read one. MEASURED at 46db018669: 19
+    # `closed_loop:` declarations in the flow, ZERO consumers anywhere in the
+    # plugin — and this module's own substrate shipped the accessor
+    # (`flowref.closed_loop`, exported in `__all__`) with no caller. A
+    # `fallback_to` naming a step that does not exist would have passed every
+    # gate here, so the convergence edges the flow's close-loop story rests on
+    # were, as a class, unfalsifiable.
+    #
+    # Dimension 5 owns "is the declared edge set the true one", so it owns this
+    # edge set too. The predicate is NOT restated here: `closed_loop_edge_check`
+    # is the ONE implementation and this module calls it, so the program a
+    # reviewer runs by hand and the cell the matrix reddens cannot drift apart —
+    # the failure mode `_ORFS_PNR_KNOB_PARAMS` names in its own header ("a second
+    # list of names that would drift away from it").
+    #
+    # Steps with no `closed_loop` get an empty list, so this adds no cell and
+    # moves no existing verdict: measured over the shipped flow, `d5_problems`
+    # is unchanged for every step and the 19 declaring steps stay green.
+    import closed_loop_edge_check as _cl
+
+    _cl_raw_ids, _cl_by = _cl.build_index(list(F.steps()))
+    problems.extend(
+        _cl.problems_for_step(F.step_by_id(step_id), _cl_raw_ids, _cl_by))
 
     # ── D5-CYCLE ─────────────────────────────────────────────────────
     if sid in ancestors(sid):
@@ -929,7 +979,21 @@ def test_d5_blocks_on_covers_the_real_dependency_graph(cell):
 def test_d5_covers_every_cell_exactly_once():
     """63 cells, each parametrized exactly once, in flow order."""
     ids = [F.normalize_id(p.values[0].step_id) for p in _params()]
-    assert len(ids) == len(F.step_ids()) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(ids) == len(F.step_ids()) == 69, (
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -979,7 +1043,21 @@ def test_d5_state_census_is_exhaustive():
         f"NA if and only if it declares neither a blocks_on key nor a gate, "
         f"and these disagree with that derivation"
     )
-    assert len(F.step_ids()) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(F.step_ids()) == 69, (
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"
@@ -1357,3 +1435,14 @@ def test_d5_the_deferred_register_is_the_only_thing_holding_those_cells_green():
         f"the register and the live measurement disagree: measured "
         f"{sorted(charged)}, registered {sorted(registered)}"
     )
+
+    # ANTI-VACUITY. The comparison above is {} == {} while the register is
+    # empty, so on its own it would assert nothing. These three edges are the
+    # debt #1070 paid; requiring them to STAY ordered keeps this control live.
+    for sid, producer in _FORMERLY_DEFERRED_LAYER3_EDGES:
+        assert producer in ancestors(sid), (
+            f"{sid} -> {producer} was a deferred layer-3 edge until #1070 "
+            f"declared it, and it is unordered again (closure="
+            f"{sorted(ancestors(sid))}). The debt this register recorded has "
+            f"come back; re-open the entry rather than re-deleting this check."
+        )

@@ -92,6 +92,30 @@ approximation of it. A flow it cannot parse is a hard error (rc 2), never a
 shorter gate list: an under-count here is indistinguishable from a flow with
 fewer gates, which is the exact class of lie this program exists to catch.
 
+Where an intent can be WIRED (three venues, 2026-08-17)
+-------------------------------------------------------
+`orphan` asserts something strong — "declares an intent and NOTHING runs it" —
+so it is only as sound as the list of places it looked:
+
+  1. `flow/phase1_phase2_phase3.yaml`   the flow definition
+  2. `tools/ci/*.sh`                    the repo-hygiene shell suite (#886)
+  3. `gatekeeper_review.py`             the repo-gate suite's PYTHON entry
+                                        point, added 2026-08-17
+
+Venue 3 exists because #1696 moved where the hygiene tier is ENTERED.
+`gatekeeper_review.repo_hygiene_gate` runs `repo_hygiene_parallel.py` when the
+tree has one and only falls back to `tools/ci/repo_hygiene_gates.sh` when it
+does not; the coordinator then shards that shell suite beneath itself. So the
+tier's entry point is a Python program that no `.sh` file names. v1.10.59 gave
+`repo_hygiene_parallel` a truthful `ENFORCEMENT: blocking` docstring and this
+audit answered ORPHANED — "reachable from nothing at all" — about a program
+whose rc turns the landing verdict to REQUEST_CHANGES. The gate had not
+regressed; the audit was reading two venues out of three.
+
+The venue list is PRINTED with every ORPHANED finding, and a venue that is not
+present on the tree under audit is reported as such rather than counted as
+having cleared anybody.
+
 Where this audit itself runs
 ---------------------------
 `tools/ci/repo_hygiene_gates.sh` invokes it BLOCKING (since v1.6.29, whose
@@ -107,7 +131,9 @@ Exit codes:
     1  a finding NEW since the recorded baseline, in EITHER register:
          `known`             contradiction  declares blocking, wired AUDIT_ONLY
                              orphan         declares an intent and is reachable
-                                            from nothing at all
+                                            from nothing at all — checked
+                                            against THREE venues, which the
+                                            report names (see below)
          `undeclared_known`  undeclared     AUDIT_ONLY and declares nothing
                                             (#886). Before #886 only the first
                                             two shapes could fail, so a gate
@@ -117,7 +143,10 @@ Exit codes:
                                             printed PASS.
        — or a recorded entry that no longer holds, which must be paid down out
        of its register rather than left standing as permission.
-    2  I/O error, or the flow definition could not be parsed
+    2  NOT CHECKED: I/O error, the flow definition could not be parsed, or the
+       residual baseline states no readable measurement (absent, unreadable,
+       truncated). An explicitly empty register is still a measurement and
+       the first offender against it still exits 1.
 """
 from __future__ import annotations
 
@@ -315,6 +344,61 @@ def _invoked_by_suite(ci_src: str, gate: str) -> bool:
     it is not in Python source."""
     stem = gate[:-3] if gate.endswith(".py") else gate
     return bool(re.search(r"\b" + re.escape(stem) + r"\.py\b", ci_src))
+
+
+#: THE THIRD PLACE A DECLARATION CAN BE WIRED (2026-08-17).
+#:
+#: `repo_gate_source` knew the hygiene tier only as `tools/ci/*.sh`. Since
+#: v1.10.46 (772c31dcb, #1696) that is no longer where the tier is ENTERED:
+#: `gatekeeper_review.repo_hygiene_gate` picks `repo_hygiene_parallel.py` when
+#: the tree has one and falls back to `tools/ci/repo_hygiene_gates.sh` only
+#: when it does not, and the coordinator then shards the shell suite beneath
+#: itself. So the entry point of the repo-gate suite is a PYTHON program that
+#: no `.sh` file names, and the shell-only venue could not see it.
+#:
+#: MEASURED, not assumed. v1.10.59 (97d5e57a2) added `ENFORCEMENT: blocking` to
+#: `repo_hygiene_parallel`'s docstring — a true statement: its rc reaches
+#: `GateResult.green`, a red one makes the verdict REQUEST_CHANGES, and
+#: `tools/gatekeeper-land.sh` refuses to land on that. The audit answered
+#: ORPHANED, i.e. "reachable from nothing at all", which was false. The gate
+#: had not regressed; only its declaration was new, and a declaration is what
+#: makes a program a candidate for this scan at all.
+#:
+#: SCOPE, measured 2026-08-17 over all 1173 `*.py` in this directory:
+#: `gatekeeper_review`
+#: names 18 programs in string literals, and exactly ONE of them declares an
+#: intent — `repo_hygiene_parallel`. Widening the venue therefore changes one
+#: verdict, the one that was wrong, and clears nothing else. That is the same
+#: measurement #886 ran before adding the shell venue for `silent_decline_audit`
+#: and it is the bar any FOURTH venue has to clear too: a venue admitted
+#: without counting what it excuses is how an orphan scan stops finding orphans.
+_REPO_GATE_RUNNERS = ("gatekeeper_review.py",)
+
+
+def repo_gate_runner_source(programs: Path) -> str:
+    """Source of the repo-gate suite's PYTHON entry point, if this tree has one.
+
+    Kept SEPARATE from `repo_gate_source` rather than concatenated into it,
+    because the two venues need different matchers and merging them would
+    silently apply the loose one to both. `repo_gate_source` strips comment
+    lines and is then matched with a bare token, which is sound for shell.
+    Python's prose lives in DOCSTRINGS, which are not comment lines and survive
+    that stripping — this very file names dozens of gates in its docstrings —
+    so a bare token match over Python source would count documentation as
+    wiring and quietly excuse every gate anyone wrote a paragraph about.
+    `_invoked` is used instead: a string literal or a direct call, never a
+    mention in prose.
+
+    Derived from the tree UNDER AUDIT. A synthetic tree with no
+    `gatekeeper_review.py` gets the empty string and is judged only on what it
+    actually contains.
+    """
+    out = []
+    for name in _REPO_GATE_RUNNERS:
+        p = programs / name
+        if p.is_file():
+            out.append(p.read_text(errors="replace"))
+    return "\n".join(out)
 
 
 def _invoked(src: str, gate: str) -> bool:
@@ -1474,6 +1558,91 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# THE FOURTH VENUE — a gate the flow names DISPATCHES another gate (2026-08-20)
+#
+# The three venues above answer "is this program named by the flow, by the CI
+# shell suite, or by a repo-gate runner". A program can be reachable by a fourth
+# route that none of them can see: a gate the flow DOES name runs it as a
+# subprocess. Step 37.5ic is the case that surfaced it — its gate names
+# `tapeout_precheck`, which runs `general_precheck` and `tapeout_readiness_check`
+# as its two ARMS. Both were reported ORPHANED ("reachable from nothing at all")
+# while being dispatched on every evaluation of that step, which is a FALSE
+# claim of the exact kind #886 added `repo_gate_source` to stop making.
+#
+# CLOSURE, NOT ONE HOP. A delegate of a delegate is still reached; stopping at
+# one hop would answer a question adjacent to the one being asked. The closure
+# is seeded ONLY by programs already reachable through another venue, so a
+# cluster of programs that reference each other and are named by nothing cannot
+# bootstrap itself into being wired — the seed is what makes the claim true, and
+# an unseeded component contributes nothing.
+#
+# IT USES `_invoked`, THE SAME PREDICATE THE OTHER VENUES USE: a bare mention in
+# a comment does not count; the program has to be named as a `<stem>.py`
+# subprocess argument or called as `<stem>.main(...)`. A weaker rule here would
+# excuse orphans by prose, and "widening the population without widening what
+# counts as wired" is the failure this file already records twice.
+# ---------------------------------------------------------------------------
+def dispatched_by_reachable_gates(programs: Path,
+                                  seeds: "set[str]") -> "set[str]":
+    """Every program stem transitively DISPATCHED by an already-reachable one.
+
+    Returns the closure MINUS the seeds, so a caller can tell "reached only via
+    this venue" from "was already reachable". An unreadable source file is
+    skipped rather than treated as empty: a file we could not read is a file we
+    did not look in, and crediting it with naming nothing would be this repo's
+    recurring "could not read == read and empty" defect.
+    """
+    stems = {f.stem for f in programs.glob("*.py")}
+    reached = set(seeds) & stems
+    frontier = set(reached)
+    while frontier:
+        nxt: "set[str]" = set()
+        for stem in frontier:
+            f = programs / f"{stem}.py"
+            try:
+                src = f.read_text(errors="replace")
+            except OSError:
+                # A FILE WE COULD NOT READ IS A FILE WE DID NOT LOOK IN. It
+                # contributes nothing, which is the strict direction: the worst
+                # this can do is fail to clear an orphan, never invent a wiring.
+                continue
+            # CANDIDATES FIRST, `_invoked` SECOND. Asking `_invoked` about all
+            # ~1100 stems per source is ~1.2M regex searches over the whole
+            # directory and does not finish in a usable time — measured, the
+            # audit ran past 900 s. So the names are EXTRACTED in two linear
+            # passes over the same regions `_invoked` looks at, and every
+            # candidate is then confirmed with `_invoked` itself. The predicate
+            # that decides is unchanged; only the number of times it is asked.
+            for cand in _dispatch_candidates(src) & (stems - reached):
+                if _invoked(src, cand):
+                    nxt.add(cand)
+        reached |= nxt
+        frontier = nxt
+    return reached - set(seeds)
+
+
+#: One quoted string region, exactly the span `_invoked`'s first rule searches
+#: (an opening quote up to the next quote or newline).
+_QUOTED_REGION_RE = re.compile(r"[\"'][^\"'\n]*")
+_DOT_PY_RE = re.compile(r"\b(\w+)\.py\b")
+_ENTRY_CALL_RE = re.compile(r"\b(\w+)\s*\.\s*(?:main|check|audit)\s*\(")
+
+
+def _dispatch_candidates(src: str) -> "set[str]":
+    """Every program stem this source could possibly be naming.
+
+    A SUPERSET by construction — it is a cheap pre-filter, and `_invoked` is
+    what actually decides. Under-collecting here would silently create orphans,
+    so the two rules mirror `_invoked`'s two rules and nothing narrower.
+    """
+    out: "set[str]" = set(_ENTRY_CALL_RE.findall(src))
+    for region in _QUOTED_REGION_RE.findall(src):
+        out.update(_DOT_PY_RE.findall(region))
+    return out
+
+
+
 def audit(flow: Path, programs: Path) -> dict:
     clauses = clauses_in_flow(flow)
     # A clause the walk reached but could not name is NOT dropped. Silently
@@ -1533,12 +1702,34 @@ def audit(flow: Path, programs: Path) -> dict:
     # every landing from the repo-hygiene suite. An earlier draft of this change
     # recorded it as debt on the strength of not appearing in a flow YAML it was
     # never meant to appear in. `repo_gate_source` is that second venue.
+    #
+    # (3) 2026-08-17: the repo-gate suite grew a PYTHON entry point above the
+    # shell one, so "no repo-gate suite invokes it" stopped being answerable
+    # from `tools/ci/*.sh` alone. See `_REPO_GATE_RUNNERS`. The venue list is
+    # named in the report, because an unreachability claim that does not say
+    # where it looked cannot be checked by the person it accuses.
     src_ci = repo_gate_source(programs)
+    src_gate_runner = repo_gate_runner_source(programs)
+    # The fourth venue. Seeded by the flow definition ONLY, so the closure
+    # cannot be bootstrapped by a cluster of programs nothing else names.
+    dispatched = dispatched_by_reachable_gates(
+        programs, {r["gate"] for r in rows}
+        | {r["gate"][:-3] for r in rows if r["gate"].endswith(".py")})
     for f in sorted(programs.glob("*.py")):
         stem = f.stem
         if stem in in_flow or f"{stem}.py" in in_flow:
             continue
+        if stem in dispatched:
+            continue
         if _invoked_by_suite(src_ci, stem):
+            continue
+        # A venue does not get to exempt ITSELF. #886 measured this exact
+        # hazard from the other direction: widening the population made the
+        # audit read its own docstring as a declaration and report itself as an
+        # orphan. `gatekeeper_review.py` names its own path in string literals,
+        # so without this guard the suite runner would be its own proof of
+        # being wired — which is not a proof of anything.
+        if f.name not in _REPO_GATE_RUNNERS and _invoked(src_gate_runner, stem):
             continue
         intent = declared_intent(programs, stem)
         if intent:
@@ -1547,7 +1738,24 @@ def audit(flow: Path, programs: Path) -> dict:
     contradictions = [r for r in rows
                       if r["declared"] == "blocking"
                       and r["enforcement"] == "AUDIT_ONLY"]
+    # What the ORPHANED verdict actually consulted. Reported so the claim is
+    # falsifiable: "nothing invokes it" is only as strong as the list of places
+    # looked at, and a venue that was EMPTY on this tree (a synthetic fixture
+    # with no `tools/ci`, say) is a different fact from a venue that was read
+    # and did not name the gate.
+    orphan_venues = [
+        {"venue": "flow definition", "present": True},
+        {"venue": "tools/ci/*.sh", "present": bool(src_ci.strip())},
+        {"venue": "/".join(_REPO_GATE_RUNNERS),
+         "present": bool(src_gate_runner.strip())},
+        # PRESENT is the count, not a boolean, because "no gate dispatches
+        # another" and "we never computed the closure" are different facts and
+        # a bare False would read as both.
+        {"venue": "dispatched by a gate the flow names (transitive)",
+         "present": bool(dispatched), "reached": sorted(dispatched)},
+    ]
     return {
+        "orphan_venues": orphan_venues,
         "total_gates": len(rows),
         "total_clauses": len(clauses),
         "enforced": sum(1 for r in rows if r["enforcement"] == "ENFORCED"),
@@ -1573,6 +1781,38 @@ def audit(flow: Path, programs: Path) -> dict:
     }
 
 
+def _load_baseline_doc(path: Path) -> Optional[dict]:
+    """A readable baseline document, or ``None`` when none was measured.
+
+    ``None`` and an explicit empty list are intentionally different values.
+    This audit attributes findings with ``current - baseline``; treating an
+    absent or truncated artefact as ``{}`` turns every inherited finding into
+    a regression, while treating the same state on a clean tree fabricates a
+    PASS.  A partial older document may still carry one measured register, so
+    it remains readable and the existing UNRECORDED-register logic below owns
+    the missing key.
+    """
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    registers = ("known", "undeclared_known")
+    if not any(key in loaded for key in registers):
+        return None
+    if any(key in loaded and not isinstance(loaded[key], list)
+           for key in registers):
+        return None
+    if any(not isinstance(entry, str)
+           for key in registers
+           for entry in loaded.get(key, [])):
+        return None
+    return loaded
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Audit which flow gates can actually stop a run.")
@@ -1596,6 +1836,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not flow.is_file():
         print(f"IO_ERROR: no flow definition at {flow}", file=sys.stderr)
         return 2
+    bl_path = Path(a.baseline) if a.baseline else (
+        _HERE / "flow_gate_enforcement_baseline.json")
+    doc = _load_baseline_doc(bl_path)
+    if doc is None:
+        # ``--write-baseline`` is the one operation that CREATES the missing
+        # measurement.  It may bootstrap an absent path, but it must not
+        # overwrite an existing unreadable/truncated artefact as though the
+        # previous measurement had been empty.
+        bootstrapping = (a.write_baseline and not bl_path.exists()
+                         and not bl_path.is_symlink())
+        if not bootstrapping:
+            print(
+                "NOT CHECKED: no flow-gate enforcement baseline states a "
+                f"readable measurement at {bl_path} — absent, unreadable, or "
+                "truncated is not a measurement of zero, so no current "
+                "finding can be called NEW. Measure this tree and record the "
+                "baseline before asking this audit to attribute anything. "
+                "See vibe-ic#1705.",
+                file=sys.stderr)
+            return 2
+        doc = {}
     try:
         rep = audit(flow, programs)
     except FlowGrammarError as exc:
@@ -1625,6 +1886,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               "final audit reaches them:")
         for o in rep["orphaned"]:
             print(f"  {o['gate']}  (declared {o['declared']})")
+        # An unreachability claim that does not say where it looked cannot be
+        # checked. A venue marked `not present on this tree` did NOT clear the
+        # gate — it was not there to be read — and that is stated rather than
+        # folded into the verdict.
+        print("  venues consulted for reachability:")
+        for v in rep.get("orphan_venues") or []:
+            print(f"    {v['venue']}: "
+                  f"{'read' if v['present'] else 'not present on this tree'}")
     if rep.get("undeclared_audit_only"):
         print(f"\nUNDECLARED and AUDIT_ONLY — {len(rep['undeclared_audit_only'])} "
               f"gate(s): no runner invokes them inline, and nothing in the gate "
@@ -1655,16 +1924,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                  + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])])
     now_u = sorted(f"undeclared::{u['gate']}"
                    for u in (rep.get("undeclared_audit_only") or []))
-    bl_path = Path(a.baseline) if a.baseline else (
-        _HERE / "flow_gate_enforcement_baseline.json")
-    doc: dict = {}
-    if bl_path.is_file():
-        try:
-            loaded = json.loads(bl_path.read_text())
-            doc = loaded if isinstance(loaded, dict) else {}
-        except (OSError, ValueError):
-            doc = {}
-
     def _recorded(key: str) -> Optional[List[str]]:
         """A register that is ABSENT is UNRECORDED, not empty. The two differ:
         an empty register asserts "no debt", an absent one asserts nothing at

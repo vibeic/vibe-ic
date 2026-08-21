@@ -90,12 +90,16 @@ affect the decision.
 """
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import json
 import os
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -407,6 +411,192 @@ def install_guard(tmpdir: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# Channel 2b — the filesystem, IN THIS PROCESS (vibe-ic#1221)
+# --------------------------------------------------------------------------- #
+# Everything above imposes the boundary on a CHILD. Measured on `origin/main`
+# 75776dbbb, that reaches nothing in production, for two independent reasons:
+#
+#   1. `scope_step` is passed by NO caller of `_watchdog.run_supervised`, so
+#      the enforcement branch there never runs. Flipping VIBEIC_STEP_SCOPE on
+#      changes nothing — the owner's switch is not connected to anything.
+#   2. All three call sites that exist — `_docker_watchdog.py:210`,
+#      `phase3_one_shot_runner.py:953`, `regmap_transaction_tb_gen.py:688` —
+#      launch a NON-Python child (`docker exec bash -lc`, `iverilog`), which
+#      the module docstring above already states the audit hook cannot cover.
+#
+# And the read §4.05 is most about never forks at all: `phase1_one_shot_runner`
+# ingesting documents into L1-L27 does it in THIS interpreter. A child-only
+# mechanism cannot observe it. So the boundary needs a locus in-process, which
+# is what this section is.
+#
+# ONE DEFINITION, STILL. The decision data — `deny_segments()`, the filename
+# forms, the step's `declared_scope` — is resolved by the SAME parent functions
+# the child is handed, at arm time. The hook then does pure string matching and
+# NOTHING else. That is not an aesthetic choice: the hook runs on the `open`
+# audit event, so a hook that imported a module or read a file would re-enter
+# itself. `oracle_reason` is deliberately NOT called from inside the hook for
+# that reason (its `reference_flow/` branch reads file content).
+#
+# OBSERVE by default, DENY only behind `VIBEIC_STEP_SCOPE_INPROC=deny`. A
+# misfire here does not redden one gate — it fails every run of the flow — so
+# the default records and reports rather than raising. Sequencing observe ->
+# deny is the owner's call, exactly as switching the module on at all is.
+ENV_INPROC = "VIBEIC_STEP_SCOPE_INPROC"
+
+#: Violations recorded in observe mode are capped: a record that can grow
+#: without bound is a memory leak wearing an audit trail's clothes.
+INPROC_VIOLATION_CAP = 256
+
+_INPROC: Dict[str, Any] = {
+    "armed": False, "root": "", "step": "?", "mode": "observe",
+    "specs": (), "deny": frozenset(), "file_re": None, "violations": [],
+}
+_INPROC_HOOK_INSTALLED = False
+
+
+def inproc_mode(env: Optional[Dict[str, str]] = None) -> str:
+    """`"deny"` only when explicitly asked; `"observe"` otherwise."""
+    e = os.environ if env is None else env
+    v = str(e.get(ENV_INPROC, "")).strip().lower()
+    return "deny" if v in ("deny", "1", "true") else "observe"
+
+
+def _inproc_hook(event: str, args: Any) -> None:
+    """The `open` audit hook. Pure string matching — see the note above."""
+    if event != "open":
+        return
+    st = _INPROC
+    if not st["armed"]:
+        return
+    path = args[0] if args else None
+    if isinstance(path, int):          # an already-open fd, not a path
+        return
+    if isinstance(path, bytes):
+        try:
+            path = path.decode()
+        except Exception:              # noqa: BLE001
+            return
+    if not isinstance(path, str):
+        return
+    try:
+        ap = os.path.abspath(path)
+    except Exception:                  # noqa: BLE001
+        return
+    root = st["root"]
+    if not root or not ap.startswith(root):
+        return                         # outside the project — see the bounds
+    rel = os.path.relpath(ap, root).replace(os.sep, "/")
+    if in_declared_scope(rel, st["specs"]):
+        return                         # the declaration wins, as everywhere
+    # EVERY segment, exactly as `oracle_reason` and the child shim do. An
+    # earlier draft here skipped the basename; that made the in-process locus
+    # disagree with the child about `x/golden` and reintroduced the two-
+    # definitions problem this module's docstring exists to describe.
+    parts = [p.lower() for p in rel.split("/")]
+    why = None
+    for seg in parts:
+        if seg in st["deny"]:
+            why = f"off-limits tree segment ({seg}/)"
+            break
+    if why is None and st["file_re"] is not None:
+        if st["file_re"].search(parts[-1] if parts else ""):
+            why = "hidden oracle file (test/ref/golden)"
+    if why is None:
+        return
+    msg = (f"vibe-ic §4.05: step {st['step']} may not read {rel} ({why}). "
+           f"It is not among the step's required_inputs in the flow "
+           f"definition.")
+    if st["mode"] == "deny":
+        raise PermissionError(msg)
+    if len(st["violations"]) < INPROC_VIOLATION_CAP:
+        st["violations"].append(msg)
+
+
+def inproc_state() -> Dict[str, Any]:
+    """A copy of what is currently imposed on this process. Read-only."""
+    st = dict(_INPROC)
+    st["violations"] = list(st["violations"])
+    st["specs"] = list(st["specs"])
+    st["deny"] = sorted(st["deny"])
+    st["hook_installed"] = _INPROC_HOOK_INSTALLED
+    return st
+
+
+def arm_in_process(project: Path, step_id: Optional[str] = None,
+                   flow_def: Optional[Path] = None,
+                   env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Impose §4.05 on THIS process. Returns the record of what was imposed.
+
+    A no-op returning `{"enforced": False}` unless `VIBEIC_STEP_SCOPE` is set,
+    so with the switch unset this cannot affect any run — the same default the
+    child half already has.
+
+    The audit hook is installed at most once per interpreter (CPython gives no
+    way to remove one), and is inert whenever nothing is armed.
+    """
+    global _INPROC_HOOK_INSTALLED
+    if not enforcement_enabled(env):
+        return {"enforced": False}
+    root = str(Path(project).resolve()).rstrip(os.sep) + os.sep
+    specs: List[str] = []
+    if step_id is not None and flow_def is not None:
+        try:
+            specs = declared_scope(str(step_id), Path(flow_def))
+        except Exception as exc:                      # noqa: BLE001
+            # Never silent. An empty declaration denies MORE, not less, so a
+            # failure here cannot quietly widen the boundary — but the reader
+            # must know the exception list was not read.
+            print(f"step_input_scope: could not read declared scope for step "
+                  f"{step_id} ({exc!r}) — nothing is declared, so this step's "
+                  f"legitimate inputs may be reported as violations",
+                  file=sys.stderr)
+    _INPROC.update({
+        "armed": True, "root": root, "step": str(step_id or "?"),
+        "mode": inproc_mode(env), "specs": tuple(specs),
+        "deny": frozenset(deny_segments()),
+        "file_re": re.compile(DENY_FILENAME_RE, re.IGNORECASE),
+        "violations": [],
+    })
+    if not _INPROC_HOOK_INSTALLED:
+        sys.addaudithook(_inproc_hook)
+        _INPROC_HOOK_INSTALLED = True
+    return {"enforced": True, "step": _INPROC["step"],
+            "mode": _INPROC["mode"], "declared_specs": len(specs),
+            "deny_segments": len(_INPROC["deny"]), "locus": "in-process"}
+
+
+def disarm_in_process() -> List[str]:
+    """Stop imposing; return the violations observed. The hook stays installed
+    (CPython cannot remove one) and is inert while nothing is armed."""
+    out = list(_INPROC["violations"])
+    _INPROC.update({"armed": False, "root": "", "specs": (),
+                    "violations": []})
+    return out
+
+
+@contextlib.contextmanager
+def scoped(project: Path, step_id: Optional[str] = None,
+           flow_def: Optional[Path] = None,
+           env: Optional[Dict[str, str]] = None) -> Iterator[Dict[str, Any]]:
+    """Impose §4.05 on this process for the duration of the block.
+
+    Restores the PREVIOUS armed state on exit rather than simply disarming, so
+    a nested dispatch cannot silently unbind its caller's scope.
+    """
+    prev = {k: _INPROC[k] for k in
+            ("armed", "root", "step", "mode", "specs", "deny", "file_re")}
+    prev_v = list(_INPROC["violations"])
+    rec = arm_in_process(project, step_id=step_id, flow_def=flow_def, env=env)
+    try:
+        yield rec
+    finally:
+        if rec.get("enforced"):
+            rec["violations"] = list(_INPROC["violations"])
+        _INPROC.update(prev)
+        _INPROC["violations"] = prev_v
+
+
+# --------------------------------------------------------------------------- #
 # The launcher entry point
 # --------------------------------------------------------------------------- #
 def child_env(base_env: Optional[Dict[str, str]],
@@ -499,7 +689,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc = {"step": args.step_id, "declared_specs": specs,
            "enforcement_enabled": enforcement_enabled()}
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(doc, indent=1) + "\n")
+        atomic_write_text(Path(args.json_out), json.dumps(doc, indent=1) + "\n")
     print(f"step {args.step_id}: {len(specs)} declared path spec(s)")
     for s in specs:
         print(f"  {s}")

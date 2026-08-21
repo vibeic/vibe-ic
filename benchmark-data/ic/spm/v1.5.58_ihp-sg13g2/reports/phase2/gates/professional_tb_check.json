@@ -1,7 +1,0 @@
-{
-  "gate": "professional_tb",
-  "verdict": "PASS",
-  "status": "PASS",
-  "dut_kind": "serial_stream",
-  "ran_cocotb": true
-}

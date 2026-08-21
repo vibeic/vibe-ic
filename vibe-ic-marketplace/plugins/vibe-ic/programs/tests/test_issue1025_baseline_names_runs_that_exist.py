@@ -29,11 +29,37 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus
+
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN_ROOT / "programs"
 REPO_ROOT = PLUGIN_ROOT.parent.parent.parent
-CORPUS = REPO_ROOT / "benchmark-data"
 BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
+# THE POPULATION IS READ OUT OF THE RECORD (vibe-ic#1223), not hardcoded here.
+# This said `benchmark-data` while the CI gate sweeps `benchmark-data/ic`; with
+# the population defined by the artefact rather than by a directory NAME those
+# are 117 run trees / 45 findings and 16 / 22 respectively, so a hardcoded root
+# would validate the baseline against a set the ratchet never holds.
+_POPULATION = json.loads(
+    BASELINE.read_text(encoding="utf-8"))["corpus_population"]
+
+
+# ...AND THE ROOT IT HANGS OFF IS NO LONGER THIS REPOSITORY. The published run
+# trees moved to vibeic/benchmark-data, and a clone of that repository IS the
+# `benchmark-data` directory — so `benchmark-data/ic` and `<clone>/ic` name the
+# SAME population. Only the leading component changes; the population is still
+# the one the record declares, which is the whole point of #1223.
+def _population_under(root: Path) -> Path:
+    p = Path(_POPULATION)
+    try:
+        return root / p.relative_to("benchmark-data")
+    except ValueError:                      # a population named some other way
+        return root / p
+
+
+_CORPUS_ROOT = corpus_root()
+CORPUS = (_population_under(_CORPUS_ROOT) if _CORPUS_ROOT is not None
+          else REPO_ROOT / _POPULATION)
 
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
@@ -57,7 +83,7 @@ def _baseline() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="no benchmark-data corpus here")
+@needs_corpus
 def test_every_baseline_entry_names_a_published_run():
     """A `per_run` key that names nothing is debt recorded against a ghost.
 
@@ -81,7 +107,7 @@ def test_every_baseline_entry_names_a_published_run():
     )
 
 
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="no benchmark-data corpus here")
+@needs_corpus
 def test_declared_population_matches_the_tree():
     """`runs_swept` / `runs_with_reports` must describe THIS tree.
 
@@ -98,13 +124,18 @@ def test_declared_population_matches_the_tree():
         f"but the tree holds {rep['runs_with_reports']}")
 
 
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="no benchmark-data corpus here")
 def test_the_recorded_total_is_the_sum_of_its_own_entries():
     """`findings_total` must not drift from `per_run`.
 
     Cheap, and it is the invariant that makes the two tests above sufficient:
     with entries validated and the sum pinned, the ceiling cannot be inflated
     by editing only the scalar.
+
+    DELIBERATELY UNGUARDED. This reads the RECORD and nothing else — no corpus
+    is opened — so a corpus-presence skip here would be a check declining to
+    run when it can in fact measure, which is the same dishonesty as a check
+    reporting a measurement it never made. It carried
+    `skipif(not CORPUS.is_dir())` by copy-paste from its two neighbours.
     """
     base = _baseline()
     per_run = base.get("per_run", {})

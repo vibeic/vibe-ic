@@ -21,6 +21,7 @@ GATE = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_gate.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "programs"))
 import tool_diagnostic_id_gate as G  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 TODAY = date(2026, 8, 12)
 
@@ -292,10 +293,17 @@ def test_the_gates_own_report_is_not_read_back_as_tool_output(tmp_path):
 # the #1080 fold — the shape is asserted, not just described in prose
 # ===========================================================================
 def test_the_census_shape_folds_into_per_step_metrics(tmp_path):
-    """#1080 is the per-step metrics schema and is unimplemented. This pins the
-    shape it can absorb: two levels under `steps.<step>.ids.<LEVEL>.<ID>`,
-    flattenable to `<step>__tool__warnings__count:<ID>` with no second scan and
-    no second definition of what an id is."""
+    """The census is keyed BY STEP — two levels under
+    `steps.<step>.ids.<LEVEL>.<ID>` — which is the shape #1080's per-step
+    metrics schema absorbs with no second scan and no second definition of what
+    an id is. The fold itself is exercised by the `#1081 ITEM 1` block below;
+    this pins the shape it folds FROM.
+
+    (Until 2026-08-14 this docstring asserted that "#1080 is ... unimplemented".
+    It landed as `4a8c4bf6b`, and a test premise that has expired is how a
+    deferral becomes permanent, so the fold is now measured rather than
+    described.)
+    """
     cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
     cen = G.census(cell)
     assert cen["schema"] == G.SCHEMA
@@ -304,10 +312,6 @@ def test_the_census_shape_folds_into_per_step_metrics(tmp_path):
     ids = cen["steps"][step]["ids"]
     assert ids["WARNING"]["RSZ-0104"] == 1
     assert ids["INFO"]["ODB-0227"] == 1
-    flat = {f"{s}__tool__warnings__count:{i}": n
-            for s, slot in cen["steps"].items()
-            for i, n in slot["ids"].get("WARNING", {}).items()}
-    assert flat["reports/phase3__tool__warnings__count:RSZ-0104"] == 1
 
 
 # ===========================================================================
@@ -323,7 +327,16 @@ def test_the_census_shape_folds_into_per_step_metrics(tmp_path):
 # each claim is re-derived here and a drift is a RED, not a stale sentence.
 # ===========================================================================
 REPO_ROOT = PLUGIN_ROOT.parents[2]
-BD_IC = REPO_ROOT / "benchmark-data" / "ic"
+
+# The published cells moved to vibeic/benchmark-data. `benchmark-data/ic/` still
+# exists here — it holds the design INPUT — so its mere presence no longer proves
+# a cell is readable, which is why the `BD_IC.is_dir()` guards below are no longer
+# sufficient on their own and each corpus test also carries `@needs_corpus`. An
+# explicit `VIBE_IC_BENCHMARK_DATA` pointer names the tree to grade; without one
+# the in-repo path stays the answer, so a checkout that still carries cells is
+# graded exactly as before.
+_CORPUS = corpus_root()
+BD_IC = (_CORPUS if _CORPUS is not None else REPO_ROOT / "benchmark-data") / "ic"
 
 
 def _published_cells():
@@ -332,9 +345,10 @@ def _published_cells():
         return []
     return sorted(c for d in BD_IC.iterdir() if d.is_dir()
                   for c in d.iterdir()
-                  if c.is_dir() and G._parse_cell_name(c.name) is not None)
+                  if c.is_dir() and G._cell_ordinal(c.name) is not None)
 
 
+@needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
 def test_the_prefix_coverage_claim_is_re_derived():
     """The COVERAGE claim, recomputed from the tree.
@@ -367,35 +381,143 @@ def test_the_prefix_coverage_claim_is_re_derived():
         f"put exactly '{' '.join(sorted(prefixes))}' in the docstring. A new "
         f"prefix means a tool started emitting diagnostics and the coverage "
         f"claim a reader relies on is now understated.")
-    assert "4b22e36ea" in doc, (
+    assert "94754771" in doc or "4b22e36ea" in doc, (
         "the docstring states raw file counts; they must stay attributed to the "
         "commit they were measured at, or they read as standing facts about a "
         "tree that has since moved")
 
 
+@needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
-def test_the_published_corpus_yields_no_comparable_pair():
-    """5 of 5 cells exit NO_BASELINE on this commit — and that is DISCLOSED.
+def test_the_corpus_pair_resolves_and_the_gate_fires():
+    """THE REPLACEMENT for a test that was meant to die, and did.
 
-    THIS TEST IS MEANT TO DIE. It fails the day a second cell of the same PDK is
-    published, which is the day the gate can finally compare something and the
-    day the docstring's "today it is every cell" paragraph becomes false. A
-    disclosure that outlives its premise is exactly the rot this repo keeps
-    finding, so the premise is asserted rather than described.
+    Its predecessor asserted "5 of 5 cells exit NO_BASELINE" and said it would
+    fail the day a pair became comparable. That day came from a CODE fix rather
+    than from a publish: the resolver was reading the PDK out of the directory
+    name, so the repository's `clean_run_*` naming family was invisible and the
+    one genuinely like-for-like pair was skipped. The premise died exactly as
+    designed; this asserts what replaced it.
+
+    Backed by a COMMITTED artefact, not a fixture: `DRT-0120` is absent from
+    v1422's `reports/phase3/drc_router.rpt` and present in v1427's, and that is
+    re-derived here rather than trusted.
     """
-    cells = _published_cells()
-    assert cells, "no published cells found — the probe itself is broken"
-    comparable = [(c.name, G.find_previous(c).name)
-                  for c in cells if G.find_previous(c) is not None]
-    assert not comparable, (
-        f"a comparable cell pair now EXISTS: {comparable}. The gate can compare "
-        f"for real, so remove the 'today it is every cell' disclosure from the "
-        f"docstring, re-run the gate over that pair, and record what it finds — "
-        f"including in tool_diagnostic_id_acceptance.json, whose text says the "
-        f"comparison path is unreachable.")
-    assert "5 of 5" in G.__doc__ or f"{len(cells)} of {len(cells)}" in G.__doc__, (
-        f"{len(cells)} published cells carry no comparable pair and the docstring "
-        f"does not say so; a reader of 'is BLOCKING' would assume it blocks.")
+    prev = BD_IC / "sha256" / "clean_run_v1422_20260715"
+    cur = BD_IC / "sha256" / "clean_run_v1427_20260715"
+    for p in (prev, cur):
+        if not p.is_dir():
+            pytest.skip(f"published run absent from this checkout: {p}")
+
+    # 1. the resolver finds it, with no flag and no caller knowledge
+    found = G.find_previous(cur)
+    assert found is not None and found.name == prev.name, (
+        f"the like-for-like predecessor was not resolved: got {found}. Both runs "
+        f"record the same PDK ({G.measured_pdk(cur)} / {G.measured_pdk(prev)}) "
+        f"and both are the same naming family, so a NO_BASELINE here means the "
+        f"resolver has regressed to parsing names again.")
+
+    # 2. the difference it must find is real, checked against the bytes
+    rpt = "reports/phase3/drc_router.rpt"
+    assert "DRT-0120" not in (prev / rpt).read_text(errors="replace")
+    assert "DRT-0120" in (cur / rpt).read_text(errors="replace")
+
+    # 3. and the gate BLOCKS on it
+    shipped = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+    rc, report = G.compare(cur, prev, shipped, date(2026, 8, 12))
+    assert rc == 1, f"the gate did not block on a real new id: rc={rc} {report}"
+    assert "DRT-0120" in report["new_ids_blocking"], report["new_ids_blocking"]
+
+
+#: Two sibling runs of ONE design, same naming FAMILY (`run_seq`), neither
+#: recording a `"pdk"` field anywhere — the shape `_cell` produces writes only
+#: `reports/phase3/run.log`, so `measured_pdk` finds nothing and `_RE_CELL`
+#: does not match the name either. This is the only shape in which the refusal
+#: rule is REACHABLE: `_cell_ordinal` must already agree (same family, lower
+#: ordinal) before `pdk_key` is ever consulted.
+_UNSTATED_PREV = "clean_run_v1400_20260101"
+_UNSTATED_CUR = "clean_run_v1401_20260102"
+
+
+def test_a_run_that_states_no_pdk_is_refused_not_assumed_to_match(tmp_path):
+    """"I could not tell" must never resolve to "same".
+
+    SYNTHETIC, and that is the repair. This test used to build its own subjects
+    by calling the function under test::
+
+        unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+        if not unstated:
+            pytest.skip("every run dir now records a PDK — the hazard is gone")
+
+    A regression that stops `pdk_key` returning None — THE EXACT DEFECT THIS
+    TEST NAMES — empties that list, and the skip then states as a fact the
+    thing the regression destroyed. MEASURED on this tree: with `pdk_key`
+    falling back to a constant `"UNKNOWN"` instead of None, the module reports
+    `30 passed, 1 skipped`, exit 0, while `find_previous` pairs two runs whose
+    process is unknown. That is the 18-false-positive mistake the PDK guard
+    exists to prevent, arriving through the guard's own population.
+
+    The corpus arm was vacuous for a second, independent reason and is kept
+    below only as an observation: the one published cell that yields no key,
+    `u_hawaii_adc/clean_run_v1422_20260715`, has no same-FAMILY sibling beneath
+    it, so `_cell_ordinal` refuses it before the PDK rule is consulted. It
+    could not have exercised this path even when the list was non-empty.
+    """
+    _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+
+    # the precondition: neither run states a PDK, by either channel
+    assert G.pdk_key(cur) is None, G.pdk_key(cur)
+    assert G.pdk_key(tmp_path / _UNSTATED_PREV) is None
+
+    # and so the pair is REFUSED, though everything else about it matches
+    assert G.find_previous(cur) is None, (
+        f"{_UNSTATED_CUR} states no PDK and a predecessor was resolved for it "
+        f"anyway ({G.find_previous(cur)}). An unmeasurable PDK must refuse, "
+        f"not match.")
+
+    # end to end, through the shipped CLI: NO_BASELINE (rc 2), not a comparison
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 2, f"expected NO_BASELINE, got rc={rc}: {out}"
+
+
+def test_PAIRED_GUARD_the_same_pair_STATING_a_pdk_does_compare(tmp_path):
+    """The refusal must be about the silence, not about the naming family.
+
+    Byte-identical fixture to the test above with ONE addition — each run
+    records `"pdk": "sky130A"` in its own reports — and it must now resolve,
+    compare, and BLOCK on the added `GRT-0043`. Without this twin, the refusal
+    rule above is satisfiable by never matching a `clean_run_*` pair at all,
+    which is the very defect #1092's resolver was fixed for.
+    """
+    prev = _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+    for c in (prev, cur):
+        (c / "reports" / "run_meta.json").write_text('{"pdk": "sky130A"}\n')
+
+    assert G.pdk_key(cur) == "sky130A"
+    assert G.find_previous(cur) == prev, G.find_previous(cur)
+
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 1, f"expected BLOCKING, got rc={rc}: {out}"
+    assert "GRT-0043" in out
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_published_cells_that_state_no_pdk_are_refused_too():
+    """The corpus arm, no longer load-bearing and no longer self-selecting.
+
+    It carries NO skip: an empty list is simply a corpus that states a PDK
+    everywhere, and the obligation is already discharged synthetically above.
+    An empty result is recorded as an empty result — never as "the hazard is
+    gone".
+    """
+    unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+    for c in unstated:
+        assert G.find_previous(c) is None, (
+            f"{c.name} states no PDK and a predecessor was resolved for it "
+            f"anyway ({G.find_previous(c)}). An unmeasurable PDK must refuse, "
+            f"not match.")
 
 
 def test_the_unwired_state_is_disclosed_or_gone():
@@ -452,6 +574,85 @@ def test_a_DENIED_id_is_not_counted_as_an_emission():
     assert out["denied_count"] == 1, out
 
 
+def _pdk_cell(tmp_path, **files):
+    """A run directory holding *files*, for `measured_pdk` to read."""
+    d = tmp_path / "cell"
+    d.mkdir()
+    for name, text in files.items():
+        (d / name).write_text(text)
+    return d
+
+
+def test_a_DENIED_pdk_is_not_counted_as_a_declaration(tmp_path):
+    """BATCH IDX (c). `measured_pdk` scans RAW TEXT and takes the modal value,
+    so records that deny a value used to outvote the one real declaration and
+    the gate compared two runs on a PDK neither of them used.
+
+    Two things in the consult are load-bearing and were measured:
+    `ignore_bracketed=False`, because the prose default blanks `{...}` and a
+    JSON document is entirely inside braces — with the default this check is a
+    no-op that reads like a check; and `extra_breaks=("\n",)`, because these
+    are machine-generated records, not prose.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"audit.json": '{"pdk": "sky130A", "staged": false, '
+                         '"note": "libraries were not staged"}\n'
+                         '{"pdk": "sky130A", "status": "superseded by the '
+                         'gf180 rerun"}\n',
+           "run.json": '{"pdk": "gf180mcuD"}\n'})
+    # Both sky130A records match the regex — without that this proves nothing.
+    text = (cell / "audit.json").read_text()
+    assert len(list(G._RE_PDK_FIELD.finditer(text))) == 2
+    assert G.measured_pdk(cell) == "gf180mcuD"
+
+
+def test_a_DENIAL_ON_ANOTHER_RECORD_does_not_retract_this_one(tmp_path):
+    """THE PAIRED HALF. A report full of ordinary negations must still yield
+    its PDK, or the consult trades a loud wrong answer for a silent missing
+    one — which this module's own docstring calls the worse failure, because
+    nothing goes red to say the extractor published less than it read."""
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A"}\n'
+                     '{"note": "no clock found for register bank"}\n'
+                     '{"drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_a_plain_declaration_is_untouched(tmp_path):
+    """The consult must not cost the ordinary case anything."""
+    cell = _pdk_cell(tmp_path, **{"a.json": '{"pdk": "sky130A"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_the_known_limit_is_pinned_rather_than_hidden(tmp_path):
+    """A denial in a SIBLING FIELD of the same record drops the value, even
+    when it denies something else entirely.
+
+    This is a FALSE NEGATIVE and it is pinned deliberately, because the two
+    shapes are structurally identical —
+
+        {"pdk": "sky130A", "status": "superseded by the gf180 rerun"}   deny
+        {"pdk": "sky130A", "drc": "no errors found"}                    keep
+
+    — and separating them needs to know what the denial is ABOUT, which no
+    scoping rule can. The direction chosen is the one `pdk_key` already argues
+    for: a dropped measurement falls back to the NAME, so this degrades to the
+    pre-existing comparison rather than to nothing, while the opposite error
+    would make the gate compare on a PDK neither run used.
+
+    MEASURED COST: 0 of the 9 `"pdk"` declarations in the tracked corpus sit in
+    a record carrying a denial, so this costs nothing today. If that number
+    moves, this test is where to come back to — change it by NARROWING the
+    scope, never by dropping the consult.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A", "drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) is None
+
+
 def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     """THE PAIRED HALF, and the one that matters. A diagnostic line IS the
     emission; its message is ordinary English that routinely negates something
@@ -461,3 +662,388 @@ def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     out = G.scan_log("[WARNING RSZ-0104] no clock found for register bank\n")
     assert out["ids"] == {"WARNING": {"RSZ-0104": 1}}, out
     assert out["denied_count"] == 0, out
+
+
+# ===========================================================================
+# THE SHIPPED ACCEPTANCE RECORD'S CLAIM ABOUT THE CORPUS
+#
+# `tool_diagnostic_id_acceptance.json` carries prose about whether the gate can
+# compare anything at all. That claim went stale silently once, and the way it
+# went stale is the interesting part: the file honestly recorded "5 of 5
+# NO_BASELINE ... the comparison path is unreachable from today's corpus", and
+# that was a correct measurement OF A BROKEN RESOLVER read as a fact about the
+# POPULATION. It also promised the situation could only change when a second
+# same-PDK cell was PUBLISHED — and a code fix reached it instead.
+#
+# An unreachable-comparison disclosure reads identically whether the corpus
+# really has no pair or the resolver merely cannot see one. So the claim is
+# recomputed here rather than trusted.
+# ===========================================================================
+_ACCEPTANCE = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+
+#: The sentinel each state must carry. Kept as literals so the assertion is
+#: about the SHIPPED WORDS a reader will actually see, not about a paraphrase.
+_SAYS_UNREACHABLE = "comparison path is unreachable"
+_SAYS_REACHABLE = "THE COMPARISON PATH IS REACHABLE"
+
+
+def _acceptance_prose() -> str:
+    """The record's text as a reader reads it, with line wrapping removed.
+
+    WHITESPACE-NORMALISED ON PURPOSE. `_comment` is a JSON array of hard-wrapped
+    lines, so every sentinel below would otherwise be hostage to where the wrap
+    happens to fall — re-flowing a paragraph would silently turn an assertion
+    about the claim into an assertion about the column width. Measured while
+    writing this: `must not adjudicate his own finding` straddles a wrap and a
+    naive join missed it.
+    """
+    return " ".join(" ".join(
+        json.loads(_ACCEPTANCE.read_text())["_comment"]).split())
+
+
+def _comparable_pairs():
+    """Every (cell, predecessor) the resolver actually finds in this tree."""
+    return [(c, G.find_previous(c)) for c in _published_cells()
+            if G.find_previous(c) is not None]
+
+
+@needs_corpus
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_acceptance_records_REACHABILITY_claim_is_measured():
+    """BOTH DIRECTIONS, so neither state is reachable by editing prose.
+
+    While a comparable pair exists the shipped record must NOT claim the
+    comparison path is unreachable, and must say it IS reachable. If the corpus
+    ever loses its last pair — a prune, a retention sweep — the disclosure has
+    to come back, because at that moment "no new diagnostic id" would again be
+    a statement about a comparison nobody performed.
+    """
+    prose = _acceptance_prose()
+    pairs = _comparable_pairs()
+    withdrawn = "That was an honest measurement of" in prose
+
+    if pairs:
+        shown = [f"{c.name} <- {p.name}" for c, p in pairs]
+        assert _SAYS_UNREACHABLE not in prose or withdrawn, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the shipped "
+            f"acceptance record still claims the comparison path is "
+            f"unreachable. A record that outlived its premise reads exactly "
+            f"like a true one.")
+        assert _SAYS_REACHABLE in prose, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the record "
+            f"does not say so. A reader deciding whether this empty list means "
+            f"'nothing to adjudicate' or 'nothing was compared' cannot tell.")
+    else:
+        assert _SAYS_UNREACHABLE in prose, (
+            "no comparable pair resolves in this tree, so the gate cannot "
+            "compare anything — and the acceptance record does not disclose "
+            "it. An empty list then reads as 'clean' when it means 'never "
+            "ran'.")
+        assert _SAYS_REACHABLE not in prose, (
+            "the record claims the comparison path is reachable and no pair "
+            "resolves.")
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_PAIRED_the_live_finding_is_NOT_adjudicated_by_its_own_author():
+    """The empty list is a POSITION, and it has to stay checkable.
+
+    The corpus pair blocks on a real id. The cheapest way to make every run
+    green is to add that id to `accepted` — which is why this asserts the
+    opposite: the shipped list stays empty while a live un-adjudicated finding
+    exists, and the record says so.
+
+    Without this half the test above is satisfiable by adjudicating the finding
+    away and then truthfully reporting a reachable-and-clean corpus.
+    """
+    pairs = _comparable_pairs()
+    if not pairs:
+        pytest.skip("no comparable pair in this tree")
+    doc = json.loads(_ACCEPTANCE.read_text())
+    blocking = set()
+    for cur, prev in pairs:
+        rc, report = G.compare(cur, prev, _ACCEPTANCE, date.today())
+        blocking |= set(report.get("new_ids_blocking") or {})
+    assert blocking, (
+        "the corpus pair resolves and nothing blocks — either the finding was "
+        "adjudicated into `accepted` or the comparison stopped finding it; "
+        "both need saying out loud rather than reading as a clean run.")
+    accepted_ids = {e.get("id") for e in doc["accepted"] if isinstance(e, dict)}
+    assert not (blocking & accepted_ids), (
+        f"{sorted(blocking & accepted_ids)} is both the live finding and its "
+        f"own exemption. The point of shipping this list empty is that the "
+        f"author must not adjudicate his own finding.")
+    assert "must not adjudicate his own finding" in _acceptance_prose()
+
+
+# ===========================================================================
+# #1081 ITEM 1 — "count tool diagnostics by message ID per step, AS A METRIC"
+#
+# The issue's own caveat was "(depends on the per-step metrics schema)". That
+# dependency is #1080, landed as `4a8c4bf6b` (`programs/step_metrics.py`), so
+# the deferral has expired. Measured before this block existed: the gate
+# censused 370 logs of one published cell and `step_metrics collect` over that
+# same run answered `0 metric(s) from 0 step(s)`, rc 2 — the count existed only
+# inside a report nothing collects.
+#
+# Every case here is PAIRED, because "emits a metric" is trivially satisfiable
+# by emitting a constant.
+# ===========================================================================
+import step_metrics as SM  # noqa: E402
+
+#: `_PREV_LOG` carries WARNING RSZ-0104, WARNING PSM-0038, `Warning 441:`
+#: (-> STA-0441), INFO ODB-0227, and one unkeyed Yosys line. Written out so a
+#: change to the fixture moves these numbers RED rather than silently.
+_STEP = "reports_phase3"
+_EXPECTED_PREV = {
+    f"{_STEP}__tool__id__rsz_0104__warning_count": 1,
+    f"{_STEP}__tool__id__psm_0038__warning_count": 1,
+    f"{_STEP}__tool__id__sta_0441__warning_count": 1,
+    f"{_STEP}__tool__id__odb_0227__info_count": 1,
+    f"{_STEP}__tool__gated__id_count": 3,
+    f"{_STEP}__tool__logs__scanned_count": 1,
+    f"{_STEP}__tool__unkeyed__diagnostic_count": 1,
+    f"{_STEP}__tool__denied__diagnostic_count": 0,
+}
+
+
+def _emit(tmp_path, name, body, project_name="proj"):
+    cell = _cell(tmp_path, name, body)
+    project = tmp_path / project_name
+    G.emit_metrics(G.census(cell), project)
+    return project
+
+
+def test_the_per_step_census_IS_emitted_as_metrics(tmp_path):
+    """Item 1, end to end: every id, per step, as a metric with its count."""
+    project = _emit(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
+    merged, prov = SM.collect(project)
+    assert prov["step_count"] == 1, prov
+    for key, want in _EXPECTED_PREV.items():
+        assert merged.get(key) == want, (key, merged.get(key), merged)
+
+
+def test_PAIRED_the_emitted_metrics_pass_step_metrics_OWN_schema_check(
+        tmp_path):
+    """An emit that #1080's own conformance check rejects is not an emit.
+
+    THE ARM THAT MATTERS. ORFS spells this `cts__flow__warnings__count:ORD-0012`
+    and copying that spelling would have been the obvious move — it fails
+    `key_defect` (a colon and capitals inside one component), so `step_metrics
+    check` would go red on every run that emitted one. The id is a component
+    instead, and this asserts the result against the schema owner rather than
+    against a regex this file wrote.
+    """
+    project = _emit(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
+    assert SM.conformance_defects(project) == []
+    for key in _EXPECTED_PREV:
+        assert SM.key_defect(key) is None, key
+
+
+def test_PAIRED_nothing_is_emitted_unless_asked(tmp_path):
+    """The census must not write metrics as a side effect of being taken.
+
+    Without this the previous test passes for a program that writes metrics on
+    every run into whatever directory it happens to be pointed at.
+    """
+    cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
+    project = tmp_path / "untouched"
+    G.census(cell)
+    assert not project.exists()
+    rc, out = _run(cell, _acc(tmp_path / "a.json", []))
+    assert rc == 2, out          # NO_BASELINE, and still no metrics dir
+    assert not (cell / SM.METRICS_REL).exists(), out
+
+
+# --- the run-to-run direction: a NEW id is an ADDED metric key -------------
+def test_a_NEW_id_shows_up_as_an_ADDED_metric_KEY(tmp_path):
+    """The metric layer REPORTS the same fact the gate BLOCKS on.
+
+    `step_metrics diff` lists a key present in the new run and absent from the
+    old under `added` — which for `<step>__tool__id__<id>__warning_count` is
+    exactly "a tool warning id that was not there last time", per step.
+    """
+    old = _emit(tmp_path, "v1.0.0_pdkX", _PREV_LOG, "old")
+    new = _emit(tmp_path, "v1.1.0_pdkX", _NEW_ID_LOG, "new")
+    rep = SM.diff(SM.collect(old)[0], SM.collect(new)[0])
+    assert f"{_STEP}__tool__id__grt_0043__warning_count" in rep["added"], rep
+
+
+def test_PAIRED_an_UNCHANGED_run_adds_no_metric_key(tmp_path):
+    """Same fixture, one line changed — here, none. `added` must be empty, or
+    the test above is satisfied by a differ that calls everything new."""
+    old = _emit(tmp_path, "v1.0.0_pdkX", _PREV_LOG, "old")
+    new = _emit(tmp_path, "v1.1.0_pdkX", _SAME_LOG, "new")
+    rep = SM.diff(SM.collect(old)[0], SM.collect(new)[0])
+    assert rep["added"] == [], rep
+    assert rep["changed"] == [], rep
+
+
+def test_a_GROWING_count_is_worse_not_undeclared(tmp_path):
+    """The level lives in the metric TAIL so `DIRECTIONS` can read it.
+
+    `warning_count`/`error_count` are two of the tails #1080 declares `lower`.
+    Had the id been the tail (`...__warning_count__rsz_0104`, or ORFS's
+    `count:RSZ-0104`), every diagnostic delta would have come back
+    `undeclared` and the differ could never say a run got worse.
+    """
+    old = _emit(tmp_path, "v1.0.0_pdkX", _PREV_LOG, "old")
+    new = _emit(tmp_path, "v1.1.0_pdkX",
+                _PREV_LOG + "[WARNING RSZ-0104] and again.\n", "new")
+    rep = SM.diff(SM.collect(old)[0], SM.collect(new)[0])
+    worse = [c for c in rep["changed"] if c["verdict"] == "worse"]
+    assert [c["key"] for c in worse] == [
+        f"{_STEP}__tool__id__rsz_0104__warning_count"], rep
+    assert worse[0]["old"] == 1 and worse[0]["new"] == 2, worse
+
+
+def test_PAIRED_a_SHRINKING_count_is_better(tmp_path):
+    """The other half of the same declaration — otherwise `lower` is
+    indistinguishable from "always worse"."""
+    old = _emit(tmp_path, "v1.0.0_pdkX",
+                _PREV_LOG + "[WARNING RSZ-0104] and again.\n", "old")
+    new = _emit(tmp_path, "v1.1.0_pdkX", _PREV_LOG, "new")
+    rep = SM.diff(SM.collect(old)[0], SM.collect(new)[0])
+    assert [c["verdict"] for c in rep["changed"]] == ["better"], rep
+
+
+def test_a_DISAPPEARED_id_does_not_SURVIVE_a_re_emit(tmp_path):
+    """`step_metrics.emit` merges, and a merge is wrong for a re-emit.
+
+    Two runs into ONE project: the second run does not emit `GRT-0043`, so its
+    key must be GONE. Merging would leave the old count sitting there and the
+    metrics would report a diagnostic that this run did not produce — a lie
+    with no symptom, in the file a later `diff` reads.
+    """
+    project = tmp_path / "proj"
+    G.emit_metrics(G.census(_cell(tmp_path, "v1.0.0_pdkX", _NEW_ID_LOG)),
+                   project)
+    assert f"{_STEP}__tool__id__grt_0043__warning_count" in SM.collect(
+        project)[0]
+    G.emit_metrics(G.census(_cell(tmp_path, "v1.1.0_pdkX", _PREV_LOG)),
+                   project)
+    merged = SM.collect(project)[0]
+    assert f"{_STEP}__tool__id__grt_0043__warning_count" not in merged, merged
+    assert merged[f"{_STEP}__tool__id__rsz_0104__warning_count"] == 1
+
+
+def test_PAIRED_a_re_emit_leaves_ANOTHER_programs_metrics_alone(tmp_path):
+    """Only OUR domain is cleared. The step file is shared — #1080's whole
+    point is that several programs contribute to one step — so a re-emit that
+    truncated the file would delete measurements this program never made."""
+    project = tmp_path / "proj"
+    SM.emit(project, _STEP, {"instance_area": 4795.85}, domain="design")
+    G.emit_metrics(G.census(_cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)),
+                   project)
+    G.emit_metrics(G.census(_cell(tmp_path, "v1.1.0_pdkX", _SAME_LOG)),
+                   project)
+    merged = SM.collect(project)[0]
+    assert merged[f"{_STEP}__design__instance_area"] == 4795.85, merged
+
+
+def test_two_ids_may_NOT_collapse_into_one_metric_key(tmp_path):
+    """A collision is REFUSED, never silently summed.
+
+    The id regex makes this unreachable today (one hyphen, no other
+    non-alphanumerics, so lowercase-and-collapse is injective). It is asserted
+    anyway because the regex is deliberately open-ended — `[A-Z][A-Z0-9]{1,7}`
+    exists so a seventeenth tool is captured — and a widening that introduced a
+    collision would otherwise understate a count with no visible symptom.
+    """
+    slot = {"ids": {"WARNING": {"AB-0012": 3, "AB.0012": 4}}, "logs": ["x.log"]}
+    with pytest.raises(ValueError, match="refusing to merge"):
+        G.metrics_for_step("s", slot)
+    ok = G.metrics_for_step("s", {"ids": {"WARNING": {"AB-0012": 3}},
+                                  "logs": ["x.log"]})
+    assert ok["s__tool__id__ab_0012__warning_count"] == 3, ok
+
+
+def test_a_failed_emit_is_a_FAILURE_not_a_quiet_zero(tmp_path):
+    """Asked to publish, could not, must not exit 0.
+
+    An "empty result is not a zero" case at the metric layer: a run that was
+    told to emit, failed, and still returned success leaves the next comparison
+    reading a file that silently is not there.
+    """
+    cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
+    blocked = tmp_path / "not-a-dir"
+    blocked.write_text("i am a file")
+    p = subprocess.run(
+        [sys.executable, str(GATE), str(cell), "--census-only",
+         "--emit-metrics", str(blocked)],
+        capture_output=True, text=True, timeout=55)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "could not emit per-step metrics" in p.stdout + p.stderr
+    ok = subprocess.run(
+        [sys.executable, str(GATE), str(cell), "--census-only",
+         "--emit-metrics", str(tmp_path / "fine")],
+        capture_output=True, text=True, timeout=55)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert "emitted 8 per-step metric(s)" in ok.stdout, ok.stdout
+
+
+def test_NO_BASELINE_still_emits_the_metric_and_still_exits_2(tmp_path):
+    """The two verdicts are independent, and conflating them costs both ways.
+
+    NO_BASELINE means the COMPARISON could not run — it does not mean nothing
+    was measured, and publishing this run's counts is precisely what gives the
+    next run a baseline. So the metric IS written. And the rc stays 2: a
+    recorded baseline is still not a clean run.
+    """
+    cell = _cell(tmp_path, "v1.0.0_pdkX", _PREV_LOG)
+    project = tmp_path / "proj"
+    p = subprocess.run(
+        [sys.executable, str(GATE), str(cell), "--acceptance",
+         str(_acc(tmp_path / "a.json", [])), "--today", TODAY.isoformat(),
+         "--emit-metrics", str(project)],
+        capture_output=True, text=True, timeout=55)
+    assert p.returncode == 2, p.stdout + p.stderr
+    assert "NO_BASELINE" in p.stdout
+    merged, prov = SM.collect(project)
+    assert prov["step_count"] == 1, prov
+    assert merged[f"{_STEP}__tool__id__rsz_0104__warning_count"] == 1
+
+
+# --- the denial count: computed since #1241, DROPPED until #1081 -----------
+def test_a_DENIED_id_reaches_the_census_the_report_AND_the_metric(tmp_path):
+    """`scan_log` counted denials and `census` threw the number away.
+
+    The comment above `scan_log` promises "DENIALS ARE COUNTED, NEVER SILENTLY
+    DROPPED", and that was true of the extractor and false of everything
+    downstream: no report and no metric carried it, so "this run emitted
+    nothing" and "this extractor discarded what it read" read identically —
+    the exact confusion the unkeyed disclosure exists to prevent.
+    """
+    body = "no [WARNING RSZ-0104] warnings were emitted\n" \
+           "[WARNING PSM-0038] Vsrc file not specified.\n"
+    _cell(tmp_path, "v1.0.0_pdkX", body)
+    cur = _cell(tmp_path, "v1.1.0_pdkX", body)
+    cen = G.census(cur)
+    assert cen["steps"][_STEP.replace("_", "/", 1)]["denied_count"] == 1, cen
+    assert G.total_denied(cen) == 1
+
+    rc, report = G.compare(cur, tmp_path / "v1.0.0_pdkX",
+                           tmp_path / "missing.json", TODAY)
+    assert rc == 0, report
+    assert report["denied_not_counted"]["current"] == 1, report
+
+    project = tmp_path / "proj"
+    G.emit_metrics(cen, project)
+    assert SM.collect(project)[0][
+        f"{_STEP}__tool__denied__diagnostic_count"] == 1
+
+    out = _run(cur, _acc(tmp_path / "a.json", []))[1]
+    assert "read as DENIALS" in out, out
+
+
+def test_PAIRED_an_EMITTED_id_is_not_counted_as_a_denial(tmp_path):
+    """Otherwise the disclosure above is satisfied by counting everything."""
+    cell = _cell(tmp_path, "v1.0.0_pdkX",
+                 "[WARNING RSZ-0104] no clock found for register bank\n")
+    cen = G.census(cell)
+    assert G.total_denied(cen) == 0, cen
+    project = tmp_path / "proj"
+    G.emit_metrics(cen, project)
+    merged = SM.collect(project)[0]
+    assert merged[f"{_STEP}__tool__denied__diagnostic_count"] == 0
+    assert merged[f"{_STEP}__tool__id__rsz_0104__warning_count"] == 1

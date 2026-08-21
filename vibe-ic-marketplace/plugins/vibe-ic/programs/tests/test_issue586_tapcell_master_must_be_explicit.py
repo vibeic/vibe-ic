@@ -56,7 +56,7 @@ import pytest
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
 from not_verified_tier import skip_not_verified  # noqa: E402
-PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
@@ -200,14 +200,16 @@ def test_the_asap7_branch_reads_the_registry_rather_than_hardcoding():
 
 # ── the value is a real cell, verified in the image ──────────────────────────
 def _image():
-    ov = os.environ.get("VIBEIC_EDA_IMAGE")
-    if ov:
-        return ov
-    for up in _PROGRAMS.parents:
-        v = up / "tools" / "vibeic-eda" / "VERSION"
-        if v.is_file():
-            return f"ghcr.io/vibeic/vibeic-eda:{v.read_text().strip()}"
-    return None
+    """The image this host holds, BY DIGEST — asked, not remembered.
+
+    This used to walk up for `tools/vibeic-eda/VERSION`, vibeic-eda's version
+    number stored in the vibe-ic repo, which made every image release need a PR
+    here. `_eda_image.judged_image()` honours the same `VIBEIC_EDA_IMAGE`
+    override and answers None the same way when there is nothing to look at.
+    """
+    sys.path.insert(0, str(_PROGRAMS))
+    import _eda_image as _img
+    return _img.judged_image().ref
 
 
 def _have_image(img):

@@ -69,6 +69,8 @@ for _p in (str(_PROGRAMS), str(_TESTS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 PROG = _PROGRAMS / "flow_compliance_check.py"
 
 _D1_NAME = "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)"
@@ -394,18 +396,25 @@ def test_the_scope_boundary_is_the_real_flows_own_boundary():
             f"premise of #1429 no longer holds and this fix needs re-deciding")
 
 
+@needs_corpus
 def test_no_published_report_contradicts_the_subset_invariant():
     """Corpus sweep, as an ARTEFACT rather than a claim in a PR body.
 
-    Every checked-in `flow_compliance*.json` is read and checked against the
+    Every published `flow_compliance*.json` is read and checked against the
     one invariant the split must hold everywhere: what GATED is a subset of
     what was REPORTED. The sweep also asserts it actually found reports — an
     empty sweep is a sweep that could not look, and must not be recorded as a
     clean one.
-    """
-    import _hostpaths
 
-    root = _hostpaths.require_repo("benchmark-data")
+    The subject is a PUBLISHED CELL, and those now live in
+    `vibeic/benchmark-data`. An absent corpus is "I could not look", so this
+    SKIPS naming the corpus rather than failing (vibe-ic#1357's shape). It is
+    NOT weakened: `found > 0` still stands, so a corpus that IS readable and
+    carries no compliance report is still a failure, and every subset assertion
+    below runs unchanged against whatever cells are there.
+    """
+    root = corpus_root()
+    assert root is not None, "the marker admitted a run with no corpus to read"
     found = unreadable = affected_mode = 0
     for path in sorted(root.rglob("flow_compliance*.json")):
         try:

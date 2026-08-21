@@ -189,6 +189,21 @@
           "alternative": "reports/phase1/extraction_coverage_report.json",
           "path": "reports/phase1/extraction_coverage_report.json",
           "size_bytes": 4610
+        },
+        "reports/audit/phase1/expert_parse_track.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/audit/phase1/expert_parse_track.json",
+          "path": "reports/audit/phase1/expert_parse_track.json",
+          "size_bytes": 7399
+        },
+        "phase1/extraction_patterns.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/extraction_patterns.json",
+          "path": "phase1/extraction_patterns.json",
+          "size_bytes": 7608,
+          "note": "added with the vibe-ic#1348 declaration of this entry in D1's required_outputs; measured 2026-08-15, not on the 2026-07-27 sweep the rest of this file records. It resolves live in 9 of the 10 admissible run roots, so no verdict here rests on the recorded size."
         }
       }
     },
@@ -405,31 +420,35 @@
       "entries": {
         "phase2/stage2/dft/scan_netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/scan_netlist.v",
           "path": "phase2/stage2/dft/scan_netlist.v",
-          "size_bytes": 1531464
+          "size_bytes": 81570,
+          "note": "vibe-ic#1266 — RE-POINTED. This record cited 'AI_IC_design/4th_benchmark/ibex_e2e', a kind='home' root no checkout carries, while the entry was in fact being answered by a search of the admissible roots. Re-measured live: the artefact is tracked at HEAD in this root, non-empty and non-symlink, and the run's OWN write ledger (reports/write_ledger.json captured 2026-08-08T02:48:29Z) records step 11 as having written exactly this path. That is a provenance any checkout can re-derive; the old one was a claim about one machine."
         },
         "phase2/stage2/dft/atpg_coverage.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/atpg_coverage.rpt",
           "path": "phase2/stage2/dft/atpg_coverage.rpt",
-          "size_bytes": 643
+          "size_bytes": 421,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "phase2/stage2/dft/transition_atpg_plan.md": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/_aborted_tmpplugin_run",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/transition_atpg_plan.md",
           "path": "phase2/stage2/dft/transition_atpg_plan.md",
-          "size_bytes": 1968
+          "size_bytes": 2050,
+          "note": "vibe-ic#1266 — RE-POINTED off 'campaign_pdk/spm/_aborted_tmpplugin_run'. That citation was the worst of the five: besides naming a tree no checkout carries, the run it named ABORTED, so the record asserted production by a run that did not finish. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "reports/phase2/dft/coverage.json",
           "path": "reports/phase2/dft/coverage.json",
-          "size_bytes": 675
+          "size_bytes": 3549,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/bsdl_plan.json": {
           "status": "PRODUCED_BY_RUN",
@@ -667,6 +686,24 @@
         }
       }
     },
+    "15.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/padring.def": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/padring.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/pad_assignment.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
     "16": {
       "verdict": "ENFORCED",
       "entries": {
@@ -764,6 +801,9 @@
           "alternative": "reports/phase3/drc_router.rpt",
           "path": "reports/phase3/drc_router.rpt",
           "size_bytes": 19208
+        },
+        "reports/phase3/drc_router.json": {
+          "status": "UNPROVEN"
         }
       }
     },
@@ -803,6 +843,13 @@
           "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
           "path": "reports/phase3/sta/sta_corner_record_completeness.json",
           "size_bytes": 3822
+        },
+        "reports/phase3/sta/post_route_signoff_corner.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/sta/post_route_signoff_corner.json",
+          "path": "reports/phase3/sta/post_route_signoff_corner.json",
+          "size_bytes": 393
         }
       }
     },
@@ -830,6 +877,13 @@
           "path": "reports/phase3/ir_drop_signoff.json",
           "size_bytes": 555,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/dynamic_ir.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/dynamic_ir.json",
+          "path": "reports/phase3/dynamic_ir.json",
+          "size_bytes": 1887
         }
       }
     },
@@ -887,6 +941,21 @@
         }
       }
     },
+    "26.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/die_finishing.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
     "27": {
       "verdict": "ENFORCED",
       "entries": {
@@ -896,6 +965,13 @@
           "alternative": "reports/phase3/si_crosstalk.json",
           "path": "reports/phase3/si_crosstalk.json",
           "size_bytes": 860
+        },
+        "reports/phase3/si_mcf_sta.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/si_mcf_sta.json",
+          "path": "reports/phase3/si_mcf_sta.json",
+          "size_bytes": 2750
         }
       }
     },
@@ -938,10 +1014,11 @@
       "entries": {
         "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/cv32e40p_e2e",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/sim_postlayout/pass.flag",
           "path": "phase3/stage3/sim_postlayout/pass.flag",
-          "size_bytes": 194
+          "size_bytes": 341,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/cv32e40p_e2e', a kind='home' root no checkout carries. Re-measured live: this root carries pass.flag non-empty, non-symlink and tracked at HEAD. Weaker than step 11's four re-points and said so rather than blurred: this root carries no write ledger, so the record rests on the pre-ledger evidence rules alone and does NOT claim the run's own log attributed the write to step 29."
         },
         "reports/phase2/gates/post_layout_sim.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1011,6 +1088,18 @@
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
+        },
+        "reports/phase3/magic_illegal_overlap.json": {
+          "status": "UNPROVEN",
+          "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+        },
+        "reports/phase3/lvs_verdict.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "declared 2026-08-20 alongside magic_illegal_overlap.json, and unlike it this one is EVIDENCED. Recorded against the run root and byte size it was MEASURED at in the published corpus (146d665); the other two published spm cells carry it too (v1.10.18_sky130A 1117 B, v1.5.58_ihp-sg13g2 944 B), so the entry resolves rather than moving the d7 finding into d3.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs_verdict.json",
+          "path": "reports/phase3/lvs_verdict.json",
+          "size_bytes": 1131
         }
       }
     },
@@ -1113,6 +1202,50 @@
           "size_bytes": 1180456
         }
       }
+    },
+    "37.5ip": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage4/hardmacro/*.lef": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.lib": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.gds": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.v": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/NO_TEMPLATE.txt"
+      ]
+    },
+    "37.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/phase3/tapeout_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/general_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/shuttle_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/SIGNOFF_*.html": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/BRIEF_*.html": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
     },
     "38": {
       "verdict": "ENFORCED",
@@ -1348,6 +1481,32 @@
     "P0": {
       "verdict": "NA_NO_REQUIRED_OUTPUTS",
       "entries": {}
+    },
+    "0.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/submission_template.json": {
+          "status": "UNPROVEN"
+        },
+        "input/submission_template/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "1.6x": {
+      "verdict": "ENFORCED",
+      "_comment": "Flow step 1.6x is NEW; no PUBLISHED run predates it, so its declared output has no run evidence yet and the truthful status is UNPROVEN. It is not WAIVED and not dormant: the step is unconditional and its judge writes this artefact on every run, including the NOT_APPLICABLE one.",
+      "entries": {
+        "reports/crosslayer/rewrite_equivalence_check.json": {
+          "status": "UNPROVEN"
+        }
+      }
     }
   }
 }

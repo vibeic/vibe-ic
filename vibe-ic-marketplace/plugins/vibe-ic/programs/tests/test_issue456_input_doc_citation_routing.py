@@ -39,10 +39,28 @@ absence the record does not account for stays a loud failure.
 
 The scope is also larger than the issue reported: 34 protocols, not 5, and the
 citations span L1-L23, not only L3.
+
+WHERE THE PARITY CORPUS LIVES NOW
+---------------------------------
+It spans TWO trees, and this check is precisely the one that needs both halves:
+
+  * the GENERATED documents that carry the citations (`<proto>/phase1/
+    generated_docs/*.json`) moved to https://github.com/vibeic/benchmark-data;
+  * the CITED documents (`<proto>/input/docs/*`) never left vibe-ic — they are
+    the design input the flow reads.
+
+Measuring either half alone answers a different question: over the corpus alone
+every one of the 89 citations reads WITHHELD_ON_RECORD, not because a document
+is withheld but because its half of the tree is elsewhere. So `parity_root`
+reassembles the two, and the three real-data tests below then reproduce the
+documented split exactly (55 RESOLVES + 34 WITHHELD_ON_RECORD). With no corpus
+to read they SKIP naming it, per `_published_corpus` — the rule vibe-ic#1357
+set for an absent TOOL, applied to an absent CORPUS.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -52,7 +70,45 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase1_parity_source_tier_check as M  # noqa: E402
 
-_CORPUS = _PROGRAMS.parents[3] / "benchmark-data" / "evaluation" / "phase1_parity"
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+#: The half that stayed here: the cited input documents.
+_INPUT_HALF = _PROGRAMS.parents[3] / "benchmark-data" / "evaluation" / "phase1_parity"
+
+
+def _mirror(src: Path, dst: Path) -> None:
+    """Mirror `src` into `dst` as REAL directories holding SYMLINKED files.
+
+    Real directories because `collect_input_doc_citations` walks with
+    `Path.rglob`, which does not descend into a symlinked directory — link the
+    protocol dirs and the walk finds nothing at all. Symlinked leaves because
+    the published artefacts are read, never copied and never written: the whole
+    assembly costs ~0.3 s and touches nothing under either source tree.
+
+    First writer wins, so a tree that already carries both halves reassembles to
+    itself rather than being overlaid twice.
+    """
+    for base, _dirs, files in os.walk(src):
+        rel = Path(base).relative_to(src)
+        (dst / rel).mkdir(parents=True, exist_ok=True)
+        for name in files:
+            link = dst / rel / name
+            if not link.exists():
+                link.symlink_to(Path(base) / name)
+
+
+@pytest.fixture()
+def parity_root(tmp_path: Path) -> Path:
+    """The parity corpus, reassembled from the two trees it now spans.
+
+    Only requested by tests marked `@needs_corpus`, so `corpus_root()` is not
+    None here and this fixture never has to invent a skip of its own.
+    """
+    root = tmp_path / "phase1_parity"
+    _mirror(corpus_root() / "evaluation" / "phase1_parity", root)
+    if _INPUT_HALF.is_dir():
+        _mirror(_INPUT_HALF, root)
+    return root
 
 
 def _protocol(tmp_path: Path, cited: str, *, key: str = "evidence",
@@ -229,9 +285,9 @@ def test_emit_routing_writes_the_file_and_exits_zero(tmp_path):
 # --------------------------------------------------------------------------
 # Real data. The numbers that justify the separation, not a fixture of them.
 # --------------------------------------------------------------------------
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="parity corpus not in this tree")
-def test_the_corpus_is_measured_not_assumed():
-    rep = M.check(_CORPUS, _CORPUS / "source_tier.json")
+@needs_corpus
+def test_the_corpus_is_measured_not_assumed(parity_root: Path):
+    rep = M.check(parity_root, parity_root / "source_tier.json")
     cc = rep["citation_counts"]
     # THE PARTITION, not the census. `89 == 55 + 34` was three integers, and
     # all three are the size of the parity corpus on the day they were written:
@@ -251,10 +307,10 @@ def test_the_corpus_is_measured_not_assumed():
     assert not [k for k in cc if k.startswith("ABSENT_")], cc
 
 
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="parity corpus not in this tree")
-def test_the_five_cells_the_issue_named_are_withheld_on_record():
+@needs_corpus
+def test_the_five_cells_the_issue_named_are_withheld_on_record(parity_root: Path):
     """#456 named 5. They are real, and they are 5 of 34."""
-    rep = M.check(_CORPUS, _CORPUS / "source_tier.json")
+    rep = M.check(parity_root, parity_root / "source_tier.json")
     by = {(r["protocol"], r["cited"]): r["decision"] for r in rep["citations"]}
     for proto, doc in [("dali", "DALI_Spec.pdf"),
                        ("ethernet", "Ethernet_Spec.pdf"),
@@ -264,11 +320,11 @@ def test_the_five_cells_the_issue_named_are_withheld_on_record():
         assert by[(proto, f"input/docs/{doc}")] == "WITHHELD_ON_RECORD"
 
 
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="parity corpus not in this tree")
-def test_the_one_followable_cell_really_does_resolve():
+@needs_corpus
+def test_the_one_followable_cell_really_does_resolve(parity_root: Path):
     """#456 said exactly one cell's pointers are followable. That is true at the
     CELL level and is why the corpus-wide claim '95 of 95 unfollowable' is not:
     pcie_gen5's 18 pointers resolve, so it is 77 of 95 opcode-level pointers."""
-    rep = M.check(_CORPUS, _CORPUS / "source_tier.json")
+    rep = M.check(parity_root, parity_root / "source_tier.json")
     by = {(r["protocol"], r["cited"]): r["decision"] for r in rep["citations"]}
     assert by[("pcie_gen5", "input/docs/pcie_gen5_spec.pdf")] == "RESOLVES"

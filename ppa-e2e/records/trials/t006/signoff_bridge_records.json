@@ -1,0 +1,294 @@
+[
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.drc.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/phase3/drc_signoff.json",
+   "sha256": "sha256:756f1a592208a16ad31c9ec65e908209a78d7a2c557f69edf617fd128ae9fb73",
+   "tool": "klayout",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0,
+  "reason": "deck registered 4 categories over a layout of 23242 measured shapes (earned clean discriminator)"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.drc.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/phase3/drc_signoff.json",
+   "sha256": "sha256:756f1a592208a16ad31c9ec65e908209a78d7a2c557f69edf617fd128ae9fb73",
+   "tool": "klayout",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0,
+  "reason": "deck registered 4 categories over a layout of 23242 measured shapes (earned clean discriminator)"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.lvs.verdict",
+  "status": "MEASURED",
+  "unit": "verdict",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/phase3/lvs_verdict.json",
+   "sha256": "sha256:bede2a95ca367714620234ac3c8e6dcfadbe99d2b3daffb70d5e87a77820424a",
+   "tool": "netgen",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": "MATCH"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.lvs.verdict",
+  "status": "MEASURED",
+  "unit": "verdict",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/phase3/lvs_verdict.json",
+   "sha256": "sha256:bede2a95ca367714620234ac3c8e6dcfadbe99d2b3daffb70d5e87a77820424a",
+   "tool": "netgen",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": "MATCH"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.antenna.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/phase3/antenna.json",
+   "sha256": "sha256:b7f0ce59ac873298e8a8c60ac447cc576a14e698681da0cd2d4aea4973819062",
+   "tool": "openroad",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "physical.antenna.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/phase3/antenna.json",
+   "sha256": "sha256:b7f0ce59ac873298e8a8c60ac447cc576a14e698681da0cd2d4aea4973819062",
+   "tool": "openroad",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "power.ir.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/phase3/ir_drop.json",
+   "sha256": "sha256:cd042cfd33172fc8456fb65e650d64a3e0dd833c04540ae1e29b5444f9000de5",
+   "tool": "openroad-psm",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0,
+  "reason": "worst 0.026% of VDD against a declared budget of 10.0%"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "power.ir.violations",
+  "status": "MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/phase3/ir_drop.json",
+   "sha256": "sha256:cd042cfd33172fc8456fb65e650d64a3e0dd833c04540ae1e29b5444f9000de5",
+   "tool": "openroad-psm",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "value": 0,
+  "reason": "worst 0.026% of VDD against a declared budget of 10.0%"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "reliability.em.violations",
+  "status": "NOT_MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/phase3/em.json",
+   "sha256": "sha256:1475fd592d66fb98d6a04bec846d49fafe05747083dc9e90a7c18fa4726f0ff2",
+   "tool": "openroad-psm",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the EM report carries a segment count (3558) and a maximum segment current (0.0002159 A) but NO violation count and NO declared current limit, so no violation count can be established from it -- and 'the tool reported no violations' is not what this artefact says"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "reliability.em.violations",
+  "status": "NOT_MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/phase3/em.json",
+   "sha256": "sha256:1475fd592d66fb98d6a04bec846d49fafe05747083dc9e90a7c18fa4726f0ff2",
+   "tool": "openroad-psm",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the EM report carries a segment count (3558) and a maximum segment current (0.0002159 A) but NO violation count and NO declared current limit, so no violation count can be established from it -- and 'the tool reported no violations' is not what this artefact says"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "equivalence.verdict",
+  "status": "NOT_MEASURED",
+  "unit": "verdict",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "reports/lec.json",
+   "sha256": "sha256:069841f6baf3608025dbee9578c109dabf7e6e0980a0eb79111df565a85678b8",
+   "tool": "yosys",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the proven pair is RTL vs 'post_dft_netlist.v (synth)', a PRE-LAYOUT netlist. The routed netlist that became the GDS was not the gate side of this proof, so it establishes no post-route equivalence"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "equivalence.verdict",
+  "status": "NOT_MEASURED",
+  "unit": "verdict",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "reports/lec.json",
+   "sha256": "sha256:069841f6baf3608025dbee9578c109dabf7e6e0980a0eb79111df565a85678b8",
+   "tool": "yosys",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the proven pair is RTL vs 'post_dft_netlist.v (synth)', a PRE-LAYOUT netlist. The routed netlist that became the GDS was not the gate side of this proof, so it establishes no post-route equivalence"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "timing.drv.violations",
+  "status": "NOT_MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "phase3/stage3/pnr/openroad.log",
+   "sha256": "sha256:677f21d449b0575c9d667ae45d72bb391b16c2671c9e6e3f1ee04f238019151c",
+   "tool": "openroad",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the OpenROAD backend emits drv.*.violation.count.pre_repair and drv.residual.violation.count; NOTHING emits the timing.drv.* names the feasibility axis proves from, and the residual record this run carries is itself NOT_MEASURED"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "timing.drv.violations",
+  "status": "NOT_MEASURED",
+  "unit": "count",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "phase3/stage3/pnr/openroad.log",
+   "sha256": "sha256:677f21d449b0575c9d667ae45d72bb391b16c2671c9e6e3f1ee04f238019151c",
+   "tool": "openroad",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "the OpenROAD backend emits drv.*.violation.count.pre_repair and drv.residual.violation.count; NOTHING emits the timing.drv.* names the feasibility axis proves from, and the residual record this run carries is itself NOT_MEASURED"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "timing.hold.wns_ns",
+  "status": "NOT_MEASURED",
+  "unit": "ns",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ss"
+  },
+  "source": {
+   "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+   "sha256": "sha256:985b47dd7b4d6738d500e336984e40419dfddec48bc423d3d1a3471e3c4b0e09",
+   "tool": "opensta",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "no STA artefact in this tree prints a `wns` line for a hold check; the reports print `worst slack min`, which _ppa/timing.py emits as timing.hold.worst_slack_ns, a name the hold axis does not prove from"
+ },
+ {
+  "schema": "vibeic.ppa.metric.v1",
+  "metric": "timing.hold.wns_ns",
+  "status": "NOT_MEASURED",
+  "unit": "ns",
+  "scope": {
+   "stage": "post_route_extracted",
+   "process": "ff"
+  },
+  "source": {
+   "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+   "sha256": "sha256:985b47dd7b4d6738d500e336984e40419dfddec48bc423d3d1a3471e3c4b0e09",
+   "tool": "opensta",
+   "parser": "jppae2e/tools/signoff_records.py",
+   "parser_sha256": "sha256:9b9c74935a975a007edca05e11635ba0f2b969e59c6cdc6a0d75affc46d44559"
+  },
+  "reason": "no STA artefact in this tree prints a `wns` line for a hold check; the reports print `worst slack min`, which _ppa/timing.py emits as timing.hold.worst_slack_ns, a name the hold axis does not prove from"
+ }
+]

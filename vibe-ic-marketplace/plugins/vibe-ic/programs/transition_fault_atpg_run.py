@@ -112,6 +112,15 @@ import sys
 import time
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+
 try:
     import _path_layout as _pl  # type: ignore
 except Exception:  # pragma: no cover - standalone fallback
@@ -460,7 +469,9 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     # the orphan.
     cname = f"vibeic_tdf_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     docker_cmd = [
-        "docker", "run", "--rm", "--name", cname, "--entrypoint", "bash",
+        "docker", "run", "--rm", "--name", cname,
+        *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
     for host, ctr in (extra_mounts or []):
