@@ -152,6 +152,23 @@ def load_ledger(path: Path) -> List[Dict[str, Any]]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def _describe_ref(repo: Path, ref: str) -> str:
+    """`ref` resolved to a short sha, or a stated reason it could not be.
+
+    Never an empty string and never a bare `ref`: a disclosure that silently
+    degrades to repeating its input tells a reader nothing they did not type.
+    """
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), "rev-parse",
+                               "--short", ref],
+                              capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"UNRESOLVABLE: {exc}"
+    if proc.returncode != 0:
+        return "UNRESOLVABLE: " + (proc.stderr.strip().splitlines() or [""])[0][:80]
+    return proc.stdout.strip() or "UNRESOLVABLE: empty"
+
+
 def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
     """The ledger as it exists at `ref`, read with `git show`.
 
@@ -480,10 +497,27 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     findings, known, new = adjudicate(record, ledger, git_age(args.repo, args.head_ref))
 
+    # THE ENDPOINT IS PART OF THE NUMBER (2026-08-22). Every age below reads
+    # "N commit(s) ago" and, until this line existed, never said ago RELATIVE
+    # TO WHAT. Measured: the same ledger and the same record gave 7 expired
+    # counted to a candidate branch's head and 5 counted to origin/main, and
+    # nothing in the output distinguished the two runs. A reader cannot audit a
+    # deadline without knowing which tree it was measured against — and a
+    # STALE `origin/main` in the subject checkout would shift every age in the
+    # permissive direction while looking identical, which is the shape this
+    # disclosure exists to expose.
+    #
+    # Same rule as `gate_discloses_denominator_check` applies to every other
+    # gate: a number without its population is a silence.
     print(f"gate_red_since: {int(record.get('declared') or 0)} gate(s) "
           f"declared, {len(known) + len(new)} red "
           f"({len(known)} acknowledged, {len(new)} NEW), "
           f"{len(ledger)} ledger row(s)")
+    print(f"  clock: ages counted to {args.head_ref} ({_describe_ref(args.repo, args.head_ref)}); "
+          f"rows read from "
+          + (f"{args.ledger_ref} ({_describe_ref(args.repo, args.ledger_ref)})"
+             if args.ledger_ref
+             else f"the working tree at {args.ledger or (args.repo / LEDGER_REL)}"))
     if new:
         # The line the doctrine was actually worried about: when the wall of
         # red is the steady state, this is what separates today's red from

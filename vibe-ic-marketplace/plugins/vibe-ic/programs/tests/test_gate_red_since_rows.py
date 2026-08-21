@@ -420,3 +420,63 @@ def test_the_review_passes_both_halves_from_the_base(tmp_path, monkeypatch):
     for flag in ("--head-ref", "--ledger-ref"):
         assert flag in argv, argv
         assert argv[argv.index(flag) + 1] == "origin/main"
+
+
+# --------------------------------------------------------------------------
+# THE ENDPOINT IS PART OF THE NUMBER.
+# --------------------------------------------------------------------------
+
+def _cli(repo, record, *extra):
+    return subprocess.run(
+        [sys.executable, str(PROGRAMS / "gate_red_since_check.py"),
+         "--record", str(record), "--repo", str(repo), *extra],
+        capture_output=True, text=True, timeout=120)
+
+
+def _rec_file(tmp_path, states):
+    q = tmp_path / "rec.json"
+    q.write_text(json.dumps(_record(states)), encoding="utf-8")
+    return q
+
+
+def test_the_verdict_says_which_tree_the_ages_were_counted_to(tmp_path):
+    """"N commit(s) ago" is meaningless without its endpoint. The same ledger
+    and record gave 7 expired counted to a branch head and 5 counted to
+    origin/main, and nothing in the output distinguished the two runs."""
+    r, shas = _repo(tmp_path)
+    out = _cli(r, _rec_file(tmp_path, {"g": "FAIL"}), "--head-ref", shas[1]).stdout
+    line = next((l for l in out.splitlines() if "clock:" in l), "")
+    assert line, out
+    assert shas[1][:7] in line or shas[1] in line, line
+    assert "ages counted to" in line
+
+
+def test_the_verdict_says_where_the_rows_came_from(tmp_path):
+    r, shas = _repo(tmp_path)
+    rec = _rec_file(tmp_path, {"g": "FAIL"})
+    from_tree = _cli(r, rec).stdout
+    assert "rows read from the working tree at" in from_tree, from_tree
+    from_ref = _cli(r, rec, "--ledger-ref", shas[1]).stdout
+    assert f"rows read from {shas[1]}" in from_ref, from_ref
+
+
+def test_a_ref_that_cannot_be_resolved_is_disclosed_not_echoed(tmp_path):
+    """A disclosure that silently degrades to repeating its input tells a
+    reader nothing they did not type."""
+    r, _ = _repo(tmp_path)
+    out = _cli(r, _rec_file(tmp_path, {"g": "FAIL"}),
+               "--head-ref", "no-such-ref-9f3a").stdout
+    line = next((l for l in out.splitlines() if "clock:" in l), "")
+    assert "UNRESOLVABLE" in line, line
+
+
+def test_the_two_endpoints_produce_visibly_different_output(tmp_path):
+    """The property that makes the disclosure worth having: two runs that
+    differ ONLY in what they counted to must not look identical."""
+    r, shas = _repo(tmp_path)
+    rec = _rec_file(tmp_path, {"g": "FAIL"})
+    a = _cli(r, rec, "--head-ref", shas[1]).stdout
+    b = _cli(r, rec, "--head-ref", "HEAD").stdout
+    line_a = next(l for l in a.splitlines() if "clock:" in l)
+    line_b = next(l for l in b.splitlines() if "clock:" in l)
+    assert line_a != line_b, line_a
