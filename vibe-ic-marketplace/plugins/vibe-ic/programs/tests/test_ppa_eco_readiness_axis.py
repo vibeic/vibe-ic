@@ -641,3 +641,25 @@ def test_preservation_a_no_witness_report_does_not_vouch_for_anything():
     r = F.promotion_verdict(cand("no-witness", clean_nine() + spares() + [row]),
                             policy(DECL_PRESERVED))
     assert r.verdict == F.UNDETERMINED
+
+
+def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
+    """The worst available failure mode, guarded before it can exist.
+
+    The ECO axis's proof set is BUILT from the declaration, and a group with no
+    proofs in it is SATISFIED vacuously. So an obligation added to
+    `ECO_OBLIGATIONS` without a matching proof would turn this axis into an
+    automatic pass for every design that declares it -- silently, and in the
+    one direction nobody would notice. The guard is exercised here directly
+    because no declaration can reach it today.
+    """
+    pol = F.FeasibilityPolicy(required_views=(VIEW,), eco_requirement=DECL)
+    saved = F.eco_proofs_and_limits
+    try:
+        # a build in which every declared obligation has lost its proof
+        F.eco_proofs_and_limits = lambda decl: ((), {}, [])
+        a = F._evaluate_eco_axis([], pol)
+    finally:
+        F.eco_proofs_and_limits = saved
+    assert a.status == F.AXIS_UNDETERMINED
+    assert a.codes == (F.C_ECO_REQUIREMENT_EMPTY,)

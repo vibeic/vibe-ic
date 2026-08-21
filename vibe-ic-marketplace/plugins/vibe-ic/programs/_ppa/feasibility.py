@@ -1007,13 +1007,24 @@ def _evaluate_eco_axis(records: Sequence[Any],
         "declaration_present": decl is not None,
         "not_proved": _eco_not_proved(state, not_asked),
     }
-    app.update({k: v for k, v in detail.items()})
+    app.update(detail)
     if state in (ECO_NOT_DECLARED, ECO_NOT_REQUIRED):
         return AxisResult(ECO_AXIS, AXIS_NOT_APPLICABLE, (code,),
                           applicability=app)
     if state == ECO_UNREADABLE:
         return AxisResult(ECO_AXIS, AXIS_UNDETERMINED, (code,),
                           applicability=app)
+    if not proofs:
+        # Unreachable from `eco_requirement_state` today: REQUIRED needs at
+        # least one obligation and every obligation maps to a proof. It is
+        # guarded anyway because the failure mode is the worst one available
+        # -- a group with no proofs is SATISFIED vacuously, so an obligation
+        # added to ECO_OBLIGATIONS without a proof would silently turn this
+        # axis into a pass for every design that declares it.
+        app["reason"] = ("the declaration states an obligation this gate has "
+                         "no proof for, so nothing could be checked")
+        return AxisResult(ECO_AXIS, AXIS_UNDETERMINED,
+                          (C_ECO_REQUIREMENT_EMPTY,), applicability=app)
     # The floors travel in `limits` so `_evaluate_one` reads them the one way
     # it reads every threshold. Nothing below this line is ECO-specific.
     sub_policy = dataclasses.replace(
