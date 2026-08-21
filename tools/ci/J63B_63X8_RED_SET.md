@@ -548,6 +548,37 @@ Note also that the module already degrades correctly around it: the
 passes on a stale citation. The test exists to prompt the repair, not to guard
 against a false green.
 
+## End-to-end: the ORIGINAL sweep shape, re-run on the fixed branch
+
+Every verification above measured one file or one node. The enumeration itself
+came from a 5-way parallel sweep of all 19 `test_matrix_*.py`, so the branch was
+finally measured in that same shape — the configuration that produced the reds,
+not a friendlier one:
+
+```
+                              original sweep      this branch, same shape
+test_matrix_63x8_coverage     5 failed, 24 passed   2 failed, 28 passed
+test_matrix_63x8_census_..    1 failed,  5 passed   6 passed
+test_matrix_d3_outputs_..     6 failed              6 failed   (reds 1-6)
+test_matrix_mutation_ledger   3 failed              3 failed   (reds 7-9)
+test_matrix_d8_missing_..     347 passed            347 passed
+everything else               green                 green
+```
+
+The two survivors in the coverage file are reds 14 and 15 — the NA-skip contract
+and the fourth-state ruling, both owned elsewhere. **Reds 10, 11, 12 and 13 are
+all green in the configuration that produced them.**
+
+**The caveat, because it changes what two of those four prove.** This sweep ran
+at load 11-18; the original ran at 25-45, and d3 finished in 60 s here against
+111 s then. For reds 10 and 12 that does not matter — they are fixed, with
+mutation proofs and 10/10 stability each. For reds 11 and 13 it does: a lighter
+box is exactly the condition under which they were already known to pass, so
+their green here is CONSISTENT WITH the earlier findings and is not additional
+proof of anything. They stay open and stay described as they are above — one
+observation with no reproduction, and a named 18.95 s item against a 60 s
+window.
+
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
 The brief said to split with `jfindings-63x8` and not duplicate it. That was
