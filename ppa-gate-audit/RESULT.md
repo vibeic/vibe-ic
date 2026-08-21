@@ -43,6 +43,14 @@ Meanwhile the repository carries, committed and tracked:
 | 5 | PPA frontier recomputes | **STILL-CANNOT** | no `objectives` declaration exists — named below |
 | 6 | PPA arms solved one problem | **RUNS-AND-PASSES** | 80 real contract pairs, 80 PASS |
 
+> **This document is written in order, and later parts supersede earlier ones.**
+> Part 1 is what the gates said when they were first pointed at real records; it
+> is kept as written rather than edited, because a report whose early sections
+> are quietly brought up to date cannot be checked against the commits that made
+> the changes. Where a later part overturns something, the earlier text carries a
+> SUPERSEDED note pointing at it. For the FINAL state of all eleven wired rows,
+> read **Part 7**; for what gates 3 and 5 are actually missing, read **Part 9**.
+
 ---
 
 ## 1. PPA head-to-head records — RUNS-AND-FAILS
@@ -155,6 +163,10 @@ denominator belongs beside `required_views_by_axis` in the contract, declared fr
 the L19 constraints document rather than inferred from what the run happened to emit.
 Authoring one here would be writing the answer key after the exam, so it is named
 rather than written.
+
+> **SUPERSEDED IN PART, BY PART 9.** Naming a producer was not the whole answer.
+> No schema in `schemas/ppa/` declares this document, so there is nothing yet for
+> `ppa_contract_build.py` to produce *to*. The first landable step is a schema.
 
 ---
 
@@ -277,6 +289,17 @@ document COULD be derived. But with no published frontier to refuse, the gate wo
 be recomputing a frontier and then checking it against itself. A gate marking its
 own paper is not a gate. Deriving the objectives *and* the frontier here to obtain
 rc=0 would be manufacturing the pass this brief forbids.
+
+> **SUPERSEDED IN PART, BY PART 9**, and the literal claim above is worth
+> separating from the impression it gives. *"No `objectives` key"* is still true —
+> measured again, zero files under `ppa-e2e/` or `ppa-crosslayer/` carry that
+> plural key. But five carry an `objective` (singular), and
+> `ppa-e2e/search/winner.json` declares a full one: metric, scope and direction,
+> with `declared_by: "this run -- the design declares NO PPA objective"`. So the
+> tree does record what was being optimised; what it does not have is that
+> declaration in the shape `ppa_pareto_check` reads, a SCHEMA for that shape, or
+> an objective the DESIGN declared rather than the run. The last of those is the
+> one that matters, and Part 9 is where it is argued.
 
 **Who would produce it:** the search runner. `ppa-crosslayer/tools/summarize.py`
 already computes the ranking that `RESULT.md` publishes as a Pareto set

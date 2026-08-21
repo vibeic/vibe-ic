@@ -16,7 +16,7 @@
         {
           "kind": "artefact",
           "ref": "ppa-gate-audit/RESULT.md",
-          "sha256": "sha256:0bff55f5a75c582b9d31c6b0acd3fdd9b3ab9ab213943bf9d5bfee3326234d82"
+          "sha256": "sha256:3034008d02724b77d9b6b216c4dfd614f9206c913b3cb9b7f6011b0d7d0a369f"
         },
         {
           "kind": "prose",
@@ -34,7 +34,7 @@
         {
           "kind": "artefact",
           "ref": "ppa-gate-audit/RESULT.md",
-          "sha256": "sha256:0bff55f5a75c582b9d31c6b0acd3fdd9b3ab9ab213943bf9d5bfee3326234d82"
+          "sha256": "sha256:3034008d02724b77d9b6b216c4dfd614f9206c913b3cb9b7f6011b0d7d0a369f"
         },
         {
           "kind": "prose",
@@ -148,7 +148,7 @@
         {
           "kind": "artefact",
           "ref": "ppa-gate-audit/RESULT.md",
-          "sha256": "sha256:0bff55f5a75c582b9d31c6b0acd3fdd9b3ab9ab213943bf9d5bfee3326234d82"
+          "sha256": "sha256:3034008d02724b77d9b6b216c4dfd614f9206c913b3cb9b7f6011b0d7d0a369f"
         },
         {
           "kind": "test",
