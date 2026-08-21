@@ -268,6 +268,21 @@ def _interface_complete(prob: dict, gate: dict) -> bool:
 # --------------------------------------------------------------------------- #
 # (4) Tier-5 floor prover — run _ref.sv against _test.sv under iverilog
 # --------------------------------------------------------------------------- #
+# #1437 — the marker _run_iverilog writes when the COMPILER ITSELF was absent, and
+# the only string floor_evidence() accepts as "no compiler ran". Deliberately
+# NARROW: it is this module's own sentinel plus the repo-wide `COMMAND_NOT_FOUND`
+# convention (_watchdog, design_one_shot_runner, phase{1_doc,3}_one_shot_runner),
+# never a bare "No such file or directory" — iverilog prints that for a missing
+# `include`, which is a REAL compile error about the design, and widening the
+# predicate to it would silently stop reporting genuine compile failures.
+_TOOL_ABSENT = "iverilog: COMMAND_NOT_FOUND"
+
+
+def _tool_was_absent(log: str) -> bool:
+    """True iff `log` is _run_iverilog's own absent-compiler sentinel."""
+    return _TOOL_ABSENT in (log or "")
+
+
 def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
                   top_name: str = "TopModule") -> Tuple[bool, str]:
     """Compile + run a TopModule (given as text, or — when top_sv_text is None —
@@ -301,6 +316,14 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
                 capture_output=True, text=True, timeout=_IVERILOG_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return False, "iverilog: COMPILE TIMEOUT"
+        except FileNotFoundError as e:
+            # #1437 — an ABSENT iverilog raised here, so callers got a traceback.
+            # It must NOT fall into the `returncode != 0` arm below either: that
+            # arm's log reads "iverilog compile error", and floor_evidence() turns
+            # a non-pass into "golden _ref.sv FAILS its own _test.sv" — a
+            # benchmark-DEFECT claim. A compiler that never ran cannot support it,
+            # so emit the marker floor_evidence() recognises instead.
+            return False, f"{_TOOL_ABSENT}: {e}"
         if cp.returncode != 0:
             return False, "iverilog compile error:\n" + (cp.stderr or cp.stdout or "")
         try:
@@ -308,6 +331,11 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
                                 cwd=str(tdp), timeout=_IVERILOG_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             return False, "vvp: SIMULATION TIMEOUT"
+        except FileNotFoundError as e:
+            # #1437 — the design COMPILED but the simulator could not be RUN.
+            # Same reasoning as the compile arm: floor_evidence() must not read
+            # this as the golden failing its own test.
+            return False, f"{_TOOL_ABSENT}: {e}"
         out = (rp.stdout or "") + (rp.stderr or "")
         # The ONLY authoritative verdict is the harness's own `Mismatches: N in M`
         # summary line. NOTE: the long-running problems' testbench arms an internal
@@ -338,6 +366,8 @@ def floor_evidence(prob: dict) -> Optional[str]:
     if not (ref_p and test_p and Path(ref_p).exists() and Path(test_p).exists()):
         return None
     passed, log = _run_iverilog(None, ref_p, test_p)
+    if _tool_was_absent(log):
+        return None          # #1437 — no compiler ran; a floor cannot be claimed
     if not passed:
         return f"golden _ref.sv FAILS its own _test.sv ({log.splitlines()[0] if log else 'unknown'})"
     sem = _semfloor.semantic_floor_evidence(prob.get("prompt") or "",

@@ -22,7 +22,9 @@ Controls, in both directions:
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -179,3 +181,217 @@ def test_metal_that_clears_the_macro_is_not_a_crossing(spelling):
 def test_a_def_with_no_special_nets_yields_nothing_rather_than_guessing():
     g = _gate()
     assert g.parse_routed_segments("VERSION 5.8 ;\nEND DESIGN\n") == []
+
+
+# ------------------------------------------------- a via changes the layer
+# LEF/DEF 5.8: "If you specify a via, layerName for the next routing coordinates
+# (if any) is implicitly changed to the other routing layer for the via."
+#
+# Reading every point of a path under the HEAD layer therefore puts upper-layer
+# metal on the lower layer. On a gate that BLOCKS, that is not a missed
+# violation — it is an invented one, against an obstruction the metal never came
+# near. A false accusation from a blocking gate costs more than a gap.
+
+_VIAS = """VIAS 1 ;
+- v12 + VIARULE VIA12 + CUTSIZE 260 260 + LAYERS MET1 VIA1 MET2
+  + CUTSPACING 260 260 + ENCLOSURE 60 270 10 60 ;
+END VIAS
+"""
+
+
+def _def_with_via(via_name: str = "v12", vias_section: str = _VIAS) -> str:
+    """A path that approaches on MET1, rises through a via, and only THEN
+    crosses the macro. The crossing metal is on MET2; the obstruction is on
+    MET1; so the correct answer is zero crossings."""
+    y = _Y_THROUGH[0]
+    body = (f"- VDD ( * VDD )\n"
+            f"  + ROUTED MET1 480 + SHAPE STRIPE ( {_X1} {y} ) ( 50000 * ) "
+            f"{via_name} ( {_X2} * )\n  + USE POWER ;")
+    return f"""VERSION 5.8 ;
+DESIGN t ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 400000 400000 ) ;
+{vias_section}COMPONENTS 1 ;
+- u_ip big_ip + PLACED ( 100000 100000 ) N ;
+END COMPONENTS
+SPECIALNETS 1 ;
+{body}
+END SPECIALNETS
+END DESIGN
+"""
+
+
+def test_metal_after_a_via_is_on_the_other_layer_not_the_head_layer():
+    """THE FABRICATION CASE. The segment that crosses the macro is MET2 metal;
+    the obstruction is MET1. Attributing it to the head layer reports a
+    violation that does not exist."""
+    g = _gate()
+    segs = g.parse_routed_segments(_def_with_via())
+    layers = [s["layer"] for s in segs]
+    assert layers == ["MET1", "MET2"], layers
+    assert _crossings(_def_with_via()) == 0
+
+
+def test_the_vias_section_supplies_the_layer_pair():
+    g = _gate()
+    assert g.parse_via_layers(_def_with_via()) == {"v12": ("MET1", "MET2")}
+
+
+def test_an_unresolvable_via_stops_rather_than_guessing_the_layer():
+    """A via defined in the tech LEF is not in this DEF, so its layers are
+    unknown. Continuing under the previous layer would attribute the metal to a
+    layer it may not be on — the same fabrication, just quieter. Stop instead.
+
+    STOPPING IS ONLY BETTER THAN GUESSING IF THE STOP IS VISIBLE. This test used
+    to end at `_crossings(d) == 0` — which pins the FALSE-CLEAN answer: zero is
+    also what a DEF with nothing to report gives, and the caller could not tell
+    the two apart. So the assertion is now on the DISCLOSURE."""
+    g = _gate()
+    d = _def_with_via(via_name="via_from_tech_lef", vias_section="")
+    segs, gaps = g.parse_routed_segments_with_gaps(d)
+    assert [s["layer"] for s in segs] == ["MET1"]
+    assert len(gaps) == 1, gaps
+    assert gaps[0]["via"] == "via_from_tech_lef"
+    assert gaps[0]["net"] == "VDD"
+    assert gaps[0]["points_unread"] > 0
+    rep = g.audit(d, [LEF])
+    assert rep["findings"] == []
+    assert rep["truncated_paths"] == gaps
+    assert rep["unread_points"] == gaps[0]["points_unread"]
+
+
+def test_def_keywords_in_a_path_are_not_read_as_vias():
+    """`SHAPE`, `FOLLOWPIN`, `USE`, `POWER` occupy the same syntactic slot as a
+    via name. Treating them as unresolvable vias abandons every path at its
+    first keyword — which reads as a clean result."""
+    assert _crossings(_def_new_continuations(ALL_YS)) == N_THROUGH
+
+
+# ---------------------------------------------------------------------------
+# AN INCOMPLETE READ MAY NOT EXIT LIKE A CLEAN ONE
+#
+# Driven through the REAL entry point (`main`, in a subprocess, on files on
+# disk) rather than through `audit`, because the defect was in what the exit
+# code and the printed verdict said — neither of which `audit` produces.
+#
+# ONE geometry, TWO legal spellings of the SAME via:
+#   A) declared in the DEF's own VIAS section       -> resolvable
+#   B) coming from the tech LEF, not in the DEF     -> unresolvable
+# `M1M2_PR`-style tech-LEF vias are the ORDINARY case, so B is not a corner.
+# This file already asserts that "the answer is a fact about the geometry, so it
+# may not depend on which legal DEF spelling carries it". Before the disclosure
+# it did: A said FAIL with 3 crossings, B said `[PASS] ... 1 supply segment(s)
+# — none spans an obstruction` and exited 0, with three MET1 follow-pin legs
+# running straight through the obstruction and nothing anywhere saying so.
+# ---------------------------------------------------------------------------
+_JOG_VIAS = """VIAS 1 ;
+- vjog + VIARULE VIA12 + CUTSIZE 260 260 + LAYERS MET1 VIA1 MET2
+  + CUTSPACING 260 260 + ENCLOSURE 60 270 10 60 ;
+END VIAS
+"""
+
+
+def _def_followpin_jog(vias_section: str, via: str) -> str:
+    """A follow-pin that rises through a via and comes straight back down — the
+    ordinary way a PDN steps over an obstacle. After the second via it is on
+    MET1 again, and its next three legs run the full width at y = 102000 /
+    104000 / 106000, all inside the macro's obstruction."""
+    pts = (f"( 0 102000 ) ( 20000 * ) {via} ( 30000 * ) {via} ( 300000 * ) "
+           f"( * 104000 ) ( 0 * ) ( * 106000 ) ( 300000 * )")
+    body = (f"- VDD ( * VDD )\n"
+            f"  + ROUTED MET1 480 + SHAPE FOLLOWPIN {pts}\n  + USE POWER ;")
+    return f"""VERSION 5.8 ;
+DESIGN t ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 400000 400000 ) ;
+{vias_section}COMPONENTS 1 ;
+- u_ip big_ip + PLACED ( 100000 100000 ) N ;
+END COMPONENTS
+SPECIALNETS 1 ;
+{body}
+END SPECIALNETS
+END DESIGN
+"""
+
+
+def _drive(tmp_path, def_text: str, tag: str):
+    """Run the program the way CI runs it and give back (rc, stdout+stderr)."""
+    cell = tmp_path / tag
+    (cell / "phase3/stage3/pnr").mkdir(parents=True, exist_ok=True)
+    (cell / "input/pdk").mkdir(parents=True, exist_ok=True)
+    (cell / "phase3/stage3/pnr/routed.def").write_text(def_text)
+    (cell / "input/pdk/macro.lef").write_text(LEF)
+    prog = os.path.join(_PROGRAMS, "macro_obs_geometry_intersect_check.py")
+    r = subprocess.run([sys.executable, prog, str(cell),
+                        "--json", str(cell / "rep.json")],
+                       capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout + r.stderr, json.loads(
+        (cell / "rep.json").read_text())
+
+
+def test_a_truncated_read_does_not_exit_like_a_clean_one(tmp_path):
+    """THE DEFECT. rc was 0 and the line was an unqualified [PASS]."""
+    rc, out, rep = _drive(
+        tmp_path, _def_followpin_jog("", "via_from_tech_lef"), "unresolvable")
+    assert rc == 2, f"rc={rc}\n{out}"
+    assert "CANNOT DETERMINE" in out, out
+    assert "NOT a pass" in out, out
+    assert "ABANDONED" in out, out
+    assert "via_from_tech_lef" in out, out
+    assert len(rep["truncated_paths"]) == 1, rep
+    assert rep["unread_points"] > 0, rep
+
+
+def test_the_same_geometry_with_the_via_declared_reports_the_crossings(
+        tmp_path):
+    """The other spelling of the identical layout. Three MET1 follow-pin legs
+    cross; the gate says so and blocks."""
+    rc, out, rep = _drive(
+        tmp_path, _def_followpin_jog(_JOG_VIAS, "vjog"), "resolvable")
+    assert rc == 1, f"rc={rc}\n{out}"
+    assert len(rep["findings"]) == 3, rep["findings"]
+    assert all(f["layer"] == "MET1" and f["followpin"]
+               for f in rep["findings"]), rep["findings"]
+    assert rep["truncated_paths"] == [], rep
+
+
+def test_a_complete_clean_read_still_passes_and_says_it_read_everything(
+        tmp_path):
+    """REVERSE CASE, and the one that stops this from being a way to make the
+    gate stop answering: a DEF with nothing to report and nothing unread still
+    exits 0 — and its PASS line states the abandonment count, so a reader never
+    has to assume it."""
+    rc, out, rep = _drive(tmp_path, _def_new_continuations(_Y_CLEAR), "clean")
+    assert rc == 0, f"rc={rc}\n{out}"
+    assert "[PASS]" in out, out
+    assert "0 path(s) abandoned" in out, out
+    assert "CANNOT DETERMINE" not in out, out
+    assert rep["truncated_paths"] == [], rep
+    assert rep["unread_points"] == 0, rep
+
+
+def test_a_finding_still_blocks_when_the_read_was_also_incomplete(tmp_path):
+    """rc=2 must not swallow a real violation. The crossings this gate DID find
+    are still findings; the truncation only means the count is a floor, and the
+    output has to say that rather than imply completeness."""
+    # the jog's three crossing legs are readable (via declared), and a SECOND
+    # net is abandoned at an unresolvable via.
+    d = _def_followpin_jog(_JOG_VIAS, "vjog").replace(
+        "SPECIALNETS 1 ;", "SPECIALNETS 2 ;").replace(
+        "END SPECIALNETS",
+        "- VSS ( * VSS )\n"
+        "  + ROUTED MET1 480 + SHAPE FOLLOWPIN ( 0 300000 ) ( 10000 * ) "
+        "other_tech_via ( 300000 * )\n  + USE GROUND ;\nEND SPECIALNETS")
+    rc, out, rep = _drive(tmp_path, d, "both")
+    assert rc == 1, f"rc={rc}\n{out}"
+    assert len(rep["findings"]) == 3, rep["findings"]
+    assert len(rep["truncated_paths"]) == 1, rep["truncated_paths"]
+    # The disclosure moved from a closing sentence to the HEADLINE and to the
+    # JSON, and this assertion follows it there rather than being relaxed: the
+    # property under test ("the output has to say the count is a floor") is
+    # unchanged, and it is now asserted in all three places the number is read
+    # — the line a person quotes, the prose, and the field a machine parses.
+    assert "at least 3 supply segment(s) SPAN" in out, out
+    assert "THIS COUNT IS A FLOOR, NOT A TOTAL" in out, out
+    assert rep["count_is_floor"] is True, rep
+    assert "other_tech_via" in out, out

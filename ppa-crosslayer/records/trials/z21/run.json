@@ -1,0 +1,18 @@
+{
+  "trial": "z21",
+  "levers": {
+    "rtl_variant": "csa_alt_maj",
+    "synthesis_strategy": "ks"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.60",
+    "spare_cell_density": "0.00"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 312.121,
+    "cpu_seconds": 379.45,
+    "peak_rss_mb": 597.4
+  }
+}

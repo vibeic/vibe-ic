@@ -114,13 +114,60 @@ def test_skip_when_not_applicable(tmp_path):
 # ── F1 VACUOUS_DFT_ASSERTION — negative control pair ─────────────────
 
 def test_NEGATIVE_CONTROL_fail_dft_asserted_but_no_chains(tmp_path):
-    """GUTTED: L20 claims DFT exists and carries zero chains."""
+    """GUTTED: an EXTRACTED L20 claims DFT exists and carries zero chains.
+
+    `extraction_status` is what makes the field values the DESIGN's claim
+    rather than the emitter's skeleton — see the twin below, which is the same
+    fixture WITHOUT it. Through vibe-ic#1003 this fixture omitted the status
+    and still reddened, which is why 48 of 106 published roots reddened on a
+    literal 50 protocol emitters write unconditionally.
+    """
     doc = json.loads(json.dumps(_SKELETON))
+    doc["extraction_status"] = "EXTRACTED"
     doc["fields"]["dft_present"] = True
     doc["fields"]["jtag_tap"] = {"tck": "tck", "tms": "tms"}
     r = _run(_mk(tmp_path, l20=doc))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "VACUOUS_DFT_ASSERTION" in r.stdout
+
+
+def test_an_UNEXTRACTED_layer_asserts_nothing_with_the_same_fields(tmp_path):
+    """The twin of the test above, differing ONLY in extraction_status.
+
+    vibe-ic#1003. `dft_present` on a layer that has never been extracted is the
+    producer's field default, not a design's assertion — the identical rule
+    `dft_atpg_coverage_check` already applies to this same field in the
+    opposite direction ("its `dft_present: false` is the emitter's field
+    default, not a decision").
+
+    The pair is the whole argument: same fields, same empty `scan_chains[]`,
+    one bit of provenance apart, and only the one whose layer says its content
+    is real is held to the consumer contract.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["dft_present"] = True
+    doc["fields"]["jtag_tap"] = {"tck": "tck", "tms": "tms"}
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
+
+
+def test_a_producer_default_string_is_not_an_assertion_either(tmp_path):
+    """The exact corpus value: `dft_present: "partial"` on a skeleton.
+
+    54 of the 106 tracked L20 documents carry this string, written
+    unconditionally by 50 protocol emitters, every one of them beside an
+    enumerated NON-scan test surface. It is a true statement about a protocol
+    that has in-band test facilities and no scan chain; it is not a claim that
+    a scan topology exists.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["dft_present"] = "partial"
+    doc["fields"]["in_band_test_facilities"] = [
+        {"name": "link error counter", "purpose": "run-time observability"}]
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
 
 
 def test_POSITIVE_CONTROL_pass_dft_asserted_with_typed_chain(tmp_path):
@@ -146,10 +193,37 @@ def test_NEGATIVE_CONTROL_fail_chain_missing_reconcilable_fields(tmp_path):
         assert field in r.stdout
 
 
-def test_extraction_claimed_with_empty_chains_fails(tmp_path):
-    """A layer claiming EXTRACTED is held to the consumer contract."""
+def test_extraction_that_ran_and_found_nothing_is_not_a_vacuous_claim(tmp_path):
+    """RAN-AND-EMPTY is a design saying "I need no DFT", not a broken claim.
+
+    vibe-ic#1003, second half of the same disjunct. `is_extraction_claimed`
+    used to count as an assertion ON ITS OWN, so a layer that ran extraction
+    and honestly recorded nothing — the ONE state that is a real statement of
+    absence — was reported as making a claim it could not back.
+    `l_doc_consumer_contract.is_extraction_claimed.__doc__` names the three
+    producer states and says only RAN-AND-EMPTY means "I need no DFT".
+
+    The layer still has no immunity: the test above shows the same EXTRACTED
+    status DOES redden the moment the layer asserts a DFT field beside an empty
+    `scan_chains[]`.
+    """
     doc = json.loads(json.dumps(_SKELETON))
     doc["extraction_status"] = "EXTRACTED"
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
+
+
+def test_a_chain_is_typed_even_on_an_unextracted_layer(tmp_path):
+    """CONTENT IS SELF-EVIDENCING — the extraction guard must not reach it.
+
+    The guard added for vibe-ic#1003 covers the assertion-WITHOUT-content arm
+    only. A `scan_chains[]` somebody actually wrote is a topology regardless of
+    provenance, and it is still held to the typing contract. If this ever goes
+    green, the guard has been widened past the defect it was measured for.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["scan_chains"] = [{"name": "chain_0"}]
     r = _run(_mk(tmp_path, l20=doc))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "VACUOUS_DFT_ASSERTION" in r.stdout
@@ -270,3 +344,348 @@ def test_writes_machine_readable_report(tmp_path):
     data = json.loads(rpt.read_text())
     assert data["verdict"] == "FAIL"
     assert data["blocking_findings"][0]["evidence"]
+
+
+# ── the cascade into the Step-36 bubble-up gate (vibe-ic#1003) ────────
+#
+# This gate WRITES `reports/phase1/<gate>.json` unconditionally, and
+# `step_internal_fail_bubble_up_check` (Step 36, BLOCKING) scans
+# `reports/**/*.json` for `verdict`. So an ADVISORY finding from this gate
+# arrives at the step that signs off as a BLOCKING one, which is a declaration
+# being overridden by a side effect. The tests below DRIVE both gates rather
+# than asserting the coupling in prose.
+
+_BUBBLE = (Path(__file__).resolve().parent.parent
+           / "step_internal_fail_bubble_up_check.py")
+
+
+def _bubble(project: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(_BUBBLE), str(project)],
+                          capture_output=True, text=True)
+
+
+def _clean_project_with_a_real_report(tmp_path):
+    """A project the bubble-up gate examines and passes.
+
+    The PASS report is load-bearing: it gives that gate a real denominator, so
+    rc 0 means "examined and clean" rather than its rc 2 refusal — otherwise
+    the before/after below would compare two refusals.
+    """
+    proj = _mk(tmp_path, l20=_SKELETON, docs={"spec.txt": _DFT_REQUIREMENT_DOC})
+    rp = proj / "reports" / "phase2"
+    rp.mkdir(parents=True, exist_ok=True)
+    (rp / "some_step.json").write_text(json.dumps({"verdict": "PASS"}),
+                                       encoding="utf-8")
+    return proj
+
+
+def test_the_cascade_is_real_when_the_report_declares_nothing(tmp_path):
+    """CONTROL for the fix: the default still cascades, exactly as today.
+
+    `--verdict-mode` defaults to BLOCKS so no existing caller changes
+    behaviour. This test is what proves the fix below is measuring the flag and
+    not measuring some unrelated drift in either gate.
+    """
+    proj = _clean_project_with_a_real_report(tmp_path)
+    before = _bubble(proj)
+    assert before.returncode == 0, before.stdout + before.stderr
+
+    gate = _run(proj)
+    assert gate.returncode == 1, gate.stdout + gate.stderr
+
+    after = _bubble(proj)
+    assert after.returncode == 1, after.stdout + after.stderr
+    assert ("l20_dft_scan_topology_actionable_check"
+            in after.stdout + after.stderr)
+
+
+def test_declaring_ADVISES_removes_the_cascade(tmp_path):
+    """A finding the flow wired ADVISORY must not redden the blocking step.
+
+    `verdict_mode: ADVISES` is the repo's own convention, already honoured by
+    `step_internal_fail_bubble_up_check` and parsed by
+    `flow_gate_enforcement_audit`. Nothing new is invented here; this gate
+    joins the gates that already speak it.
+    """
+    proj = _clean_project_with_a_real_report(tmp_path)
+    before = _bubble(proj)
+    assert before.returncode == 0, before.stdout + before.stderr
+
+    gate = subprocess.run(
+        [sys.executable, str(PROG), str(proj), "--verdict-mode", "ADVISES"],
+        capture_output=True, text=True)
+    # the FINDING is unchanged — only its declared enforcement mode moved
+    assert gate.returncode == 1, gate.stdout + gate.stderr
+
+    rpt = (proj / "reports" / "phase1"
+           / "l20_dft_scan_topology_actionable_check.json")
+    data = json.loads(rpt.read_text())
+    assert data["verdict"] == "FAIL"
+    assert data["verdict_mode"] == "ADVISES"
+
+    after = _bubble(proj)
+    assert after.returncode == 0, after.stdout + after.stderr
+# ── vibe-ic#1011: F2 counted a DENIAL as evidence of a requirement ─────────
+#
+# DRIVEN through the CLI, not through `inspect()`, because the defect being
+# fixed was a VERDICT: the gate FAILed 25 published run dirs, 16 of them on
+# documents that say in so many words that the requirement does not exist.
+#
+# All fixtures are SYNTHETIC restatements of shapes measured on the corpus.
+# No design, foundry, vendor, process or part token appears in any of them.
+
+#: A sibling layer that DENIES having any DFT surface. Every phrase here is a
+#: shape that was live on the published corpus.
+_L7_DENIES_DFT = {
+    "test_debug_architecture_present": False,
+    "notes": ("<standard> does NOT specify JTAG / scan-chain / on-chip BIST "
+              "at the protocol level. Conformance is established by the "
+              "published compliance test specification."),
+    "rationale": ("Neither <bus A> nor <bus B> defines a JTAG / scan / BIST "
+                  "/ MBIST / debug architecture. There is no dedicated debug "
+                  "interface in either protocol."),
+    "ate_or_dft": ("No standard DFT / JTAG path is exposed on the host "
+                   "interface; it is not specified at the protocol level."),
+}
+
+#: The SAME layer shape, asserting a DFT surface positively. This is the pair
+#: that makes the test above mean something.
+_L7_STATES_DFT = {
+    "test_debug_architecture_present": True,
+    "test_modes": [
+        {"name": "Scan test",
+         "purpose": ("Scan control / scan in / scan out drive the scan "
+                     "chains that manufacturing DFT requires.")},
+        {"name": "Boundary scan",
+         "purpose": "A TAP controller is required for boundary scan access."},
+    ],
+}
+
+
+def test_a_sibling_layer_that_DENIES_dft_no_longer_reddens_f2(tmp_path):
+    """THE DEFECT. L20 is the honest empty skeleton and the design's own
+    documents say there is nothing to carry, so there is no gap to report."""
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_DENIES_DFT}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "a document DENYING a DFT requirement was counted as stating one:\n"
+        + r.stdout + r.stderr)
+    assert r.returncode != 1, r.stdout + r.stderr
+
+
+def test_a_sibling_layer_that_STATES_dft_still_reddens_f2(tmp_path):
+    """THE PAIRED GUARD, and the reason the test above is not a ban.
+
+    This is the shape of the ONE finding among the 25 that is unambiguously
+    real: a sibling test-debug layer enumerating scan test and boundary scan
+    while L20 carries neither. It MUST stay red, and it is asserted here on a
+    synthetic twin so the corpus root is not needed to keep the guard alive.
+    """
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_STATES_DFT}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the negation ruler deleted a REAL finding:\n" + r.stdout + r.stderr)
+
+
+def test_an_input_doc_that_DENIES_dft_no_longer_reddens_f2(tmp_path):
+    """The same question on the other evidence channel. Both `framed_hits`
+    call sites in this gate opt in, and a fix applied to one of them would
+    leave the other counting denials."""
+    denial = ("3.2 Test Provisions\n"
+              "The protocol does not specify a scan chain, and no JTAG TAP "
+              "controller is required at this layer.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": denial}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_an_input_doc_that_STATES_dft_still_reddens_f2(tmp_path):
+    """Paired guard for the input-doc channel — the fixture the file already
+    ships, asserted through the new code path."""
+    r = _run(_mk(tmp_path, l20=_SKELETON,
+                 docs={"spec.txt": _DFT_REQUIREMENT_DOC}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_a_prohibition_about_dft_is_a_requirement_not_a_denial(tmp_path):
+    """`_NON_NORMATIVE_RE` records the trap this fixture pins: `must NOT
+    exceed 5 ns` is a real requirement that contains a negation. A gate that
+    cannot tell a PROHIBITION from an ABSENCE deletes half its own corpus."""
+    prohibition = ("3.2 Test Requirements\n"
+                   "A full scan chain is required. The scan chain shall not "
+                   "exceed 5000 flops and must not be observable in mission "
+                   "mode.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": prohibition}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "a prohibition was read as an absence:\n" + r.stdout + r.stderr)
+
+
+def test_the_denial_ruler_cannot_turn_a_typed_topology_red_or_green(tmp_path):
+    """Content stays self-evidencing. A design that CARRIES an actionable
+    scan topology passes whatever its prose says, so the new ruler can only
+    ever move the evidence side of F2 — never the layer side."""
+    doc = dict(_SKELETON)
+    doc["fields"] = dict(_SKELETON["fields"], scan_chains=[_TYPED_CHAIN],
+                         dft_present=True)
+    for sibling in (_L7_DENIES_DFT, _L7_STATES_DFT):
+        r = _run(_mk(tmp_path / str(id(sibling)), l20=doc,
+                     siblings={"L7": sibling},
+                     docs={"spec.txt": _DFT_REQUIREMENT_DOC}))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            r.stdout + r.stderr)
+
+
+# ── vibe-ic#1021: three ruler defects, all measured on published roots ─────
+#
+# Every fixture is a SYNTHETIC restatement of a shape read off the published
+# corpus by hand. None is copied from a design and none carries a design,
+# foundry, vendor, protocol-standard or process token.
+
+def test_NEGATIVE_CONTROL_framing_may_not_be_borrowed_across_a_full_stop(
+        tmp_path):
+    """DEFECT 1. A parenthetical MENTION in one sentence, an unrelated
+    `requires` about certification in the next. Before #1021 the +/-160-char
+    window reached back across the full stop and reddened the project.
+
+    Paired with the guard below: this must go quiet and that must stay red.
+    """
+    doc = ("4.1 Debug Connector\n"
+           "In this mode all digital circuits are disconnected from the "
+           "connector and the bold pins can be used to expose debug related "
+           "signals (e.g. JTAG interface). The certification body requires "
+           "that privacy precautions have been taken before the mode is "
+           "entered.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "framing was borrowed from the NEXT sentence:\n" + r.stdout + r.stderr)
+
+
+def test_POSITIVE_CONTROL_framing_in_the_terms_own_sentence_still_reddens(
+        tmp_path):
+    """The paired guard for defect 1. A window that admits nothing is not a
+    narrower window, it is a broken one."""
+    doc = ("4.1 Debug Connector\n"
+           "In this mode all digital circuits are disconnected from the "
+           "connector. The design requires a JTAG TAP controller on the "
+           "debug connector.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+#: DEFECT 2, in the two roots' own idiom: no negation word anywhere, so no
+#: denial ruler reaches it at any reach.
+_L7_DEFERS_DFT = {
+    "test_debug_architecture_present": False,
+    "notes": ("The protocol-level test/debug surface is the sideband channel "
+              "plus the link training patterns and symbol error counters. "
+              "Chip-level JTAG/scan/BIST remain source / sink silicon "
+              "concerns; conformance is established by the published "
+              "compliance test specification."),
+}
+
+
+def test_a_sibling_layer_that_DEFERS_dft_to_another_party_does_not_redden(
+        tmp_path):
+    """DEFECT 2. "this requirement belongs to somebody else" is neither "it
+    does not exist" nor "there is one here"."""
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_DEFERS_DFT}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "a scope-deferral was counted as a stated requirement:\n"
+        + r.stdout + r.stderr)
+    assert r.returncode != 1, r.stdout + r.stderr
+
+
+def test_a_layer_that_names_a_concern_AND_IMPOSES_IT_still_reddens(tmp_path):
+    """The paired guard for defect 2, and the reason it is not a ban. The
+    ownership vocabulary is narrow by construction: a layer may use the word
+    `concern` and still state a requirement of its own."""
+    sibling = {
+        "test_debug_architecture_present": True,
+        "notes": ("Manufacturing test is a first-order concern for this "
+                  "design. A full scan chain is required and the TAP "
+                  "controller shall be reachable from the debug connector."),
+    }
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": sibling}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the deferral ruler deleted a REAL finding:\n" + r.stdout + r.stderr)
+
+
+#: DEFECT 3. Two published roots spend the BIST token on a PROTOCOL MESSAGE
+#: NAME, inside a genuine `shall` sentence, so framing is really there and
+#: cannot discriminate. Restated synthetically in both shapes.
+_BIST_MESSAGE_DOCS = {
+    "message_table.txt": (
+        "5.2 Data Message Types\n"
+        "Data Messages (number of data objects >= 1): 0x01 Capabilities, "
+        "0x02 Request, 0x03 BIST Built-In Self Test, 0x04 Sink_Capabilities. "
+        "The device shall implement every message type listed.\n"),
+    "frame_types.txt": (
+        "6.1 Frame Types\n"
+        "The controller shall transport the following frame types: 0x27 "
+        "Register Downstream, 0x39 Activate, 0x46 Data, 0x58 BIST "
+        "Activate, 0x5F Setup.\n"),
+    "bit_definition.txt": (
+        "6.2 Command Header\n"
+        "BIST (B): when set, indicates that the command the driver built is "
+        "for sending a BIST frame, and the controller shall send it.\n"),
+}
+
+
+def test_a_protocol_MESSAGE_NAME_carrying_the_bist_token_does_not_redden(
+        tmp_path):
+    """DEFECT 3. A frame type and a message type are payloads a protocol
+    defines on the wire. Neither says anything about whether the design has a
+    built-in self-test, which is the only question this layer asks."""
+    for name, text in _BIST_MESSAGE_DOCS.items():
+        r = _run(_mk(tmp_path / name, l20=_SKELETON, docs={name: text}))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            f"a protocol message name was read as a DFT requirement "
+            f"({name}):\n" + r.stdout + r.stderr)
+
+
+def test_a_REAL_bist_requirement_still_reddens(tmp_path):
+    """The paired guard for defect 3, and the one that keeps the narrowing
+    honest: the token is only rejected when the document says, structurally,
+    that it is naming an encoding."""
+    doc = ("6.3 Test Provisions\n"
+           "The design shall provide memory BIST for every on-chip SRAM and "
+           "the MBIST controller is required to report a pass/fail status.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the message-name ruler deleted a REAL MBIST requirement:\n"
+        + r.stdout + r.stderr)
+
+
+def test_the_message_name_ruler_touches_ONLY_the_bist_alternative(tmp_path):
+    """It narrows ONE of sixteen alternatives in the vocabulary. A scan-chain
+    requirement sitting in the SAME sentence as a message-type table must be
+    unaffected — otherwise the reject is a sentence-level ban rather than a
+    token-level one."""
+    doc = ("6.1 Frame Types\n"
+           "The controller shall transport 0x58 BIST Activate, and the "
+           "design shall additionally provide a full scan chain for "
+           "manufacturing test.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_all_three_rulers_leave_a_typed_topology_alone(tmp_path):
+    """Content stays self-evidencing, exactly as #1011's ruler had to. All
+    three of this issue's rulers move only the EVIDENCE side of F2; a design
+    that CARRIES an actionable scan topology passes whatever its prose says."""
+    doc = dict(_SKELETON)
+    doc["fields"] = dict(_SKELETON["fields"], scan_chains=[_TYPED_CHAIN],
+                         dft_present=True)
+    for i, sibling in enumerate((_L7_DEFERS_DFT, _L7_STATES_DFT)):
+        r = _run(_mk(tmp_path / f"case{i}", l20=doc, siblings={"L7": sibling},
+                     docs=dict(_BIST_MESSAGE_DOCS)))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            r.stdout + r.stderr)

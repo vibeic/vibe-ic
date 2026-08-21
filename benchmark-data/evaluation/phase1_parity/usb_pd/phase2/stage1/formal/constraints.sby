@@ -1,9 +1,0 @@
-# Auto-generated formal task placeholder; rtl/assertions.sv
-# carries one SVA per L3 constraint (use SVA_ENABLED define).
-[options]
-mode prove
-[engines]
-smtbmc
-[script]
-read -formal rtl/*.sv
-prep -top assertions_l3

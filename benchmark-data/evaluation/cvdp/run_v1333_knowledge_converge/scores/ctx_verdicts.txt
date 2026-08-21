@@ -1,2 +1,0 @@
-ctx cvdp_copilot_scrambler_0018 FAIL (0s) [|1 failed|]
-ctx cvdp_copilot_scrambler_0024 PASS (1s) [5 passed||]

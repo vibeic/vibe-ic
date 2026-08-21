@@ -1,1 +1,0 @@
-../../phase2/stage2/constraints/edge_llm_accel.sdc

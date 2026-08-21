@@ -1,7 +1,0 @@
-{
-  "verdict": "PASS",
-  "exit_code": 0,
-  "message": "PASS: sim/results.xml is not a cpu-functional-oracle connectivity waiver (functional verdict owned by the functional gates); cpu_functional_oracle_waiver_check N/A.",
-  "capability_gap": "cap:cpu_functional_oracle",
-  "gate": "cpu_functional_oracle_waiver_check"
-}
