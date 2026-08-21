@@ -1827,6 +1827,33 @@ rather than a red I was diagnosing. **The rule does not stop applying to good
 news.**
 
 
+## M28 — the blast radius, closed: who DEPENDS on the two files I changed
+
+I verified both changed files exhaustively — both lanes, pristine baselines,
+mutation arms — and never asked whether anything else depends on them. Two things
+do, and both are downstream of changes I made:
+
+| dependant | how it depends | result |
+|---|---|---|
+| `tools/ci/test_hermetic_landing_arm_receipt.py:36` | loads `test_hermetic_candidate_runner.py`, so it inherits the `save_container` rewrite and the `rw_bind` behaviour | **37 passed** |
+| `programs/tests/test_inherited_red_deadline.py:187` | `import test_landing_merge_verdict as B`, borrowing its LAND-OK baseline | **14 passed** |
+
+Both plausible breakages, neither caught by anything I had run. The
+`save_container` change adds an early `return` when `create=False` and the path
+is absent — a receipt test driving the fake docker through an unusual order could
+have depended on the old unconditional write. And design A REMOVED a module-level
+name by renaming a test; an importer referencing it would have failed at import,
+not at assertion.
+
+**Both pass. The blast radius is two files and it is closed.**
+
+The lesson is the same one this document keeps finding, one level further out:
+**I verified the thing I changed and not the thing that trusts it.** Full-file
+sweeps covered the files I edited; a file that imports one of them is not in that
+set. `git grep` for the module name took one command and should have been part of
+the first verification, not the last.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
