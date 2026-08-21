@@ -756,6 +756,61 @@ def test_no_parsed_tree_outlives_the_answer_taken_from_it():
                 f"{name} returns its input tree, which lets a caller cache it")
 
 
+_BLIND_EXTRACTOR = '''
+import re
+RE = re.compile(r"targets (\\w+)")
+def extract(text, rec):
+    m = RE.search(text)
+    if m:
+        rec["pdk_target"] = m.group(1)
+    return rec
+'''
+
+
+def test_the_polarity_baseline_refuses_to_grow(tmp_path):
+    """`phrases`' docstring cites this to explain why the polarity gate cannot
+    simply be sharpened: a wider predicate makes pre-existing extractors visible
+    all at once, and the debt register MAY ONLY SHRINK, so it cannot take them.
+
+    Cited behaviour gets checked, not trusted -- that is the whole shape of
+    #712. Built here on a synthetic tree so it costs a few milliseconds instead
+    of a scan of the real one, and so it tests the RULE rather than today's
+    census number.
+
+    This is not an argument for relaxing that rule. The rule is what stops the
+    register becoming a waiver list. It is recorded so the next person reads
+    "sealed by design, and here is the proof" instead of rediscovering it."""
+    import sys
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import prose_polarity_consulted_check as G  # noqa: E402
+
+    root = tmp_path / "t"
+    (root / "programs").mkdir(parents=True)
+    (root / "programs" / "one.py").write_text(_BLIND_EXTRACTOR)
+    prog = str(PROGRAMS_DIR / "prose_polarity_consulted_check.py")
+
+    def run(*extra):
+        return subprocess.run([sys.executable, prog, "--root", str(root), *extra],
+                              capture_output=True, text=True, timeout=120)
+
+    assert run("--write-baseline").returncode == 0
+    assert G.scan(root) == ["one::extract"]
+
+    # a SECOND pre-existing blind extractor becomes visible
+    (root / "programs" / "two.py").write_text(_BLIND_EXTRACTOR)
+    assert run().returncode == 1, "a grown set passed"
+    r = run("--write-baseline")
+    assert r.returncode == 1, (
+        "the baseline absorbed growth; it has become a waiver list:\n"
+        + r.stdout + r.stderr)
+    assert "GREW" in (r.stdout + r.stderr), r.stdout + r.stderr
+    # and the file on disk still holds the SMALLER set
+    import json as _json
+    kept = _json.loads(
+        (root / "programs" / "prose_polarity_baseline.json").read_text())["known"]
+    assert kept == ["one::extract"], kept
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

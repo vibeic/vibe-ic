@@ -301,6 +301,29 @@ def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
     a reader must not take it as the gate having agreed with the paragraph
     above.
 
+    AND THAT PREDICATE CANNOT SIMPLY BE WIDENED, which is the part that turns
+    this from a to-do into a design constraint. MEASURED by doing it: closing
+    just the `for`-target half in the gate's own source takes the census
+    213 -> 253 and the gate to rc=1, and the route its FAIL message names then
+    refuses --
+
+        [FAIL] refusing to write a baseline that GREW (213 -> 253). It is a
+               debt register, not a waiver list.
+
+    -- because the baseline MAY ONLY SHRINK. That rule is right, and it is why
+    the gate is sealed against its own improvement: a sharper predicate makes 40
+    pre-existing extractors visible at once, and they are exactly the category
+    the baseline exists for ("extractors that predate the vocabulary are
+    recorded, not failed"), yet the register cannot take them. The only honest
+    routes are to fix all 40 first, or to change the gate's own rule -- both
+    decisions well above a fix to this file, which is why they are written down
+    here rather than attempted.
+
+    (That 40 is larger than the 35 an earlier wrapper-based measurement gave:
+    edited into the source, `for`-target names also propagate through the
+    transitive loop that follows, so they carry one hop further. The wrapper
+    measured a weaker widening than the real one.)
+
     IF THAT PREDICATE IS EVER WIDENED, this function will be flagged and NEITHER
     of the gate's two registers fits it. `_NOT_PROSE` is for input in a formal
     grammar with no negation form, and this is real English. The baseline is a
