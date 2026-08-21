@@ -1315,6 +1315,21 @@ the narrower one. It is the only quoted figure in this report that did not
 reproduce, and `verify.py --slow` now re-runs both commands and compares them to
 the text, so the next one cannot go stale unnoticed.*
 
+*That check then caught something about itself. On one run it reported `ran 5
+passed, report says 7` — and the pytest summary it had read actually said **"2
+failed, 5 passed"**. The check matched `(\d+) passed` and nothing else, so a RED
+run reached me as a smaller green number, with no mention that anything failed.
+That is the defect this whole cluster is about, committed inside the tool written
+to police it. It now reads failures explicitly and reports them.*
+
+*The underlying run is also flaky, which is the second half. That file runs gates
+over the whole repository, takes about ninety seconds, and failed once in three
+consecutive invocations of the identical command — the two failures being a
+clean-run denominator assertion, the shape that loses to contention. So the check
+re-runs once and requires the disagreement twice before calling a figure stale. A
+single red from a ninety-second repository-wide gate is not evidence; treating it
+as evidence manufactures a confident false verdict.*
+
 No gate is implemented. No version bumped. No baseline written. Nothing pushed
 to main.
 

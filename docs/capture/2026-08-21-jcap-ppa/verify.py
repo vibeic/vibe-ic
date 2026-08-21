@@ -558,14 +558,29 @@ if SLOW:
     _cases = [(["test_capture_routing_consistency.py", "test_enhancement_emit.py"], 69, 4),
               (["test_issue1130_wiring_population_parity.py"], 7, 0)]
     control("quoted-pytest", all(f"{p} passed" in MD for _, p, _s in _cases))
-    for files, exp_p, exp_s in _cases:
+    def _run(files):
         r = _sp.run([sys.executable, "-m", "pytest", *[str(_T / f) for f in files], "-q"],
                     capture_output=True, text=True, cwd=str(PLUG), timeout=1800)
+        # Read the SUMMARY, failures included. The first version matched only
+        # `(\d+) passed` and reported "ran 5 passed" for a run whose summary said
+        # "2 failed, 5 passed" -- it turned a red run into a smaller green number,
+        # which is the shape of defect this whole batch is about.
         m = re.search(r"(\d+) passed(?:, (\d+) skipped)?", r.stdout)
-        got_p, got_s = (int(m.group(1)), int(m.group(2) or 0)) if m else (-1, -1)
+        f = re.search(r"(\d+) failed", r.stdout)
+        return ((int(m.group(1)), int(m.group(2) or 0)) if m else (-1, -1),
+                int(f.group(1)) if f else 0)
+    for files, exp_p, exp_s in _cases:
+        (got, nfail) = _run(files)
+        if (got, nfail) != ((exp_p, exp_s), 0):
+            # One of these files runs gates over the whole repository for ~90s and
+            # fails intermittently under load -- observed once in three runs. A
+            # single red here is not evidence of a stale figure, so disagree twice
+            # before saying so.
+            (got, nfail) = _run(files)
         check(f"quoted figure reproduces: {' '.join(files)}",
-              (got_p, got_s) == (exp_p, exp_s) and f"{exp_p} passed" in MD,
-              f"ran {got_p} passed/{got_s} skipped, report says {exp_p}/{exp_s}")
+              (got, nfail) == ((exp_p, exp_s), 0) and f"{exp_p} passed" in MD,
+              f"ran {got[0]} passed/{got[1]} skipped/{nfail} failed, "
+              f"report says {exp_p}/{exp_s}/0")
 
 # 39. tallies written INSIDE prose code blocks. The table figures were checked
 # from the first version of this file; a "Bucket-A records 26" sitting in an
