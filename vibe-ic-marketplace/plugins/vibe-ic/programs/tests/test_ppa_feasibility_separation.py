@@ -159,13 +159,22 @@ def test_the_gate_has_no_numeric_margin_of_its_own():
     """There is no knob a caller could turn far enough to buy a promotion.
 
     `FeasibilityPolicy` carries an axis table, the views feasibility must hold
-    across, contract-declared limits and a waiver switch. None of those is a
-    tolerance on a violation count or a slack; the only numbers in the gate are
-    zero and the limits the CONTRACT declared.
+    across (globally and per axis), contract-declared limits and a waiver
+    switch. None of those is a tolerance on a violation count or a slack; the
+    only numbers in the gate are zero and the limits the CONTRACT declared.
+
+    The set is enumerated EXACTLY rather than filtered, so a field added later
+    has to be argued for here in a diff a reviewer sees, rather than sliding in
+    under a name the substring list below happens not to catch.
+    `required_views_by_axis` is the views ONE axis must hold across; it cannot
+    express "any view will do" (an axis named with an empty list is
+    UNDETERMINED, exactly as an undeclared global list is) so it is a view
+    declaration and not a knob.
     """
     fields = {f.name for f in __import__("dataclasses").fields(
         F.FeasibilityPolicy)}
-    assert fields == {"axes", "required_views", "limits", "allow_waivers"}
+    assert fields == {"axes", "required_views", "required_views_by_axis",
+                      "limits", "allow_waivers"}
     assert not any(n in fields for n in
                    ("tolerance", "margin", "penalty", "weight", "weights",
                     "score", "threshold"))
