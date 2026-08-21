@@ -89,6 +89,18 @@ yarn-error.log*
 *.rda
 work/
 runs/
+# vibe-ic#1744 — the SAME evidence-vs-noise line the `*.log` block above draws,
+# for a directory name. `runs/` is right for EDA flow output in a project tree
+# and wrong for the ONE run directory that is a tracked test fixture: the
+# external shuttle precheck writes `runs/<tag>/<NN>-<step>/`, and the parser in
+# `tapeout_readiness_check` keys on that structure — specifically on which step
+# dirs carry a `state_out.json`. A fixture that renamed `runs/` to dodge this
+# rule would stop being what the tool emits, which is the only property that
+# makes it worth having. MEASURED: without these two lines `git add -A` stages
+# PROVENANCE.md and silently drops all fourteen evidence files, so the test
+# would import a fixture that is not there.
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/**
 
 # Quartus local
 db/
@@ -183,3 +195,13 @@ benchmark-data/datasets/
 # negations above, not a `tests/**` sweep. A stray tool output landing in a
 # test directory stays ignored.
 !vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/density_fill/filled.gds
+
+# 2026-08-21 fleet run-folder triage, the same hole as #361 one more time.
+# `docs/research/fleet_run_folder_triage_evidence/` holds the ONLY surviving
+# copy of content lifted out of run folders that were then removed: an agent's
+# `agent.log` / `iter*.log` narrative of a round, a `history.md`. `*.log` at
+# line 31 silently dropped 31 of the 88 files and `history.md` at 156 dropped
+# one more; `git add` reported success and the doc would have cited files that
+# were never committed, after the folders holding them had been deleted.
+# MEASURED: 89 files on disk, 57 staged, before this rule.
+!docs/research/fleet_run_folder_triage_evidence/**
