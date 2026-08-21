@@ -827,3 +827,110 @@ Q12 — *"does an outward claim's scope exceed its evidence?"* — is answered b
 this lane's own subject: four exemptions claimed "no run in this repository has
 filed one yet" over a tree holding 17 records, 82 contracts, 21 candidate sets
 and 80 pairs. The claim exceeded the evidence by the entire population.
+
+---
+
+# Part 9 — the brief asked for a SCHEMA, and that is the answer for gates 3 and 5
+
+Ask 1 of this job is *"name the input each gate needs, exactly: a path, a schema,
+a producer."* Parts 1 and 3 named paths and producers for the two gates that
+still cannot check. The schema was left implicit, and following it up changes the
+answer.
+
+## The missing artefacts are UNSPECIFIED, not merely unproduced
+
+Fourteen PPA schemas ship in `vibe-ic-marketplace/plugins/vibe-ic/schemas/ppa/`.
+**None of them declares any of the three artefacts these two gates need.**
+
+    an `expected` denominator — (metric, scope) pairs a run must produce   NO SCHEMA
+    an `objectives` list      — [{key, metric, sense, scope}]              NO SCHEMA
+    a published `frontier`    — the document the gate is under test against NO SCHEMA
+
+`claims.v1` has a `coverage` block, but it is a claim denominator (`total`,
+`by_status`), not the measurement denominator `ppa_measurement_check` reads.
+`search_manifest.v1` has a `frontier_input`, which declares *what the Pareto lane
+may see* — not the frontier it produced.
+
+So the first landable step for either gate is **a schema, not a run**. That is
+the same finding #1121 made about the head-to-head gate, in its own words: *"the
+first landable step is not a number, it is the RECORD SCHEMA."* Naming a producer
+was not enough; there is nothing yet for a producer to produce.
+
+## The only objective in this tree is one a run wrote for itself
+
+`ppa-e2e/search/winner.json` does declare an objective:
+
+    "objective": { "metric": "area.design_report.um2",
+                   "scope": { "stage": "post_route" },
+                   "better_is": "lower",
+                   "declared_by": "this run -- the design declares NO PPA
+                                   objective (L19 die_area_budget_um=null,
+                                   power_budget_uw=null)" }
+
+The run says so itself, in the record, unprompted: **the design declares no PPA
+objective at all.** Both L19 budgets are null.
+
+This is a much stronger reason for gate 5's STILL-CANNOT than "no `objectives`
+key exists". An objective could be lifted from this document in an afternoon. It
+must not be, because a frontier recomputed against an objective the run chose for
+itself, and then checked against a frontier derived from the same choice, is the
+run grading its own exam twice. The gate is refusing the right thing.
+
+## The frontier lane excluded all 60 candidates for a reason this tree contradicts
+
+`ppa-e2e/search/manifest.json` — `frontier_stage: post_route_extracted`,
+`included_count: 0`, `excluded_count: 60`. Every one carries:
+
+    "code": "FEASIBILITY_UNDETERMINED",
+    "detail": "feasibility lane not wired: _ppa/feasibility.py has not landed,
+               so no setup/hold/DRV/DRC/LVS/antenna/IR/EM/equivalence evidence
+               was read for this candidate"
+
+Both clauses are false in the tree that ships them:
+
+    _ppa/feasibility.py landed          1f9720028  [v1.11.26]
+    this manifest was committed         f842978a7  [v1.11.42]   17 commits later
+    the lane IS wired                   ppa-e2e/tools/analyze.py:59 invokes
+                                        ppa_feasibility_check.py per trial
+    evidence WAS read                   122 feasibility reports committed under
+                                        ppa-e2e/records/ — 121 UNDETERMINED, 1 INFEASIBLE
+
+**The outcome does not change**: 121 UNDETERMINED and 1 INFEASIBLE would admit
+nobody to a frontier either. What changes is which fact is on the record. *"We
+never looked"* and *"we looked and could not decide"* must never share a verdict
+— that is the rule this entire lane is about, and a committed record asserting
+the first while 122 documents beside it prove the second is the same defect one
+directory over. A stale reason is indistinguishable from a live one to the next
+reader, and it is the one that gets believed.
+
+## One of the 60 ranked candidates is DRC-violating, and the ranking cannot say so
+
+`ppa-e2e/records/trials/t033/feasibility_bridged_report.json`:
+
+    drc         VIOLATED     FEAS_VIOLATION
+    lvs         SATISFIED
+    antenna     SATISFIED
+    ir          SATISFIED
+    setup hold drv em equivalence   UNDETERMINED
+
+`t033` is row 6999 µm² in `winner.json`'s 60-row ranking. **It is not the
+winner** — `t028` at 6136 µm² is, and the two are not close. But `winner.json`'s
+ranking rows carry `trial`, `knobs`, `objective`, `unit`, `cost` and **no
+feasibility term at all**, and its `excluded` list is empty. A reader of the
+published ranking has no way to learn that one of the candidates in it violates
+DRC; the answer is in a sibling directory, in a document the ranking does not
+cite.
+
+That is not a wrong number. It is a published ranking whose scope exceeds its
+evidence — Appendix C question 12, asked of the campaign rather than of this
+branch.
+
+## What this changes, and what it does not
+
+Gate 5's verdict stands: **STILL-CANNOT**. It is now better founded. The
+exemption no longer rests on "no run has published one yet" (Part 1), nor on "no
+producer writes one" (Part 3), but on three measured facts: no schema specifies
+the artefact, the only objective in the tree is self-declared and says so, and
+the campaign's own frontier lane admitted zero candidates. None of the four
+findings above was produced by changing anything. They were read out of documents
+that were already committed.
