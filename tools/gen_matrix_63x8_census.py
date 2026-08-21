@@ -463,6 +463,17 @@ def _build_corpus_figures() -> CorpusFigures:
     table["matrix_dimensions"] = lambda f: len(_dimensions())
     table["ledger_cells"] = lambda f: len(f.step_ids()) * len(_dimensions())
 
+    def _informational_gates(_f):
+        # Dimension 9's subject: the gates whose FAIL `flow_compliance_check`
+        # removes from `failing`. Read off the live frozenset, never counted by
+        # hand — the README publishes this number as the size of a hole, and a
+        # stale "4" would read as a disclosed known gap while describing a set
+        # that had grown.
+        import flow_compliance_check as _fcc
+        return len(_fcc.INFORMATIONAL_GATES)
+
+    table["informational_gates"] = _informational_gates
+
     for kind in F.OUTPUT_KINDS:
         table[f"required_outputs_{kind.lower()}"] = _out_kind(kind)
     for kind in F.GATE_CLAUSE_KINDS:

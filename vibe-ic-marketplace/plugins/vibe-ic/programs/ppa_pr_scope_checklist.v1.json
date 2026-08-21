@@ -1,0 +1,145 @@
+{
+  "schema": "vibeic.ppa.pr_checklist.v1",
+  "catalogue_version": "1",
+  "source": "VIBE_IC_PPA_ENHANCEMENT_SPEC_v1.2_FINAL Appendix C, sections C.1 and C.2. English rendering frozen by the orchestrator 2026-08-21 so that all PPA lanes share one wording.",
+  "merge_condition": "Every applicable question has verifiable evidence, and every inapplicable question has a machine-checkable reason.",
+  "note_numbering": "C.1 numbering is deliberately NON-CONTIGUOUS: 6, 7, 11, 12, 16, 18, 19 and 20 live in C.2. That is the spec's numbering. It is not a gap introduced here and must not be closed up.",
+  "note_c1_release_clause": "C.1 reads: 'For a PR that touches neither AI nor closure, questions 8-10, 13-15 and 17 may be marked N/A.' The permission is JOINT, not per-question: it is granted only when NEITHER an AI surface NOR a closure surface is touched. So all seven carry the same release condition (any of ai / agent / closure present -> all seven apply). This is the literal contract text; a per-question reading would be an invention.",
+  "note_min_evidence_kinds": "Where a question's own text names the artefact type it is asking about, that kind is required. Question 3 asks for a source artifact and its hash -> an 'artefact' entry. Questions 4, 5, 11 and 19 each ask what happens when something is EXERCISED ('what does it emit', 'can rc=2 be misread', 'can a negative fixture turn this red', 'was it tested against') -> a named 'test'. Every other question accepts any verifiable kind. Nothing here was invented beyond what the question sentence itself names.",
+  "evidence_kinds": {
+    "artefact": "A repo-relative path plus a declared sha256. VERIFIED only when the file exists and the declared digest equals the computed one.",
+    "test": "A test id of the form <repo-relative file>::<test name>. VERIFIED only when the file exists and it defines that test.",
+    "path": "A repo-relative path that must exist. VERIFIED by existence; its sha256 is recorded so the answer is re-checkable later.",
+    "prose": "Free text. NEVER verifiable, by design. It may accompany an answer; it can never satisfy one. This is what makes the merge condition 'verifiable evidence' rather than 'twenty long answers'."
+  },
+  "token_vocabulary": [
+    "ai", "agent", "provider", "runtime", "tool", "security",
+    "closure", "controller", "candidate", "search", "contract",
+    "feasibility", "pareto", "benchmark", "gate", "parser",
+    "docs", "report", "claims", "casebook", "recovery",
+    "action_registry", "blast_radius", "claim_surface",
+    "schema", "flow_step", "skill", "metric"
+  ],
+  "questions": [
+    {
+      "id": 1, "section": "C.1",
+      "text": "Does this program measure a requirement, a metric, a proxy, or feasibility?",
+      "applies": {"mode": "always"}
+    },
+    {
+      "id": 2, "section": "C.1",
+      "text": "Which implementation, stage, mode, corner and activity basis does the number belong to?",
+      "applies": {"mode": "always"}
+    },
+    {
+      "id": 3, "section": "C.1",
+      "text": "Where is the source artifact, and its hash?",
+      "applies": {"mode": "always"},
+      "min_evidence_kinds": ["artefact"]
+    },
+    {
+      "id": 4, "section": "C.1",
+      "text": "What does it emit when nothing was measured?",
+      "applies": {"mode": "always"},
+      "min_evidence_kinds": ["test"]
+    },
+    {
+      "id": 5, "section": "C.1",
+      "text": "Can rc=2 be misread as PASS?",
+      "applies": {"mode": "always"},
+      "min_evidence_kinds": ["test"]
+    },
+    {
+      "id": 6, "section": "C.2",
+      "text": "Could a candidate win by modifying the problem itself?",
+      "applies": {"mode": "any_token", "tokens": ["candidate", "search", "contract"],
+                  "na_reason_code": "NO_CANDIDATE_SEARCH_OR_CONTRACT_SURFACE"}
+    },
+    {
+      "id": 7, "section": "C.2",
+      "text": "Could an infeasible candidate enter the frontier?",
+      "applies": {"mode": "any_token", "tokens": ["feasibility", "pareto", "benchmark"],
+                  "na_reason_code": "NO_FEASIBILITY_PARETO_OR_BENCHMARK_SURFACE"}
+    },
+    {
+      "id": 8, "section": "C.1",
+      "text": "Does this closed loop actually have an actuator?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 9, "section": "C.1",
+      "text": "Which domains were re-measured after the actuator ran?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 10, "section": "C.1",
+      "text": "How is a regression rolled back?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 11, "section": "C.2",
+      "text": "Can a negative fixture turn this gate red?",
+      "applies": {"mode": "any_token", "tokens": ["gate", "parser", "controller"],
+                  "na_reason_code": "NO_GATE_PARSER_OR_CONTROLLER_SURFACE"},
+      "min_evidence_kinds": ["test"]
+    },
+    {
+      "id": 12, "section": "C.2",
+      "text": "Does an outward claim's scope exceed its evidence?",
+      "applies": {"mode": "any_token", "tokens": ["docs", "report", "claims", "claim_surface"],
+                  "na_reason_code": "NO_DOCS_REPORT_OR_CLAIM_SURFACE"}
+    },
+    {
+      "id": 13, "section": "C.1",
+      "text": "Was the program genuinely unable to decide, before handing off to AI?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 14, "section": "C.1",
+      "text": "Which exact evidence does the AI proposal cite?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 15, "section": "C.1",
+      "text": "Is the action inside the typed registry, the budget, the blast radius and the autonomy level?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 16, "section": "C.2",
+      "text": "Does the program-only path still hold when AI is unavailable?",
+      "applies": {"mode": "any_token", "tokens": ["agent", "provider", "runtime"],
+                  "na_reason_code": "NO_AGENT_PROVIDER_OR_RUNTIME_SURFACE"}
+    },
+    {
+      "id": 17, "section": "C.1",
+      "text": "When the program and the AI disagree, who stops the promotion?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "agent", "closure"],
+                  "na_reason_code": "NEITHER_AI_NOR_CLOSURE_SURFACE"}
+    },
+    {
+      "id": 18, "section": "C.2",
+      "text": "Can this AI recovery be distilled into a program / gate / fixture?",
+      "applies": {"mode": "any_token", "tokens": ["casebook", "recovery"],
+                  "na_reason_code": "NO_CASEBOOK_OR_RECOVERY_SURFACE"}
+    },
+    {
+      "id": 19, "section": "C.2",
+      "text": "Was it tested against prompt injection, hallucinated metric, generic MCP bypass, raw script, metacharacter, path/symlink traversal and arbitrary shell?",
+      "applies": {"mode": "any_token", "tokens": ["agent", "tool", "security"],
+                  "na_reason_code": "NO_AGENT_TOOL_OR_SECURITY_SURFACE"},
+      "min_evidence_kinds": ["test"]
+    },
+    {
+      "id": 20, "section": "C.2",
+      "text": "Has the AI-attributed improvement been separated from simply spending more compute or more trials?",
+      "applies": {"mode": "any_token", "tokens": ["ai", "search", "benchmark"],
+                  "na_reason_code": "NO_AI_SEARCH_OR_BENCHMARK_SURFACE"}
+    }
+  ]
+}
