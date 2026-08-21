@@ -984,6 +984,46 @@ def test_polarity_reaches_every_denominator_kind(tmp_path):
             f"say which kind was dropped: {refused}")
 
 
+#: Every route by which a test in this tree names the program it exercises,
+#: plus the two shapes that must resolve to None.
+_NAMING_ROUTES = [
+    ("from X import ...",      "from thing_emit import script\n",        "thing_emit"),
+    ("import X",               "import thing_emit\n",                    "thing_emit"),
+    ("import pkg.X",           "import pkg.thing_emit\n",                "thing_emit"),
+    ("path literal X.py",      'P = "thing_emit.py"\n',                  "thing_emit"),
+    ("path literal dir/X.py",  'P = "programs/thing_emit.py"\n',         "thing_emit"),
+    ("names two programs",     "import thing_emit\nimport other_emit\n", None),
+    ("names no program",       "import os\n",                            None),
+]
+
+
+def test_every_route_a_test_names_its_program_by(tmp_path):
+    """`named_program` decides which emitter a pin belongs to, so a route it
+    fails to recognise silently removes that test's pins from CHECK B -- the
+    quiet direction. Only `from X import ...` was exercised, and this branch
+    changed the function's SIGNATURE (it takes the caller's parsed tree now),
+    which is exactly when the unexercised routes are worth checking.
+
+    THE TWO `None` ROWS ARE THE POINT OF THAT SIGNATURE CHANGE. None must mean
+    "names 0 or more than 1 program" and nothing else. It used to also mean
+    "this file would not parse", which made a test the guard COULD NOT READ
+    indistinguishable from one that names nothing -- the reach shrank in
+    silence. Parsing is the caller's job now and an unreadable file is REPORTED;
+    see `test_a_TEST_that_will_not_parse_is_reported_too`. This test pins the
+    other half: None still means ambiguity, and ambiguity is still refused."""
+    import ast
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    stems = {"thing_emit", "other_emit"}
+    for label, src, want in _NAMING_ROUTES:
+        got = E.named_program(ast.parse(src), stems)
+        assert got == want, (
+            f"{label}: resolved to {got!r}, expected {want!r} -- a route that "
+            f"stops resolving takes that test's pins out of CHECK B without "
+            f"saying so")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
