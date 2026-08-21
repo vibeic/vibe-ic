@@ -2934,6 +2934,55 @@ materially different from what their names implied, and I only learned that by
 running them — which cost three commands.
 
 
+## M50 — the three unwired checkers, by name. And the repository says the thesis better than I have.
+
+M49 turned two labels into counts. Reading the two gates' output turns the counts
+into **names — and they are the same three**:
+
+```
+closed_loop_edge_check.py
+ppa_pr_scope_check.py
+slot_pad_budget_check.py
+```
+
+`checker execution wiring` calls them *"3 checker(s) that NOTHING but their own
+test runs — a fixture the author wrote proves the logic, never the artefacts"*.
+`gates are wired to something` calls them *"3 gate(s) newly consulted by no
+automatic verdict"*. **Same three programs, two gates, one defect** — and unlike
+my earlier groupings this one is confirmed by IDENTITY, not by co-location in an
+output. (M43 and M48 both failed exactly there.)
+
+**The surrounding population, which I had never recorded:**
+
+| measure | value |
+|---|---|
+| checker-shaped programs | **630** of 1232 in `programs/` |
+| test-only | **37** |
+| skill-only (the weakest runner) | **31** — 29 with NO written reason |
+| gates total / unwired | **619 / 61** (baseline 59) |
+| unwired but named in a skill | **28** |
+
+**Sixty-one unwired gates**, two above baseline. Thirty-one checkers whose only
+runner is a skill — *"a skill mention runs it only if an agent remembers to"*.
+
+**And the gate states this document's thesis better than I have managed in fifty
+sections:**
+
+> A gate nothing invokes produces no verdict, and **the tree looks the same
+> either way**. Wire it into the flow yaml, CAPTURE_ROUTING, a runner, or
+> `tools/ci` — a skill mention runs it only if an agent remembers to.
+
+That is the whole engagement in three lines, and it was already written, in a
+gate that has been failing this entire time inside a six-item list I recorded by
+name.
+
+**One thing I deliberately did NOT do.** `gate_is_wired_check` prints
+`[NOTE] baseline shrank — now wired: analog_liberty_nonzero_delay_check. Re-run
+with --write-baseline.` **The brief forbids `--write-baseline` on any hygiene
+gate, including when the gate asks** — and this is exactly the moment it asks
+nicely, having just delivered good news. Recorded, not run.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
