@@ -366,6 +366,45 @@ here because it was assigned, and two agents writing one contract in parallel is
 the duplication this split exists to prevent — but **"assigned and unstarted" is
 a different fact from "pending on a branch"**, and this is the one that is true.
 
+### PROBED, not asserted: the fourth state DOES close 7-9, and here is its bill
+
+"They close when the fourth state lands" was reasoning, not a measurement, and
+this report has been wrong twice this session about things it reasoned instead
+of ran. So it was run — in a THROWAWAY worktree, never on this branch, because
+authoring the contract is not this agent's to do. A minimal probe made
+dimension 3 return a fourth state for a step whose every recorded entry is
+`UNPROVEN` and which cites no run root:
+
+```
+before probe   3 failed, 121 passed, 2 skipped
+after  probe   2 failed, 122 passed, 2 skipped
+```
+
+**Reds 7, 8 and 9 all close.** The claim holds.
+
+**And two DIFFERENT gates open, which is the part worth having in advance.**
+`test_the_ledger_grid_matches_what_was_measured` and
+`test_the_grid_gate_names_the_cell_that_moved` fire, and the gate names its own
+remedy precisely:
+
+```
+the grid's shape changed: measured (69, 8, 520) (steps, dimensions,
+                          ENFORCED cells), pinned (69, 8, 522)
+0.5ic/d3 LEFT ENFORCED and is now NOT_MEASURED — it is not in
+                          LEDGER_CELLS_NOT_ENFORCED
+1.6x/d3  LEFT ENFORCED and is now NOT_MEASURED — it is not in
+                          LEDGER_CELLS_NOT_ENFORCED
+```
+
+So the complete, measured task for whoever authors the fourth state is: the
+contract across 9 producers and 7 consumers, **plus** re-deriving the ledger
+grid pin `522 -> 520` and registering both cells in `LEDGER_CELLS_NOT_ENFORCED`.
+Two extra edits, both named by the gate itself rather than discovered late — and
+the gate behaving this way is it working, not a complication.
+
+Nothing above was committed. The probe existed to answer a question this report
+had been answering from reasoning.
+
 ## 1-6 — the evidence really is absent, and that was checked
 
 The six cite run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`,
