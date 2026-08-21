@@ -47,6 +47,7 @@ Accepted with no refusal and no unrouted record.
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
 - [A dangling reference the whole verifier walked past](#a-dangling-reference-the-whole-verifier-walked-past)
+- [Emission is reproducible, and the one thing that moves is the one that should](#emission-is-reproducible-and-the-one-thing-that-moves-is-the-one-that-should)
 - [Summary](#summary)
 - [Next](#next)
 
