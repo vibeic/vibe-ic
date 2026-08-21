@@ -1526,3 +1526,56 @@ legitimate-slow-shard cost is known.
 
 That is an honest UNDETERMINED with the missing input named, which this repo
 prefers to a manufactured answer, and it is the last thing this document says.
+
+## 26. Correcting my own decline: the re-assembly is mechanical, and the blocker is the VERSION
+
+§23's correction measured the re-assembly at "eight conflicts" and I turned that
+into a reason to decline: real assembly work, in lanes I do not own, where a bad
+resolution silently drops someone's contribution — the collateral-revert class
+itself. That was a JUDGEMENT about risk, not a measurement of it, which is the
+error this document has now caught in itself five times. So the conflicts were
+enumerated.
+
+**None of the eight is in a lane's substantive code.**
+
+```
+.claude-plugin/marketplace.json                      version declaration
+vibe-ic-marketplace/.claude-plugin/marketplace.json  version declaration
+plugins/vibe-ic/.claude-plugin/plugin.json           version declaration
+README.md  (x3, three trees)                         version declaration
+programs/INDEX.md                                    GENERATED
+programs/PROGRAM_INVENTORY.json                      GENERATED (gen_program_inventory.py)
+```
+
+Six are version-declaration sites and two are generated artefacts. That is the
+well-known shape of a batch conflict in this repo, and both halves have a known
+correct resolution: take the assigned version at every declaration site, then
+REGENERATE the two derived files rather than hand-merging them. No lane's work
+is at stake in any of the eight, and my "silently drops someone's contribution"
+worry does not apply to a single one of them.
+
+**So the decline stands, but for a completely different and much better reason,
+and it comes from my own brief rather than from my judgement:** resolving six
+version-declaration conflicts requires CHOOSING A VERSION, and *"Do NOT bump the
+plugin version — the lander assigns it"*. The one thing the re-assembly cannot
+proceed without is the one thing I am forbidden to supply. That is a rule, not
+an estimate, and unlike "eight risky conflicts" it does not dissolve on contact
+with measurement.
+
+**What this buys whoever does hold it.** The job is not "resolve eight
+conflicts in other people's lanes". It is:
+
+1. assign the version (the lander's own act), and write it at the six
+   declaration sites — `version_bump_monotonic_check` and
+   `gatekeeper_assign_version.py` already exist for exactly this;
+2. regenerate `INDEX.md` and `PROGRAM_INVENTORY.json` rather than merging them
+   — a batch that hand-merges a generated file is how a measured 6-PR batch once
+   went `-8/+0` once its generated files were regenerated;
+3. merge `fix/jland67-hygiene-subset-honoured-squashed`, whose range is already
+   measured clean against `landing_collateral_revert_check`.
+
+That is a materially smaller and more certain job than the one §23 described,
+and saying so is worth more than my decline was. **A cost I declined to pay
+turned out to be a cost I had never counted** — which is the same defect as
+every other correction in this document, arriving one last time from the
+direction I was least watching: my own reason for not doing something.
