@@ -307,7 +307,27 @@ def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     (That 40 is larger than the 35 an earlier wrapper-based measurement gave:
     edited into the source, `for`-target names also propagate through the
     transitive loop that follows, so they carry one hop further. The wrapper
-    measured a weaker widening than the real one.)
+    measured a weaker widening than the real one. Re-derived at this branch's
+    tip the figures are 41 / 37 / 88 -- a little higher because this file itself
+    grew; the numbers move with the tree and are re-derived, never re-read.)
+
+    AND THIS DEFERRAL WAS RE-OPENED, not merely restated. The sibling limitation
+    under "WHAT K IS" was deferred on a reason that turned out to answer a
+    weaker question -- it rejected one coarse SKETCH of a repair and generalised
+    that to the repair itself -- and it was implemented once a narrower design
+    was measured. The same suspicion was put to this one, and it survives, for a
+    structurally different reason: there is no narrow version. All three
+    widenings were tried at this tip and the SMALLEST exposes 37 pre-existing
+    extractors:
+
+        `for`-target gap alone          213 -> 254   (+41)
+        setdefault(k, ...).add(v) alone 213 -> 250   (+37)
+        both                            213 -> 301   (+88)
+
+    None of those is fixable inside a branch about one extractor, and the debt
+    register cannot take them. The objection here is to the GATE'S OWN
+    STRUCTURE, which measurement confirms, and not to a sketch of mine, which
+    measurement refuted.
 
     IF THAT PREDICATE IS EVER WIDENED, this function will be flagged and NEITHER
     of the gate's two registers fits it. `_NOT_PROSE` is for input in a formal
