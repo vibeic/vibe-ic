@@ -781,6 +781,43 @@ additions are at different points in the same object. The branch is landable on
 
 ---
 
+## One of these four suites is LOAD-DEPENDENT, and I reported it green without saying so
+
+Late in the session the suite went red. It is worth writing down because I had
+published "87 passed, 4 skipped" several times without the one number that
+makes it reproducible.
+
+```
+                                     elapsed   load average (32 cores)
+suite green, repeatedly this session    33s     ~4.8
+suite RED                              113s     64.13
+the timing-out program alone           117s     64.13   (its documented
+                                                         baseline: 18.9-20.3s)
+```
+
+The failure is `subprocess.TimeoutExpired` at the 55s bound in
+`test_issue1130_wiring_population_parity`, **not** an assertion. That test
+documents its own basis — the program was measured at 18.9–20.3s and 55s is
+~2.7× the slowest observed. At load 64 on 32 cores the program runs ~6× its
+baseline, which the oversubscription fully accounts for.
+
+**Attribution, proven rather than assumed:** this branch changes exactly one
+shipped file, and the program that timed out contains **zero** references to it.
+The change cannot reach it.
+
+**What I did not do: raise the timeout.** The bound is an assertion about how
+long the program may take. Raising it to turn a red green is the one move
+forbidden here, and most of all when the red is environmental and the bound is
+correct.
+
+So the honest status of that one suite is **UNDETERMINED under load, with the
+named cause** — not green, and not a regression. The other three suites and
+every gate in this capture are unaffected and were re-run green. A reader
+reproducing this on a busy host should expect the same timeout and should read
+the load before reading the verdict.
+
+---
+
 ## Reproduce
 
 On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
@@ -809,6 +846,8 @@ backlog_sanitize_check on the emitted record         rc 0   0 hard, 0 soft
 pytest: the four suites that read the routing table  rc 0   87 passed, 4 skipped
     test_capture_routing_consistency, test_enhancement_emit,
     test_issue1130_wiring_population_parity, test_tracked_json_yaml_parses_check
+    -- MEASURED AT load average ~4.8 on 32 cores, in 33s. The load belongs
+       beside the number: see the load-dependence note below.
 suite_write_guard                                    PASS   the session wrote
                                                             nothing into the tree
 ```

@@ -56,3 +56,9 @@ upstream's source, not our measurement.
 | file | the claim it backs |
 |---|---|
 | `f4_population_MEASURED.txt` | the population is **one**: exactly one validator in 1232 programs carries a `PREFIX:IDENTIFIER` alternation. A real defect, but a single instance rather than a class — recorded so it is not read as a general rule by association. |
+
+## Session environment
+
+| file | the claim it backs |
+|---|---|
+| `test_red_under_load_MEASURED.txt` | the late-session red is a 55s subprocess timeout at load 64 on 32 cores, against a documented 18.9–20.3s baseline; the timing-out program has zero references to the file this branch changes. The timeout was NOT raised. |

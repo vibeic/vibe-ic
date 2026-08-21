@@ -1,0 +1,31 @@
+THE RED IS ENVIRONMENTAL, AND HERE IS THE LOAD BESIDE THE NUMBER.
+
+  test_issue1130_wiring_population_parity
+    ::test_the_wiring_gates_state_their_denominator_on_a_clean_run
+      [checker_execution_wiring_audit.py]        subprocess.TimeoutExpired @ 55s
+
+NOT an assertion failure. The test bounds the program at 55s and documents its
+own basis: "MEASURED, 3 runs each on a loaded host: checker_execution_wiring_
+audit 18.9-20.3s. 55s is ~2.7x the slowest observed."
+
+MEASURED HERE, with the load beside it, because a timing number without the
+load next to it is not a measurement:
+
+    suite green earlier this session   33s        load average ~4.8   (32 cores)
+    suite red now                      113s       load average 64.13  (32 cores)
+    the program alone, run 1           117.0s     load at start 64.13
+
+Load 64 on 32 cores is 2x oversubscription. The program is ~6x its documented
+baseline, which the load fully accounts for.
+
+ATTRIBUTION, PROVEN NOT ASSUMED: this branch changes exactly one shipped file,
+`benchmark/CAPTURE_ROUTING.json`. `checker_execution_wiring_audit.py` contains
+ZERO references to it, so the change cannot reach the program that timed out.
+
+WHAT I DID NOT DO: raise the timeout. The bound is an assertion about how long
+the program may take, and raising it to turn a red green is the one move that is
+forbidden here -- doubly so when the red is environmental and the bound is
+correct. The standing rule for this host is not to begin timeout adjudication
+while load exceeds core count.
+
+STATUS: UNDETERMINED under load, with the named cause. Re-run when load drops.
