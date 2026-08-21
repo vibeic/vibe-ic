@@ -7,20 +7,20 @@
         "area_um2": {
           "baseline": 6594.0,
           "better_is": "lower",
-          "delta": -554.0,
-          "delta_pct": -8.4016,
+          "delta": -85.0,
+          "delta_pct": -1.2891,
           "scale": "ratio",
-          "subject": 6040.0,
+          "subject": 6509.0,
           "verdict": "SUBJECT_BETTER"
         },
         "pareto": "SUBJECT_DOMINATES",
         "power_mw": {
           "baseline": 0.5730000000000001,
           "better_is": "lower",
-          "delta": -0.033,
-          "delta_pct": -5.7592,
+          "delta": -0.01,
+          "delta_pct": -1.7452,
           "scale": "ratio",
-          "subject": 0.54,
+          "subject": 0.5630000000000001,
           "verdict": "SUBJECT_BETTER"
         },
         "timing_wns_ns": {
@@ -35,10 +35,10 @@
         }
       }
     },
-    "subject": "vibe-ic-crosslayer-searched"
+    "subject": "vibe-ic-crosslayer-only"
   },
   "feasibility": {
-    "vibe-ic-crosslayer-searched": {
+    "vibe-ic-crosslayer-only": {
       "checked": [
         "antenna",
         "drc",
@@ -76,12 +76,12 @@
     "pdk": "sky130A",
     "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
   },
-  "record": "/home/reyerchu/_jxlayer/records/h2h_C.json",
+  "record": "/home/reyerchu/_jxlayer/records/h2h_G.json",
   "roles": {
     "baselines": [
       "vibe-ic-phase3-defaults"
     ],
-    "subject": "vibe-ic-crosslayer-searched"
+    "subject": "vibe-ic-crosslayer-only"
   },
   "scope": {
     "area_um2": {

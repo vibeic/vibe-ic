@@ -782,24 +782,33 @@
             },
             {
               "metric": "timing.drv.max_tran_violations",
-              "reason": "no record in this candidate names this metric",
-              "state": "NO_RECORD",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
               "view": {
                 "stage": "post_route"
               }
             },
             {
               "metric": "timing.drv.max_cap_violations",
-              "reason": "no record in this candidate names this metric",
-              "state": "NO_RECORD",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
               "view": {
                 "stage": "post_route"
               }
             },
             {
               "metric": "timing.drv.max_fanout_violations",
-              "reason": "no record in this candidate names this metric",
-              "state": "NO_RECORD",
+              "outcomes": [
+                "SATISFIED"
+              ],
+              "records": 1,
+              "state": "MEASURED",
               "view": {
                 "stage": "post_route"
               }
@@ -812,22 +821,67 @@
               "metric": "timing.drv.violations"
             },
             {
-              "absent": true,
               "kind": "count_zero",
-              "metric": "timing.drv.max_tran_violations"
+              "metric": "timing.drv.max_tran_violations",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "check": "drv",
+                "stage": "post_route",
+                "tool": "opensta"
+              },
+              "source": {
+                "parser": "drv_records.py",
+                "path": "/home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:bc1f0f2b064abe9c268ffc9f767727408e5251c9e2e024384f5bd8345df644f6",
+                "tool": "opensta"
+              },
+              "unit": "count",
+              "value": 0
             },
             {
-              "absent": true,
               "kind": "count_zero",
-              "metric": "timing.drv.max_cap_violations"
+              "metric": "timing.drv.max_cap_violations",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "check": "drv",
+                "stage": "post_route",
+                "tool": "opensta"
+              },
+              "source": {
+                "parser": "drv_records.py",
+                "path": "/home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:bc1f0f2b064abe9c268ffc9f767727408e5251c9e2e024384f5bd8345df644f6",
+                "tool": "opensta"
+              },
+              "unit": "count",
+              "value": 0
             },
             {
-              "absent": true,
               "kind": "count_zero",
-              "metric": "timing.drv.max_fanout_violations"
+              "metric": "timing.drv.max_fanout_violations",
+              "required_view": {
+                "stage": "post_route"
+              },
+              "scope": {
+                "check": "drv",
+                "stage": "post_route",
+                "tool": "opensta"
+              },
+              "source": {
+                "parser": "drv_records.py",
+                "path": "/home/reyerchu/_jxlayer/run/trials/p08/phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:bc1f0f2b064abe9c268ffc9f767727408e5251c9e2e024384f5bd8345df644f6",
+                "tool": "opensta"
+              },
+              "unit": "count",
+              "value": 0
             }
           ],
-          "status": "UNDETERMINED"
+          "status": "SATISFIED"
         },
         {
           "axis": "drc",
@@ -1159,7 +1213,6 @@
       ],
       "candidate_id": "p08",
       "codes": [
-        "drv:FEAS_METRIC_ABSENT",
         "em:FEAS_NOT_MEASURED",
         "em:FEAS_INCOMPLETE_VIEW_SET",
         "equivalence:FEAS_NOT_MEASURED",

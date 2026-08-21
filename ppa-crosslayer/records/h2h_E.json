@@ -19,7 +19,7 @@
     "source": "/home/reyerchu/_jxlayer/records/trials/b000/contract.json"
    },
    "measurement_basis": "post_route_sta",
-   "config_source": "phase3_one_shot_runner.py argparse defaults, unchanged: --die-um auto --util 0.30 --spare-density 0.02; RTL exactly as the design ships it",
+   "config_source": "d",
    "tuned_by_this_project": false,
    "ppa": {
     "area_um2": {
@@ -124,7 +124,7 @@
    "_feasibility_verdict": "UNDETERMINED"
   },
   {
-   "flow": "vibe-ic-crosslayer-searched",
+   "flow": "x",
    "role": "subject",
    "design": {
     "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
@@ -138,10 +138,10 @@
    },
    "contract": {
     "sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
-    "source": "/home/reyerchu/_jxlayer/records/trials/c02/contract.json"
+    "source": "/home/reyerchu/_jxlayer/records/trials/c05/contract.json"
    },
    "measurement_basis": "post_route_sta",
-   "config_source": "cross-layer winner: RTL lever arithmetic_architecture = carry-save shared-XOR form (crosslayer_rewrite_equivalence PASS, 165/165 points proven), at PnR knobs die auto / density 0.60 / spare 0.00",
+   "config_source": "s",
    "tuned_by_this_project": true,
    "ppa": {
     "area_um2": {
@@ -152,10 +152,10 @@
       "tool": "openroad",
       "fill": "post_fill"
      },
-     "value": 6040.0,
+     "value": 6148.0,
      "source": {
-      "path": "/home/reyerchu/_jxlayer/run/trials/c02/phase3/stage3/pnr/openroad.log",
-      "sha256": "sha256:6b53bb3ba1a3a5a24d463c76f1720403488410853819a2617e1b64c799f434d9",
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
       "tool": "openroad",
       "parser": "_ppa/backends/openroad.py"
      }
@@ -176,7 +176,7 @@
      "value": 0.0,
      "source": {
       "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
-      "sha256": "sha256:112fd9828fe845ac0cbc23ce8927a909e64601ea201331c7dd00ec655ce4c625",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
       "tool": "opensta",
       "parser": "_ppa/backends/opensta.py"
      }
@@ -196,10 +196,10 @@
       "mode": "functional",
       "group": "Total"
      },
-     "value": 0.54,
+     "value": 0.541,
      "source": {
-      "path": "/home/reyerchu/_jxlayer/records/trials/c02/diag/power_postroute.rpt",
-      "sha256": "sha256:17fcc1aa051712fcc305f1518a7ff2505d895d5a3c1aa39678d0e75abe0db45a",
+      "path": "/home/reyerchu/_jxlayer/records/trials/c05/diag/power_postroute.rpt",
+      "sha256": "sha256:554ec3cd97db8e2ef359a4b2211169fbfe7e3ce80591788fc81633c3dd8320d9",
       "tool": "opensta",
       "parser": "_ppa/power.py"
      }
@@ -242,7 +242,7 @@
    "tuning": {
     "supported": false
    },
-   "_trial": "c02",
+   "_trial": "c05",
    "_feasibility_verdict": "UNDETERMINED"
   }
  ]

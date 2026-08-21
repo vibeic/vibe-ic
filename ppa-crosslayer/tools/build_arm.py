@@ -144,7 +144,16 @@ def main(argv=None) -> int:
             pw_recs = ppower.metric_records(rep, stage=stage)
         notes.append("power stage derived from the session's own inputs: "
                      + "; ".join(why))
-    flat = list(or_recs) + list(tim_recs) + list(sign_recs) + list(pw_recs)
+    # --- 3c. the drv axis. NOTHING in programs/ produces it; this is the
+    # caller-side reference implementation, with its own four fixtures.
+    r = run([PY, str(ROOT / "tools" / "drv_records.py"), str(proj),
+             "--json", str(out / "drv_records.json")])
+    notes.append(f"drv_records rc={r.returncode}: "
+                 f"{r.stdout.strip().splitlines()[0] if r.stdout.strip() else r.stderr.strip()[:200]}")
+    drv_recs = ((load(out / "drv_records.json") or {}).get("records")) or []
+
+    flat = (list(or_recs) + list(tim_recs) + list(sign_recs) + list(pw_recs)
+            + list(drv_recs))
     (out / "records_flat.json").write_text(
         json.dumps(flat, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     (out / "proxy_records.json").write_text(
