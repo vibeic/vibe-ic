@@ -1,488 +1,405 @@
-# RESULT — the feasibility gate can answer
+# The record producers and the record consumer, made to agree
 
-**Branch** `agent/jppafeas-feasibility-producers`
-**Base** `origin/main` @ `e36d81c0a` — *v1.11.33*, cut fresh, worktree clean at cut.
-**Commit** `925ecd555` — 16 files, +2492 / −49.
+Branch cut from `origin/main` at **`e36d81c0a`** — `landing(ACTIVATE): wire what
+the fourteen lanes shipped` **[v1.11.33]**. Fetched 2026-08-21; that is the tip
+`origin/main` actually carries. The brief named a v1.11.19..v1.11.47 batch — the
+last eleven of those (v1.11.34..v1.11.47) are not on `origin/main` from here, so
+this branch is cut from v1.11.33 and everything below is measured against it.
 
-> **Note on the base.** The brief said `v1.11.19..v1.11.47` landed this morning.
-> `git fetch origin main` (twice, verified against `git ls-remote`) puts
-> `origin/main` at `e36d81c0a`, **v1.11.33**. I cut from what the remote actually
-> points at and re-fetched before pushing. If v1.11.47 exists somewhere I could
-> not see it, this branch needs a rebase and the A/B below needs re-measuring —
-> an A/B is only as current as its base.
+Items: **F-2, F-4, F-5, F-9, F-13** and lander requests **R5, R6, R7, R8, R10**.
 
----
-
-## The headline, as one measurement
-
-Same candidate document, same records, two gates:
-
-```
-$ python3 ppa_feasibility_check.py --candidates cand_full.json
-BASE  rc=2   baseline: UNDETERMINED
-             setup:FEAS_METRIC_ABSENT  hold:FEAS_METRIC_ABSENT  drv:FEAS_METRIC_ABSENT
-             drc/lvs/antenna/ir/em/equivalence: FEAS_VIEWS_NOT_DECLARED, FEAS_METRIC_ABSENT
-
-MINE  rc=0   baseline: FEASIBLE
-```
-
-A candidate can now be FEASIBLE, so the head-to-head's "both arms feasible"
-condition can hold, so a PPA comparison can be defended.
-
-**The timing records in that document are what `_ppa/timing.py` emits TODAY**
-(`worst_slack`, no `wns`) — this is reachable on run trees that already exist,
-not only on runs made after the emitter fix.
-
-**And the base cannot reach it under any view declaration.** I gave it its best
-shot, twice:
-
-| candidate document | BASE | MINE |
-|---|---|---|
-| `required_views_by_axis` per axis | rc=2 UNDETERMINED | **rc=0 FEASIBLE** |
-| one global `required_views` = the two timing corners | rc=2 | rc=2 |
-| one global `required_views` = `{stage}` only | rc=2 | rc=2 |
-
-The last two rows matter as much as the first. **Per-axis views are load-bearing,
-and nothing here made UNDETERMINED disappear by widening what counts as
-satisfied** — under a global view declaration my gate still refuses, exactly as
-the base does.
+Every fix has two halves, because shipping only the first is what lets these
+come back: the code is reconciled, **and the rule that was missing is written
+into `docs/PPA_INTERFACES.md` with a test that fails if the two sides drift
+again**. The contract gained one new subsection per class of disagreement:
+**§2** (the unit rule), **§2.1** (a second record under one identity), and
+**§3.1** (the five identities, and what belongs in each).
 
 ---
 
-## Per item
+## What changed, per item — and WHICH SIDE moved
 
-### F-3 / R3 — seven axes had no producer
+### F-5 / R6 — the unit of a count · **the PRODUCER moved**
 
-**New:** `_ppa/signoff.py` (library) + `ppa_signoff_records.py` (CLI, rc 0/2/3).
+`_ppa/area.py` declared `"cells"`, `"wires"` and `"wire_bits"`; `_ppa/metrics.py`
+reads the `_count` suffix on a metric NAME as a claim about `unit` and demanded
+`"count"`. Two files in one lane holding opposite rules. **Three** specs were
+wrong, not one — the finding named `cell_count`, and `wire_count` and
+`wire_bit_count` have the same defect:
 
-It reads the run's own sign-off artefacts and emits `vibeic.ppa.metric.v1`
-records with real provenance (path + sha256 + parser + parser sha256). **Six of
-the seven now have a producer.** DRV does not — see "what I could not settle".
+```
+area.proxy.cell_count      area.py says 'cells'      name claims 'count'  -> UNIT_CONTRADICTS_NAME
+area.proxy.wire_count      area.py says 'wires'      name claims 'count'  -> UNIT_CONTRADICTS_NAME
+area.proxy.wire_bit_count  area.py says 'wire_bits'  name claims 'count'  -> UNIT_CONTRADICTS_NAME
+```
 
-| metric | artefact it is read from |
+**`_ppa/area.py` is the side that changed.** The metric NAME is part of the
+record's identity, and `unit_suffix_of` is the only cross-check in the system
+positioned to catch an order-of-magnitude unit error — every consumer downstream
+trusts `unit`. Relaxing `metrics.py` to accept `"cells"` would have removed that
+check for **every** `_count` metric in the tree, and bought nothing: WHAT is
+counted is already stated twice, by the metric name and by `AreaMetricSpec.what`.
+The unit names the DIMENSION, never the thing counted.
+
+Both halves of the reminder are enforced and tested: the record **carries** its
+unit, and a record with no unit is **refused** (`NO_UNIT`), never assumed from
+the name — `test_vacuous_a_record_with_NO_unit_is_refused_never_assumed`.
+
+### F-4 / R5 — the three envelopes · **the CONSUMER moved**
+
+`records_from_document` accepted one record, a bare list, or a
+`metric_bundle.v1`, and **not one shipped producer writes any of the three**.
+Measured on a real OpenROAD parse: the envelope holds **52 genuine records** and
+the consumer indexed **0**.
+
+**`_ppa/metrics.py` is the side that changed**, and the reason is structural
+rather than a coin-toss: `bundle()` is built from a `MetricIndex`, and the index
+**refuses a conflicting pair**. A producer forced to write a bundle could not
+express "two artefacts disagree" *at all* — which is precisely what
+`_ppa/backends/__init__.py` requires a backend to report. Making the producers
+write bundles would have deleted the evidence between them.
+
+New `M.RECORD_CARRIERS` maps envelope schema → the key its records live under.
+An unregistered `vibeic.ppa.*` document is still **refused**, never read as empty
+(rule 9). Measured after: `52 records -> OK 52`.
+
+**Secondary, and it was real:** with every input unreadable the program still
+wrote `{"records": []}` — byte-identical to a run that read a tree and found
+nothing. The exit code was honest and the file was not. Now no bundle is written
+when nothing was read, and a *partial* read writes a bundle that carries
+`inputs_unreadable` so the file itself says what it could not open. The existing
+test `test_vacuous_an_empty_directory_writes_no_bundle_that_reads_as_clean`
+promised this in its name and its body admitted the opposite; it now asserts what
+it says.
+
+### F-9 / R7 — two readings of one metric under one scope · **I did NOT implement R7**
+
+R7 asks for the source artefact to be put into `scope`. **I have not done that,
+and I recommend against it.** It makes the collision go away by converting a
+DETECTED conflict into two facts that quietly never compare again — the opposite
+of what `_ppa/backends/__init__.py` requires ("A backend never resolves a
+disagreement… ruling on the conflict is `_ppa/contract.py`'s job").
+
+What I found instead is that **the index was calling agreement a conflict.**
+Driving the backend over a real PnR directory:
+
+| metric | openroad.log | openroad.metrics.json | before | after |
+|---|---|---|---|---|
+| `route.drc.violation.count` | **0** | **0** | `CONFLICTING_RECORD` | **corroboration, accepted** |
+| `route.via.count` | 2502 | 2510 | `CONFLICTING_RECORD` | `CONFLICTING_RECORD` |
+| `route.wirelength.um` | 12704.0 | 12722 | `CONFLICTING_RECORD` | `CONFLICTING_RECORD` |
+
+The first row is two artefacts **confirming** a fact, and its refusal message
+read "Two numbers claiming to be the same fact is a conflict" when the two
+numbers were equal. One corroborated fact took down the whole record set.
+
+`MetricIndex.add` now names four outcomes instead of two (contract §2.1):
+byte-identical → `DUPLICATE_RECORD`; same status/unit/value from different bytes
+→ **CORROBORATION**, kept once with the confirming artefact recorded in the
+bundle's `corroborations`; different value → `CONFLICTING_RECORD`, and the
+refusal now **names both source paths**; different value from the **same bytes**
+→ `SAME_ARTEFACT_TWO_VALUES`, because identical bytes cannot support two numbers
+and that is a parser defect, not a fact about the run.
+
+Disagreement is still detected and still fatal to the claim. Records are left
+byte-identical to what the producer parsed — corroboration lives in the index and
+the bundle, not by rewriting parsed evidence.
+
+### F-10 / R8 — every timing row emitted twice, and three slacks in one view
+
+Two different defects, and the brief's dichotomy separates them exactly.
+
+**(a) One reading read twice → the INPUT LIST was wrong.** `discover_reports`
+de-duplicated on the *resolved path*, and the runner publishes each report into
+two directories as separate files with identical bytes. Now it de-duplicates by
+**content hash**, keeps the first in `_STA_DIRS` order, and each collapse is
+reported as a note rather than dropped silently.
+
+**(b) Three slacks under one scope → the SCOPE was wrong.**
+`timing.*.worst_path_slack_ns` is emitted once per reported path and every one
+carried the same scope. The scope now names the path: `path_startpoint` /
+`path_endpoint` when the artefact gives them — an identity that is the same in
+two runs of one design, so two arms stay comparable — and `path_ordinal` **only**
+when it does not, since an ordinal moves if the tool reorders its output and a
+cross-arm comparison over it should refuse. Never both.
+
+Measured on the new specimen: 3 rows named by endpoints, 1 by ordinal, no two
+rows from one artefact sharing a scope.
+
+### F-2 — `--backend` drove no backend, including the ones that exist
+
+All five shipped backends returned the same blanket rc=2. The CLI also had no
+argument saying *what* to read.
+
+`_ppa/backends/__init__.py` gains a driver seam: a backend that can turn one
+path into records declares `extract_records()`; one that cannot declares
+`NO_DRIVER_REASON`. Both are read by attribute, so teaching a backend to be
+driven touches only that backend. `ppa_metric_extract.py` gains
+`--backend TOOL --from PATH` (and `--stage` for the backend that needs it).
+
+| backend | now |
 |---|---|
-| `physical.drc.violations` | `reports/phase3/drc_signoff.json` + `reports/phase3/drc_vacuous.json` |
-| `physical.lvs.verdict` | `reports/phase3/lvs_verdict.json` |
-| `physical.antenna.violations` | `reports/phase3/antenna.json` |
-| `power.ir.violations`, `power.ir.worst_drop_v` | `reports/phase3/ir_drop.json` |
-| `reliability.em.violations`, `reliability.em.worst_ratio` | the current-density screen's report |
-| `equivalence.verdict` | `reports/lec.json` |
+| `openroad` | **drivable** — a run directory, a log, or a metrics JSON |
+| `librelane` | **drivable** — see the caveat below |
+| `yosys` | **drivable, requires `--stage`** — one transcript holds a generic and a mapped block; defaulting it compares a pre-techmap count against a mapped one |
+| `opensta` | not drivable, **says why**: it produces a `Report`, and deciding what a slack MEANS is a domain rule |
+| `orfs` | not drivable, **says why**: it parses AutoTuner rows the search layer holds, not an artefact on disk |
 
-On a closed run: **6 axes SATISFIED** where the base had `FEAS_METRIC_ABSENT` on
-all seven.
+Measured end to end: `--backend openroad --from <run dir>` → 49 records indexed,
+2 genuine conflicts refused, rc=1, no bundle. `--from <log>` → 35 records, rc=0,
+bundle written.
 
-**It invents nothing.** Every reader answers one of exactly two ways — the
-artefact states the fact, or `NOT_MEASURED` with a reason naming what is missing.
-There is no third branch. Measured refusals, each one a shipped test:
+**Also fixed here:** `RC_BAD_INVOCATION = 3` was defined in that file and never
+used — `argparse` exits **2** on a usage error, which §1 reserves for "I could
+not check". A typo and an unreadable input left a caller the same exit code. The
+parser now exits 3, as §1 says.
 
-* **DRC** applies the three-way discriminator from
-  `fixtures/ppa/drc/zero_three_ways/expected.json` — as *that decision table*,
-  driven in the tests by the fixture's own `expected.json` rather than by numbers
-  I wrote. The report carries two of the three facts; the third (did the deck run
-  over geometry) is not in the report and never can be, so it comes from
-  `drc_vacuous_pass_check`'s artefact. A run with no vacuity artefact is
-  NOT_MEASURED, not a clean.
-* **Antenna** over an incompletely routed design → NOT_MEASURED. Null counts are
-  not read as zero.
-* **IR** with no declared `budget_pct_vdd` → no violation count exists (there is
-  no line to be over). The drop itself is still MEASURED, for the axis's
-  contract-limit proof.
-* **Equivalence** proving RTL against a netlist that names no post-layout netlist
-  → NOT_MEASURED with the gate netlist quoted. A *failed* LEC is MEASURED, not
-  NOT_MEASURED: reporting a real finding as "could not check" hides it.
-* **LVS** verdicts are reported verbatim. `INCOMPLETE` and `WARN` are not mapped
-  to failures — they are verdicts the axis does not accept, which is a different
-  sentence and a different fix.
+### F-13 / R10 — which artefacts belong to `analysis`
 
-**Corner-independent facts are emitted ONCE.** The reference bridge had to emit
-each physical fact once per required timing view — N records carrying one source
-hash, into an index whose entire job is to notice when two numbers claim to be
-the same fact — purely because `required_views` was global. F-11 removed the
-need; a test asserts the duplication does not come back.
+The contract named five identities in a module-map line and never said what goes
+in each, and the natural reading of "analysis artefacts" — the STA/DRC/LVS
+reports — makes `ppa_problem_integrity_check` refuse **every** legitimate
+comparison, because those files are outputs of the implementation.
 
-**`scope.stage`** is required by `_ppa/metrics.py` and no artefact states one. It
-is not guessed: each source declares its stage together with a `stage_basis`
-sentence naming the input that makes it that stage, and both travel into the
-record's `provenance`. A reader can check the claim instead of discovering later
-that it was a guess.
+**New contract §3.1** states the rule: *an artefact that varies with the
+implementation may not sit in `analysis`.* `analysis` is the measurement
+CONFIGURATION; it is never the reading.
 
-### F-17 — the EM report supports no violation count
+**New finding `PPA-C-016`** makes it actionable. `PPA-C-012` is deliberately
+unchanged — the comparison really is invalid — but when `analysis` differs **and
+`implementation` differs**, the artefacts that moved are now named as misfiled,
+with the rule and the fix. A bare digest mismatch sent the reader to diff two run
+trees by hand.
 
-The finding is right about `reports/phase3/em.json`: segment count and peak
-current, **no violation count and no declared limit**. But the fact is not
-missing from the flow — **`em_current_density_check.py` already computes it**,
-screening every segment against the PDK's Jmax and listing offenders. Its
-`offender_count` is `reliability.em.violations`, and its `summary.worst_utilization`
-(J/Jmax) is *exactly* `reliability.em.worst_ratio`, unit `1`.
+The discriminator is tested too: `analysis` moving **alone** is a genuinely
+different measurement (a moved corner) and must NOT be reported as misfiling.
 
-So the honest answer is better than "the artefact does not carry the fact": the
-artefact that carries it is a different one, and it ships. `em.json` **alone**
-still yields NOT_MEASURED, and the screen's own `SKIPPED` verdict (report
-present, Jmax present, nothing mapped) is carried through as NOT_MEASURED with
-the screen's message — never as a clean.
-
-### F-8 / R9 — power records cannot satisfy their own REQUIRED_SCOPE
-
-`_ppa/power.py` now fills `process`, `voltage_v` and `temperature_c` from
-`opensta.parse_liberty_pvt(report["liberty"])` — the parser the same lane already
-ships, against the file name the record already carries.
-
-**The half that matters is what it must not do.** `check_scope_parity` tests
-required keys for *presence*, so `process: None` would satisfy the key check and
-then compare equal to another `None` — two records that say nothing about their
-corner, passing as the same corner. Worse than the refusal it replaces. So **only
-what the parser resolved is emitted**; an unresolvable or *ambiguous* stem leaves
-the key out and records the parser's own gap reason in `provenance`. And
-`check_scope_parity` now refuses a present-but-null required key outright
-(`SCOPE_SENTINEL`).
-
-`mode` is still not emitted — no power artefact states an operating mode. The
-refusal is correct and it stays; the caller supplies it through the existing
-`extra_scope` hook. See requests to the lander.
-
-### F-11 — `required_views` is global
-
-**The decision, since the brief asked for one rather than a patch:**
-
-**Yes, an unmeasured required view should sink the axis, and that is unchanged.**
-A corner nobody ran is a corner nobody ran. What was wrong was not the strictness
-— it was that one list was applied to nine axes measured in *different scope
-namespaces*. Setup and hold sign off across process corners; DRC, LVS, antenna,
-IR, EM and equivalence are single measurements over one database and have no
-process corner at all. A contract declaring its timing corners therefore also
-demanded them of DRC, leaving DRC permanently uncovered unless its producer
-faked N scopes.
-
-So: `FeasibilityPolicy.required_views_by_axis`, falling back to the global
-`required_views` for any axis it does not name — a contract written before this
-field adjudicates *identically* (tested). There is no spelling that means "any
-view will do": an axis named with an **empty** list is UNDETERMINED, exactly as
-an undeclared global list is (tested). A key naming no known axis is dropped
-rather than silently honoured (tested).
-
-**And the record now SAYS which views were measured**, so a reader can re-decide.
-Every `AxisResult` publishes `coverage`, one row per declared view:
-
-| state | meaning | the fix it points at |
-|---|---|---|
-| `MEASURED` | a record covers the view and the proof was evaluated | — |
-| `NOT_MEASURED` | a record covers the view and could not support the metric — **with the artefact's own reason and the source path** | a better artefact |
-| `NO_RECORD` | nothing covering this view names the metric | a run |
-
-Those last two used to be one sentence with no view named at all. The coverage is
-published on SATISFIED axes too, so questioning the view set does not require
-making the axis fail first. `ppa_feasibility_check.py` also publishes
-`views_used_by_axis` — what the gate *resolved*, not only what the contract wrote.
-
-### F-15 — no STA artefact prints a hold `wns`
-
-The brief predicted the honest answer and it was right, and it turned out to be
-**both** halves.
-
-**The emitter.** `phase3_one_shot_runner.py`'s two multi-corner sign-off stanzas
-— the ones that decide setup at the slow corner and hold at the fast one — emit
-`report_worst_slack` and `report_tns` and **never `report_wns` at all**. So
-`timing.hold.wns_ns` was NOT_MEASURED on every view of every run, for every
-design: the hold axis was structurally unprovable, and that is a property of the
-flow, not of any chip. Both stanzas now ask, through `_report_wns_tcl(rpt_c, flag)`
-(`-max` for setup, `-min` for hold), guarded by `catch` in the runner's own
-established idiom so a build that rejects the flag cannot abort a sign-off script
-that has already written its setup half. On failure the reason is *written into
-the report* and no marker appears, so an absent wns stays visible as a refusal
-rather than becoming a silent skip.
-
-`_ppa/timing.py` will not derive the wns from the worst slack, and **it is right
-not to** — §3 says hash the value you parsed. I did not touch that.
-
-**The axis.** The emitter fix only helps runs made after it. The tool already
-prints the fact under its other name, on every run that exists — so
-`timing.{setup,hold}.worst_slack_ns` is admitted as a proof group. This is **not
-a relaxation** and I did not take that on trust:
-
-```
-wns = min(0, worst_slack)          (_ppa/timing.py's own header;
-                                    measured in tests/test_ppa_timing.py, where
-                                    one view reports worst slack 0.19 beside wns 0.00)
-
-wns >= 0  <=>  min(0, worst_slack) >= 0  <=>  worst_slack >= 0
-```
-
-Same predicate, so it admits no candidate the wns proof would refuse. A test
-sweeps both signs and the boundary over both checks and requires the two verdicts
-to agree. Three more tests hold the line: a negative worst slack still VIOLATES;
-a no-paths view (worst_slack left at INF, which `_ppa/timing.py` already emits as
-NOT_MEASURED) is **not** rescued; and a violation in one group is not outvoted by
-a satisfied other group.
-
-### F-18 / R12 — `derive_feasibility` requires a count, and LVS is not a count
-
-**I changed the shape rather than encoding "matched" as 0.** A check now states
-its result as `violations` (a count), `status` (`CLEAN`/`VIOLATIONS`/`NOT_CHECKED`)
-or `verdict` (a literal). The `comparison.v2` schema documents all three, with an
-`anyOf` requiring at least one, plus `top_cell` — because a match between two
-circuits nobody named is not a fact about this design.
-
-The verdict accept-sets are **sourced from the accept sets `_ppa/feasibility.py`
-declares on the matching axis**, so there is one statement in the repository of
-what an LVS pass looks like — and a test asserts the two agree rather than
-trusting me to keep them in step.
-
-Consequences, each tested:
-* `status: CLEAN` everywhere → FEASIBLE (was NOT_CHECKED, on a record valid
-  against the shipped schema).
-* `lvs: {verdict: MATCH, top_cell: core}` → FEASIBLE, with no count written about
-  a verdict.
-* `lvs: {verdict: MISMATCH}` → INFEASIBLE, not merely unchecked.
-* `status: NOT_CHECKED` **outranks** a leftover count — an explicit "I did not
-  check this" must not be resurrected.
-* A `verdict` on a check with no verdict spelling (`drc: {verdict: "looks fine"}`)
-  → NOT_CHECKED. Free text does not buy a pass.
-* **Contradiction:** `status: CLEAN` beside `violations: 3` → INFEASIBLE, and the
-  contradiction is named in `contradicting`. The measured count decides, because
-  this module's own stance is that an assertion beside its own evidence is where
-  a record has room to be dishonest cheaply.
-* Every count-shaped record written before this change derives identically.
-
-### F-18, one layer down — the canonical shape could not express a verdict
-
-Found while building F-3, and it was blocking it. `_ppa/metrics.validate()`
-hard-required a numeric value, so `physical.lvs.verdict` and
-`equivalence.verdict` — **two of the nine axes the gate proves** — were refused
-`VALUE_NOT_A_NUMBER` by the very shape the gate reads. That is not a rule about
-LVS; it is the record shape and the gate disagreeing about what a metric is.
-
-`is_verdict_metric()` derives it from the name (last segment `verdict`), in the
-same style as `metric_domain`, so a new verdict metric needs no edit. A verdict
-record is held to everything else — a value is required, the empty string is not
-one (two empties compare EQUAL, so two circuits nobody compared would read as
-agreeing), and `unit` must be `"verdict"`. What it is exempt from is arithmetic,
-and `compare()` returns `NOT_NUMERIC` with **no `delta_b_minus_a` key** rather
-than `float()`-ing two strings: a delta of 0 printed for two verdicts reads as
-"no regression" on a pair that were never numbers. A *number* declaring
-`unit: "verdict"` is refused too.
+§3.1 also records the F-14 hazard the E2E lane hit: a hash-based identity over an
+emitted script is defeated by absolute host paths — emit it relative, or leave it
+out of the identity **and say so**.
 
 ---
 
-## A/B, by TEST ID
+## The A/B, by TEST ID
 
-Same 33 files both sides, run **serially** (`-p no:randomly`, no `-n`), on
-`e36d81c0a` vs `925ecd555`:
+Serial runs (`-p no:cacheprovider`, no `-n`), base measured in a **separate clean
+worktree at `e36d81c0a`** so the two arms differ only by this branch.
 
-```
-BASE   6 failed, 774 passed, 11 skipped
-MINE   6 failed, 774 passed, 11 skipped      + 89 new tests, all green
-diff of the sorted FAILED test-ID lists: EMPTY
-```
+**The PPA set** — `tests/test_ppa_*.py` + `test_readme_ppa_extractor.py` +
+`test_issue1121_ppa_head_to_head.py` (39 files base, 41 after):
 
-The 6 reds are **identical test IDs on both sides** and are pre-existing:
+| arm | result |
+|---|---|
+| base `e36d81c0a` | **33 failed, 1085 passed** in 42.21s |
+| this branch | **33 failed, 1123 passed** in 43.31s |
 
-```
-tests/test_ppa_contract.py::test_a_clean_contract_passes_both_schemas
-tests/test_ppa_contract.py::test_a_clean_declaration_builds_and_validates
-tests/test_ppa_contract.py::test_a_clean_verdict_discloses_what_it_examined
-tests/test_ppa_contract.py::test_the_disclosure_moves_with_the_document
-tests/test_ppa_contract.py::test_the_embedded_run_manifest_is_validated_against_its_own_schema
-tests/test_ppa_contract.py::test_the_json_report_is_written_when_it_is_asked_for
-```
+**The full affected surface** — every test file referencing `_ppa`,
+`ppa_metric_extract`, `ppa_problem_integrity` or `PPA_INTERFACES` (47 base, 49
+after):
 
-Cause, measured on the pristine base:
+| arm | result |
+|---|---|
+| base `e36d81c0a` | **35 failed, 1539 passed, 5 skipped, 2 xfailed** in 113.27s |
+| this branch | **35 failed, 1577 passed, 5 skipped, 2 xfailed** in 113.54s |
 
-```
-[UNDETERMINED] PPA-C-010: jsonschema is not importable here, so the contract's
-               shape was NOT validated. This is not the schema passing
-$ python3 -c "import jsonschema"  ->  ModuleNotFoundError
-```
+**The failing TEST-ID sets are IDENTICAL on both arms — `comm` reports nothing in
+either direction. No new failure, and no test that was red became green by
+accident.** Both arms gain exactly **+38** passing tests, which is exactly the 38
+this branch adds (13 + 13 + 3 + 6 + 3): 1085 -> 1123 and 1539 -> 1577.
 
-That is the undeclared dependency the e2e lane also recorded. The refusal is
-correctly worded; the missing dependency is not mine and I did not paper over it.
+### The 35 pre-existing reds are NOT mine, and here is what they are
 
-**New tests: 89, all green.**
-
-| file | tests | covers |
+| count | file | cause |
 |---|---|---|
-| `test_ppa_signoff_records.py` | 32 | F-3, F-17 — positive / negative / vacuous |
-| `test_ppa_feasibility_views_and_slack.py` | 29 | F-11, F-15 |
-| `test_ppa_verdict_and_scope_shapes.py` | 28 | F-18, F-8 |
+| 20 | `test_ppa_metrics_schema_agreement.py` | `jsonschema` |
+| 12 | `test_ppa_contract.py` | `jsonschema` |
+| 1 | `test_ppa_contract_fixtures.py` | `jsonschema` |
+| 1 | `test_matrix_d2_falsifiable.py::test_d2_gate_has_a_reachable_fail[step1.6x]` | step 1.6x's one blocking clause reaches PASS on a deliberately-broken project |
+| 1 | `test_not_verified_tier.py::test_no_new_undeclared_infrastructure_skip_appears` | `test_trusted_pytest_entry.py` carries an undeclared infrastructure-absent skip |
 
-`tests/test_ppa_feasibility_separation.py::test_the_gate_has_no_numeric_margin_of_its_own`
-is an **exact** enumeration of `FeasibilityPolicy`'s fields, so adding
-`required_views_by_axis` required updating it. I extended the enumeration and the
-docstring (arguing why a per-axis view list is a view declaration and not a knob)
-rather than loosening the assertion to a filter — the exactness is the guard, and
-it still fails on any field added later.
-
-### Positive / negative / VACUOUS for the new checker
+The `jsonschema` 33 are an **environment** fact with a real code defect behind
+them, and it is worse than "not a declared dependency":
 
 ```
-rc=0  a run that measured something              8 records, 5+ MEASURED
-rc=2  an empty run directory                     [CANNOT CHECK] + 8 NOT_MEASURED rows
-rc=3  a path that is not a directory / no args
-rc=1  NEVER returned — this program reports evidence; the gate makes findings
+$ python3 -c "import jsonschema; print(jsonschema.__version__)"
+3.2.0
+E   AttributeError: module 'jsonschema' has no attribute 'Draft202012Validator'
 ```
 
-The rc=2 artefact is checked too, not only the exit code: it holds eight
-well-formed NOT_MEASURED records. A `--json` file that looked clean beside an
-honest exit code is a defect this repository has shipped before.
+`ppa_contract_check.py:118` guards `import jsonschema` and prints a correctly
+worded `PPA-C-010` when it fails — but line 158 then uses
+`jsonschema.Draft202012Validator` unconditionally. An **old but importable**
+jsonschema walks straight past the guard and raises. The refusal is right; the
+version check is missing. **Out of my items — reported, not fixed**, because
+touching it would move my A/B baseline. See request 4.
 
 ---
 
-## Mutation arms — 15 of 15
+## Mutation arms — every fix, reverted, with the test that goes red
 
-Revert the fix → the named test goes RED → restore → GREEN. Script:
-`scratchpad/mutate.py`. Every row verified green-before *and* green-after, so a
-test that was already failing cannot be mistaken for a working arm.
+Harness: revert one edit in place, run only the named test, restore. All ten went
+red; a guard that cannot go red is not a guard.
 
-| # | reverted | test that goes red |
-|---|---|---|
-| 1 | DRC: trust the report's bare zero | `test_the_drc_discriminator_is_the_fixture_s_table[ran_on_empty_layout]` |
-| 2 | EM: read `em.json`'s `MEASURED` as a clean | `test_the_em_measurement_artefact_alone_supports_no_count` |
-| 3 | LEC: accept a proof over any gate netlist | `test_a_pre_layout_lec_proof_is_not_post_route_equivalence` |
-| 4 | Antenna: read an unrouted check's zero as a zero | `test_an_antenna_check_over_an_unrouted_design_is_not_a_zero` |
-| 5 | Per-axis views: always fall back to the global list | `test_a_corner_independent_axis_no_longer_needs_the_timing_corners` |
-| 6 | Coverage: publish no rows | `test_the_coverage_separates_a_view_nobody_ran_from_one_that_could_not_be_read` |
-| 7 | Drop the hold `worst_slack` proof group | `test_the_hold_axis_is_provable_from_a_report_that_prints_only_worst_slack` |
-| 8 | Emitter: stop asking one stanza for the wns | `test_both_multi_corner_signoff_stanzas_ask_the_tool_for_the_wns` |
-| 9 | Deriver: require an integer count on every floor check | `test_status_clean_everywhere_derives_feasible` |
-| 10 | Deriver: let an assertion outvote a measured count | `test_a_self_contradicting_check_is_decided_by_the_measured_count` |
-| 11 | Record shape: a verdict is not a metric | `test_a_verdict_record_is_a_valid_canonical_record` |
-| 12 | Record shape: subtract two verdicts | `test_two_verdicts_are_never_subtracted` |
-| 13 | Power: do not fill the PVT | `test_the_pvt_the_liberty_names_reaches_the_scope` |
-| 14 | Power: emit the PVT keys as **null** when unresolved | `test_an_unreadable_liberty_stem_leaves_the_keys_OUT_and_says_why` |
-| 15 | Parity: accept a present-but-null required scope key | `test_a_present_but_null_required_scope_key_is_refused` |
+| # | mutation | named test | verdict |
+|---|---|---|---|
+| 1 | `area.py` declares `"cells"` again | `..._agreement.py::test_every_area_metric_builds_a_record_its_own_consumer_ACCEPTS` | **RED** rc=1 |
+| 2 | `RECORD_CARRIERS` holds only the bundle | `..._agreement.py::test_the_three_shipped_producers_write_documents_the_consumer_READS` | **RED** rc=1 |
+| 3 | agreement called a conflict again | `..._second_record_identity.py::test_two_artefacts_that_AGREE_are_corroboration_not_conflict` | **RED** rc=1 |
+| 4 | conflict detection removed | `..._second_record_identity.py::test_two_artefacts_that_DISAGREE_are_still_refused` | **RED** rc=1 |
+| 5 | dedupe by resolved path again | `test_ppa_timing.py::test_a_report_published_into_two_directories_is_read_ONCE` | **RED** rc=1 |
+| 6 | path identity dropped from scope | `test_ppa_timing.py::test_every_reported_path_row_says_WHICH_path` | **RED** rc=1 |
+| 7 | openroad's driver removed | `test_ppa_metrics_extract_cli.py::test_the_backend_seam_actually_EXTRACTS` | **RED** rc=1 |
+| 8 | the blanket backend refusal returns | `test_ppa_metrics_extract_cli.py::test_the_backend_seam_actually_EXTRACTS` | **RED** rc=1 |
+| 9 | the misfiling diagnosis removed | `test_ppa_problem_integrity.py::test_a_report_declared_under_analysis_is_named_as_MISFILED` | **RED** rc=1 |
+| 10 | an empty bundle is written again | `test_ppa_metrics_extract_cli.py::test_vacuous_an_empty_directory_writes_no_bundle_that_reads_as_clean` | **RED** rc=1 |
 
-Arms **14** and **15** are the ones I care most about: they are the arms against
-*my own fix* becoming the next defect.
+**Arm 4 is the one that matters most for F-9.** It proves the corroboration
+change did not quietly disable conflict detection: force `_states_the_same_fact`
+to always-true and the DISAGREE test goes red.
 
----
+**Two arms I had to strengthen after they failed to go red, recorded because the
+first version would have shipped a guard that guarded nothing:**
 
-## Other gates
+* my first F-2 guard asserted only that *some* backend is drivable — disabling
+  openroad's driver left librelane and yosys and it stayed **green**. Replaced
+  with an end-to-end guard through the process: `--backend openroad --from <log>`
+  must exit 0 and index a record with the value the log states.
+* my first path-identity test ran on a fixture with **one** path row, so "no two
+  rows share a scope" was satisfied by having nothing to collide with. Added a
+  specimen with three paths in one view, and asserted `len(path_rows) >= 4` and
+  the exact value set so it cannot go vacuous again.
 
-* `source_chip_agnostic_check` — **PASS**, 1503 files, NDA panel 4588/4588. No
-  foundry name, node, SKU or codename anywhere in the new source or this file.
-* `programs/INDEX.md` and `PROGRAM_INVENTORY.json` — **regenerated**, not
-  hand-edited. The inventory diff is exactly my additions (+1 top-level, +1
-  catalogued, +5 tree `.py`, +3 test files); no other lane's drift absorbed.
-  (`gen_program_inventory.py` counts TRACKED files, so it had to run *after* the
-  commit — worth knowing.)
-* `test_program_inventory_no_drift.py` — back to the base's exact 4 reds; the
-  fifth (`test_catalogued_agrees_with_the_shipped_index`) was mine and is fixed.
-* `tools/ci/protected_landing_transition.json` — **no protected path touched**,
-  verified mechanically against the manifest. Nothing for the lander to re-render.
-* No plugin version bump. Nothing pushed to `main`. No `--write-baseline` on any
-  gate. No GDS, geometry, pin or rule deck touched — nothing in this branch
-  changes what a tool measures, only what is done with what it measured.
-* `tools/ci/repo_hygiene_gates.sh` — **identical to base**, A/B'd on a clean
-  committed tree:
+### Non-vacuity, checked rather than assumed
 
-  ```
-  BASE   76 of 86 decided — 67 passed, 9 failed; 10 NOT CHECKED
-  MINE   76 of 86 decided — 67 passed, 9 failed; 10 NOT CHECKED
-  diff of the sorted "^^ FAILED" gate lists: EMPTY
-  ```
+* the envelope census asserts it scanned `> 10` schemas before concluding;
+* every registry-walking test asserts its registry is non-empty first;
+* the path-identity test exercises **both** naming branches — measured 3 named,
+  1 ordinal;
+* `test_the_unit_rule_is_ENFORCED_and_not_merely_declared` re-applies the exact
+  pre-v1.11.33 declaration and requires `UNIT_CONTRADICTS_NAME`, so the census
+  cannot pass over a tree where the enforcer stopped firing.
 
-  Worth recording how nearly I mis-read this. Run against a **dirty** worktree it
-  reported one extra failure (`an argued direction is pinned`) and one extra
-  NOT CHECKED (`gates are host-independent`), because both gates create isolated
-  workers from `HEAD` and said so:
-
-  ```
-  DIRTY_CHECKOUT: host-independence was NOT checked — tracked files are modified,
-  so the worktree at HEAD does not carry them and every one would read as a
-  difference about the edit rather than about the gate. This is not a pass.
-  ```
-
-  Committing first made both go away. Neither was a finding about this change,
-  and the gates were explicit about that rather than leaving me to guess.
+**The census found a defect I had missed by hand.** It failed on first run naming
+`vibeic.ppa.area_verdict.v1`, an envelope I had not seen in the findings. It is
+an adjudication and not a record carrier, so it is classified as such — but that
+is the census doing the job it was written for on its first execution.
 
 ---
 
 ## What I could NOT settle
 
-**1 — DRV has no producer, and the reason is granularity, not absence.**
-This is the seventh axis and the one I did not close. The extractor exists and is
-shipped: `sta_corner_record_completeness_check.extract_drv(text)` returns
-per-kind `max_slew` / `max_capacitance` / `max_fanout` counts *and* a `queried`
-flag that distinguishes "the limit was met" from "the tool was never asked" —
-which is exactly the distinction the DRV axis needs. **But it is report-scoped,
-not view-scoped**: it accumulates counts across every section of a report and
-returns one answer per file, while `timing.drv.*` must be matched against a
-`required_view`. Two ways forward, and both belong to lanes that own the code:
+**1. `librelane` produces records the canonical consumer refuses — a FOURTH
+producer, and worse than the three.** F-4 named three; there are four. Measured:
 
-  * `extract_drv` gains per-section attribution — it already tracks the section
-    banner regex, so the state is there; or
-  * DRV is emitted at *report* scope with the stage the report's `STA_BASIS`
-    stamp declares, and the contract declares `drv: [{stage: …}]`. Per-axis
-    required views (F-11) make this reachable now, where it was not before.
+```
+design__instance__area   MEASURED -> ['BAD_METRIC_NAME', 'SCOPE_INCOMPLETE', 'NO_UNIT']
+design__instance__count  MEASURED -> ['BAD_METRIC_NAME', 'SCOPE_INCOMPLETE', 'NO_UNIT']
+timing__setup__ws        MEASURED -> ['BAD_METRIC_NAME', 'SCOPE_INCOMPLETE', 'NO_UNIT']
+```
 
-I did not write a second STA-report reader in `_ppa/signoff.py` to do it:
-`_ppa/timing.py` already owns STA parsing and already derives the per-view scope,
-and a second reader is the drift the backend/domain split exists to prevent.
+Its rows are invalid at the **record** level, not just wrapped in an unreadable
+envelope: LibreLane's `design__instance__area` is not a canonical dotted name,
+no row carries a `stage`, and **no row carries a `unit` at all**. I did **not**
+fix it. Mapping those keys onto canonical names and units needs evidence for
+each unit that I do not have here, and inventing them is the exact defect
+`openroad.py` refuses by name ("It does not map a `-metrics` JSON key whose unit
+it could not establish from evidence"). I drove it anyway rather than hiding it,
+and said so in the driver's docstring, so the gap is loud instead of silent.
 
-**2 — `mode` is still absent from the power scope.**
-Three of the four keys `REQUIRED_SCOPE["power_mw"]` wants now come from the
-liberty stem. The fourth is an *operating* mode and no power artefact states one.
-`activity.declared_mode` is the activity basis, not an operating mode, and using
-it would be exactly the fabricated scope field the module refuses. The refusal
-stands and the caller must supply it.
+**2. The `timing_rows.v1` schema edit is additive, and §5 says v1 is never
+edited.** Naming the path in scope needs three optional properties, and the
+scope block is `additionalProperties: false` — which I kept, so an *undeclared*
+scope key is still refused. Every document valid under the old schema stays valid
+under the new one, and nothing hashes against the schema file (records carry
+`vibeic.ppa.metric.v1`; the envelope hashes rows, not the schema). I judged that
+§5's precondition — "once something has **hashed against it**" — is not met, and
+that minting `timing_rows.v2` for three optional keys would ripple through the
+producer, `RECORD_CARRIERS` and every consumer for no gain. **If the lander reads
+§5 more strictly, the zero-schema-change alternative is R8's other option: emit
+only the worst path per (clock, check) and drop the rest.** That needs no schema
+edit; it discards the 2nd/3rd-worst paths, which is why I did not choose it.
 
-**3 — I could not verify `report_wns -min` against a real OpenSTA build.**
-The evidence that it is accepted is strong and in-repo (`tests/test_ppa_timing.py`
-carries a real report body containing `wns min 0.00`, so the tool does emit the
-min-side label), but I did not run the pinned image to confirm the *flag* spelling
-on the build the flow uses. That is precisely why the emitter change is wrapped
-in `catch` with a written `SIGNOFF_WNS_UNAVAILABLE reason=$_wnserr` line: if the
-flag is wrong, the sign-off script still completes and the report says so out
-loud. It would still be worth one real run to confirm.
+**3. I could not reproduce the E2E lane's run tree.** Everything above is
+measured against synthetic specimens transcribed from the real logs already in
+`tests/`, plus a faithful OpenROAD run directory I built from
+`LOG_MODERN` + a metrics JSON that disagrees in the direction the module
+docstring records as measured. The 61-arm `spm` tree is not on this host, so the
+F-13 numbers I quote are the E2E lane's, not re-measured by me; the F-13 *rule*
+is re-proved here on the contract fixtures instead.
 
-**4 — the six pre-existing `test_ppa_contract.py` reds** are the undeclared
-`jsonschema`. Not mine, not fixed here, reported above with the measurement.
-
-**5 — the `EM_SCREEN_RELS` path list is a convention, not a contract.**
-`em_current_density_check.py` writes wherever `--json` points, and no flow step
-pins that path. I look under three names and the record states which one it
-found; if the flow never runs the screen, EM is NOT_MEASURED, which is honest but
-means the axis is only as reachable as the step that is not yet wired.
+**4. `--backend` still cannot drive `opensta` or `orfs`,** and I did not force
+it. Both now state their own reason. Wiring opensta would mean a second
+implementation of `_ppa/timing.py`'s view rules inside a parser, free to disagree
+with the first about one number.
 
 ---
 
 ## REQUESTS TO THE LANDER
 
-**R-A — wire `ppa_signoff_records.py` into the flow, and pin the EM screen's
-output path.** The producer is shipped and tested but nothing calls it. Two
-steps: run it after sign-off to emit the bundle, and give
-`em_current_density_check.py --json` a fixed destination
-(`reports/phase3/em_current_density.json` is the first name I look under). Until
-the screen runs, `reliability.em.violations` is NOT_MEASURED — correctly, and
-uselessly.
+**1 — `tools/ci/protected_landing_transition.json`: no change needed.** I
+checked all 47 pinned paths against my diff: none of the 19 files this branch
+touches is protected. No manifest re-render is required for this branch.
 
-**R-B — contracts must declare `required_views_by_axis`.** The A/B above shows
-this is load-bearing: with only a global `required_views`, my gate refuses
-exactly as the base does. `ppa_contract_build.py` should emit a per-axis block,
-and the stages my producer declares (`signed_off_gds` for DRC,
-`post_route_extracted` for LVS, `post_route` for antenna/IR/EM/equivalence) are
-in `_ppa/signoff.SOURCES` with the basis for each.
+**2 — Please confirm the `timing_rows.v1` schema call** (What I could not settle,
+2). Additive optional properties, `additionalProperties: false` retained. Say the
+word and I will convert it to R8's emit-only-the-worst form, which needs no
+schema change at all.
 
-**R-C — DRV, per item 1 above.** Either `extract_drv` gains per-section
-attribution, or DRV is emitted at report scope. This is the last of the seven and
-the only one still `FEAS_METRIC_ABSENT` on a closed run.
+**3 — `_ppa/backends/librelane.py` needs an owner decision** (What I could not
+settle, 1). Every MEASURED row it emits is refused three ways. It needs a
+key→(canonical name, unit, stage) map like `openroad._JSON_MAP`, and each unit
+needs evidence. Until then it is a backend that can be driven and whose output
+the assembler refuses — which is honest, and useless.
 
-**R-D — declare or bundle `jsonschema`.** Six shipped tests are red on a stock
-`python3`, and every contract a downloaded plugin builds gets rc=2. Also on the
-e2e lane's list (their #11); repeating it because it cost me a base A/B to
-diagnose.
+**4 — `ppa_contract_check.py` needs a jsonschema VERSION check, not just an
+import check.** Line 118 guards the import; line 158 uses
+`Draft202012Validator` unconditionally. With `jsonschema 3.2.0` installed the
+`PPA-C-010` refusal never fires and the program raises `AttributeError` instead.
+That is 33 of the 35 reds on clean main on this host. Fix is a version guard
+folded into the existing `PPA-C-010` branch. Out of my items, so untouched.
 
-**R-E — `power.py` needs an operating `mode` from somewhere.** Per item 2. Either
-the flow declares one (`pvt_matrix.json` when it names exactly one) and the
-caller passes it through the existing `extra_scope` hook, or `REQUIRED_SCOPE`
-should say why power needs a mode that nothing produces.
+**5 — `_ppa/metrics.py` still has no `metric_bundle.v1` schema file**, and its
+own comment raises this as a request to you. §5 says every instance document has
+one; `schemas/ppa/` has no `metric_bundle`. My `RECORD_CARRIERS` census would
+cover it the day it lands.
 
-**R-F — the STA_BASIS stamps (the e2e lane's request #1) are still the highest-
-value unfixed thing in this area, and they are not mine.** I fixed the missing
-`report_wns`; the missing `STA_BASIS` stamp on the same two multi-corner emitters
-is a separate three-line change and it is what makes 48 of 56 timing rows
-unstageable. My worst-slack proof group makes hold provable *despite* it, but
-setup and hold both still need those rows to carry a stage before they can be
-adjudicated per corner.
+**6 — Two pre-existing reds on clean main are unrelated to this branch** and
+belong to whoever owns them: `step 1.6x`'s only blocking clause reaches PASS on a
+deliberately-broken project (`test_matrix_d2_falsifiable.py`), and
+`test_trusted_pytest_entry.py` carries an undeclared infrastructure-absent skip
+(`test_not_verified_tier.py`).
 
-**R-G — nothing to re-render.** No pinned protected path is touched by this
-branch, verified against `tools/ci/protected_landing_transition.json`.
+**7 — R7 was deliberately not implemented as written** (F-9 above). If you want
+the artefact in `scope` after all, it should be a declared authority-order
+resolution in `_ppa/contract.py` rather than a scope key, so the override is
+named and printed as `PPA-C-015` instead of two facts silently ceasing to
+compare.
+
+---
+
+## Files
+
+```
+docs/PPA_INTERFACES.md                      §2 unit rule, §2.1 second record, §3.1 identities
+schemas/ppa/timing_rows.v1.schema.json      three optional path-identity scope keys
+programs/_ppa/area.py                       F-5: three units, "cells"/"wires"/"wire_bits" -> "count"
+programs/_ppa/metrics.py                    F-4 RECORD_CARRIERS; F-9 corroboration vs conflict
+programs/_ppa/timing.py                     F-10a content-hash dedupe; F-10b path identity in scope
+programs/_ppa/contract.py                   PPA-C-016 registered
+programs/_ppa/backends/__init__.py          F-2 the driver seam
+programs/_ppa/backends/openroad.py          F-2 driver
+programs/_ppa/backends/librelane.py         F-2 driver (+ its refusal caveat, written down)
+programs/_ppa/backends/yosys.py             F-2 driver, requires --stage
+programs/_ppa/backends/opensta.py           F-2 NO_DRIVER_REASON
+programs/_ppa/backends/orfs.py              F-2 NO_DRIVER_REASON
+programs/ppa_metric_extract.py              F-2 --backend/--from; F-4 secondary; §1 rc=3
+programs/ppa_problem_integrity_check.py     F-13 PPA-C-016 diagnosis
+programs/tests/test_ppa_producer_consumer_agreement.py   NEW, 13 tests (F-4, F-5, F-2 census)
+programs/tests/test_ppa_second_record_identity.py        NEW, 13 tests (F-9, §2.1)
+programs/tests/test_ppa_timing.py           +3 (F-10a, F-10b)
+programs/tests/test_ppa_metrics_extract_cli.py  +6 (F-2 end-to-end, F-4 secondary)
+programs/tests/test_ppa_problem_integrity.py    +3 (F-13 negative/positive/discriminator)
+```
+
+No GDS was hand-edited, no geometry deleted, no pin moved, no rule deck relaxed.
+No `--write-baseline` was run on any hygiene gate. No plugin version was bumped.

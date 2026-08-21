@@ -443,3 +443,14 @@ def parse_rows(rows: Any, **kw: Any) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         return []
     return [parse_row(r, **kw) for r in rows]
+
+
+#: WHY THIS BACKEND IS NOT DRIVEN FROM A PATH (`_ppa/backends/__init__.py`).
+#: `parse_row`/`parse_rows` take AutoTuner result ROWS that the search layer
+#: already holds in memory; there is no single artefact on disk that this
+#: module is the reader of. Inventing a file format here would make this
+#: parser the author of a document nobody writes.
+NO_DRIVER_REASON = (
+    "orfs parses AutoTuner result rows supplied by the search layer, not an "
+    "artefact on disk: it has no path to be driven from. Call "
+    "`_ppa.backends.orfs.parse_rows(rows)` from the code that holds the rows.")
