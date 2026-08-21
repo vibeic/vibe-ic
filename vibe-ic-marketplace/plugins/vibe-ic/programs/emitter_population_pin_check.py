@@ -428,8 +428,21 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
 
 def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
                              List[Tuple[str, int, str]]]:
+    """``({tail: {(value, lineno)}}, [(phrase, lineno, denial)])`` for the SOURCE
+    of a test file -- `pins_of` for a caller that has already parsed, and that is
+    where the reasoning lives, because that is the one `main` calls.
+    """
+    try:
+        return pins_of(ast.parse(text))
+    except SyntaxError:
+        return {}, []
+
+
+def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
+                                    List[Tuple[str, int, str]]]:
     """``({tail: {(value, lineno)}}, [(phrase, lineno, denial)])`` -- what a test
-    PINS, and what it turned out to be DENYING instead.
+    PINS, and what it turned out to be DENYING instead, from an
+    already-parsed module. `pins` is the text-taking wrapper.
 
     A pin is an ASSERTION that the emitter states the value. This is not one:
 
@@ -451,16 +464,7 @@ def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
 
     WHAT IT REFUSES IS RETURNED, not dropped -- a pin the guard declined to
     compare is a pin it did not check, and this file prints its reach.
-    """
-    try:
-        return pins_of(ast.parse(text))
-    except SyntaxError:
-        return {}, []
 
-
-def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
-                                    List[Tuple[str, int, str]]]:
-    """`pins`, for a caller that has already parsed -- see `phrases_of`.
 
     THE PARENT MAP IS BUILT ONLY IF THERE IS A PHRASE TO JUDGE. It costs a walk
     of the whole tree plus a dict entry per node, and the great majority of test
@@ -507,7 +511,22 @@ def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
 
 def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
                                  List[Tuple[str, str, str]]]:
-    """``([(name, increment_sites, [(kind, D)])], [(what, matched, denial)])``.
+    """``([(name, increment_sites, [(kind, D)])], [(what, matched, denial)])``
+    for the SOURCE of a program -- `counters_of` for a caller that has already
+    parsed, and that is where the reasoning lives, because that is the one
+    `main` calls.
+    """
+    try:
+        return counters_of(ast.parse(text))
+    except SyntaxError:
+        return [], []
+
+
+def counters_of(tree: ast.AST) -> Tuple[
+        List[Tuple[str, int, List[Tuple[str, int]]]],
+        List[Tuple[str, str, str]]]:
+    """``([(name, increment_sites, [(kind, D)])], [(what, matched, denial)])``
+    from an already-parsed module. `counters` is the text-taking wrapper.
 
     THE SUBJECT IS THE EMITTED SCRIPT, not the file that prints it -- see
     `emitted_script_of`. Read flat, for the reason this function always gave.
@@ -532,16 +551,6 @@ def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
     the reach, and a guard that quietly counts less than it read is the failure
     this file is built to catch one level up.
     """
-    try:
-        return counters_of(ast.parse(text))
-    except SyntaxError:
-        return [], []
-
-
-def counters_of(tree: ast.AST) -> Tuple[
-        List[Tuple[str, int, List[Tuple[str, int]]]],
-        List[Tuple[str, str, str]]]:
-    """`counters`, for a caller that has already parsed -- see `phrases_of`."""
     src = emitted_script_of(tree)
 
     def denial(m: "re.Match[str]") -> Optional[str]:
