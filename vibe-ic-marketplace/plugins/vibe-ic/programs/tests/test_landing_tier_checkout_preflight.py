@@ -25,6 +25,7 @@ chip-AGNOSTIC: pure git/path plumbing. No design, PDK or vendor literal.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -146,6 +147,53 @@ def test_a_missing_directory_is_REFUSED_not_crashed(tmp_path):
 # --------------------------------------------------------------------------
 # the guard is WIRED, and wired where it can still be reached
 # --------------------------------------------------------------------------
+def test_the_full_tier_actually_calls_this_program():
+    """A guard nothing invokes is a guard that enforces nothing.
+
+    Read out of the shipped script rather than restated here, so deleting the
+    call is red instead of invisible.
+    """
+    lines = _LAND.read_text(encoding="utf-8").splitlines()
+    calls = [i for i, line in enumerate(lines)
+             if line.startswith("if ! ")
+             and "landing_tier_checkout_preflight.py" in line]
+    assert len(calls) == 1, (
+        f"gatekeeper-land.sh guards the full tier with {len(calls)} checkout "
+        "preflight call(s), expected exactly 1")
+    cheap_exit = next(i for i, line in enumerate(lines)
+                      if line.startswith('if [ "$CHEAP_ONLY" = "1" ]'))
+    assert calls[0] > cheap_exit, (
+        "the checkout preflight would refuse a --cheap-only run. That tier is "
+        "the pre-push hook's path, it runs in whatever checkout the developer "
+        "is in, and it finishes in seconds — the failure this refuses needs an "
+        "hour to happen.")
+    # THE FIRST ARM IS WHERE AN ARM IS CALLED, not where a particular line
+    # shape is. This used to be `line.strip() == "run_pytest"`. The full tier's
+    # independent stages now run at the same time, so the arms are called from
+    # inside the lane bodies the window launches, that generator matched
+    # nothing, and `next` raised StopIteration — "the preflight is too late"
+    # and "I could not find an arm" became the same red.
+    arms = ("run_pytest", "run_repo_tools_pytest", "run_unselectable_pytest")
+    spans = []
+    for name in arms:
+        define = next(i for i, line in enumerate(lines)
+                      if line.startswith(f"{name}() {{"))
+        close = next(i for i in range(define + 1, len(lines))
+                     if lines[i] == "}")
+        spans.append((define, close))
+    arm_calls = [i for i, line in enumerate(lines)
+                 if not any(a <= i <= b for a, b in spans)
+                 and not line.lstrip().startswith("#")
+                 and any(re.search(rf"(?<![\w./-]){name}(?![\w(])", line)
+                         for name in arms)]
+    assert arm_calls, (
+        "gatekeeper-land.sh defines the test arms but calls none of them")
+    first_arm = min(arm_calls)
+    assert calls[0] < first_arm, (
+        "the checkout preflight runs after an arm has already spent time in a "
+        "tree it should never have started in")
+
+
 def test_there_is_no_environment_escape_hatch():
     """"Impossible by accident" is the property; a flag would sell it back.
 

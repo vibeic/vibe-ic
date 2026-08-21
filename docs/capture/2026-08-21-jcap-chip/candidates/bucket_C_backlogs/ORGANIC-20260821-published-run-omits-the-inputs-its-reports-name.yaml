@@ -1,0 +1,18 @@
+type: enhancement
+severity: P2
+component: published evidence corpus and its publication contract
+plugin_version: "1.11.66"
+
+title: >-
+  A published run carries the reports it produced but not the inputs those reports name
+
+pattern: |
+  A published run carries its reports but not the inputs those reports were measured from, so a later reader can neither re-derive a number nor re-measure the run under a rule that did not exist when it was published, and the resulting gap reads as history rather than as missing evidence.
+
+suggested_fix: |
+  Write the publication contract for which inputs a published run must carry beside its reports, measure the existing corpus against it and record the shortfall per run, then enable the check for newly published runs only and close the historical entries as each run is re-published rather than by widening an exemption.
+
+id: "ORGANIC-20260821-published-run-omits-the-inputs-its-reports-name"
+submitted_at: "2026-08-21T22:08:47+08:00"
+session_context: >-
+  Two recorded adversarial findings about unattributable sign-off reports could not be closed even after the mechanism that fixes them landed, because the published runs they cite carry no inputs to re-measure from.

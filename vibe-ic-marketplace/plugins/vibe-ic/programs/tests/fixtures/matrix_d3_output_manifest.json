@@ -694,10 +694,14 @@
         },
         "reports/phase3/padring.json": {
           "status": "UNPROVEN"
+        },
+        "reports/phase3/pad_assignment.json": {
+          "status": "UNPROVEN"
         }
       },
       "condition_files": [
-        "input/submission_template/slots/*.yaml"
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
       ]
     },
     "16": {
@@ -797,6 +801,9 @@
           "alternative": "reports/phase3/drc_router.rpt",
           "path": "reports/phase3/drc_router.rpt",
           "size_bytes": 19208
+        },
+        "reports/phase3/drc_router.json": {
+          "status": "UNPROVEN"
         }
       }
     },
@@ -945,7 +952,8 @@
         }
       },
       "condition_files": [
-        "input/submission_template/slots/*.yaml"
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
       ]
     },
     "27": {
@@ -1218,12 +1226,25 @@
     "37.5ic": {
       "verdict": "NA_DORMANT_CONDITION",
       "entries": {
+        "reports/phase3/tapeout_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/general_precheck.json": {
+          "status": "UNPROVEN"
+        },
         "reports/phase3/shuttle_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/SIGNOFF_*.html": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/BRIEF_*.html": {
           "status": "UNPROVEN"
         }
       },
       "condition_files": [
-        "input/submission_template/slots/*.yaml"
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
       ]
     },
     "38": {
@@ -1464,10 +1485,25 @@
     "0.5ic": {
       "verdict": "ENFORCED",
       "entries": {
-        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt": {
+        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
           "status": "UNPROVEN"
         },
         "reports/phase1/submission_template.json": {
+          "status": "UNPROVEN"
+        },
+        "input/submission_template/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "1.6x": {
+      "verdict": "ENFORCED",
+      "_comment": "Flow step 1.6x is NEW; no PUBLISHED run predates it, so its declared output has no run evidence yet and the truthful status is UNPROVEN. It is not WAIVED and not dormant: the step is unconditional and its judge writes this artefact on every run, including the NOT_APPLICABLE one.",
+      "entries": {
+        "reports/crosslayer/rewrite_equivalence_check.json": {
           "status": "UNPROVEN"
         }
       }

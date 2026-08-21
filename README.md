@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.11.1](https://img.shields.io/badge/plugin-v1.11.1-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.11.68](https://img.shields.io/badge/plugin-v1.11.68-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
 > **Status: v1.11 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
@@ -63,25 +63,34 @@ gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATU
 ```bash
 export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
-docker pull ghcr.io/vibeic/vibeic-eda:0.3.14   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:latest   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda --memory 48g --memory-swap 48g \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.3.14 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
 Stock fallback: `docker pull hpretl/iic-osic-tools:latest` (run it named `vibeic-eda`).
-Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.26`.
+Already running an older tag? Swap without retyping mounts:
+`tools/vibeic-eda/restart-eda.sh` (no argument = the newest vibeic-eda image this
+host holds, pinned to its digest), or pass a tag explicitly.
 See **[docs/INSTALL.md](docs/INSTALL.md)** for the required bind-mounts (Phase 3 needs the identity mount).
 
-`0.2.26` is the newest tag published to `ghcr.io/vibeic/vibeic-eda` and is the
-image the current VerilogEval runs below were measured on. The one-line
-`tools/vibeic-eda/VERSION` is the *build* pin and currently reads `0.2.23`;
-`tools/vibeic-eda/sync_image_version.py --check` reports every install-doc
-pointer that differs from it, so expect it to flag this section until the build
-pin is moved forward. Pull the tag above — not `VERSION` — for the current image.
+**This repo does not record which vibeic-eda version you should run.** It used to:
+a one-line `tools/vibeic-eda/VERSION` held the number, every install doc had to
+match it, and every vibeic-eda release therefore opened a PR here. That file is
+gone. `docker pull …:latest` above gets the current image, and anything in the
+plugin that needs to name an image asks `_eda_image.judged_image()`, which asks
+the image two questions and stores neither: its **digest**
+(`ghcr.io/vibeic/vibeic-eda@sha256:…`, what you replay with) and its own standard
+`org.opencontainers.image.version` **label** (what a human reads). Gates that
+report a verdict *about* the image write both into their `--json` report, so any
+finding can be replayed with `--image …@sha256:…` and any red is attributable to
+specific bytes rather than to a tag whose meaning moved. An image that will not
+say which release it is, or that this host cannot identify, is `NOT_MEASURED` —
+the gate exits 2 rather than reporting a clean PDK it never opened.
 
 **PDKs.** The flow resolves PDKs through
 `plugins/vibe-ic/programs/pdk_registry.json`:
@@ -418,7 +427,7 @@ guaranteed by the **gates**, not by an author≠approver split.
 
 Vibe-IC is deliberately split into purpose-scoped repos under
 [github.com/vibeic](https://github.com/vibeic), wired together by explicit
-version contracts (this plugin pins the `vibeic-eda` image tag; `vibeic-eda`
+version contracts (this plugin resolves the `vibeic-eda` image by digest; `vibeic-eda`
 pins each fork's SHA). This repo — the **plugin** — is the one you install.
 
 ```

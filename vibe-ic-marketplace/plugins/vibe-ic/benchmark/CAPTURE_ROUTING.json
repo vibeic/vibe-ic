@@ -202,6 +202,38 @@
       "description": "benchmark-verify's final 'Plugin-test hard rule' (vibe-ic#1130). If a verification run modified plugin code, DONE may not be claimed until the FULL pytest suite -- BOTH programs/tests/ and tests/ -- has passed. The gate turns that conditional into a mechanical verdict; before this entry the rule existed only as prose in the skill, so it ran when an agent remembered and produced no verdict when one did not.",
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/benchmark-verify/SKILL.md"
+    },
+    "ppa.feasibility": {
+      "bucket_A_program": "programs/ppa_feasibility_check.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "ppa.head_to_head": {
+      "bucket_A_program": "programs/ppa_head_to_head_check.py",
+      "bucket_B_skill_file": "skills/ppa-benchmark/SKILL.md"
+    },
+    "ppa.search": {
+      "bucket_A_program": "programs/ppa_search_run.py",
+      "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
+    },
+    "ppa.artefact_write": {
+      "bucket_A_program": "programs/_atomic_artefact.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "capture.emit": {
+      "bucket_A_program": "programs/enhancement_emit.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "capture.backlog_sanitize": {
+      "bucket_A_program": "programs/backlog_sanitize_check.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "repo.host_independence": {
+      "bucket_A_program": "programs/gate_host_independence_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "repo.test_population": {
+      "bucket_A_program": "programs/plugin_change_pytest_gate.py",
+      "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
     }
   },
   "default_routing": {

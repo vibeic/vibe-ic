@@ -55,12 +55,11 @@ just built, so the automated tier proves its own tree instead of assuming the
 clone did the right thing. That is the path the measured four-gate loss happened
 on, and it is guarded here.
 
-The BY-HAND path — `tools/gatekeeper-land.sh` refusing before the full tier's
-first arm — is a change to a PROTECTED runtime path, and
-`protected_landing_transition.py` requires such a change to arrive as PREPARE
-(manifest only) then ACTIVATE (bytes only); "per-file mixtures refuse". So that
-call lands separately, and until it does this program's by-hand coverage is the
-remedy text somebody has to run, not a refusal that fires on its own.
+`tools/gatekeeper-land.sh` calls it before the full tier's first arm, which
+covers the BY-HAND path: a tier an operator or any other wrapper starts from a
+worktree. That call is a change to a PROTECTED runtime path, so it arrived as a
+PREPARE (manifest only) followed by this ACTIVATE (bytes only) — the module
+refuses per-file mixtures, so it could not have arrived any other way.
 
 EXIT CODES
 ==========

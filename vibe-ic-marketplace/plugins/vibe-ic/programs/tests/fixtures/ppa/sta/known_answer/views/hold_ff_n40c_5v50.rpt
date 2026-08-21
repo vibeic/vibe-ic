@@ -1,0 +1,48 @@
+# TRIMMED SLICE of a real published multi-corner OpenSTA report.
+#
+#   source repo   vibeic benchmark-data (moved out of this repo at v1.10.56,
+#                 commit e23d0be5e "benchmark-data ... move to their own
+#                 repositories")
+#   source path   ic/spm/v1.9.96_gf180mcuD/reports/phase3/sta_mcorner_ocv.rpt
+#   source sha256 1d44efe6867bba44e8f8be2e6027cdf4ef03a081edcd58de3ad6a0800d854930
+#   source lines  104-138 of 201
+#   trim          the corner header, its OCV/worst-slack/tns summary lines, and
+#                 ONE representative path are kept verbatim. The remaining
+#                 paths in that corner are dropped; they carry no property this
+#                 fixture is about. Nothing was edited — only whole lines removed.
+#
+=== HOLD corner: process=FF liberty=/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ff_n40C_5v50.lib, SPEF=chip_top.min.spef ===
+OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV
+worst slack min 0.57
+tns max 0.00
+Startpoint: _437_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: _437_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: min
+
+    Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------
+                   0.00    0.00   clock clk (rise edge)
+                   0.38    0.38   clock network delay (propagated)
+           0.09    0.00    0.38 ^ _437_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+   0.02    0.15    0.45    0.83 v _437_/Q (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+   0.01    0.11    0.10    0.93 ^ _274_/ZN (gf180mcu_fd_sc_mcu7t5v0__nand2_1)
+   0.00    0.09    0.08    1.01 v _353_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi211_1)
+           0.09    0.00    1.01 v _437_/D (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+                           1.01   data arrival time
+
+                   0.00    0.00   clock clk (rise edge)
+                   0.42    0.42   clock network delay (propagated)
+                  -0.04    0.38   clock reconvergence pessimism
+                           0.38 ^ _437_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+                   0.06    0.44   library hold time
+                           0.44   data required time
+-----------------------------------------------------------------------
+                           0.44   data required time
+                          -1.01   data arrival time
+-----------------------------------------------------------------------
+                           0.57   slack (MET)
+
+
+Startpoint: _415_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: _446_ (rising edge-triggered flip-flop clocked by clk)
