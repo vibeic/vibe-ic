@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "CAN 2.0 is a wire-level protocol spec; no PDK / SDC / floorplan constraints at the protocol layer. Per-controller integration constraints (clock-tree budget, transceiver pad ring, common-mode rejection at the PHY) live in the SoC integration spec, not in Bosch CAN 2.0."
-  }
-}

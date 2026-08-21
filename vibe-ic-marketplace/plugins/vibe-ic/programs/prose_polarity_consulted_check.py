@@ -91,6 +91,22 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "crosslayer_rewrite_equivalence::module_ports":
+        "Verilog/SystemVerilog module port declarations. The matched text is a "
+        "production of the HDL grammar — `module m(input wire [7:0] a, ...)` in the "
+        "ANSI form and `module m(a, b); input [7:0] a;` in the non-ANSI form — "
+        "written by a synthesis-bound source file, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'a is NOT an input'. A port "
+        "either appears in a declaration or it does not, and absence is already how "
+        "this function reports it (the name is simply not in the returned list, and "
+        "the caller turns an empty list into NOT_MEASURED rather than into an "
+        "empty-but-fine wrapper). This is the same class as the already-exempted "
+        "digital_hardmacro_gen::read_interface and _pad_ring::parse_def. The two "
+        "defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) "
+        "both read English design documents, where denial is spellable and was "
+        "spelled; consulting `_prose_polarity` on a port list would add a branch "
+        "that can never fire, and a call that can never fire is a green light "
+        "rather than a check.",
     "macro_obs_geometry_intersect_check::parse_via_layers":
         "LEF/DEF 5.8 VIAS section. The matched text is `- <viaName> ... "
         "+ LAYERS <lower> <cut> <upper> ;` — a production of the DEF grammar, "
@@ -100,6 +116,145 @@ _NOT_PROSE: Dict[str, str] = {
         "#711 die_area_budget_um) both read English design documents, where "
         "denial is spellable and was spelled. Consulting `_prose_polarity` on "
         "a VIAS entry would be an unreachable branch.",
+    "input_doc_pdk_claim_vs_installed_pdk_check::_sections_of":
+        "SPICE `.lib` section directives inside a PDK corner library. The "
+        "matched text is `^\\s*\\.lib\\s+(NAME)\\s*$` -- a production of the "
+        "ngspice/SPICE library grammar, written by the foundry's model "
+        "packaging, in which there is no form that DENIES a section: SPICE "
+        "gives no way to write '.lib mos_tt is NOT defined here'. A section "
+        "either appears as a directive or it does not, and absence is already "
+        "how this function reports it (the name is simply not in the returned "
+        "list). The values written back are those section NAMES, quoted into "
+        "the gate's evidence so a reader can re-derive the vocabulary from the "
+        "same file -- they are never read as an assertion that could be "
+        "negated by surrounding text. Consulting `_prose_polarity` on a `.lib` "
+        "directive would add a branch that can never fire, and a call that can "
+        "never fire is a green light rather than a check. Contrast the two "
+        "defects this gate was built from (#706 pdk_target, #711 "
+        "die_area_budget_um): both read English design documents, where denial "
+        "is spellable and was spelled -- which is exactly what "
+        "vibe-ic#904 is about on the OTHER side of this same gate, where the "
+        "CLAIM text is prose and is parsed by the claim scanner, not here.",
+    "phase3_one_shot_runner::density_counted_specs":
+        "Two machine-written grammars, neither of which can spell a denial. "
+        "The first is a LEF/DEF streamout layermap row -- `<lefname> "
+        "<purpose> <gdslayer> <gdsdatatype>`, whitespace-separated columns "
+        "emitted by the foundry's streamout packaging or by this runner's own "
+        "`_synthesize_streamout_layermap`; there is no form in it that says "
+        "'met1 FILL is NOT on 68/36'. The second is the KLayout DRC layer "
+        "binding `NAME = input(L, D)` / `polygons(L, D)`, a production of the "
+        "deck's Ruby DSL, in which a layer is bound or it is not -- a deck "
+        "cannot write 'this is NOT layer 68 datatype 36'. Absence is already "
+        "how both halves report it: an unmatched row or an unmatched binding "
+        "simply does not enter `counted`, and the report publishes the "
+        "resulting spec list plus `specs_from_layermap` / `specs_from_deck` "
+        "counts so a reader can see exactly what was and was not found. "
+        "Nothing here is read as an assertion that surrounding text could "
+        "negate. There is also a hard reason it CANNOT consult the module: "
+        "this function's source is injected verbatim into the KLayout batch "
+        "recipe (`_metal_density_recipe`) and executed inside the container "
+        "under KLayout's own interpreter, which has no path to "
+        "`_prose_polarity` -- so the call would not merely be unreachable, it "
+        "would not import. Contrast the two defects this gate was built from "
+        "(#706 pdk_target, #711 die_area_budget_um): both read English design "
+        "documents, where denial is spellable and was spelled.",
+    "pytest_per_file_junit::_admit":
+        "Progress-stream FILENAMES in a parent-owned directory. The matched "
+        "text is ONE POSIX path component, minted by this repo's own "
+        "`_pytest_progress_plugin.pytest_configure` in exactly two forms -- "
+        "`m.<pid>.<ppid>.jsonl` and `w.<workerid>.<pid>.<ppid>.jsonl` -- and "
+        "both patterns are anchored `\\A...\\Z`, so the ENTIRE subject IS the "
+        "token: there is no surrounding text for a denial to live in, and a "
+        "path component has no form that says 'this stream is NOT from pid "
+        "41'. A name that does not match is not ignored, it REFUSES the whole "
+        "set (`unexpected file in progress directory`), so absence is already "
+        "reported more strictly than any polarity branch could report it. "
+        "What the function writes -- `self.streams[name]` and "
+        "`self.kinds[name]` -- is a demultiplexing key for an open probe, not "
+        "a value published as a declaration that a neighbouring sentence "
+        "could retract; and the one claim the name does carry, the owning "
+        "pid, is not believed either -- it is re-checked against the launched "
+        "process and a mismatch refuses the set. Contrast the two defects "
+        "this gate was built from (#706 pdk_target, #711 die_area_budget_um): "
+        "both read English design documents, where denial is spellable and "
+        "was spelled. Consulting `_prose_polarity` on a directory entry would "
+        "add a branch that can never fire, and a call that can never fire is "
+        "a green light rather than a check.",
+    "_pad_ring::parse_def":
+        "LEF/DEF 5.8 UNITS / DIEAREA / COMPONENTS records. The matched text is "
+        "`UNITS DISTANCE MICRONS <n> ;`, `DIEAREA ( x y ) ( x y ) ;` and the "
+        "COMPONENTS entry form `- <inst> <master> + PLACED ( x y ) <orient> ;` "
+        "-- productions of the DEF grammar emitted by the floorplanner, in "
+        "which there is no form that DENIES a placement: DEF gives no way to "
+        "write 'this instance is NOT placed at ( 0 0 )'. A record that is "
+        "absent is already reported as absent -- a missing UNITS or DIEAREA "
+        "RAISES DefError rather than defaulting -- so absence is refused, not "
+        "silently read as a value. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "_pad_ring::parse_lef_macros":
+        "LEF 5.8 MACRO / SIZE records. The matched text is `MACRO <name>` and "
+        "`SIZE <w> BY <h> ;`, productions of the LEF grammar emitted by the "
+        "PDK's own cell library, in which there is no form that DENIES a "
+        "footprint: LEF gives no way to write 'this macro is NOT 30 BY 180'. "
+        "A MACRO carrying no SIZE simply does not enter the returned map, so "
+        "absence is reported by absence rather than by a negated value, and "
+        "the body of each macro is bounded at its own END so no neighbouring "
+        "text can lend it one. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "_pad_ring::parse_lef_sites":
+        "LEF 5.8 SITE declarations. The matched text is the top-level `SITE "
+        "<name>` form with its CLASS and SIZE, a production of the LEF grammar "
+        "emitted by the PDK, in which there is no form that DENIES a site: LEF "
+        "gives no way to write 'this site is NOT CORE'. The function already "
+        "distinguishes the two syntactic roles the same keyword plays -- a "
+        "top-level SITE that DECLARES one, versus the `SITE <name> ;` "
+        "reference inside a MACRO that only names one -- which is a grammar "
+        "question, not a polarity question. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_check::parse_lef":
+        "LEF 5.8 MACRO / SIZE / ORIGIN / PIN records read as the delivered "
+        "abstract's interface. Every matched token is a production of the LEF "
+        "grammar written by Magic's LEF writer, in which there is no form that "
+        "DENIES a pin: LEF gives no way to write 'this macro does NOT have a "
+        "pin named clk'. A pin that is not declared is not in the returned "
+        "set, and the gate's verdict is built from the DECLARATION being "
+        "present, never from a bad token being absent. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_check::parse_liberty":
+        "Liberty `cell` / `pin` / `pg_pin` groups read as the timing view's "
+        "interface. The matched text is a production of the Liberty grammar "
+        "emitted by the characterisation tool, in which there is no form that "
+        "DENIES a pin. This function is already built around exactly the "
+        "hazard polarity guards against, one level lower: it STRIPS COMMENTS "
+        "FIRST and requires the DECLARATION to be present, because "
+        "`analog_hardmacro_check` recorded a Liberty containing only `/* the "
+        "release was cancelled */` satisfying a bare `\"cell\" in text` test "
+        "on the letters inside the word cancelled. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "digital_hardmacro_gen::read_interface":
+        "The DEF PINS section. The matched text is the entry form `- <pinName> "
+        "+ NET <net> + DIRECTION <dir> + USE <use> ;` -- a production of the "
+        "DEF grammar emitted by the place-and-route tool, in which there is no "
+        "form that DENIES a pin's direction or USE class: DEF gives no way to "
+        "write 'this pin is NOT POWER'. The USE scan deliberately reuses the "
+        "SAME entry split as the shared `parse_def_pins` reader so the two "
+        "cannot disagree about what an entry is, and a pin carrying no USE "
+        "records the empty string rather than guessing a class. The two defects this gate was built from (#706 pdk_target, #711 die_area_budget_um) both read English design documents, where denial is spellable and was spelled.",
+    "crosslayer_rewrite_equivalence::module_ports":
+        "A Verilog-2005 / SystemVerilog MODULE HEADER. The matched text is "
+        "`module <name> #(...) (...) ;` and, inside it, the port declaration "
+        "form `input|output|inout [wire|reg|logic] [signed] [<range>] <name>` "
+        "-- productions of the HDL grammar, in which there is no form that "
+        "DENIES a port: Verilog gives no way to write 'this module does NOT "
+        "have an input named clk'. What the function returns is not a claim "
+        "about the design read out of a sentence; it IS the module's "
+        "interface, the same text the frontend elaborates, and the frontend "
+        "-- not a neighbouring comment -- is what decides whether the port "
+        "exists. A comment reading `// b is not used` leaves `b` in the "
+        "elaborated interface, so honouring it would make this reader "
+        "disagree with the compiler that consumes the wrapper it builds. A "
+        "module that is not found returns [] and the caller turns that into "
+        "NOT_MEASURED rather than an empty-but-fine wrapper, so absence is "
+        "refused rather than read as a value. The two defects this gate was "
+        "built from (#706 pdk_target, #711 die_area_budget_um) both read "
+        "English design documents, where denial is spellable and was spelled; "
+        "the direct precedents here are `digital_hardmacro_gen::read_interface` "
+        "(DEF PINS) and `digital_hardmacro_check::parse_lef` above.",
 }
 
 
@@ -125,11 +280,56 @@ def _searches_prose(fn: ast.AST) -> bool:
     return False
 
 
+#: Modules whose `.compile` mints a PATTERN. Kept to the two spellings that
+#: exist in this corpus rather than `attr == "compile"` on anything, so an
+#: unrelated `x = obj.compile(...)` cannot borrow the exclusion.
+_PATTERN_FACTORY_MODULES = {"re", "regex"}
+
+
+def _is_compiled_pattern(value: ast.AST) -> bool:
+    """`re.compile(...)` -- the INSTRUMENT that reads prose, not a value read
+    out of prose.
+
+    A `re.Pattern` is never a declared value taken out of a sentence, whatever
+    was concatenated to build it, and no sentence can deny one. Both real
+    defects (#706 `pdk_target`, #711 `die_area_budget_um`) wrote the matched
+    TEXT into a declared field; memoising the searcher is keeping a tool.
+
+    Without this, a word-boundary helper that caches its own pattern --
+
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        pat  = re.compile(left + re.escape(token) + right)
+        _CACHE[token] = pat
+
+    -- reads as an extractor publishing a declared value, because the `re.match`
+    in the CONDITION marks `left` match-derived and `pat` inherits it. The text
+    that goes INTO a pattern is still tracked: an extractor that compiles a
+    pattern AND writes the matched text is unchanged, which is pinned by test.
+
+    MEASURED on this corpus before it was written: this removes exactly ONE
+    name from the 217 the predicate returns, `policy_direction_pin_check::_names`,
+    and no other. Two wider narrowings were built first and REJECTED on the same
+    measurement -- dropping the test of a conditional expression also dropped
+    `parametric_spec_extractor::extract_arithmetic`, whose
+    `"saturate" if re.search(r"saturat", text) else ...` is the #706 defect
+    exactly; and excluding slice bounds also dropped
+    `l22_checklist_milestone_emit::extract_milestones`, which publishes a
+    document's own resolution column. Both are findings, not noise.
+    """
+    return (isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "compile"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in _PATTERN_FACTORY_MODULES)
+
+
 def _match_derived_names(fn: ast.AST) -> Set[str]:
     """Locals bound to a regex match or to text taken out of one.
 
     `m = RE.search(t)`, `hits = RE.findall(t)`, `val = m.group(1)`, and one hop
-    onward (`val = raw.strip()`), which is how both real defects were written."""
+    onward (`val = raw.strip()`), which is how both real defects were written.
+    A local bound to `re.compile(...)` is NOT one of them -- see
+    `_is_compiled_pattern`."""
     out: Set[str] = set()
     for _ in range(3):                       # transitive, cheaply bounded
         grew = False
@@ -138,6 +338,8 @@ def _match_derived_names(fn: ast.AST) -> Set[str]:
                 continue
             t = n.targets[0]
             if not isinstance(t, ast.Name):
+                continue
+            if _is_compiled_pattern(n.value):
                 continue
             for sub in ast.walk(n.value):
                 hit = (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)

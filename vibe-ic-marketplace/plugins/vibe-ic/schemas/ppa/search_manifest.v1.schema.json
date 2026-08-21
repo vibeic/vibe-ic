@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vibeic.ppa.search_manifest.v1",
+  "title": "PPA search manifest v1",
+  "description": "What a search run published. The shape exists so that two searches can be compared on more than a trial count: every budget dimension, every trial in every terminal state, and a NAMED reason for each candidate that was not comparable. A manifest that satisfies this schema is well-formed; programs/ppa_search_run.py --verify additionally checks that it is self-consistent, which is a different and stronger question.",
+  "type": "object",
+  "required": [
+    "schema",
+    "budget",
+    "budget_spent",
+    "fidelity_ladder",
+    "feasibility_terms",
+    "candidates",
+    "frontier_input",
+    "what_the_budget_bought"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "vibeic.ppa.search_manifest.v1",
+      "description": "First key of every instance document (PPA_INTERFACES section 5)."
+    },
+    "space_digest": {
+      "type": "string",
+      "description": "sha256: of the search space this run drew from, through _ppa/canonical_json. Two manifests are only comparable when this matches; different spaces are different searches."
+    },
+    "budget": {
+      "type": "object",
+      "description": "Every budget dimension, declared. A field left out is not a default, it is an unanswered question, so all ten are required and an unbounded one is stated as null.",
+      "required": [
+        "max_trials",
+        "max_full_pnr_trials",
+        "max_cpu_hours",
+        "max_wall_seconds",
+        "concurrency",
+        "memory_limit_mb",
+        "per_trial_timeout_s",
+        "failed_trial_policy",
+        "seed",
+        "cache_policy"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "max_trials": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 is a legitimate budget and produces a complete bundle of one point. 0 is not a budget."
+        },
+        "max_full_pnr_trials": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "A SUBSET of max_trials, not an extra allowance. Separate from the trial count because 50 synthesis trials and 50 routed trials are not the same work."
+        },
+        "max_cpu_hours": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_wall_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "concurrency": {"type": "integer", "minimum": 1},
+        "memory_limit_mb": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+        "per_trial_timeout_s": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "failed_trial_policy": {
+          "enum": ["COUNTS_AGAINST_BUDGET", "RETRY_ONCE_THEN_COUNTS", "FREE"],
+          "description": "Whether a crashed trial spends budget. Both answers are defensible and they give different trial counts, so it may not be left implicit."
+        },
+        "seed": {
+          "type": "integer",
+          "description": "The candidate sequence is a seeded shuffle. Same space + same seed + same budget reproduces the same sequence."
+        },
+        "cache_policy": {
+          "enum": ["REUSE", "IGNORE", "REFUSE"],
+          "description": "A cache hit costs no CPU. Under REUSE the manifest must also say how many trials were hits, or the published CPU-hours describe a different amount of work than a reader assumes."
+        }
+      }
+    },
+    "budget_spent": {
+      "type": "object",
+      "description": "What the budget actually bought. Derived from the candidate states, never incremented by hand: a counter and a list can disagree, a derived count cannot.",
+      "required": [
+        "trials_proposed",
+        "trials_ran",
+        "trials_charged",
+        "full_pnr_trials",
+        "cache_hits",
+        "cpu_hours",
+        "wall_seconds",
+        "states"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "trials_proposed": {"type": "integer", "minimum": 0},
+        "trials_ran": {"type": "integer", "minimum": 0},
+        "trials_charged": {"type": "integer", "minimum": 0},
+        "full_pnr_trials": {"type": "integer", "minimum": 0},
+        "cache_hits": {"type": "integer", "minimum": 0},
+        "cpu_hours": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "null, never 0.0, when no trial reported CPU time: 'not instrumented' and 'used no CPU' are opposite facts and 0.0 reads as the second."
+        },
+        "wall_seconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "null when the elapsed span cannot be reconstructed (concurrency > 1 without timestamps). Dividing a sum by the concurrency would publish a model as a measurement."
+        },
+        "states": {
+          "type": "object",
+          "description": "Count per lifecycle state. Present for every state including the zeroes, so a state that never occurred and a state nobody tracked are distinguishable.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "fidelity_ladder": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "The ordered stage vocabulary, cheapest first. Published with the manifest so a reader can rank completed_stage without importing this plugin."
+    },
+    "full_pnr_stage": {"type": "string"},
+    "feasibility_terms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "Every component of the eligibility verdict, named individually so a verdict built from a subset is visibly a subset. Detailed-route DRC alone is one of these terms."
+    },
+    "lever_notes": {
+      "type": "array",
+      "description": "One entry per admitted lever this run did NOT vary, and why. A lever that silently vanished from a search and a lever that was never searchable must not look the same in the artefact.",
+      "items": {
+        "type": "object",
+        "required": ["lever", "status", "reason"],
+        "properties": {
+          "lever": {"type": "string"},
+          "status": {"enum": ["NOT_ENUMERABLE", "NOT_ADMITTED"]},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "description": "EVERY candidate ever proposed, in every terminal state, including the ones that never ran. Publishing only the winner makes a lucky draw look like a method.",
+      "items": {
+        "type": "object",
+        "required": ["identity", "knobs", "state", "completed_stage", "feasibility", "metrics", "cost"],
+        "additionalProperties": true,
+        "properties": {
+          "identity": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "sha256 of (space digest, knobs) through the one serializer, so a cache hit is checkable rather than asserted."
+          },
+          "knobs": {"type": "object"},
+          "state": {
+            "enum": ["REJECTED_SPACE", "DEDUPLICATED", "BUDGET_EXHAUSTED", "COMPLETED", "FAILED", "TIMEOUT"],
+            "description": "Terminal states only. PROPOSED and RUNNING are deliberately absent: an unfinished trial published as a result is a measurement that has not happened yet."
+          },
+          "completed_stage": {
+            "type": ["string", "null"],
+            "description": "The highest ladder rung this trial actually reached. NEVER an integer: a tuner iteration counter (ORFS/Ray Tune `step`) counts objective reports, not flow progress, and the same value can mean 'died in floorplan' and 'finished routing'. The type here refuses it."
+          },
+          "feasibility": {
+            "type": "object",
+            "required": ["verdict", "reason", "terms"],
+            "properties": {
+              "verdict": {
+                "enum": ["ELIGIBLE", "INELIGIBLE", "UNDETERMINED"],
+                "description": "UNDETERMINED is its own answer and never folds into INELIGIBLE: 'we checked and it fails' and 'we never checked' are different findings."
+              },
+              "reason": {"type": "string"},
+              "terms": {
+                "type": "object",
+                "description": "Per-term status. An ELIGIBLE verdict whose terms are not all PASS or NOT_APPLICABLE is an eligibility claim on a partial vector.",
+                "additionalProperties": {"type": "string"}
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["schema", "metric", "status"],
+              "properties": {
+                "schema": {"const": "vibeic.ppa.metric.v1"},
+                "metric": {"type": "string"},
+                "status": {"enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"]}
+              }
+            }
+          },
+          "cost": {
+            "type": "object",
+            "required": ["cpu_seconds", "wall_seconds", "peak_rss_mb"],
+            "properties": {
+              "cpu_seconds": {"type": ["number", "null"], "minimum": 0},
+              "wall_seconds": {"type": ["number", "null"], "minimum": 0},
+              "peak_rss_mb": {"type": ["number", "null"], "minimum": 0}
+            }
+          },
+          "cache_hit": {"type": "boolean"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "frontier_input": {
+      "type": "object",
+      "description": "What the Pareto lane is allowed to see, and a named reason for every candidate left out. An empty included[] is a legitimate complete answer: the budget bought no comparable point.",
+      "required": ["frontier_stage", "included", "excluded", "included_count", "excluded_count"],
+      "properties": {
+        "frontier_stage": {
+          "type": ["string", "null"],
+          "description": "The single scope the whole frontier is taken at. Fixed, because a frontier mixing stages is a category error with a plot."
+        },
+        "included": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["identity", "knobs", "completed_stage", "metrics"],
+            "properties": {
+              "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+              "knobs": {"type": "object"},
+              "completed_stage": {"type": ["string", "null"]},
+              "metrics": {"type": "array"}
+            }
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["identity", "code", "detail"],
+            "properties": {
+              "identity": {"type": "string"},
+              "code": {"enum": ["NOT_ELIGIBLE", "FEASIBILITY_UNDETERMINED", "SCOPE_MISMATCH", "DID_NOT_RUN", "NO_MEASURED_METRIC"]},
+              "detail": {"type": "string"}
+            }
+          }
+        },
+        "included_count": {"type": "integer", "minimum": 0},
+        "excluded_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "toolchain": {"type": "object"},
+    "what_the_budget_bought": {
+      "type": "object",
+      "description": "The trial count with CPU-hours and wall time in the same breath, because the number a reader takes away is whichever is easiest to read.",
+      "required": ["sentence", "comparable_points", "frontier_stage", "cpu_hours", "wall_seconds"],
+      "properties": {
+        "sentence": {"type": "string"},
+        "comparable_points": {"type": "integer", "minimum": 0},
+        "frontier_stage": {"type": ["string", "null"]},
+        "cpu_hours": {"type": ["number", "null"]},
+        "wall_seconds": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

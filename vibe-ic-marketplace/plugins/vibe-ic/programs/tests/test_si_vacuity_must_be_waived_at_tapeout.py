@@ -66,6 +66,10 @@ import signoff_audit as sa  # noqa: E402
 import si_mcf_sta_check as sic  # noqa: E402
 import _gate_denominator as _gd  # noqa: E402
 import _gdsii  # noqa: E402
+# One real-report control below reads PUBLISHED cells, which now live in
+# vibeic/benchmark-data. `_published_corpus` owns the single "is a published
+# cell readable here?" answer and the single skip reason.
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 _DECLARED_GDS = "phase3/stage4/gds/top.gds"
 # Read through `getattr` on purpose. Bound at MODULE scope, a hard
@@ -920,7 +924,13 @@ def test_the_documented_waiver_example_satisfies_its_sibling_gates(tmp_path):
     `growth_rationale`) and `waiver_staleness_check` rc 2 (no parseable
     `approved_at`, so the entry can never AGE). An example this gate accepts
     and its siblings reject sends a reviewer to write a waiver that cannot be
-    aged or closed — a permanent one."""
+    aged or closed — a permanent one.
+
+    vibe-ic#922 added `growth_rationale_covers` to that sibling contract: a
+    rationale must record the waiver population it was written against, or it
+    authorises unlimited growth forever. The documented block comment carries
+    the field, so this fixture does too — that is the whole point of this
+    test, and it fails here first if the comment and the gates drift."""
     import datetime
     import subprocess
 
@@ -929,6 +939,7 @@ def test_the_documented_waiver_example_satisfies_its_sibling_gates(tmp_path):
     _write(tmp_path / "waivers.json", json.dumps({
         "growth_rationale": ("One SI vacuity disclosed for this release; the "
                              "extraction rerun is tracked."),
+        "growth_rationale_covers": 1,
         "waived_steps": [{
             "id": sa._TAPEOUT_STEP_ID,
             "reason": _GOOD_REASON,
@@ -1146,18 +1157,21 @@ def test_the_channel_check_does_not_fire_on_a_body_the_emitter_wrote(tmp_path):
         assert _rc(tmp_path) == 0, findings
 
 
+@needs_corpus
 def test_the_channel_check_is_silent_on_every_real_report_in_the_tree(
         tmp_path):
     """The strongest false-alarm evidence available: the emitter's own output.
 
-    Not a fixture — every checker-output SI report tracked in this repo, in
+    Not a fixture — every checker-output SI report in the PUBLISHED cells, in
     every verdict state. A clause that fires on one of these would be blocking
     correct work.
+
+    The old guard asked whether `benchmark-data/` was a directory. It still is
+    in this repo — it holds the design INPUT — so the guard passed and the
+    control then failed on an empty `rglob`, reporting a defect where the only
+    fact was that the result cells had moved to vibeic/benchmark-data.
     """
-    corpus = Path(__file__).resolve().parents[5] / "benchmark-data"
-    if not corpus.is_dir():
-        pytest.skip("no benchmark-data corpus in this checkout — this control "
-                    "is NOT measured here, rather than passing vacuously")
+    corpus = corpus_root()
     reports = sorted(corpus.rglob("reports/phase3/si_mcf_sta_check.json"))
     assert reports, "corpus present but empty — this control measures nothing"
     for path in reports:
