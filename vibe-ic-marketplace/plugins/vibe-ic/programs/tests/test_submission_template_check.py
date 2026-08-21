@@ -659,14 +659,133 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "its condition is unsatisfiable and the step is dead for every design")
 
 
+def _write_router(root: Path, suffix: str) -> None:
+    """Put ONE of step 0.5ic's router files on disk, by its suffix."""
+    import _tapeout_declaration as TD
+    if suffix == "*.yaml":
+        (root / ST.SLOTS_DIR_REL).mkdir(parents=True, exist_ok=True)
+        (root / ST.SLOTS_DIR_REL / "slot_a.yaml").write_text(
+            "DIE_AREA: [0, 0, 2000, 2000]\n"
+            "CORE_AREA: [100, 100, 1900, 1900]\nFP_SIZING: absolute\n")
+    elif suffix == "NO_TEMPLATE.txt":
+        (root / ST.NO_TEMPLATE_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / ST.NO_TEMPLATE_REL).write_text(
+            ST.NO_TEMPLATE_MARKER + "\nfixture\n")
+    elif suffix == "SELF_TAPEOUT.txt":
+        (root / TD.SELF_TAPEOUT_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / TD.SELF_TAPEOUT_REL).write_text(
+            TD.SELF_TAPEOUT_MARKER + "\nfixture\n")
+    else:                                                   # pragma: no cover
+        raise AssertionError(
+            f"no writer for router file {suffix!r} — the flow grew a router "
+            f"and this helper did not; add a branch above rather than letting "
+            f"the pairs below run over a tree that was never built")
+
+
+def test_two_routers_at_once_exit_ONE_a_refusal_and_never_TWO_a_skip(tmp_path):
+    """The TIER, not just the finding — and the tier is the unguarded half.
+
+    That two coexisting router artefacts are REFUSED is already pinned twice, by
+    `test_path_step_matrix_ic_and_ip::test_two_router_files_at_once_are_refused_
+    and_the_control_is_not` and by `test_general_precheck::
+    test_g8_two_router_files_at_once_are_refused_not_resolved`. Removing the
+    refusal reddens both. This does not repeat that.
+
+    What NOTHING pinned is the EXIT TIER the refusal leaves by. MEASURED on
+    81cd5321b by demoting it — keeping the ROUTER_CONTRADICTION finding, keeping
+    it in the report, and returning 2 instead of 1 for that case alone:
+
+        362 passed, 11 skipped, 3 xfailed        <- nothing noticed
+
+    That is not cosmetic. `flow_compliance_check` reads rc 2 as the disclosed
+    SKIP tier: a demoted refusal stops meaning "this tree is contradictory and
+    must not proceed" and starts meaning "this step could not measure, carry
+    on". The tree that selects two terminals at once would then pass step 0.5ic
+    as a disclosed skip, and every routed step behind it would run.
+
+    So this asserts rc == 1 EXACTLY. Not `!= 0`, which 2 also satisfies and
+    which is how the hole stayed open.
+
+    The pairs are DERIVED from the flow, never named: which routers exist is
+    what a route being added or retired changes.
+    """
+    import itertools
+    import tapeout_declaration_check as TDC
+
+    by_file = _routes_by_router_file()
+    routers = sorted(by_file)
+    pairs = list(itertools.combinations(routers, 2))
+    assert pairs, (
+        "fewer than two router files are routed on, so there is no pair to "
+        f"put on disk and this rule examined nothing. Routes: {by_file}")
+
+    for a, b in pairs:
+        root = tmp_path / f"{a}_{b}".replace("*", "star").replace(".", "_")
+        (root / "input/submission_template").mkdir(parents=True)
+        _write_router(root, a)
+        _write_router(root, b)
+        import _tapeout_declaration as TD
+        doc, _ig = TD.merge_answers(TD.blank_declaration(),
+                                    {"deliverable": "DIE"})
+        (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
+        rep = root / "reports/phase1/tapeout_declaration.json"
+        rc = TDC.main([str(root), "--json", str(rep)])
+        assert rc == 1, (
+            f"a tree carrying {a} AND {b} must exit 1 — a REFUSAL — and this "
+            f"exited {rc}. Exit 2 is the flow's disclosed-skip tier, so a "
+            f"contradictory tree would read as 'could not measure' and every "
+            f"step routed behind 0.5ic would run over it")
+        assert TDC.RULE_ROUTER_CONTRADICTION in rep.read_text(), (
+            f"the refusal for {a}+{b} must be the NAMED rule, not a bare "
+            f"non-zero exit")
+
+
 def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
     """THE ONE THIS STEP EXISTS FOR, now that the outputs are routers.
 
     MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
     chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
-    applicable, on `files_exist` and nothing else. Nothing blocks on this step
-    and nothing takes a required_input from it, so ITS OWN FAIL DOES NOT STOP
-    THE ROUTING — measured too, and it is why the file must not be written.
+    applicable, on `files_exist` and nothing else.
+
+    THE SENTENCE THAT USED TO SIT HERE IS NO LONGER TRUE, and it is corrected
+    rather than deleted because a reader who believes it reasons wrongly about
+    why this step matters. It said "Nothing blocks on this step and nothing
+    takes a required_input from it, so ITS OWN FAIL DOES NOT STOP THE ROUTING —
+    measured too". Both halves are now false; the 2026-08-20 D5-MISSING-EDGE
+    change added the edges, and "measured too" is exactly the phrase that stops
+    the next reader from re-measuring.
+
+    NO LIST OF STEP IDS APPEARS HERE ON PURPOSE — enumerating them is how the
+    sentence above rotted. The PROPERTY, re-derivable in one read of the flow
+    this file already parses:
+
+        every step whose `condition.files_exist` names a submission_template
+        router also declares `0.5ic` in its `blocks_on`; the chip-path ones
+        additionally take `input/submission_template/tapeout_declaration.json`
+        as a `required_input` from it.
+
+    So this step's FAIL now DOES stop the routing. Nothing is asserted here
+    about it: `test_matrix_d5_deps_correct.py`, in
+
+        test_d5_blocks_on_covers_the_real_dependency_graph
+
+    derives the edge set from the real dependency graph, one parametrised cell
+    per step. NOT quite "every step": some cells are WAIVED under
+    `xfail(strict=True)`, which is not a skip — a waived cell XPASSes and goes
+    red the day its gap closes. The enforced/waived split is a COUNT and counts
+    rot, so it is not written here; run the cell family and read the tail:
+
+        pytest programs/tests/test_matrix_d5_deps_correct.py \
+            -k test_d5_blocks_on_covers_the_real_dependency_graph -q
+
+    Every step this docstring is about was in the ENFORCED set when the
+    correction was made — measured, by dropping `0.5ic` from `15.5ic`, `26.5ic`
+    and `37.5ip` in a throwaway tree and watching the matching D5 cell redden
+    for each. That is a record of an experiment, not a claim about today.
+
+    THE CONCLUSION IS UNCHANGED, because it never rested on that clause: the
+    router file must not be written by a run that did not look, because the
+    routers select terminals by `files_exist` and nothing else.
 
     A run that searched and found nothing and SAID SO, and a run where nobody
     looked, produce the same empty directory. If both wrote the router, both
