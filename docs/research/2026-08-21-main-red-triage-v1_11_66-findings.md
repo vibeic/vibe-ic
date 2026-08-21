@@ -3180,6 +3180,58 @@ recorded as a label.**
 **Not bumped. Not baselined. Recorded.**
 
 
+## M55 — the last unexamined label, and `slot_pad_budget_check` turns up a THIRD time
+
+I added the row *"`declaration scans strip comments` — 5 regexes. Not
+investigated further"* to section C one commit ago, having recorded the count and
+not the content. Reading it — the M49→M50 move — names them:
+
+```
+crosslayer_rewrite_equivalence::module_params::_MODULE_RE(rtl_text)
+crosslayer_rewrite_equivalence::module_ports::_MODULE_RE(rtl_text)
+declared_clock_period::declared_io_delay_fraction::_IO_TOKEN_RE(text)
+slot_pad_budget_check::parse_top_ports::_DIR_RE(decl)
+slot_pad_budget_check::parse_top_ports::_DIR_RE(s)
+```
+
+(175 such scans against a baseline of 170.)
+
+**Two of the five are `slot_pad_budget_check`.** That program now appears in
+THREE of the six blocking hygiene FAILs:
+
+| finding | source |
+|---|---|
+| unwired — nothing but its own test runs it | `checker execution wiring` + `gates are wired to something` (M50) |
+| blocked on the shuttle operator's template, same artefact as `0.5ic` | confirmed by data path (M52) |
+| **2 of 5 declaration regexes scanning unstripped text** | `declaration scans strip comments` (here) |
+
+**And it is the checker that measured five of nine designs unbondable.** So the
+single program carrying the most consequential measurement in the repository is
+also unwired, input-starved, and scanning comments as if they were code. That is
+not a coincidence to marvel at — **an unwired program is one nothing exercises,
+and nothing exercised is where defects accumulate undisturbed.** The three
+findings are one story.
+
+**The gate's own explanation is, once more, the lesson I kept relearning:**
+
+> A comment sentence matching `module\s+(\w+)` mints a module that does not
+> exist. Strip comments on the value that reaches the scan — **stripping a
+> SIBLING variable does not make this one safe, which is the whole reason this
+> gate reads dataflow and not presence.**
+
+**"Dataflow and not presence"** is exactly the distinction I got wrong four times
+tonight: a flat ledger read as step membership (M43), an unprinted line read as an
+absent hint (M44), a co-located clause read as a shared cause (M48), two programs
+sharing a subject read as sharing an input (M51, which happened to hold). Each
+time I reasoned from PRESENCE — this appears near that — where the answer required
+following the VALUE.
+
+**This repository's gates keep stating my own errors back to me in better words
+than I use.** That is the third time tonight, and I no longer think it is
+coincidence: these gates were written by someone who had already made these
+mistakes and troubled to name them precisely.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3271,7 +3323,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
-| **`declaration scans strip comments`** | 5 declaration regexes scanning text no stripper touched (M49). Not investigated further. | **unexamined** |
+| **`declaration scans strip comments`** | 5 regexes scanning unstripped text, **named in M55** (175 vs baseline 170). **2 of the 5 are `slot_pad_budget_check`** — see its two other rows; one program, three findings. Fix: strip comments on the value that REACHES the scan, not on a sibling. | **named, fixable per-site** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
 ## D. Corrections to my own earlier reports — the complete list
