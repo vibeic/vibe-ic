@@ -80,6 +80,71 @@ def _record(project: Path, step: str) -> Path:
     return project / R._ATPG_NOT_RUN_REL[step]
 
 
+def _real_grade_blob(step: str) -> dict:
+    """A coverage artefact the gate's OWN recount grades PASS, per step.
+
+    This used to be copied out of `benchmark-data/ic/spm/v1.5.58_ihp-sg13g2`.
+    The published result cells now live in `vibeic/benchmark-data`, and reading
+    one here made a test about the GATE depend on which cells happen to be
+    published — the property is the gate's, so the fixture is the gate's too.
+
+    It is not a rubber stamp. Both evaluators RE-DERIVE their verdict from the
+    per-record lists and never trust a written top-level number
+    (`path_delay_coverage_check._recount`, `sdd_coverage_check._recount`), so
+    this blob reaches PASS only by being internally consistent:
+
+      DT2  2 LOC-testable paths, both `nr_verdict`/`robust_verdict` = DET
+           -> recount sensitised 2 / testable 2 = 100% >= floor 80%
+      DT3  2 LOC-testable records with slack 8.8/8.9 ns against a margin
+           re-derived as 0.1 x 10.0 ns -> both re-derive to `weak`, which is
+           what they claim, so there is no strong-with-high-slack fabrication
+           and no coverage over-claim
+
+    A `{"verdict": "PASS"}` stub would NOT do: `no per-path PDF records present`
+    / `no per-fault SDD records present` both FAIL, which is the point.
+    """
+    if step == "DT2":
+        def _p(idx: int, slack: float) -> dict:
+            return {"idx": idx, "startpoint": "ff_launch",
+                    "endpoint": f"ff_capture_{idx}", "end_kind": "ff",
+                    "end_edge": "^", "arrival": 1.0, "slack": slack,
+                    "loc_testable": True, "nr_verdict": "DET",
+                    "robust_verdict": "DET", "covered": True, "robust": True,
+                    "status": "robust"}
+        return {
+            "program": "path_delay_fault_atpg_run", "clock": "clk", "top": "dut",
+            "floor_pct": 80.0, "k_requested": 2, "k_selected": 2,
+            "clock_period_ns": 10.0,
+            "graded_paths": 2, "testable_paths": 2, "sensitised_paths": 2,
+            "robust_paths": 2, "non_robust_paths": 0, "false_or_held_paths": 0,
+            "aborted_paths": 0, "pdf_sensitised_coverage_pct": 100.0,
+            "pdf_robust_coverage_pct": 100.0,
+            "path_records": [_p(0, 8.8), _p(1, 8.9)],
+            "verdict": "PASS", "status": "PASS", "reasons": [],
+        }
+    if step == "DT3":
+        def _r(idx: int, slack: float) -> dict:
+            return {"source": "sta_path", "idx": idx, "startpoint": "ff_launch",
+                    "endpoint": f"ff_capture_{idx}", "direction": "STR",
+                    "arrival_ns": 1.0, "detecting_path_slack_ns": slack,
+                    "loc_testable": True, "sensitizable": True,
+                    "nr_verdict": "DET", "robust_verdict": "DET",
+                    "sdd_bucket": "weak"}
+        return {
+            "program": "sdd_atpg_run", "clock": "clk", "top": "dut",
+            "margin_fraction": 0.1, "margin_fraction_cap": 1.0,
+            "clock_period_ns": 10.0, "margin_ns": 1.0,
+            "margin_ns_derivation": "margin_fraction × clock_period",
+            "k_selected": 2, "graded_faults": 2, "strong": 0, "weak": 2,
+            "undetected_at_speed": 0,
+            "sdd_binary_strong_coverage_pct": 0.0,
+            "sdd_slack_weighted_coverage_pct": 0.0,
+            "sdd_records": [_r(0, 8.8), _r(1, 8.9)],
+            "verdict": "PASS", "status": "PASS", "reasons": [],
+        }
+    raise AssertionError(f"no real-grade fixture for {step}")
+
+
 def _armed(project: Path) -> None:
     """Every DT1/DT2/DT3 precondition satisfied."""
     _sdc(project)
@@ -491,19 +556,21 @@ def test_a_real_grade_is_never_downgraded_by_a_stale_record(tmp_path, step, mod)
     MUTATION THIS CATCHES: consulting the record before the coverage blob.
     """
     R.atpg_disclose_not_run(tmp_path, step, "stale", "precondition_unmet")
-    # v1.5.58_ihp-sg13g2 (still published, untouched by the v1.9.94_sky130A
-    # swap): the fixture needs a REAL, PASS-graded coverage blob, which is a
-    # property of the design/plugin combination that produced it, not of any
-    # one cell's identity. spm's v1.9.94_sky130A record (regenerated the same
-    # session) reports DT2/DT3 as NOT_APPLICABLE for this design under the
-    # current plugin — a real, different verdict, not a fixture regression —
-    # so it can no longer serve as "the real grade" this test needs.
-    src = json.loads((PROGS.parent.parent.parent.parent
-                      / "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2"
-                      / R._ATPG_COVERAGE_REL[step]).read_text())
+
+    # CONTROL, and the reason this is not a weakened test: the record on disk is
+    # LIVE — resolvable, parseable, and on its own it drives the gate to BLOCKED.
+    # Without this arm a PASS below could come from a record the gate merely
+    # failed to read, which is a different cause and would not catch the
+    # mutation. Measured here, on the same tree, one call earlier.
+    blocked = mod.audit(tmp_path)
+    assert blocked["verdict"] == "BLOCKED", blocked
+    assert blocked["not_run_record"], (
+        "fixture premise: the stale record must be RESOLVED when there is no "
+        "artefact, or the no-leak direction below is asserting on nothing")
+
     dst = tmp_path / R._ATPG_COVERAGE_REL[step]
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(src))
+    dst.write_text(json.dumps(_real_grade_blob(step)))
 
     report = mod.audit(tmp_path)
     assert report["verdict"] == "PASS", report
