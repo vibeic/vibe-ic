@@ -1445,3 +1445,33 @@ claims that were not measured. Two commands would have caught it, and the only
 reason it was caught at all is that I went back to test an implicit claim rather
 than a stated one. A remedy is not verified until the remedy itself has been
 run, not merely the artefact it produces.
+
+## 24. Re-differenced after the last code change, because the subject moved
+
+The "clears seven, adds none" result was measured on this branch's content at
+`1eefc98923`. `3106e4d3c2` then changed CODE — `tools/gatekeeper-land.sh` and
+`ci_harness_timeout_ceiling_check.py`, the budget-margin comment and its digest
+re-pin. A differential whose subject changed afterwards is a differential about
+a tree that no longer exists, which is the staleness this document has now
+corrected four times in its own claims. So it was re-run rather than assumed to
+carry over.
+
+Current merged tree (`85383af35b` + `22c41652d3`, clean merge, 0 conflicts),
+same 17-file selection plus the seventh node:
+
+```
+10 failed, 464 passed, 5 skipped  (561s)
+
+vs the as-is batch arm:  cleared the same six ci_harness_timeout_ceiling_check
+                         ids; NEW: none
+vs merged_r3 (the pre-code-change run): failure name sets IDENTICAL
+```
+
+**The code change regressed nothing**, and the seventh node is included in the
+464 rather than sitting outside the selection as it did when the count was six.
+
+This is the last measurement. It is recorded not because it was in doubt but
+because the alternative was to let a result stand whose subject had moved
+underneath it — and every time this document did that, it was wrong: the
+"eleven commits", the "cheap" remedy, the "~550 s" cost, and the pinned pair.
+Four for four is enough of a pattern to stop assuming and re-run.
