@@ -1373,13 +1373,42 @@ green while they still do not tamper anything, which is the worst of both: a
 green that cannot fail, added by hand. They belong with the other ten in the
 re-founding work already escalated.
 
-### The 12 IMAGE-ONLY reds
+### The 12 IMAGE-ONLY reds — MEASURED, not inferred (M19)
 
-All twelve need a Docker CLI or `merge-tree`; the image has the latter and not
-the former. Note `..._candidate_cannot_prewrite_base_wave_artifacts` is among
-them — it passes on the host (vacuously, M15) and fails in the image for want of
-docker. A test can be vacuous in one lane and absent in the other, and neither
-state is the guard working.
+I first wrote this section from the test names. Having just retracted one
+inferred claim (M17), I re-ran the twelve in the image and read the reasons:
+
+```
+10 x  No such file or directory: 'docker'
+ 8 x  assert 2 == 0        4 x  assert 2 == 1
+```
+
+All twelve return **rc 2 = `RC_CANNOT_MEASURE`** where the test expects a real
+verdict. That is the verifier behaving **correctly**: with no Docker CLI it
+cannot run the arms, so it reports *I could not decide* rather than passing or
+refusing.
+
+**This is the repository's rule 9 honoured by the product, in the one lane where
+it matters most.** "I could not look" and "I looked and it was clean" produce
+different exit codes, and the CI lane gets the honest one. After a night of
+finding places where that distinction had collapsed — in a test's assert
+message, in a defaulted `.get`, in a 0-byte file that still `exists()` — the
+program under test gets it right.
+
+The consequence, stated exactly: **the end-to-end verification path is not
+exercisable in the pinned image, and the image says so.** The other 112 tests in
+the file, which do not need a container, run and pass there. That is the correct
+version of the claim M17 withdrew.
+
+`..._candidate_cannot_prewrite_base_wave_artifacts` is among the twelve: it
+passes on the host (vacuously, M15) and is unmeasurable in the image. A guard can
+be vacuous in one lane and unmeasurable in the other, and neither state is the
+guard working.
+
+**Whether the CI image should be able to run these at all is a lane decision** —
+it needs a Docker CLI and a reachable daemon, which is a materially bigger
+question than the `pytest-timeout` one I settled at the top of this engagement,
+and not one to decide unilaterally. It joins the escalation list.
 
 
 # ===== REQUESTS TO THE LANDER =====
