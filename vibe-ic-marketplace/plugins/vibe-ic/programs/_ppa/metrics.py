@@ -83,6 +83,7 @@ __all__ = [
     "derived",
     "validate", "validate_or_raise", "is_comparable",
     "scope_digest", "record_key", "metric_domain", "unit_suffix_of",
+    "VERDICT_UNIT", "is_verdict_metric", "verdict",
     "MetricIndex", "Coverage", "CoverageRow", "coverage", "format_coverage",
     "BUNDLE_SCHEMA_ID", "RECORD_CARRIERS", "bundle", "validate_bundle",
     "records_from_document",
@@ -345,7 +346,35 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
     has_value = "value" in rec
     numeric_status = status in COMPARABLE_STATUSES or status == ESTIMATED
 
-    if numeric_status:
+    is_verdict = is_verdict_metric(metric)
+
+    if numeric_status and is_verdict:
+        # A VERDICT is value-bearing and is not a number. It is held to the same
+        # everything-else: a value is required, the empty string is not one, and
+        # the unit is stated rather than left blank. What it is exempt from is
+        # arithmetic — and `compare()` refuses to do any on it, so the exemption
+        # cannot leak into a delta.
+        if not has_value:
+            bad("NO_VALUE", f"status {status} requires a `value`")
+        else:
+            value = rec["value"]
+            if isinstance(value, bool) or not isinstance(value, str):
+                bad("VERDICT_NOT_A_STRING",
+                    f"metric {metric!r} is a verdict, so `value` is one of the "
+                    f"literals the axis accepts; got {value!r}. A verdict "
+                    "encoded as a number is a number downstream.")
+            elif not value.strip():
+                bad("VERDICT_SENTINEL",
+                    "`value` is empty. The empty string is not a verdict — two "
+                    "of them compare EQUAL, so two circuits nobody compared "
+                    "would read as agreeing.")
+        unit = rec.get("unit")
+        if unit != VERDICT_UNIT:
+            bad("VERDICT_UNIT_WRONG",
+                f"metric {metric!r} is a verdict, so `unit` is "
+                f"{VERDICT_UNIT!r}; got {unit!r}. Naming a physical unit on a "
+                "verdict is what makes a consumer try to scale it.")
+    elif numeric_status:
         if not has_value:
             bad("NO_VALUE", f"status {status} requires a `value`")
         else:
@@ -364,6 +393,11 @@ def validate(rec: Any) -> List[Tuple[str, str]]:
                 f"status {status} requires a non-empty `unit`. The empty "
                 "string is not a unit — it compares equal to another empty "
                 "unit, so two numbers in different units pass a unit check.")
+        elif unit == VERDICT_UNIT:
+            bad("VERDICT_UNIT_ON_A_NUMBER",
+                f"metric {metric!r} is not a verdict metric but the record "
+                f"declares unit {VERDICT_UNIT!r}. A number whose unit is "
+                "'verdict' is a number with no unit at all.")
         elif isinstance(metric, str):
             suffix_unit = unit_suffix_of(metric)
             if suffix_unit is not None and suffix_unit.lower() != unit.lower():
@@ -465,6 +499,34 @@ def unit_suffix_of(metric: str) -> Optional[str]:
     if "_" not in last:
         return None
     return _UNIT_SUFFIXES.get(last.rsplit("_", 1)[1])
+
+
+#: The unit a VERDICT carries. Not a physical unit and deliberately not the
+#: empty string: `""` compares equal to `""`, so two records in unknown units
+#: would pass a unit check, which is the sentinel §6.1 names.
+VERDICT_UNIT = "verdict"
+
+
+def is_verdict_metric(metric: Any) -> bool:
+    """True when the metric's last segment is `verdict`.
+
+    WHY THE SHAPE HAS TO ADMIT THESE AT ALL. `_ppa/feasibility.py` proves two of
+    its nine axes — `physical.lvs.verdict` and `equivalence.verdict` — with the
+    `verdict_in` kind, against an accepted set of literals. LVS does not produce
+    a violation count; it produces a match/no-match about a NAMED top-level
+    circuit, and encoding "matched" as the integer 0 puts a number where a
+    verdict belongs and invites arithmetic on it downstream. Before this
+    predicate existed, `validate` refused every such record with
+    VALUE_NOT_A_NUMBER, so two of the nine axes the gate proves could not be
+    expressed in the canonical shape the gate reads. That is not a rule about
+    LVS: it is the record shape and the gate disagreeing about what a metric is.
+
+    Derived from the NAME, in the same style as `metric_domain`, so a new
+    verdict metric needs no edit here.
+    """
+    if not isinstance(metric, str) or "." not in metric:
+        return False
+    return metric.rsplit(".", 1)[1] == "verdict"
 
 
 def scope_digest(scope: Mapping[str, Any]) -> str:
@@ -1020,6 +1082,10 @@ CMP_NOT_MEASURED = "NOT_MEASURED"
 CMP_UNIT_MISMATCH = "UNIT_MISMATCH"
 CMP_INVALID = "INVALID_RECORD"
 CMP_DIFFERENT_METRIC = "DIFFERENT_METRIC"
+#: Two verdicts. Comparable in the sense that they are the same fact
+#: under the same scope, and NOT subtractable. Distinct from
+#: CMP_OK so a caller cannot read a missing `delta_b_minus_a` as zero.
+CMP_NOT_NUMERIC = "NOT_NUMERIC"
 
 
 def compare(a: Mapping[str, Any], b: Mapping[str, Any],
@@ -1105,6 +1171,24 @@ def compare(a: Mapping[str, Any], b: Mapping[str, Any],
         out["detail"] = (f"same metric and same scope, but unit {a.get('unit')!r} "
                          f"vs {b.get('unit')!r}. One of these two records is "
                          "wrong; comparing the numbers would hide which.")
+        return out
+
+    if is_verdict_metric(a.get("metric")):
+        # Same metric, same scope, both measured, same unit — and still not a
+        # subtraction. "MATCH" minus "MATCH" is not 0, and a delta of 0 printed
+        # for two verdicts would read as "no regression" on a pair that were
+        # never numbers. The axis that proves a verdict does so by membership in
+        # an accepted set; `_ppa/feasibility.py` owns that set and this does not
+        # duplicate it.
+        out["verdict"] = CMP_NOT_NUMERIC
+        out["a"]["value"] = a["value"]
+        out["b"]["value"] = b["value"]
+        out["equal"] = a["value"] == b["value"]
+        out["detail"] = (
+            f"{a.get('metric')!r} is a verdict, not a magnitude: "
+            f"{a['value']!r} vs {b['value']!r}. There is no delta and no "
+            "winner; whether a verdict is acceptable is decided by the "
+            "feasibility axis that names the literals it accepts.")
         return out
 
     va, vb = float(a["value"]), float(b["value"])

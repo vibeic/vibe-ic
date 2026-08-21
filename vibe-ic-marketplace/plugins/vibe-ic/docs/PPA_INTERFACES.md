@@ -70,6 +70,7 @@ One shape, `vibeic.ppa.metric.v1`. Numbers never travel alone.
 **No numeric sentinels.** `0`, `-1` and `""` never mean "not measured". A report
 prints the literal `NOT_MEASURED` row; it does not omit it.
 
+<<<<<<< HEAD
 **A record that may enter a numeric comparison must CARRY its unit.** Absent or
 empty is refused (`NO_UNIT`); it is never inferred from the name. The name is a
 cross-check on a declared unit, not a substitute for one.
@@ -88,12 +89,29 @@ Measured 2026-08-21: `_ppa/area.py` declared `"cells"`, `"wires"` and
 `"count"`. Two files in one lane holding opposite rules refused six records per
 run. The registry moved, not the rule. Guard:
 `tests/test_ppa_producer_consumer_agreement.py`.
+=======
+**A verdict is not a number.** A metric whose last name segment is `verdict`
+carries a non-empty STRING value and declares `"unit": "verdict"`. Two of the
+nine feasibility axes are proved this way: LVS answers whether two named
+circuits match, and equivalence answers whether a proof exists — neither is a
+population, and encoding "matched" as the integer `0` puts a number where a
+verdict belongs and invites arithmetic on it downstream. `_ppa/metrics.compare`
+returns `NOT_NUMERIC` for a pair of verdicts and never a delta; whether a
+verdict is acceptable is decided only by the feasibility axis that names the
+literals it accepts.
+
+**A `scope` key that is present and null is worse than one that is absent.**
+`null == null`, so two records that could not read their corner compare as the
+SAME corner. A field a producer could not establish is OMITTED and the reason is
+recorded outside `scope`; the refusal that follows is the correct outcome.
+>>>>>>> origin/agent/jppafeas-feasibility-producers
 
 **Two numbers are comparable only if their `scope` matches.** Synthesis area and
 post-route area are different metrics. Vectorless power and VCD power are
 different metrics. A comparison across differing scope is `UNDETERMINED`, not a
 winner.
 
+<<<<<<< HEAD
 ### 2.1 A SECOND record under one `(metric, scope)` identity
 
 Three different things look alike here, and collapsing them is what made a
@@ -129,6 +147,33 @@ conflict into two facts that quietly never compare again.
 metric emitted once per reported path under one scope
 (`timing.*.worst_path_slack_ns`, three values, one view) is not a conflict and
 not corroboration; the scope is missing the field that tells the readings apart.
+=======
+### 2.1 Required views are declared PER AXIS
+
+`_ppa/feasibility.FeasibilityPolicy` reads `required_views` (global) and
+`required_views_by_axis` (per axis, falling back to the global list for any axis
+it does not name). The two exist because the nine axes are not measured in one
+scope namespace: setup and hold sign off across process corners, while DRC, LVS,
+antenna, IR, EM and equivalence are single measurements over one database and
+have no process corner at all. With one global list, a contract declaring its
+timing corners also demanded them of DRC, so either DRC was permanently
+uncovered or its producer had to emit one measurement N times under fabricated
+scopes — N records carrying one source hash, into an index whose job is to
+notice exactly that.
+
+**What this does not change:** an unmeasured required view still makes the axis
+UNDETERMINED. A corner nobody ran is a corner nobody ran. There is no spelling
+that means "whatever was measured is enough" — an axis named with an empty list
+is UNDETERMINED, exactly as an undeclared global list is.
+
+**Every axis result publishes its `coverage`**: one row per declared view saying
+`MEASURED`, `NOT_MEASURED` (a record covers the view and could not support the
+metric — with the reason and the artefact it came from) or `NO_RECORD` (nothing
+covers the view). Those two used to be one sentence, and they need different
+fixes: one needs a better artefact, the other needs a run. The coverage is
+published on a SATISFIED axis too, so a reader questioning whether the view set
+was the right one does not have to make the axis fail first.
+>>>>>>> origin/agent/jppafeas-feasibility-producers
 
 ## 3. Identity
 
@@ -186,6 +231,9 @@ _ppa/timing.py           per-view timing rows from STA artefacts
 _ppa/power.py            power split + activity basis provenance
 _ppa/area.py             area taxonomy: proxy vs physical, kept separate
 _ppa/feasibility.py      the hard gate: setup/hold/DRV/DRC/LVS/ANT/IR/EM/equivalence
+_ppa/signoff.py          the physical/reliability/equivalence axes, read out of
+                         the flow's own sign-off artefacts (the producer side of
+                         the gate above)
 _ppa/pareto.py           frontier over the triple; never over a collapsed scalar
 _ppa/closure.py          controller state machine: actuator, remeasure, rollback, stop
 _ppa/search.py           candidate lifecycle, budget, multi-fidelity
