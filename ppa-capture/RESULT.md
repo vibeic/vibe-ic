@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 23 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 24 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 20 | deterministic rules — the default, and every one names its predicate |
+| **A** | 21 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -846,6 +846,34 @@ subject.
 **(o)** yes. **(d)** yes — a known-verdict invocation per command covers every
 command the layer gains.
 
+### A-22 · a third-party import at test module scope aborts collection · `repo.test_population`
+
+The tests lane found **two** files importing PyYAML at module scope with no
+guard and judged them latent, the host having the package. The count is what
+makes it worth doing:
+
+    module-scope third-party imports in the test tree, unguarded   51
+    distinct packages involved                                      1
+
+Exactly one package — so the fix is bounded and mechanical. **Proven, with a
+positive control on the same blocked dependency:**
+
+    test file   1 error during collection ... Interrupted    ZERO tests run
+    program     rc=2, stated could-not-check                 degrades correctly
+
+A skip is a *result* and appears in the roll-up. A collection error is the
+**absence** of results, and it **interrupts the session** — so one unguarded
+import in a tree of hundreds turns a full run into no run, and the tier that
+exists to catch infrastructure-shaped non-runs cannot see a file that never
+collected. The product side already handles the same dependency correctly, which
+is exactly why the test-side omission is easy to miss.
+
+**Screen warning:** a name is third-party only if it resolves nowhere in the
+repository. Matching against a list of module stems misclassifies in-repo
+packages and reports 216 — the eighth over-match in this lane.
+**(o)** yes. **(d)** yes — it is per test module per import, so it covers the
+next optional dependency the suite adopts.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1033,6 +1061,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
+| A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
