@@ -48,19 +48,46 @@ def _git_clone_shallow(url: str, dest: Path, commit: Optional[str] = None) -> bo
             check=True, capture_output=True, timeout=120,
         )
         if commit and commit not in ("master", "main", "HEAD"):
-            # Best-effort: try to check out the pinned commit (may fail
-            # if not on default branch — accept that for reproducibility
-            # comparison, the depth-1 clone may give different content
-            # than the pinned commit).
+            # Best-effort: try to check out the pinned commit. It may fail — a
+            # depth-1 clone need not contain a commit off the default branch.
+            #
+            # THE OUTCOME IS INSPECTED AND REPORTED, WHICH IT DID NOT USED TO BE.
+            # Previously both calls swallowed their result and the function
+            # returned True regardless, so a comparison made against the DEFAULT
+            # BRANCH was published as a reproducibility verdict about the PINNED
+            # COMMIT, with nothing in the record naming which revision had
+            # actually been compared. That is the defect
+            # `prepared_checkout_states_the_revision_it_holds` refuses: a
+            # complete, internally consistent verdict about an unnamed revision.
+            #
+            # The bool contract is unchanged — a clone that produced a tree is
+            # still a usable tree — but an unachieved pin is now stated on
+            # stderr naming BOTH revisions, so a reader can tell a comparison
+            # against the pinned commit from a comparison against whatever the
+            # default branch happened to hold.
             try:
                 subprocess.run(
                     ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", commit],
                     capture_output=True, timeout=60,
                 )
-                subprocess.run(
+                co = subprocess.run(
                     ["git", "-C", str(dest), "checkout", commit],
                     capture_output=True, timeout=30,
                 )
+                head = subprocess.run(
+                    ["git", "-C", str(dest), "rev-parse", "HEAD"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                achieved = (head.stdout or "").strip()
+                if co.returncode != 0 or not achieved.startswith(commit[:7]):
+                    where = achieved[:12] if achieved else "an unresolvable HEAD"
+                    print(
+                        f"[ip_catalog_reproduce_pull] PIN_NOT_ACHIEVED — asked "
+                        f"for {commit[:12]}, tree is on {where}. Any comparison "
+                        f"below is about the revision the tree HOLDS, not the "
+                        f"one it was pinned to.",
+                        file=sys.stderr,
+                    )
             except Exception:
                 pass
         return True
