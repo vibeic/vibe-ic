@@ -246,6 +246,106 @@ def _summarize(probe: MCPProbe, catastrophic: bool = False) -> Dict[str, Any]:
     }
 
 
+# ──────────────── pytest-collectable coverage (vibe-ic, 2026-08-20) ──────────
+#
+# WHY THIS SECTION EXISTS.
+#
+# Everything above is a hand-run CLI (`python3 test/test_mcp_live_probe.py`).
+# It is NAMED `test_*.py` and lives under `test/`, so the landing gate's
+# unselectable-corpus lane selects it — and pytest then collected ZERO items
+# from it and exited 5 (`EXIT_NOTESTSCOLLECTED`) with an empty JUnit.
+#
+# MEASURED on origin/int/tonight (7676d9c56), the corpus driven one file at a
+# time exactly as `gatekeeper-land.sh::run_unselectable_pytest` drives it:
+#
+#     111 file(s) asked · 852 test case(s) · 2 red
+#     RC 5  vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test/test_mcp_live_probe.py
+#     -> junit written with 0 <testcase> elements ("no tests ran in 0.05s")
+#
+# `pytest_per_file_junit` is right to refuse that: a file that produced no test
+# case is UNKNOWN, not clean, so it is held out of the merged report and named
+# NORECORD — and `landing_merge_verdict` then refuses the landing. That ONE
+# file is the whole of the lane's `recorded 110 / NORECORD 1`; the other 110
+# files have zero failures between them. A lane with nothing wrong that still
+# cannot report is the shape this repository exists to remove.
+#
+# The fix is NOT an exclusion entry and NOT a skip: both would answer "I could
+# not look" for a file that can be looked at. What is asserted here is the
+# EXIT-CODE CONTRACT this module's own docstring publishes to its callers
+# (0 = all PASS or SKIP, 1 = at least one FAIL, 2 = server never started).
+# `_summarize` is a pure function of the recorded steps, so the contract is
+# checkable with no node, no server, no hardware and no network — which is what
+# lets it run in the pinned landing image on every landing.
+#
+# The live end-to-end probe stays exactly what it was: a hand-run tripwire.
+
+
+class _StubProbe:
+    """A recorded step list. `_summarize` reads nothing else off a probe."""
+
+    def __init__(self, statuses):
+        self.steps = [{"name": f"step{i}", "status": s, "detail": None}
+                      for i, s in enumerate(statuses)]
+
+
+def test_the_probe_targets_the_server_this_repo_ships():
+    """`_SERVER` is the shipped entry point, not a path that drifted away.
+
+    The CLI returns 2 with "server file not found" when this is wrong, so a
+    broken path would present as a catastrophic server failure rather than as
+    the packaging error it is.
+    """
+    assert _SERVER.name == "index.js"
+    assert _SERVER.parent.name == "src"
+    assert _SERVER.is_file(), f"the probe's server target does not exist: {_SERVER}"
+
+
+def test_all_pass_or_skip_exits_zero():
+    r = _summarize(_StubProbe(["PASS", "PASS", "SKIP"]))
+    assert r["exit_code"] == 0
+    assert r["ok"] is True
+    assert r["summary"] == {"pass": 2, "fail": 0, "skip": 1, "total": 3}
+
+
+def test_one_fail_exits_one_even_beside_passes():
+    """A single FAIL decides the run. The counts still report the whole set."""
+    r = _summarize(_StubProbe(["PASS", "FAIL", "SKIP"]))
+    assert r["exit_code"] == 1
+    assert r["ok"] is False
+    assert r["summary"] == {"pass": 1, "fail": 1, "skip": 1, "total": 3}
+
+
+def test_a_server_that_never_started_exits_two_not_one():
+    """2 and 1 are different answers: "the server is broken" is not "a check
+    failed". `run_probe` returns catastrophic=True the moment `initialize` gets
+    no response, and the docstring promises callers that distinction."""
+    r = _summarize(_StubProbe(["FAIL"]), catastrophic=True)
+    assert r["exit_code"] == 2
+    assert r["ok"] is False
+
+
+def test_an_empty_step_list_is_never_reported_as_a_passing_run():
+    """NOTHING-TO-CHECK IS NOT A PASS — asserted from the other side.
+
+    `_summarize` over zero steps DOES return 0, and that is only sound because
+    the sole caller reaching it with an empty list is the catastrophic path.
+    Pinned here so the zero-step total stays visible in the record instead of
+    an empty run reading as a clean one.
+    """
+    r = _summarize(_StubProbe([]))
+    assert r["summary"]["total"] == 0
+    assert _summarize(_StubProbe([]), catastrophic=True)["exit_code"] == 2
+
+
+def test_the_recorded_steps_survive_into_the_report_verbatim():
+    """The report is the record. `--json` consumers read `steps`, so dropping
+    or rewriting one there would silently shrink what a run reported."""
+    probe = _StubProbe(["PASS", "FAIL"])
+    r = _summarize(probe)
+    assert r["steps"] == probe.steps
+    assert [s["status"] for s in r["steps"]] == ["PASS", "FAIL"]
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--json", action="store_true",

@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 CAUSES = ("strap_sparse", "switching_cluster", "narrow_metal", "weak_via")
@@ -89,14 +90,15 @@ def build_triage(hotspots: List[Dict[str, Any]]) -> Dict[str, Any]:
         "cause_count": cause_count,
         "worst_ir_uv": worst_ir,
         "hotspot_count": len(out),
-        "emitted_by": "ir_drop_triage_classify v0.1.50",
+        "emitted_by": _pmd.emitted_by("ir_drop_triage_classify"),
     }
 
 
 def triage_to_markdown(t: Dict[str, Any]) -> str:
     out = ["# IR-drop triage",
            "",
-           f"_Emitted by `ir_drop_triage_classify.py` (v0.1.50)._",
+           f"_Emitted by `ir_drop_triage_classify.py` "
+           f"(v{_pmd.running_plugin_version()})._",
            "",
            f"- Hotspots: **{t['hotspot_count']}**",
            f"- Worst IR: {t['worst_ir_uv']} uV",
