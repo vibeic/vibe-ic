@@ -230,6 +230,12 @@ def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
             and id(n) not in skip]
 
 
+def emitted_script_of(tree: ast.AST) -> str:
+    """`emitted_script`, for a caller that has already parsed."""
+    return "\n".join(v for _, _, v in sorted(
+        (n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)))
+
+
 def emitted_script(text: str) -> str:
     """The emitted strings of `text` as ONE flat text, one record per line.
 
@@ -246,7 +252,10 @@ def emitted_script(text: str) -> str:
     were already separated by a quote, a newline and the next line's indentation,
     so no pattern here could span the seam then either.
     """
-    return "\n".join(v for _, _, v in _emitted_strings(text))
+    try:
+        return emitted_script_of(ast.parse(text))
+    except SyntaxError:
+        return ""
 
 
 def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
@@ -451,7 +460,17 @@ def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
     the reach, and a guard that quietly counts less than it read is the failure
     this file is built to catch one level up.
     """
-    src = emitted_script(text)
+    try:
+        return counters_of(ast.parse(text))
+    except SyntaxError:
+        return [], []
+
+
+def counters_of(tree: ast.AST) -> Tuple[
+        List[Tuple[str, int, List[Tuple[str, int]]]],
+        List[Tuple[str, str, str]]]:
+    """`counters`, for a caller that has already parsed -- see `phrases_of`."""
+    src = emitted_script_of(tree)
 
     def denial(m: "re.Match[str]") -> Optional[str]:
         """The word by which the emitted statement around `m` DENIES it."""
@@ -558,31 +577,34 @@ def main(argv: Optional[List[str]] = None) -> int:
             text_cache[stem] = sources[stem].read_text(errors="replace")
         return text_cache[stem]
 
-    tree_cache: Dict[str, Optional[ast.AST]] = {}
+    seen_unparsed: Set[str] = set()
 
-    def tree_of(stem: str) -> Optional[ast.AST]:
-        """This program's AST, or None having RECORDED that it would not parse.
+    def record_unparsed(name: str, e: SyntaxError) -> None:
+        """Say once that a source could not be read. Both checks can reach the
+        same file, and a reach report that counts one file twice is its own
+        small lie."""
+        if name not in seen_unparsed:
+            seen_unparsed.add(name)
+            unparsed.append(f"{name}:{e.lineno}: {e.msg}")
 
-        Cached, and it is the ONLY place a program is parsed: both checks ask
-        this file the same question and a second parse of an 18,000-line runner
-        is pure cost. Measured: adding an independent parseability probe beside
-        the phrase reader took this guard from 23s to 43s on the shipped tree.
-        """
-        if stem not in tree_cache:
-            try:
-                tree_cache[stem] = ast.parse(body(stem))
-            except SyntaxError as e:
-                tree_cache[stem] = None
-                unparsed.append(f"{sources[stem].name}:{e.lineno}: {e.msg}")
-        return tree_cache[stem]
-
+    # A TREE IS DERIVED FROM AND THEN DROPPED, NEVER CACHED. Caching them was
+    # measured at 596 MB peak RSS against 221 MB for the pre-polarity revision
+    # -- ~820 program ASTs held live, two of them over 2 MB of source -- and the
+    # allocator and GC pressure that buys makes EVERY parse in the run about
+    # twice as slow, including parses of files the cache never touched. On this
+    # fleet memory is a named constraint, so what is kept is the small derived
+    # answer (a phrase dict, a bool) and never the tree it came from.
     for stem in sources:
         src = body(stem)
         if "incr " not in src:
             continue
-        if tree_of(stem) is None:
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as e:
+            record_unparsed(sources[stem].name, e)
             continue
-        rows, refused = counters(src)
+        rows, refused = counters_of(tree)
+        del tree
         for what, matched, word in refused:
             denied.append({"where": sources[stem].name, "what": what,
                            "matched": matched, "denial": word})
@@ -602,8 +624,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def emitter_phrases(stem: str):
         if stem not in phrase_cache:
-            tree = tree_of(stem)
-            phrase_cache[stem] = {} if tree is None else phrases_of(tree)
+            try:
+                # The tree is a temporary: `phrases_of` returns a small dict and
+                # the AST is unreachable the moment this returns.
+                phrase_cache[stem] = phrases_of(ast.parse(body(stem)))
+            except SyntaxError as e:
+                record_unparsed(sources[stem].name, e)
+                phrase_cache[stem] = {}
         return phrase_cache[stem]
 
     stems = set(sources)

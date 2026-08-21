@@ -695,6 +695,67 @@ def test_a_parseable_tree_reports_nothing_unparsed(tmp_path):
     assert json.loads((tmp_path / "r.json").read_text())["unparsed"] == []
 
 
+def test_no_parsed_tree_outlives_the_answer_taken_from_it():
+    """MEASURED REGRESSION, PINNED STRUCTURALLY.
+
+    An earlier revision of this guard cached `ast.parse` results per program so
+    both checks could share one parse. It shared the parse and kept ~820 ASTs
+    live, two of them over 2 MB of source: peak RSS went 221 MB -> 596 MB, and
+    the allocator and GC pressure that buys made EVERY parse in the run about
+    twice as slow -- including parses of files the cache never touched, which is
+    why the cost did not look like it came from the cache. On this fleet memory
+    is a named constraint, so the rule is: derive the small answer, drop the
+    tree.
+
+    Asserted on the SOURCE because a memory ceiling in a unit test would be a
+    bound that is legal and unreliable: no module-level or closure name may hold
+    an `ast.parse` result across iterations. The `*_of` functions take a tree as
+    an ARGUMENT and return a dict, a string or a list -- never the tree -- and
+    every call site parses into a temporary.
+
+    If this goes red because a cache was reintroduced, measure peak RSS before
+    deciding it is fine: the last one looked obviously correct too."""
+    import ast
+    src = PROG.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    main_fn = fns["main"]
+
+    # THE FAILURE SHAPE IS STORING THE TREE ITSELF: `cache[key] = ast.parse(...)`
+    # or `t = ast.parse(...)` followed by `cache[key] = t`. Passing a parse
+    # THROUGH a deriving call -- `cache[key] = phrases_of(ast.parse(...))` -- is
+    # the CORRECT shape and must stay legal: the tree is a temporary and is
+    # unreachable the moment the call returns. Matching "an ast.parse appears
+    # anywhere inside the stored value" would forbid the fix along with the bug.
+    def _is_parse(node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "parse")
+
+    tree_names = {t.id for n in ast.walk(main_fn)
+                  if isinstance(n, ast.Assign) and _is_parse(n.value)
+                  for t in n.targets if isinstance(t, ast.Name)}
+    for n in ast.walk(main_fn):
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Subscript)
+                                             for t in n.targets):
+            held = (_is_parse(n.value)
+                    or (isinstance(n.value, ast.Name) and n.value.id in tree_names))
+            assert not held, (
+                "a parsed tree is being stored in a container; that is the "
+                "596 MB shape -- store what you derived from it instead")
+
+    # ... and the tree-taking cores return a derived value, never their input.
+    for name in ("phrases_of", "pins_of", "counters_of", "emitted_script_of"):
+        assert name in fns, f"{name} is gone; the parse-once design changed"
+        returns = [n for n in ast.walk(fns[name])
+                   if isinstance(n, ast.Return) and n.value is not None]
+        assert returns, name
+        for r in returns:
+            assert not (isinstance(r.value, ast.Name)
+                        and r.value.id == "tree"), (
+                f"{name} returns its input tree, which lets a caller cache it")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
