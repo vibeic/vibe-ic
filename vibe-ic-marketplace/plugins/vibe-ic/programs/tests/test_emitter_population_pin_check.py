@@ -651,6 +651,50 @@ def test_polarity_cannot_empty_the_reach_into_a_PASS(tmp_path):
     assert len(doc["denied_by_polarity"]) == 2, doc
 
 
+def test_a_source_that_will_not_parse_is_REPORTED_not_silently_skipped(tmp_path):
+    """THE ONE DIRECTION THE NARROWING COULD QUIETLY LOSE.
+
+    `counters` used to read the RAW FILE, so a program with a syntax error was
+    still regex-scanned and its `incr` sites still counted. Reading the AST
+    instead means an unparseable file yields nothing -- MEASURED, the same
+    fixture gives 2 sites to a raw-text scan and `[]` to `counters` -- and a
+    reach that shrank because a file would not parse is still a shrunken reach.
+
+    It is not a FAILURE: a syntax error is another gate's business, and this one
+    refusing would be it answering a question it was not asked. It is a stated
+    NON-EXAMINATION, which is this file's own rule -- the reach is printed,
+    always -- and it appears in the head line and in the JSON so a run that read
+    less than the tree holds says so in both places.
+
+    The tree ships 0 unparseable programs today; this exists for the version
+    skew that makes one, where the failure would otherwise be invisible."""
+    progs, tests = _tree(tmp_path)
+    src = (progs / "thing_emit.py").read_text()
+    (progs / "thing_emit.py").write_text(src + "\n\ndef newer(x)  :::\n    pass\n",
+                                         encoding="utf-8")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    out = r.stdout + r.stderr
+    assert "[UNPARSED]" in r.stdout, (
+        "a source this guard could not read left the reach in silence:\n" + out)
+    assert "thing_emit.py" in r.stdout and "could NOT read it" in r.stdout, out
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert len(doc["unparsed"]) == 1, doc
+    assert doc["unparsed"][0].startswith("thing_emit.py:"), doc
+    assert "source(s) NOT examined because they would not parse" in r.stdout, out
+    # and nothing was invented from a file that could not be read
+    assert doc["counters_examined"] == 0, doc
+
+
+def test_a_parseable_tree_reports_nothing_unparsed(tmp_path):
+    """The control on the sentence above: the count is a MEASUREMENT, not a
+    label that is always printed as zero."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    assert "[UNPARSED]" not in r.stdout, r.stdout
+    assert json.loads((tmp_path / "r.json").read_text())["unparsed"] == []
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

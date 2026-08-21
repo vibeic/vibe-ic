@@ -202,11 +202,12 @@ def _emitted_strings(text: str) -> List[Tuple[int, int, str]]:
         tree = ast.parse(text)
     except SyntaxError:
         return []
-    return [(n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)]
+    return sorted((n.lineno, n.col_offset, n.value)
+                  for n in _emitted_nodes(tree))
 
 
 def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
-    """The `ast.Constant` behind every emitted string, in source order.
+    """The `ast.Constant` behind every emitted string.
 
     THE ONE PLACE that decides what counts as emitted -- `_emitted_strings`
     wants the text, `pins` wants the node so it can ask what the surrounding
@@ -219,11 +220,14 @@ def _emitted_nodes(tree: ast.Module) -> List[ast.Constant]:
                                                   (ast.Constant, ast.JoinedStr)):
             for part in ast.walk(n.value):
                 skip.add(id(part))
-    out = [n for n in ast.walk(tree)
-           if isinstance(n, ast.Constant) and isinstance(n.value, str)
-           and id(n) not in skip]
-    out.sort(key=lambda n: (n.lineno, n.col_offset))
-    return out
+    #: UNORDERED. Only `emitted_script` needs source order -- a script read out
+    #: of order is not the script -- and it sorts for itself. `phrases_of` and
+    #: `pins_of` key by tail and by node, so sorting for them was a sort per
+    #: file across every test in the tree, paid to answer a question neither
+    #: asks.
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in skip]
 
 
 def emitted_script(text: str) -> str:
@@ -243,6 +247,17 @@ def emitted_script(text: str) -> str:
     so no pattern here could span the seam then either.
     """
     return "\n".join(v for _, _, v in _emitted_strings(text))
+
+
+def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
+    """`phrases`, for a caller that has already parsed. One parse per file is
+    most of this guard's runtime, so asking two questions must not cost two."""
+    out: Dict[str, Set[Tuple[str, int]]] = {}
+    for node in _emitted_nodes(tree):
+        for m in PHRASE.finditer(node.value):
+            out.setdefault(m.group(2).strip(), set()).add(
+                (m.group(1), node.lineno))
+    return out
 
 
 def phrases(text: str) -> Dict[str, Set[Tuple[str, int]]]:
@@ -370,20 +385,35 @@ def pins(text: str) -> Tuple[Dict[str, Set[Tuple[str, int]]],
     WHAT IT REFUSES IS RETURNED, not dropped -- a pin the guard declined to
     compare is a pin it did not check, and this file prints its reach.
     """
+    try:
+        return pins_of(ast.parse(text))
+    except SyntaxError:
+        return {}, []
+
+
+def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
+                                    List[Tuple[str, int, str]]]:
+    """`pins`, for a caller that has already parsed -- see `phrases_of`.
+
+    THE PARENT MAP IS BUILT ONLY IF THERE IS A PHRASE TO JUDGE. It costs a walk
+    of the whole tree plus a dict entry per node, and the great majority of test
+    files carry no `of <N> <tail>` at all, so paying for it before knowing there
+    is a question is most of the cost of asking. MEASURED on the shipped tree:
+    parsing each test twice and mapping every one of them took this guard from
+    ~21s to ~32s; parsing once and mapping only where a phrase exists brings it
+    back.
+    """
     kept: Dict[str, Set[Tuple[str, int]]] = {}
     refused: List[Tuple[str, int, str]] = []
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
+    carrying = [(n, list(PHRASE.finditer(n.value))) for n in _emitted_nodes(tree)]
+    carrying = [(n, hits) for n, hits in carrying if hits]
+    if not carrying:
         return kept, refused
     parent: Dict[int, ast.AST] = {}
     for n in ast.walk(tree):
         for child in ast.iter_child_nodes(n):
             parent[id(child)] = n
-    for node in _emitted_nodes(tree):
-        hits = list(PHRASE.finditer(node.value))
-        if not hits:
-            continue
+    for node, hits in carrying:
         word = denies_containment(node, parent)
         for m in hits:
             tail = m.group(2).strip()
@@ -456,17 +486,21 @@ def counters(text: str) -> Tuple[List[Tuple[str, int, List[Tuple[str, int]]]],
     return rows, refused
 
 
-def named_program(text: str, stems: Set[str]) -> Optional[str]:
+def named_program(tree: ast.AST, stems: Set[str]) -> Optional[str]:
     """The single program a test file names, or None if it names 0 or >1.
 
     Taken from imports and from ``"<stem>.py"`` path literals — the two ways a
     test in this tree reaches a program. A test naming several programs is left
     alone: which emitter a phrase belongs to would be a guess.
+
+    TAKES THE PARSED TREE, not the text. Two reasons, and the first is honesty:
+    parsing here and returning None on `SyntaxError` made a file this reader
+    COULD NOT READ indistinguishable from one that names no program, so an
+    unparseable test left the guard's reach silently. The caller parses, reports
+    what it could not parse, and passes the tree. The second is cost -- CHECK B
+    walks every test file in the tree and the parse is most of this guard's
+    runtime, so parsing twice to ask two questions is the wrong shape.
     """
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return None
     found: Set[str] = set()
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
@@ -507,6 +541,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     sources = {p.stem: p for p in sorted(args.programs.glob("*.py"))}
     findings: List[dict] = []
     denied: List[dict] = []
+    #: Sources this guard tried to read and could not. NEVER silent: a reach
+    #: that shrank because a file would not parse is still a shrunken reach, and
+    #: the whole subject moved to the AST when `counters` stopped reading raw
+    #: text -- before that a broken file was still regex-scanned, so this is the
+    #: one direction that change could quietly lose.
+    unparsed: List[str] = []
     counters_examined = 0
     pins_examined = 0
 
@@ -518,9 +558,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             text_cache[stem] = sources[stem].read_text(errors="replace")
         return text_cache[stem]
 
+    tree_cache: Dict[str, Optional[ast.AST]] = {}
+
+    def tree_of(stem: str) -> Optional[ast.AST]:
+        """This program's AST, or None having RECORDED that it would not parse.
+
+        Cached, and it is the ONLY place a program is parsed: both checks ask
+        this file the same question and a second parse of an 18,000-line runner
+        is pure cost. Measured: adding an independent parseability probe beside
+        the phrase reader took this guard from 23s to 43s on the shipped tree.
+        """
+        if stem not in tree_cache:
+            try:
+                tree_cache[stem] = ast.parse(body(stem))
+            except SyntaxError as e:
+                tree_cache[stem] = None
+                unparsed.append(f"{sources[stem].name}:{e.lineno}: {e.msg}")
+        return tree_cache[stem]
+
     for stem in sources:
         src = body(stem)
         if "incr " not in src:
+            continue
+        if tree_of(stem) is None:
             continue
         rows, refused = counters(src)
         for what, matched, word in refused:
@@ -542,18 +602,25 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def emitter_phrases(stem: str):
         if stem not in phrase_cache:
-            phrase_cache[stem] = phrases(body(stem))
+            tree = tree_of(stem)
+            phrase_cache[stem] = {} if tree is None else phrases_of(tree)
         return phrase_cache[stem]
 
+    stems = set(sources)
     for test in sorted(args.tests.rglob("test_*.py")):
         text = test.read_text(errors="replace")
-        stem = named_program(text, set(sources))
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as e:
+            unparsed.append(f"{test}:{e.lineno}: {e.msg}")
+            continue
+        stem = named_program(tree, stems)
         if stem is None:
             continue
         em = emitter_phrases(stem)
         if not em:
             continue
-        pinned, pin_refused = pins(text)
+        pinned, pin_refused = pins_of(tree)
         for phrase, lineno, word in pin_refused:
             denied.append({"where": f"{test}:{lineno}", "what": "test pin",
                            "matched": phrase, "denial": word})
@@ -576,13 +643,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     head = (f"{counters_examined} emitted counter denominator(s) and "
             f"{pins_examined} test pin(s) examined; {len(denied)} match(es) "
-            f"not counted because the statement DENIES them")
+            f"not counted because the statement DENIES them; {len(unparsed)} "
+            f"source(s) NOT examined because they would not parse")
     report = {"tool": TOOL, "counters_examined": counters_examined,
               "pins_examined": pins_examined, "denied_by_polarity": denied,
-              "findings": findings}
+              "unparsed": unparsed, "findings": findings}
     if args.json:
         _atomic.write_json(args.json, report)
 
+    for u in unparsed:
+        print(f"  [UNPARSED] {u} — this guard could NOT read it, so nothing in "
+              f"it was examined")
     for d in denied:
         print(f"  [POLARITY] {d['where']}: {d['what']} `{d['matched']}` sits "
               f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
@@ -590,8 +661,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if counters_examined == 0 and pins_examined == 0:
         _vac.announce_vacuous(TOOL, "no-population-stated-twice")
+        # THE REACH IS PRINTED ON THIS PATH TOO. A verdict of "nothing was
+        # compared" is exactly the one a reader needs the reach for: it is the
+        # difference between a tree that states no population twice and a tree
+        # this guard could not read. Without it, a run whose reach was emptied
+        # by unparseable sources -- or by polarity -- announced the empty result
+        # and not the cause.
         print(f"[VACUOUS] {TOOL}: no emitted population is stated twice here, "
-              f"so nothing was compared; this is NOT a pass")
+              f"so nothing was compared; this is NOT a pass [{head}]")
         return _vac.RC_VACUOUS
 
     if findings:
