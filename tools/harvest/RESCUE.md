@@ -112,3 +112,37 @@ whole of it. No ref can be pushed for a commit that does not exist. Those rows s
 `**DELETING THIS DIRECTORY DESTROYS THE CONTENT**` and they mean it literally. Preserving them
 would mean committing their trees into somebody's repository, which is a decision for the owner
 and not for a triage job.
+
+## The mirror, and it is the one that loses work
+
+jharv3 found the dangerous half of the host-view error: hosts also **over**-report `ON_REMOTE`.
+`refs/remotes` is a *cache*, and a tracking ref survives the branch it tracked. A commit
+reachable only from a deleted branch's stale tracking ref reads "safe to delete, it is on the
+remote" and is not on the remote at all.
+
+My own fix inherited it. `resolve_origin.sh` resolved on one machine — correct — but against a
+clone fetched **without `--prune`**. Measured: **537 of my 678 tracking refs were branches origin
+had deleted.** Re-resolved against live refs only (`git ls-remote --heads origin` as the
+authority, 143 live), **3 heads were falsely `ON_REMOTE`** and would have been deleted as safe.
+
+All three preserved: `harvest/rescue-102-stale-remote-vibe-ic` `79768640f9a`, all three shas
+confirmed as its parents.
+
+Only three, because the *first* error had already caused over-preservation: over-warning made me
+rescue commits that did not need it, and that absorbed most of this class. Two errors in opposite
+directions, and the cautious one covered for the dangerous one — which is luck, not method.
+
+**Final, live-refs-only: 824 heads, 822 `ON_REMOTE`, 0 `ON_LOCAL_REF_ONLY`, 0 `UNREFERENCED`,
+2 with no resolvable HEAD.**
+
+## main moved 30 commits under both of us
+
+`origin/main` is now `81cd5321b08` (v1.11.68), 30 past the `a00f53f2094` every row was judged
+against — the same staleness this re-triage exists to correct. Main moving can only turn RECOVER
+into LANDED, never the reverse, so nothing was unsafe; it over-kept. Re-judged all 188 RECOVER
+rows of `verdicts_shard_b.tsv` and `verdicts_shard_c_80_recovered.tsv` against current main:
+**one flipped** — `/home/reyerchu/_jcap_priv/wt`, whose whole tree is now a tree main publishes.
+
+The re-fetch used `bin_jharv2/fetch_guarded.sh`, which refuses to fetch a clone whose origin is a
+local path (it moved a correct ref backwards once) and repairs those from a clone with a real
+remote instead. On `.121` it skipped two such clones and repaired them, as designed.
