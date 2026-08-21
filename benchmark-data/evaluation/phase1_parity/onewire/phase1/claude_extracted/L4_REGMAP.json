@@ -1,5 +1,0 @@
-{
-  "ic_name": "1-Wire bus (Maxim AN148 Reliable 1-Wire Networks)",
-  "register_map_present": false,
-  "notes": "1-Wire is a wire-level multi-drop bus protocol; there is no addressable register file at the protocol layer. Each 1-Wire slave device (DS18B20 temperature sensor, DS2401 silicon serial number, iButton EEPROM, etc.) defines its own scratchpad / EEPROM memory map accessed via device-specific function commands AFTER the ROM-command address resolution phase. AN148 specifies only the wire-level protocol (Reset / Presence / time-slot signaling) and the ROM-command set; per-slave register / scratchpad layouts live in each device's individual datasheet."
-}

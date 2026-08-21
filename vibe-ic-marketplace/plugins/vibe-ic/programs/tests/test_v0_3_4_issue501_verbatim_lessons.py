@@ -117,15 +117,85 @@ def test_touched_skill_compliance_tests_green():
     rr = PT.repo_root()
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
+    import os
     import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # The child runs pytest INSIDE the SHIPPED `skills/` tree, so it collects
+    # and imports files from under it — and CPython caches the byte-code NEXT
+    # TO THE SOURCE. Measured on clean main `75776dbbb`, this one call left
+    # four files inside the tree this repository ships:
+    #
+    #   skills/core-agent-loop/programs/__pycache__/api_health.cpython-310.pyc
+    #   skills/core-agent-loop/programs/__pycache__/poll.cpython-310.pyc
+    #   skills/core-agent-loop/tests/__pycache__/
+    #       test_compliance.cpython-310-pytest-9.1.1.pyc
+    #   skills/core-agent-loop/tests/__pycache__/
+    #       test_poll_actionable_is_open.cpython-310-pytest-9.1.1.pyc
+    #
+    # WHICH DETECTOR ACTUALLY OWNS THIS, measured rather than assumed. Three
+    # plausible ones do NOT, and saying otherwise would be a comment that
+    # stops being true the moment someone checks it:
+    #
+    #   * `git status skills/` is EMPTY — `__pycache__/` is gitignored — so
+    #     `landing_worktree_is_clean_check` reads the tree as clean;
+    #   * `suite_write_guard` classifies them through `_is_cache_noise` and
+    #     logs them ADVISORY, never blocking;
+    #   * `test_tools_and_integration.py::
+    #      test_shipped_skills_tree_is_untouched_by_this_session` skips them
+    #     too — `_digest_tree` filters on that same `_is_cache_noise`
+    #     predicate, deliberately, because digesting them made the gate cry
+    #     wolf on bare collection. Measured both arms here: with the writer
+    #     live and running BEFORE it in one session, that digest still passes.
+    #
+    # The invariant that IS violated is "the shipped tree carries no build
+    # output", owned by `test_issue1417_no_test_bytecompiles_the_shipped_tree`.
+    # Both of its relevant assertions go red on the pre-fix file, and one of
+    # them is red on clean main with nothing else running:
+    # `test_no_test_module_spawns_a_child_into_the_shipped_tree_unsuppressed`
+    # names this module as the offender by source shape, and
+    # `test_the_shipped_tree_carries_no_committed_bytecode` goes red once the
+    # child has actually run.
+    #
+    # This is a SPAWNED child, so the `sys.dont_write_bytecode` remedy that
+    # `_load_shipped_module` uses for the in-process importers cannot reach
+    # it — `dont_write_bytecode` is per-interpreter. Only the child's own
+    # environment can suppress it. `PYTHONDONTWRITEBYTECODE` covers pytest's
+    # assertion-rewrite caches too: with it set, the same run leaves zero
+    # files under `skills/` and the child still reports 5 passed, 1 skipped.
+    #
+    # `-p no:cacheprovider` is deliberately NOT added. `.pytest_cache` is
+    # placed at ROOTDIR, which `vibe-ic/pytest.ini` pins to the plugin root —
+    # measured from `cwd=/` as well, so it does not depend on the caller's
+    # directory. It never lands under `skills/`, so disabling it would be a
+    # flag added to silence a check that had nothing to say.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # Measured BEFORE and AFTER, and differenced, so this accuses only its own
+    # child. An absolute "no .pyc under skills/" would inherit whatever an
+    # earlier test in the session left there and point at the wrong writer —
+    # the exact failure mode that cost #1417 a bisection.
+    skills_root = SKILL.parents[1]
+    before = {str(q) for q in skills_root.rglob("*.pyc")}
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env, timeout=60,
     )
+    leaked = sorted(str(q) for q in skills_root.rglob("*.pyc")
+                    if str(q) not in before)
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
         + r.stdout[-3000:] + r.stderr[-2000:]
+    )
+    assert not leaked, (
+        "this test's own child byte-compiled the SHIPPED skills/ tree: "
+        f"{leaked}. `sys.dont_write_bytecode` is per-interpreter and cannot "
+        "reach a spawned child; the child needs PYTHONDONTWRITEBYTECODE=1 in "
+        "its environment. Almost nothing else reports it: `.pyc` is "
+        "gitignored, so `git status` and `git add -A` stay clean, and "
+        "suite_write_guard and the skills/ digest in "
+        "test_tools_and_integration.py both filter it out as cache noise. "
+        "The invariant is owned by "
+        "test_issue1417_no_test_bytecompiles_the_shipped_tree, which is the "
+        "only other thing that goes red."
     )

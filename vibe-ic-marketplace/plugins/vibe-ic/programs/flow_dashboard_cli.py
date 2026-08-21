@@ -304,9 +304,18 @@ def render_frame(
     add(overall_plain, overall_col)
 
     # outcome breakdown, e.g. "pass 33  fail 0  skipped 8  na 13  external 5 ..."
+    # A status this mode's classifier cannot emit is rendered "n/a", never as a
+    # count: "fail 0" from a classifier with no fail branch asserts a verdict
+    # that was never computed.
+    unavailable = set(_g(data, "summary_unavailable", []) or [])
     count_parts_plain = []
     count_parts_col = []
     for key, label, codes in _SUMMARY_ORDER:
+        if key in unavailable:
+            seg = f"{label} n/a"
+            count_parts_plain.append(seg)
+            count_parts_col.append(_c(seg, "dim", color=color))
+            continue
         val = int(_g(summary, key, 0) or 0)
         seg = f"{label} {val}"
         count_parts_plain.append(seg)
@@ -314,6 +323,30 @@ def render_frame(
     counts_plain = "  ".join(count_parts_plain)
     counts_col = "  ".join(count_parts_col)
     add(counts_plain, counts_col)
+    if unavailable:
+        names = ", ".join(
+            lbl for k, lbl, _ in _SUMMARY_ORDER if k in unavailable
+        )
+        hint = (f"   ({names} not derivable in {_g(data, 'mode', '')} mode "
+                f"— this map is output-file presence, not a verdict; "
+                f"run --full, or read reports/orchestrator/*.json)")
+        add(_clip_line(hint, width), _c(_clip_line(hint, width), "dim",
+                                        color=color))
+
+    # ---- AUTHORITATIVE failing steps, quoted verbatim --------------------
+    # Deliberately a flat list, NOT painted onto step rows: the orchestrator
+    # keys steps by runner-internal name and the flow keys them by id, with no
+    # mapping between the two. See flow_dashboard_data._orchestrator_failures.
+    ofails = _g(data, "orchestrator_failures", []) or []
+    if ofails:
+        head = f"✗ runner-reported failing step(s): {len(ofails)}"
+        add(_clip_line(head, width),
+            _c(_clip_line(head, width), "red", "bold", color=color))
+        for rec in ofails:
+            line = (f"   {_g(rec, 'status', '')}  {_g(rec, 'name', '')}"
+                    f"   [{_g(rec, 'source', '')}]")
+            add(_clip_line(line, width),
+                _c(_clip_line(line, width), "red", color=color))
     add("")
 
     # ---- PHASES ----------------------------------------------------------

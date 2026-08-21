@@ -49,6 +49,28 @@ that internal shortcut is *not* part of the external contribution path.)
   first still saves you rework — wait for a maintainer to triage before sinking
   time into a large PR.
 
+> **Looking for open issues? Ask GraphQL (`gh issue list`), not the REST
+> listing and not the search index.** Measured on this repository on
+> 2026-08-15, at a moment when 33 issues were open:
+>
+> ```
+> gh issue list --repo vibeic/vibe-ic --state open --limit 200  ->  33  (GraphQL)
+> gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=100'  ->   0  (REST)
+> gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open' ->   0  (search index)
+> gh api repos/vibeic/vibe-ic --jq .open_issues_count           ->   0
+> gh api repos/vibeic/vibe-ic/issues/1645 --jq .state           -> "open"
+> gh api 'repos/vibeic/vibe-ic/pulls?state=open&per_page=100'   ->   6  (REST is fine here)
+> ```
+>
+> The REST **listings** and the search index answer HTTP 200 with an empty set
+> for a repository whose issues are intact over GraphQL and readable one at a
+> time over REST. An empty listing and an empty backlog are byte-identical:
+> anyone looking for work through `gh api .../issues` or `search/issues` sees
+> nothing to claim and cannot tell that apart from a queue that is genuinely
+> clear. See vibe-ic#1645; `skills/core-agent-loop/programs/poll.py`,
+> `programs/open_issue_claim_scan.py` and `programs/open_organic_issue_count.py`
+> all enumerate over GraphQL for this reason.
+
 ### 2. Fork + branch
 
 ```bash
@@ -100,23 +122,27 @@ The two hard gates that **must** pass before any PR is mergeable:
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
         vibe-ic-marketplace/plugins/vibe-ic
 
-# (b) Full test suite — BOTH plugin test trees + the MCP server
+# (b) Full test suite — `run_tests.sh` IS the full suite. Bare `pytest` is NOT.
 #
-#     HARD RULE: validate with bare `pytest` from the plugin root. The plugin has TWO
-#     test trees and you MUST run both:
-#       - programs/tests/ : unit tests for the deterministic programs
-#       - tests/          : integration/regression GATES (INDEX.md freshness,
-#                           every-skill-has-compliance.yaml + test_compliance.py,
-#                           orchestrator input-branch regressions, end-to-end skill audit)
-#     pytest.ini pins `testpaths = programs/tests tests`, so bare `pytest` runs both.
-#     NEVER validate with only `pytest programs/tests/` (or only `tests/`) — that silently
-#     skips the other tree. A real on-main regression once slipped through exactly this way
-#     (an orchestrator fix verified only against programs/tests/).
-( cd vibe-ic-marketplace/plugins/vibe-ic && pytest -q )   # collects programs/tests/ + tests/
-pytest -q vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test
+#     `pytest.ini` declares ONE testpath (`programs/tests`) on purpose, and
+#     `single_testpath_guard.py` pins it there. Every other tree is discovered by
+#     `run_tests.sh` and NOWHERE else:
+#       - programs/tests/            unit tests for the deterministic programs
+#       - tools/phase1_engine/tests/ the Phase-1 gap/render engine
+#       - mcp-eda/test/              the MCP EDA server sub-project
+#       - skills/*/tests/            per-skill compliance regression
+#
+#     WHAT USED TO BE HERE was a HARD RULE saying the plugin had two trees,
+#     `programs/tests/` and `tests/`, that `testpaths` listed both, and that bare
+#     `pytest` therefore ran both. All three were false. `testpaths` has only ever
+#     listed one, and `tests/` HAS NEVER EXISTED in this repository — pytest does not
+#     fail on a path that is not there, it collects nothing. So the reader who obeyed
+#     the rule got a clean-looking ZERO from the tree they were told to be most careful
+#     about. See `pytest.ini` and vibe-ic#1391.
+( cd vibe-ic-marketplace/plugins/vibe-ic && ./run_tests.sh )
 ```
 
-> Adding a program or skill? The `tests/` gates enforce registration: every new program
+> Adding a program or skill? The `programs/tests/` gates enforce registration: every new program
 > must be in `programs/INDEX.md` (`python3 tools/gen_programs_index.py`), and every new
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
