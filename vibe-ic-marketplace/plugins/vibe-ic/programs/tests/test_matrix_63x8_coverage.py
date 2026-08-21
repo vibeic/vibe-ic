@@ -535,11 +535,34 @@ def test_live_collection_relays_finite_semantic_progress_past_old_bound(
     monkeypatch.setattr(
         sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
         old_fixed_bound)
+    #: A SIXTH of the window, not a half. Until 2026-08-22 each of seven files
+    #: slept `0.14` against a `0.30` stall window — a 2.1x margin, and 2.1x is
+    #: not much once per-file import and collection machinery lands on top of
+    #: the sleep. MEASURED on `origin/main` a00f53f20 in a whole-file run, this
+    #: died as
+    #:
+    #:     WATCHDOG_STALLED: ... did not advance for > 0.3s
+    #:     PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing (stage=collecting)
+    #:
+    #: `stage=collecting` is the load-bearing word: the child had STARTED and
+    #: was emitting: it was killed BETWEEN two collections, not before the
+    #: first. Same disease as the nested-outcome renewal test below, one
+    #: notch less acute, and it gets the same treatment — the window is
+    #: untouched and the margin is engineered instead.
+    file_seconds = _COLLECTION_PROGRESS_STALL_S / 6
+    files = 21
+    assert file_seconds * 6 <= old_fixed_bound, (
+        f"each collected file must finish well inside the {old_fixed_bound}s "
+        f"window or this test measures scheduler jitter, not renewal")
+    assert files * file_seconds > 0.8, (
+        f"the collection run must still cross the 0.8s bound this test exists "
+        f"to prove work may cross")
+
     paths = []
-    for index in range(7):
+    for index in range(files):
         path = tmp_path / f"test_collect_progress_{index}.py"
         path.write_text(
-            "import time\ntime.sleep(.14)\n\n"
+            f"import time\ntime.sleep({file_seconds})\n\n"
             f"def test_{index}(): assert True\n", encoding="utf-8")
         paths.append(path)
 
