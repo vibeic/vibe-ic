@@ -17,8 +17,8 @@ def rule_refusal_on_absence_falsified_against_unread_views(sample_text, ports):
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
 
-def rule_upstream_arithmetic_pin(sample_text, ports):
-    """Pin the ARITHMETIC of a re-implementation against its upstream. Where this repo re-implements an upstream computation, the measurement primitive upstream uses must be the one ours uses. Deterministic form: the value our side-fit sums must not flow from an orientation-dependent quantity, because upstream's own loop is orientation-independent. Implemented as a taint walk over the function's assignments: the name bound to the along-the-row extents must not trace to a call that swaps axes by orientation."""
+def rule_upstream_correspondence_declared_then_pinned(sample_text, ports):
+    """A re-implementation must DECLARE which upstream computation it mirrors and which primitive that computation measures with; the declaration is then checkable, and the check is a program. Detection without the declaration is NOT a program -- see the generality sweep -- so the deterministic work is the declaration format plus the checker that reads the named upstream file, confirms the named primitive is what it uses, and asserts our function does not transform it before aggregating."""
     # Expected signal: ERROR
     # Suggested fix action: Walk the placement function's assignments and taint every name whose value flows from the orientation-dependent footprint helper. Refuse if the along-the-row extent is tainted. The upstream source that fixes the expected primitive is read from the pinned image at run time, not quoted from memory, and the gate returns NOT DETERMINED rather than PASS when it cannot read it.
     return []  # list of findings — TODO implement

@@ -456,9 +456,12 @@ their own populations, and every one of them was refuted by the same cheap move:
 | F1: pin the input SET against upstream | over-fires 4/5; narrowed, stops catching the defect |
 | F1 again: a refusal must have READ every view | over-fires 8/10 — adopted before it was swept |
 | F3b: the unhonoured-knob rule has no population | it has four instances, in four subsystems |
+| F2: the arithmetic pin generalises | the shape it keys on occurs at **224 sites** |
+| F4: (implied) a general vocabulary rule | population is **1** — a single instance, not a class |
 
-None of the three was visible from the one case that motivated it. All three
-took a single sweep to expose. That is the durable lesson of this capture, and
+None of the five was visible from the one case that motivated it. All five took
+a single sweep to expose — and F2 is the sharpest of them, because I wrote the
+lesson into this document and then did not apply it to F2 for two more rounds. That is the durable lesson of this capture, and
 it is worth more than any of the five rules in it:
 
 > **A rule is not a rule until it has been run over its own population.**
@@ -468,6 +471,62 @@ it is worth more than any of the five rules in it:
 It applies to this document too — which is why the F1 record carries a
 `formulation_history` field naming both rules it replaced, rather than
 presenting the surviving one as if it had been the idea all along.
+
+---
+
+## CORRECTION — F2 does not generalise, and what that changes about the rule
+
+I swept F1's rule three times, F3b's, and F4's population. I did not sweep F2's,
+and I had written the lesson about exactly that into this document two rounds
+earlier. Sweeping it now.
+
+The predicate I measured red/green is written for ONE computation: it knows the
+along-the-row extent must not be orientation-transformed, and that knowledge
+came from reading upstream, not from the code's shape. Over the population of
+modules that cite an upstream computation by path, the shape it keys on — a
+value flowing through a transform into an aggregate — occurs at **224 sites**.
+That is simply what ordinary code looks like. **A program cannot pick the 1 site
+of 224 that matters.**
+
+### Applying the brief's own anti-excuse test, rather than retreating to judgement
+
+The brief is explicit that *"it needs judgement"* is the most over-used excuse
+to skip the program work, and that before accepting it I must name the exact
+input and the exact decision. Named:
+
+* **Input the program would see** — the AST of our module, and the text of the
+  upstream file.
+* **The decision it cannot make from that input** — the **correspondence**:
+  which of our functions re-implements which upstream loop. Neither text
+  declares it. Our function does not say which upstream loop it mirrors; the
+  upstream loop does not say what re-implements it.
+
+And that is where it stops being an excuse, because **the missing input is
+declarable, not unknowable.** The information already exists in the module — as
+prose. It cites the upstream file by path, and on the pre-fix tree the comment
+one line above the defect names the correct primitive. So the rule changes
+shape rather than dropping:
+
+> **A re-implementation must DECLARE which upstream computation it mirrors and
+> which primitive that computation measures with. The declaration is then
+> checkable, and the check is a program.**
+
+The deterministic work is the declaration format plus a checker that reads the
+named upstream file, confirms the named primitive, and asserts our function does
+not transform it before aggregating. It stays **Bucket A** — the program work is
+real and it is not a heuristic detector. What was wrong was believing detection
+alone could be the program.
+
+The one-computation red/green measurement stands and is unaffected; what it
+never established — and what an earlier version of this document claimed it
+did — is that the same predicate generalises.
+
+## CORRECTION — F4's population is one
+
+Swept for validators carrying a `PREFIX:IDENTIFIER` alternation: **exactly one
+in 1232 programs.** F4 is a real defect with a real measurement, but it is a
+single instance, not a class with a corpus. Recorded as such rather than left to
+read as a general rule by sitting in a list of them.
 
 ---
 
