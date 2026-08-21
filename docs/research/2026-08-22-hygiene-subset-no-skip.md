@@ -1076,3 +1076,33 @@ flow-change acceptance standard — a bidirectional control proving the new valu
 still catches a genuine hang — and it is not this branch's subject. It is
 reported here, with the reproduction recipe (`--stall-grace 5` on any tree), so
 that whoever takes it has the mechanism rather than a symptom.
+
+## 19. Remedy status, pinned to the exact pair it was measured on
+
+The remedy in §9 has now been verified three times against three different
+batch heads, and each verification went stale when a head moved. So it is
+recorded here as a PAIR of SHAs rather than as a standing claim, because "merge
+this branch and it goes green" is not a fact about the branch — it is a fact
+about a branch and a base together.
+
+```
+VERIFIED PAIR
+  base    origin/land/batch67-assembled   137caae9255b01add20d12042e0fb6ee0df68038
+  branch  fix/jland67-hygiene-subset-honoured  1eefc989230727e4aa42dc0ea7b06cf23f52fc21
+  merge   clean, 0 conflicted files
+  result  ci_harness_timeout_ceiling_check  rc 0 PASS
+          147 passed — the ceiling check's own tests, the two target tests,
+          and the seam guard
+  main at time of measurement            81cd5321b082f9535f1a607a6feb7855498e7fe6
+  all three heads read from `git ls-remote`, not a tracking ref
+```
+
+**Merging an OLDER commit of this branch now reproduces the exact defect §9
+diagnoses.** `1eefc98923` edits `tools/gatekeeper-land.sh` and re-pins its
+digest in the same commit; take the edit without the pin — by merging any
+earlier head — and `ci_harness_timeout_ceiling_check` fails again for the same
+reason it fails on `137caae92` today. The branch is a chain of atomic
+edit-plus-pin pairs, and every one of them has to arrive.
+
+That is the whole lesson of this document in one sentence, and it now applies
+to the fix as much as to the thing it fixes.
