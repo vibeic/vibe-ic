@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 31 records, and the sixteen already-program claims of which fifteen hold
+# The PPA cluster, DISTILLED — 32 records, and the sixteen already-program claims of which fifteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 31 records](#the-31-records)
+- [The 32 records](#the-32-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -75,7 +75,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 28 | deterministic rules — the default, and every one names its predicate |
+| **A** | 29 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -215,7 +215,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 31 records
+## The 32 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1194,6 +1194,41 @@ anything outside its three known tokens to not-measured, **quoting what it saw**
 which is what makes a growing vocabulary visible instead of silently reclassified.
 **(o)** yes. **(d)** yes — it is per artefact type per reader.
 
+### A-30 · a guard for a declared value must not accept a value its own consumer defaults · `repo.test_population`
+
+The only rule here found by **breaking the product on purpose** rather than by
+reading it. The backend seam requires every backend to be drivable or to raise
+with a reason of at least forty characters, and a census asserts exactly that.
+The loader supplies a generic reason whenever a module declares none:
+
+    getattr(mod, NO_DRIVER_ATTR, None)
+      or (f"`_ppa/backends/{tool}.py` declares no {DRIVER_ATTR}() and no "
+          f"{NO_DRIVER_ATTR}, so nothing here can say what it reads")
+
+That fallback is far longer than forty characters, so the predicate holds for
+every backend regardless of what any of them declares.
+
+    delete the whole reason from one backend, file re-parsed to confirm
+      it still compiles                              -> 0 failed, 0 errors
+
+**Three mutations were needed, and the two failures are part of the rule.**
+Renaming the shared constant proved nothing, because the test and the code read
+the same symbol and stayed consistent with each other. Deleting a single line of
+a multi-line assignment produced invalid Python, and its green result was an
+artefact of the broken file rather than a property of the guard. Only removing
+the entire assignment, with the mutated source re-parsed, is evidence — which is
+the general lesson that a mutation must be shown to be a VALID program before its
+green result means anything.
+
+**(o)** yes — it is the guard for F-2, and F-2 is the finding it fails to protect.
+**(d)** yes, and deliberately stated over the semantics rather than the syntax:
+the narrow form here is one raise site, but the same defeat arrives from a
+dataclass default, a `dict.get` fallback, or an attribute inherited from a base
+class, and the predicate — can the reading side produce this value with the
+declaration absent — covers all of them.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1531,9 +1566,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 31 records**:
+the patterns were unchecked by anything. Over **all 32 records**:
 
-    pairs compared                      465
+    pairs compared                      496
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -1646,10 +1681,14 @@ multi-line assignment produced invalid Python, whose green result was an artefac
 rather than a finding. Only the third — removing the whole assignment and
 re-parsing the file to confirm it still compiles — is evidence.
 
-The narrow syntactic form of this, a raise whose message is `<lookup> or
-<default literal>`, occurs at **one** production site in the tree, so it is
-recorded here with its measured population rather than promoted to a rule with
-an implied breadth it has not earned.
+The narrow syntactic form of this — a raise whose message is `<lookup> or
+<default literal>` — occurs at **one** production site in the tree. It is
+recorded as **A-30** anyway, and the reason is a mistake this lane made twice
+already: folding a distinct failure into a neighbouring record is exactly how
+`F-17`'s rule and `F-6`'s second clause came to be invisible. A guard proven
+unable to fail is not a footnote on a population record. The rule is stated over
+the semantics rather than the syntax, because a default can also arrive from a
+dataclass field, a `dict.get`, or a base class.
 
 This is deliberately NOT wired into `verify.py`. A verifier that edits the
 product tree to prove a point is a verifier that can leave the tree edited, and
@@ -1996,7 +2035,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 31 records emitted and validated — 28 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 32 records emitted and validated — 29 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2024,7 +2063,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 16 claims, **15 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 5 | A-3, A-4, A-13, A-22, A-25 |
+| **EXTRACT-NEW** | 6 | A-3, A-4, A-13, A-22, A-25, A-30 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2085,6 +2124,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-27 | **12 bad screens** | 3 missed their own case | the class behind every warning above |
 | A-28 | 232 single-value | 115 files | upper bound on candidates, stated as such |
 | A-29 | 4 lanes | **3 wrong** | not my measurement — the convention commit's own |
+| A-30 | 1 raise site | **guard cannot fail** | proven by mutation; stated over semantics, not the syntax |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
