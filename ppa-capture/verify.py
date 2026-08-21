@@ -126,6 +126,55 @@ defs = [d for f in CAND.glob("*.py")
 check("every sketch resolves to its section by name",
       all(d in byslug for d in defs), f"{len(defs)} sketches")
 
+# 9. every Bucket-A rule has a row in the sweep table.
+#    THIS ONE DRIFTED ONCE: the table was written at 14 rules and silently
+#    stopped covering the batch as it grew to 26. A summary table is a second
+#    copy of the record set, so it needs the same agreement check as the rest.
+arows = set(re.findall(r"^\| (A-\d+|C-2) \| ", MD, re.M))
+asecs = {sid for sid, _ in heads if sid.startswith("A-")}
+control("sweep-table", "A-999" not in arows)
+check("every Bucket-A rule has a sweep-table row",
+      asecs <= arows, f"missing {sorted(asecs - arows)}")
+
+# 10. every record routes to a step that exists, whose program is on disk.
+#     The emitter warns about an unrouted record and does not fail; a routing
+#     entry pointing at a deleted program would pass it silently.
+PLUG = HERE.parent / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+ROUTING = json.loads((PLUG / "benchmark" / "CAPTURE_ROUTING.json").read_text())
+control("routing", "no.such.step" not in ROUTING["steps"])
+unrouted = [r.get("rule_name") or r.get("title") for r in RECS
+            if r.get("step") not in ROUTING["steps"]]
+check("every record names a routed step", not unrouted, str(unrouted[:3]))
+badprog = [r.get("rule_name") for r in RECS if r["bucket"] == "A"
+           and r.get("step") in ROUTING["steps"]
+           and not (PLUG / (ROUTING["steps"][r["step"]].get("bucket_A_program") or "x")).is_file()]
+check("every Bucket-A target program exists on disk", not badprog, str(badprog[:3]))
+
+# 11. the already-program count in the title matches the two tables that hold it
+WORDS = {"eleven": 11, "twelve": 12, "fourteen": 14, "fifteen": 15,
+         "sixteen": 16, "seventeen": 17, "eighteen": 18}
+m = re.search(r"and the (\w+) rules that were already programs", MD)
+claimed = WORDS.get(m.group(1)) if m else None
+# COUNT THE TWO ALREADY-PROGRAM TABLES STRUCTURALLY, by their header rows.
+# Prose-anchored splitting was tried twice and was wrong twice (23, then 27):
+# the anchors sit near other tables and the span swallowed them. A table is
+# identified by its own header line and ends at the first non-table line.
+def _table_rows(header: str) -> int:
+    lines = MD.splitlines()
+    try:
+        i = next(k for k, l in enumerate(lines) if l.strip() == header)
+    except StopIteration:
+        return -1
+    n, k = 0, i + 2                      # skip header and the --- separator
+    while k < len(lines) and lines[k].startswith("| "):
+        n, k = n + 1, k + 1
+    return n
+tbl = (_table_rows("| F | already enforced by | general over |")
+       + _table_rows("| class | already enforced by |"))
+control("already-program", claimed is not None)
+check("the title's already-program count matches the tables",
+      claimed == tbl, f"title {claimed}, tables {tbl}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

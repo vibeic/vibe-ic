@@ -1463,11 +1463,28 @@ deliverable were *agreement* failures with nothing missing. And every check runs
 a control that must fail first — if the control passes, the check reports itself
 BROKEN instead of green.
 
+**Extended to the claims that had already drifted once.** The first version
+checked fourteen things and not the two that had actually gone stale during the
+lane — the sweep table as the batch grew, and routing. It now checks eighteen,
+including that every Bucket-A rule has a sweep-table row, that every record
+names a routed step whose program is on disk, and that the count in the title
+matches the two tables holding it.
+
 That second property paid immediately: **on its first run the harness declared
 its own measurement control broken.** The control string was *"a claim with no
 quantity at all"*, and the number-word pattern matched on *"no"* — the control
 was itself a positive. A hand-written check would have printed PASS and I would
 have believed it. This one refused to.
+
+**And it went on to catch three more errors — all three in itself.** The
+title-versus-tables check reported 23, then 27, against a title of 16 that was
+correct all along: each prose anchor I split on sat beside other tables and the
+span swallowed them. Replacing the anchors with a structural read — find the
+table by its own header row, stop at the first non-table line — gives 16 and 16.
+
+Four bad screens in one file, every one caught by the file rather than by me,
+and the deliverable's numbers unchanged throughout. That is the difference
+between a check that runs and a check that was run once.
 ---
 
 ## Summary
