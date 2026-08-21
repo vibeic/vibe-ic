@@ -223,6 +223,34 @@ elimination alone. **Exclusion count for any enforcement figure: 2 cells,
 carrying 3 of the 17 reds.** They close when the fourth state lands, and not
 by anything done here.
 
+**CORRECTION — that state exists NOWHERE, and this file previously implied it
+was in flight.** Measured, not assumed: `jfindings-63x8`'s branch does not touch
+`matrix_cell_state` in ANY dimension, and on main `NOT MEASURED` appears only as
+a reporting string inside `test_matrix_63x8_coverage.py:2167` — never as a state
+a dimension can return. Reds 7-9 are not waiting on a branch; they are waiting
+on work nobody has started. A reader who took the earlier wording would have
+waited for a delivery that was never coming.
+
+What it would cost, measured — **9 producers and 7 consumers**:
+
+```
+defines matrix_cell_state()   d1 d2 d3 d4 d5 d6 d7 d8 d9          (9)
+reads it                      test_matrix_mutation_ledger
+                              test_matrix_63x8_coverage
+                              test_matrix_waiver_single_source
+                              test_d7_single_tree_lookup_is_lazy
+                              matrix_d7_artifact_graph
+                              matrix_63x8/substitution.py
+                              matrix_63x8/README.md               (7)
+```
+
+A fourth state is a cross-cutting contract, not a one-line return: every
+producer must decide when its predicate CANNOT run, and every consumer must stop
+folding that answer into one of the three it already handles. It is not authored
+here because it was assigned, and two agents writing one contract in parallel is
+the duplication this split exists to prevent — but **"assigned and unstarted" is
+a different fact from "pending on a branch"**, and this is the one that is true.
+
 ## 1-6 — the evidence really is absent, and that was checked
 
 The six cite run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`,
