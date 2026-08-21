@@ -3412,6 +3412,44 @@ invites fixing the environment or the test. **I carried that label for the whole
 engagement because it sounded like an explanation.**
 
 
+## M61 — the lease red measured too: a REAL flake, but the mechanism is a race, not load
+
+Completing what M60 started. The other half of the pair is
+`test_pytest_per_file_junit::test_nested_validated_progress_is_relayed_to_the_outer_session`
+— **the nested-progress-relay red from brief 2**, which I characterised then as
+*"load-confounded on both trees"* and which was accepted as the right answer.
+
+**8 repeats on a quiet host:**
+
+```
+1 passed in 7.96s      1 passed in 8.46s
+1 passed in 7.96s      1 passed in 7.78s
+1 passed in 8.42s      1 FAILED in 2.31s     ← 1/8
+1 passed in 8.27s
+1 passed in 8.47s
+```
+
+**1/8. It IS a flake** — my original characterisation holds, unlike the `magic`
+one which M60 just demolished. **Two labels of the same kind, one right and one
+wrong, and neither had been measured.**
+
+**But the mechanism looks wrong.** The failure runs in **2.31 s against ~8 s
+passes** — it fails in a QUARTER of the time it takes to succeed. **Load makes
+work slower, not faster.** A forward-progress lease that expires early on an idle
+host is losing a race, not missing a deadline under contention.
+
+**So "load-fragile" is probably the wrong half of the label**, in the same way
+"flake" was the wrong half for `magic`. Not corrected — one 8-run sample and a
+timing observation is not a diagnosis, and I have spent this document watching
+plausible mechanisms die (ten of them). **Recorded as: confirmed flaky 1/8, with
+the failure FASTER than the passes, which argues against the stated cause.**
+
+**And M36's honest gap is closed.** The row that claimed *"ratios recorded"* and
+recorded none now has both: `magic` **10/10 deterministic**, lease **1/8 flaky**.
+The claim was unbacked for the whole engagement; the measurement cost twelve
+minutes.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3501,7 +3539,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
-| **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. The 0.8 s lease one is still unmeasured (72 s/run). | **mislabelled; `magic` half characterised** |
+| **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M61: the lease one IS a real flake, 1/8** — but it fails in **2.31 s against ~8 s passes**, i.e. FASTER than it succeeds, which argues for a race rather than the "load-fragile" label. Both ratios now recorded, closing M36's gap. | **both measured; one mislabel confirmed, one suspected** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
