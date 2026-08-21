@@ -49,8 +49,8 @@ _ORIGIN = "https://github.com/vibeic/benchmark-data.git"
 #: "No corpus was resolved; nothing was opened."  Distinct from rc 0 (an index
 #: was read and it holds none) and from rc 2 (a pointer was given and is
 #: wrong).  `GATE_DISPATCH_ABSENT_RC` in `tools/ci/_gate_dispatch.sh` is the
-#: same number, and `test_the_absent_rc_agrees_with_the_dispatcher` pins that
-#: the two spellings cannot drift apart.
+#: same number, and `test_the_absent_exit_code_is_one_number_in_two_languages`
+#: pins that the two spellings cannot drift apart.
 NO_CORPUS_RC = 3
 
 
