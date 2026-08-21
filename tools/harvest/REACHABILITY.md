@@ -33,3 +33,28 @@ the host, run it locally, carry the measurements back.
 
 **.107 (8HD-c) is the one genuine UNREACHABLE.** Port 22 times out from three different
 hosts — down, not key-refused. Any row on it must be UNREACHABLE, and that is not ABANDON.
+
+## The local-path origin trap, measured — and it bit me
+
+jharv3 flagged that a clone whose `origin` is a LOCAL PATH fetches a stale branch and exits 0.
+It is worse than stale. On **.121**, four clones have `origin = /home/reyerchu/vibe-ic`, and
+`git fetch origin main` against a local path fetches that path's **local branch** `main` — not
+its `origin/main`. Those four were already correct at `a00f53f2094`; my fetch moved them
+**backwards** to `f6db3e921e6` and exited 0.
+
+    OK /home/reyerchu/_j4reds2/tree     a00f53f2094 -> f6db3e921e6   /home/reyerchu/vibe-ic/.
+    OK /home/reyerchu/_smrg_priv/smrg_tree a00f53f2094 -> f6db3e921e6   /home/reyerchu/vibe-ic
+
+"Fetch first" is the right rule and it made the reference **worse** on those four. Repaired by
+fetching the remote-tracking ref explicitly from a clone on the same host that has a real
+https origin, which restores it offline without rewriting anyone's remote config:
+
+    git -C <clone> fetch <good-clone> +refs/remotes/origin/main:refs/remotes/origin/main
+
+All four back at `a00f53f2094`, verified before judging, and the judging run **refuses to
+start** unless every clone it will use reads that sha. The rows those clones produced say so
+in their own evidence.
+
+Audited for the same fault elsewhere: **.105 zero** local-origin clones (23/23 at a00f53f2094),
+**.102 zero** (81/82 at a00f53f2094; the 82nd is a bare path the normaliser mangled and it owns
+zero rows), **.114 zero** (3/3 real https origins). The fault is confined to .121.
