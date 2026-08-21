@@ -368,24 +368,29 @@ line is left standing, unchanged, as a decision for the owner.
 ## 5. A/B by TEST ID — zero new red
 
 Selection, not the whole suite (measured earlier at load 276 with 0 free memory,
-per the brief): every test my change can reach. That is 112 files —
+per the brief): every test my change can reach —
 
-* the 51 `test_ppa_*` / `test_closed_loop_*` / `test_readme_ppa_*` files, for the
+* the `test_ppa_*` / `test_closed_loop_*` / `test_readme_ppa_*` files, for the
   five gates and the seam;
 * every one of the 62 files that parses `tools/ci/repo_hygiene_gates.sh`, for the
   one wired line (`grep -rln repo_hygiene_gates programs/tests/`).
 
-Same selection both sides, `-p no:randomly`, `--timeout=600`, separate
-`--basetemp` per arm (a shared basetemp makes two concurrent runs delete each
-other's `tmp_path`).
+**111 files are common to both arms and are the A/B basis.** The tree arm also
+runs the two files that do not exist on the base — `test_ppa_corpus_mode.py` and
+`test_ppa_corpus.py` — for 113. Stated rather than folded in: a comparison whose
+two sides ran different populations is not a comparison, so the 68 new passes
+below are accounted for separately and are not mixed into the delta.
+
+`-p no:randomly`, `--timeout=600`, separate `--basetemp` per arm (a shared
+basetemp makes two concurrent runs delete each other's `tmp_path`).
 
 ```
 BASE  bb90724dc   11 failed, 2409 passed, 19 skipped  (914.80s)
 TREE  9a100b5eb   11 failed, 2477 passed, 19 skipped  (928.88s)
 ```
 
-`+68` passed is exactly the two new files: `test_ppa_corpus_mode.py` 54 +
-`test_ppa_corpus.py` 14.
+`+68` passed is exactly the two tree-only files: `test_ppa_corpus_mode.py` 54 +
+`test_ppa_corpus.py` 14. Over the 111 common files the pass count is identical.
 
 By ID, not by count:
 
