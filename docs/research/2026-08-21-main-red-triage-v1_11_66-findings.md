@@ -2565,6 +2565,55 @@ after two corrections that made me look careful.
 | **M41** | **"what is the step-level precedence between VACUOUS_PASS and WAIVED-DEFERRED for an `all_of` carrying both?"** — one function, and both other links are verified sound |
 
 
+## M42 — RUN it instead of reading it, and the question changes shape a fifth time
+
+M41 stopped because my METHOD was wrong — seizing on comments that fit the
+symptom. The repair is not to abandon the question but to change method:
+**measure**. The test drives the real `flow_compliance_check`, so Step 4's verdict
+is observable.
+
+**Measured:**
+
+```
+○ [VACUOUS-PASS     ] Step  4: 🔁 Simulation (testbench-based + L10/L12
+                               coverage + Verilator coverage)  (stage1)
+```
+
+and inside the captured compliance output, a member at **`rc=2  VACUOUS_PASS`**
+alongside `GATE_RAN reset_dependency_check  rc=0  PASS`.
+
+**So Step 4's `all_of` contains a genuinely VACUOUS member.** That is measured,
+not inferred, and it changes the question a fifth time:
+
+> If a member is truly vacuous (rc=2 — it examined nothing), then **VACUOUS-PASS
+> may be the CORRECT verdict for the step**, and the thing to investigate is the
+> vacuous member itself — not the waiver plumbing, which M40/M41 verified sound
+> end to end.
+
+A step containing a predicate that concluded nothing is not obviously entitled to
+report `WAIVED-DEFERRED` just because a *different* predicate disclosed a
+capability gap. **The vacuous signal is the more serious of the two**, and the
+codebase's own doctrine — Pillar 2, "no vacuous result counts as PASS" — argues
+for surfacing it.
+
+**Instrument defect #8, caught in the act.** My greps for the per-gate `rc=`
+lines returned only two of them, because I was grepping **pytest's truncated
+`repr`** of the captured output — the `...` elision in the middle hides the rest.
+The `rc=2 VACUOUS_PASS` line is visible only because it happens to fall in the
+retained tail. **A `...`-elided string is not the output**, and I read it as one
+for two probes.
+
+**Honest stop, with what is established:** producer correct (M40), `all_of`
+carries the waiver (M41), Step 4 measured VACUOUS-PASS with a real vacuous member
+present (here). **Unlisted: the full member set**, because the truncation defeats
+it without instrumenting the run properly.
+
+**Fifth framing.** Vocabulary → registry lookup → policy call → waiver-plumbing
+defect → **"is the vacuous member correct, and if so is the test's expectation
+the thing that is wrong?"** Every framing was more precise than the last, and
+only this one was reached by running the thing.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
