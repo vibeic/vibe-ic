@@ -81,6 +81,28 @@ five of its own siblings in the same step already cite — 1919 B, `"program":
 Regression sweep over every consumer of this manifest: every number identical
 to the pre-change baseline except the one being fixed.
 
+### The routing was NOT the root cause — checked, and the hypothesis is dead
+
+The obvious explanation for 16/17 surviving days is that the gate which catches
+them was never routed to the change that broke them. That was tested at the
+commit itself rather than assumed: a worktree at `d976999c4`, then
+`ci_targeted_test_select.py --base d976999c4~1`.
+
+```
+selected: 331 tests
+  SELECTED  test_flow_manifest_declaration_parity
+  SELECTED  test_matrix_d3_outputs_produced
+  SELECTED  test_matrix_63x8_coverage
+  SELECTED  test_matrix_mutation_ledger
+```
+
+All four were selected. The selector is correct and needs no change — **do not
+"fix" it on the strength of this drift.** The gate was routed, costs under a
+second, and would have failed. What did not happen is the 331-test selection
+being RUN, which is the standing constraint on this host, not a routing gap.
+Recorded as a refuted hypothesis so the next reader spends their time
+elsewhere.
+
 ## 12 — a real finding that had been filed as weather
 
 The renewal test drove 12 child items that each slept `0.45` s against a stall
