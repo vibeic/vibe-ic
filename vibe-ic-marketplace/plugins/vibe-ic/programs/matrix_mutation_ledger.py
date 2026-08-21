@@ -2028,7 +2028,19 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: changed state. Twelve mutation entries gained "1.6x", each REPLAYED rather
 #: than assumed; the two that could not be are named in the note on
 #: LEDGER_CELLS_NOT_ENFORCED.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 522)
+#: 2026-08-22: (69, 8, 522) -> (69, 8, 516). -6 ENFORCED cells, and every one is
+#: NAMED below rather than left as a lowered count. They are the six dimension-3
+#: cells that moved ENFORCED -> NOT_MEASURED when the owner's 2026-08-21 ruling
+#: gave the grid its fourth state: 15/d3, 17/d3, 19/d3, 20/d3, 30/d3, 32/d3.
+#:
+#: NOTHING ABOUT THEIR MUTATION COVERAGE CHANGED. They were never carrying a
+#: measured mutation — a cell whose declared outputs cite a run root no corpus
+#: can supply has no baseline to mutate from. What changed is that they no
+#: longer CLAIM to be enforcing while their predicate says otherwise, so they
+#: leave the denominator this ledger is responsible for. That is the count
+#: going down for the honest reason: fewer cells assert enforcement, not fewer
+#: mutations measured.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 516)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -2088,6 +2100,27 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     ("M3", 3, "NA"),
     ("M4", 3, "NA"),
     ("P0", 3, "NA"),
+    # 2026-08-22 — SIX CELLS ENTER THE FOURTH STATE, named one at a time
+    # because a lowered ENFORCED count with no named cell is exactly what the
+    # grid gate exists to refuse.
+    #
+    # Each declares an output whose manifest record cites a run root this
+    # dimension searches on NO host, so the corpus pointer cannot settle it and
+    # publishing the corpus would not either. They were reported ENFORCED —
+    # claiming their predicate passed — while it FAILED, and
+    # `test_no_cell_is_counted_enforced_while_its_predicate_is_red` named all
+    # six. NOT_MEASURED is what is true of them, and it carries the citation
+    # each one could not resolve.
+    #
+    # NOT A WAIVER and NOT a closure: they self-invalidate the moment the record
+    # is re-pointed or such a run is published, because
+    # `unanswerable_citations` is re-derived live.
+    ("15", 3, "NOT_MEASURED"),
+    ("17", 3, "NOT_MEASURED"),
+    ("19", 3, "NOT_MEASURED"),
+    ("20", 3, "NOT_MEASURED"),
+    ("30", 3, "NOT_MEASURED"),
+    ("32", 3, "NOT_MEASURED"),
     # 15.5ic/26.5ic/37.5ip/37.5ic d3: the four path-specific steps that arrived
     # 2026-08-20 with a step-level `condition: files_exist:
     # [input/submission_template/...]` and `condition_kind: design_dependent`.
