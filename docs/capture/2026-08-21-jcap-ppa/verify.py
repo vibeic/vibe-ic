@@ -162,7 +162,13 @@ badprog = [r.get("rule_name") for r in RECS if r["bucket"] == "A"
 check("every Bucket-A target program exists on disk", not badprog, str(badprog[:3]))
 
 # 11. the already-program count in the title matches the two tables that hold it
-WORDS = {"eleven": 11, "twelve": 12, "fourteen": 14, "fifteen": 15,
+# A number-word this table does not carry resolves to None, and `None == 9` is
+# False -- so a check comparing two IDENTICAL lists failed, and the detail line
+# printed "nine (9 named) ... table has 9", which reads like a passing check.
+# Cover the small words too.
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+         "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+         "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
          "sixteen": 16, "seventeen": 17, "eighteen": 18}
 # `claimed_ap`, not `claimed`: that name is already bound above for the summary
 # file list. Rebinding it worked only because the first use is consumed before
@@ -650,6 +656,23 @@ for _f in sorted(CAND.glob("*.py")):
 control("sketches-parse", bool(list(CAND.glob("*.py"))))
 check("every emitted sketch parses as Python", not _bad,
       f"{len(list(CAND.glob('*.py')))} file(s)" + (f"; broken: {_bad}" if _bad else ""))
+
+# 44. the handoff names the unswept rules, and that list is derivable from the
+# sweep table -- a row with no "before" figure is a rule nobody swept. It said
+# eight while the table said nine, because the count was typed once and the table
+# grew afterwards. Derive it instead.
+_rows = re.findall(r"^\| (A-\d+|C-\d+) \| ([^|]*) \|", MD, re.M)
+_key = lambda x: (x[0], int(x.split("-")[1]))   # ONE key for both lists: the
+# first version sorted one by (letter, number) and the other by number alone, so
+# two identical sets compared unequal and the check failed on its own ordering.
+_unswept = sorted({c for c, before in _rows if before.strip() in ("—", "-", "")}, key=_key)
+_m = re.search(r"Sweep before building each of the (\w+) unswept rules", MD)
+_named = re.search(r"unswept rules\*\* — ([A-Z0-9, \-\n]+?), which are exactly", MD, re.S)
+_listed = sorted(set(re.findall(r"A-\d+", _named.group(1))) if _named else set(), key=_key)
+control("unswept", bool(_rows) and bool(_m))
+check("the handoff's unswept list is the sweep table's unswept rows",
+      WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
+      f"prose says {_m.group(1) if _m else '-'} ({len(_listed)} named), table has {len(_unswept)}")
 
 print()
 if fails:

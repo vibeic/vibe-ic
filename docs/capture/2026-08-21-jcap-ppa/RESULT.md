@@ -2115,7 +2115,7 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (43 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (44 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2294,7 +2294,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            43 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            44 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2314,7 +2314,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     43 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     44 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
@@ -2348,7 +2348,7 @@ a file behind, would be an instance of two of the records it is verifying.
 Work through it in sequence. Step 1 gates the rest.
 
 1. **Run the verifier** (above). Read the exit code.
-2. **Implement the 28 Bucket-A rules** — a separate lane, per the brief. Take
+2. **Implement the 29 Bucket-A rules** — a separate lane, per the brief. Take
    `pattern` and `fix_action` from `docs/capture/2026-08-21-jcap-ppa/recoveries.json`; the sketches in
    `docs/capture/2026-08-21-jcap-ppa/candidates/` are already filed beside the program that owns each
    fix, and each `fix_action` names the specific way its own screen goes wrong.
@@ -2356,7 +2356,9 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the eight unswept rules.** Thirteen sweeps
+3. **Sweep before building each of the nine unswept rules** — A-1, A-2, A-6,
+   A-10, A-16, A-17, A-18, A-19, A-23, which are exactly the rows carrying no
+   *before* figure in the sweep table. Thirteen sweeps
    changed ten rules and demoted one out of its bucket; the base rate says expect
    change.
 4. **Wire the verifier** — one line in the pinned hygiene gates, which this lane
@@ -2372,8 +2374,21 @@ Work through it in sequence. Step 1 gates the rest.
 6. Then **proceed to** the **Bucket-C provenance plumbing**, which is the precondition for the
    header rule and the reason that record is C rather than A.
 
-**Nothing else is outstanding.** F-16 was open for most of this lane and is
-*settled*: the post-layout equivalence failure is the step's own setup, not the
-forked tool — the runner's helper documents the abort and calls it a false
-tool-error. It is listed here only because an earlier version of this section
-sent readers to reopen it.
+**Two things are outstanding that are not on the numbered list, because neither
+is this lane's to close.**
+
+- **F-2's guard cannot fail, and the fix it guards has already landed.** That is
+  the worst combination: the class reads as covered, the code is currently
+  correct, and a regression would be silent. `A-30` is the rule; the concrete
+  repair is to stop `driver_for` supplying a generic reason, or to assert against
+  each module's own attribute rather than the accessor's return.
+- **Three sibling capture lanes have backlogs on `main` that its own validator
+  rejects.** Measured while re-checking `A-9`: in-tree backlogs failing the
+  component rule went from 6 of 29 to **10 of 33**, and all four new failures came
+  from the bundles landed by `506ff68c1`. Those files are outside this branch, so
+  they are reported rather than touched.
+
+**F-16 is settled, not outstanding**: the post-layout equivalence failure is the
+step's own setup, not the forked tool — the runner's helper documents the abort
+and calls it a false tool-error. It is mentioned only because an earlier version
+of this section sent readers to reopen it.
