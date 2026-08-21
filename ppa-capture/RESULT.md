@@ -643,6 +643,19 @@ routed, which is exactly the wall this lane hit.
 Worse than unattributable: the consuming gate **restates** the attribution it
 inherited, so an unevidenced claim appears at two layers and reads as
 corroborated.
+**Swept, and the sweep moved the check.** A code scan cannot answer this: the
+verdict lives in a constant rather than a literal, so a literal scan finds one
+site of the several that exist; and asking whether the producing FILE mentions an
+exit status is meaningless when that file is tens of thousands of lines long — it
+says yes for reasons unrelated to this artefact. The predicate is artefact-level:
+
+    keys written beside the verdict   verdict · tool · top · skipped · skip_reason
+    carries a tool diagnostic         NO
+    schema for the artefact           NONE — so nothing can require one
+
+**The rule's home is a schema**, making the diagnostic mandatory whenever a
+verdict names a tool, not a scan over source.
+
 **(o)** yes — had the diagnostic been retained, F-16 would have been assignable
 on the day it was found instead of open across a whole lane.
 **(d)** yes — it is per tool-invoking step, and the tree has many.
@@ -827,6 +840,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-4 | 32 prefix globs | needs a discriminator | **most are correct**; see below |
 | A-6 | — | 0 false positives | clean **where the record puts it**; placement warning |
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
+| A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 
 In every case the discriminator was invisible from the defect that motivated the
@@ -845,7 +859,9 @@ were supplied. **Every rule here will be built by someone writing the same scree
 I wrote.** Each `fix_action` now names the specific way its own screen goes
 wrong.
 
-**Every Bucket-A rule is now swept or accounted for.** Nine were swept outright.
+**Every Bucket-A rule is swept or accounted for — including A-15, which was
+added after this section was first written and which the claim briefly did not
+cover.** Ten were swept outright.
 A-1 and A-2 are false-positive-free by construction — a set difference over
 declared tables cannot invent a member. A-9 and A-13 were swept during
 construction: A-9's 6-of-29 IS its sweep, and A-13 required the generic-token
