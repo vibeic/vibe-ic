@@ -618,7 +618,7 @@ proof of anything. They stay open and stay described as they are above — one
 observation with no reproduction, and a named 18.95 s item against a 60 s
 window.
 
-## PROBED and INCONCLUSIVE: the startup-grace argument was aimed at the wrong watchdog
+## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word all along
 
 The reason this report gives for not touching the watchdog is that a startup
 grace would redden red 11. That was reasoning. Probed, in a throwaway worktree:
@@ -656,7 +656,35 @@ widen a window to make a loaded host fit — is unchanged. What was wrong is thi
 report's account of WHICH component would have to change, and that is now
 labelled unconfirmed instead of asserted.
 
-Nothing from either probe was committed.
+**THIRD PROBE, and it settles it.** The startup probe was keyed on "before the
+FIRST observed progress", so the question it left open was whether
+`supervise()` is on the path at all. Answered by widening the window itself
+rather than adding a grace:
+
+```
+stall_grace_s x 40    red 11: 1 FAILED — "DID NOT RAISE AssertionError", 4.16s
+```
+
+`supervise()` **does** own red 11's kill: multiply its window and the kill stops
+happening, and the test that exists to prove the kill happens goes red. So:
+
+* **The original conclusion was right and my correction over-corrected.**
+  Widening that window reddens red 11 — now MEASURED, not reasoned. The
+  six-consumer blast radius of `run_owned` DOES apply after all.
+* **But "startup" was the wrong word for every one of these.** A startup-KEYED
+  grace never engages, because progress IS observed early on this path — the
+  child is not killed before it reports, it reports and then stalls. Red 11
+  joins reds 10 (`stage=collecting`) and 13 (`stage=running`) as a **mid-run
+  stall**. The "startup indistinguishability" framing this report used for all
+  three was wrong three times.
+
+The practical consequence is now clean and fully measured: **a startup grace
+would not fix reds 10, 11 or 13 — it never engages. Widening the stall window
+would, and it reddens red 11's fail-closed-fast guarantee.** That is the trade,
+it is real, and the decision not to take it stands on a measurement instead of
+on a story.
+
+Nothing from any of the three probes was committed.
 
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
