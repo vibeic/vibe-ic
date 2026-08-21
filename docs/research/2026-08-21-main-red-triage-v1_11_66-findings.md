@@ -2090,9 +2090,9 @@ third mutation-ledger red awaiting a named mutation, and it is now written down.
 
 # ===== REQUESTS TO THE LANDER =====
 
-Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
-proposal (`2026-08-22-refounding-the-hermetic-era-landing-guards.md`), and two
-test files. **No program, no gate, no flow, no version, no baseline was touched.**
+Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
+proposal (`2026-08-22-refounding-the-hermetic-era-landing-guards.md`), two test
+files, and one evidence fixture (`matrix_d3_output_manifest.json`). **No program, no gate, no flow, no version, no baseline was touched.**
 
 **Measured effect, both lanes** (`test_landing_merge_verdict.py`):
 
@@ -2116,9 +2116,15 @@ reaching any assertion this branch changed.
 | 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. Discriminates: `base_total == 0` and `base_land is None` are both real, disclosed conditions. RED -> GREEN, verified full-file. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
 | 5 | `test_landing_merge_verdict.py`: **design C** — the three tamper guards re-founded (M24) | Each now asserts the verifier REFUSES (`rc 1`), the tamper did NOT redefine the tree (`expected_tree == verified_tree`), it never reached the real worktree (`candidate_test_worktree_status == "clean"`), and it WAS observed (the planted test in `delta.new_failures`). Specification verified against a live run BEFORE the edit. 3 RED -> GREEN. **Retires** the old `rc 2` / `doc is None` / `"raw attestation failed"` assertions deliberately — that was a hard `Refusal` for an arm dirtying the REAL worktree, which no longer happens; the check moved into `candidate_test_worktree_status`. The reasoning is inline in each test. |
 
-Items 4 and 5 turn four reds green. If you would rather land the diagnostic and
-harness work first and take the re-foundings separately, items 1-3 are
-independent of them.
+| 6 | `matrix_d3_output_manifest.json`: the measured step-31 entry (M32) | EVIDENCE, not a baseline rewrite. `reports/phase3/drc_signoff.json` measured at **1919 B** from `benchmark-data/ic/spm/v1.9.96_gf180mcuD` — the same declared run root step 31's other entries cite, carrying `provenance.jsonl` AND `reports/orchestrator/`. Gate goes `1 not covered -> 0`. **Closes 3 reds.** Blast radius checked including the one the gate names: `matrix_mutation_ledger` gives an IDENTICAL failure ID set to the pristine baseline. |
+
+Items 4 and 5 turn four reds green; item 6 turns three more. If you would rather
+land the diagnostic and harness work first and take the re-foundings separately,
+items 1-3 are independent of them, and item 6 is independent of all of them.
+
+**Escalation 2 is CLOSED, not deferred.** I had escalated it as needing evidence
+this host lacks. That was wrong (M30) — 10 of the 15 declared run roots are here
+and two carry the artefact. Do not carry it forward as an open item.
 
 ## B. ONE DECISION I NEED FROM YOU — a green becomes a red
 
