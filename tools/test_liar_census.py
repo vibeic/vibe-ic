@@ -2369,9 +2369,16 @@ def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
     # The tree at the pin measures 180, NOT the 179 the literal was set to in
     # that same commit -- see the block above. That is the red this control
     # would have named on the day, and it is left visible here rather than
-    # smoothed over.
+    # smoothed over. It is a FIXED COMMIT's blob, so this number is history and
+    # cannot rot.
     assert d["before"] == 180, d
-    assert d["after"] == 181, d
+    # DERIVED, NEVER TYPED. Writing `== 181` here would put a SECOND literal in
+    # this file that a flow author has to remember, which is the disease this
+    # whole change is treating -- the next grow would redden two controls
+    # instead of one and this one would teach nothing the pin had not already
+    # said. Cross-checking the two instruments against the SAME tree is the
+    # assertion actually worth making, and it survives every grow.
+    assert d["after"] == lc.population_report(lc.FLOW_YAML)["declared"], d
 
 
 def test_an_optional_clause_is_BLOCKING_not_advisory(tmp_path):
