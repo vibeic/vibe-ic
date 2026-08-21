@@ -1397,6 +1397,58 @@ def test_a_refusal_names_the_program_it_came_from(tmp_path):
         f"a denial in one program curtailed the other: {doc}")
 
 
+EMITTER_REFUSED_WITH_A_DENIAL = (
+    'def s():\n    return (\n'
+    '        "  # the retry path does not incr _n; it re-issues\\n"\n'
+    '        "  if {[catch {a}]} { incr _n }\\n"\n'
+    '        "  if {[catch {b}]} { incr _n }\\n"\n'
+    '        "  if {[catch {c}]} { incr _n }\\n"\n'
+    '        "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def test_the_reach_survives_a_REFUSAL(tmp_path):
+    """"THE REACH IS PRINTED, ALWAYS" is this guard's own rule, and this branch
+    has pinned it on the PASS path and on the VACUOUS path. Not on FAIL -- which
+    is where a reader needs it most, because a refusal is the one verdict that
+    sends someone to change code.
+
+    A finding says "these two numbers disagree". The reach says how much of the
+    tree those numbers came from, what polarity declined to count, and what
+    could not be read at all. Without it a refusal looks like a complete account
+    of the tree when it may be an account of one file out of two.
+
+    The fixture carries all three signals at once on a REFUSED run: a genuine
+    disagreement (3 sites against a denominator of 2), a polarity refusal (the
+    phantom fourth site written into a comment that denies it), and an
+    unreadable neighbour. All three must appear beside the refusal, not be
+    displaced by it."""
+    progs = tmp_path / "p"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "thing_emit.py").write_text(EMITTER_REFUSED_WITH_A_DENIAL,
+                                         encoding="utf-8")
+    (progs / "broken.py").write_text(
+        'def s():\n    return "  incr _z\\n"\n\ndef q(  :::\n', encoding="utf-8")
+    (tests / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                     encoding="utf-8")
+
+    r = _run(progs, tests)
+    out = r.stdout
+    assert r.returncode == RC_FAIL, out + r.stderr
+    fail = [l for l in out.splitlines() if l.startswith("[FAIL]")]
+    assert len(fail) == 1, out
+    for fragment in ("emitted counter denominator(s)", "test pin(s) examined",
+                     "not counted because the statement DENIES them",
+                     "NOT examined because they would not parse"):
+        assert fragment in fail[0], (
+            f"the refusal does not state its reach ({fragment!r} missing) -- it "
+            f"reads as a complete account of the tree:\n{fail[0]}")
+    assert "[POLARITY]" in out, (
+        "what polarity declined to count vanished behind the refusal:\n" + out)
+    assert "[UNPARSED]" in out, (
+        "a file that could not be read vanished behind the refusal:\n" + out)
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
