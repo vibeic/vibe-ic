@@ -8,8 +8,24 @@ stderr so ``gate_dispatch_over`` cannot mistake prose for an item.
 
 There is no elapsed-time verdict here.  Git either exits and supplies complete
 index evidence, or the caller's progress supervisor owns liveness.  A broken
-pointer, a loose directory, or a failed git query is UNDETERMINED (rc 2), never
-an empty population.
+pointer, a loose directory, an ABSENT corpus or a failed git query is
+UNDETERMINED (rc 2), never an empty population.
+
+THE ABSENT ROW IS IN THAT PROMISE BECAUSE THIS PRODUCER'S CONSUMER CANNOT READ
+STDERR (vibe-ic#1764).  ``gate_dispatch_over`` decides between "the corpus is
+EMPTY" and "the producer FAILED" from the exit status and the item count and
+nothing else, so an rc 0 with nothing on stdout says "I opened it and it holds
+none" whatever this file prints alongside.  MEASURED 2026-08-21 on a clean
+worktree of origin/main: nothing at ``benchmark-data/`` with the pointer unset,
+and a resolved checkout whose index carries no routed DEF, were byte-identical
+at the dispatcher and BOTH produced ``corpus ... is EMPTY — nothing was checked
+over it`` — the second true, the first about a corpus nothing had opened.  So
+this call site does not opt into NO_CORPUS and accepts no flag that would; see
+``_corpus_location.refuse``'s ``absent_opt_in``.
+
+That is not a way to stop this row blocking, and it is not one now: an empty
+population and a failed producer are both mode-2 dispatcher refusals, rc 2,
+NOT CHECKED and un-exemptable.  Only the true sentence differs.
 """
 from __future__ import annotations
 
@@ -360,9 +376,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     corpus, origin = location.resolve(
         named, subdir="ic", gate="routed-def corpus", announce=True)
     if not corpus.is_dir():
+        # NOT `may_be_absent=True`, and NO opt-in flag that could make it so.
+        # That row's outcome is rc 0 NO_CORPUS, and rc 0 here is this producer
+        # telling `gate_dispatch_over` it read a corpus and found none — the
+        # one sentence it must never be able to say about a tree it never
+        # opened.  vibe-ic#1764; the docstring carries the measurement.
         return location.refuse(
             "routed-def corpus", named, corpus, origin,
-            may_be_absent=True, scanned="routed DEF(s)")
+            may_be_absent=False, scanned="routed DEF(s)",
+            absent_opt_in=None)
 
     rc, paths = _index_paths(corpus)
     if rc != 0:
