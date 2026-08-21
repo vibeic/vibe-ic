@@ -174,6 +174,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -570,8 +571,10 @@ def extract_drv(text: str) -> Dict[str, object]:
     # title": `report_check_types` prints SEVERAL tables back to back, so an
     # open-ended table would keep counting rows belonging to the NEXT one (the
     # `Group Slack` / `Required Width` tables OpenSTA emits alongside). A table
-    # ends at the first line carrying no digit, which is where the next title
-    # begins.
+    # ends at the first NON-BLANK line carrying no digit, which is where the
+    # next title begins. Blank lines are interior to a table (OpenSTA separates
+    # `max capacitance` rows with them) and only suspend it — see the
+    # ROWS_BLANK branch below.
     kind: Optional[str] = None
     state = "IDLE"
 
@@ -624,9 +627,32 @@ def extract_drv(text: str) -> Dict[str, object]:
             continue
 
         # state == ROWS: the table ends at the first line with no digit in it.
-        if not line or not any(ch.isdigit() for ch in line):
+        #
+        # ...but a BLANK line is NOT that terminator, and treating it as one
+        # under-counted a whole check kind. MEASURED on caravel_user_project x
+        # sky130A (bit-identical routes on two hosts, plugin v1.10.18): OpenSTA
+        # prints the `max capacitance` table with a blank line BETWEEN EVERY
+        # ROW, while `max slew` and `max fanout` print theirs contiguously. The
+        # walk therefore closed the cap table after its FIRST row in each
+        # corner, and a sign-off report holding 48 VIOLATED capacitance rows
+        # (24 setup + 24 hold) was recorded as `max_capacitance x2`. A 24x
+        # under-count, in the LENIENT direction — the record understated the
+        # design's own sign-off DRV population.
+        #
+        # A blank therefore only SUSPENDS the table; the next line decides.
+        # Every real terminator (a DRV title, a non-DRV title, an
+        # `=== SECTION ===` banner, the check-types markers) is consumed
+        # earlier in this loop, so each still closes or re-opens a table
+        # exactly as it did before — this can only stop the walk from ending
+        # a table early, never keep one open across a title.
+        if not line:
+            state = "ROWS_BLANK"
+            continue
+        if not any(ch.isdigit() for ch in line):
             kind, state = None, "IDLE"
             continue
+        if state == "ROWS_BLANK":
+            state = "ROWS"
         if _VIOLATED_RE.search(line):
             counts[kind] = counts.get(kind, 0) + 1
             rows.setdefault(kind, []).append(_row_instance(line))
@@ -1638,7 +1664,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if out_path is not None:
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(res, indent=2) + "\n")
+            atomic_write_text(out_path, json.dumps(res, indent=2) + "\n")
         except OSError as e:
             print(f"{_PROGRAM}: cannot write {out_path}: {e}", file=sys.stderr)
             return 2
@@ -1650,6 +1676,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
     banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
     print(f"[{banner}] {_PROGRAM}: {tag}")
+    if tag == "NOT_APPLICABLE":
+        # vibe-ic#1115. This gate already knew -- "no stance file, pvt_matrix or
+        # STA report declares or records any corner -- there is no timing record
+        # to judge". It said so inside a `[PASS]` banner, and the only channel
+        # `flow_compliance_check` reads on the passing path is this prefix, so
+        # the step was recorded as ordinary multi-corner sign-off over zero
+        # corners.
+        print(f"VACUOUS_PASS: {_PROGRAM} judged 0 corner(s) — "
+              + "; ".join(str(r) for r in res.get("reasons", []))[:200])
     print(render_table(res))
     for reason in res.get("reasons", []):  # type: ignore[union-attr]
         print(f"  - {reason}")

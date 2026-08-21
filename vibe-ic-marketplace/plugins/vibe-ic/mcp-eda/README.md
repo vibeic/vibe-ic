@@ -23,7 +23,8 @@ docker pull ghcr.io/vibeic/vibeic-eda:latest                       # forked tool
 docker rm -f vibeic-eda 2>/dev/null || true                        # drop any old container of this name
 docker run -d --name vibeic-eda -v $HOME/designs:/design \
   ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
-# already running an older tag? recreate config-preserving: tools/vibeic-eda/restart-eda.sh 0.2.12
+# already running an older tag? recreate config-preserving: tools/vibeic-eda/restart-eda.sh
+# (no argument = the newest vibeic-eda image this host holds, by digest; or pass a tag)
 # stock fallback: docker pull hpretl/iic-osic-tools:latest  (then run it named vibeic-eda)
 
 # 2. Install MCP server

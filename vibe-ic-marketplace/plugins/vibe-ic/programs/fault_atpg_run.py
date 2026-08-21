@@ -73,47 +73,28 @@ from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+import _eda_image as _img
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 def _resolve_docker_image() -> str:
     """Resolve the EDA docker image, preferring the forked vibeic-eda
-    distribution (the iic-osic-tools fork this plugin actually ships and that
-    carries Fault + iverilog + yosys) over the upstream image, which may not be
-    pulled locally. Order: explicit env override → first locally-present
-    PINNED vibeic-eda tag → legacy upstream name (last resort).
+    distribution (the iic-osic-tools fork this plugin ships, carrying Fault +
+    iverilog + yosys) over the upstream image.
 
-    The fork tags below are pinned, never ``:latest``: a floating tag can
-    silently resolve to a stale local image whose tool behavior no longer
-    matches what the plugin was verified against. Every ``vibeic-eda:X.Y.Z``
-    literal here is a LIVE POINTER tracked by
-    ``tools/vibeic-eda/sync_image_version.py`` (this file is registered in its
-    INSTALL_DOC_CANDIDATES), so ``--set``/``--bump`` rewrites it mechanically
-    and ``--check`` fails the suite on drift — do not hand-edit out of step.
-
-    Historically this was hardcoded to ``hpretl/iic-osic-tools:latest``; on a
-    machine that only has the fork pulled, ``docker run`` failed with
-    image-not-found and the whole DFT step silently died. chip-AGNOSTIC."""
-    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
-    if env:
-        return env
-    candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.63",
-        "vibeic-eda:0.2.63",
-        "vibeic/vibeic-eda:0.2.63",
-        "hpretl/iic-osic-tools:latest",
-    )
-    for img in candidates:
-        try:
-            r = subprocess.run(["docker", "image", "inspect", img],
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                return img
-        except Exception:
-            pass
-    # nothing found locally — return the fork's pinned canonical name; the
-    # caller's `docker run` then pulls exactly the verified image (or surfaces
-    # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.2.63"
+    The version is ASKED FOR, not remembered. It used to be a pinned literal
+    kept in step by `sync_image_version.py`, on the stated grounds that the tag
+    "matches what the plugin was verified against" — and nothing ever verified
+    that. vibeic-eda's own release gate does, and `_eda_image` asks the registry
+    which image is current rather than trusting a local `:latest`, which is how
+    this once resolved to `hpretl/iic-osic-tools:latest` on a machine that had
+    only the fork and made the whole DFT step die on image-not-found.
+    chip-AGNOSTIC."""
+    return _img.resolve()
 
 
 DOCKER_IMAGE = _resolve_docker_image()
@@ -207,6 +188,35 @@ PDK_CONFIG = {
             "sg13g2_sdfrbp_1,sg13g2_sdfrbp_2,"
             "sg13g2_sdfrbpq_1,sg13g2_sdfrbpq_2,"
             "sg13g2_sdfbbp_1"
+        ),
+    },
+    # NanGate45 / FreePDK45 open academic 45nm stdcell library (OpenROAD's
+    # reference PDK; ships in the container at /foss/pdks/nangate45). Without
+    # this entry a FULLY tech-mapped NanGate45 netlist (NAND2_X1 / DFF_X1 /
+    # SDFF_X1, no Yosys generic primitives) sniffs to None -> the DFT step reads
+    # that None as `generic_unmapped` and refuses scan insertion with
+    # "no Liberty configured for pdk 'unmapped'", even though the netlist is
+    # mapped and the container ships this library's Liberty. That is the exact
+    # "could not NAME the PDK" != "no library-mapped cells" confusion the
+    # `netlist_is_library_mapped` docstring (above) warns about, surfacing on
+    # the resolution side. Adding the entry is the same remedy applied to
+    # ihp-sg13g2 above; it teaches the sniff (via pdk_cell_prefixes) and gives
+    # scan insertion its Liberty (SCAN_LIBERTY in fault_scan_chain_insert.py).
+    #
+    # cell_model is None ON PURPOSE: this build's container ships NO NanGate45
+    # Verilog simulation model (only .lib / .lef / .gds / .cdl), so Fault's
+    # iverilog-based stuck-at fault simulation cannot run. With cell_model=None,
+    # run_fault returns rc=2 "no Verilog cell model resolved" — an HONEST,
+    # disclosed engine-limited skip, NOT a fabricated coverage number and NOT a
+    # crash. This REPLACES the false "unsupported pdk: unmapped" (which wrongly
+    # blamed the netlist) with the true state: NanGate45 IS recognised and
+    # scan-insertable; only its ATPG fault-sim is engine-limited here.
+    "nangate45": {
+        "cell_model": None,
+        "dff_cells": (
+            "DFF_X1,DFF_X2,DFFR_X1,DFFR_X2,DFFS_X1,DFFS_X2,"
+            "DFFRS_X1,DFFRS_X2,SDFF_X1,SDFF_X2,SDFFR_X1,SDFFR_X2,"
+            "SDFFS_X1,SDFFS_X2,SDFFRS_X1,SDFFRS_X2"
         ),
     },
 }
@@ -823,6 +833,20 @@ def pdk_cell_prefixes() -> dict:
                 continue
             if "__" in cell:                     # <lib>__<cell>
                 prefixes.add(cell.split("__", 1)[0] + "__")
+            elif (dsm := re.match(r"(.+_[A-Za-z]+)\d+$", cell)):
+                # FLAT DRIVE-STRENGTH naming `<root>_X<drive>` (NanGate45 /
+                # FreePDK45: DFF_X1, SDFFRS_X2, NAND2_X1). The trailing integer
+                # is a DRIVE STRENGTH, not a cell instance, and there is no
+                # `<lib>_` separator. The plain `<lib>_<cell>` split below would
+                # yield the over-broad `DFF_`, which is a SUBSTRING of the Yosys
+                # generic primitive `$_DFF_P_` — so an UNMAPPED netlist would be
+                # misread as this PDK (a false pass of the sniff). Keep the
+                # drive-strength FAMILY root incl. the `_X` (`DFF_X`, `SDFFRS_X`):
+                # specific to the mapped library, never a substring of `$_DFF_`.
+                # No configured `__`-style PDK reaches here (they take the branch
+                # above); only genuine `_X<n>` families do. Still derived purely
+                # from `dff_cells` — no second table, no vendor/SKU literal.
+                prefixes.add(dsm.group(1))
             elif "_" in cell:                    # <lib>_<cell>
                 prefixes.add(cell.split("_", 1)[0] + "_")
             else:
@@ -885,6 +909,54 @@ def _count_yaml_block_items(text: str, key: str) -> int:
         if not ln[:1].isspace():
             break
     return n
+
+
+# ── A HIGH EXIT CODE IS NOT A DEATH CERTIFICATE ────────────────────────────
+#
+# `128+N means death by signal N` is the convention a SHELL uses to REPORT a
+# child's signal death. It says nothing about a process that calls exit(N)
+# itself with N >= 128, and the elaborator inside the ATPG engine does exactly
+# that: Icarus Verilog exits with its ERROR COUNT.
+#
+#   MEASURED (public, no PDK, no vendor, no design — 153 instantiations of an
+#   undeclared module; see the reproduction shipped with this fix):
+#       $ iverilog -o /dev/null probe.v > log 2>&1 ; echo $?
+#       154
+#       $ tail -3 log
+#       *** These modules were missing:
+#               MISSING_CELL referenced 153 times.
+#
+# So an ATPG input that is missing >= 128 cell models was being classified
+# "killed by signal N", retried _ATPG_MAX_ATTEMPTS times (a deterministic
+# failure retried three times fails three times), and then written up as an
+# engine crash that "must be re-driven, not waived" — while the true cause,
+# `Unknown module type: <cell>`, sat in the log this very function captured.
+#
+# THE DISCRIMINATOR: a process killed by a signal did not live long enough to
+# print a structured diagnosis. When the engine's own error grammar IS present,
+# the exit code is the engine's considered answer, not a death certificate.
+#
+# Deliberately NARROW. Anything ambiguous stays classified as signal death, so
+# a genuine SIGSEGV keeps its retry — see the reverse case in the test.
+# chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on compiler diagnostic grammar.
+_ATPG_SIGNAL_DEATH_FLOOR = 128
+_ATPG_ENGINE_DIAGNOSTIC_RE = re.compile(
+    r"^\s*\d+\s+error\(s\)\s+during\s+elaboration"
+    r"|These modules were missing"
+    r"|Unknown module type",
+    re.MULTILINE,
+)
+
+
+def atpg_exit_is_signal_death(exit_code: int, engine_log: str) -> bool:
+    """True iff `exit_code` should be read as death by signal.
+
+    Below the floor it never is. At or above the floor it is — UNLESS the
+    engine printed its own error diagnosis, which a signal-killed process
+    cannot have done. Pure; no I/O."""
+    if exit_code < _ATPG_SIGNAL_DEATH_FLOOR:
+        return False
+    return not _ATPG_ENGINE_DIAGNOSTIC_RE.search(engine_log or "")
 
 
 def parse_atpg_coverage(cov_text: str, atpg_log: str, atpg_exit: int) -> dict:
@@ -1179,6 +1251,7 @@ def _run_docker(
     deadline = atpg_container_deadline(timeout, flush_grace_s)
     docker_cmd = [
         "docker", "run", "--rm",
+        *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
@@ -1476,6 +1549,17 @@ def run_fault(
         return 2, {"error": "no Verilog cell model resolved: pass "
                             "--cell-model-path or use a PDK with a configured "
                             "cell_model"}
+    if pdk == "gf180" and not cell_model_override:
+        # ciel's gf180mcu path is content-addressed (versions/<hash>/...) and
+        # the hash PDK_CONFIG carries is a point-in-time fallback that goes
+        # stale whenever vibeic-eda's gf180mcu pin advances — see
+        # pdk_cell_models.GF180_CIEL_HASH_FALLBACK. Re-resolve it live against
+        # THIS run's own image/container before trusting it.
+        _parts = cell_model.split(" ")
+        _resolved = _pcm.materialize_gf180_paths(
+            _parts, lambda argv, t: _run_docker(project, argv, timeout=t,
+                                                pdk_dir=pdk_dir))
+        cell_model = " ".join(_resolved)
     # Flop-cell resolution: explicit override wins; else auto-detect from the
     # netlist and union with the PDK-config seed so cut never misses the real
     # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).
@@ -1669,8 +1753,51 @@ def run_fault(
     #     "the OSS tool cannot do this" is a false capability gap.
     #
     # chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on the POSIX convention that
-    # 128+N means death by signal N.
-    _ATPG_SIGNAL_DEATH_FLOOR = 128
+    # 128+N means death by signal N -- AND, since this fix, on the engine's own
+    # diagnostic grammar, because that convention is a shell's reporting
+    # convention and not a property of the exit code. See
+    # atpg_exit_is_signal_death() above.
+    # ── SIZE-SCALED WALL ────────────────────────────────────────────────────
+    # This was a fixed `timeout=1800`. A fixed wall asks "has 30 minutes
+    # passed", and is read as "can this engine grade this design" — two
+    # different questions that agree only on designs small enough for the
+    # answer not to matter.
+    #
+    # MEASURED (ibex x sky130A, 2026-08-05). `fault` ATPG on the sky130-mapped
+    # 31k-cell netlist RUNS: `fault chain` built a real scan chain from
+    # `ibex_core_synth.v` against the PDK liberty, with real scan DFFs, and the
+    # engine was mid-grade when the wall expired. Its own record says so —
+    # "the engine was running, not unable ... a BUDGET outcome, not a
+    # capability gap". A fixed 1800 s turned a large design's honest partial
+    # coverage into an absent measurement.
+    #
+    # The sibling at-speed engine already fixed this and its comment names
+    # "the old 1800 s" as the defect; the same constant was still live here.
+    # `_scaled_wall_budget` and `parse_cut_ports` are imported rather than
+    # copied, so the two engines cannot drift apart, and the size signal is the
+    # SAME quantity the coefficient was measured against: the pseudo-PI/PO
+    # pairs the cut exposed, i.e. the flop count.
+    #
+    # The caller's 1800 stays the FLOOR — a small design's wall is unchanged to
+    # the second. NOT MEASURED, and stated rather than hidden: the per-flop
+    # coefficient was measured for the 2-frame LOC miter of the at-speed
+    # engine, not for stuck-at. It is used here as a floor-RAISING term with
+    # the same campaign ceiling, which can only ever give a large design more
+    # room; the budget actually used is recorded below so the next round can
+    # measure the real stuck-at curve instead of inheriting this one.
+    _atpg_wall = 1800
+    _atpg_scan_flops = 0
+    try:
+        import transition_fault_atpg_run as _tdf
+        _cut_for_wall = project / cut_out
+        if _cut_for_wall.is_file():
+            _, _, _, _pairs = _tdf.parse_cut_ports(
+                _cut_for_wall.read_text(errors="replace"))
+            _atpg_scan_flops = len(_pairs)
+            _atpg_wall = _tdf._scaled_wall_budget(1800, _atpg_scan_flops)
+    except Exception:
+        pass          # unreadable cut -> the floor, never a guess
+
     _ATPG_MAX_ATTEMPTS = 3
     atpg_attempts: list[int] = []
     ec, out, err = -1, "", ""
@@ -1683,15 +1810,15 @@ def run_fault(
             (project / cov_out).unlink()
         except OSError:
             pass
-        ec, out, err = _run_docker(project, [atpg_shell], timeout=1800,
+        ec, out, err = _run_docker(project, [atpg_shell], timeout=_atpg_wall,
                                    pdk_dir=pdk_dir)
         atpg_attempts.append(ec)
-        if ec < _ATPG_SIGNAL_DEATH_FLOOR:
+        if not atpg_exit_is_signal_death(ec, out + "\n" + err):
             break            # clean exit (0 or a considered non-zero) — done
         if (project / cov_out).exists():
             break            # died late but the metadata landed — keep it
     atpg_log = (out + "\n" + err)[-2000:]
-    atpg_signal_death = ec >= _ATPG_SIGNAL_DEATH_FLOOR
+    atpg_signal_death = atpg_exit_is_signal_death(ec, out + "\n" + err)
 
     cov_file = project / cov_out
     cov_text = cov_file.read_text() if cov_file.exists() else ""
@@ -1820,6 +1947,13 @@ def run_fault(
             # Retry history + crash classification, so a consumer can tell "the
             # engine crashed" from "the engine answered".
             "atpg_attempt_exits": atpg_attempts,
+            # The budget this run actually had, and the design size it was
+            # sized from. "exceeded its wall budget" without the number is a
+            # verdict nobody downstream can check or re-plan against.
+            "atpg_wall_budget_s": _atpg_wall,
+            "atpg_wall_budget_basis": (
+                f"floor 1800 s + per-flop term on {_atpg_scan_flops} scan flop(s)"
+                if _atpg_scan_flops else "floor 1800 s (no cut flops resolved)"),
             "atpg_signal_death": atpg_signal_death,
             "log_tail": atpg_log[-500:],
         }

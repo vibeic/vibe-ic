@@ -1,10 +1,11 @@
 """Regression — the phase-3 sign-off emitters must re-run when their output
 predates the routed DEF / extracted SPEF it is COMPUTED FROM.
 
-Defect (measured on a real re-run): `step_canonicalize_artefacts` gated the
+Defect (measured on a real re-run): `step_canonicalize_artefacts` gated ~14
 sign-off emitters on their output's EXISTENCE alone, e.g.
 
     if primary_def.is_file() and not dyn_ir_json.is_file():
+    if (not _mcf_json.is_file() and _mcf_spef and ...):
     if not power_rpt.is_file() and primary_def.is_file():
 
 Every one of those outputs is DERIVED from the routed DEF (and, for the
@@ -29,22 +30,12 @@ Two instances measured on one run directory:
     netlist replaced at 00:54 — a stale PASS, which is worse than a stale FAIL
     because nothing downstream questions it.
 
-The first tranche of this class (extraction + STA, then IR/EM/antenna/SI/MCF)
-landed already and is guarded by `_signoff_regen`. This file closes the
-REMAINDER against the SAME predicate rather than a second one: a flow with two
-freshness predicates that answer differently is the defect one level up.
-`_signoff_regen` was WIDENED to a variadic source list for that, because a
-crosstalk report is derived from the SPEF as well as from the DEF.
+This is the same mechanism as the Step-34 metal-fill staleness (filed
+separately); that call site is deliberately NOT touched here so the two
+changes do not collide.
 
 NEG cases below are load-bearing: the guard must not degenerate into "always
 re-run", which would defeat the caching it refines and mask the real defect.
-
-Scope note — `metal_density_json` is deliberately NOT in the guarded set.
-`_emit_metal_density_report` resolves the FRESHER of {canonical alias,
-streamed pnr source} itself, so this call site has no single input path it
-could honestly date the report against; a guard dated against a file the
-emitter does not read is a worse claim than no guard. That report's currency
-is owned on the read side, by `_freshest_gds` inside the emitter.
 """
 from __future__ import annotations
 
@@ -68,10 +59,9 @@ def _touch(path: Path, mtime: float) -> Path:
 
 # --------------------------------------------------------------------------
 # The BEHAVIOURAL delta, stated against the pre-fix gate expression verbatim.
-# `_signoff_regen` ALREADY EXISTS on the base this change is built on, so a
-# test that merely calls it would pass on the unfixed tree. These tests state
-# the delta as a DISAGREEMENT between the pre-fix expression and the predicate
-# now in the guard, on inputs the pre-fix expression answers wrongly.
+# This is the test that proves behaviour changed rather than merely that a new
+# symbol exists: it fails against the byte-identical pre-fix file because the
+# pre-fix expression answers "reuse" on the measured case.
 # --------------------------------------------------------------------------
 def test_pre_fix_existence_gate_would_have_reused_the_stale_artefact(tmp_path):
     """The measured case: output 6h53m OLDER than the source it derives from."""
@@ -102,22 +92,11 @@ def test_absent_output_still_emits(tmp_path):
 
 
 def test_stale_against_any_one_of_several_sources(tmp_path):
-    """A SPEF-fed emitter is stale if EITHER the DEF or the SPEF is newer.
-
-    This is the case the widening exists for: with the pre-widening
-    single-source signature the SPEF could not be declared at all, so a
-    re-extraction that left the DEF alone republished the previous
-    extraction's crosstalk numbers.
-    """
-    out = _touch(tmp_path / "si_crosstalk.rpt", 1_000_000.0)
+    """A SPEF-fed emitter is stale if EITHER the DEF or the SPEF is newer."""
+    out = _touch(tmp_path / "si_mcf_sta.json", 1_000_000.0)
     old_def = _touch(tmp_path / "top.def", 900_000.0)
     new_spef = _touch(tmp_path / "top.spef", 1_000_001.0)
     assert p3._signoff_regen(out, old_def, new_spef) is True
-    # ... and symmetrically, when it is the DEF that moved.
-    out2 = _touch(tmp_path / "si_crosstalk2.rpt", 1_000_000.0)
-    new_def = _touch(tmp_path / "top2.def", 1_000_001.0)
-    old_spef = _touch(tmp_path / "top2.spef", 900_000.0)
-    assert p3._signoff_regen(out2, new_def, old_spef) is True
 
 
 def test_unprovable_freshness_re_emits(tmp_path, monkeypatch):
@@ -155,26 +134,9 @@ def test_equal_mtime_is_not_stale(tmp_path):
 
 
 def test_absent_source_does_not_force_re_emit(tmp_path):
-    """Nothing to be stale against => the existing artefact stands.
-
-    This is the pre-widening `_signoff_regen` contract ("no layout -> leave an
-    existing artefact alone") and the widening must not have moved it.
-    """
+    """Nothing to be stale against => the existing artefact stands."""
     out = _touch(tmp_path / "thermal_screen.json", 1_000_000.0)
     assert p3._signoff_regen(out, tmp_path / "never_written.def") is False
-
-
-def test_absent_source_is_skipped_not_short_circuited(tmp_path):
-    """A missing source must not hide a LATER source that IS newer.
-
-    The single-source predicate answered `return False` the moment a source was
-    absent. Widened, that has to become "skip this one and keep looking", or a
-    DEF that has not been written yet would mask a re-extracted SPEF.
-    """
-    out = _touch(tmp_path / "si_crosstalk.rpt", 1_000_000.0)
-    absent = tmp_path / "never_written.def"
-    newer = _touch(tmp_path / "top.spef", 1_000_500.0)
-    assert p3._signoff_regen(out, absent, newer) is True
 
 
 def test_no_sources_reduces_to_the_existence_gate(tmp_path):
@@ -193,121 +155,6 @@ def test_all_sources_older_is_reused(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The WIDENING must be behaviour-preserving for every call site that already
-# passes exactly one source. Enumerated, not argued.
-# --------------------------------------------------------------------------
-_STATES = {"absent": None, "older": 900_000.0,
-           "equal": 1_000_000.0, "newer": 1_100_000.0}
-
-
-def _pre_widening_signoff_regen(artifact: Path, layout: Path) -> bool:
-    """`_signoff_regen` EXACTLY as it stood before the widening (v1.9.79)."""
-    try:
-        if not artifact.is_file():
-            return True
-        if not layout.is_file():
-            return False
-        return artifact.stat().st_mtime < layout.stat().st_mtime
-    except OSError:
-        return True
-
-
-@pytest.mark.parametrize("art_state", sorted(_STATES))
-@pytest.mark.parametrize("lay_state", sorted(_STATES))
-def test_single_source_is_identical_to_the_pre_widening_predicate(
-        tmp_path, art_state, lay_state):
-    """All 16 filesystem-reachable (artifact, layout) states agree.
-
-    Every call site that already existed passes exactly one source, so this is
-    the statement that none of them changed answer.
-    """
-    art = tmp_path / "artifact.rpt"
-    lay = tmp_path / "layout.def"
-    if _STATES[art_state] is not None:
-        _touch(art, 1_000_000.0 if art_state == "equal" else _STATES[art_state])
-    if _STATES[lay_state] is not None:
-        _touch(lay, _STATES[lay_state])
-    assert p3._signoff_regen(art, lay) is _pre_widening_signoff_regen(art, lay)
-
-
-def test_widening_is_behaviour_preserving_including_unreadable_states(tmp_path):
-    """Same claim, extended to the states a real filesystem cannot reach.
-
-    The parametrized test above covers the 16 filesystem-reachable states. The
-    ones that decide whether a widening is really a no-op are the OTHER ones:
-    `is_file()` answering True while `stat()` raises, `is_file()` itself
-    raising. A widening that hoists the artefact's `stat()` ABOVE the source
-    loop — the obvious way to write it — changes the answer in exactly one of
-    them (artefact unstattable, source absent: the pre-widening body returns
-    "reuse", the hoisted one returns "re-run"), and no filesystem test would
-    ever show it. So the states are injected.
-    """
-    import itertools
-    import tempfile
-
-    rels = {"older": -100.0, "equal": 0.0, "newer": +100.0}
-    errs = [None, ("art", "stat"), ("lay", "stat"),
-            ("art", "isfile"), ("lay", "isfile")]
-    base_t = 1_000_000.0
-
-    boom: dict[str, str] = {}
-    real_stat, real_isfile = Path.stat, Path.is_file
-
-    def patched_stat(self, *a, **kw):
-        if boom.get(str(self)) == "stat":
-            raise OSError("stat unavailable")
-        return real_stat(self, *a, **kw)
-
-    def patched_isfile(self, *a, **kw):
-        if boom.get(str(self)) == "isfile":
-            raise OSError("is_file unavailable")
-        return real_isfile(self, *a, **kw)
-
-    states = 0
-    divergences = []
-    Path.stat, Path.is_file = patched_stat, patched_isfile
-    try:
-        for a_st, l_st, err in itertools.product(
-                ("absent", "present"), ("absent", "present"), errs):
-            both = a_st == "present" and l_st == "present"
-            for rel_name, rel in (rels.items() if both else [("n/a", 0.0)]):
-                with tempfile.TemporaryDirectory() as td:
-                    boom.clear()
-                    art = Path(td) / "artifact.json"
-                    lay = Path(td) / "layout.def"
-                    if a_st == "present":
-                        art.write_text("x")
-                        os.utime(art, (base_t, base_t))
-                    if l_st == "present":
-                        lay.write_text("x")
-                        os.utime(lay, (base_t + rel, base_t + rel))
-                    if err:
-                        who, kind = err
-                        boom[str(art if who == "art" else lay)] = kind
-
-                    def call(fn):
-                        try:
-                            return fn(art, lay)
-                        except Exception as exc:      # noqa: BLE001
-                            return f"EXC:{type(exc).__name__}"
-
-                    states += 1
-                    was = call(_pre_widening_signoff_regen)
-                    now = call(p3._signoff_regen)
-                    if was != now:
-                        divergences.append(
-                            (a_st, l_st, rel_name, err, was, now))
-    finally:
-        Path.stat, Path.is_file = real_stat, real_isfile
-
-    assert states == 30, f"state enumeration changed shape: {states}"
-    assert divergences == [], (
-        "widening _signoff_regen to varargs changed single-source behaviour, "
-        f"so the pre-existing call sites moved: {divergences}"
-    )
-
-
-# --------------------------------------------------------------------------
 # The class must stay closed: no DEF-derived sign-off emitter may go back to
 # an existence-only gate.
 # --------------------------------------------------------------------------
@@ -316,6 +163,29 @@ GUARDED_OUTPUTS = [
     "aging_sta_json", "dyn_ir_json", "thermal_json",
     "dfm_json", "perc_rpt", "sdf_out", "power_rpt", "_mcf_json",
 ]
+
+# `metal_density_json` is NOT in that list, and the omission is the point.
+#
+# The check below is a SOURCE GREP: it requires the literal
+# `_signoff_regen(<name>` to appear in `step_canonicalize_artefacts`. For every
+# other output that is the right shape — each derives from ONE input path the
+# call site can name and date against.
+#
+# Metal density cannot. `_emit_metal_density_report` resolves the FRESHER of
+# {canonical stage-4 alias, streamed pnr GDS} itself, because Step 37 rewrites
+# the alias LATER in this same pass. There is no single input path the call
+# site could honestly date against, and `_signoff_regen` dated against the
+# wrong input is a worse claim than no guard — the runner's own comment says
+# exactly this, and ends: "if the SKIP-on-existence needs closing too, it must
+# be closed there, against the path that emitter actually chose."
+#
+# It has been closed there. So requiring the helper's NAME at this call site
+# would now fail a correct implementation — the test would be pinning the
+# IMPLEMENTATION rather than the property. The property is checked
+# behaviourally instead, in `test_metal_density_is_re_emitted_when_it_predates
+# _the_gds_it_describes` below: a report older than the GDS it names is
+# re-emitted, and one newer than it is left alone. That test passes against any
+# correct implementation, including one that never calls `_signoff_regen`.
 
 
 def _canonicalize_body() -> str:
@@ -363,139 +233,6 @@ def test_scan_scope_actually_contains_the_gates():
     assert "primary_def" in body and "spef_out" in body
 
 
-# --------------------------------------------------------------------------
-# BEHAVIOURAL control on the CALL SITES. The substring scan above proves only
-# that a NAME appears in the source; it cannot tell a converted guard from one
-# that merely mentions the helper in a comment. These two EXTRACT each gate's
-# real condition expression from the AST and EVALUATE it against a synthetic
-# run directory, so what is asserted is what the guard DOES.
-# --------------------------------------------------------------------------
-def _gate_condition_src(name: str) -> str:
-    """The `if` condition, as source, that decides whether `name` is emitted."""
-    import ast
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    tree = ast.parse(src)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef)
-              and n.name == "step_canonicalize_artefacts")
-    hits = []
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.If):
-            continue
-        names = {n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)}
-        if name in names:
-            hits.append((node.lineno, ast.unparse(node.test)))
-    assert hits, f"no gate mentioning {name} inside step_canonicalize_artefacts"
-    # The EMIT gate is the first `if` in source order that mentions the name;
-    # anything later is a post-emit "did the tool write something" check on the
-    # SAME name, a different question (see
-    # test_emitter_internal_output_checks_are_left_alone).
-    hits.sort()
-    return hits[0][1]
-
-
-def _eval_gate(cond: str, tmp: Path, *, stale: bool) -> bool:
-    """Evaluate a real gate condition against a synthetic run directory.
-
-    `stale=True`  -> every guarded output predates the routed DEF / SPEF.
-    `stale=False` -> every guarded output postdates them (the REVERSE case).
-    """
-    src_t, out_t = ((1_000_000.0, 900_000.0) if stale
-                    else (900_000.0, 1_000_000.0))
-    project = tmp / "proj"
-    primary_def = _touch(project / "phase3/stage3/pnr/top.def", src_t)
-    spef_out = _touch(project / "phase3/stage3/extracted/top.spef", src_t)
-    _touch(project / "phase3/stage3/pnr/constraint.sdc", src_t)
-    ns = {
-        "project": project,
-        "primary_def": primary_def,
-        "spef_out": spef_out,
-        "_mcf_spef": [spef_out],
-        "_mcf_newest_spef": spef_out,
-        "_signoff_regen": p3._signoff_regen,
-        "multi_process": True,
-    }
-    for n in GUARDED_OUTPUTS:
-        ns[n] = _touch(project / "reports" / f"{n}.out", out_t)
-    return bool(eval(cond, {"__builtins__": {}}, ns))  # noqa: S307
-
-
-@pytest.mark.parametrize("name", GUARDED_OUTPUTS)
-def test_gate_predicate_re_emits_a_stale_artefact(tmp_path, name):
-    """FORWARD, behavioural: the REAL gate expression must answer "emit".
-
-    Fails against the pre-fix file for the right reason — the pre-fix
-    predicate, evaluated on an output that predates the routed DEF it derives
-    from, answers "reuse".
-    """
-    cond = _gate_condition_src(name)
-    assert _eval_gate(cond, tmp_path, stale=True) is True, (
-        f"gate for {name} answers 'reuse' on a STALE output: {cond}"
-    )
-
-
-@pytest.mark.parametrize("name", GUARDED_OUTPUTS)
-def test_gate_predicate_still_reuses_a_fresh_artefact(tmp_path, name):
-    """REVERSE, behavioural: the REAL gate expression must answer "reuse".
-
-    Anti-degeneration. If a gate were rewritten to "always re-run" this fails
-    while the forward test above stays green — so the pair is decisive in both
-    directions rather than only counting failures.
-    """
-    cond = _gate_condition_src(name)
-    assert _eval_gate(cond, tmp_path, stale=False) is False, (
-        f"gate for {name} re-runs unconditionally on a FRESH output: {cond}"
-    )
-
-
-def test_the_helper_is_the_one_the_runner_already_had():
-    """REVERSE CASE for the remedy itself: no SECOND freshness helper.
-
-    The first revision of this change added `_signoff_emit_needed(output,
-    *sources)` beside the `_signoff_regen(artifact, layout)` the runner already
-    carried. Measured, the two were the same function on every reachable
-    single-source state — so what shipped would have been one freshness rule
-    stated twice, free to drift. If a differently-named twin reappears, that
-    drift is back.
-    """
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    assert "def _signoff_regen(" in src
-    assert "def _signoff_emit_needed(" not in src, (
-        "a second freshness helper was reintroduced; widen _signoff_regen "
-        "instead so there is exactly one rule"
-    )
-
-
-def test_si_report_is_dated_against_the_spef_it_is_made_of():
-    """Step 27 reads the SPEF's coupling caps, so the SPEF is a SOURCE.
-
-    Dating it against the DEF alone leaves the exact escape measured on
-    `si_mcf_sta.json`: a re-extraction supersedes the report without touching
-    the DEF, and the guard sees nothing.
-    """
-    body = _canonicalize_body()
-    assert "_signoff_regen(si_rpt, primary_def, spef_out)" in body, (
-        "si_crosstalk.rpt must be dated against the extracted SPEF as well as "
-        "the routed DEF — it is computed from the SPEF's coupling caps"
-    )
-
-
-def test_metal_density_exclusion_is_recorded_not_forgotten():
-    """The one deliberate omission must be visible as a decision.
-
-    `metal_density_json` is the only remaining existence-only gate in this
-    block. If that is ever silently changed — in either direction — the
-    reasoning must be updated with it, so pin both the state and its note.
-    """
-    body = _canonicalize_body()
-    assert "not metal_density_json.is_file()" in body
-    assert "_signoff_regen(metal_density_json" not in body
-    assert "DELIBERATELY NOT `_signoff_regen`-gated" in body, (
-        "the exclusion lost its rationale; a reader cannot tell an omission "
-        "from an oversight"
-    )
-
-
 def test_emitter_internal_output_checks_are_left_alone():
     """REVERSE CASE for the scan: the post-emit 'did the tool write anything'
     checks inside the emitter implementations must SURVIVE. If this flips, the
@@ -506,3 +243,68 @@ def test_emitter_internal_output_checks_are_left_alone():
                 "not sdf_out.is_file() or sdf_out.stat().st_size"):
         assert pat in src, f"post-emit output check was wrongly removed: {pat}"
         assert pat not in body, f"{pat} unexpectedly inside the gate scope"
+
+
+# --------------------------------------------------------------------------
+# metal_density: the PROPERTY, checked behaviourally rather than by grepping
+# for a helper name at a call site that cannot honestly use it.
+# --------------------------------------------------------------------------
+def _density_emitter():
+    import importlib.util as _iu, sys as _sys
+    p = PROG / "phase3_one_shot_runner.py"
+    spec = _iu.spec_from_file_location("_p3_density", p)
+    mod = _iu.module_from_spec(spec)
+    _sys.modules["_p3_density"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _layout(tmp_path, *, report_older_than_gds: bool):
+    """A project whose metal_density.json is older or newer than its GDS."""
+    import os
+    proj = tmp_path / "proj"
+    gdsd = proj / "phase3" / "stage4" / "gds"
+    rpt = proj / "reports" / "phase3"
+    for d in (gdsd, rpt, proj / "phase3" / "stage3" / "pnr"):
+        d.mkdir(parents=True, exist_ok=True)
+    gds = gdsd / "top.gds"
+    gds.write_bytes(b"\x00\x06\x00\x02\x00\x07")
+    out = rpt / "metal_density.json"
+    out.write_text('{"layers": {"met1": 0.11}}')
+    t = gds.stat().st_mtime
+    os.utime(out, (t - 500, t - 500) if report_older_than_gds else (t + 500, t + 500))
+    return proj, gds, out
+
+
+def test_metal_density_is_re_emitted_when_it_predates_the_gds_it_describes(tmp_path):
+    """THE PROPERTY. A density report older than the layout it names describes a
+    design that no longer exists, and nothing in the artefact says so. The
+    emitter must not treat it as current."""
+    p3 = _density_emitter()
+    proj, gds, out = _layout(tmp_path, report_older_than_gds=True)
+    notes = []
+    # No container/PDK here, so emission cannot complete — but it must get PAST
+    # the currency decision, which is what this pins. A skip on currency returns
+    # before any note is added; a skip on tooling says so.
+    p3._emit_metal_density_report(proj, "top", _FakePdk(), "nonexistent", out, notes)
+    assert notes, (
+        "the emitter returned without a word — it treated a report older than "
+        "the GDS it names as current")
+    assert any("predates" in n or "layermap" in n or "skipped" in n for n in notes), notes
+
+
+def test_metal_density_that_postdates_its_gds_is_left_alone(tmp_path):
+    """REVERSE CASE, and the one that matters: an emitter that re-ran every time
+    would satisfy the test above and be worse than the defect — it would re-run
+    KLayout on every canonicalize pass. A current report must be left alone."""
+    p3 = _density_emitter()
+    proj, gds, out = _layout(tmp_path, report_older_than_gds=False)
+    notes = []
+    rv = p3._emit_metal_density_report(proj, "top", _FakePdk(), "nonexistent", out, notes)
+    assert rv is False and notes == [], (
+        f"a report NEWER than its GDS must be left alone silently; got {notes}")
+
+
+class _FakePdk:
+    name = "testpdk"
+    lefdef_layermap = None

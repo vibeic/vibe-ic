@@ -21,8 +21,10 @@ THIRD-PARTY COMPONENTS
 ================================================================================
 
 This project wraps and depends on several open-source tools and libraries.
-None are bundled in this repository; install instructions in INSTALL_GUIDE.md
-and the upstream projects retain their own licenses.
+The TOOLS below are not bundled; install instructions in INSTALL_GUIDE.md and
+the upstream projects retain their own licenses. Third-party SOURCE that IS
+bundled in this repository is listed under BUNDLED THIRD-PARTY SOURCE at the
+end of this file.
 
 EDA tools (invoked by mcp-eda, typically inside the
 hpretl/iic-osic-tools Docker image):
@@ -60,5 +62,45 @@ Reference hardware mentioned in documentation:
 
   - Terasic DE10-Lite (MAX10 FPGA development board)
   - Keysight DSO-X 3014T (oscilloscope, SCPI over USB-TMC)
+
+================================================================================
+
+================================================================================
+BUNDLED THIRD-PARTY SOURCE
+================================================================================
+
+Source files from the projects below are VENDORED INTO THIS REPOSITORY under
+benchmark-data/, as the design input and reference material the benchmark ICs
+are built from. Each file retains its own SPDX header and copyright line; this
+section is the repository-level record required by Apache License 2.0 section
+4(d), and it is kept accurate by
+`vibe-ic-marketplace/plugins/vibe-ic/programs/bundled_attribution_notice_check.py`,
+which fails when a bundled copyright holder is not named here.
+
+  - lowRISC contributors (OpenTitan project)     Apache-2.0
+    https://github.com/lowRISC/opentitan
+    AES IP and its reference synthesis flow, under
+    benchmark-data/ic/opentitan_aes/
+
+  - lowRISC contributors                          Apache-2.0
+    https://github.com/lowRISC/ibex
+    Ibex RISC-V core RTL, under benchmark-data/ic/ibex/
+
+  - Efabless Corporation                          Apache-2.0
+    https://github.com/chipfoundry/caravel_user_project
+    caravel_user_project / user_proj_example RTL, under
+    benchmark-data/ic/caravel_user_project/
+
+  - Olof Kindgren <olof@award-winning.me>         ISC
+    https://github.com/olofk/serv
+    SERV bit-serial RISC-V core RTL, under benchmark-data/ic/subservient/
+
+  - Olof Kindgren <olof.kindgren@gmail.com>       Apache-2.0
+    https://github.com/olofk/subservient
+    Subservient SoC integration RTL, under benchmark-data/ic/subservient/
+
+  - The SkyWater PDK Authors                      Apache-2.0
+    https://github.com/google/skywater-pdk
+    Cell views referenced by the open-PDK flows.
 
 ================================================================================

@@ -52,6 +52,7 @@ from pathlib import Path
 import _path_layout as _pl
 import fault_atpg_run as _fatpg
 import floorplan_contract as _fpc
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ SCAN_LIBERTY = {
               "gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib"),
     "ihp-sg13g2": ("/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/"
                    "sg13g2_stdcell_typ_1p20V_25C.lib"),
+    # NanGate45 / FreePDK45 (OpenROAD reference PDK). The container ships the
+    # typical-corner Liberty; `fault chain` needs exactly this to stitch the
+    # scan chain. Keyed by the same `nangate45` id fault_atpg_run.PDK_CONFIG now
+    # uses, so cell-MODEL and Liberty can never resolve from different libraries
+    # (the two-table invariant ORGANIC #410 established). See the PDK_CONFIG
+    # note there: this makes scan insertion RUN on a mapped NanGate45 netlist
+    # that was previously refused as pdk 'unmapped'.
+    "nangate45": ("/foss/pdks/nangate45/libs.ref/NangateOpenCellLibrary/lib/"
+                  "NangateOpenCellLibrary_typical.lib"),
 }
 
 # `fault chain`'s DFT port option names.  These are OPTION NAMES we pass, so
@@ -437,6 +447,78 @@ def chain_resynth_missing_header_ports(log: str) -> list:
     return seen
 
 
+# The SECOND way `fault chain` builds a chain and then throws it away.
+#
+# fault's internal yosys re-synthesis must bind every module the netlist
+# instantiates. A hard macro supplied to the flow as LEF + Liberty only — an
+# ordinary design input, and what every SRAM/OTP/PHY IP ships — has no Verilog
+# model in that yosys invocation, so `hierarchy -check` aborts. The chain is
+# already built when this happens.
+#
+# Before this classifier the report carried only
+#     "`fault chain` produced no scan netlist"
+# which is TRUE and ADJACENT: it names the missing artefact, not the reason,
+# and is byte-indistinguishable from a design that legitimately has no
+# flip-flops to chain. Downstream, `cut_netlist.v` is then absent and the DT1 /
+# DT2 transition- and path-delay steps record "NEVER RAN — precondition unmet",
+# so the whole DFT tail reads as a capability that was never exercised rather
+# than as one input the tool was never given.
+#
+# MEASURED (a design whose OTP macro is staged as LEF + Liberty with no Verilog
+# model, ghcr.io/vibeic/vibeic-eda:0.2.65) — the tool's own lines:
+#     Internal scan chain successfully constructed. Length: 271
+#     Boundary scan cells successfully chained. Length:  3
+#     Total scan-chain length:  274
+#     Resynthesizing with yosys…
+#     ERROR: Module `\<MACRO>' referenced in module `\<top>.original' in cell
+#            `\<inst>' is not part of the design.
+#     A yosys error has occurred.
+#
+# chip-AGNOSTIC: a pure string check on yosys' own error text. No vendor, SKU,
+# process node or part number participates.
+_UNRESOLVED_MODULE_RE = re.compile(
+    r"Module\s+`\\?([^']+?)'\s+referenced\s+in\s+module\s+`\\?[^']*?'"
+    r"\s+in\s+cell\s+`\\?[^']*?'\s+is\s+not\s+part\s+of\s+the\s+design",
+    re.I)
+
+#: `fault chain` prints this only after it has actually constructed a chain.
+#: It is what licenses the "BUILT then discarded" claim — without it this
+#: program would be asserting a build it never saw evidence of.
+_CHAIN_TOTAL_LEN_RE = re.compile(
+    r"Total\s+scan-chain\s+length:\s*(\d+)", re.I)
+
+
+def chain_resynth_unresolved_modules(log: str) -> list:
+    """Module names `fault chain`'s own re-synthesis could not bind, in
+    first-seen order.
+
+    These are modules the netlist INSTANTIATES but for which that yosys
+    invocation was handed no model — typically a hard macro supplied as
+    LEF/Liberty only. PURE — a string check on the tool's own error,
+    unit-testable without Docker. Empty list means this failure mode is not
+    present."""
+    seen: list = []
+    for m in _UNRESOLVED_MODULE_RE.finditer(log or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def chain_reported_total_length(log: str):
+    """The total scan-chain length `fault chain` reported CONSTRUCTING, or
+    None when it never said it built one.
+
+    Guards the `chain_built_then_discarded` claim: a report that asserts a
+    chain was built and discarded, on a log that never showed a chain being
+    built, would be this program inventing the very kind of adjacent fact the
+    classifier exists to remove. PURE."""
+    last = None
+    for last in _CHAIN_TOTAL_LEN_RE.finditer(log or ""):
+        pass
+    return int(last.group(1)) if last else None
+
+
 def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk: str, reset: str | None = None,
               reset_active_low: bool = False,
@@ -484,6 +566,14 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             pdk, pdk_cfg = sniffed, _fatpg.PDK_CONFIG[sniffed]
 
     liberty, lib_note = resolve_liberty(pdk, liberty_override)
+    if liberty and pdk == "gf180" and not liberty_override:
+        # Same staleness as fault_atpg_run's cell-model resolution — ciel's
+        # gf180mcu path is content-addressed and SCAN_LIBERTY's hash is a
+        # point-in-time fallback. Re-resolve live before trusting it.
+        liberty = _pcm.materialize_gf180_paths(
+            [liberty],
+            lambda argv, t: _fatpg._run_docker(project, argv, timeout=t,
+                                               pdk_dir=pdk_dir))[0]
     if not liberty:
         # PDK not in SCAN_LIBERTY and no explicit --liberty: fall back to the
         # design's OWN staged corner libraries. A foundry PDK the container does
@@ -648,6 +738,47 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                 f"opentitan_aes x sky130A: adding the missing name to the "
                 f"header makes the identical intermediate elaborate under "
                 f"`yosys hierarchy -check` with rc=0.")
+            return 1, err_report
+        _unresolved = chain_resynth_unresolved_modules(log)
+        if _unresolved:
+            # DEGRADE LOUDLY, exactly as the header-port branch above does.
+            # The generic "produced no scan netlist" is true and useless here:
+            # it describes the absent artefact, not the one missing input that
+            # caused it, and it reads the same as a design with no flops.
+            err_report["chain_resynth_unresolved_modules"] = _unresolved
+            _total_len = chain_reported_total_length(log)
+            if _total_len is not None:
+                # Only claim BUILT-then-discarded when the tool itself said it
+                # built one. Otherwise name the unresolved module and stop.
+                err_report["chain_built_then_discarded"] = True
+                err_report["chain_reported_total_length"] = _total_len
+            err_report["error"] = (
+                f"`fault chain`'s own yosys re-synthesis could not bind "
+                f"module(s) {_unresolved}: the netlist INSTANTIATES them but "
+                f"that yosys invocation was handed no model for them, so "
+                f"`hierarchy -check` aborts and nothing is published"
+                + (f" — AFTER the chain was successfully constructed "
+                   f"(total scan-chain length {_total_len}; see log_tail). "
+                   if _total_len is not None else ". ")
+                + f"This is a MISSING INPUT, not a property of this design "
+                f"and not an engine crash: a hard macro staged as LEF + "
+                f"Liberty only (SRAM / OTP / PHY IP normally is) has no "
+                f"Verilog view for `fault chain` to elaborate. Consequence if "
+                f"unread: `cut_netlist.v` is never written, so the DT1 "
+                f"transition-fault and DT2 path-delay steps both record "
+                f"'NEVER RAN — precondition unmet' and the DFT tail looks "
+                f"like an unexercised capability rather than one absent "
+                f"input. Remedies: (a) give the re-synthesis a blackbox stub "
+                f"for the macro built from its Liberty/LEF port list — the "
+                f"flow already emits exactly this for the back end as "
+                f"reports/phase3/physical_cell_stubs.v, and phase 3 already "
+                f"discovers the macro library set via _discover_local_macros "
+                f"over input/pdk_local/; or (b) stage a synthesizable "
+                f"(blackbox-annotated) Verilog view of the macro alongside "
+                f"its LEF/Liberty. NOTE `fault chain --help` declares "
+                f"'-l, --liberty <liberty>  Liberty file. (Required.)' — "
+                f"singular and NOT repeatable, so passing the macro's Liberty "
+                f"as a second --liberty is not available.")
             return 1, err_report
         if connected_inout:
             # A CONNECTED bidirectional port cannot be stripped losslessly and
