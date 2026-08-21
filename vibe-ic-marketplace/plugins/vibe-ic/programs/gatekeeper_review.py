@@ -1358,6 +1358,12 @@ def _declared_labels(repo: Path, script: Optional[Path] = None) -> Optional[list
     with tempfile.TemporaryDirectory(prefix="hygiene_list_") as td:
         out = Path(td) / "list.json"
         try:
+            # watchdog-exempt: `--list` DECLARES the gate set and executes no
+            # gate — `gate_dispatch_init` parses it, every gate is recorded
+            # LISTED, and `gate_dispatch_finish` writes the record and exits.
+            # No tool subprocess is launched, so there is nothing here that can
+            # escape supervision. MEASURED at 0.12 s over 85 gates, and bounded
+            # anyway by the `timeout=` below rather than by that measurement.
             subprocess.run(["bash", str(path), "--list",
                             "--summary-json", str(out)],
                            cwd=str(repo), capture_output=True, timeout=120)
