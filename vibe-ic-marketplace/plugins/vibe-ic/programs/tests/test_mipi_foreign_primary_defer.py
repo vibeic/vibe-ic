@@ -146,10 +146,39 @@ def test_garbage_blob_is_false():
 # --------------------------------------------------------------------------- #
 
 from _plugin_tree import repo_path_or_missing  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 # flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
 # the flattened cache; resolve defensively so the existing skipif guards fire.
-_BP = repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
+#
+# 2026-08-16 — WHERE THE PARITY RESULTS WENT. `benchmark-data/evaluation/
+# phase1_parity/<bench>/` still exists in this repository, but only its
+# `input/` half: the RESULTS (`phase1/generated_docs/L1_DATASHEET.json`,
+# `L2_FRS.json`, `reports/`) moved to https://github.com/vibeic/benchmark-data.
+# Two of the three MIPI-family benchmarks this test names — `mipi` and
+# `mipi_dsi` — are not in this checkout under any name at all, and the third,
+# `mipi_csi2`, carries only `input/`. The old `not _BP.is_dir()` guard cannot
+# see any of that: the directory is still here, so the guard stays silent, the
+# corpus test reads 54 empty L1+L2 blobs, fires on nothing, and reports
+# `set() != {mipi, mipi_csi2, mipi_dsi}` — a DETECTOR REGRESSION that did not
+# happen.
+#
+# So the run root is taken from the published corpus when one is reachable, and
+# the test is skipped naming the corpus when none is (vibe-ic#1357's rule for an
+# absent tool, applied to an absent corpus). Point `VIBE_IC_BENCHMARK_DATA` at a
+# clone of `vibeic/benchmark-data` and it runs against all 97 benchmarks, and
+# can still fail.
+def _phase1_parity_root():
+    """The parity corpus: the published clone when reachable, else in-repo."""
+    root = corpus_root()
+    if root is not None:
+        cand = root / "evaluation" / "phase1_parity"
+        if cand.is_dir():
+            return cand
+    return repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
+
+
+_BP = _phase1_parity_root()
 
 
 def _l1l2_blob(bench: str) -> str:
@@ -162,6 +191,7 @@ def _l1l2_blob(bench: str) -> str:
     return s
 
 
+@needs_corpus
 @pytest.mark.skipif(not _BP.is_dir(),
                     reason="private benchmark_phase1/ corpus not present")
 def test_corpus_runner_blob_fires_only_on_mipi_family():

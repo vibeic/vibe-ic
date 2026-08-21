@@ -66,6 +66,29 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# Import the structural port-abort classifier. It replaces a FALSE diagnosis
+# ("RTL and post-DFT netlist differ") with a truthful one ("equiv_make aborted
+# on the port match; nothing was compared") at the SAME hard-FAIL severity.
+# It never downgrades the tier and never names a cause it has not measured.
+try:
+    from lec_gate_netlist_select import (
+        classify_port_abort as _classify_port_abort,
+        port_abort_cause as _port_abort_cause,
+        CANONICAL_STATUS as _GNS_STATUS,
+        CANONICAL_VERDICT as _GNS_VERDICT,
+    )
+    _HAS_GNS = True
+except ImportError:  # graceful degradation if the module is absent
+    _HAS_GNS = False
+    _GNS_STATUS = "LEC_STRUCTURAL_PORT_ABORT"
+    _GNS_VERDICT = "STRUCTURAL-PORT-ABORT"
+
+    def _classify_port_abort(log_text: str, compared_points: int):  # type: ignore[misc]
+        return None
+
+    def _port_abort_cause(project, gate_field: str = ""):  # type: ignore[misc]
+        return False, ""
+
 
 GATE = "lec_equivalence_check"
 
@@ -106,6 +129,7 @@ class Finding:
 class AuditResult:
     program: str = GATE
     passed: bool = False
+    inconclusive: bool = False
     equivalent: Optional[bool] = None
     compared_points: Optional[int] = None
     non_equivalent_points: Optional[int] = None
@@ -262,6 +286,7 @@ def audit(project: Path) -> AuditResult:
 
     # 5) Corroborate / supplement from .rpt.
     rpt_info: dict = {}
+    rpt_text: str = ""
     if rpt_path.is_file():
         try:
             rpt_text = rpt_path.read_text(encoding="utf-8", errors="replace")
@@ -294,15 +319,177 @@ def audit(project: Path) -> AuditResult:
         "rpt": rpt_info,
     }
 
+    # --- (d) INCONCLUSIVE: NO completed comparison → zero decided points ----
+    # A run that reaches 0 decided points is NOT classifiable as PASS or FAIL —
+    # there is no equivalence evidence in EITHER direction. Two causes, both
+    # non-blocking:
+    #   * a frontend PARSE-ABORT: the gold/gate never elaborated (read_verilog /
+    #     read_slang could not parse a modern-SV closure) → no miter built; and
+    #   * a wall-clock TIMEOUT that killed yosys BEFORE any completed
+    #     equiv_status verdict (v1462 ibex/CPU-class): 0 points decided, no
+    #     counterexample — a disclosed budget gap (lec_run marks it INCONCLUSIVE).
+    # It must NOT be a hard FAIL (which cascade-marks downstream steps MISSING)
+    # and must NOT be a vacuous PASS. §4.05-safe: this re-classifies ONLY a
+    # zero-decided-point run — a miter that DID run and left non-equivalent /
+    # unproven points still FAILs (the guard below requires no such points).
+    verdict_field = str(lc.get("verdict", "")).strip().upper()
+    is_inconclusive = (lc.get("inconclusive") is True
+                       or verdict_field == "INCONCLUSIVE")
+    zero_miter = ((compared in (None, 0))
+                  and (non_equiv in (None, 0))
+                  and (unproven in (None, 0))
+                  and not rpt_info.get("rpt_success_line"))
+
+    # --- (c0) SKIPPED-CONDITION: lec_run's DISCLOSED-skip verdict ----------
+    # SKIPPED-CONDITION is the producer's explicit "I did NOT decide this"
+    # signal: the gold top could not be resolved to a real RTL module, an
+    # unstaged hard-macro module was referenced, or the netlist carries
+    # SAT-unmodelable cells. In EVERY such case lec_run built no deciding miter
+    # and recorded NO counterexample — exactly like INCONCLUSIVE, it is a
+    # visible non-PASS with zero equivalence evidence in either direction, NOT
+    # a proof of non-equivalence. Treating it as LEC_NOT_EQUIVALENT (the old
+    # behaviour) turned a disclosed capability/staging gap into a hard FAIL that
+    # cascade-marked every downstream step MISSING — the identical mis-handling
+    # #208 fixed for INCONCLUSIVE. §4.05 NO-LEAK: this reclassifies ONLY when
+    # there is no counterexample (non_equiv in {None,0}); a genuine mismatch
+    # lands non_equiv>0 and still FAILs at the substance verdict (b) below, so a
+    # real non-equivalence can never be laundered into a non-blocking skip.
+    is_skipped = verdict_field == "SKIPPED-CONDITION"
+    if is_skipped and (non_equiv in (None, 0)):
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_SKIPPED_CONDITION", severity="WARNING",
+            message=("LEC verdict is SKIPPED-CONDITION — lec_run made a "
+                     "DISCLOSED skip (gold top not resolvable to an RTL module, "
+                     "an unstaged hard-macro module, or SAT-unmodelable cells) "
+                     "and built no deciding miter, recording NO counterexample. "
+                     "RTL≡netlist was not decided in EITHER direction — this is "
+                     "the same evidence class as INCONCLUSIVE, a non-blocking "
+                     "disclosed skip (never a hard FAIL that cascades downstream "
+                     "MISSING, never a vacuous PASS). Resolve the top / stage "
+                     "the macro / supply Liberty, or close with sign-off LEC, "
+                     "to get a real verdict."),
+            file=LEC_JSON_REL))
+        return res
+
+    if is_inconclusive and zero_miter:
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_INCONCLUSIVE_PARSE_ABORT", severity="WARNING",
+            message=("LEC verdict is INCONCLUSIVE — no completed comparison "
+                     "produced any decided points (0 compared): a frontend "
+                     "parse-abort built no miter, or a wall-clock timeout killed "
+                     "yosys before any equiv_status verdict. RTL≡netlist could "
+                     "not be decided in EITHER direction (no counterexample). "
+                     "This is a non-blocking SKIPPED-CONDITION (never a hard "
+                     "FAIL that cascades, never a vacuous PASS). Re-run with the "
+                     "slang frontend / a larger --timeout, or close with "
+                     "sign-off LEC, to get a real verdict."),
+            file=LEC_JSON_REL))
+        return res
+
+    # --- (d2) #208 — NON-CONVERGENCE INCONCLUSIVE: a COMPLETED miter left
+    # points unproven, but equiv_induct did NOT converge (a flat wall) and NO
+    # counterexample was recorded (0 non-equivalent points). Non-convergence is
+    # NOT non-equivalence — a real difference produces a counterexample
+    # (non_equivalent_points > 0). lec_run is the authority that inspected the
+    # raw yosys log for a counterexample and only then marked the run
+    # INCONCLUSIVE; trust that verdict here ONLY while non_equiv == 0. A single
+    # non-equivalent point forces the substance FAIL below (§4.05 NO-LEAK — this
+    # can never launder a real mismatch into a pass). Non-blocking, but a visible
+    # non-PASS: it must be closed with sign-off LEC.
+    if is_inconclusive and (non_equiv in (None, 0)):
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_INCONCLUSIVE_NONCONVERGENCE", severity="WARNING",
+            message=("LEC verdict is INCONCLUSIVE — a completed equivalence "
+                     f"miter left {unproven} point(s) unproven, but equiv_induct "
+                     "did NOT converge (a flat induction wall) and NO "
+                     "counterexample was recorded (0 non-equivalent points). "
+                     "Non-convergence is not non-equivalence: a real difference "
+                     "produces a counterexample. This is INCONCLUSIVE, NOT "
+                     "NOT_EQUIVALENT — a disclosed sequential-depth capability "
+                     "gap. Close with sign-off LEC (Conformal/VC LEC), which "
+                     "handles deep sequential induction. Visible non-PASS (never "
+                     "a vacuous PASS)."),
+            file=LEC_JSON_REL))
+        return res
+
+    # --- (d3) STRUCTURAL PORT-ABORT — a TRUTHFUL name for rule (a) ----------
+    # yosys equiv_make refuses to build a miter when a gate-side top-level port
+    # has no gold counterpart:
+    #   ERROR: Can't match gate port `_NNN_.d_gate' to a gold port.
+    # compared_points is then 0 and NOTHING was compared. Reporting that as
+    # LEC_NOT_EQUIVALENT / "RTL and post-DFT netlist differ — fall back to step
+    # 9" is a FALSE statement: no comparison ever happened, so no difference was
+    # ever observed, and the next agent is sent to re-synthesise a design that
+    # was never examined.
+    #
+    # This changes the RULE NAME and the MESSAGE only. It is deliberately NOT a
+    # reclassification into the INCONCLUSIVE tier:
+    #   * res.inconclusive stays False, so main() still returns rc=1 (hard
+    #     FAIL) exactly as before. Routing it to rc=3 would print the
+    #     PASS_WITH_WAIVERS sentinel and flow_compliance would record step 13 as
+    #     WAIVED-DEFERRED — so a genuine top-level port-set mismatch (scan ports
+    #     present in the netlist and absent from the gold RTL — a real DFT
+    #     integration defect) would be laundered into a near-pass. Equivalence
+    #     was not proven; an unproven equivalence is never a waiver.
+    #   * the ATPG-cut cause is asserted ONLY when port_abort_cause() confirms
+    #     the fingerprint on the netlist that lec.json says was compared. The
+    #     yosys string alone proves only "the port sets do not match"; naming a
+    #     cause from it would put a fabricated finding in a sign-off report.
+    #
+    # The zero_miter guard is load-bearing and NOT redundant with the
+    # compared==0 test inside classify_port_abort: it additionally requires no
+    # counterexample and no unproven point, so a run that recorded a real
+    # mismatch keeps the mismatch verdict even if its log also carries an abort
+    # line from an earlier attempt.
+    _structural_port_abort = bool(
+        zero_miter
+        and _classify_port_abort(
+            rpt_text, compared if compared is not None else 0) is not None)
+
     # --- substance verdict ------------------------------------------------
     # (a) the boolean itself must be true.
     if equivalent is not True:
-        res.findings.append(Finding(
-            rule="LEC_NOT_EQUIVALENT", severity="ERROR",
-            message=("LEC result is not equivalent "
-                     f"(equivalent field = {equivalent!r}). RTL and post-DFT "
-                     "netlist differ — fall back to step 9 (synth/DFT)."),
-            file=LEC_JSON_REL))
+        if _structural_port_abort:
+            _cause_ok, _cause = _port_abort_cause(
+                project, str(lc.get("gate", "")))
+            res.findings.append(Finding(
+                rule=_GNS_STATUS, severity="ERROR",
+                message=(
+                    f"LEC verdict is {_GNS_VERDICT}: yosys equiv_make aborted "
+                    "with a port-match error, so NO miter was built and "
+                    f"compared_points={compared if compared is not None else 0}. "
+                    "Nothing was compared — this is NOT evidence that the RTL "
+                    "and the netlist differ, and it is NOT a pass either. "
+                    + (f"Measured cause — {_cause}. The upstream producer is "
+                       "fault_atpg_run.py, which writes Fault's ATPG "
+                       "combinational-cut output verbatim to scan_netlist.v "
+                       "when no scan netlist exists yet; post_dft_opt then "
+                       "opt_cleans that into the netlist handed to LEC. Fix the artifact the DFT chain hands "
+                       "over — do NOT re-point LEC at a different netlist, "
+                       "because comparing <top>_synth.v would report the "
+                       "post-DFT equivalence step as PASS without ever reading "
+                       "the post-DFT netlist."
+                       if _cause_ok else
+                       "The gate netlist named in the report does NOT carry the "
+                       "ATPG combinational-cut fingerprint, so the cause is "
+                       "unconfirmed and is NOT guessed here. Diff the top-level "
+                       "port set of the gate netlist against the gold RTL: the "
+                       "usual cause is DFT/scan ports present in the netlist "
+                       "and absent from the RTL, which is a real defect.")),
+                file=LEC_RPT_REL))
+        else:
+            res.findings.append(Finding(
+                rule="LEC_NOT_EQUIVALENT", severity="ERROR",
+                message=("LEC result is not equivalent "
+                         f"(equivalent field = {equivalent!r}). RTL and post-DFT "
+                         "netlist differ — fall back to step 9 (synth/DFT)."),
+                file=LEC_JSON_REL))
 
     # (b) any non-equivalent point => hard fail (independent of the boolean).
     if non_equiv is not None and non_equiv > 0:
@@ -385,7 +572,55 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(report_json)
 
     print(report_json)
-    return 0 if result.passed else 1
+
+    # A real not-equivalent / unproven / vacuous / missing result → 1 (hard FAIL).
+    if not (result.passed or result.inconclusive):
+        return 1
+
+    # A genuine PASS → 0.
+    if result.passed:
+        return 0
+
+    # INCONCLUSIVE → the WAIVED-DEFERRED tier (rc=3 + the `PASS_WITH_WAIVERS`
+    # stdout sentinel), NOT a bare rc=0.
+    #
+    # WHY (the bug this replaces): this branch used to `return 0`, reasoning
+    # that INCONCLUSIVE must not be a hard FAIL that cascade-marks downstream
+    # steps MISSING — which is correct — and that `result.passed` staying False
+    # in the JSON kept it "a visible non-PASS". It did not. Step 13's gate in
+    # flow/phase1_phase2_phase3.yaml is
+    #     program_exit_zero: "lec_equivalence_check . --json …"
+    # and `_check_program_exit_zero` maps rc==0 → passed=True with NO downgrade
+    # tier attached. So an INCONCLUSIVE LEC was recorded in the authoritative
+    # flow_compliance matrix as a BARE PASS — i.e. the compliance table asserted
+    # "RTL ≡ post-DFT netlist: PASS" about a netlist nothing had proven
+    # equivalent. That is strictly worse than a visible FAIL, and it is exactly
+    # the false-clean this module's own docstring exists to prevent.
+    #
+    # rc=3 + sentinel is the ESTABLISHED idiom for precisely this shape (a
+    # disclosed capability gap that must not read as a bare PASS) — see
+    # cpu_functional_oracle_waiver_check, which emits `{"verdict":
+    # "PASS_WITH_WAIVERS", "exit_code": 3}`. flow_compliance promotes it to
+    # WAIVED-DEFERRED, which is visible, is excluded from a strict PASS
+    # headline, and still does not cascade downstream steps to MISSING —
+    # keeping every property the rc=0 choice was reaching for, without the
+    # false PASS.
+    #
+    # The sentinel MUST be the LAST line AND must stay SHORT. flow_compliance
+    # inspects only the trailing 300 chars of stdout and requires the token at
+    # line-START (`line.lstrip().startswith(...)`). A long single line would be
+    # sliced mid-string by the [-300:] window, the `PASS_WITH_WAIVERS` prefix
+    # would fall outside it, `startswith` would fail, and the gate would quietly
+    # fall back to a bare rc-3 FAIL. So: the (long) reason goes on its own line
+    # FIRST, and the short sentinel line goes LAST.
+    reason = (result.findings[0].rule if result.findings
+              else "LEC_INCONCLUSIVE")
+    detail = (result.findings[0].message if result.findings
+              else "LEC verdict is INCONCLUSIVE — no equivalence decided.")
+    print(detail)
+    print(f"PASS_WITH_WAIVERS: step 13 LEC not decided ({reason}) — "
+          f"WAIVED-DEFERRED to sign-off LEC, never a bare PASS.")
+    return 3
 
 
 if __name__ == "__main__":

@@ -54,20 +54,57 @@ Failure modes (chip-AGNOSTIC):
      phase3/analog/hardmacro/**/*.lef                (analog LEF)
      phase3/analog/hardmacro/**/*.lib                (analog Liberty)
 
+   EXCLUDED from the two *.v globs: front-end pre-pass files the
+   flow itself writes into the netlist directory (`*_sv2v.v`).
+   Those are synthesis INPUTS. See
+   `_FRONTEND_INTERMEDIATE_SUFFIXES` for why this is a name rule
+   over the flow's own generated names and not content sniffing.
+
 VACUOUS_PASS conditions:
 * AGENT_REPORT.md missing — `agent_report_presence_check` handles
   that as FAIL; this gate stays out of the way and emits VACUOUS.
 * No canonical artefacts exist on disk — pre-output project,
   attestation gate inapplicable.
 
+WHY VACUOUS_PASS EXITS 2 AND NOT 0 (#834)
+-----------------------------------------
+The umbrella that consumes this gate reads its EXIT CODE and nothing
+else. `flow_compliance_check._run_structural_rtl_gates` — the driver
+for the `_STRUCTURAL_RTL_GATES` tuple this gate is registered in
+(line ~1409) — maps rc 0 -> a `PASS` gate record, rc 1 -> `FAIL`,
+rc 2 -> a `SKIP` record carrying `skip_kind: input-missing`. It never
+opens the JSON report and never scans stdout, so the
+`VACUOUS_PASS:` line printed below reaches NO automated consumer on
+that path: it is read by a human or by nobody.
+
+This gate computed `VACUOUS_PASS` and then returned 0 anyway, so
+"there was nothing to look at" was credited in the executed-PASS
+numerator, indistinguishable from "every canonical artefact on disk
+is attested and the hashes match". The two halves of one contract
+disagreed; this side is the one that was wrong, because the umbrella's
+convention (rc 2 = examined nothing) is the shared one and is what
+`_vacuous_exit` exists to route.
+
+The `VACUOUS_PASS:` stdout line is KEPT. It is the second, weaker
+channel (`flow_compliance_check._stdout_signals_vacuous`), it is what
+`_check_program_exit_zero` reads on the per-step path, and dropping it
+would trade one disclosure for another instead of adding one.
+
 Usage:
     python3 agent_report_sha256_attestation_check.py <project_dir>
                                                       [--json <out>]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
+    0  PASS — every canonical artefact on disk is attested
     1  no attestation table OR canonical artefact lacks attestation
-    2  argument or I/O error
+    2  VACUOUS_PASS (examined nothing: no report file, or no canonical
+       artefact on disk) — the repo-wide `_vacuous_exit.RC_VACUOUS`
+       convention. Also the rc for an unusable project argument, which
+       is the same overload every gate routed through `_vacuous_exit`
+       carries (see `reports_subfolder_taxonomy_check`): the umbrella
+       never invokes a gate on a path it did not just walk, and
+       `_gate_invocation` separates a genuine argparse rejection from a
+       verdict by reading the callee's own error protocol.
 
 chip-AGNOSTIC. No vendor / IC / specific filename hardcoded.
 """
@@ -81,6 +118,9 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
+
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 _RE_SHA256_TOKEN = re.compile(r"sha256:([0-9a-fA-F]{64})", re.IGNORECASE)
@@ -103,6 +143,55 @@ _CANONICAL_ARTEFACT_GLOBS: Tuple[Tuple[str, str], ...] = (
     ("analog LEF",     "phase3/analog/hardmacro/**/*.lef"),
     ("analog Liberty", "phase3/analog/hardmacro/**/*.lib"),
 )
+
+
+#: Filenames the FLOW ITSELF deposits in a netlist directory that are
+#: synthesis INPUTS, not synthesis OUTPUTS.
+#:
+#: WHY THIS EXISTS — the two `*.v` globs above ask "is there a .v file in
+#: the netlist directory" and the gate reads the answer as "has this
+#: project produced a netlist". Those are not the same question, and the
+#: flow's own front-end fallback is what separates them: when the SV
+#: front-end is unavailable, the runner writes an sv2v pre-pass file
+#: INTO the very directory the glob watches, then feeds it to yosys.
+#:
+#:   design_one_shot_runner.py   `_host_conv = synth_dir / f"{synth_top}_sv2v.v"`
+#:   phase3_one_shot_runner.py   `sv2v_out_host = out_dir / f"{top}_sv2v.v"`
+#:
+#: So a project that has NOT completed synthesis can still present a
+#: `.v` file here, and the gate then demands the final report attest a
+#: pre-synthesis intermediate as a chip artefact. The cheapest way to
+#: clear that is to publish a SHA256 of an intermediate under a "chip
+#: artefact" heading — a rule meant to make reports verifiable rewarding
+#: a report that is falsely verifiable. Same shape as #802.
+#:
+#: A gate-level netlist is trivially distinguishable by CONTENT (no
+#: `parameter`, no `always`, only cell instantiations), but content
+#: sniffing fails OPEN in the dangerous direction: an unparsed real
+#: netlist would stop being demanded. This is a NAME rule over the
+#: flow's OWN generated names instead, which fails SAFE — anything the
+#: flow did not generate stays a canonical artefact and is still
+#: demanded. Reading the emitter's documented naming contract, not
+#: guessing at file content (same principle as `_gate_invocation`).
+#:
+#: SCOPE — deliberately narrow. It suppresses NOTHING but the front-end
+#: intermediate. A real netlist under any other name, including one that
+#: merely CONTAINS "sv2v", is still a canonical artefact: the rule is an
+#: exact suffix match on the emitters' f-string, not a substring search.
+_FRONTEND_INTERMEDIATE_SUFFIXES: Tuple[str, ...] = (
+    "_sv2v.v",
+)
+
+
+def _is_frontend_intermediate(path: Path) -> bool:
+    """True if `path` is a front-end pre-pass file the flow itself wrote.
+
+    Exact-suffix match on the runners' own f-string so a hand-authored
+    netlist named e.g. `sv2v_top.v` or `top_sv2v_golden.v` is NOT
+    suppressed — it is not a name the flow generates, so it keeps
+    requiring attestation."""
+    return any(path.name.endswith(sfx)
+               for sfx in _FRONTEND_INTERMEDIATE_SUFFIXES)
 
 
 @dataclass
@@ -143,8 +232,13 @@ def _collect_canonical_artefacts(project: Path
     out: List[Tuple[str, Path]] = []
     for kind, pattern in _CANONICAL_ARTEFACT_GLOBS:
         for p in sorted(project.glob(pattern)):
-            if p.is_file():
-                out.append((kind, p))
+            if not p.is_file():
+                continue
+            # A front-end pre-pass file is an INPUT to synthesis. It is
+            # not a chip artefact and must not be attested as one.
+            if _is_frontend_intermediate(p):
+                continue
+            out.append((kind, p))
     return out
 
 
@@ -263,11 +357,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
+        # Both channels, from the same conclusion (#834). The stdout line
+        # is the pre-existing human/`_stdout_signals_vacuous` disclosure;
+        # `exit_code(passed=True, skipped=True)` is rc 2, the ONLY channel
+        # the P0 structural umbrella reads. Before this, the gate said
+        # "examined nothing" in the one place the umbrella cannot hear.
         print(f"VACUOUS_PASS: {report['reason']}")
-        return 0
+        return _vx.exit_code(passed=True, skipped=True)
     if verdict == "PASS":
         rep = _resolve_report_files(project)
         rep_str = " / ".join(str(p.relative_to(project)) for p in rep)
