@@ -1764,7 +1764,13 @@ CONTENT_ARM_AS_MEASURED: Dict[str, str] = {
 #: :data:`CONTENT_ARM_UNGRADABLE_SELF_WRITTEN` below, which names every step in
 #: this position and is re-derived live so it cannot rot into a description of
 #: an older tree.
-CONTENT_ARM_BLIND: Tuple[str, ...] = ("28", "A1", "A4", "D1")
+#: 2026-08-21, MERGE: "2" RESTORED. It was removed on the yaml INFERENCE that
+#: step 2's only content-bearing declared output is its own gate's `--json`
+#: target. The on-disk MEASUREMENT disagrees — the file survives the gate — so
+#: step 2 is gradable after all, it is UNMOVED, and UNMOVED on a gradable row
+#: is what this set means. Removing it was my error; the measurement puts it
+#: back, and the record of why is above CONTENT_ARM_UNGRADABLE_SELF_WRITTEN.
+CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
 
 #: Steps the content arm CANNOT grade because every content-bearing artefact it
 #: rewrites is written by that step's own gate. Not a waiver and not a pass: it
@@ -1778,7 +1784,26 @@ CONTENT_ARM_BLIND: Tuple[str, ...] = ("28", "A1", "A4", "D1")
 #: artefact some other producer writes, and for 1.6x that is not currently
 #: possible (the step is unconditional by design and a design that ran no
 #: cross-layer search produces no upstream report).
-CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x", "2")
+#: 2026-08-21, MERGE: "2" REMOVED, and the test that removed it is
+#: `test_the_two_readings_of_self_written_agree`, written for exactly this
+#: merge. Two lanes answered "is this row gradable?" two ways and they part on
+#: step 2. MEASURED:
+#:
+#:   step 2    declared output rewritten : reports/phase2/lint/rtl_hygiene.json
+#:             yaml says the gate writes it : YES (it is a --json target)
+#:             SURVIVED the gate on disk    : YES
+#:   step 1.6x yaml says the gate writes it : YES
+#:             SURVIVED the gate on disk    : NO
+#:
+#: The yaml INFERENCE reads a `--json` target and concludes the gate overwrites
+#: it. That over-predicts for any clause that does not actually run: step 2's
+#: path is named by a clause whose program never wrote it, so the file survived
+#: and the content arm CAN grade the step. The on-disk MEASUREMENT is what
+#: happened, and it is the reading this file acts on.
+#:
+#: So the two lanes were not both right here, as they were on the entries pin.
+#: The inference was coarser and it is the one that lost, on evidence.
+CONTENT_ARM_UNGRADABLE_SELF_WRITTEN: Tuple[str, ...] = ("1.6x",)
 
 #: Kinds the flow can read at all. Anything else is not a content channel, so a step
 #: that rewrites only those is NOT gradable and its UNMOVED means nothing about blindness.
@@ -2395,9 +2420,27 @@ def test_the_two_readings_of_self_written_agree():
         measured = _gradable(rec, step_id)
         if inferred != measured:
             disagree.append((step_id, inferred, measured))
-    assert not disagree, (
+    # ONE DIVERGENCE IS MEASURED AND PINNED, in BOTH directions, so this test
+    # still fires for any new one. The message below anticipated a divergence
+    # in one direction — a gate WRITING a declared output the command does not
+    # name. Measured on this tree it is the OTHER direction:
+    #
+    #   step 2  reports/phase2/lint/rtl_hygiene.json
+    #           the gate command NAMES it as a `--json` target
+    #           the file SURVIVED the gate on disk
+    #
+    # so the command names a target its program did not write on this fixture.
+    # That is why the inference (False) and the measurement (True) disagree, and
+    # it is why the measurement is the reading this file acts on: a `--json`
+    # flag is an intention, and only the disk says what happened.
+    KNOWN_DIVERGENCE = {("2", False, True)}
+    unexpected = [d for d in disagree if tuple(d) not in KNOWN_DIVERGENCE]
+    stale = [d for d in KNOWN_DIVERGENCE if d not in {tuple(x) for x in disagree}]
+    assert not unexpected and not stale, (
         "the yaml inference and the on-disk measurement disagree about which "
-        "rows are gradable: " + repr(disagree) + ". The measurement is the one "
-        "this file acts on; a divergence means a gate writes a declared output "
-        "under a path the gate command does not name, which is a finding about "
-        "that gate.")
+        "rows are gradable, and not in the way already recorded. NEW: "
+        + repr(unexpected) + "; NO LONGER DIVERGING: " + repr(stale) +
+        ". The measurement is the one this file acts on; a divergence means a "
+        "gate writes a declared output under a path the gate command does not "
+        "name, or names one it does not write — either way a finding about "
+        "that gate, and either way it must be named here rather than absorbed.")
