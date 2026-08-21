@@ -1321,3 +1321,67 @@ contained a node my change BROKE rather than fixed, the same blind spot would
 have hidden it, and the two arms of my differential would have agreed with each
 other while both being wrong. A selection derived from a diff can only find
 couplings the diff spells out; an import edge to a checker is not one.
+
+## 23. A blocker I put in the batch myself
+
+Re-running §10's blocker against the CURRENT batch head — because a blocker
+report measured on a head that no longer exists is exactly the staleness this
+document keeps objecting to — turned up **two** findings where there was one,
+and the second is mine:
+
+```
+origin/main..origin/land/batch67-assembled  (85383af35b)
+FAIL: COLLATERAL REVERT: 2 finding(s) in 56 commit(s).
+  7a9ccd0bb  ppa-crosslayer/eco-readjudication/MANIFEST.json : 81/145 (56%)   [jrows, §10]
+  ff9914c79  docs/research/2026-08-22-hygiene-subset-no-skip.md : 11/12 (92%) [MINE]
+```
+
+`46d18e377` published **"At 721 s the review had not yet returned"**; `ff9914c79`
+removed it. The number was not merely superseded — it was WRONG. The poll was
+`pgrep -f drive_real_review.py`, which matched the shells started to WAIT for
+that process, so the run had actually returned at 631.5 s. §6 already carries
+that correction under "A correction I owe, about my own measurement."
+
+So this branch publishes a false statement and un-publishes it in the same push,
+which is precisely what the gate exists to stop. **The gate is right, and it is
+right about me on stronger grounds than about the finding I reported in §10** —
+that one is a deliberate in-lane revision whose net effect is +131 lines; mine
+is a retraction of an error.
+
+### The remedy, built and pushed rather than proposed
+
+The gate's own text offers two dispositions: re-land from the delta, or drop the
+earlier commit "if its work is genuinely unwanted". The earlier text was
+incorrect, so dropping it is the correct disposition and not a convenience.
+
+`fix/jland67-hygiene-subset-honoured-squashed` (`6138c8b4b0`) is this branch's
+work as ONE commit on the same parent, with a **byte-identical final tree**
+(`7b746f48a1ecba4719c15d56857c07b5241ea8b9` on both, verified with
+`git write-tree`).
+
+```
+546487a8a3..d1f37e062d  (multi-commit)  rc 1  FAIL — 1 finding, mine
+546487a8a3..6138c8b4b0  (squashed)      rc 0
+ceiling check on the squashed tree      rc 0
+```
+
+**Stated the way the gate states it**, because it says so itself and the
+distinction is the one this document is about: the squashed range reports
+`0 in-range predecessor pair(s) examined … this result is the ABSENCE of a
+question, not a pass`. The squash does not make the branch pass a test — it
+removes the thing that was wrong, which is that a false number was a commit of
+record on the way to the true one.
+
+**Nothing is erased.** The 721 s error stays documented in the final text,
+together with why the poll lied. What is dropped is publishing the wrong number
+as its own commit first — not the record of having been wrong. A branch that
+hid its own correction would be a worse artefact than one that fails a gate.
+
+### What I am NOT doing
+
+The batch at `85383af35b` already merged the multi-commit form, so those commits
+are in its history and no branch of mine can remove them. Clearing this finding
+requires re-assembling the batch's take of this work from the squashed commit,
+and re-pointing `land/batch67-assembled` is not mine to do — the same boundary
+`jmeas3` drew and I agreed with. The artefact is pushed and named so the
+decision is cheap for whoever holds it; the decision itself is not mine.
