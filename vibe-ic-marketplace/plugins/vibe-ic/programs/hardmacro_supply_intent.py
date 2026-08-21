@@ -57,25 +57,43 @@ from pathlib import Path
 import _path_layout as _pl
 from typing import Any, Dict, List, Optional, Tuple
 
-# `PIN <name>` ... `USE POWER|GROUND` ... `END <name>` — LEF is whitespace and
+# `PIN <name>` ... `USE <type>` ... `END <name>` — LEF is whitespace and
 # newline tolerant, so scan the pin block rather than assuming a line layout.
 _PIN_BLOCK_RE = re.compile(
     r"\bPIN\s+(?P<name>[A-Za-z_][\w\[\]\.$<>]*)\b(?P<body>.*?)\bEND\s+(?P=name)\b",
     re.S | re.IGNORECASE)
-_USE_RE = re.compile(r"\bUSE\s+(POWER|GROUND)\s*;", re.IGNORECASE)
+#: Any `USE` record, not only the supply ones. The difference between "this pin
+#: is typed SIGNAL" and "this pin carries no typing at all" is a fact about the
+#: ABSTRACT, and it is invisible to a scan that can only see POWER/GROUND.
+_ANY_USE_RE = re.compile(r"\bUSE\s+([A-Za-z]+)\s*;", re.IGNORECASE)
 _MACRO_RE = re.compile(r"\bMACRO\s+([A-Za-z_][\w\.$]*)", re.IGNORECASE)
 
 ACCOUNTED = {"declared_rail", "declared_gap", "rail_name_match"}
 
 
-def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
-    """Every LEF-typed POWER/GROUND pin, with the MACRO it belongs to.
+def lef_all_pins(lef_text: str) -> List[Dict[str, Any]]:
+    """EVERY pin a LEF declares — typed or not — with the MACRO it belongs to.
 
-    Returns [{"master", "pin", "use"}]. Pure LEF grammar — this is the
-    AUTHORITATIVE statement that a pin is a supply terminal, and it is what
-    TritonRoute honours when it aborts.
+    Returns ``[{"master", "pin", "use", "uses"}]`` where ``uses`` is every
+    ``USE`` record found in the pin body (upper-cased, in file order) and
+    ``use`` is the first of them, or ``""`` when the abstract types the pin
+    with none.
+
+    WHY THIS IS THE PRIMITIVE AND `lef_pg_pins` IS THE FILTER (vibe-ic#774)
+    ----------------------------------------------------------------------
+    A reader that can only see POWER/GROUND-typed pins cannot tell these two
+    apart:
+
+        (a) a hard macro whose abstract types its pins and none is a supply pin
+        (b) a hard macro whose abstract types NOTHING
+
+    `magic`'s ``lef write`` emits neither ``DIRECTION`` nor ``USE`` on any PIN,
+    so (b) is what an HONESTLY regenerated abstract looks like — and every
+    consumer keyed on ``USE POWER``/``USE GROUND`` reads it as (a) and goes
+    quiet. The two facts have to be separable at the parser, or every consumer
+    re-derives the same blind spot. Pure LEF grammar; no PDK literal.
     """
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     if not lef_text:
         return out
     # Segment by MACRO so each pin is attributed to its own master.
@@ -85,10 +103,230 @@ def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
     for i, (start, master) in enumerate(bounds):
         end = bounds[i + 1][0] if i + 1 < len(bounds) else len(lef_text)
         for pm in _PIN_BLOCK_RE.finditer(lef_text[start:end]):
-            um = _USE_RE.search(pm.group("body") or "")
-            if um:
-                out.append({"master": master, "pin": pm.group("name"),
-                            "use": um.group(1).upper()})
+            uses = [u.upper() for u in _ANY_USE_RE.findall(pm.group("body") or "")]
+            out.append({"master": master, "pin": pm.group("name"),
+                        "use": uses[0] if uses else "", "uses": uses})
+    return out
+
+
+def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
+    """Every LEF-typed POWER/GROUND pin, with the MACRO it belongs to.
+
+    Returns [{"master", "pin", "use"}]. Pure LEF grammar — this is the
+    AUTHORITATIVE statement that a pin is a supply terminal, and it is what
+    TritonRoute honours when it aborts.
+
+    A FILTER over `lef_all_pins`, not a second walk: the two answers come from
+    one parse, so "which pins exist" and "which pins are typed supply" can never
+    disagree about the same file.
+    """
+    out: List[Dict[str, str]] = []
+    for rec in lef_all_pins(lef_text):
+        pg = next((u for u in rec["uses"] if u in ("POWER", "GROUND")), None)
+        if pg:
+            out.append({"master": rec["master"], "pin": rec["pin"], "use": pg})
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# WHICH MASTERS ARE HARD MACROS, AND WHICH ABSTRACTS TYPE NOTHING
+# --------------------------------------------------------------------------- #
+#: LEF CLASS values that denote a hard macro. Pure LEF grammar; PDK-agnostic.
+#: Kept byte-identical to `l21_macro_supply_rail_declared_check`'s list on
+#: purpose — see `lef_macro_classes` for why the WALK is shared rather than the
+#: list alone.
+HARD_MACRO_CLASSES = ("BLOCK", "RING", "PAD", "COVER")
+
+def lef_macro_classes(lef_text: str) -> Dict[str, str]:
+    """``{MACRO_NAME: CLASS}`` — ONE class walk for every consumer.
+
+    Delegates to `l21_macro_supply_rail_declared_check._macro_classes`, the
+    prose-polarity-aware walk (#777: a LEF is a text file whose author comment
+    can retire the statement under it). The import is LAZY because that module
+    imports this one at module scope; resolving it inside the call keeps the
+    dependency one-directional at import time.
+
+    AND THERE IS DELIBERATELY NO SECOND WALK BEHIND IT
+    --------------------------------------------------
+    Every other delegation in this file keeps an inline fallback so the module
+    answers stand-alone. This one must not, because CLASS is read
+    SUBTRACTIVELY: its value is what REMOVES a master from an audit's scope. A
+    prose-blind copy would honour a `CLASS CORE ;  # deprecated, not a core
+    cell` and hand the audited file the switch that silences its own audit —
+    `repo_hygiene_gates`' `prose_polarity_consulted_check` named exactly that
+    when this function first shipped with one.
+
+    So when the shared walk is unavailable this returns ``{}``, and ``{}`` is
+    SAFE in the one direction that matters: both readers here treat "no CLASS
+    record" as "keep this master in scope", so the cost is one extra audited
+    macro rather than a silenced audit. `lef_untyped_masters` then screens the
+    std cells out on the evidence it actually needs anyway — a std-cell LEF
+    types its PG pins, so it is excluded by the affirmative-typing test one
+    line down, with or without its class.
+    """
+    try:
+        from l21_macro_supply_rail_declared_check import (  # type: ignore
+            _macro_classes as _shared)
+    except Exception:  # pragma: no cover - see the docstring: {} is fail-safe
+        return {}
+    return _shared(lef_text)
+
+
+def lef_untyped_masters(lef_text: str) -> Dict[str, List[str]]:
+    """``{MACRO_NAME: [pin, ...]}`` for every HARD macro whose own abstract
+    declares PINs and types NONE of them with a ``USE`` record.
+
+    THE FACT A PG-ONLY WALK CANNOT EXPRESS (vibe-ic#774, generalised)
+    ----------------------------------------------------------------
+    `lef_pg_pins` returns ``[]`` for three different files, and only two of them
+    are non-applicability:
+
+      * a LEF with no hard macro at all              -> genuinely nothing
+      * a hard macro that TYPES its pins and none is
+        POWER/GROUND                                 -> an AFFIRMATIVE "no
+                                                        supply terminal", which
+                                                        IS evidence
+      * a hard macro that types NO pin at all        -> **this function**: the
+                                                        evidence is missing from
+                                                        an artefact that exists
+
+    The third is what an HONESTLY regenerated abstract looks like: `magic`'s
+    ``lef write`` emits neither ``DIRECTION`` nor ``USE`` on any PIN. Any
+    consumer keyed on ``USE POWER``/``USE GROUND`` reads it as the second case
+    and goes quiet, so the run gets more honest and the gate gets quieter.
+
+    A master that types a supply pin ANYWHERE in this file is excluded — the
+    conservative reading, and it keeps a partially-typed abstract from
+    manufacturing a finding. `CLASS CORE` std cells are excluded by LEF grammar,
+    not by filename.
+    """
+    classes = lef_macro_classes(lef_text)
+    by_master: Dict[str, List[Dict[str, Any]]] = {}
+    for rec in lef_all_pins(lef_text):
+        by_master.setdefault(str(rec.get("master") or ""), []).append(rec)
+    out: Dict[str, List[str]] = {}
+    for master, recs in by_master.items():
+        if not master or not recs:
+            continue
+        cls = classes.get(master, "")
+        # No CLASS record at all -> treat as a hard macro (many vendor macro
+        # LEFs omit it); an explicit CORE class is a std cell.
+        if cls and not any(cls.startswith(c) for c in HARD_MACRO_CLASSES):
+            continue
+        if any(r.get("uses") for r in recs):
+            continue
+        pins = [str(r.get("pin") or "") for r in recs if r.get("pin")]
+        if pins:
+            out[master] = pins
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# LIBERTY — the macro's OWN independent statement about its supply pins
+# --------------------------------------------------------------------------- #
+# ONE Liberty grammar, here, for the same reason there is one LEF grammar here:
+# `lef write` drops the LEF `USE` records but leaves `pg_pin`/`pg_type` intact,
+# so EVERY gate that has to survive a tool-written abstract needs this walk. Four
+# private copies of it is how the LEF walk got a one-line-pin blind spot in one
+# copy and not the others (#316/#329).
+_LIB_CELL_RE = re.compile(
+    r"\bcell\s*\(\s*\"?([A-Za-z_][\w\.\$\[\]/]*)\"?\s*\)", re.IGNORECASE)
+_LIB_PG_PIN_RE = re.compile(
+    r"\bpg_pin\s*\(\s*\"?(?P<pin>[A-Za-z_][\w\.\$\[\]<>]*)\"?\s*\)"
+    r"\s*\{(?P<body>[^{}]*)\}", re.S | re.IGNORECASE)
+_LIB_PG_TYPE_RE = re.compile(r"\bpg_type\s*:\s*\"?([A-Za-z_]+)\"?", re.IGNORECASE)
+
+#: Bounds on a project-wide Liberty sweep. A hard macro's own view is kilobytes;
+#: a full std-cell library is not, and no consumer here needs it (those cells are
+#: CLASS CORE and already out of scope). Losing an oversized library costs a
+#: corroboration, never a verdict.
+_MAX_LIB_FILES = 200
+_MAX_LIB_BYTES = 16 * 1024 * 1024
+_MAX_LIB_TOTAL_BYTES = 64 * 1024 * 1024
+
+#: Fallback roots, used only when the consumer's glob list cannot be imported.
+_FALLBACK_LEF_GLOBS: Tuple[str, ...] = ("input/pdk_local/**/*.lef",)
+
+
+def pg_type_to_use(pg_type: str) -> str:
+    """Liberty ``pg_type`` -> LEF ``USE``. Grammar-level mapping over Liberty's
+    own enumeration (primary/backup/internal power|ground plus the well-bias
+    types); ``""`` when the group declares no type — the pin is still a declared
+    supply terminal, its polarity is just not stated."""
+    v = (pg_type or "").strip().lower()
+    if not v:
+        return ""
+    if "ground" in v or v in ("pwell", "deeppwell"):
+        return "GROUND"
+    if "power" in v or v in ("nwell", "deepnwell"):
+        return "POWER"
+    return ""
+
+
+def liberty_pg_pins(lib_text: str) -> List[Dict[str, str]]:
+    """``[{"cell", "pin", "use"}]`` for every ``pg_pin`` group a Liberty view
+    declares. Pure Liberty grammar; no PDK, vendor or cell literal."""
+    out: List[Dict[str, str]] = []
+    if not lib_text:
+        return out
+    bounds = [(m.start(), m.group(1)) for m in _LIB_CELL_RE.finditer(lib_text)]
+    for i, (start, cell) in enumerate(bounds):
+        end = bounds[i + 1][0] if i + 1 < len(bounds) else len(lib_text)
+        for pm in _LIB_PG_PIN_RE.finditer(lib_text[start:end]):
+            tm = _LIB_PG_TYPE_RE.search(pm.group("body") or "")
+            out.append({"cell": cell, "pin": pm.group("pin"),
+                        "use": pg_type_to_use(tm.group(1) if tm else "")})
+    return out
+
+
+def macro_lib_globs() -> Tuple[str, ...]:
+    """Where a macro's own Liberty view lives — DERIVED from the LEF roots the
+    consumer gate harvests from rather than copied, so a root added there is
+    searched here the same day (the pattern `l21_macro_supply_rail_synth.
+    _default_lef_roots` already establishes for the LEF side)."""
+    try:
+        from l21_macro_supply_rail_declared_check import (  # type: ignore
+            _MACRO_LEF_GLOBS as _globs)
+    except Exception:  # pragma: no cover - stand-alone fallback
+        _globs = _FALLBACK_LEF_GLOBS
+    return tuple(g[:-len(".lef")] + ".lib" for g in _globs
+                 if g.endswith(".lef"))
+
+
+def project_liberty_pg_pins(project) -> Dict[str, Dict[str, str]]:
+    """``{cell: {pin: USE}}`` from every Liberty view staged beside the design's
+    own macro abstracts. This is the macro's OWN independent statement about
+    which of its pins are supply terminals, and it SURVIVES a ``lef write`` that
+    drops the LEF ``USE`` records."""
+    out: Dict[str, Dict[str, str]] = {}
+    try:
+        root = Path(project)
+    except TypeError:
+        return out
+    if not root.is_dir():
+        return out
+    seen = set()
+    budget = _MAX_LIB_TOTAL_BYTES
+    for pat in macro_lib_globs():
+        try:
+            candidates = sorted(root.glob(pat))[:_MAX_LIB_FILES]
+        except (OSError, ValueError):
+            continue
+        for lib in candidates:
+            if not lib.is_file() or lib in seen:
+                continue
+            seen.add(lib)
+            try:
+                size = lib.stat().st_size
+                if size > _MAX_LIB_BYTES or size > budget:
+                    continue
+                budget -= size
+                text = lib.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for rec in liberty_pg_pins(text):
+                out.setdefault(rec["cell"], {}).setdefault(rec["pin"],
+                                                           rec["use"])
     return out
 
 
@@ -451,25 +689,142 @@ def declared_binding_map(l21: Dict[str, Any],
     return out
 
 
+def recover_untyped_pin(master: str, pin: str,
+                        lib_pg: Dict[str, Dict[str, str]],
+                        rails: List[str]) -> Tuple[str, str]:
+    """``(USE, why)`` for a pin whose own abstract types it with nothing.
+
+    Priority: the macro's OWN Liberty ``pg_pin``/``pg_type`` (an INDEPENDENT
+    statement about the same macro, and the one that survives a ``lef write``),
+    then name-equality against the rails the design itself declares.
+
+    The second source establishes EXISTENCE, not polarity — `declared_rails`
+    flattens power and ground into one name list — so it returns ``USE ""``.
+    That costs nothing: a pin whose name equals a declared rail is ACCOUNTED by
+    `classify_pin` whichever polarity it has, so no verdict rests on the
+    missing half. ``("", "")`` when neither source knows this pin.
+    """
+    cell = lib_pg.get(master) or {}
+    if pin in cell:
+        use = cell[pin]
+        return use, (
+            f"the macro's OWN Liberty view declares `pg_pin ({pin})`"
+            + (f" with pg_type -> {use}" if use
+               else " (no pg_type, so its polarity is unstated)"))
+    hit = _rail_token_match(pin, rails)
+    if hit:
+        return "", (f"the design independently declares a rail {hit!r} of "
+                    f"exactly this name")
+    return "", ""
+
+
 def assess(lef_texts: List[str], l21: Dict[str, Any],
            extra_rails: Optional[List[str]] = None,
            project=None) -> Dict[str, Any]:
-    """Classify every LEF-typed PG pin across the given macro LEFs.
+    """Classify every macro supply pin across the given macro LEFs.
 
-    `project` is OPTIONAL and changes no verdict: it lets the result carry WHY
-    a rail is undeclared when the reason is that a producer never ran
-    (vibe-ic#691). Omitting it leaves the output byte-identical to before."""
+    `project` is OPTIONAL and changes no EXISTING verdict: it lets the result
+    carry WHY a rail is undeclared when the reason is that a producer never ran
+    (vibe-ic#691), and it is where the macro's own Liberty view is read from
+    (below).
+
+    AN EMPTY SCAN IS NOT A CLEAN BILL (vibe-ic#785)
+    ----------------------------------------------
+    This used to be a walk over `lef_pg_pins` and nothing else, so it returned
+
+        {"pins": [], "accounted": [], "gaps": [], ...}
+
+    — a clean bill — for a design with no macro at all AND for a hard macro
+    whose abstract types NO pin. MEASURED on the identical macro, one abstract
+    hand-written and one regenerated honestly by `magic`'s ``lef write``:
+
+        hand-written abstract     pins=2 gaps=2
+        tool-written abstract     pins=0 gaps=0 accounted=0   <- indistinguishable
+                                                                 from no macro
+
+    The docstring at the top of this module records an EARLIER false-clean of
+    exactly this shape ("does this token appear in ANY layer" — IT MEASURED THE
+    THING NEXT TO IT), so the module now separates the three facts:
+
+      `scanned`            what was actually read — an empty scan says so
+      `untyped_abstracts`  every hard macro that declares PINs and types none
+      `recovered_pins`     those pins whose use the design's OWN independent
+                           views recover, run through the SAME `classify_pin`
+                           clause as a LEF-typed pin
+      `inconclusive`       True when an untyped abstract is corroborated by
+                           NOTHING — unverifiable from either side, which is a
+                           different fact from "nothing to verify"
+
+    WHY THE RECOVERED PINS DO NOT JOIN `pins` / `gaps`
+    --------------------------------------------------
+    Deliberate, and it is not timidity. The BINDER those keys feed
+    (`_macro_supply_gc_plan`, and the pre-route gate that blocks on them) keys
+    on ``USE POWER`` / ``USE GROUND``, so it is structurally incapable of
+    binding a pin whose abstract types nothing. Folding recovered pins into
+    `gaps` would make a blocking gate demand something the binder cannot
+    deliver, with no remedy but the one L21-5 already owns (re-attach the
+    typing, or disclose it under a named waiver). Reported in its own bucket,
+    every existing consumer keeps its exact behaviour and the new fact still
+    reaches anyone who reads for it.
+    """
     pins: List[Dict[str, Any]] = []
     for txt in lef_texts or []:
         for p in lef_pg_pins(txt):
             pins.append({**classify_pin(p["master"], p["pin"], l21, extra_rails),
                          "use": p["use"]})
+
+    # ---- the abstracts that type NOTHING (#785) -------------------------- #
+    typed_masters = {p["master"] for p in pins}
+    untyped: Dict[str, List[str]] = {}
+    for txt in lef_texts or []:
+        for master, pin_names in lef_untyped_masters(txt).items():
+            bucket = untyped.setdefault(master, [])
+            for name in pin_names:
+                if name not in bucket:
+                    bucket.append(name)
+    # A master typed in ONE staged abstract and untyped in another is covered
+    # by the typed one — the conservative reading.
+    untyped = {m: v for m, v in untyped.items() if m not in typed_masters and v}
+
+    lib_pg = project_liberty_pg_pins(project) if (untyped and project is not None) \
+        else {}
+    rails = declared_rails(l21) + list(extra_rails or [])
+    recovered: List[Dict[str, Any]] = []
+    abstracts: List[Dict[str, Any]] = []
+    for master in sorted(untyped):
+        here: List[Dict[str, Any]] = []
+        for pin in untyped[master]:
+            use, why = recover_untyped_pin(master, pin, lib_pg, rails)
+            if not why:
+                continue
+            rec = {**classify_pin(master, pin, l21, extra_rails),
+                   "use": use, "typing_source": why}
+            here.append(rec)
+            recovered.append(rec)
+        abstracts.append({
+            "master": master, "pins": untyped[master],
+            "recovered": here, "corroborated": bool(here),
+        })
+
     out = {
         "pins": pins,
         "accounted": [p for p in pins if p["status"] in ACCOUNTED],
         "gaps": [p for p in pins if p["status"] not in ACCOUNTED],
         "declared_rails": declared_rails(l21),
         "measured_rails": sorted(set(extra_rails or [])),
+        "scanned": {
+            "lef_texts": len(lef_texts or []),
+            "typed_masters": sorted(typed_masters),
+            "untyped_masters": sorted(untyped),
+            "liberty_cells": sorted(lib_pg),
+        },
+        "untyped_abstracts": abstracts,
+        "recovered_pins": recovered,
+        "recovered_gaps": [p for p in recovered
+                           if p["status"] not in ACCOUNTED],
+        # UNVERIFIABLE, not clean: an abstract that types nothing and that no
+        # independent view of the same macro corroborates.
+        "inconclusive": any(not a["corroborated"] for a in abstracts),
     }
     # #691 — a rail can be undeclared because the design does not declare it, or
     # because the INDEPENDENT declaration step never ran. Those are the same

@@ -72,6 +72,23 @@ def _cascade(steps, results, waivers=None):
     return FC._attribute_cascade_verdicts(results, steps, waivers or {})
 
 
+# vibe-ic#776 — softening now requires a DECLARED dependency, not just a
+# `blocks_on` edge, so the fixtures below say which step writes the artefact
+# and which step's gate reads it. Before #776 these specs carried no
+# declaration at all and softened anyway; `test_the_same_chain_without_the_
+# declaration_does_not_soften` is the control that pins the difference.
+_ART = "reports/phase2/some_artifact.json"
+
+
+def _writes(sid, **extra):
+    return dict(id=sid, required_outputs=[_ART], **extra)
+
+
+def _reads(sid, blocks_on, **extra):
+    return dict(id=sid, blocks_on=list(blocks_on),
+                gate={"files_exist": [_ART]}, **extra)
+
+
 # ── a declared gap is never softened ────────────────────────────────────────
 def test_a_step_declaring_its_own_gap_stays_missing():
     steps = _steps({"id": 13}, {"id": "M2", "blocks_on": [13],
@@ -116,23 +133,37 @@ def test_the_softer_verdict_is_not_reachable_through_a_declared_gap():
 # ── the legitimate cascade is untouched ─────────────────────────────────────
 def test_a_plain_waived_ancestor_still_defers():
     """THE ACCEPT CASE. #502's intent is real: a step whose predecessor was
-    deferred never ran. Only the unfounded data-flow CLAIM is removed."""
-    steps = _steps({"id": 12}, {"id": 13, "blocks_on": [12]})
+    deferred never ran — when the flow DECLARES the step reads what the
+    predecessor writes (#776)."""
+    steps = _steps(_writes(12), _reads(13, [12]))
     results = [_res(12, "WAIVED"), _res(13, "MISSING")]
     _cascade(steps, results, {12: {"ticket": "T-1"}})
     assert results[1].status == "DEFERRED-BY-UPSTREAM"
     assert "ticket=T-1" in results[1].cascade_note
 
 
+def test_the_same_chain_without_the_declaration_does_not_soften():
+    """#776 CONTROL for the test above — identical `blocks_on`, identical
+    waiver, only the declaration removed. This is the shape that produced
+    `DEFERRED-BY-UPSTREAM(13)` on 1153 of the flow's 1221 ancestor pairs."""
+    steps = _steps({"id": 12}, {"id": 13, "blocks_on": [12]})
+    results = [_res(12, "WAIVED"), _res(13, "MISSING")]
+    info = _cascade(steps, results, {12: {"ticket": "T-1"}})
+    assert results[1].status == "MISSING", results[1].status
+    assert results[1].cascade_note == "waived-ancestor-undeclared(12)"
+    assert info["deferred_by_upstream"] == []
+
+
 def test_the_deferral_reason_no_longer_asserts_what_it_cannot_check():
     """It used to say the step "consumes outputs that step X's waiver
-    deferred". The flow declares `inputs:` zero times."""
-    steps = _steps({"id": 12}, {"id": 13, "blocks_on": [12]})
+    deferred" off an ORDERING edge alone. #776: it may say so only where the
+    flow declares the read, and it must still never use the old phrasing."""
+    steps = _steps(_writes(12), _reads(13, [12]))
     results = [_res(12, "WAIVED"), _res(13, "MISSING")]
     _cascade(steps, results, {12: {"ticket": "T-1"}})
     reason = " ".join(results[1].reasons)
     assert "consumes outputs" not in reason, reason
-    assert "ORDER" in reason and "not established" in reason
+    assert "ORDER" in reason and "the flow declares this step reads" in reason
 
 
 def test_a_failing_step_is_still_never_converted():
@@ -144,7 +175,7 @@ def test_a_failing_step_is_still_never_converted():
 
 def test_a_gap_declared_but_empty_is_not_a_gap():
     """`known_gap: ""` states nothing; it must not silence the cascade."""
-    steps = _steps({"id": 12}, {"id": 13, "blocks_on": [12], "known_gap": "  "})
+    steps = _steps(_writes(12), _reads(13, [12], known_gap="  "))
     results = [_res(12, "WAIVED"), _res(13, "MISSING")]
     _cascade(steps, results, {12: {"ticket": "T-1"}})
     assert results[1].status == "DEFERRED-BY-UPSTREAM"
@@ -155,9 +186,9 @@ def test_an_ANCESTOR_whose_gap_is_empty_does_not_stop_the_walk():
     `known_gap` on an ANCESTOR would halt the BFS and attribute the step to a
     declaration that states nothing — worse than the waiver it displaced,
     because it names a cause and gives no reason."""
-    steps = _steps({"id": 11},
-                   {"id": 12, "blocks_on": [11], "known_gap": "   "},
-                   {"id": 13, "blocks_on": [12]})
+    steps = _steps(_writes(11),
+                   _reads(12, [11], known_gap="   "),
+                   _reads(13, [12]))
     results = [_res(11, "WAIVED"), _res(12, "MISSING"), _res(13, "MISSING")]
     _cascade(steps, results, {11: {"ticket": "T-9"}})
     assert results[2].status == "DEFERRED-BY-UPSTREAM", results[2].status

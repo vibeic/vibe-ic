@@ -39,6 +39,8 @@ Implemented cross-check rules:
   row_count_vs_counts     — number of rows in each findings table matches Counts line
   crc_gen_if_declared     — if Phase-1 JSON declares CRC sub-block, generator must be invoked
   postcheck_pass_only     — RTL header must record post-checks = PASS
+  text_only_report        — prose-report skill: must NOT claim an RTL
+                            post-check verdict it never measured
   no_forbidden_patterns   — reject certain regex matches
     (takes `patterns: [list]`)
   pattern_requires_tool   — if a phrase appears, a tool invocation must also appear
@@ -416,11 +418,43 @@ def _cc_no_volatile_paths(spec: Dict[str, Any], text: str) -> List[Finding]:
          'a real file. Offending paths: ' + ', '.join(seen)))]
 
 
+def _cc_text_only_report(spec: Dict[str, Any], text: str) -> List[Finding]:
+    """For a skill whose deliverable is a PROSE REPORT, not RTL.
+
+    Such a skill emits markdown, so the `// Post-checks:` RTL header that
+    `postcheck_pass_only` demands can never legitimately appear in its
+    output — and requiring it made those skills unsatisfiable: every
+    required element could be present and the audit still returned FAIL,
+    with the only route to green being to paste a header asserting that
+    `rtl_hygiene_lint` and `fsm_error_invariant` had passed on a document
+    that neither tool had ever been run against.
+
+    So this rule asserts the INVERSE, and keeps the teeth pointed at the
+    behaviour that actually matters: a prose report must NOT claim an RTL
+    post-check verdict. A markdown review cannot have run those tools on
+    itself, so a header claiming it did is a fabricated result.
+    """
+    m = re.search(r'//\s*Post-checks:\s*rtl_hygiene_lint\s*=', text)
+    if not m:
+        return []
+    return [Finding(
+        spec.get('id', 'text_only_claims_rtl_postcheck'),
+        'FAIL',
+        spec.get('description',
+                 'Prose-report skill output claims an RTL post-check '
+                 'verdict.'),
+        ('This skill produces a report, not RTL, so `rtl_hygiene_lint` / '
+         '`fsm_error_invariant` were never run against this document. '
+         'Remove the `// Post-checks:` header rather than asserting a '
+         'verdict that was not measured.'))]
+
+
 CROSS_CHECK_RULES: Dict[str, Callable[[Dict[str, Any], str], List[Finding]]] = {
     'score_formula':         _cc_score_formula,
     'row_count_vs_counts':   _cc_row_count_vs_counts,
     'crc_gen_if_declared':   _cc_crc_gen_if_declared,
     'postcheck_pass_only':   _cc_postcheck_pass_only,
+    'text_only_report':      _cc_text_only_report,
     'no_forbidden_patterns': _cc_no_forbidden_patterns,
     'pattern_requires_tool': _cc_pattern_requires_tool,
     'no_volatile_paths':     _cc_no_volatile_paths,

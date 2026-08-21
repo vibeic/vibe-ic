@@ -178,3 +178,143 @@ def test_no_block_list_vacuous(tmp_path: Path) -> None:
     assert r.returncode == 0
     rpt = json.loads((tmp_path / "report.json").read_text())
     assert rpt["verdict"] == "VACUOUS_PASS"
+
+
+# ── LAYOUT-REALIZABILITY (A3_NETLIST_IDEAL_PRIMITIVE_IN_BLOCK) ────────────
+# A6 grades DRC == 0 AND a netgen LVS match. The netgen PDK setup declares
+# device classes for the PDK's own res_*/cap_* subcircuits and NOTHING that
+# equates an ideal SPICE primitive to a drawn device, so a block carrying one
+# cannot match — before anyone draws anything. Measured on the deck below:
+# A3, A4 and A5 all certified it and the only signal was an A6 mismatch three
+# steps later, which reads as a layout defect.
+
+_MOS = ("Mn1 nd1 VINP ntail VSS nfet_01v8 W=8u L=0.5u\n"
+        "Mn2 nd2 VINN ntail VSS nfet_01v8 W=8u L=0.5u\n"
+        "Mp3 nd1 nd1 VDD VDD pfet_01v8 W=8u L=0.5u\n"
+        "Mp4 nd2 nd1 VDD VDD pfet_01v8 W=8u L=0.5u\n"
+        "Mtail ntail nbias VSS VSS nfet_01v8 W=4u L=0.5u\n")
+_PORTS = ".subckt ota VDD VSS VINP VINN VOUT FB nbias nd2\n"
+_HDR = "* ota — realizability fixtures\n"
+
+
+def _rules(project: Path):
+    rpt = json.loads((project / "report.json").read_text())
+    return rpt, sorted({f["rule"] for f in rpt.get("findings", [])})
+
+
+def test_ideal_primitives_inside_the_block_subckt_fail(tmp_path: Path) -> None:
+    """(a) of the three-way proof — the authoring skill's own worked example."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        _HDR + _PORTS + _MOS
+        + "Vbias nbias VSS 0.8\n"
+          "R1 VOUT FB 100k\n"
+          "Cc nd2 VOUT 3p\n"
+          ".ends ota\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    rpt, rules = _rules(tmp_path)
+    assert rules == ["A3_NETLIST_IDEAL_PRIMITIVE_IN_BLOCK"], rpt
+    cards = {c["card"] for c in rpt["findings"][0]["ideal_cards"]}
+    assert cards == {"Vbias", "R1", "Cc"}, rpt
+
+
+def test_the_same_devices_in_the_testbench_pass(tmp_path: Path) -> None:
+    """(b) — the testbench is where the remediations SEND these elements
+    ("hoist the source to a port", "move the load to the TB"). A rule that
+    fired on them would push the fix straight back out again."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        _HDR + _PORTS + _MOS + ".ends ota\n"
+        + ".subckt ota_tb VDD VSS\n"
+          "Xdut VDD VSS ninp ninn nout nfb nbias nd2 ota\n"
+          "Vbias nbias VSS 0.8\n"
+          "R1 nout nfb 100k\n"
+          "Cload nout VSS 1p\n"
+          ".ends ota_tb\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _rules(tmp_path)[1] == []
+
+
+def test_pdk_res_and_cap_devices_pass(tmp_path: Path) -> None:
+    """(c) — both PDK forms. `X...` is the subcircuit instance every PDK
+    device takes, and an R/C card NAMING A MODEL is a semiconductor device the
+    PDK can declare a device class for. A SPICE identifier cannot begin with a
+    digit, so value and model are separable exactly, with no model-name list."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        _HDR + _PORTS + _MOS
+        + "XR1 VOUT FB VSS res_xhigh_po W=0.35u L=48u\n"
+          "XCc nd2 VOUT cap_mim_m3 W=10u L=10u\n"
+          "R2 VOUT FB res_generic_po W=1u L=10u\n"
+          "C2 nd2 VSS cap_var_lvt W=5u L=5u\n"
+          ".ends ota\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _rules(tmp_path)[1] == []
+
+
+def test_a_controlled_source_is_not_a_way_round_the_rule(
+        tmp_path: Path) -> None:
+    """A linear VCCS IS a resistor. Covering E/F/G/H/B is what stops the rule
+    being evaded by writing the same ideal element with a different letter."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        _HDR + _PORTS + _MOS
+        + "G1 VOUT FB VOUT FB 1e-5\n"
+          "B1 nd2 VSS I=V(nd1)*1e-3\n"
+          ".ends ota\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    rpt, rules = _rules(tmp_path)
+    assert rules == ["A3_NETLIST_IDEAL_PRIMITIVE_IN_BLOCK"], rpt
+    assert {c["card"] for c in rpt["findings"][0]["ideal_cards"]} == {"G1",
+                                                                     "B1"}
+
+
+def test_file_scope_cards_are_not_block_content(tmp_path: Path) -> None:
+    """`<block>.sp` is `.include`d by its testbench; a card at file scope is
+    not inside the block. Same depth discipline `_subckt_device_count` uses."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        _HDR + _PORTS + _MOS + ".ends ota\n"
+        + "Vsup VDD VSS 1.8\n"
+          "Rload VOUT VSS 10k\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _rules(tmp_path)[1] == []
+
+
+def test_a_disclosed_stub_is_not_charged_for_its_disclosure(
+        tmp_path: Path) -> None:
+    """The runner's own deterministic A3 stub is `r_stub vin vout 1k` inside
+    the block subckt. It already SAYS it is a placeholder; failing it here
+    would charge for the disclosure and replace an accurate PASS_WITH_STUB
+    with a realizability complaint about a circuit nobody claims is real.
+    This pins the rule's POSITION, after the stub short-circuit."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        "* deterministic_stub extraction_strategy=deterministic_stub\n"
+        "* ota — SPICE netlist (stub)\n"
+        ".subckt ota vdd vss vin vout\n"
+        "* replace with extracted netlist when analog-netlist-gen skill runs\n"
+        "r_stub vin vout 1k\n"
+        ".ends ota\n"
+        + "* padding to clear the 200-byte substance floor\n" * 4,
+        design_content=None)
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _rules(tmp_path)[1] == []
+
+
+def test_the_value_rules_still_come_first(tmp_path: Path) -> None:
+    """Ordering: a `.subckt` shell with one ideal R and nothing else is
+    diagnosed as the deeper defect it is, not as a realizability complaint."""
+    _block_list(tmp_path, ["ota"])
+    _sp(tmp_path, "ota",
+        "* simulation script (no .subckt)\n"
+        + "R1 a b 1k\n" * 30 + ".end\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    assert _rules(tmp_path)[1] == ["A3_NETLIST_NO_SUBCKT"]

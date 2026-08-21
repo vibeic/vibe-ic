@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "vibeic.ppa.claims.v1",
+  "title": "vibeic.ppa.claims.v1 — every public claim bound to the evidence that supports it",
+  "description": "A claims document is the join between a sentence a reader will believe and the artefact that makes it true. A claim without an `evidence` entry is an assertion; a claim whose `status` outruns the status of its evidence is a claim about silicon that no artefact supports. Both are refused by ppa_page_claim_check.py. The `NOT_MEASURED` status is a first-class member of this document and is never omitted: a claims file that silently drops what could not be measured reads as complete coverage.",
+  "type": "object",
+  "required": ["schema", "generated_by", "claims"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "vibeic.ppa.claims.v1",
+      "description": "First key of every instance document (PPA_INTERFACES.md §5)."
+    },
+    "generated_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The program that produced this document, e.g. `ppa_report_gen.py`."
+    },
+    "report": {
+      "type": "string",
+      "description": "Path of the report.md these claims were emitted alongside, relative to the run root."
+    },
+    "coverage": {
+      "type": "object",
+      "description": "The stated denominator. Present so that a reader can tell `nothing was measured` from `nothing was looked at` without recounting the rows.",
+      "required": ["total", "by_status"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "by_status": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "description": "May be empty ONLY when `coverage.total` is 0 and the report states that zero explicitly. An empty array is a stated zero, never a silent one.",
+      "items": {"$ref": "#/definitions/claim"}
+    }
+  },
+  "definitions": {
+    "claim": {
+      "type": "object",
+      "required": ["id", "text", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Cited from prose as `[claim:<id>]`. Unique within the document."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The public sentence, exactly as a reader will meet it."
+        },
+        "status": {
+          "enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"],
+          "description": "Same vocabulary as vibeic.ppa.metric.v1 (PPA_INTERFACES.md §2). A claim may never carry a status STRONGER than the weakest evidence record it cites; MEASURED is the strongest."
+        },
+        "metric": {
+          "type": "string",
+          "description": "The canonical metric name this claim is about, when it is about one."
+        },
+        "value": {
+          "description": "Present ONLY when status is MEASURED or DERIVED. There are no numeric sentinels: 0, -1 and \"\" never mean `not measured`.",
+          "type": ["number", "string", "boolean"]
+        },
+        "unit": {"type": "string"},
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "REQUIRED when status is NOT_MEASURED, NOT_APPLICABLE or INVALID. It carries a reason, not a value."
+        },
+        "formula": {
+          "type": "string",
+          "description": "REQUIRED when status is DERIVED — a reader must be able to recompute the number themselves."
+        },
+        "scope": {
+          "type": "object",
+          "description": "Two numbers are comparable only if their scope matches (PPA_INTERFACES.md §2). `base` and `reviewed` are the two qualification fields ppa_page_claim_check.py reads.",
+          "properties": {
+            "stage": {"type": "string"},
+            "mode": {"type": "string"},
+            "process": {"type": "string"},
+            "voltage_v": {"type": "number"},
+            "temperature_c": {"type": "number"},
+            "rc_corner": {"type": "string"},
+            "clock": {"type": "string"},
+            "check": {"type": "string"},
+            "base": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The revision/version the statement was measured AT. A statement about the tree that carries no base pin reads present-tense and goes false without anyone editing it — measured 2026-08-21, three published sentences went false in one day at v1.11.12."
+            },
+            "reviewed": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What was actually reviewed, when. This is what lifts a `nobody` / `no open flow` form from an unbounded universal to a bounded search."
+            }
+          }
+        },
+        "criterion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The falsifiable test the sentence would fail. `converges`, `honest` and `nothing violates` are not criteria until one is written here."
+        },
+        "definitions": {
+          "type": "object",
+          "description": "Terms the sentence leans on that a reader would otherwise supply themselves.",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Empty is legal ONLY for status NOT_MEASURED — where the absence of evidence IS the fact being reported.",
+          "items": {"$ref": "#/definitions/evidence"}
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["path", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "`sha256:<hex>` from _ppa/canonical_json.digest_of, over the value that was PARSED — never one that was recomputed."
+        },
+        "status": {
+          "enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"],
+          "description": "The status of the underlying metric record. A MEASURED claim citing a NOT_MEASURED record is the defect this whole document exists to make visible."
+        },
+        "tool": {"type": "string"},
+        "parser": {"type": "string"}
+      }
+    }
+  }
+}

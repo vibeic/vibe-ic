@@ -568,3 +568,54 @@ def test_blindness_skipped_when_absent(tmp_path):
     by_name = {g.name: g for g in v.gates}
     assert by_name["blindness_audit"].rc == -1  # SKIP, non-blocking
     assert v.verdict == "MERGE_OK", v.blocking
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#1208 — `_run_program` is the one chokepoint all 15 gate drivers go
+# through, and it had no `timeout=` at all. The wait lands in
+# `subprocess.communicate` -> `selector.poll`, which `--timeout-method=thread`
+# cannot interrupt, so THREE of this file's sibling modules could not be run in
+# a pinned selection on clean a38902d1 at all: the invocation produced no
+# summary line, which greps as neither a pass nor a failure.
+# ---------------------------------------------------------------------------
+def _sleeper(tmp_path: Path, seconds: float) -> Path:
+    p = tmp_path / "sleeper.py"
+    p.write_text(f"import time\ntime.sleep({seconds})\n")
+    return p
+
+
+def test_a_driven_program_that_overruns_is_STOPPED(tmp_path):
+    """The bound exists. Without it this call never returns."""
+    import time
+    t0 = time.monotonic()
+    rc, _out, err = gk._run_program(_sleeper(tmp_path, 30), [], timeout=1.0)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 15, elapsed
+    assert "1208" in err, err
+
+
+def test_an_overrun_is_NEVER_reported_as_a_clean_result(tmp_path):
+    """The half that matters. A bounded wait that returned 0 would be a WORSE
+    defect than the hang: it converts "never finished" into "clean", and every
+    caller here treats rc 0 as a passing gate."""
+    rc, _out, err = gk._run_program(_sleeper(tmp_path, 30), [], timeout=1.0)
+    assert rc != 0, (rc, err)
+    assert rc == 124, rc
+    assert "UNDETERMINED" in err, err
+
+
+def test_a_program_that_finishes_INSIDE_the_bound_still_returns_its_own_rc(
+        tmp_path):
+    """The inverse, without which the two above are satisfied by a
+    `_run_program` that fails everything. Both a clean exit and a real
+    non-zero must still come through unchanged."""
+    ok = tmp_path / "ok.py"
+    ok.write_text("print('fine')\n")
+    rc, out, _err = gk._run_program(ok, [], timeout=60.0)
+    assert rc == 0, rc
+    assert "fine" in out, out
+
+    bad = tmp_path / "bad.py"
+    bad.write_text("import sys\nsys.exit(3)\n")
+    rc2, _o, _e = gk._run_program(bad, [], timeout=60.0)
+    assert rc2 == 3, rc2

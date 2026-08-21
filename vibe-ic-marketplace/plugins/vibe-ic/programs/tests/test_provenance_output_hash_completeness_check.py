@@ -187,9 +187,20 @@ def test_path_absolute_outside_project_fails(tmp_path: Path) -> None:
     assert any(f.rule == "PROVENANCE_PATH_OUTSIDE_PROJECT" for f in findings)
 
 
-def test_hash_inconsistent_across_entries_fails(tmp_path: Path) -> None:
-    """Same output path in two entries with different hashes ⇒ FAIL.
-    The audit chain is contradicting itself."""
+def test_newest_record_of_a_path_is_the_one_that_must_match(tmp_path: Path) -> None:
+    """Two entries for one path, NEWEST declaring a digest the file does not
+    carry ⇒ FAIL.
+
+    This used to assert PROVENANCE_HASH_INCONSISTENT — the rule that read any
+    two differing records of a path as a self-contradicting chain. That shape
+    is what a legitimate re-run produces, so the rule fired on honest ledgers
+    and the check became unsatisfiable after the first iteration. The ledger
+    is append-only, so a later record SUPERSEDES an earlier one and only the
+    newest is a claim about the bytes on disk.
+
+    The detection this test defends is unchanged and is asserted below: a
+    newest record that disagrees with disk is still a broken chain. Note the
+    OLDEST record here matches the file exactly and does not rescue it."""
     p = tmp_path / "proj"
     body = b"// real netlist\n" + b"Y" * 500
     sha = _write_real_output(p, "phase2/stage2/synth/netlist.v", body)
@@ -202,7 +213,26 @@ def test_hash_inconsistent_across_entries_fails(tmp_path: Path) -> None:
     ])
     verdict, findings = audit(p)
     assert verdict == "FAIL"
-    assert any(f.rule == "PROVENANCE_HASH_INCONSISTENT" for f in findings)
+    assert any(f.rule == "PROVENANCE_HASH_MISMATCH" for f in findings)
+
+
+def test_a_superseded_record_does_not_fault_the_ledger(tmp_path: Path) -> None:
+    """The mirror of the above: same two-record shape, but the NEWEST record
+    is the one that matches disk — a plain re-run. It must PASS, and the
+    superseded record must be reported rather than silently dropped."""
+    p = tmp_path / "proj"
+    stale = "sha256:" + "e" * 64
+    body = b"// real netlist\n" + b"Z" * 500
+    sha = _write_real_output(p, "phase2/stage2/synth/netlist.v", body)
+    _make_provenance(p, [
+        {"timestamp": "2026-05-08T03:14:23Z", "tool": "yosys",
+         "outputs": {"phase2/stage2/synth/netlist.v": stale}},
+        {"timestamp": "2026-05-08T03:15:42Z", "tool": "rerun-yosys",
+         "outputs": {"phase2/stage2/synth/netlist.v": sha}},
+    ])
+    verdict, findings = audit(p)
+    assert verdict == "PASS", [(f.rule, f.detail) for f in findings]
+    assert any(f.rule == "PROVENANCE_OUTPUT_SUPERSEDED" for f in findings)
 
 
 def test_jsonl_parse_error_fails(tmp_path: Path) -> None:

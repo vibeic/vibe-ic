@@ -20,13 +20,48 @@ ACCEPTANCE (from the issue ## 驗收):
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import triage_record_check as mod
 
 SKILL_MD = (Path(__file__).resolve().parents[2]
             / "skills" / "open-benchmark-methodology" / "SKILL.md")
+
+
+def _load_shipped_module(path, name):
+    """Import a file from the SHIPPED `skills/` tree WITHOUT leaving bytecode.
+
+    `skills/` is the shipped tree, and `test_tools_and_integration.py`
+    digests it byte-for-byte to prove no test mutates it — the assertion
+    `gatekeeper-land.sh:213` depends on. Importing a file from under it makes
+    CPython drop `__pycache__/<name>.cpython-3XX.pyc` next to the source,
+    which is a new file inside that digested tree.
+
+    The write is invisible to every other check: `.pyc` is gitignored, so
+    `git status`, `git add -A` and `suite_write_guard` are all clean. The
+    digest is the only thing that sees it, which is why it presents with no
+    obvious author — see #1404, which fixed the same shape in
+    `test_v1_0_95_gatekeeper_poll_prs.py`.
+
+    This site writes at TEST time rather than import time, so whether it
+    trips depends on run ORDER: the digest is captured when
+    `test_tools_and_integration` is imported and asserted at the end of that
+    module's tests, and alphabetically `test_tools` sorts before `test_v0_2_97`.
+    The default order hides it; any shuffle that puts this module first
+    exposes it. Order-dependence is not a reason to leave the write in place.
+    """
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    m = importlib.util.module_from_spec(spec)
+    _prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(m)
+    finally:
+        sys.dont_write_bytecode = _prev
+    return m
 
 
 # ── #481 defect fixture: the 4 violation shapes from the issue ───────────
@@ -198,17 +233,38 @@ def test_482_triage_record_check_wired_into_result_checklist():
 def test_482_skill_compliance_tests_still_pass():
     """The skill's own structure/compliance test module must still import +
     its core invariants hold after our SKILL.md / compliance.yaml edits."""
-    import importlib.util
-
     comp_test = (SKILL_MD.parent / "tests" / "test_compliance.py")
     assert comp_test.exists()
-    spec = importlib.util.spec_from_file_location("obm_compliance_test", comp_test)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    m = _load_shipped_module(comp_test, "obm_compliance_test")
     # compliance.yaml still loads and declares the skill correctly.
     reqs = m.load_requirements()
     assert reqs.get("skill") == "open-benchmark-methodology"
     assert isinstance(reqs.get("requirements"), list) and reqs["requirements"]
+
+
+def test_the_shipped_loader_leaves_NO_bytecode_beside_the_source(tmp_path):
+    """The paired guard for `_load_shipped_module`: drop the suppression and
+    this must go red.
+
+    Deliberately measured on a throwaway source in `tmp_path`, not on the real
+    `skills/` file. The suppression is path-independent, so a temp source
+    proves the same property — and probing the shipped tree would mean either
+    deleting a `.pyc` that may predate the digest (mutating the tree this is
+    supposed to protect) or reading a cache another test already warmed, which
+    would let a broken loader pass.
+    """
+    src = tmp_path / "probe_module.py"
+    src.write_text("VALUE = 481\n", encoding="utf-8")
+
+    m = _load_shipped_module(src, "probe_module_for_bytecode_guard")
+
+    assert m.VALUE == 481, "the loader must actually execute the module"
+    left = sorted(p.name for p in tmp_path.rglob("*.pyc"))
+    assert not left, (
+        f"the loader left bytecode beside the source: {left}. Against a file "
+        "under the SHIPPED skills/ tree that is a write into the tree "
+        "test_tools_and_integration.py digests, and nothing else can see it — "
+        ".pyc is gitignored, so git status and suite_write_guard stay clean.")
 
 
 def test_482_rule_is_chip_agnostic():

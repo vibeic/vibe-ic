@@ -1,8 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "SerDes core/IO supplies (implementation-defined)"
-    ],
-    "power_considerations": "64B/67B has lower overhead than 8B/10B (1.5625% vs 25%), improving power efficiency per useful bit; lane count scales power with bandwidth."
-  }
-}

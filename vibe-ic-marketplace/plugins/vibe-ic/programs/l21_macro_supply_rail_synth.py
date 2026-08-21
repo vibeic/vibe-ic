@@ -68,7 +68,70 @@ _NAME_KEY = "name"
 
 
 # ── LEF ──────────────────────────────────────────────────────────────────────
+try:  # ONE LEF walk for the producer and its consumer (#785)
+    from hardmacro_supply_intent import (  # type: ignore
+        lef_all_pins as _shared_lef_all_pins,
+        lef_macro_classes as _shared_lef_macro_classes,
+        project_liberty_pg_pins as _shared_project_liberty_pg_pins,
+    )
+except Exception:                                           # noqa: BLE001
+    _shared_lef_all_pins = None                             # type: ignore
+    _shared_lef_macro_classes = None                        # type: ignore
+    _shared_project_liberty_pg_pins = None                  # type: ignore
+
+
 def _parse_lef(text: str) -> Dict[str, Dict[str, Any]]:
+    """``{MACRO: {"pins": {pin: USE|None}, "class": CLASS|None}}``.
+
+    A PRODUCER AND ITS CONSUMER MUST NOT KEEP SEPARATE PARSERS (#785)
+    ----------------------------------------------------------------
+    The body below is a LINE-ORIENTED walk, and it never got the one-line-pin
+    fix #316/#329 landed on the shared block parser. LEF is newline-tolerant, so
+    a whole PIN block is legal on ONE line::
+
+        PIN <name> DIRECTION INOUT ; USE POWER ; PORT ... END END <name>
+
+    The walk consumes that line at its ``PIN`` token and moves on, so the
+    same-line ``USE`` is never read and the pin comes out ``{'<name>': None}``.
+
+    MEASURED on published data — `benchmark-data/ic/u_hawaii_adc` stages two
+    hard macros in exactly this form (``ldo`` IOVDD/VSS, ``delta_sigma``
+    VDD/VSS) — this program printed
+
+        verdict: NOT_APPLICABLE
+        0 hard macro(s) with PG pins across 2 LEF file(s), 2 master(s)
+
+    while its own consumer, `l21_macro_supply_rail_declared_check`, FAILED on
+    those four pins reading the same two files. A producer and its consumer
+    disagreeing about the same file, because the producer kept a private parser.
+    `phase3_one_shot_runner._parse_macro_supply_pins` had already been converted
+    to the shared walk for this exact reason; this was the copy left behind.
+
+    So the block walk and the CLASS walk are both DELEGATED, and the line walk
+    below survives only as a stand-alone fallback — a subset, never a superset.
+    """
+    if _shared_lef_all_pins is not None:
+        out: Dict[str, Dict[str, Any]] = {}
+        classes = (_shared_lef_macro_classes(text)
+                   if _shared_lef_macro_classes is not None else {})
+        for rec in _shared_lef_all_pins(text):
+            master = str(rec.get("master") or "")
+            if not master:
+                continue
+            d = out.setdefault(master, {"pins": {}, "class": None})
+            uses = [u for u in (rec.get("uses") or [])]
+            pin_name = str(rec.get("pin") or "")
+            if pin_name:
+                d["pins"].setdefault(pin_name, uses[0] if uses else None)
+        for master, cls in classes.items():
+            out.setdefault(master, {"pins": {}, "class": None})["class"] = cls
+        return out
+    return _parse_lef_line_walk(text)
+
+
+def _parse_lef_line_walk(text: str) -> Dict[str, Dict[str, Any]]:
+    """Stand-alone fallback for `_parse_lef`. Carries the one-line-pin blind
+    spot documented there; used only when the shared walk cannot be imported."""
     out: Dict[str, Dict[str, Any]] = {}
     macro: Optional[str] = None
     pin: Optional[str] = None
@@ -120,15 +183,88 @@ def _collect_macros(lef_paths: List[Path]) -> Tuple[Dict[str, Dict[str, Any]], L
     return masters, read
 
 
+def _is_hard_macro(cls: Optional[str]) -> bool:
+    """Does this LEF ``CLASS`` denote a hard macro?
+
+    The CONSUMER's policy, imported rather than restated (#785): its
+    `_HARD_MACRO_CLASSES` includes ``COVER``, and it treats a master with NO
+    CLASS record as a hard macro because many vendor macro LEFs omit it. This
+    program used a narrower private tuple and required the record to be present,
+    so a COVER-class or class-less macro was invisible here and in scope there —
+    the same producer/consumer disagreement `_parse_lef` documents, one field
+    over. An explicit ``CORE`` (std cell / filler / tap) is still excluded.
+    """
+    c = (cls or "").upper()
+    if not c:
+        return True
+    try:
+        from l21_macro_supply_rail_declared_check import (  # type: ignore
+            _HARD_MACRO_CLASSES as _classes)
+    except Exception:                                       # noqa: BLE001
+        _classes = ("BLOCK", "RING", "PAD", "COVER")
+    return any(c.startswith(x) for x in _classes)
+
+
 def _hard_macros_with_pg(masters: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
-    """{master: {pin: USE}} for BLOCK-class masters that declare PG pins."""
+    """{master: {pin: USE}} for hard-macro masters that declare PG pins."""
     out: Dict[str, Dict[str, str]] = {}
     for m, d in masters.items():
-        if (d.get("class") or "") not in ("BLOCK", "RING", "PAD"):
+        if not _is_hard_macro(d.get("class")):
             continue
         pg = {p: u for p, u in d["pins"].items() if u in ("POWER", "GROUND")}
         if pg:
             out[m] = pg
+    return out
+
+
+def _hard_macros_untyped(masters: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """``{master: [pin, ...]}`` for every hard macro that declares PINs and
+    types NONE of them with a ``USE`` record.
+
+    ABSENCE OF EVIDENCE IS NOT NON-APPLICABILITY (#785). `_hard_macros_with_pg`
+    returning ``{}`` used to be the ONLY answer this program had for three
+    different files, and it printed the same ``NOT_APPLICABLE`` for all three:
+    no LEF at all; an abstract that types its pins and declares no supply
+    terminal (an AFFIRMATIVE statement, and genuinely nothing to derive); and an
+    abstract that types NOTHING — which is what `magic`'s ``lef write`` emits,
+    and where the rails this program exists to derive are simply MISSING from an
+    artefact that exists.
+    """
+    out: Dict[str, List[str]] = {}
+    for m, d in masters.items():
+        if not _is_hard_macro(d.get("class")):
+            continue
+        pins = d.get("pins") or {}
+        if not pins or any(u for u in pins.values()):
+            continue
+        out[m] = sorted(pins)
+    return out
+
+
+def _recover_untyped_pg(untyped: Dict[str, List[str]],
+                        proj: Path) -> Dict[str, Dict[str, str]]:
+    """``{master: {pin: USE}}`` recovered from the macro's OWN Liberty view.
+
+    `pg_pin`/`pg_type` survive a ``lef write`` that drops the LEF ``USE``
+    records, so this is the design's own independent statement about the same
+    macro — not a name pattern, not a keyword list, and never a rail this
+    program invents. Only POWER/GROUND-resolved pins are returned: a `pg_pin`
+    with no `pg_type` states a supply terminal without its polarity, and a rail
+    whose polarity is unknown is exactly what this program refuses to guess.
+    """
+    if not untyped or _shared_project_liberty_pg_pins is None:
+        return {}
+    try:
+        lib = _shared_project_liberty_pg_pins(proj)
+    except Exception:                                       # noqa: BLE001
+        return {}
+    out: Dict[str, Dict[str, str]] = {}
+    for master, pins in untyped.items():
+        cell = lib.get(master) or {}
+        got = {p: cell[p] for p in pins
+               if cell.get(p) in ("POWER", "GROUND")}
+        if got:
+            out[master] = got
     return out
 
 
@@ -323,8 +459,42 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     masters, lefs_read = _collect_macros(lefs)
     hard = _hard_macros_with_pg(masters)
+
+    # ---- THE THREE-WAY SPLIT (#785) -------------------------------------- #
+    # An abstract that types NOTHING is not an abstract with nothing to declare.
+    # The typing is recovered from the macro's OWN Liberty view where one is
+    # staged, and those pins then flow through the SAME derivation as a
+    # LEF-typed pin — so a tool-written abstract still yields its rails instead
+    # of a silent NOT_APPLICABLE. What cannot be recovered is REPORTED, not
+    # printed as non-applicability.
+    untyped = {m: p for m, p in _hard_macros_untyped(masters).items()
+               if m not in hard}
+    recovered = _recover_untyped_pg(untyped, proj)
+    for m, pg in recovered.items():
+        hard[m] = dict(pg)
+    unresolved = sorted(m for m in untyped if m not in recovered)
+
     if not hard:
         print(f"=== {PROGRAM} ===")
+        if unresolved:
+            # NOT the same answer as "nothing to derive". Named, printed, and
+            # given its own verdict token so a reader (and a grep) can tell the
+            # two apart.
+            print("  verdict: UNTYPED_ABSTRACT")
+            print(f"  count: 0 hard macro(s) with PG pins across "
+                  f"{len(lefs_read)} LEF file(s), {len(masters)} master(s) — "
+                  f"but {len(unresolved)} staged hard macro(s) type NO pin at "
+                  f"all, so there is no `USE POWER`/`USE GROUND` record to "
+                  f"derive a rail FROM, and no Liberty `pg_pin` beside the "
+                  f"abstract to recover one from either")
+            for m in unresolved:
+                print(f"  ! {m}: {len(untyped[m])} PIN(s), none typed "
+                      f"({', '.join(untyped[m][:8])}) — `magic`'s `lef write` "
+                      f"emits neither `DIRECTION` nor `USE`, so re-attach the "
+                      f"typing to the abstract or stage the macro's Liberty "
+                      f"view beside it; until then this design's rails are "
+                      f"UNDERIVABLE, not absent")
+            return 0
         print("  verdict: NOT_APPLICABLE")
         print(f"  count: 0 hard macro(s) with PG pins across "
               f"{len(lefs_read)} LEF file(s), {len(masters)} master(s)")
@@ -377,6 +547,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     gnd_list = sorted(ground_pins) or sorted(have_gnd)
     ref_gnd = gnd_list[0] if gnd_list else None
 
+    def _provenance(pin: str, use: str, by_macros: List[str]) -> Dict[str, Any]:
+        """WHERE this rail's polarity actually came from.
+
+        A rail recovered from a Liberty `pg_pin` must NOT claim
+        ``macro_lef_pin_use: POWER`` — the LEF said nothing at all, and a
+        provenance field that quotes a record the file does not contain is the
+        same defect one layer down. `hardmacro_supply_intent`'s anti-cheat reads
+        `derived_by` too, so a recovered rail is still correctly excluded from
+        the independent declarations it would otherwise be checked against.
+        """
+        src: Dict[str, Any] = {"declared_by_macros": sorted(by_macros)}
+        rec = [m for m in by_macros if m in recovered]
+        if rec and all(m in recovered for m in by_macros):
+            src["macro_lef_pin_use"] = None
+            src["recovered_from"] = (
+                f"the macro's OWN Liberty `pg_pin ({pin})` declares a "
+                f"pg_type resolving to {use}; its abstract types NO pin at all "
+                f"(a `lef write` emits neither `DIRECTION` nor `USE`)")
+        else:
+            src["macro_lef_pin_use"] = use
+            if rec:
+                src["also_recovered_from_liberty_for"] = sorted(rec)
+        return src
+
     added: List[Dict[str, Any]] = []
     for pin in sorted(power_pins):
         if pin in have_pwr:
@@ -388,10 +582,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _POWER_KEY: pin,
             _GROUND_KEY: ref_gnd,
             "derived_by": PROGRAM,
-            "derived_from": {
-                "macro_lef_pin_use": "POWER",
-                "declared_by_macros": sorted(power_pins[pin]),
-            },
+            "derived_from": _provenance(pin, "POWER", power_pins[pin]),
             "voltage_v": None,
             "voltage_status": "not stated in the design's own documents",
         }
@@ -463,8 +654,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         added.append({
             _NAME_KEY: pin, _POWER_KEY: _primary_power, _GROUND_KEY: pin,
             "derived_by": PROGRAM,
-            "derived_from": {"macro_lef_pin_use": "GROUND",
-                             "declared_by_macros": sorted(ground_pins[pin])},
+            "derived_from": _provenance(pin, "GROUND", ground_pins[pin]),
             "is_power_domain": False,
             "voltage_v": 0.0,
             "voltage_status": (
@@ -500,9 +690,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             bind_map.append({
                 "master": m, "pin": pin, "rail": pin, "use": use,
                 "derived_by": PROGRAM,
-                "rationale": ("LEF types this pin USE " + use +
-                              "; bound to the same-named rail declared in "
-                              "power_domains[] by this program"),
+                "rationale": (
+                    ("the macro's OWN Liberty `pg_pin` types this pin " + use +
+                     " (its abstract types no pin at all)"
+                     if m in recovered else
+                     "LEF types this pin USE " + use) +
+                    "; bound to the same-named rail declared in "
+                    "power_domains[] by this program"),
             })
 
     if args.apply and bind_map:
@@ -521,7 +715,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             "distinct_ground_pins": len(ground_pins),
             "already_declared_power_nets": len(have_pwr),
             "rails_added": len(added),
+            "untyped_abstracts": len(untyped),
+            "untyped_abstracts_recovered": len(recovered),
+            "untyped_abstracts_unresolved": len(unresolved),
         },
+        # #785 — carried whether or not the derivation succeeded. A run that
+        # derived rails for macro A while macro B's abstract types nothing must
+        # not read as a run with nothing left to say about B.
+        "untyped_abstracts": {m: untyped[m] for m in sorted(untyped)},
+        "untyped_abstracts_recovered": {m: recovered[m]
+                                        for m in sorted(recovered)},
+        "untyped_abstracts_unresolved": unresolved,
         "power_pins": {p: v for p, v in sorted(power_pins.items())},
         "ground_pins": {p: v for p, v in sorted(ground_pins.items())},
         "rails_added": added,
@@ -553,6 +757,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  + rail {e[_NAME_KEY]}: power={e[_POWER_KEY]} ground={e[_GROUND_KEY]} "
               f"voltage={v if v is not None else 'unstated'} "
               f"({e['voltage_status']})")
+    for m in sorted(recovered):
+        print(f"  ~ {m}: abstract types NO pin; supply role RECOVERED from the "
+              f"macro's OWN Liberty `pg_pin` — "
+              + ", ".join(f"{p}={u}" for p, u in sorted(recovered[m].items())))
+    for m in unresolved:
+        print(f"  ! {m}: {len(untyped[m])} PIN(s), none typed "
+              f"({', '.join(untyped[m][:8])}) and no Liberty `pg_pin` beside "
+              f"the abstract — this macro's rails are UNDERIVABLE, not absent")
     if not result["applied"] and added:
         print("  (dry run — re-run with --apply to write these into the layer)")
     return 0
