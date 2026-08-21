@@ -487,6 +487,17 @@ check("every contents anchor resolves to a heading",
 # 28. the TITLE's own record count. The title is the one line every reader sees
 #     and the last structural level nothing walked — the STATUS block below it
 #     was checked, the title above it was not.
+# EVERY heading that states a record count, not just line 1. The title check read
+# `MD.splitlines()[0]` and nothing else, so "## The 29 records" sat two short of
+# the truth for as long as it took someone to read the document instead of
+# diffing it. A count is a claim wherever it appears.
+_heads = [(h, int(n)) for h, n in
+          re.findall(r"^(#{1,3} [^\n]*?(\d+) records[^\n]*)$", MD, re.M)]
+_stale = [h for h, n in _heads if n != len(RECS)]
+control("heading-counts", len(_heads) >= 2)     # the title AND the section heading
+check("every heading stating a record count matches the record set",
+      not _stale, f"{len(_heads)} heading(s), records {len(RECS)}"
+      + (f"; stale: {_stale}" if _stale else ""))
 _tm = re.search(r"— (\d+) records", MD.splitlines()[0])
 control("title-count", _tm is not None)
 check("the title's record count agrees with the record set",
