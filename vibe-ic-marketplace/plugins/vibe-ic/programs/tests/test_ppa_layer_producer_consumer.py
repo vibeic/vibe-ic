@@ -91,11 +91,19 @@ SRC = {"path": "artefact.rpt", "sha256": "sha256:" + "ab" * 32,
 #     F-4  the same 3 area records are refused by metrics.validate
 #     F-4  48 of 48 power records from power's own fixtures are refused
 #     F-4  every timing row is refused, and MetricIndex.add raises on one
-_F5_AREA_UNIT_DISAGREES = {
-    "area.proxy.cell_count",       # declares 'cells',     name requires 'count'
-    "area.proxy.wire_count",       # declares 'wires',     name requires 'count'
-    "area.proxy.wire_bit_count",   # declares 'wire_bits', name requires 'count'
-}
+# F-5 IS FIXED AND THE SET IS EMPTY. It held the three `*_count` area metrics
+# that declared 'cells' / 'wires' / 'wire_bits' where the metric NAME requires
+# 'count'. `_ppa/area.py` — the record lane's file, handed over in RESULT.md
+# per PPA_INTERFACES §6 — now declares 'count' for all three, and all six
+# pinned arms xpassed. This file's own instruction at that point is to delete
+# the pin: "a pin that survives its bug is a second bug, and it is the one
+# that hides the first".
+#
+# THE SET IS KEPT, EMPTY, RATHER THAN THE BRANCH BEING DELETED, because the
+# next disagreement of this shape is named by adding one string here. It is
+# checked against the taxonomy below so it can never rot into a list of names
+# that no longer exist.
+_F5_AREA_UNIT_DISAGREES: set = set()
 
 
 def _pin(finding, detail):
@@ -136,6 +144,15 @@ def test_the_area_metric_taxonomy_is_not_empty():
     """The denominator for the parametrized arm below. An empty taxonomy makes
     every unit check vacuously green."""
     assert len(AREA_METRICS) >= 14, AREA_METRICS
+
+
+def test_the_f5_pin_names_only_metrics_that_exist():
+    """A pin list that outlives its metric names stops pinning anything and
+    nothing says so. Empty is the expected state now that F-5 has landed."""
+    unknown = _F5_AREA_UNIT_DISAGREES - set(AREA_METRICS)
+    assert not unknown, (
+        f"_F5_AREA_UNIT_DISAGREES names metrics the area taxonomy no longer "
+        f"has, so those pins can never fire: {sorted(unknown)}")
 
 
 @pytest.mark.parametrize("metric", AREA_METRICS)

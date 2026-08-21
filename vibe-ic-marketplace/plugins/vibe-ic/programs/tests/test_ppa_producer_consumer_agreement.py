@@ -151,6 +151,21 @@ NON_CARRIERS = {
     "vibeic.ppa.search_manifest.v1":        "the candidate lifecycle",
     "vibeic.ppa.closure_run.v1":            "a controller run",
     "vibeic.ppa.actuator_registry.v1":      "what a controller may move",
+    # The agent control plane (`_ppa/agent_policy.py`, `_ppa/agent_router.py`,
+    # `_ppa/agent_context.py`). None of these five carry a reading: the context
+    # is deliberately evidence REFERENCES and hashes with no file content at
+    # all, and the other four are a permission set, a situation, a diagnosis
+    # and a proposal. Declared rather than left out, because "not classified"
+    # and "classified as not a carrier" are the two states this guard exists to
+    # keep apart.
+    "vibeic.ppa.agent_policy.v1":           "what an agent is allowed to do",
+    "vibeic.ppa.situation.v1":              "the question put to the router",
+    "vibeic.ppa.diagnosis.v1":              "the router's answer, not a reading",
+    "vibeic.ppa.agent_handoff.v1":          "an explicit waive to an agent",
+    "vibeic.ppa.agent_proposal.v1":         "what an agent proposes doing",
+    "vibeic.ppa.agent_context.v1":          "evidence REFERENCES and hashes; "
+                                            "it carries no file content at "
+                                            "all, by construction",
 }
 
 _SCHEMA_RE = re.compile(r'"(vibeic\.ppa\.[a-z_0-9]+\.v\d+)"')

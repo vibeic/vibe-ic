@@ -963,6 +963,13 @@ RECORD_CARRIERS: Dict[str, str] = {
     "vibeic.ppa.backend_records.v1": "records",
     "vibeic.ppa.timing_rows.v1": "rows",
     "vibeic.ppa.power.v1": "metrics",
+    # The sign-off producer for the physical / reliability / equivalence axes
+    # (`_ppa/signoff.py`, `SCHEMA_BUNDLE`). Registered because it genuinely
+    # carries `vibeic.ppa.metric.v1` records under `records` — leaving it out
+    # is not neutral: every record it holds is refused UNRECOGNISED_DOCUMENT
+    # and the extractor reports zero over a bundle full of readings, which is
+    # F-4 exactly, one producer later.
+    "vibeic.ppa.signoff_records.v1": "records",
 }
 
 
