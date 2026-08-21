@@ -1,0 +1,315 @@
+# Full test coverage for the two tape-out paths, IC and IP
+
+Branch `test/pathsteps-ic-ip-matrix`, cut from `origin/main` **8a9c5ad9e**
+(`[v1.11.51]`, fetched 2026-08-21 18:07). Worktree at cut: 5658 tracked files,
+`git status --porcelain` empty.
+
+One file is added and **nothing existing is modified**:
+
+```
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_path_step_matrix_ic_and_ip.py
+```
+
+129 collected node ids. No flow yaml edit, no program edit, no version bump,
+no `--write-baseline`, no manifest edit.
+
+---
+
+## 1. What was built
+
+A **design class x path step** matrix. Seven classes, five steps, every cell's
+state asserted explicitly, and every cell decided by driving **the flow's own
+predicates over a real project tree** — `flow_compliance_check._check_condition`
+and `flow_compliance_check.check_step` — never by reading the yaml and
+asserting what it appears to say.
+
+That distinction is not stylistic. The pre-existing
+`test_pad_and_seal_ring_on_the_chip_path.py:242` asserts the condition's TEXT
+and pins 15.5ic's spelling to 26.5ic's and to 37.5ic's. All three can be
+spelled identically and still be wrong for a class of design; only running them
+on a tree of that class can say.
+
+### The classes
+
+Five from the brief, plus two the flow can distinguish that the brief did not
+name:
+
+| class | tree | why it exists |
+|---|---|---|
+| `self_tapeout_pdk_ships_no_shuttle` | `SELF_TAPEOUT.txt`, `ihp-sg13g2` | the registry names no shuttle |
+| `self_tapeout_pdk_ships_a_shuttle` | `SELF_TAPEOUT.txt`, `gf180mcuD` | the registry names a LIVE one |
+| `shuttle_chip_template_fetched` | `slots/1x1.yaml`, `gf180mcuD` | the operator's geometry is here |
+| `shuttle_chip_template_not_fetched` | `SELF_TAPEOUT.txt`, `gf180mcuD` | see finding F1 — same tree as the row above |
+| `ip_hardmacro` | `NO_TEMPLATE.txt` | the 37.5ip terminal |
+| **`no_router_file_step_0_5ic_never_ran`** | no router artefact at all | **added.** The "someone forgot" class. Four step comments rest on the claim that 0.5ic's gate reports it; nothing tested that claim. |
+| **`two_router_files_at_once`** | `SELF_TAPEOUT.txt` + `NO_TEMPLATE.txt` | **added.** Three steps justify their `any_of` with "no tree ever holds both". A tree that does makes every terminal run at once. |
+
+### The three layers
+
+**Condition layer** (35 cells) — `_check_condition` over each class tree.
+RUNS / SKIPPED-CONDITION / MISSING, one stated expectation per cell, no default
+and no wildcard: a cell nobody wrote is a `KeyError`, not a silent pass.
+
+**Verdict layer** (35 cells) — `check_step` over a BARE tree. A cell that RUNS
+must land on `MISSING`, never on a skip. This is the original defect stood on
+its head: 15.5ic on a self tape-out used to report SKIPPED-CONDITION (nothing
+to see) and must now report MISSING (a pad ring is owed and is not there).
+
+**Gate layer** — two halves:
+* *vacuous-pass guard*, per cell: no gate of a running step exits 0 on a tree
+  carrying only a router file. rc 1 (a finding) and rc 2 (`[CANNOT CHECK]`) are
+  both answers; rc 0 is not an answer at all.
+* *red reachability*, per step: each of the five gates reaches **rc 1** on a
+  constructed refusal. A gate stuck on rc 2 is a step stuck on SKIP one layer
+  down — which is exactly how `pad_ring_gen` could only ever take its SKIP
+  branch for a year.
+
+**MISSING never reads as SKIPPED-CONDITION.** `_state()` returns MISSING for a
+step id the flow does not carry at all, and the retired `37.5self` is the
+standing control that proves the resolver keeps the two apart.
+
+---
+
+## 2. Findings
+
+### F1 — a self tape-out on a shuttle-served PDK cannot pass 37.5ic. REPORTED, not fixed.
+
+`tapeout_precheck.operator_arm_applicability` decides the operator arm from two
+facts — the PDK's registry entry, and whether slot geometry was fetched — and
+never from the **router file**. So a die taping ITSELF out on `gf180mcuD`
+lands on `NOT_DETERMINED` ("the template was never fetched") for a template it
+was never going to fetch, and `NOT_DETERMINED` exits 1.
+
+The flow has the answer and this arm does not ask for it:
+`_tapeout_declaration.route_of` is the canonical three-way router, and
+`tapeout_declaration_gen` writes into `SELF_TAPEOUT.txt`, verbatim, that *"the
+operator's own container is the arm it does not get, because there is no
+operator."*
+
+**Why I did not fix it.** Reading the router file would close this, and would
+also make a design that genuinely INTENDED the shuttle and forgot to fetch read
+as "one fewer arm" — a silence, which is the disease. The flow cannot tell the
+two apart because there is no declared submission target (finding F2). The
+honest remedy is structural.
+
+Pinned by `test_a_self_tapeout_on_a_shuttle_pdk_is_refused_at_37_5ic` (our arm
+stubbed ALL GREEN, so the refusal is attributable to the missing arm and
+nothing else) and by
+`test_the_route_predicate_exists_and_the_operator_arm_does_not_consult_it`,
+which goes red the moment the arm starts consulting the route.
+
+### F2 — the flow cannot distinguish two of the brief's five classes.
+
+The brief names "self tape-out, PDK ships one" and "shuttle chip, template NOT
+fetched" as separate classes. Their trees are **byte-identical**: a chip with no
+ingested slot geometry gets `SELF_TAPEOUT.txt` whatever it intended, because
+`route_of` reads `has_slots` and the declared `deliverable`, and the 18-question
+declaration has no submission-target question. Both rows are kept, and
+`test_the_flow_cannot_tell_a_self_tapeout_from_an_unfetched_shuttle` asserts the
+declaration has no `submission_target` — so if one is ever added, the test goes
+red and the two rows become genuinely different classes.
+
+### F3 — step 38 is a SIXTH path-specific step, and it has no condition. REPORTED, not fixed.
+
+The five steps carry the path in their id spelling, and nothing makes that
+authoritative. Asking the question the other way round — *after the step the
+flow itself calls "the cell/IP path TERMINAL", which later steps does an IP
+still owe?* — returns exactly two, and one of them has no way out:
+
+```
+38  Foundry Handoff      no condition, no escape hatch
+39  FPGA final sign-off  no condition, but --skip-hardware already waives it
+                         (_FPGA_BOARD_STEP_IDS = {6, 39}); measured WAIVED
+```
+
+Everything else (M1..M4, 40..44) falls away on a condition of its own.
+
+Measured on a **COMPLETE** IP deliverable — the streamed GDS plus all four
+views — step 38 reports `MISSING` with all five kit members named. An IP has no
+reticle, no wafer and no dicing street; step 38's own notes say the kit exists
+because otherwise *"the foundry cannot accept the GDS for fab"*, which is a
+statement about a die. Neither `foundry_handoff_package_check` nor
+`foundry_handoff_pack_gen` contains any hardmacro or route branch — the gate
+speaks only of *"the chip-named GDS deliverable"*.
+
+**Why I did not fix it.** The remedy NARROWS a sign-off step's applicability,
+and getting that wrong lets a die skip foundry handoff — the opposite and worse
+failure. Recorded as `xfail(strict=True)` with the evidence, so it XPASSes and
+forces the waiver's removal the moment it lands.
+
+### F4 — three producers a path step declares are invoked by nothing. REPORTED, not fixed. **This is the headline.**
+
+Dimension 1 of the 63x8 matrix asks whether a step's **gate** is wired, and
+answers it by running `_evaluate_gate` for real. All five path steps pass.
+Nobody asks the other half: a step also declares the programs that **produce**
+its `required_outputs`, and a step whose producer nothing dispatches reports
+MISSING for every design forever — which every reader charges to the design.
+
+Measured by AST over every `programs/*.py` (string constants and imports,
+docstrings excluded), plus the flow's own gate clauses as a second channel:
+
+| step | producer | invoker |
+|---|---|---|
+| 0.5ic | `submission_template_ingest` | **NONE** |
+| 0.5ic | `tapeout_declaration_gen` | **NONE** |
+| 15.5ic | `pad_assignment_gen` | its own gate clause |
+| 15.5ic | `pad_ring_gen` | **NONE** |
+| 26.5ic | `die_finishing_gen` | `phase3_one_shot_runner.py:23340` |
+| 37.5ic | `tapeout_docs_gen` | its own gate clause |
+| 37.5ip | `digital_hardmacro_gen` | `phase3_one_shot_runner.py:31738` |
+
+The one-shot runners hardcode their steps; `phase3_one_shot_runner` does not
+load the flow yaml at all, so there is no dynamic dispatcher that a name scan
+would miss. Nothing under `commands/`, `skills/`, `agents/`, `hooks/`,
+`mcp-eda/`, `benchmark/`, `config/` or `_shared/` mentions any of the three.
+
+**The consequence is the whole point.** `tapeout_declaration_gen` and
+`submission_template_ingest` are the ONLY things in this flow that write a
+router file, and every other path step conditions on one. So **no run of this
+flow reaches a router file by running one**, which puts every design in this
+matrix's `no_router_file` row — where 15.5ic, 26.5ic, 37.5ic and 37.5ip ALL
+report SKIPPED-CONDITION. That is the same silent skip the chip-path work
+(v1.11.38) landed to close, still live one layer up: the condition was repaired
+and the thing that satisfies it was never dispatched.
+
+The docstring exclusion is load-bearing and was measured, not assumed:
+`pad_assignment_gen`'s docstring contains the line
+`programs/pad_ring_gen.py    reader`, and a text scan counts that as an
+invocation of the one producer in the list that has none.
+
+**Why I did not fix it.** Wiring a producer into a one-shot runner changes what
+a real run does and blocks on. The repo's own gates call that the flow owner's
+call, and the `flow-change-acceptance` standard for it — bidirectional negative
+control, corpus sweep with zero false positives, an explicit
+BLOCKING-vs-ADVISORY declaration, prove-by-run — is more than a test branch
+should decide unilaterally.
+
+### F5 — minor: the flow names a step that does not exist.
+
+`flow/phase1_phase2_phase3.yaml:668`, inside 0.5ic's comment, says in the
+present tense that `SELF_TAPEOUT.txt` is *"read by step 37.5self"*. `37.5self`
+was retired into 37.5ic as an ARM on 2026-08-20. Comment-only, no behaviour.
+Not edited: the yaml is contended by the matrix-dimension lane and a one-line
+comment is not worth an adjacency conflict. `programs/tapeout_precheck.py:22`
+carries the same stale route table, but its surrounding prose is explicitly
+historical.
+
+---
+
+## 3. Mutation arms
+
+Every guard was mutated and the reddened node ids recorded. The deliverable is
+tests, so the arm proves each guard reddens against the defect it guards.
+Run serially in a dedicated worktree; the tree is `git checkout -- .` between
+mutations and ends `porcelain=0`.
+
+MUTATION_TABLE_PLACEHOLDER
+
+### The arm that found a real weakness in my own test
+
+**M5 reddened nothing on the first pass.** `_path_steps()` derived the path
+steps from the `ic`/`ip` id suffix; `37.5self` ends in neither, so re-adding it
+— the exact three-route defect this campaign closed — was invisible, and
+`test_a_step_the_flow_does_not_carry_reads_MISSING_and_never_a_skip` was
+asserting something trivially true. A predicate that cannot fail is worthless.
+
+Fixed in `08d398576`: a step is on a path because its **condition reads a
+router artefact**; the suffix is a naming convention and a convention cannot be
+what a guard rests on. Both discriminators are kept. `_state()` now resolves
+against the WHOLE flow, so MISSING means "the flow does not carry it" rather
+than "the subset did not match it".
+
+**M9 was a bad mutation, not a weak test.** Renaming
+`RULE_ROUTER_CONTRADICTION` renames both sides of a comparison that reads the
+constant — correct behaviour, since pinning the string literal would be worse.
+Replaced by M9b, which makes the contradiction **undetectable** rather than
+renamed.
+
+---
+
+## 4. A/B against the base, by test id
+
+AB_PLACEHOLDER
+
+---
+
+## 5. What I could NOT settle
+
+* **F1's correct remedy.** Reading the router file in
+  `operator_arm_applicability` closes the self-tape-out case and opens the
+  forgot-to-fetch case. I could not find a third reading that closes both with
+  the artefacts the flow has today, and I am not confident enough in either
+  direction to change a step whose whole value is that its verdict is not one
+  we wrote.
+
+* **Whether step 38 should skip or should have an IP-shaped kit of its own.**
+  I established that an IP cannot satisfy it and that nothing in the step knows
+  the IP path exists. I did not establish which of the two remedies the owner
+  wants, and they are not the same change.
+
+* **The blast radius of wiring the three producers (F4).** I measured that they
+  are unwired and what follows from it. I did not measure what wiring them
+  would do to existing runs, because that needs the corpus, and
+  `benchmark-data` is not in this tree (the pre-push benchmark-evidence gate
+  reports `--tree benchmark-data is not a directory`).
+
+* **`test_digital_hardmacro_gen.py::test_a_pinless_abstract_is_never_staged`**
+  fails on **base** and at head identically. It is a host artefact, not a
+  defect: the test asserts the refusal message "NO \`PIN\` block" and gets
+  "magic did not complete: watchdog reported launch_error after 0s" — `magic`
+  is not on this host's PATH. Worth noting that a tool-absence renders as FAIL
+  where the repo's own contract would make it rc=2 / `[CANNOT CHECK]`, but that
+  is not this branch's scope.
+
+---
+
+## REQUESTS TO THE LANDER
+
+1. **F4 is the one that matters.** Three producers — `submission_template_ingest`,
+   `tapeout_declaration_gen`, `pad_ring_gen` — are declared by a step and
+   invoked by nothing. The first two write the router file every other path
+   step conditions on, so the chip-path repair that landed as v1.11.38 cannot
+   fire on any real run. Please decide who wires them and to which runner. The
+   strict xfail
+   `test_no_path_step_declares_a_producer_that_nothing_can_invoke` XPASSes and
+   forces its own removal the moment they are.
+
+2. **Dimension 1 of the 63x8 matrix covers gates only.** Whatever is decided
+   about F4, the general gap is that no dimension asks whether a step's
+   declared PRODUCERS are dispatchable. That is a matrix-dimension question
+   and belongs to the lane that owns it, not here.
+
+3. **F3 — the proposed edit for step 38, if you want it.** LOCAL to step 38's
+   block, and it is 37.5ic's chip-path marker verbatim:
+
+   ```yaml
+     - id: 38
+       condition:
+         any_of: true
+         files_exist:
+           - "input/submission_template/slots/*.yaml"
+           - "input/submission_template/SELF_TAPEOUT.txt"
+       condition_kind: design_dependent
+       name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
+   ```
+
+   Verified as mutation M10: with it applied, the xfail XPASSes (the anti-rot
+   fires) and no other cell in this matrix moves. **Do not land it without
+   deciding F3's open question first** — an IP might deserve an IP-shaped
+   handoff kit rather than a skip.
+
+4. **F1 — a 19th declaration question.** A declared submission target would let
+   37.5ic's operator arm tell "there is no operator to ask" from "we never went
+   and asked", and would make the brief's two shuttle classes genuinely
+   distinct. Structural, so I did not make it.
+
+5. **No protected path is touched.** The branch adds one file under
+   `programs/tests/` and edits nothing else, so
+   `tools/ci/protected_landing_transition.json` needs no change and I have no
+   sha256 to hand you.
+
+6. **`git push` needs the tracked hook on this host.** `.git/hooks/pre-push`
+   symlinks to the main checkout's copy, which was 646 commits behind
+   `origin/main` and still runs the benchmark-evidence gate that moved to
+   `gatekeeper-land.sh`. Pushed with
+   `git -c core.hooksPath=tools/git-hooks push`; the tracked hook passes.
