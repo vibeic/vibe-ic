@@ -100,9 +100,81 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # a RECORD rather than a design, and the corpus carries none yet (#1121's first
 # head-to-head has not run), so it is wired through the uncheckable channel: it
 # exits 2 and says so, rather than printing PASS over an empty population.
+#
+# THE CORPUS MOVED AND THIS LINE DID NOT FOLLOW IT. `benchmark-data` went to its
+# own repository in v1.10.56, so `$ROOT/benchmark-data` has not existed here
+# since — and `Path.glob` yields nothing for a missing directory, so this gate
+# printed `0 head-to-head record(s) found` and exited 2 exactly as a clean empty
+# corpus would. MEASURED: the two were byte-identical, which is a denominator
+# asserted over a population nobody searched.
+#
+# The checker now resolves its corpus through `_corpus_location` — the same seam
+# `L-doc field producer` and the two `tracked-symlink` gates use for the same
+# v1.10.56 breakage (vibe-ic#1710) — so $VIBE_IC_BENCHMARK_DATA now actually
+# aims this gate at a clone, and a pointer that is SET AND WRONG is UNDETERMINED
+# rather than laundered into an empty corpus.
+#
+# DELIBERATELY *NOT* `--corpus-may-be-absent`. That flag's outcome is rc 0
+# NO_CORPUS, and rc 0 here would be this gate printing a PASS over a population
+# it never opened — the one thing #1241 wired it through this channel to avoid.
+# Absent stays rc 2, which is what the declaration below already promises.
 uncheckable_until 2026-11-30 "validates a RECORD rather than a design, and the corpus carries none yet (#1121's first head-to-head has not run), so rc 2 says the population is empty instead of printing PASS over it. Goes live by itself on the first head-to-head committed"
 run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
+
+# THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
+#
+# The v1.11.19..v1.11.32 PPA stack landed five more gates over PPA campaign
+# DOCUMENTS, and `checker_execution_wiring_audit` / `gate_is_wired_check` both
+# reported all five as consulted by no automatic verdict — the same finding
+# #1241 made about `ppa_head_to_head_check`, which is why that gate is on the
+# line above. The lanes could not wire them: this file and the flow YAML are
+# single-writer surfaces they were forbidden to touch, so the wiring is the
+# lander's step and this is it.
+#
+# WHY HERE AND NOT THE FLOW YAML, DECIDED PER PROGRAM AND MEASURED.
+# Each of these validates a RECORD, not a design — a contract, a candidate set,
+# a published frontier, a coverage bundle, a pair of contracts — and no flow
+# step produces any of them. A flow clause would therefore have to name a path
+# nothing writes, and `test_matrix_d2_falsifiable` demands that every BLOCKING
+# clause reach a content-earned FAIL: MEASURED with two of them wired at step
+# 36, `test_d2_gate_has_a_reachable_fail[step36]` goes red with both clauses at
+# VACUOUS_PASS, because d2 materialises an unmet `condition_files_exist` as `{}`
+# and `{}` is rc 2 to every one of these gates. Paying that with an UNREDDENED
+# registration would be recording a gap this lander created, which is the one
+# thing the register is not for. The record gates belong beside the record gate
+# that is already here; promoting them into the flow is a flow-owner change with
+# its own fixtures, and it is written up as a request rather than done quietly.
+#
+# rc 2 ON EVERY ONE OF THEM, MEASURED 2026-08-21 AGAINST AN ABSENT RECORD, which
+# is what chooses the wrapper rather than a guess:
+#   ppa_contract_check           rc 2  [CANNOT CHECK] ... contract.json: absent
+#   ppa_measurement_check        rc 2  [CANNOT CHECK] INPUT_ABSENT: no such bundle
+#   ppa_feasibility_check        rc 2  [CANNOT CHECK] candidates not found
+#   ppa_pareto_check             rc 2  [CANNOT CHECK] candidates not found
+#   ppa_problem_integrity_check  rc 2  [CANNOT CHECK] baseline ...: absent
+# Not one of them exits 0 on an input it never opened, and each NAMES the file
+# it looked for — so `run_tolerating_uncheckable` carries "I could not look" to
+# the roll-up as NOT_CHECKED instead of folding it into "I looked and it was
+# clean". `run` would be wrong here for the same reason it is right for the two
+# flow-document gates further down: those have a subject in this repository.
+#
+# LIMIT, STATED RATHER THAN LEFT TO BE FOUND. These five take an EXACT path,
+# not a corpus walk, so unlike the head-to-head gate above they do not follow
+# `$VIBE_IC_BENCHMARK_DATA` and a record filed under another name is not judged.
+# The refusal is at least self-describing — it prints the path it opened — but
+# the honest fix is a `--corpus` mode resolved through `_corpus_location`, which
+# is lane-owned code this landing may not edit. Recorded as a request.
+uncheckable_until 2026-11-30 "validates a measurement CONTRACT rather than a design, and no run in this repository has filed one yet; rc 2 names the absent document instead of printing PASS over it"
+run_tolerating_uncheckable "PPA measurement contract" "$ROOT" python3 "$PG/ppa_contract_check.py" --contract "$ROOT/benchmark-data/ppa/contract.json"
+uncheckable_until 2026-11-30 "validates a RECORD SET against a declared denominator, and no run in this repository has filed one yet; rc 2 names the absent bundle instead of computing a vacuous 100% coverage"
+run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_measurement_check.py" --coverage "$ROOT/benchmark-data/ppa/coverage.json"
+uncheckable_until 2026-11-30 "adjudicates a CANDIDATE SET for promotion, and no run in this repository has filed one yet; rc 2 names the absent candidates instead of reporting every candidate feasible over an empty list"
+run_tolerating_uncheckable "PPA promotion feasibility" "$ROOT" python3 "$PG/ppa_feasibility_check.py" --candidates "$ROOT/benchmark-data/ppa/candidates.json" --contract "$ROOT/benchmark-data/ppa/contract.json"
+uncheckable_until 2026-11-30 "recomputes a PUBLISHED frontier, and no run in this repository has published one yet; rc 2 names the absent candidates instead of certifying a frontier it never recomputed"
+run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$ROOT/benchmark-data/ppa/candidates.json" --contract "$ROOT/benchmark-data/ppa/contract.json" --frontier "$ROOT/benchmark-data/ppa/frontier.json"
+uncheckable_until 2026-11-30 "compares TWO contracts to establish that both arms solved the same problem, and no run in this repository has filed a pair yet; rc 2 names the absent baseline instead of reporting two runs comparable"
+run_tolerating_uncheckable "PPA arms solved one problem" "$ROOT" python3 "$PG/ppa_problem_integrity_check.py" --baseline "$ROOT/benchmark-data/ppa/baseline_contract.json" --candidate "$ROOT/benchmark-data/ppa/contract.json"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
@@ -218,39 +290,38 @@ run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_s
 # run nowhere at all -- which is the exact condition it exists to detect.
 run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_check.py" --repo-root "$ROOT"
 
-# vibe-ic#215/#566 — the image-version gate is BLOCKING, and what it blocks on
-# is now exactly the half this repo owns: every live pointer equals the anchor,
-# and the anchor has not been rolled below what this repo already committed.
-# Both are read from the tree and from git, so the verdict has a fixed point.
+# vibe-ic#215/#566/#927 — THE IMAGE-VERSION GATE IS GONE, with the version it
+# gated. `tools/vibeic-eda/VERSION` held vibeic-eda's version number inside THIS
+# repo, so every image release needed a PR here; `sync_image_version.py --check`
+# was the blocking gate that kept the install docs in step with it, and
+# `--report-upstream` was the non-blocking half that asked the registry.
 #
-# vibe-ic#927 — it used to ALSO block on `--require-remote`, comparing the
-# anchor against `:latest` and against the newest tag on ghcr. Those are names
-# another org re-points on its own cadence: the gate went red when the fork
-# published (0.2.75 -> .81 -> .82 -> .83 in about twelve hours), green again
-# when they were quiet, and could not tell "we are behind" from "the registry
-# moved under us". Bumping the anchor each time closed the instance and left
-# the mechanism. The comparison still HAPPENS — it moved to the report on the
-# next line — it just no longer decides whether anyone can land.
+# Removed rather than fixed, because measured 2026-08-21 the mechanism had
+# stopped paying for itself in both directions:
 #
-# vibe-ic#539, now RESOLVED as a side effect: this gate was the one declared
-# out of the host-independence comparison, because that probe runs every gate
-# TWICE and requires the verdicts to match, and a network round-trip can differ
-# between invocations for a reason that is not in the commit (v1.7.92 went RED
-# then GREEN on an identical commit). --check makes no network call at all now,
-# so the EXCLUDE directive is GONE and the gate is probed like every other one.
-run "image-version pins are internally consistent" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check
-
-# The other half of #927, deliberately NOT a verdict. "Has upstream published
-# something newer?" is real and worth knowing, so it is asked on every run and
-# the answer is RECORDED with the instant it was taken — a reading with no
-# timestamp cannot be told from a current one by a later reader. It exits 0 when
-# it got an answer (agreeing or not) and 2 when the registry did not respond, so
-# it can never be the reason a landing fails. Adopting a newer image is this
-# repo's call, made deliberately with `sync_image_version.py --set X.Y.Z`, which
-# is where the #354 "the tag must actually resolve" check now lives.
-uncheckable_until 2027-02-28 "needs a REACHABLE ghcr registry: --report-upstream asks the registry what it has published, and rc 2 means it did not respond (an answer that disagrees is rc 0 by design -- this gate can never fail a landing)"
-# host-independence: EXCLUDE — resolves a tag on a remote registry, so two invocations can differ for a reason that is not in the commit
-run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --report-upstream --require-remote
+#   * `--check` was RED on main. Its one live pointer was
+#     `crosslayer_rewrite_equivalence.py:379`, a comment recording WHICH image a
+#     yosys measurement was taken on. The gate was demanding that a measurement
+#     record be falsified to match an anchor;
+#   * of 11 registered install docs only ONE still carried an X.Y.Z pin at all.
+#     The documentation had already decoupled itself; the anchor reached almost
+#     nothing;
+#   * the anchor said 0.3.16 while the host running the gates had 0.3.13, so the
+#     two gates that judge the IMAGE were judging one this machine does not have
+#     — a multi-gigabyte pull inside a hygiene run, or a timeout reported as
+#     "could not check".
+#
+# What the anchor was standing in for is REPRODUCIBILITY AND ATTRIBUTION, and a
+# DIGEST gives that without anyone's cooperation: `_eda_image.judged_image()`
+# names the image this host actually holds by the bytes it is made of, and every
+# verdict-bearing report now carries that digest (`_eda_image.verdict_report`
+# REFUSES to write one that does not).
+#
+# The one property `--check` had that is worth keeping — nothing in the tree may
+# PIN an image version — moved to a shipped test that runs everywhere the plugin
+# runs, instead of a repo-root tool that only runs here:
+#   programs/tests/test_the_eda_image_is_resolved_not_remembered.py
+#     ::test_no_shipped_file_reads_a_vibeic_eda_version_from_our_source_tree
 
 # On 2026-07-28 a retried `gh repo fork` created 25 forks of one upstream in six
 # minutes — the command is not idempotent and invents a numbered name instead of
@@ -321,6 +392,36 @@ run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforceme
 # what makes a second declaration impossible rather than merely noisy, and it
 # also refuses the degenerate repair of deleting the surviving one.
 run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
+
+# vibe-ic#1121 family, landed in the v1.11.19..v1.11.32 PPA stack and wired
+# here by the lander because `flow/` and `tools/ci/` are single-writer surfaces
+# the lane could not touch.
+#
+# ITS SUBJECT IS THE SHIPPED FLOW DOCUMENT, which is what puts it in this file
+# rather than in a flow clause: a repo-wide invariant needing no PR context and
+# no design run, sitting beside the two gates above that read the same document.
+# It asks a question `closed_loop_edge_check` explicitly stops short of — that
+# check proves a declared `closed_loop` edge is WELL-FORMED and says in its own
+# words that nothing executes one — namely, for each declared edge, is there
+# CODE that can take it, and what does that code prove? It refuses to let an
+# edge nothing can take be reported as a closed-loop success.
+#
+# PLAIN `run`, and the wrapper was measured before it was chosen. On the shipped
+# tree, 2026-08-21: rc 0, "22 declared closed_loop edge(s) over 69 step(s);
+# DECLARED_ONLY=18, EXECUTABLE=1, REMEASURED=3, ROLLBACK_PROVEN=0". It has a
+# real subject in this repository and a real denominator that it prints, so
+# there is no "I could not look" state for `run_tolerating_uncheckable` to
+# carry, and using that wrapper would give an rc 2 somewhere to hide.
+#
+# BLOCKING FROM ITS FIRST RUN IS AFFORDABLE, MEASURED: the census is green today
+# and 18 DECLARED_ONLY edges are REPORTED, not failed — the tier a declaration
+# gets by having no registry entry is a state the gate publishes, not a finding.
+# What it fails is a citation that does not verify against the tree, so nothing
+# pre-existing is being blessed and nothing pre-existing turns red.
+#
+# ONE LINE, no `\` continuation — `gate_discloses_denominator_check.parse_gates`
+# is line-anchored, so a wrapped argv reaches its probe with the tail missing.
+run "closed-loop executable census" "$ROOT" python3 "$PG/closed_loop_executable_coverage_check.py"
 
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
@@ -401,7 +502,7 @@ run "backlog items are tracked" "$ROOT" python3 "$PG/backlog_sanitize_check.py" 
 # returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
-uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside it, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1)"
+uncheckable_until 2027-02-28 "needs a vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside the digest this host resolves, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1). It does NOT pull -- pass --allow-pull if that is what you mean"
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
@@ -529,7 +630,23 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # roll-up honest.
 _per_published_cell_gates() {
   local _def="$1" _cell
-  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  # `routed_def_corpus.py` emits ABSOLUTE DEF paths -- its own docstring says
+  # "one absolute DEF path per line" -- and the published corpus may sit
+  # OUTSIDE this repository entirely, because $VIBE_IC_BENCHMARK_DATA names a
+  # clone whose root is the published tree. So $ROOT is not this path's parent
+  # and must not be prefixed to it.
+  #
+  # v1.10.69 replaced this loop's producer with that program. The one it
+  # replaced was `git -C "$ROOT" ls-files`, whose output IS repo-relative, so
+  # the prefix below was correct for it and was carried over unchanged. The
+  # result was "$ROOT/$ABSOLUTE" -- a path that cannot exist. Every per-cell
+  # gate then answered rc 2 "I could not look", and `run_tolerating_uncheckable`
+  # absorbed all four under exemptions whose stated reason is FALSE ("this cell
+  # ships no readable macro/OBS geometry", "no parseable layout", "no step
+  # reports", "NO_BASELINE"). The corpus read as CHECKED while nothing in it was
+  # ever opened -- the empty-population refusal above cannot see this, because
+  # the population is 1, not 0.
+  _cell="${_def%/phase3/stage3/pnr/routed.def}"
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
@@ -636,7 +753,7 @@ run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_select
 # a command consisting of the backslash alone. Both reported GATE_UNRUNNABLE
 # (`No such file or directory: '\'`), which is not a failure of this gate but
 # of the script's readability by its own readers.
-uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of it, and rc 2 means the PDKs could not be read at all"
+uncheckable_until 2027-02-28 "needs a vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of the digest this host resolves, and rc 2 means the PDKs could not be read at all. It does NOT pull -- pass --allow-pull if that is what you mean"
 run_tolerating_uncheckable "PDK via patch vs layer min width" "$ROOT" python3 "$PG/pdk_via_patch_meets_layer_min_width_check.py" --from-image --advisory
 
 # vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
@@ -772,6 +889,15 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # baseline register did not move with the corpus either, so a corpus-less run
 # still checks that `findings_total` equals the sum of `per_run` — a ceiling
 # raised by hand to buy headroom is rc 1 with or without a corpus.
+#
+# AND A CEILING LOWERED BY HAND IS TOO (vibe-ic#1704). The register records the
+# counts it moved FROM beside the counts it holds, plus the reason it was
+# allowed to fall; a corpus-less run re-checks that pairing exactly as it
+# re-checks the sum. `--write-baseline` — the command this gate tells an
+# operator to run on a shrink — refuses to lower any of `findings_total`,
+# `runs_swept` or `runs_with_reports` without `--shrink-reason '<why>'`.
+# Nothing on the line below writes anything, so this gate is read-only as
+# before.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
@@ -969,12 +1095,63 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # decides whether everything else is honest. 95 tests; measured twice at
 # this consolidation at 25 s and 137 s on the same tree -- the mutation
 # probes dominate and vary with machine load, so budget for the high one.
-# Every subprocess this file starts is bounded at 55 s or less, strictly under
-# the 180 s `--timeout-method=thread` session bound below, so a hang fails
-# ONE test here instead of killing the run and losing every other result.
+# Every subprocess this file starts is bounded at 55 s or less, and that is now
+# the ONLY bound: the `-p pytest_timeout --timeout=180 --timeout-method=thread`
+# session bound this line used to carry is gone.
+#
+# THE CLAIM THAT USED TO STAND HERE -- "it was the LAST SURVIVING USE in this
+# repo of an idiom the repo has already retired" -- WAS FALSE, and stayed false
+# for three versions. MEASURED 2026-08-20 at 9cc09b863 (v1.11.5), FOUR live
+# requests remained: `programs/tests/test_pytest_per_file_junit.py:389`, two in
+# `programs/tests/test_issue1181_probe_budget_and_summary.py`, and the DEFAULT
+# RUNNER of `tools/core_agent/covered_by.py`. They cost 28 red cells on the
+# landing gate in the anchored image that vanished on any host with an ambient
+# pip install -- a set difference of 28 whose entire content was the runtime,
+# not the code under test. The claim was true of every file anybody had
+# PINNED, and each of the five pins was scoped to one named file, so none of
+# them could see the sixth. `retired_pytest_plugin_request_check.py` below is
+# the tree-wide form, and it is what makes a claim like this one checkable
+# instead of merely asserted in a comment.
+#
+#   CAPABILITY, measured: `-p pytest_timeout` is a hard import, and
+#   `pytest-timeout` is absent from `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2`
+#   (the image named by `protected_landing_transition.json` .runner.image) and
+#   from every 0.2.x/0.3.x tag of it on this host. There, this exact line did
+#   not run 108 tests and report zero failures — it exited before collection
+#   with `ImportError: Error importing plugin "pytest_timeout"`. The only lane
+#   that ever installed the plugin was `.github/workflows`, and those files now
+#   live under `.github/workflows-disabled`; the pass this gate used to record
+#   depended on an ambient host pip package that nothing in this tree declares.
+#
+#   DOCTRINE, already settled: `tools/gatekeeper-land.sh` dropped this idiom at
+#   v1.10.69 and TWO live tests forbid its return
+#   (`tools/ci/test_phase_b_activated_parity.py::test_the_activated_runtime_no_
+#   longer_uses_a_wall_clock_pytest_timeout` and
+#   `tools/ci/test_repo_tools_tests_gate.py::test_pytest_is_progress_supervised
+#   _without_an_elapsed_verdict`), `ci_harness_timeout_ceiling_check.py` reports
+#   it there as "reintroduces a fixed pytest elapsed-time verdict", and
+#   `programs/pytest_per_file_junit.py` carries the measurement behind that
+#   retirement: `--timeout-method=thread` kills the SESSION, so the run that
+#   trips it loses every result it had already earned. This script is invoked
+#   BY `gatekeeper-land.sh`, so it is on that same landing path.
+#
+# NOTHING IS LEFT UNBOUNDED THAT WAS BOUNDED: the 180 s session bound sat above
+# per-subprocess bounds of 55 s or less, so by this file's own design it could
+# only ever fire after the inner bounds had already failed a test — and when it
+# did fire it destroyed the other 107 results. Its removal deletes a backstop
+# whose only reachable behaviour was the destructive one.
 run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-    python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+    python3 -m pytest -q \
     "$ROOT/tools/test_liar_census.py"
+# ptmo/2026-08-20 — the tree-wide form of a retirement that had been enforced
+# five times, each time in ONE named file, and had therefore leaked into four
+# files nobody pinned. `-p <name>` is a hard import: pytest dies in its
+# pre-parse when the module is absent, and `pytest-timeout` is absent from the
+# anchored runner image AND from its newest tag. MEASURED, same 90 cases, same
+# tree: 30 red in the image, 3 on a host, 28-test set difference, all of it
+# this cause. BLOCKING: `run` fails the suite on any non-zero rc, and the gate
+# returns 2 rather than 0 when it could not read a file or examined none.
+run "no retired pytest plugin request" "$ROOT" python3 "$PG/retired_pytest_plugin_request_check.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
@@ -1235,12 +1412,14 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 #   --from-image --advisory, no image  rc 2  the WARN names the image it could
 #                                            not start; still NOT_CHECKED
 #
-# The image is READ from `tools/vibeic-eda/VERSION` rather than restated in the
-# checker, and that was exercised rather than asserted: the anchor moved
-# 0.2.98 -> 0.2.99 between v1.10.42 and v1.10.43 while this change was being
-# measured, and the checker followed with no edit. The sibling carries the tag
-# as a literal and needs `sync_image_version.py` to rewrite it.
-uncheckable_until 2026-11-30 "needs the ANCHORED vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from it to read the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)"
+# The image is RESOLVED, not restated: `_eda_image.judged_image()` names the
+# newest vibeic-eda image THIS HOST holds, by digest. That was exercised rather
+# than asserted — the checker followed an anchor bump 0.2.98 -> 0.2.99 with no
+# edit back when the answer came from `tools/vibeic-eda/VERSION`, and it follows
+# a host's image with no edit now. What changed is that the answer is no longer
+# a version number stored in this repo, so a vibeic-eda release no longer needs a
+# PR here, and the report names the DIGEST it read rather than a tag.
+uncheckable_until 2026-11-30 "needs a vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from the digest this host resolves and reads the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)"
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT" --from-image --advisory
 

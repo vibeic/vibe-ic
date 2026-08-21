@@ -8435,6 +8435,47 @@ def _stamp_gate_report_dirs(project: Path) -> List[str]:
     return stamped
 
 
+def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
+    """Flow step 1.6x — a candidate RTL produced by a cross-layer PPA search
+    must still be the design the specification describes.
+
+    Runs the JUDGE (`crosslayer_rewrite_equivalence_check`), never the tool, so
+    this costs a file read on every ordinary design and nothing else. The judge
+    writes `reports/crosslayer/rewrite_equivalence_check.json` on EVERY run,
+    including the NOT_APPLICABLE one — which is the point: a design that ran no
+    cross-layer search must produce a RECORD saying so, not an absence a reader
+    has to interpret.
+
+    It is called UNCONDITIONALLY for the reason
+    `flow_condition_reachability_check` gave when step 1.6x was first written
+    conditional: "a check disabled by exactly the situation it was written
+    for". A search that rewrote the RTL and skipped its own snapshot would have
+    skipped the gate with it."""
+    t0 = time.time()
+    out_rel = "reports/crosslayer/rewrite_equivalence_check.json"
+    cmd = [sys.executable, str(Path(__file__).resolve().parent
+                               / "crosslayer_rewrite_equivalence_check.py"),
+           str(project),
+           "--report", "reports/crosslayer/rewrite_equivalence.json",
+           "--baseline-marker", "reports/crosslayer/baseline_rtl",
+           "--search-space", "reports/crosslayer/search_space.json",
+           "--json", out_rel]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        rc = r.returncode
+        detail = (r.stdout or r.stderr or "").strip().splitlines()
+        detail = detail[-1] if detail else f"rc={rc}"
+    except (subprocess.SubprocessError, OSError) as e:  # noqa: BLE001
+        return StepResult("crosslayer_rewrite_fidelity", "FAIL",
+                          time.time() - t0,
+                          f"the rewrite-fidelity judge could not run ({e}); "
+                          f"a check that could not look is not a clean check")
+    status = "PASS" if rc == 0 else "FAIL"
+    return StepResult("crosslayer_rewrite_fidelity", status,
+                      time.time() - t0, detail, [out_rel],
+                      extras={"exit_code": rc})
+
+
 def step_stamp_gate_reports(project: Path) -> StepResult:
     """ORGANIC-20260606 #497 ROUND-2: caller-side identity stamp of every
     gate/lint JSON the gate-audit step produced. Runs AFTER step_final_audit
@@ -15641,6 +15682,12 @@ def main() -> int:
     # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
     # so a clean / not-applicable design always passes.
     plan.append(step_determinism_gates(project, args.top_name))
+
+    # Flow step 1.6x — cross-layer rewrite fidelity. Unconditional:
+    # the judge itself decides applicability and WRITES the verdict,
+    # so a design that ran no cross-layer search leaves a
+    # NOT_APPLICABLE record rather than a silence.
+    plan.append(step_crosslayer_rewrite_fidelity(project))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.

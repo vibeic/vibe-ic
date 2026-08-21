@@ -57,10 +57,28 @@ _T = 50
 #: Test-only no-progress window. It is not a cap on healthy runtime.
 _STALL = 1
 
-#: pytest-timeout's per-test bound inside these tests. Must be BELOW `_KILL` for
-#: the "pytest-timeout fires first" fixture and ABOVE it for the import-hang
-#: fixture, which is the whole distinction the two shapes exist to draw.
-_INNER_TIMEOUT = 4
+#: The bound the ONE-SESSION arm of `test_one_session_loses_the_whole_record_
+#: and_per_file_does_not` puts on ITSELF, as `subprocess.run(timeout=...)`.
+#:
+#: It replaces `-p pytest_timeout --timeout=4 --timeout-method=thread`, which
+#: this file used to hand to every child it launched. That idiom is RETIRED in
+#: this repo (`programs/pytest_per_file_junit.py`: "There is deliberately no
+#: pytest-timeout guard on the landing path"; `tools/ci/test_phase_b_activated_
+#: parity.py` and `tools/ci/test_repo_tools_tests_gate.py` both forbid its
+#: return), and MEASURED on 2026-08-20 the plugin is absent from the anchored
+#: runtime `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff` AND from the newer
+#: 0.3.13 tag: `-p <missing plugin>` is a HARD import that dies in pytest's
+#: pre-parse, so all 26 tests in this file that reached the child through
+#: `_pytest_cmd` were red in the image and green on a host that happened to
+#: carry an ambient pip package nothing in this tree declares.
+#:
+#: NOTHING IS LEFT UNBOUNDED THAT WAS BOUNDED. Every other child in this file
+#: goes through the driver, whose `--stall-after {_STALL}` supervision fires at
+#: 1 s -- a quarter of the 4 s the retired plugin was set to -- so the plugin
+#: could never have been the bound that fired there. The single-session arm is
+#: the ONE child with no driver above it, and it now carries its own explicit
+#: kill instead of borrowing one from a plugin.
+_SINGLE_SESSION_KILL = 8
 
 _GREEN = "def test_i_am_green():\n    assert 1 == 1\n"
 
@@ -236,6 +254,131 @@ def test_hermetic_outer_progress_refuses_changed_item_denominator_or_ordinal():
     relay.observe(_OuterProbe(item_order=swapped))
     assert "nodeid/ordinal differs" in relay.problem
 
+
+def _stream_set_over(tmp_path, shares, *, item_order, declared=None,
+                     domain_progress=None):
+    """A real `_ProgressStreamSet` carrying one real probe per worker share."""
+    streams = D._ProgressStreamSet(
+        tmp_path, "0" * 32, lambda: os.getpid())
+    for index, finished in enumerate(shares):
+        name = f"w.gw{index}.{os.getpid()}.0.jsonl"
+        path = tmp_path / name
+        path.write_bytes(b"")
+        probe = D._SemanticProgressProbe(
+            path, streams.nonce, streams.pid_fn, partial_session=True)
+        probe.item_order = list(item_order)
+        probe.items = set(item_order)
+        probe.finished = set(finished)
+        probe.declared_items = (
+            len(item_order) if declared is None else declared)
+        probe.domain_progress = dict((domain_progress or {}).get(index, {}))
+        streams.streams[name] = probe
+        streams.kinds[name] = "worker"
+    return streams
+
+
+def test_a_stream_that_appears_after_the_first_scan_is_still_admitted(tmp_path):
+    """THE READ SIDE'S OWN BLIND SPOT, and it made every merge verification
+    refuse.
+
+    `_scan` lists a directory FD it holds open for the whole run.
+    `os.listdir(fd)` is `fdopendir(dup(fd))`, and a dup SHARES the file offset,
+    so a second listing resumes wherever the first one stopped. The first scan
+    always happens BEFORE the pytest child has written its stream -- the driver
+    polls immediately after spawning -- so that cursor is already at
+    end-of-directory when the stream finally appears.
+
+    MEASURED in the hermetic candidate container, whose profile mounts `/tmp`
+    as a TMPFS: `os.listdir(self.dir_fd)` returned `[]` at the same instant
+    `os.listdir(self.directory)` returned `['m.7.1.jsonl']`. A 0.02 s GREEN arm
+    was therefore admitted only by `complete()` -- after the last observer
+    sample -- so the hermetic relay emitted no checkpoint and no terminal
+    record, no B1 receipt was written, and `gatekeeper-verify-merge.sh`
+    answered rc=2 to a known-good branch and a known-bad one alike: 22 reds in
+    `test_landing_merge_verdict`, and a merge gate that could not discriminate.
+
+    The cursor position is the whole property, so this test SETS it rather than
+    hoping the host filesystem reproduces tmpfs semantics: on ext4 the kernel
+    re-seeds the readdir cursor and the defect is invisible, which is exactly
+    why it survived. A scan must be a statement about the directory, never
+    about where the previous scan stopped reading it."""
+    streams = D._ProgressStreamSet(tmp_path, "0" * 32, lambda: os.getpid())
+    try:
+        assert streams.sample() == 0
+        assert streams.streams == {}, "nothing was written yet"
+        os.lseek(streams.dir_fd, 0, os.SEEK_END)
+        name = f"m.{os.getpid()}.0.jsonl"
+        (tmp_path / name).write_bytes(b"")
+        streams.sample()
+        assert streams.error == "", streams.error
+        assert list(streams.streams) == [name], (
+            "the stream was invisible to the scan that followed it: a green "
+            "arm and a hung arm are reported identically")
+    finally:
+        streams.close()
+
+
+def test_hermetic_relay_reads_the_object_production_actually_hands_it(tmp_path):
+    """THE PAIRING NO TEST ABOVE MEASURES. Every relay test in this file feeds
+    `observe()` a hand-written duck type (`_OuterProbe`) that has the four
+    attributes by construction, so none of them can see whether the REAL
+    argument has them. `_run_progress_supervised` stopped passing
+    `_SemanticProgressProbe` and started passing `_ProgressStreamSet`; the set
+    defined none of `declared_items` / `item_order` / `finished` /
+    `domain_progress`, so the first watchdog sample raised AttributeError
+    inside the hermetic arm. The arm then died with no terminal progress
+    record and the runner could only report "candidate ended without the exact
+    semantic terminal record" — the relay's own refusal channel never fired,
+    so the cause was invisible. Measured against the real class here."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    # Two workers, each finishing only its own share: the union is the session.
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        relay.observe(streams)
+        assert relay.finish()
+    finally:
+        streams.close()
+    assert emitter.rows == [
+        ("start", None),
+        ("checkpoint", "pytest:test_a.py"),
+        ("checkpoint", "pytest:test_b.py"),
+        ("checkpoint", "pytest:record-published"),
+        ("terminal", None),
+    ]
+
+
+def test_hermetic_relay_stays_silent_until_every_worker_agrees(tmp_path):
+    """The join may never be optimistic. While one worker has not yet declared
+    the collected selection, or the workers disagree about it, the set must
+    report `declared_items is None` so the relay emits NOTHING rather than
+    computing a denominator from a partial view."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        undeclared = next(iter(streams.streams.values()))
+        undeclared.declared_items = None
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+        undeclared.declared_items = len(items)
+        undeclared.item_order = list(reversed(items))
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+    finally:
+        streams.close()
+
+
 #: The #1654 shape verbatim: `Future.result` -> `Condition.wait` ->
 #: `waiter.acquire`. `--timeout-method=thread` cannot interrupt it.
 _HANGS_IN_TEST = (
@@ -301,10 +444,15 @@ def _md5(p: Path) -> str:
 
 
 def _pytest_cmd():
-    """The harness command, pinned the way the landing gate pins it."""
-    return [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-            f"--timeout={_INNER_TIMEOUT}", "--timeout-method=thread",
-            "-p", "no:cacheprovider"]
+    """The harness command, pinned the way the landing gate pins it.
+
+    The landing gate declares SEMANTIC PROGRESS and no elapsed-time verdict, so
+    this argv carries no `--timeout` and names no timeout plugin. Keeping the
+    two in step is not left to a reader:
+    `test_the_landing_harness_argv_shape_is_the_one_this_file_pins` below
+    asserts it against the shipped `tools/ci/hermetic_test_arm_entry.sh`.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 
 def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
@@ -337,12 +485,33 @@ def test_one_session_loses_the_whole_record_and_per_file_does_not(tmp_path):
     before = {p.name: _md5(p) for p in sorted(corpus.glob("test_*.py"))}
 
     # ---- ARM 1: one session, exactly the shape gatekeeper-land.sh used ----
+    #
+    # The kill is EXTERNAL and explicit. It used to come from
+    # `-p pytest_timeout --timeout=4 --timeout-method=thread`, and #1654's
+    # measurement is that the thread method cannot interrupt the blocking
+    # `waiter.acquire()` this fixture hangs in either -- it dumps stacks and
+    # takes the PROCESS down. Both routes kill the same process at the same
+    # point; only one of them needs a plugin the anchored runtime does not
+    # carry. The claim under test is unchanged and is asserted below: a session
+    # killed while one of its files hangs writes NO junit, so the two files that
+    # had already PASSED lose their record too.
     single = tmp_path / "single.xml"
-    subprocess.run(
-        _pytest_cmd() + ["-o", "junit_family=xunit1", f"--junitxml={single}",
-                         "test_green_neighbour.py", "test_hangs_like_replay.py",
-                         "test_green_after.py"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    killed = False
+    try:
+        subprocess.run(
+            _pytest_cmd() + ["-o", "junit_family=xunit1",
+                             f"--junitxml={single}",
+                             "test_green_neighbour.py",
+                             "test_hangs_like_replay.py",
+                             "test_green_after.py"],
+            cwd=str(corpus), capture_output=True, text=True,
+            timeout=_SINGLE_SESSION_KILL)
+    except subprocess.TimeoutExpired:
+        killed = True
+    assert killed, (
+        "the single-session arm exited on its own inside "
+        f"{_SINGLE_SESSION_KILL} s — the hang fixture no longer hangs and this "
+        "test proves nothing")
     assert not single.exists(), (
         "the single-session arm wrote a junit — the hang fixture no longer "
         "reproduces #1654 and this test proves nothing")
@@ -651,9 +820,49 @@ def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
 
 def test_protocol_refusal_is_not_mislabeled_as_a_stall():
     reason = D._norecord_reason(
-        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3)
+        0, "PROGRESS_PROTOCOL_INCOMPLETE: collection mismatch\n", True, 3,
+        stalled=False, protocol_error="collection mismatch")
     assert reason == "pytest progress protocol incomplete: collection mismatch"
     assert "STALLED" not in reason
+
+
+def test_a_subject_that_prints_the_stall_marker_is_not_called_a_stall():
+    """THE HALF THE TEST ABOVE NEVER EXERCISED, and it cost a session.
+
+    MEASURED on clean origin/main 49d2b3328, this very file driven one at a time
+    the way the landing gate drives it: `10 failed, 11 passed in 24.13s`, natural
+    exit, truncated at 21 of 72 items by its own `--maxfail` bound — reported as
+    `STALLED after 300 s`. The only `WATCHDOG_STALLED:` in the whole buffer came
+    from an assertion dump belonging to this file's own test of the stall
+    detector. The supervisor's watchdog never fired.
+    """
+    out = ("E   AssertionError: assert 'X' in '\\nWATCHDOG_STALLED: configured "
+           "forward-progress signals did not advance for > 0.25s\\n'\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.16.1.jsonl: session finished before "
+           "every selected item completed (21/72)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.16.1.jsonl: session finished before every selected "
+                       "item completed (21/72)")
+    assert reason == ("pytest progress protocol incomplete: m.16.1.jsonl: session "
+                      "finished before every selected item completed (21/72)")
+    assert "STALLED" not in reason
+
+
+def test_a_stall_the_supervisor_actually_saw_is_still_called_a_stall():
+    """The other direction: the label must survive where it is TRUE."""
+    reason = D._norecord_reason(None, "", True, 300, stalled=True,
+                                protocol_error="")
+    assert reason == ("STALLED after 300 s with no validated pytest lifecycle "
+                      "progress")
+
+
+def test_the_stall_verdict_is_a_required_argument():
+    """A caller that forgets it must not silently inherit the old guess."""
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300)
+    with pytest.raises(TypeError):
+        D._norecord_reason(1, "", True, 300, stalled=False)
 
 
 def test_progress_stall_cleans_a_descendant_that_escaped_the_process_group(
@@ -1925,6 +2134,42 @@ def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
     assert len(contract["lanes"]) >= 3, contract
 
 
+def test_the_landing_harness_argv_shape_is_the_one_this_file_pins():
+    """`_pytest_cmd` must stay the shipped landing argv, option for option.
+
+    THE DEFECT THIS EXISTS FOR, measured 2026-08-20 at `9cc09b863` (v1.11.5).
+    `_pytest_cmd` still carried `-p pytest_timeout --timeout=4
+    --timeout-method=thread` and called itself "pinned the way the landing gate
+    pins it" — long after `tools/ci/hermetic_test_arm_entry.sh` had dropped the
+    idiom. Nothing compared the two, so the drift was invisible until it showed
+    up as colour: the same 90 cases gave **30 red in the anchored image and 3 on
+    a host**, a 28-test set difference whose entire cause was that the image
+    does not carry the plugin and the host happened to.
+
+    A prose claim of "pinned the way the landing gate pins it" is not a pin.
+    This is.
+    """
+    root = _repo_root()
+    entry = root / "tools" / "ci" / "hermetic_test_arm_entry.sh"
+    if not entry.is_file():
+        pytest.skip("the landing scripts are not shipped in this tree")
+    body = entry.read_text(encoding="utf-8", errors="replace")
+    cmd = _pytest_cmd()
+
+    # The retired idiom, in BOTH directions: gone from the shipped entry AND
+    # gone from what this file hands its children.
+    assert "pytest_timeout" not in body, body
+    assert "--timeout" not in body, body
+    assert "pytest_timeout" not in cmd, cmd
+    assert not any(a.startswith("--timeout") for a in cmd), cmd
+
+    # The options the entry DOES declare must be the ones this file uses, or
+    # these tests are measuring a harness nobody runs.
+    assert "-p no:cacheprovider" in body, body
+    assert cmd[cmd.index("-p") + 1] == "no:cacheprovider", cmd
+    assert "-q" in body and "-q" in cmd, (body, cmd)
+
+
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
     import ci_harness_timeout_ceiling_check as C
     root = C.find_repo_root()
@@ -1936,3 +2181,263 @@ def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
     assert _T <= ceiling, (_T, ceiling)
     # `_STALL` is deliberately not compared: it measures absence of progress,
     # not healthy runtime, and therefore is not a wall-clock harness bound.
+
+
+# ── the selection and the report must be read in ONE frame (jnorec, C) ───────
+#
+# MEASURED at 49d2b3328, the landing gate's `full:unselectable-tests` lane:
+# `rc=0`, 852 cases, `784 passed, 60 skipped, 5 xfailed, 3 xpassed`, ZERO
+# failures — and REFUSED, `missing=111` of 111 selected with `extra=110`. The
+# corpus program emits repo-root-relative paths and the lane runs with cwd at
+# the repository root, while every one of those files lives under the plugin
+# subtree, which carries its own `pytest.ini` — so pytest's rootdir was the
+# plugin and every `file` attribute came back plugin-relative. The comparison
+# matched nothing in either direction, which means that lane's aggregate arm had
+# never measured anything and nobody could tell: UNKNOWN and broken read alike.
+#
+# Both directions are pinned below. The first fails on the pre-fix driver
+# (a fully green split-frame session is refused); the second fails on it too,
+# for the opposite reason — it names ONE genuinely absent file, and the pre-fix
+# driver names all of them, so a fix that merely stopped comparing would pass
+# the first test and fail this one.
+
+_PLAIN_GREEN = "def test_it_is_green():\n    assert True\n"
+
+#: A module pytest imports and collects ZERO items from. This is the shape the
+#: coverage check exists for and it must stay refused.
+_COLLECTS_NOTHING = "VALUE = 1\n"
+
+
+def _plain_pytest_cmd():
+    """The harness command WITHOUT `-p pytest_timeout`.
+
+    MEASURED in the pinned landing image: `import pytest_timeout` raises
+    `ModuleNotFoundError`, and `-p <missing plugin>` dies in pytest's pre-parse
+    before collection. A coverage test built on that command would exercise the
+    pre-parse failure and prove nothing about coverage.
+    """
+    return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+
+
+def _split_frame_tree(tmp_path: Path, files: dict) -> Path:
+    """A tree whose selection frame and pytest's rootdir deliberately differ.
+
+    The test files sit in a subdirectory carrying its OWN `pytest.ini`, so
+    pytest infers rootdir there, while the selection is written relative to the
+    OUTER directory the driver runs in. That is exactly the landing gate's
+    unselectable lane: repo root cwd, plugin-subtree files, plugin `pytest.ini`.
+    """
+    root = tmp_path / "outer"
+    inner = root / "inner"
+    inner.mkdir(parents=True, exist_ok=True)
+    (inner / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    for name, body in files.items():
+        (inner / name).write_text(body, encoding="utf-8")
+    (root / "selection.txt").write_text(
+        "".join(f"inner/{n}\n" for n in files), encoding="utf-8")
+    return root
+
+
+def _run_driver_in(root: Path, junit: Path, *extra, pytest_extra=()):
+    return subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(root / "selection.txt"),
+         "--junit", str(junit),
+         "--stall-after", str(_STALL), *extra,
+         "--"] + _plain_pytest_cmd() + list(pytest_extra),
+        cwd=str(root), capture_output=True, text=True, timeout=_T)
+
+
+def test_a_green_session_read_in_another_frame_is_not_refused(tmp_path):
+    """POSITIVE CONTROL: nothing is wrong, so nothing may be reported wrong."""
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_beta.py": _PLAIN_GREEN})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert "AGGREGATE_COMPLETE" in proc.stdout, proc.stdout
+    assert "AGGREGATE_NORECORD" not in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_OK, proc.stdout
+
+
+def test_a_file_that_collects_nothing_is_still_named_missing(tmp_path):
+    """NEGATIVE CONTROL, and the whole value of the change.
+
+    One selected file contributes no testcase. That is the shape
+    `_aggregate_coverage_problem` exists to catch, and declaring the frame must
+    not blunt it: the refusal must name THAT file and only that file.
+    """
+    root = _split_frame_tree(tmp_path, {"test_alpha.py": _PLAIN_GREEN,
+                                        "test_silent.py": _COLLECTS_NOTHING})
+    proc = _run_driver_in(root, tmp_path / "merged.xml", "--aggregate-only")
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "missing=['inner/test_silent.py'], extra=[]" in proc.stdout, (
+        "the refusal must name exactly the file that produced no testcase; "
+        "naming every file (or none) means the frames still disagree\n"
+        + proc.stdout)
+
+
+def test_a_caller_that_declared_a_rootdir_keeps_it():
+    """The frame is ADDED, never overridden — a caller may own it."""
+    assert D._declared_rootdir(["-q", "--rootdir=/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q", "--rootdir", "/elsewhere"], "/anchor") == []
+    assert D._declared_rootdir(["-q"], "/anchor") == ["--rootdir=/anchor"]
+
+
+# ── a --maxfail prefix is a NAMED truncation, still refused (jnorec, B1) ──────
+#
+# MEASURED at 288dc9fc8, the landing gate's `full:targeted-tests` lane over a
+# 116-file selection, byte-identical in five rounds:
+#
+#     AGGREGATE_NORECORD  aggregate JUnit does not exactly cover the selected
+#                         files (missing=[108 paths]) — cross-file/order
+#                         semantics are UNKNOWN, not clean
+#
+# The truth was `10 failed, 178 passed`, `188/2565` items, `rc=1`, a valid
+# JUnit: pytest stopped inside selected file 8 of 116 because `--maxfail=10`
+# told it to. One reading sends the reader to the harness; the other sends them
+# to ten named tests. Nobody chased it for five rounds, which is what an
+# unknowable-looking refusal costs.
+#
+# The verdict does NOT move — a prefix of a failure set cannot be differenced
+# against another arm, so the landing is still refused. Only the diagnosis moves.
+
+_TWO_RED = ("def test_red_one():\n    assert False\n"
+            "def test_red_two():\n    assert False\n"
+            "def test_green_never_reached():\n    assert True\n")
+
+
+def test_a_maxfail_prefix_is_named_and_still_refused(tmp_path):
+    """POSITIVE CONTROL: the cause is knowable, so it must be named."""
+    corpus = _tree(tmp_path, {"test_aa_red.py": _TWO_RED,
+                              "test_bb_never_ran.py": _PLAIN_GREEN})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED  2 failures reached at file 1/2," in proc.stdout, (
+        proc.stdout)
+    assert "test_aa_red.py::test_red_one" in proc.stdout.replace(
+        "test_aa_red::", "test_aa_red.py::"), proc.stdout
+    # THE REFUSAL IS UNCHANGED. Every consumer keys off this marker.
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    assert "never launched: ['test_bb_never_ran.py']" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_real_stall_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 1: a genuine hang must stay an unexplained NORECORD.
+
+    The bound is declared and the session is incomplete, exactly as in the
+    positive case. The one thing that differs is that the supervisor's stall
+    lease fired instead of the process exiting on its own, and that alone must
+    keep the truncation label off.
+    """
+    corpus = _tree(tmp_path, {"test_hangs.py": _HANGS_IN_TEST})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--aggregate-stall-after", str(_STALL),
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    # The REASON must still be the stall, not a bound. A diagnosis that renames
+    # a hang after the failure bound is the permissive direction: it would send
+    # the reader to ten tests when the harness is what stopped.
+    assert "AGGREGATE_NORECORD  STALLED after" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_a_zero_collecting_file_is_not_reclassified_as_a_truncation(tmp_path):
+    """NEGATIVE CONTROL 2: not-covered must stay not-covered.
+
+    A declared bound plus an incomplete report is not enough to blame the bound:
+    here nothing failed at all, so the refusal must remain the coverage one and
+    must still name the file that produced no testcase.
+    """
+    corpus = _tree(tmp_path, {"test_green.py": _PLAIN_GREEN,
+                              "test_silent.py": _COLLECTS_NOTHING})
+    proc = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--selection", str(corpus / "selection.txt"),
+         "--junit", str(tmp_path / "merged.xml"),
+         "--stall-after", str(_STALL), "--aggregate-only",
+         "--"] + _plain_pytest_cmd() + ["--maxfail=2"],
+        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+    assert "AGGREGATE_TRUNCATED" not in proc.stdout, proc.stdout
+    assert "missing=['test_silent.py'], extra=[]" in proc.stdout, proc.stdout
+    assert proc.returncode == D.RC_NORECORD, proc.stdout
+
+
+def test_the_bound_is_read_from_this_drivers_own_argv():
+    """Never from the child's output: a test may print `--maxfail` too."""
+    assert D._declared_failure_bound(["-q"]) is None
+    assert D._declared_failure_bound(["-q", "--maxfail=10"]) == 10
+    assert D._declared_failure_bound(["-q", "--maxfail", "4"]) == 4
+    assert D._declared_failure_bound(["-q", "-x"]) == 1
+    assert D._declared_failure_bound(["-qx"]) == 1
+    assert D._declared_failure_bound(["--exitfirst", "--maxfail=9"]) == 1
+    assert D._declared_failure_bound(["-q", "--maxfail=0"]) is None
+    assert D._declared_failure_bound(["-p", "no:cacheprovider"]) is None
+
+
+def test_an_unknown_session_shape_is_never_called_a_truncation():
+    """Every clause is required, and a missing sink key is UNKNOWN."""
+    full = {"natural_exit": True, "leaked": False, "cleanup_ok": True,
+            "protocol_complete": False, "items_finished": 5,
+            "items_declared": 9}
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, []) is not None
+    assert D._maxfail_truncation(None, 1, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 0, 2, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 1, full, 1, 3, []) is None
+    assert D._maxfail_truncation(2, 1, 2, full, 1, 3, ["x.py"]) is None
+    assert D._maxfail_truncation(2, 1, 2, {}, 1, 3, []) is None
+    for key, bad in (("natural_exit", False), ("leaked", True),
+                     ("cleanup_ok", False), ("protocol_complete", True),
+                     ("items_finished", None), ("items_declared", None),
+                     ("items_finished", 9)):
+        broken = dict(full, **{key: bad})
+        assert D._maxfail_truncation(2, 1, 2, broken, 1, 3, []) is None, key
+
+
+def test_a_nested_drivers_complaint_is_not_this_sessions_reason():
+    """The detail must come from THIS session's probe, not from the buffer.
+
+    MEASURED with only the `stalled` half repaired: this file's per-file arm
+    reported "no pytest progress stream was produced" for a session whose own
+    probe had just said "session finished before every selected item completed
+    (29/83)". The first `PROGRESS_PROTOCOL_INCOMPLETE:` in the buffer belonged to
+    a NESTED driver run that this file spawns as its subject.
+    """
+    out = ("PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress stream was produced\n"
+           "PROGRESS_PROTOCOL_INCOMPLETE: m.139.138.jsonl: session finished before "
+           "every selected item completed (29/83)\n")
+    reason = D._norecord_reason(
+        1, out, True, 300, stalled=False,
+        protocol_error="m.139.138.jsonl: session finished before every selected "
+                       "item completed (29/83)")
+    assert reason.endswith("completed (29/83)"), reason
+    assert "no pytest progress stream" not in reason
+
+
+def test_a_probe_that_made_no_complaint_yields_no_protocol_reason():
+    """Fail closed: an unsupplied detail must not be invented from the buffer."""
+    out = "PROGRESS_PROTOCOL_INCOMPLETE: something the child printed\n"
+    reason = D._norecord_reason(1, out, True, 300, stalled=False,
+                                protocol_error="")
+    assert "protocol incomplete" not in reason
+    assert reason == "pytest supervision ended without a complete liveness record"
+
+
+def test_the_sink_reader_refuses_a_complete_join():
+    assert D._sink_protocol_error({}) == ""
+    assert D._sink_protocol_error({"protocol_complete": True,
+                                   "protocol_error": "x"}) == ""
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": "x"}) == "x"
+    assert D._sink_protocol_error({"protocol_complete": False,
+                                   "protocol_error": None}) == ""

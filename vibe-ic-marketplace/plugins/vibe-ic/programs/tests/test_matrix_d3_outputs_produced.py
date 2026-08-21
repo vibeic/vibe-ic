@@ -2329,7 +2329,31 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
         f"manifest/flow step-set mismatch: only in flow {sorted(live - recorded)}, "
         f"only in manifest {sorted(recorded - live)}"
     )
-    assert len(cells_for(DIM)) == len(live) == 63
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(cells_for(DIM)) == len(live) == 69
 
 
 @needs_corpus
@@ -2791,8 +2815,8 @@ def test_d3_waivers_meet_the_registry_bar():
     assert not problems, "\n".join(problems)
 
 
-def test_d3_cell_states_partition_all_63_steps():
-    """ENFORCED + WAIVED + NA == 63, computed live, with no cell in two states."""
+def test_d3_cell_states_partition_all_steps():
+    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2807,7 +2831,31 @@ def test_d3_cell_states_partition_all_63_steps():
         else:
             enforced.append(sid)
             assert rec["verdict"] == "ENFORCED"
-    assert len(enforced) + len(waived) + len(na) == 63, (
+    # 69 -> 68: step `37.5self` (General Precheck) is RETIRED, and the census
+    # goes back DOWN. The owner's 2026-08-20 decision: the general precheck was
+    # never a third ROUTE, it is a second ARM of `37.5ic` — our ladder runs on
+    # every design that reaches that step, and the operator's container runs IN
+    # ADDITION wherever the PDK ships a precheck and its template was fetched.
+    # A PDK with no shuttle precheck is the same step with one fewer arm, not a
+    # different route. Re-stated by hand, as the census comments here require:
+    # a step LEAVING must force a human to say the number just as loudly as one
+    # arriving. RE-DERIVED from the live yaml, never decremented by hand.
+    # 2026-08-21, 68 -> 69: step 1.6x. The note above is CORRECT about its own
+    # change and wrong about the base it applied it to. Measured by driving
+    # `flowref` at each revision's yaml through
+    # `VIBE_IC_MATRIX_FLOW_YAML`, the matrix population is:
+    #
+    #     ff5071caa (this pin last set)   68   no 1.6x, no 37.5self
+    #     7fcbc7397~1                     69   no 1.6x, 37.5self PRESENT
+    #     7fcbc7397 (adds 1.6x)           70
+    #     867de4289 (retires 37.5self)    69
+    #
+    # So the population moved THREE times across three commits, not once: 37.5self
+    # arrived after this pin was set and was never credited, 1.6x arrived and was
+    # never credited, and only the removal was. Subtracting one from a base that
+    # was already two behind is how a hand-moved census drifts while every
+    # individual edit to it looks careful.
+    assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2820,10 +2868,11 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (50, 2, 11), (
+    assert (len(enforced), len(waived), len(na)) == (52, 2, 15), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(50, 2, 11) on 2026-08-12. A step moving between states is a real "
+        f"(52, 2, 15) at 7fcbc7397 + 867de4289. A step moving between states "
+        f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2858,6 +2907,101 @@ def test_d3_cell_states_partition_all_63_steps():
         "test_d3_waived_steps_still_produce_their_unwaived_entries was red on "
         "merge.json. A per-entry waiver cannot express 'this step never ran'. "
         "M1's dimension-7 waiver is untouched."
+        "\n2026-08-20: (50, 2, 11) -> (54, 2, 11). Four steps were ADDED to the "
+        "flow; none moved between states. 15.5ic, 26.5ic, 37.5ip and 37.5ic are "
+        "the path-specific steps of the cell/IP-vs-chip/IC split. Each declares "
+        "required_outputs, carries no step-level condition (so "
+        "NA_DORMANT_CONDITION is not derivable for it) and holds no waiver, "
+        "which is what ENFORCED means here. Every entry is recorded UNPROVEN: "
+        "their producer programs are not written yet, so no admissible run root "
+        "has ever produced these paths. The four cells are RED, and that is the "
+        "honest reading of a flow declaring an output nothing produces \u2014 not "
+        "a state to waive away."
+        "\n2026-08-20 (later the same day, R6): (54, 2, 11) -> (51, 2, 15), "
+        "and note the first triple sums to 67 while this one sums to 68 \u2014 "
+        "it was written before step 0.5ic existed. TWO independent movements, "
+        "both from vibe-ic#1744:"
+        "\n  (a) +1 step. 0.5ic (Submission Template Ingest) was added. It "
+        "declares required_outputs, carries no step-level condition and holds "
+        "no waiver, so it lands ENFORCED: 54 -> 55 before (b)."
+        "\n  (b) -4 ENFORCED, +4 NA. 15.5ic, 26.5ic, 37.5ip and 37.5ic each "
+        "GAINED a step-level `condition` in the same change \u2014 "
+        "`files_exist: [input/submission_template/slots/*.yaml]` on 15.5ic, "
+        "26.5ic and 37.5ic, `files_exist: "
+        "[input/submission_template/NO_TEMPLATE.txt]` on 37.5ip \u2014 each "
+        "with `condition_kind: design_dependent`. The sentence three "
+        "paragraphs up, 'carries no step-level condition (so "
+        "NA_DORMANT_CONDITION is not derivable for it)', is therefore FALSE "
+        "against the yaml in this same tree, and is kept above only as the "
+        "record of what was true that morning. 55 - 4 = 51 ENFORCED, "
+        "11 + 4 = 15 NA."
+        "\nWHAT THIS COST, STATED PLAINLY: four cells that were RED \u2014 "
+        "'a flow declaring an output nothing produces' \u2014 are now NOT "
+        "JUDGED. Nothing about their producers changed; only the reading did. "
+        "The dormancy is not self-asserted, though: the NA is guarded live by "
+        "test_d3_required_outputs_are_produced, which re-reads the yaml for the "
+        "condition and re-checks every run root for the condition file, so the "
+        "day any project ships input/submission_template/ the NA "
+        "self-invalidates and the four cells return to the denominator."
+        "\nv1.11.5: (51, 2, 15) -> (51, 2, 16), and this one is +1 STEP with "
+        "NO reclassification \u2014 the triple sums 68 -> 69. 37.5self "
+        "(General Precheck \u2014 the tape-out check for a design with NO "
+        "operator) was added: the chip/IC route for a design that has no "
+        "shuttle operator to refuse it, which until this step passed no "
+        "submission check of any kind. It arrives NA rather than ENFORCED for "
+        "exactly the reason its three siblings did, and the reading is "
+        "re-derived live rather than declared: `condition: {files_exist: "
+        "[input/submission_template/SELF_TAPEOUT.txt]}` with `condition_kind: "
+        "design_dependent`, and no admissible run root carries that marker. "
+        "ENFORCED is unmoved at 51, WAIVED unmoved at 2, NA 15 -> 16. Publish "
+        "a run tree carrying SELF_TAPEOUT.txt and this NA self-invalidates "
+        "through the same live guard, the cell returns to the denominator, "
+        "and this pin reddens naming it."
+        "\nsmrg/retire-37p5self: (51, 2, 16) -> (51, 2, 15), and it is the "
+        "MIRROR of the entry directly above \u2014 the same step, leaving. The "
+        "triple sums 69 -> 68. `37.5self` is RETIRED: the general precheck was "
+        "never a third ROUTE out of stage 4, it is a second ARM of 37.5ic, "
+        "which now runs our ladder on every design that reaches it and the "
+        "operator's container IN ADDITION wherever the PDK ships a precheck and "
+        "its template was fetched."
+        "\nWHICH CELL MOVED, AND IN WHAT STATE: `37.5self/d3`, and it was NA, "
+        "not ENFORCED \u2014 exactly the state the entry above records it "
+        "entering the grid in. So this is -1 STEP with NO reclassification, the "
+        "mirror image of that +1: ENFORCED unmoved at 51, WAIVED unmoved at 2, "
+        "NA 16 -> 15. NOTHING ELSE MOVED, and that is MEASURED rather than "
+        "assumed: the live not-ENFORCED inventory was diffed against the pinned "
+        "one on this tree and the ONLY difference is `37.5self/d3` "
+        "(`matrix_mutation_ledger.LEDGER_CELLS_NOT_ENFORCED`, moved in this "
+        "same change). A step removal that had silently reclassified a "
+        "neighbouring cell would appear there as a second difference; there is "
+        "none."
+        "\nWHY THIS IS A STALE PIN AND NOT A BROKEN DERIVATION: everything "
+        "above this assertion is recomputed live \u2014 `cells_for(DIM)` reads "
+        "the yaml, `step_record` reads the manifest, `waiver_for` reads the "
+        "registry \u2014 and all three handled a 68-step flow with no change at "
+        "all. Only the hand-restated TRIPLE is a number a human must move, "
+        "which is exactly what it is for: a step LEAVING has to force someone "
+        "to say the number as loudly as one arriving."
+        "\n2026-08-21: (51, 2, 15) -> (52, 2, 15). +1 ENFORCED, no "
+        "reclassification, and it is step 1.6x \u2014 the cross-layer "
+        "rewrite-fidelity relation, added by `7fcbc7397` FIVE COMMITS BEFORE "
+        "the entry above. It lands ENFORCED on the same three live reads its "
+        "siblings were classified by: `step_condition('1.6x')` is None, it "
+        "declares one required_output "
+        "(`reports/crosslayer/rewrite_equivalence_check.json`), and it holds no "
+        "dimension-3 waiver. Its unconditionality is deliberate and recorded in "
+        "its own yaml comment: a `files_exist` condition was tried first and "
+        "refused by `flow_condition_reachability_check` as 'a check disabled by "
+        "exactly the situation it was written for'. WAIVED and NA unmoved."
+        "\nTHE ENTRY ABOVE IS CORRECT ABOUT ITS OWN CHANGE AND WRONG ABOUT THE "
+        "BASE IT APPLIED IT TO, which is the part worth keeping. It moved the "
+        "triple 69 -> 68 for a step LEAVING, from a base that had never been "
+        "credited with this step ARRIVING. MEASURED, by driving `flowref` at "
+        "each revision's yaml through `VIBE_IC_MATRIX_FLOW_YAML` and counting "
+        "`step_ids()`: ff5071caa 68, 7fcbc7397~1 69, 7fcbc7397 70, 867de4289 "
+        "69. The population moved THREE times across three commits and only the "
+        "third was written down \u2014 so 'a human must move it' is the "
+        "mechanism AND, twice running, the failure."
     )
 
 
@@ -4575,6 +4719,12 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
         p = run / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6); this probe needs a STAGED cell to
+    # read the contract off, so the run has to be publishable.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _pdk_revision_fixture as _pdk_fixture
+    _pdk_fixture.write_run_pdk_revision(run)
 
     dest_root = tmp_path / "benchmark-data"
     proc = subprocess.run(
@@ -5743,6 +5893,43 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
+def _condition_file_present(root, pattern: str) -> bool:
+    """Is a step-level `files_exist` entry satisfied under ``root``?
+
+    A GLOB HAD TO BE ANSWERED WITH A GLOB (measured 2026-08-20)
+    ==========================================================
+    This was ``(root / pattern).is_file()``. Every `condition_files` value in
+    the manifest was a plain path, so the bug was invisible: M1-M4 name
+    `phase1/analog/analog_block_list.json`, steps 40-44 name
+    `phase3/stage5_manufacturing/silicon_received.json`, and a plain path is
+    its own glob.
+
+    The chip/IC steps (15.5ic, 26.5ic, 37.5ic) are gated on
+    `input/submission_template/slots/*.yaml` — the first WILDCARD condition in
+    the flow. `Path("a/*.yaml").is_file()` is False for every tree that has
+    ever existed, so those three cells would have reported NA_DORMANT
+    unconditionally: not "the condition is unmet" but "the question cannot be
+    asked". A cell that can only answer one way is exactly the vacuous pass
+    this dimension exists to catch, and it would have been introduced BY the
+    steps whose dormancy it was meant to measure.
+
+    Directory entries count: `files_exist` is satisfied by presence, and one
+    existing consumer (step 14, `condition_files_exist: [phase2/stage2/synth]`)
+    names a DIRECTORY. `is_file()` was wrong about that too.
+    """
+    from glob import glob as _glob
+    import os
+    if any(ch in pattern for ch in "*?["):
+        # `.exists()` on each hit, not just a non-empty glob: `glob` returns a
+        # DANGLING symlink, and the enforcer this mirrors
+        # (`flow_compliance_check._glob_first`) documents the opposite rule --
+        # "only paths that RESOLVE are returned" -- because leaving a link to
+        # nothing once scored strictly better than deleting the file.
+        return any(os.path.exists(h) for h in _glob(str(root / pattern),
+                                                    recursive=True))
+    return (root / pattern).exists()
+
+
 def matrix_na_precondition(step_id):
     """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
     # Re-derived live from the flow yaml and the run trees, NOT read off the
@@ -5759,7 +5946,7 @@ def matrix_na_precondition(step_id):
     declared = [str(x) for x in (cond.get("files_exist") or [])]
     if not wanted or any(w not in declared for w in wanted):
         return None
-    if any((rr.path / w).is_file()
+    if any(_condition_file_present(rr.path, w)
            for rr in run_roots().values() for w in wanted):
         return None
     return ("a step-level condition keeps the step dormant: no admissible run "
