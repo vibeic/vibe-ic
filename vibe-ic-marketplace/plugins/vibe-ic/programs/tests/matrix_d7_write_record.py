@@ -170,29 +170,14 @@ records instead of artefacts, and it is deliberately the strictest form:
 not take an operator-supplied directory, and does not consult a manifest of
 machine paths. It asks ``git ls-tree -r HEAD`` for every tracked
 ``*/reports/write_ledger.json`` and takes the run root to be that file's
-grandparent.
-
-MEASURED 2026-08-12, and the population is NO LONGER EMPTY. It was 0 roots when
-this module landed; two benchmark-data publications
-(``benchmark-data/ic/spm/v1.9.96_gf180mcuD``, 2026-08-07, and
-``v1.10.18_sky130A``, 2026-08-09) carried a tracked ledger and turned the oracle
-live for the first time. ``RECORD_BOUND_ROOTS`` did its job — it made that a
-loud, named event — and the event was never triaged, so ``main`` carried nine
-red dimension-7 tests for five days.
-
-What the re-measurement found is that the promotions were not the twelve
-predicted above. Six fired, and EVERY ONE of them came from a producer-
-confidence rung that names no producer (see the section below); on the two
-rungs this module's own justification rests on, the promotion count is **zero**.
-Of the six, one was a real declaration gap that holds without any record at all
-(``reports/phase3/dynamic_ir.json``, step 24's gate demands it positionally and
-FAILs rc 1 when it is absent — now DECLARED in the flow yaml), and the other
-five were artefacts of the missing rung filter: a gate-clause
-``condition_files_exist`` trigger whose absence the flow itself declares legal
-(step 27), a gate program's OWN report path that nothing reads (step 34), the
-containerised ATPG engine's native output which exists only when that engine
-ran (step 11), and two Phase-1 documents charged to the step that READS them
-rather than the step that writes them (D1, M2).
+grandparent. MEASURED on this commit: **0 roots** (``git ls-tree -r
+--name-only HEAD | grep -c write_ledger.json`` = 0; ``step_write_ledger``
+landed on 2026-08-06 and no run tree has been re-published since). Every cell
+therefore degrades to the pre-binding behaviour, and :data:`RECORD_BOUND_ROOTS`
+pins the empty population so the first published record is a loud, named event
+rather than a discovery — at which point the twelve promotions above must be
+re-measured and each one either DECLARED in the flow yaml or waived with
+evidence.
 
 FOUR RULES A RECORD MUST PASS, AND WHY EACH ONE EXISTS
 ======================================================
@@ -226,36 +211,6 @@ FOUR RULES A RECORD MUST PASS, AND WHY EACH ONE EXISTS
 A record that fails any of these is NOT consulted and the reason is returned
 as a SENTENCE, which :func:`binding_notes` publishes onto every dimension-7
 cell. Nothing here is ever silent.
-
-THE RECORD MUST NAME A PRODUCER, NOT MERELY NAME A PATH (2026-08-12)
-====================================================================
-``step_write_ledger`` grades every residual entry on a producer-confidence
-ladder, and only its top two rungs name a producer: ``provenance_output`` (the
-wrapper's own post-run record claims this exact path as its output) and
-``window`` (the mtime falls inside exactly one logged invocation). The lower
-three — ``ambiguous``, ``unwitnessed``, ``unattributable`` — record that the
-question COULD NOT BE ANSWERED: 2+ candidate windows and no single name, no
-window at all, or no ``provenance.jsonl`` to match against.
-
-W2 asks "does the flow PRODUCE this path". Only the top two rungs answer it,
-and only they are in the class this binding exists for: the predicate the AST
-cannot decide is a write performed inside a SHELLED-OUT tool script, and those
-writes go through the provenance wrapper — which is precisely what puts them on
-``provenance_output``/``window``. A path on a lower rung was by definition not
-witnessed as a wrapped tool invocation.
-
-Until 2026-08-12 every rung was admitted. Because :attr:`Observation.producer_label`
-falls back to ``producer_confidence`` when ``producer`` is ``None``, an entry
-recording the ABSENCE of attribution became an affirmative producer claim and
-W2 read ``run-record:unwitnessed`` as "the flow produces this" — the exact
-inversion the emitter warns against in the artefact this module reads
-("...land as 'unwitnessed'. That is a true statement about this run's
-provenance COVERAGE, **not proof of a hand-written artefact**"). MEASURED on
-the two records this commit carries: 474 of 509 observations sit on the
-unattributed rungs and every one of the six W2 promotions came from them.
-:data:`ATTRIBUTED_CONFIDENCE` is the filter; refusals are counted per root and
-published by :func:`binding_notes`, so the narrowing is never silent. It
-narrows the ORACLE, never the RULE — see THE ONE DIRECTION.
 
 THE THREE EVIDENCE RULES ARE RE-APPLIED, LIVE, PER PATH
 =======================================================
@@ -307,12 +262,60 @@ if str(F.PROGRAMS_DIR) not in sys.path:
 #: relative paths it publishes. Never called to BUILD anything here.
 import step_write_ledger as _swl  # noqa: E402
 
+#: The corpus pointer, for the seam below. Imported for its resolver only; the
+#: pointer is never SEARCHED for, it is offered or it is not.
+import _published_corpus as _pc  # noqa: E402
+
 #: Where ``step_write_ledger.emit()`` puts the run-level record. Under
 #: ``reports/`` and not under ``steps/`` because ``benchmark_evidence_publish``
 #: excludes ``steps/`` by name, so a record written only there could never
 #: reach a published cell — i.e. could never be tracked, i.e. could never be
 #: admissible here.
 RECORD_REL = "reports/write_ledger.json"
+
+#: The directory every record root is spelled under, and the name of the
+#: repository that subtree moved to (``vibeic/benchmark-data``). It is what
+#: makes the corpus rewrite in :func:`record_roots` a plain prefix swap rather
+#: than a lookup table — exactly as ``_corpus_candidate`` does for dimension 3.
+_CORPUS_DIR = "benchmark-data"
+
+
+def _offered_corpus():
+    """A corpus a caller EXPLICITLY offered that is not this repo's own tree.
+
+    THE SAME SEAM DIMENSION 3 WAS GIVEN BY vibe-ic#1703, AND FOR THE SAME
+    MEASURED REASON. Every root this module can name is spelled
+    ``benchmark-data/<...>``; that subtree left this repository, so
+    :func:`record_roots` searching only ``_plugin_tree.repo_root()`` returned
+    the EMPTY population on every host — including a host that had pointed
+    ``VIBE_IC_BENCHMARK_DATA`` at a clone carrying exactly the two roots
+    :data:`test_matrix_d7_outputs_list_complete.RECORD_BOUND_ROOTS` pins. #1703
+    named that shape in dimension 3: "the pointer switched the skip OFF without
+    switching discovery ON", and it was true here too, one dimension over.
+
+    #527 STILL HOLDS IN THE DIRECTION IT WAS WRITTEN FOR. This is not a
+    ``$HOME`` search and not a manifest of machine paths: the operator NAMES
+    the tree, an unset pointer changes nothing, and trackedness is still
+    decided by ``git ls-tree -r HEAD`` in the tree that HOLDS the root
+    (:func:`tracked_at_head`), so it is the CORPUS COMMIT that answers and
+    ``git clean -xdf`` still cannot move a colour. A corpus that is not a git
+    checkout answers the empty set, contributes no root, and the pin above
+    fires by name — loudly, not silently.
+
+    Raises rather than returning ``None`` on a broken pointer, because
+    ``corpus_root()`` does: a named-but-unreadable corpus is a wrong path, not
+    an absent one (``_published_corpus.CorpusPointerBroken``).
+    """
+    corpus = _pc.corpus_root()
+    if corpus is None:
+        return None
+    repo = _plugin_tree.repo_root()
+    if repo is not None and corpus.resolve() == (repo / _CORPUS_DIR).resolve():
+        # Already reached by the in-repo arm; yielding it twice would double
+        # count the same root under two labels.
+        return None
+    return corpus
+
 
 #: Bound for the `git ls-tree` below. NOT a round number picked by feel:
 #: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
@@ -337,49 +340,6 @@ _RESIDUAL_KEY = "written_never_declared"
 #: (``cts_quality_check``) from an OBSERVED one at a glance, and so nothing
 #: downstream can mistake one for the other.
 OBSERVED_PREFIX = "run-record"
-
-#: The rungs of ``step_write_ledger``'s producer-confidence ladder that ACTUALLY
-#: NAME A PRODUCER. Quoted from the emitter's own definition of an attributed
-#: write rather than restated::
-#:
-#:     "attributed_writes": sum(1 for e in entries.values()
-#:         if e.get("producer_confidence") in ("provenance_output", "window"))
-#:
-#: WHY THIS FILTER EXISTS (2026-08-12). W2 asks "does the flow PRODUCE this
-#: path". The ladder's lower three rungs do not answer it — they record that
-#: the question could not be answered:
-#:
-#:   ``ambiguous``       the mtime is inside 2+ overlapping invocation windows;
-#:                       candidates listed, NO single name.
-#:   ``unwitnessed``     the mtime is inside NO logged invocation window.
-#:   ``unattributable``  there is no ``provenance.jsonl`` to match against.
-#:
-#: ``producer_label`` falls back to ``producer_confidence`` when ``producer`` is
-#: ``None``, so admitting those rungs turned a record of ABSENT attribution into
-#: an affirmative producer claim, and W2 read "run-record:unwitnessed" as
-#: "the flow produces this". The emitter says so in the artefact this module
-#: reads, in its own ``coverage_note``: "Steps whose work is done by a plugin
-#: program or by the agent ... land as 'unwitnessed'. That is a true statement
-#: about this run's provenance COVERAGE, **not proof of a hand-written
-#: artefact**; triage accordingly."
-#:
-#: It is also the wrong class. This binding exists for ONE predicate the AST
-#: cannot decide — a write performed inside a SHELLED-OUT tool script
-#: (RESOLUTION_LIMITS entry 1). Those writes go through the provenance wrapper,
-#: which is exactly what puts them on ``provenance_output`` / ``window``. A path
-#: on a lower rung was, by definition, NOT witnessed as a wrapped tool
-#: invocation, so it is outside the class this oracle was built to see — and
-#: the module docstring's whole justifying measurement is on the top rung
-#: ("``producer_confidence="provenance_output"``, the strongest rung on the
-#: emitter's ladder ... not inferences at all").
-#:
-#: MEASURED on the two records this commit carries: 474 of 509 residual
-#: observations sit on the three unattributed rungs (402 unwitnessed, 72
-#: ambiguous) and ALL SIX W2 promotions came from them; the 35 attributed
-#: observations promote nothing. Refusals are counted and published per root by
-#: :func:`binding_notes` — this narrows the ORACLE, never the RULE, and a
-#: refusal is never silent.
-ATTRIBUTED_CONFIDENCE = frozenset({"provenance_output", "window"})
 
 
 @dataclass(frozen=True)
@@ -421,27 +381,19 @@ class Rejected:
     """Residual paths a record named that this module refused, kept apart.
 
     "the record names a path that is gone", "...that is now 0 bytes",
-    "...that is a symlink", "...that no commit carries" and "...that the record
-    could not attribute to any producer" are five different findings. Folding
-    them into one would make a record's own rot read as a flow property, and
-    would hide the largest class of all: on a real run most residual paths are
-    ``unwitnessed``, which is a statement about provenance COVERAGE and not
-    about the flow.
+    "...that is a symlink" and "...that no commit carries" are four different
+    findings. Folding them into one would make a record's own rot read as a
+    flow property.
     """
 
     absent: Tuple[str, ...] = ()
     empty: Tuple[str, ...] = ()
     symlinked: Tuple[str, ...] = ()
     untracked: Tuple[str, ...] = ()
-    #: Live artefacts the record names but attributes to no producer — the
-    #: ladder rungs outside :data:`ATTRIBUTED_CONFIDENCE`. Each entry carries
-    #: its rung so a reader can tell "2+ candidate windows" from "no window at
-    #: all" from "no provenance log" without opening the record.
-    unattributed: Tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.absent or self.empty or self.symlinked
-                    or self.untracked or self.unattributed)
+                    or self.untracked)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -491,20 +443,41 @@ def record_roots() -> Tuple[RecordRoot, ...]:
 
     Empty on a flattened install cache (no repo root, no git work tree), which
     is the correct answer there: nothing is admissible, everything degrades.
+
+    TWO TREES, ONE RULE (vibe-ic#1703's repair, applied here). A record root is
+    looked for in this repository AND in a corpus the operator explicitly
+    offered — see :func:`_offered_corpus` for why searching only the repository
+    made this population empty on every host in existence. The rule does not
+    change between them: the root must carry ``reports/write_ledger.json``
+    TRACKED AT HEAD, and HEAD means the head of whichever tree holds the root.
+    The label keeps its ``benchmark-data/<...>`` spelling in both cases, so a
+    root is the same root whichever tree answered for it and the pin does not
+    have to know which one did.
     """
-    repo = _plugin_tree.repo_root()
-    if repo is None:
-        return ()
     out: List[RecordRoot] = []
-    for rel in sorted(tracked_at_head(repo)):
-        if not rel.endswith("/" + RECORD_REL):
-            continue
-        root_rel = rel[: -(len(RECORD_REL) + 1)]
-        if not root_rel:
-            continue
-        cand = repo / root_rel
-        if cand.is_dir():
-            out.append(RecordRoot(rel=root_rel, path=cand))
+    seen: set = set()
+
+    def _harvest(tree: Path, label_prefix: str) -> None:
+        for rel in sorted(tracked_at_head(tree)):
+            if not rel.endswith("/" + RECORD_REL):
+                continue
+            root_rel = rel[: -(len(RECORD_REL) + 1)]
+            if not root_rel:
+                continue
+            label = label_prefix + root_rel
+            if label in seen:
+                continue
+            cand = tree / root_rel
+            if cand.is_dir():
+                seen.add(label)
+                out.append(RecordRoot(rel=label, path=cand))
+
+    repo = _plugin_tree.repo_root()
+    if repo is not None:
+        _harvest(repo, "")
+    corpus = _offered_corpus()
+    if corpus is not None:
+        _harvest(corpus, _CORPUS_DIR + "/")
     return tuple(out)
 
 
@@ -643,7 +616,6 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
         empty: List[str] = []
         symlinked: List[str] = []
         untracked: List[str] = []
-        unattributed: List[str] = []
         for rec in (doc["residual"][_RESIDUAL_KEY] or []):
             if not isinstance(rec, dict):
                 continue
@@ -661,43 +633,23 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
                 else:
                     untracked.append(f"{rel} ({size} B)")
                 continue
-            # FOURTH RULE — the record must NAME A PRODUCER. The three rules
-            # above ask "is this still an artefact"; this one asks the question
-            # W2 actually put: "does the flow PRODUCE it". A rung outside
-            # ATTRIBUTED_CONFIDENCE records that the run could not say, and an
-            # unanswered question must not be handed back as an answer.
-            confidence = str(rec.get("producer_confidence") or "?")
-            if confidence not in ATTRIBUTED_CONFIDENCE:
-                unattributed.append(f"{rel} ({confidence})")
-                continue
             by_path.setdefault(rel, []).append(Observation(
                 root=root.label,
                 rel=rel,
                 size_bytes=size,
                 producer=rec.get("producer"),
-                producer_confidence=confidence,
+                producer_confidence=str(rec.get("producer_confidence") or "?"),
             ))
         rej = Rejected(tuple(absent), tuple(empty), tuple(symlinked),
-                       tuple(untracked), tuple(unattributed))
+                       tuple(untracked))
         if rej:
             rejections[root.label] = rej
-            live = len(absent) + len(empty) + len(symlinked) + len(untracked)
-            if live:
-                notes.append(
-                    f"{root.label}: {live} residual path(s) refused on live "
-                    f"re-verification (absent {len(absent)}, 0-byte "
-                    f"{len(empty)}, symlinked {len(symlinked)}, untracked "
-                    f"{len(untracked)}) — a record is a claim about the past, "
-                    f"not evidence about today")
-            if unattributed:
-                notes.append(
-                    f"{root.label}: {len(unattributed)} residual path(s) "
-                    f"refused as UNATTRIBUTED — the record names them but "
-                    f"puts them on a producer-confidence rung outside "
-                    f"{sorted(ATTRIBUTED_CONFIDENCE)}, i.e. it did not witness "
-                    f"a tool writing them. That is a statement about this "
-                    f"run's provenance coverage, not evidence that the flow "
-                    f"produces the path, so W2's oracle stays the AST for them")
+            notes.append(
+                f"{root.label}: {len(absent) + len(empty) + len(symlinked) + len(untracked)} "
+                f"residual path(s) refused on live re-verification "
+                f"(absent {len(absent)}, 0-byte {len(empty)}, symlinked "
+                f"{len(symlinked)}, untracked {len(untracked)}) — a record is "
+                f"a claim about the past, not evidence about today")
     return ({k: tuple(v) for k, v in by_path.items()},
             tuple(notes), rejections)
 
