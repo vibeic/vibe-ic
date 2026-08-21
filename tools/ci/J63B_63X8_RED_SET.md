@@ -1,0 +1,1249 @@
+# j63b — the remaining 63x8 reds, re-enumerated, classified and three of them closed
+
+Measured tree: `origin/main` @ `a00f53f20` [v1.11.66] — RE-FETCHED at the end
+of this work and still the head, so nothing here is measured against a main that
+has since moved. Fresh `git worktree`,
+`PYTHONDONTWRITEBYTECODE=1`, corpus pointer UNSET, one pytest process per file.
+Host load recorded per run, because four of the seventeen turn on it.
+
+## HEADLINE, stated first because the brief asked for it loudly
+
+**There is no d8 red. Dimension 8 is 347 passed / 0 failed, rc=0, twice.**
+The structure the campaign was routing around — "seven are stuck behind ONE d8
+red" — does not exist on this commit. `test_matrix_d8_missing_caught.py` is
+entirely green in 83.11 s in the sweep and 34.73 s alone. Nothing is waiting on
+it. Whatever the seven were when they were counted, dimension 8 is not what
+holds them.
+
+## The live red set: 17, and where it was hiding
+
+The first sweep over the 19 `test_matrix_*.py` files found 15. The family is
+wider than that prefix: ten more files consume the same census or the same
+dimension-3 evidence manifest, and one of them carried the other two reds.
+Ranking candidate files by real coupling (an import of `matrix_63x8` /
+`matrix_cell_state` / `gen_matrix_63x8_census`, not a mention in a comment)
+is what surfaced them.
+
+| # | id | which of the three | what was done |
+|---|----|--------------------|---------------|
+| 1-6 | `d3_outputs_produced::test_d3_required_outputs_are_produced[15,17,19,20,30,32]` | NOT_MEASURED (evidence) | VERIFIED absent, see below. Owned by `jfindings-63x8` |
+| 7-9 | `matrix_mutation_ledger` — `[0.5ic]`, `[1.6x]`, `coverage_is_complete` | NOT_MEASURED | PROBED: the fourth state does close all three, and costs 2 further edits — and it is UNSTARTED, not pending |
+| 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED, with a measured floor** | 2.1x -> 6x margin; but each renewal costs a FILE import, and at load 60+ that overhead alone beats the window — see below |
+| 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED — 1 observation, 0 reproductions | mid-run stall, mechanism SETTLED by probe; widening the window reddens it, which is why it is not touched |
+| 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
+| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | mid-run stall: one d3 item is 18.95 s against a 60 s window; widening the window is the measured trade, and it is refused |
+| 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
+| 15 | `63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | THE RULING | 55 of 621 cells: 6 measured red, 49 not measured |
+| 16 | `flow_manifest_declaration_parity::test_every_declared_path_has_a_manifest_entry` | **STALE PIN — FIXED** | re-derived on the current tree |
+| 17 | `flow_manifest_declaration_parity::test_the_population_is_the_whole_flow_and_is_not_empty` | **STALE PIN — FIXED** | same cause as 16 |
+
+Green in the same sweep: d1 82, d2 85+2xf, d4 77, d5 81+1xf, d6 81+1xf,
+d7 97+3s+4xf, **d8 347**, d9 80, 63x8_ledger 52, figure_coverage 12,
+waiver_single_source 4, write_record_scope 7, a3, a8,
+artefact_mutation_channel, and the eight further census consumers.
+
+## Why this reports on NINE and not the brief's fourteen
+
+The brief allocated "the other fourteen" by arithmetic: 17 remaining, minus the
+three findings `jfindings-63x8` named, leaves 14. That subtraction treats a
+FINDING as a RED, and here it is not. Its three findings span seven reds:
+
+* **two needing evidence** — the d3 unanswerable citations, which is ONE cause
+  with SIX parametrized ids (steps 15, 17, 19, 20, 30, 32) across two cited run
+  roots;
+* **one needing a ruling** — `test_no_cell_is_counted_enforced_while_its_
+  predicate_is_red`, one red.
+
+Plus `test_every_na_cell_asserts_a_live_precondition`, which is already fixed on
+that branch and so is not among its three REMAINING findings, but is equally not
+work to redo here. That is eight reds accounted for elsewhere and **nine here**:
+7-13, 16 and 17. Three of the nine are closed.
+
+The allocation was checked by content, not accepted by arithmetic: the six d3
+paths were searched for across the whole corpus (absent everywhere, at every
+version), and that branch's own diff was read to confirm it adds
+`magic_illegal_overlap.json` and not `drc_signoff.json` — which is what made
+16/17 unambiguously ours to fix rather than a duplicate of its work.
+
+## 16 + 17 — the stale pin, re-derived and not widened
+
+`d976999c4` [v1.11.45] added `reports/phase3/drc_signoff.json` to step 31's
+`required_outputs` — correctly, three programs read that file — and did not
+measure it into `matrix_d3_output_manifest.json`. The parity gate has been
+reading **164 declared paths against 163 entries** ever since.
+
+The fix is the one the gate itself names: measure the path. It resolves
+non-empty at `benchmark-data/ic/spm/v1.9.96_gf180mcuD`, the admissible run root
+five of its own siblings in the same step already cite — 1919 B, `"program":
+"eda_report_audit:drc"`, the output of step 31's own gate clause. Recorded
+`PRODUCED_BY_RUN`, decided LIVE by the same branch as the other 121.
+**No assertion changed**; the two sides now genuinely pair one-to-one.
+Regression sweep over every consumer of this manifest: every number identical
+to the pre-change baseline except the one being fixed.
+
+### The routing was NOT the root cause — checked, and the hypothesis is dead
+
+The obvious explanation for 16/17 surviving days is that the gate which catches
+them was never routed to the change that broke them. That was tested at the
+commit itself rather than assumed: a worktree at `d976999c4`, then
+`ci_targeted_test_select.py --base d976999c4~1`.
+
+```
+selected: 331 tests
+  SELECTED  test_flow_manifest_declaration_parity
+  SELECTED  test_matrix_d3_outputs_produced
+  SELECTED  test_matrix_63x8_coverage
+  SELECTED  test_matrix_mutation_ledger
+```
+
+All four were selected. The selector is correct and needs no change — **do not
+"fix" it on the strength of this drift.** The gate was routed, costs under a
+second, and would have failed. What did not happen is the 331-test selection
+being RUN, which is the standing constraint on this host, not a routing gap.
+Recorded as a refuted hypothesis so the next reader spends their time
+elsewhere.
+
+## Read the timing reds in the right regime — three are fixture-scale, ONE is not
+
+Everything below about `0.25 s`, `0.30 s` and `0.45 s` windows is easy to
+misread as "collection and outcome runs are fragile under load", and that would
+be false. The PRODUCTION values are:
+
+```
+_COLLECTION_PROGRESS_STALL_S = 60      test monkeypatches it to 0.25 / 0.30
+_OUTCOME_PROGRESS_STALL_S    = 60      test monkeypatches it to 0.45
+```
+
+**Two hundred times tighter in the fixture than in production.** Reds 10, 11 and
+12 all live in that shrunken regime: they exist to make a renewal property
+testable in seconds, and their sensitivity to load is a property of a window
+deliberately squeezed to sub-second, not of anything a real run meets. Nothing in
+this report should be read as evidence that a production collection or outcome
+run is at risk of a spurious stall kill.
+
+**Red 13 is the exception, and that is what makes it the most interesting of the
+four.** `test_the_census_block_is_fresh` drives a REAL nested run at the REAL
+`60 s` window — nothing is monkeypatched — and it still stalled, because one d3
+item (`test_d3_the_producer_oracle_answers_both_ways`) takes **18.95 s** on an
+almost idle box. A third of a production window inside a single pytest item,
+before the machine is busy.
+
+So the four sort into two very different classes:
+
+| | window | regime | what its red means |
+|---|---|---|---|
+| 10, 11, 12 | 0.25-0.45 s | fixture, 200x tightened | a construction/robustness question about the TEST |
+| **13** | **60 s** | **production** | **a real item consuming a third of a real window** |
+
+That ordering is the opposite of the effort spent on them here — three fixture
+reds got two fixes and many measurements, and the one production-regime
+observation is the one left open. It is left open for the reason given in its own
+section (the remedy is the shipped `VIBEIC_MATRIX_OUTCOME_WORKERS` cap, and
+widening 60 s is refused),
+but a reader deciding where to look next should start at 13.
+
+## 12 — a real finding that had been filed as weather
+
+The renewal test drove 12 child items that each slept `0.45` s against a stall
+window of `0.45` s. The renewal interval EQUALLED the interval the watchdog was
+allowed to wait, so its green was scheduler jitter. On an idle box (load 3.45,
+the file 2.1x faster than under load) it was STILL red, while its two
+neighbours went green — and the child's tail shows seven of the twelve items
+already reported before the kill. It was dying between renewals, not failing to
+start.
+
+Fixed by giving the renewal a margin (each item a third of the window, 24 of
+them, so the run outlives the bound by 8x) with the ratio ASSERTED rather than
+commented. Because making a timing test survivable is exactly the shape of a
+relaxation, the opposite claim is now its own test: an item that cannot finish
+inside the window MUST still be killed. Three mutations were run and each
+reddened the arm it was aimed at. Whole file, idle host: `3 failed, 26 passed`
+-> `2 failed, 28 passed`, twice.
+
+## Red 12's fix measured against the standard that condemned it
+
+The prior session's rate for this exact node was **4/10 red on unmodified
+`origin/main`**, measured by running it alone ten times. The fix is measured the
+same way so the two numbers are comparable, and then again under contention
+harsher than the one that produced the red:
+
+```
+ARM 1  the pair alone, ten consecutive runs        10/10 green  (~6.1 s each)
+ARM 2  THREE concurrent full-file runs, load 53.18
+         conc1  2 failed, 28 passed   red 12 + control: green
+         conc2  2 failed, 28 passed   red 12 + control: green
+         conc3  2 failed, 28 passed   red 12 + control: green
+```
+
+Load 53.18 is above the 25-45 that produced the original red and far above the
+3.45 idle run where it still failed. The two failures in each concurrent run are
+the NA-skip contract and the fourth-state ruling — both owned elsewhere. 4/10
+red to 0/10 and 0/3, against a harder condition.
+
+**And an honest refinement to 10 and 11.** They did NOT reproduce in any of the
+three concurrent runs at load 53, having failed in the original sweep at load
+25-45. Load average alone does not predict them; the specific interleaving does.
+They are rarer and more intermittent than a single observation suggests, which
+strengthens rather than weakens the reading that they are not repository
+defects — and it is stated here so nobody quotes a rate this work never
+measured.
+
+## 10 — the same disease as 12, one notch less acute, and I nearly missed it
+
+This was filed as host contention for most of this work, on the strength of it
+passing on a quiet box. Then its actual failure text was read, which should have
+happened first:
+
+```
+WATCHDOG_STALLED: ... did not advance for > 0.3s
+PROGRESS_PROTOCOL_INCOMPLETE: terminal event missing (stage=collecting)
+```
+
+**`stage=collecting` is the load-bearing word.** The child had STARTED and was
+emitting events; it was killed BETWEEN two collections. That is red 12's
+disease, not red 11's startup problem — and the construction says so: seven
+files each sleeping `0.14` against a `0.30` window is a **2.1x** margin, and
+2.1x is not much once per-file import and collection machinery land on top of
+the sleep.
+
+Same treatment as 12, and **the window is untouched at `0.30`**: 21 files at a
+SIXTH of the window (`1.05 s` total, still over the `0.8 s` bound the test
+exists to prove work may cross), with the ratio asserted rather than commented.
+
+Two mutations, run, each reddening the arm it aims at:
+
+```
+window 0.30 -> 0.02  (renewals cannot keep up)  -> 1 failed, WATCHDOG_STALLED
+ratio  /6   -> /2    (the old thin shape)       -> assert (0.15*6) <= 0.3 fails
+                                                   before the run even starts
+```
+
+Stability: **10/10 green alone** (~2.1 s each), and green in three CONCURRENT
+full-file runs at load 31.54.
+
+**One honest observation from those concurrent runs, which is not a new red.**
+`test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved` failed
+in 2 of the 3. It appears in NO prior unbound run of this file. Three concurrent
+full-file runs genuinely starve the nested outcome run, which is the exact
+condition that test detects — the harness catching an abusive measurement
+configuration this work created, not a defect and not caused by this change.
+
+## The finding is bigger than red 13: FOUR modules carry an item near the window
+
+Red 13's section below traces its stall to one d3 item. That was the item the
+failure message happened to name. Asking the same question of all nine dimension
+modules — slowest item each, one process per file, **idle box, load 0.68** —
+says d3 is not even the worst:
+
+```
+d6_skip_discipline          46.06s   test_d6_skip_discipline[stepD1]        77% of the window
+d7_outputs_list_complete    17.28s   test_d7_required_outputs_list_is_..    29%
+d3_outputs_produced         16.85s   test_d3_the_producer_oracle_answ..     28%
+d8_missing_caught           13.65s   test_d8_downgrade_is_reachable_..      23%
+d9_verdict_consumed          5.27s                                           9%
+d4_criteria_match            4.39s                                           7%
+d1_wiring                    2.40s                                           4%
+d2_falsifiable               1.55s                                           3%
+d5_deps_correct              0.42s                                           1%
+```
+
+**d6 holds a single pytest item for 46 seconds against a 60-second no-progress
+window, on an idle machine.** Four of the nine modules carry an item worth a
+quarter of the window or more.
+
+(When this was written it continued "and pytest emits no transition during any
+of them". **That is false and is retracted** — renewal inside items was
+afterwards measured at a 10-15 s cadence, further down. The item-duration table
+here is kept because the numbers are real, but see below for why item duration
+turned out to be the WRONG quantity to be measuring.)
+
+**Re-measured on a quieter box, and it is worse than that.** At load 0.57:
+
+```
+64.98s call  test_d6_skip_discipline[stepD1]
+ 0.48s call  test_d6_l3c_fires_when_the_numerator_folds...
+ 0.04s call  test_d6_every_tier_moving_hint_is_either_accepted...
+             every other d6 step: ~0.01s
+81 passed, 1 xfailed in 66.92s
+```
+
+**One item is 64.98 s — ABOVE the 60 s window — and it is 97% of its own file's
+total runtime.** Measured 46.06 s and 64.98 s on two idle runs, so it also
+varies by 40% run to run.
+
+**THE EXPERIMENT WAS RUN, AND IT REFUTES THE INFERENCE.** The paragraph that
+stood here predicted that a nested run containing only this item would be killed
+as hung, because "pytest emits no transition during an item". Driving
+`_run_outcome_reports` on `test_matrix_d6_skip_discipline.py` ALONE, at the real
+`60 s` window, load 20.4:
+
+```
+window in force: 60 s
+RESULT: completed in 62.6s, 82 item(s) reported  —  NOT killed
+```
+
+A run whose single longest item exceeds the window completed unkilled. **So
+something renews the window DURING an item on this path, and the premise this
+report leaned on — "no intra-item transition exists" — is false here.**
+
+Three things are retracted with it:
+
+* that red 13's stall is explained by "one long item with nothing to renew";
+* that the remedy is "an intra-item heartbeat" — renewal inside items was later
+  MEASURED to exist at a 10-15 s cadence, so there is nothing to write; the
+  remedy is the shipped worker cap;
+* the framing, repeated in several sections above, that any item exceeding the
+  window is indistinguishable from a hang.
+
+What SURVIVES is only what was measured: red 13 did stall once with
+`terminal event missing (stage=running)`; d6 carries an item at 46-65 s; four
+modules carry items above a quarter of the window; and the driver did not kill a
+lone 62.6 s run. The mechanism connecting the first fact to the others is now
+**unknown**, and saying so is the honest end of this line of investigation
+rather than a better story.
+
+**THE NEXT PROBE WAS ALSO RUN, and it produces the real number.** Driving d6
+alone through the driver at shrinking windows bisects the intra-item renewal
+gap directly:
+
+```
+window 60s -> COMPLETED  62.6s, 82 items
+window 30s -> COMPLETED  49.9s, 82 items
+window 20s -> COMPLETED  51.1s
+window 15s -> COMPLETED  50.0s
+window 10s -> KILLED     15.2s   WATCHDOG_STALLED ... > 10s
+```
+
+**Intra-item renewal exists, and its coarsest gap is between 10 s and 15 s.**
+The production window is 60 s, so the real margin is roughly **4-6x over the
+renewal gap** — not the "14 seconds of headroom" this section claimed when it was
+measuring the wrong thing.
+
+**So the item-duration framing was the wrong measurement, and it is retracted.**
+d6's 46-65 s item is not the hazard; the renewal gap is, and that gap is 10-15 s
+whatever an item's length. The table above listing four modules with items above
+a quarter of the window measures something real but not the thing that decides a
+stall kill. Red 13's `stage=running` stall means the 10-15 s gap stretched past
+60 s under three-way concurrency — about a 5x stretch — and THAT is the question
+worth asking next, not how long any item is.
+
+**And the first unknown is now closed by reading the call site.**
+`pytest_per_file_junit.py` drives the outcome run as:
+
+```
+_wd.run_supervised(list(cmd), output_progress=False,
+                   domain_progress_probe=_progress_sample,
+                   stall_grace_s=stall_after, ...)
+```
+
+`output_progress=False` — **stdout is explicitly not progress**, exactly as the
+coverage module's docstring claims ("Output and CPU activity are not progress").
+The renewal therefore comes from `domain_progress_probe=_progress_sample`, the
+nonce-bound semantic protocol the child's own pytest plugin writes. So the
+10-15 s cadence measured above is the SEMANTIC protocol emitting during a long
+item, not stdout keeping the run alive by accident — which is the reassuring
+answer rather than the alarming one.
+
+What is now measured end to end: output is not progress (code); renewal is
+semantic and happens INSIDE items (bisection); its gap is 10-15 s on an idle box
+(bisection); the production window is 60 s, giving 4-6x margin; and red 13's
+stall requires that gap to stretch ~5x under three-way concurrency.
+
+**AND THE LAST UNKNOWN IS NOW REPRODUCED, not inferred.** Three concurrent
+nested d6 runs, at the PRODUCTION `60 s` window, nothing monkeypatched:
+
+```
+[c1] window 60s -> KILLED  77.5s
+[c2] window 60s -> KILLED  79.0s
+[c3] window 60s -> KILLED  78.5s
+```
+
+**3 of 3 killed.** Three-way concurrency stretches the 10-15 s renewal gap past
+60 s — a 4-6x stretch — and it does so reliably. That is red 13's mechanism, and
+it is now a repeatable experiment rather than a single observation nobody could
+re-fire: eight earlier attempts to reproduce a stall by LOAD alone all failed
+(up to load 48.5 with 80 spinners), because load was never the variable.
+**Concurrent nested runs of the same driver are.**
+
+The chain is complete and every link measured:
+
+```
+output is not progress                     code: output_progress=False
+renewal is semantic, and INSIDE items      bisection: survives at 15s
+its gap is 10-15 s on an idle box          bisection: killed at 10s
+production window is 60 s                  4-6x margin
+3 concurrent nested runs                   3/3 KILLED at 60s
+```
+
+Red 13 is therefore neither "the host" nor "one long item". It is a driver whose
+renewal cadence has 4-6x margin alone and none at all when three of its own
+nested runs share a machine.
+
+**A REMEDY ALREADY SHIPS, and it needs no code change.**
+`test_matrix_63x8_coverage.py` exposes `VIBEIC_MATRIX_OUTCOME_WORKERS`
+(`_outcome_worker_cap`), and `test_outcome_worker_cap_reduces_nested_width_
+without_changing_default` already pins that it works. Measured on the FAITHFUL
+configuration — all nine dimension modules through `_run_outcome_reports` at the
+production `60 s` window:
+
+```
+cap unset   width 3   COMPLETED  147.7s, 1060 items   (load 5.82)
+cap unset   width 3   COMPLETED  147.8s, 1060 items   (load 13.11, external contention)
+cap = 1     width 1   COMPLETED  272.9s, 1060 items   (load 18.97, external contention)
+```
+
+So the knob works and costs **1.85x wall-clock** to serialise the waves.
+
+**But its necessity is UNPROVEN, and that is stated rather than glossed.** The
+faithful configuration survived both times, including under deliberate external
+contention at load 13. What reliably kills is *three concurrent whole nested
+runs* — heavier than anything the suite actually does. So:
+
+* if red 13 recurs on a CI host, `VIBEIC_MATRIX_OUTCOME_WORKERS=1` is an
+  operator-level mitigation that changes no assertion, no window and no code,
+  at a measured 1.85x cost;
+* nobody should set it pre-emptively on this evidence, because the condition it
+  guards against was not reproduced in the configuration the suite runs.
+
+That is where this line of investigation ends: mechanism measured, reproduction
+available, remedy shipped and costed, necessity honestly unproven.
+
+## 13 — not "the host". One item, 18.95 s, against a 60 s window
+
+Red 10 taught this report to read the failure text before classifying, so red 13
+got the same treatment. Its message is the same shape as 10's —
+`terminal event missing (stage=running)` — the child had started and was
+emitting, then stopped for over 60 s. So: which item?
+
+```
+slowest durations, test_matrix_d3_outputs_produced.py, load 5.60
+  18.95s  test_d3_the_producer_oracle_answers_both_ways
+   1.03s  test_d3_the_write_ledger_can_only_subtract_evidence
+   1.00s  test_d3_the_write_ledger_binds_production_to_the_step
+   0.92s  ... and everything else below a second
+```
+
+**One item is 18× its nearest neighbour**, and it is a THIRD of the 60 s
+no-progress window on an almost idle box. Under the three-way contention that
+produced the red, 3x is not a stretch.
+
+And it is not a slow test anybody should speed up. That was first taken from the
+docstring; it is now MEASURED, by timing the calls directly:
+
+```
+import the module          0.50 s
+producer_evidence  #1     17.29 s    producers=1
+producer_evidence  #2      0.00 s
+producer_evidence  #3      0.00 s
+```
+
+The first call pays for the whole AST index and every later call is free, which
+is exactly what `@lru_cache(maxsize=None)` plus the deliberate deferral — "only
+a run that reaches an UNEVIDENCED verdict should pay for it" — is supposed to
+produce. **The cache works, the deferral works, and the cost is irreducible.**
+There is nothing to optimise away, and that is now a measurement rather than a
+quotation.
+
+Two alternatives were considered and are worse:
+
+* **build the index in a session fixture**, so it sits outside any item — this
+  makes EVERY d3 run pay 17 s including the ones that never reach an UNEVIDENCED
+  verdict, which is precisely the cost the deferral exists to avoid;
+* **build it incrementally** so progress fires during the work — pytest emits no
+  transition mid-item whatever the work does, so this changes nothing.
+
+So d3's cost is irreducible: 17.29 s, inside one item, against a 60 s window.
+What that does NOT imply — and an earlier revision of this file did imply it —
+is that no renewal reaches inside an item. It does: measured at a 10-15 s
+cadence further down, which is why this item is survivable at all. The remedy
+is the shipped worker cap, not a heartbeat that would have to be written.
+
+**The finding is structural, and it is the same root as red 11's.** pytest emits
+lifecycle transitions at item BOUNDARIES, never during an item, so the driver
+has no way to tell "one long item making progress" from "hung". Any item whose
+runtime is a material fraction of the stall window is indistinguishable from a
+hang, and this one is a third of it before the box is even busy.
+
+**The remedy sentence that stood here was retracted** — it named an intra-item
+heartbeat, and renewal inside items was subsequently MEASURED to exist at a
+10-15 s cadence, so nothing needs writing. The actual remedy is the shipped
+`VIBEIC_MATRIX_OUTCOME_WORKERS` cap, measured at 1.85x wall-clock, with its
+necessity honestly unproven. What is still NOT the remedy is widening the 60 s
+window until a contended run fits underneath; that is the relaxation this
+campaign exists to refuse. Red 13 stays open, as a measured mechanism with a
+repeatable reproduction rather than a shrug at the machine.
+
+## 11 — one observation, never reproduced, and I should not have said "proved"
+
+Red 10 and red 13 both turned out to have causes their own text named while I
+had classified them from behaviour. Red 11 got the same audit, and the result is
+different again: **it does not reproduce at all.**
+
+```
+full-file run, load 3.45                      green
+3 concurrent full-file runs, load 53.18       green x3
+isolated, load 8.79  (24 CPU spinners)        green
+isolated, load 48.52 (80 CPU spinners) x3     green x3
+```
+
+Eight attempts after the original, zero reproductions — and CPU load alone does
+not do it. Whatever produced the single observed failure needed the specific
+process/fork contention of this file's own nested pytest runs, not a busy CPU.
+
+So the honest statement is **one observation, no reproduction**, not "proved to
+be the host". An earlier revision of this file used the word "proved" for reds
+10, 11 and 13 together; that word was earned for none of them, and two turned
+out not to be the host at all.
+
+**What does NOT depend on any of this** is the pinning argument that red 11
+carries, because that rests on the test's assertions, which are read directly
+rather than inferred from a failure:
+
+```
+assert elapsed < 3          # the kill must BEAT the impostor
+assert "WATCHDOG_STALLED:" in message
+assert "COLLECT_CHATTER"  in message
+```
+
+Those three lines pin fail-closed-fast whether or not the test ever goes red
+again, and they are why a startup grace cannot simply be added. That argument
+stands; the classification of the red beneath it is now stated at the strength
+the evidence actually supports.
+
+
+
+All three pass without any change to the repository once the box is not being
+saturated by this file's own nested pytest children: 10 and 11 in the full-file
+run at load 3.45, 13 alone at load 18-30 (`1 passed in 163.79s`). The failure
+signature this section originally pointed at was
+`PROGRESS_PROTOCOL_INCOMPLETE: no pytest progress stream was produced`, read as
+"the child was killed before it emitted anything, i.e. interpreter startup was
+scored as a hang". **That reading is retracted.** `_watchdog.supervise()` does
+set `last_progress = start`, but a startup-keyed probe was later measured NOT to
+engage, and reds 10, 11 and 13 were all shown to be MID-RUN stalls: progress is
+observed early and then stops. The startup framing was wrong for all three — see
+"PROBED to a conclusion" below, and the 10-15 s renewal cadence measured after
+it.
+
+**CORRECTION — it is not a weakness, it is a pinned trade-off.** An earlier
+revision of this file called the startup blind spot a defect that was merely out
+of validation reach. That was wrong in a way that matters, because it invites
+the next reader to "fix" it and quietly make the repo worse.
+
+The blind spot is real and its location is exact — `_watchdog.supervise()` sets
+`last_progress = start`, so time spent launching counts as time without
+progress. But a slow-starting child and a child that will NEVER start are
+indistinguishable from the parent: neither has emitted a lifecycle event, and
+output is explicitly not progress. The only thing separating them is how long
+you are willing to wait.
+
+The repository has already chosen, and one of these very reds is the test that
+pins the choice. `test_live_collection_chatty_import_without_events_fails_closed`
+drives a child that prints for 3 s while emitting no events, and asserts:
+
+```
+assert elapsed < 3          # the kill must BEAT the impostor
+assert "WATCHDOG_STALLED:" in message
+assert "COLLECT_CHATTER"  in message
+```
+
+Adding a startup grace large enough to survive a loaded host pushes the kill
+past that bound and reddens this test. **Fail-closed-fast and survive-a-slow-
+start are the same dial turned opposite ways.** Reds 10 and 13 under load are
+the price of the setting the repo picked, not evidence it picked wrong — and
+red 11 is the guard that would catch anyone trading it away silently.
+
+For completeness, the mechanical scope, since it was measured: `stall_grace_s`
+is one uniform window in `_owned_process_supervisor.run_owned` reaching
+`_watchdog.supervise`, and six programs feed it — `_docker_watchdog` (EDA
+containers), `gatekeeper_review` (the landing gate), `repo_hygiene_parallel`
+(the ~57 min tier), `phase3_one_shot_runner` (real PnR/DRC/LVS),
+`pytest_per_file_junit` (every test tier) and `_watchdog`'s own 1800 s lease. An
+opt-in parameter defaulting to today's behaviour WOULD contain the blast radius
+to one caller — so validation cost is not the reason to leave this alone. The
+reason is the paragraph above.
+
+## 7-9 — NOT_MEASURED, with the reason field filled in
+
+Steps `0.5ic` and `1.6x` are ENFORCED in dimension 3 and no entry in
+`matrix_mutation_ledger.MUTATIONS` covers them. `applies_to` is FROZEN by
+design — a new step must redden this gate — so the red is the mechanism
+working. What it asks for cannot be produced on any host, measured both ways:
+
+* with a pre-withdrawal corpus clone, `--replay D3-UNDECLARED-ARTEFACT --step
+  1.6x` -> `ALREADY_RED (4.5s)` and `--step 0.5ic` -> `ALREADY_RED (5.0s)`,
+  both `baseline_rc=1`, both UNMEASURABLE;
+* without one — the published state, `benchmark-data` `bcf2f94` withdrew all
+  four cells on 2026-08-20 — the predicate SKIPS and both arms return
+  `NOT_REPLAYABLE / UNREADABLE`.
+
+There is no green->red transition to record, so `applies_to` may not be
+widened: LOCK 3 exists to stop a number nobody measured. The manifest already
+says it for `1.6x` — *"no PUBLISHED run predates it ... the truthful status is
+UNPROVEN"* — while `matrix_cell_state()` still returns ENFORCED from NA/WAIVED
+elimination alone. **Exclusion count for any enforcement figure: 2 cells,
+carrying 3 of the 17 reds.** They close when the fourth state lands, and not
+by anything done here.
+
+**CORRECTION — that state exists NOWHERE, and this file previously implied it
+was in flight.** Measured, not assumed: `jfindings-63x8`'s branch does not touch
+`matrix_cell_state` in ANY dimension, and on main `NOT MEASURED` appears only as
+a reporting string inside `test_matrix_63x8_coverage.py:2167` — never as a state
+a dimension can return. Reds 7-9 are not waiting on a branch; they are waiting
+on work nobody has started. A reader who took the earlier wording would have
+waited for a delivery that was never coming.
+
+What it would cost, measured — **9 producers and 7 consumers**:
+
+```
+defines matrix_cell_state()   d1 d2 d3 d4 d5 d6 d7 d8 d9          (9)
+reads it                      test_matrix_mutation_ledger
+                              test_matrix_63x8_coverage
+                              test_matrix_waiver_single_source
+                              test_d7_single_tree_lookup_is_lazy
+                              matrix_d7_artifact_graph
+                              matrix_63x8/substitution.py
+                              matrix_63x8/README.md               (7)
+```
+
+A fourth state is a cross-cutting contract, not a one-line return: every
+producer must decide when its predicate CANNOT run, and every consumer must stop
+folding that answer into one of the three it already handles. It is not authored
+here because it was assigned, and two agents writing one contract in parallel is
+the duplication this split exists to prevent — but **"assigned and unstarted" is
+a different fact from "pending on a branch"**, and this is the one that is true.
+
+### PROBED, not asserted: the fourth state DOES close 7-9, and here is its bill
+
+"They close when the fourth state lands" was reasoning, not a measurement, and
+this report has been wrong twice this session about things it reasoned instead
+of ran. So it was run — in a THROWAWAY worktree, never on this branch, because
+authoring the contract is not this agent's to do. A minimal probe made
+dimension 3 return a fourth state for a step whose every recorded entry is
+`UNPROVEN` and which cites no run root:
+
+```
+before probe   3 failed, 121 passed, 2 skipped
+after  probe   2 failed, 122 passed, 2 skipped
+```
+
+**Reds 7, 8 and 9 all close.** The claim holds.
+
+**And two DIFFERENT gates open, which is the part worth having in advance.**
+`test_the_ledger_grid_matches_what_was_measured` and
+`test_the_grid_gate_names_the_cell_that_moved` fire, and the gate names its own
+remedy precisely:
+
+```
+the grid's shape changed: measured (69, 8, 520) (steps, dimensions,
+                          ENFORCED cells), pinned (69, 8, 522)
+0.5ic/d3 LEFT ENFORCED and is now NOT_MEASURED — it is not in
+                          LEDGER_CELLS_NOT_ENFORCED
+1.6x/d3  LEFT ENFORCED and is now NOT_MEASURED — it is not in
+                          LEDGER_CELLS_NOT_ENFORCED
+```
+
+So the complete, measured task for whoever authors the fourth state is: the
+contract across 9 producers and 7 consumers, **plus** re-deriving the ledger
+grid pin `522 -> 520` and registering both cells in `LEDGER_CELLS_NOT_ENFORCED`.
+Two extra edits, both named by the gate itself rather than discovered late — and
+the gate behaving this way is it working, not a complication.
+
+Nothing above was committed. The probe existed to answer a question this report
+had been answering from reasoning.
+
+## 1-6 — the evidence really is absent, and that was checked
+
+The six cite run root `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`,
+kind `home`. The remedy the test offers first is to re-point the record at a
+root that carries the artefact — the same fix applied to 16/17 above — so it
+was tried: `floorplan.def`, `placed.def`, `post_cts.def` and `post_hold.def`
+exist **nowhere** in the corpus, in any cell, at any version. The classification
+"needs evidence this repository does not hold" is confirmed by search, not
+inherited.
+
+## The fixes re-verified with the corpus BOUND — and red 10's honest limit
+
+A fix measured only in the configuration that hides most of the population is
+half a measurement, so they were re-run against the pre-withdrawal clone — the
+configuration in which 22 further reds are visible.
+
+**This section said "all three" until red 10 was fixed after it was written, and
+that stale word was hiding a real gap: red 10's fix had never been measured
+bound at all.** Measured now, and the answer is not a clean pass:
+
+```
+bound, load 63.65   1 FAILED
+bound, load 60.42   1 passed (4.08s)
+bound, load 57.15   1 passed (3.14s)  1 passed (2.81s)
+UNBOUND control, same load window      1 passed (2.27s)
+```
+
+The unbound control passes in the same window, so **the corpus is not the
+variable — load is.** One failure in four attempts at load 57-63. Red 10's fix
+takes the renewal margin from 2.1x to 6x and that is a real improvement measured
+10/10 alone, green in three concurrent full-file runs at load 31.5, and green in
+the original 5-way sweep shape — but **it is not immunity, and at load ~63 the
+6x margin can still be exceeded.** That is consistent with the settled mechanism
+rather than a surprise: a margin is a ratio, and a busy enough box beats any
+ratio. Stated here rather than left for someone to discover, because "FIXED" in
+the table above means the construction defect is gone, not that the node can
+never go red on a saturated host.
+
+The rest, re-run bound:
+
+```
+test_flow_manifest_declaration_parity          12 passed        (reds 16, 17)
+..._nested_outcome_run_outlives_old_fixed...   passed           (red 12)
+..._nested_outcome_run_is_killed_when_no_...   passed           (its control)
+test_matrix_63x8_ledger                        52 passed
+test_matrix_63x8_figure_coverage               12 passed
+test_matrix_d7_outputs_list_complete           99 passed, 5 xfailed
+```
+
+None of the three is corpus-dependent, and the manifest entry added for step 31
+resolves correctly when the corpus IS present — which is the only configuration
+that can exercise its `PRODUCED_BY_RUN` branch at all. The four coverage
+failures under BOUND are `test_every_na_cell_...`,
+`test_no_cell_is_counted_enforced_...` (both owned elsewhere) and two revealed
+by the corpus, not by this branch.
+
+## The structural question, answered properly — and the answer is inverted
+
+The brief's premise was "seven are stuck behind ONE d8 red; if that d8 is a
+stale pin, seven close at once". The d8 half is false (dimension 8 is 347/347).
+The *shape* of the question is the right one to ask, though, so it was asked of
+the thing that actually sits behind most of this family: the corpus.
+
+MEASURED, this branch, host load 1.74, the same files run with the pointer UNSET
+and then BOUND to a pre-withdrawal `benchmark-data` clone (`146d665`, the commit
+before `bcf2f94` withdrew all four cells) — i.e. exactly the counterfactual
+"what would publishing a run tree buy":
+
+```
+corpus UNBOUND   11 red
+corpus BOUND     33 red
+
+closed by binding the corpus    0
+revealed by binding the corpus  22
+```
+
+**Nothing closes. Publishing evidence does not retire a single one of these
+reds — it uncovers twenty-two more.** The 22 are 11 further d3 step cells
+(`0.5ic`, `1.6x`, 10, 16, 18, 21, 23, 29, 31, 34, 38, A9), 8 d3 guard tests
+including `test_d3_run_root_discovery_is_live` and
+`test_d3_unevidenced_cells_are_named_cell_by_cell`, and 2 coverage tests
+including `test_the_enforcement_census_is_reported_for_humans`. How many of the
+22 are real defects versus the known corpus-pointer precedence issue was left
+unclaimed in an earlier revision of this file. It is claimed now, below, and it
+matters — because "22 reds revealed" reads as "22 hidden defects", and that is
+not what they are.
+
+Two things follow, and they matter more than the number:
+
+1. **The corpus-absent skip is a blindfold, not a blocker.** Every figure this
+   family publishes with the pointer unset is computed over a population where
+   61 of 69 d3 cells declined to look. The census already says so — that is what
+   its 49 NOT MEASURED cells are for — and this is the size of what they cover.
+2. **Reds 7-9 are identical bound and unbound** (`3 failed, 123 passed` bound;
+   `3 failed, 121 passed` unbound). The mutation-ledger reds do not move when
+   the evidence arrives, which PROVES rather than argues the NOT_MEASURED
+   classification above: they are waiting on the fourth-state ruling, not on a
+   corpus. Anyone tempted to close them by publishing a run tree can stop.
+
+Reds 1-6 also stay red with the corpus bound, which is the behaviour their own
+module documents: an inadmissible `kind` is "decided without opening a file,
+which is what makes the answer identical on a host that has a corpus and on one
+that does not".
+
+## Verification closed against the SELECTOR's answer, not against my own guess
+
+Deciding for yourself which files a change could have broken is how a change
+breaks one you did not think of. So the repo was asked instead —
+`ci_targeted_test_select.py --base origin/main` on this branch names **46 test
+files**, and all 46 have now been run, one pytest process each, corpus pointer
+unset, on a quiet host:
+
+```
+46 of 46 run
+43 files green
+ 3 files carry 11 reds, all classified:
+     test_matrix_d3_outputs_produced   6   (reds 1-6,   owned elsewhere)
+     test_matrix_mutation_ledger       3   (reds 7-9,   NOT_MEASURED)
+     test_matrix_63x8_coverage         2   (reds 14-15, owned elsewhere)
+```
+
+**The arithmetic, since 11 is not 17 minus 3 and a reader should not have to
+work that out.** Seventeen on clean main; three fixed here (12, 16, 17) leaves
+fourteen; this sweep observed eleven. The missing three are **10, 11 and 13** —
+the load-intermittent ones. They did not fire in this sweep, and they did not
+fire in three concurrent full-file runs at load 53 either. That is a property of
+those three, documented in their own section above, not a discrepancy: nobody
+has a rate for them and this report does not offer one.
+
+**So no red on this branch is unaccounted for, and none of the three fixes broke
+anything the selector can see.** The 22 files not previously run were all green,
+among them several this work would not have thought to check —
+`test_flow_compliance_check` (22), `test_signoff_required_outputs_completeness`
+(21), `test_plugin_full_audit` (11), `test_programs_index_freshness` (11),
+`test_ci_harness_timeout_ceiling_check` (86), `test_tools_and_integration` (19).
+
+The one that mattered most was invisible from the outside:
+**`test_d3_manifest_declaration_parity`** — 13 passed — is a SECOND parity gate
+over the same manifest, distinct from `test_flow_manifest_declaration_parity`,
+and the step-31 entry has to satisfy both. It was not on any list this work had
+built by hand; the selector produced it.
+
+### What the 22 actually ARE — triaged, and most are not defects
+
+Every one was read for its own reason rather than counted. Six classes:
+
+| n | class | evidence |
+|---|-------|----------|
+| 12 | **UNEVIDENCED against the clone that was bound** | the recorded run root is not in it — `benchmark-data/ic/sha256/clean_run_v1427_20260715` (step 10), `benchmark-data/ic/subservient` (step 21). Not "the flow fails to produce"; the evidence lives in run roots this clone lacks |
+| 4 | **PINS that moved** | `the cost of closing the unevidenced class moved: measured 453282 B over 23 entries, pinned 386857 B`, plus three population/set pins that re-derive once the population is visible |
+| 2 | **host-dependent counts** | `141 of 164 declared entries verified live … and that number is host`-dependent by its own words; `run_root_discovery_is_live` |
+| 2 | **coverage, downstream** | census/live-outcome reporting moving because d3's state moved |
+| 1 | **a REAL finding** | `21 manifest record(s) cite a run root no checkout carries while THIS COMMIT answers the entry` — a genuine stale-manifest defect |
+| 1 | **the known precedence defect** | the self-certification probe drives `benchmark-data/ic/u_hawaii_adc`, "which lives in this repository and must resolve" — the bound pointer overrides the in-repo root |
+
+So the blindfold is not covering twenty-two defects. It is covering **four pins
+that need re-deriving, one real stale-manifest finding, one precedence defect,
+and twelve cells whose evidence sits in run roots nobody staged** — the last of
+which depend entirely on WHICH roots a publisher would stage, not on whether the
+flow produces the artefacts.
+
+That sharpens the headline rather than softening it. Publishing a run tree still
+closes zero of the seventeen. What it additionally does is force four pins to be
+re-derived and surface one genuine defect — a smaller and much more specific
+bill than "22 more reds", and one somebody can actually plan.
+
+**Caveat, stated because it bounds everything above:** this was measured against
+a clone at `146d665`, one commit before the withdrawal. No CI host can reproduce
+it today. It is the counterfactual "what the corpus showed the day before it was
+withdrawn", which is the right question for deciding whether to re-publish, and
+is not a claim about any host's current state.
+
+### The one real defect in the 22, made actionable
+
+`test_d3_no_record_cites_an_absent_run_this_commit_can_answer` is the only
+unambiguous defect the corpus reveals, so it is written out rather than left as
+a table row. **21 manifest records name a run root the REPOSITORY does not
+carry, while a different admissible root answers the same entry.** The
+population, by cited root:
+
+```
+benchmark-data/ic/caravel_user_project   steps D1 (x2), 4, 9, …
+benchmark-data/ic/sha256                 step 5
+benchmark-data/ic/sha256/clean_run_v1427_20260715   step 10
+benchmark-data/ic/u_hawaii_adc           steps A1, A2, A3, A4, A5, A6 (x2), …
+```
+
+The remedy is the same shape as the step-31 fix in this branch — re-point each
+record at the root that actually answers it — and **it was NOT done here, for a
+reason that is not squeamishness.** The root that answers is only visible with a
+pre-withdrawal clone bound. Re-pointing 21 committed records at roots the
+published corpus no longer carries would replace one unreproducible citation
+with another, and would bake a corpus state that upstream deliberately removed
+into a fixture every host reads. That is a worse artefact than the red.
+
+It is repairable by exactly one kind of author: someone with the run trees
+staged, re-deriving each record against what they publish, in the same change
+that publishes it. Until then it sits with reds 1-6 — a real finding whose
+missing input is named.
+
+Note also that the module already degrades correctly around it: the
+`PRODUCED_BY_RUN` branch searches every admissible root and reports
+`STALE MANIFEST RECORD … which root answered instead`, so nothing silently
+passes on a stale citation. The test exists to prompt the repair, not to guard
+against a false green.
+
+## End-to-end: the ORIGINAL sweep shape, re-run on the fixed branch
+
+Every verification above measured one file or one node. The enumeration itself
+came from a 5-way parallel sweep of all 19 `test_matrix_*.py`, so the branch was
+finally measured in that same shape — the configuration that produced the reds,
+not a friendlier one:
+
+```
+                              original sweep      this branch, same shape
+test_matrix_63x8_coverage     5 failed, 24 passed   2 failed, 28 passed
+test_matrix_63x8_census_..    1 failed,  5 passed   6 passed
+test_matrix_d3_outputs_..     6 failed              6 failed   (reds 1-6)
+test_matrix_mutation_ledger   3 failed              3 failed   (reds 7-9)
+test_matrix_d8_missing_..     347 passed            347 passed
+everything else               green                 green
+```
+
+The two survivors in the coverage file are reds 14 and 15 — the NA-skip contract
+and the fourth-state ruling, both owned elsewhere. **Reds 10, 11, 12 and 13 are
+all green in the configuration that produced them.**
+
+**The caveat, because it changes what two of those four prove.** This sweep ran
+at load 11-18; the original ran at 25-45, and d3 finished in 60 s here against
+111 s then. For reds 10 and 12 that does not matter — they are fixed, with
+mutation proofs and 10/10 stability each. For reds 11 and 13 it does: a lighter
+box is exactly the condition under which they were already known to pass, so
+their green here is CONSISTENT WITH the earlier findings and is not additional
+proof of anything. They stay open and stay described as they are above — one
+observation with no reproduction, and a named 18.95 s item against a 60 s
+window.
+
+## Both fixes measured at EXTREME load on equal terms — and one was improved
+
+Red 10's honest limit (above) made the asymmetry obvious: red 12 had never been
+measured above load 53, so this report was claiming more confidence for one fix
+than for the other without having tested them equally. Measured, same box, same
+session:
+
+```
+red 12, item = window/3, 24 items   load 82-86    0 of 6 green   (9-10 s each)
+                                    the CONTROL passed every time
+```
+
+The failing arm was the positive test, and the control — the arm asserting that
+an item which CANNOT renew is still killed — passed under every one of those
+runs. That is the load-insensitivity it was built for, confirmed at the harshest
+condition available rather than claimed.
+
+So red 12's margin was raised to a SIXTH of the window, matching red 10, with
+36 items:
+
+```
+red 12, item = window/6, 36 items   load 87.88    6 of 6 green   (5.5 s each)
+```
+
+**Strictly better on both axes**: 6/6 where /3 was 0/6, at slightly HIGHER load,
+and 5.5 s per run against 9-10 s. Nothing was traded for it — 36 items at a
+sixth is less total work than 24 at a third. Both mutations re-run afterwards
+and both still fire (ratio walked back to `/2` → the margin guard refuses before
+the run; window shrunk to `0.02` → `WATCHDOG_STALLED`, red).
+
+**What this does NOT claim.** Neither fix is immunity. Red 10 still failed once
+in four attempts at load 63, and it uses the same `/6` ratio. A margin is a
+ratio; a busy enough box beats any ratio. What the fixes remove is a
+CONSTRUCTION defect — a test whose green depended on scheduler jitter at
+ordinary load — and that is gone for both, with the improvement measured rather
+than assumed.
+
+## Why the two timing fixes have different ceilings — measured, not guessed
+
+Raising red 12's margin to `/6` made it 6 of 6 at load 87.88. Red 10 is on the
+SAME `/6` ratio and is **1 of 6 at load 63**. Same file, same technique, same
+ratio, an order of magnitude apart in robustness — so the difference was
+isolated rather than shrugged at.
+
+**The sleep is not red 10's constraint.** Driven to `0.001` — effectively no
+sleep at all, with the two `> 0.8 s` assertions stubbed so only the renewal
+mechanism was under test:
+
+```
+file_seconds = 0.001, load 76.32     1 of 4 green
+```
+
+**Three of four still fail with no sleep in the fixture.** So the floor is not
+anything this test can tune away: red 10's renewals are separate FILES, and each
+one costs a real interpreter import plus a pytest collection. At load 60+ that
+overhead alone exceeds the `0.30 s` window.
+
+That is the whole difference between the two:
+
+| | what one renewal costs | ceiling measured |
+|---|---|---|
+| red 12 | a test function in ONE already-imported file | 6/6 green at load 87.88 |
+| red 10 | a FILE — import + collect, every time | 1/6 green at load 63 |
+
+So red 10's fix should be read for exactly what it is: **the construction defect
+is gone** — the renewal interval no longer equals the window, which is what made
+the test measure scheduler jitter at ordinary load — and it is green 10/10
+alone, green in three concurrent full-file runs at load 31.5, and green in the
+original 5-way sweep shape. **It cannot be made robust at load 60+ by margin
+engineering**, because the remaining gap is per-file collection cost, and the
+only levers left are widening the window (refused) or removing files (which
+removes the renewals the test exists to demonstrate).
+
+## PROBED to a conclusion: the window OWNS the kill, and "startup" was the wrong word
+
+**The settled answer first, because this section took three probes to reach it
+and the intermediate steps are recorded below rather than in front.**
+
+`supervise()` owns red 11's kill, and widening its window reddens the test:
+
+```
+stall_grace_s x 40    red 11: 1 FAILED — "DID NOT RAISE AssertionError", 4.16s
+```
+
+So the six-consumer blast radius of `run_owned` DOES apply, and this report's
+original conclusion — do not widen that window — is confirmed by measurement
+rather than by argument.
+
+**But "startup" was the wrong word for all three of reds 10, 11 and 13.** A
+startup-KEYED grace never engages: progress IS observed early on these paths, so
+the child is not killed before it reports, it reports and then stalls. Red 11
+joins red 10 (`stage=collecting`) and red 13 (`stage=running`) as a **mid-run
+stall**. This report used the startup framing three times and it was wrong three
+times.
+
+Net, and fully measured: **a startup grace would fix none of reds 10, 11 or 13 —
+it never engages. Widening the stall window would fix them, and it reddens red
+11's fail-closed-fast guarantee.** That is the real trade, and declining it now
+rests on a measurement.
+
+<details>
+<summary>How this was reached — two probes that did not settle it</summary>
+
+Probe 1 gave `supervise()` a startup budget (before the FIRST observed progress,
+`max(stall_grace_s, N)`) and red 11 stayed green at **1.38 s** with N=5 and
+**1.37 s** with N=45, while the test asserts `elapsed < 3`.
+
+That was read as "the blast-radius argument is misaimed and the mechanism is
+doubtful". **That reading was wrong**, and it is left here because the mistake is
+instructive: a probe that does not move the outcome has two explanations — the
+component is not on the path, or the probe's KEY never fires — and only the
+second was true. Probe 2 raised the same grace to 45 s and changed nothing,
+which distinguished nothing. Probe 3 stopped keying on startup and multiplied
+the window itself, which moved the outcome immediately and settled it.
+
+</details>
+
+Nothing from any of the three probes was committed.
+
+## Landing note — this branch is conflict-neutral, and there is ONE trap
+
+The brief said to split with `jfindings-63x8` and not duplicate it. That was
+checked rather than assumed, by trial merge:
+
+```
+main + j63b                        clean, rc=0
+main + jfindings-63x8              6 conflicts
+main + j63b + jfindings-63x8       the SAME 6 conflicts
+```
+
+Identical sets, so **this branch adds zero conflicts** — all six are
+`jfindings-63x8` against a main it predates. `test_matrix_63x8_coverage.py`, the
+one file both branches edit, auto-merges: the two changes are in disjoint
+regions and both survive.
+
+**THE TRAP, and it is silent.** `matrix_d3_output_manifest.json` conflicts
+(theirs-vs-main, present without this branch too), and the HEAD side of that one
+conflict region contains three things while the theirs side contains one:
+
+```
+resolve --ours   : drc_signoff.json + lvs_verdict.json present = 2 of 2
+resolve --theirs : drc_signoff.json + lvs_verdict.json present = 0 of 2
+```
+
+Taking `--theirs` — the natural move, since the incoming branch carries the
+better `magic_illegal_overlap.json` provenance note — **silently deletes
+`lvs_verdict.json` and `drc_signoff.json`**, reopening reds 16 and 17 and
+leaving 164 declared paths against 162 entries. Taking `--ours` keeps both
+entries and loses the improved note.
+
+Neither side is right. Resolve by hand: **take theirs for the
+`magic_illegal_overlap.json` `provenance_note` only, and keep HEAD for
+everything else in that region.** Then run
+`pytest -q programs/tests/test_flow_manifest_declaration_parity.py` — under a
+second, and it is the check that catches this exact mistake.
+
+### The trap is ALL SIX regions, and one of them is a duplicate of main
+
+The manifest is not special. Every one of the six conflicts is asymmetric in the
+same direction — main's later content sits on the HEAD side and a one-sided
+`--theirs` deletes it:
+
+```
+phase1_phase2_phase3.yaml        ours  89 lines   theirs  17
+matrix_d3_output_manifest.json   ours  17         theirs   1
+matrix_63x8/README.md            ours   2         theirs   2
+matrix_63x8/flowref.py           ours  20         theirs  75
+test_matrix_63x8_ledger.py       ours 114         theirs  27
+test_matrix_d2_falsifiable.py    ours 241         theirs 380
+```
+
+**So the right instrument is a REBASE of `jfindings-63x8` onto current main, not
+a merge.** A rebase replays its commits one at a time against what main now
+says and forces each decision to be made on its own; a single six-region merge
+invites exactly one `--theirs` keystroke that silently drops main's work in
+three files.
+
+And the yaml region is worth naming, because it is not a disagreement at all —
+**both sides are the same fix, authored twice.** They declare
+`reports/phase3/magic_illegal_overlap.json` on step 31 for the same dimension-7
+reason (`gate_output_read_elsewhere`), in different prose. Main already carries
+it:
+
+```
+required_outputs on main includes magic_illegal_overlap.json   True
+d3 manifest entry on main                                       PRESENT (UNPROVEN)
+landed by                                                       ff5071caa
+```
+
+So that branch's step-31 d7 commit is superseded — the declaration and the entry
+are on main already, and what it still adds there is a richer `provenance_note`,
+which is a text merge and not a finding. This is the same disease as the premise
+this whole report opens by correcting: **a list written before main moved.**
+Worth re-deriving that branch's remaining findings against current main before
+spending review on them.
+
+### How much of that branch is still live — measured, and most of it is
+
+Saying "a branch predates main" is not a verdict on its content, so the content
+was checked commit by commit. Of its nine commits, **seven add a test function
+that does not exist on main** — genuinely new work, and the reason the split was
+worth making. Two add no test, and both of those are superseded:
+
+* **`matrix(d7)` step 31's extraction-feedback verdict** — main declares the
+  path and carries the manifest row already (`ff5071caa`). What remains is a
+  richer `provenance_note`: a text merge, not a finding.
+* **`matrix(figures)` the 11 anchored figures** — this one is worse than
+  superseded, it is a REGRESSION if taken. It re-derives the figures to
+  `142` entries and `166` blocking clauses. Main has since re-derived further:
+
+```
+main today            164<!--figure:required_output_entries-->
+                      177<!--figure:blocking_clauses-->
+that commit sets      142                166
+test_matrix_63x8_figure_coverage on main:  12 passed
+```
+
+Resolving that region toward theirs walks two published figures backwards and
+reddens a gate that is currently green.
+
+This is the strongest argument for the rebase: replayed one commit at a time
+against current main, the figures commit fails its own gate immediately and the
+d7 commit shows up as an empty or prose-only change. Merged as one six-region
+blob, both land silently.
+
+**Nothing here says that branch is stale work.** Seven ninths of it is new, and
+two of the reds this report leaves open are its to close.
+
+## Reproduce
+
+**Enumerate the family** (this is what produced the 17; the `test_matrix_`
+prefix alone finds only 15):
+
+```
+git worktree add -f <wt> origin/main --detach
+cd <wt>/vibe-ic-marketplace/plugins/vibe-ic
+export PYTHONDONTWRITEBYTECODE=1; unset VIBE_IC_BENCHMARK_DATA
+for f in programs/tests/test_matrix_*.py; do
+  python3 -m pytest -q -p no:randomly -p no:cacheprovider "$f"; done
+grep -rln 'matrix_63x8\|matrix_cell_state\|gen_matrix_63x8_census' \
+     programs/tests/*.py | grep -v '/test_matrix_'      # the other consumers
+```
+
+**Let the repo choose your verification set** — it named 46 files where a hand
+list had 24:
+
+```
+python3 programs/ci_targeted_test_select.py --base origin/main
+```
+
+**Reproduce red 13 on demand** — three concurrent nested runs at the PRODUCTION
+window, 3/3 killed. This is the only reliable reproduction found; load alone
+never worked (8 attempts, to load 48.5):
+
+```
+for n in 1 2 3; do (python3 - <<'EOF' &
+import sys, time, pathlib, importlib
+sys.path[:0] = [str(pathlib.Path('programs/tests').resolve()),
+                str(pathlib.Path('programs').resolve())]
+cov = importlib.import_module('test_matrix_63x8_coverage')
+d6 = pathlib.Path('programs/tests/test_matrix_d6_skip_discipline.py').resolve()
+t = time.monotonic()
+try:
+    cov._run_outcome_reports((d6,), cwd=pathlib.Path('.').resolve())
+    print(f"COMPLETED {time.monotonic()-t:.1f}s")
+except AssertionError:
+    print(f"KILLED {time.monotonic()-t:.1f}s")
+EOF
+); done
+```
+
+Vary `cov._OUTCOME_PROGRESS_STALL_S` in that snippet to bisect the renewal gap
+(killed at 10 s, survives at 15 s). Set
+`VIBEIC_MATRIX_OUTCOME_WORKERS=1` to serialise the waves — 1.85x wall-clock.
+
+**Probe what the fourth state would close** (throwaway tree only — the contract
+is not this agent's to author):
+
+```
+python3 programs/matrix_mutation_ledger.py --replay D3-UNDECLARED-ARTEFACT --step 1.6x
+# then: make d3's matrix_cell_state return a 4th state for a step whose every
+# entry is UNPROVEN with no cited run root, and run test_matrix_mutation_ledger:
+#   3 failed -> 2 failed   (reds 7-9 close; the ledger GRID pin opens)
+```
+
+## What was and was not done
+
+**Four reds closed** — 16 and 17 by re-deriving a measurement that a declaration
+landed without, 12 and 10 by removing races from tests that had no margin of
+their own, each with mutation proofs on both arms and stability measured at
+extreme load with their ceilings stated.
+
+**Five left open**, every one with a measured mechanism and a named missing
+input: 7-9 wait on a contract that is UNSTARTED (probed: it closes them, and
+costs two further edits); 11 has one observation and no reproduction in eight
+attempts; 13 has a full measured chain, a repeatable reproduction and a shipped
+mitigation whose necessity is unproven.
+
+**Eight owned elsewhere**, allocated by content and audited commit by commit.
+
+Nothing here was obtained by widening an assertion, rewriting a baseline,
+deleting a test or relaxing a rule deck. Where a story could not be replaced by
+a number, the story was retracted, repeatedly and including against this agent's
+own earlier conclusions in this same file. Both figures are checkable rather
+than asserted:
+
+```
+git log --format=%s origin/main..HEAD | grep -icE 'correct|retract|refut|wrong'
+    -> 12 commits whose subject states a correction
+grep -ciE 'retracted|CORRECTION' tools/ci/J63B_63X8_RED_SET.md
+    ->  8 marked retractions in this file
+```
+
+An earlier revision of this paragraph said "twenty-three times". That was a
+running tally kept in conversation, never measured, and it counted refinements
+that are not retractions. **A report arguing that no number should be published
+without measuring it had an unmeasured number in its last line**, which is worth
+leaving on the record rather than quietly correcting.
+
+**That miss prompted an audit of every DERIVED figure in this file** — the
+percentages, ratios and totals, which are where an unchecked number hides most
+easily because it looks like it came from somewhere. Fourteen were recomputed
+from their own inputs and all fourteen hold:
+
+```
+d6 46.06/60 = 76.77%  (stated 77%)      d7 17.28/60 = 28.80%  (stated 29%)
+d6 64.98/66.92 = 97.10% (stated 97%)    d3 16.85/60 = 28.08%  (stated 28%)
+272.9/147.8 = 1.85x   (stated 1.85x)    d8 13.65/60 = 22.75%  (stated 23%)
+60/15 = 4, 60/10 = 6  (stated 4-6x)     60/0.30 = 200 (stated 200x)
+0.30/0.14 = 2.14      (stated 2.1x)     0.30/0.05 = 6 (stated 6x)
+36*0.075 = 2.70s      (stated 2.7s)     24*0.15 = 3.60s (stated 3.6s)
+1.8/0.45 = 4          (stated 4x)
+```
+
+Every difference is rounding in the first significant place (76.77 -> 77,
+2.14 -> 2.1, 22.75 -> 23). No derived figure in this file is wrong, and the
+one number that was is named above rather than repaired in silence.
+
+**And the third class — QUOTED measurements — was checked against the logs they
+came from**, because transcription is its own failure mode and it leaves no
+trace in the arithmetic. Ten load-bearing figures, counts and timings both:
+
+```
+d8 347 passed                     log: 347 passed in 83.11s      MATCH
+d8 alone 347 in 34.73s            log: 347 passed in 34.73s      MATCH
+d3 6 failed, 52 passed, 61 skip   log: identical, 110.94s        MATCH
+coverage before 5 failed, 24      log: identical, 351.67s        MATCH
+census before 1 failed, 5         log: identical, 396.46s        MATCH
+parity before 2 failed, 10        log: identical, 0.88s          MATCH
+coverage idle-before 3 failed,26  log: identical, 168.74s        MATCH
+coverage after 2 failed, 28 x2    log: 164.14s and 166.23s       MATCH
+sweep-shape coverage 2 failed,28  log: identical, 168.88s        MATCH
+sweep-shape census 6 passed       log: identical, 153.06s        MATCH
+```
+
+Ten of ten exact. So every figure in this file is now in one of three verified
+states: **measured and quoted correctly, derived and recomputed correctly, or
+named as the one that was neither.**

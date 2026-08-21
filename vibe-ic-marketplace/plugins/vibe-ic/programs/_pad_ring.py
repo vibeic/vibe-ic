@@ -56,6 +56,56 @@ and two checks are OURS because upstream has no analogue:
                             BTerms — upstream's chip flow deletes IO placement
                             outright saying so. Nothing upstream then checks
                             that every top-level port actually reached a pad.
+    PAD_SITE_DECLARATION_AMBIGUOUS
+                            a PDK tree may ship more than one IO library, and
+                            each declares its own `PAD_FAKE_SITES`. Upstream
+                            reads ONE library's config, so it never sees two.
+                            This step discovers them, so it can, and two
+                            declarations of one site name at two different
+                            sizes is refused rather than resolved by file
+                            order — the site width is what the whole spacing
+                            arithmetic rounds to.
+
+WHERE A PAD SITE IS DECLARED — TWO PDK VIEWS, NOT ONE
+=====================================================
+MEASURED 2026-08-22 in the current image, and this is the defect this module
+was carrying: the IO cell library's LEFs may contain NO top-level `SITE`
+declaration at all. On the one open PDK checked exhaustively, all 15 IO cell
+LEFs carry only the `SITE <name> ;` REFERENCE form inside a MACRO — a name,
+not a declaration. The distribution declares the site in its TECH view:
+
+    <root>/<tree>/libs.tech/<flow>/<io library>/config.tcl
+        set ::env(PAD_SITE_NAME)        "<name>"
+        set ::env(PAD_CORNER_SITE_NAME) "<corner name>"
+        # Note: This is needed if site definition are not in LEF
+        dict set ::env(PAD_FAKE_SITES) "<name>" "<width_um>, <height_um>"
+
+`PAD_FAKE_SITES` is upstream's own PDK-scoped variable — "A dict of fake pad
+sites and their width and height tuple. Use this if the LEF does not include
+the site definitions for the IO pads." — and upstream's placer consumes it
+BEFORE its two site lookups, calling `make_fake_io_site` once per entry. This
+module names 11 of upstream's 20 PDK-scoped `PAD_*` variables — the 8 geometric
+ones in the contract above plus the 3 it records as UNPERFORMED — and omitted
+this one. (RE-MEASURED 2026-08-22 by counting `Variable("PAD_…")` in upstream's
+`pad_variables`: 20, not the 14 an earlier draft of this paragraph asserted from
+our own `REQUIRED_VARS` count without checking theirs.) The other 8 it omits are
+file lists — LEFs, GDS, libs, CDLs, SPICE and Verilog models — and bondpad
+dimensions, none of which this step performs. `PAD_FAKE_SITES` is the one
+omission that cost anything: on every distribution that declares its sites that
+way the first lookup refused `PAD_SITE_NOT_FOUND` against a PDK that had in fact
+declared the site.
+
+MEASURED, not assumed, what the created site is: driving
+`make_fake_io_site -name X -width W -height H` against a real tech LEF and
+dumping the database yields `SITE X class=PAD w=W h=H` in a library the tool
+names `FAKE_IO`. So a PDK-declared site is CLASS PAD carrying exactly the
+declared size, and honouring the declaration does not weaken
+`PAD_SITE_CLASS_NOT_PAD` — it is what the tool the check models does.
+
+A DECLARATION IS STILL NOT AN INVENTION. Only the PDK may declare a site: this
+module reads `PAD_FAKE_SITES` out of a PDK file and nowhere else. A project's
+`pad_assignment.json` cannot declare one, there is no default size anywhere in
+this file, and a site named by neither view is still `PAD_SITE_NOT_FOUND`.
 
 THE CONFIG CONTRACT
 ===================
@@ -100,18 +150,32 @@ THE IO CELL LIBRARY — FOUND, NOT DRAWN
 ======================================
 Located by the layout convention PDK DISTRIBUTIONS use —
 `<root>/<tree>/libs.ref/<library whose name carries the io token>/lef/*.lef` —
-never by naming a process, a foundry or a library. MEASURED over the 6 PDK
-trees the pinned image ships (names withheld; this is a count, not an
-inventory):
+never by naming a process, a foundry or a library. RE-MEASURED 2026-08-22 by
+sweeping every PDK tree the pinned image ships (names withheld; this is a
+count, not an inventory):
 
-    4 trees carry such a library, holding 15, 22, 22 and 71 distinct masters
-    2 trees carry none
-    of the 4, only 2 ship the PAD-class SITE records `PAD_SITE_NAME` and
-    `PAD_CORNER_SITE_NAME` refer to; the other 2 ship masters and no site
+    7 trees swept
+    4 carry an IO cell library; 3 carry none
+    of the 4, 2 declare their pad sites as LEF SITE records
+             and 2 declare them in the TECH view, via `PAD_FAKE_SITES`
+    0 declare them in neither, and 0 declare one site at two sizes
 
-That last line is why `PAD_SITE_NOT_FOUND` is a real branch and not a
-defensive one: on half the IO libraries in the image, upstream's own placer
-would exit 1 on its first lookup.
+The count that was here before was right and the conclusion drawn from it was
+not. It read: "only 2 ship the PAD-class SITE records ... the other 2 ship
+masters and no site", and concluded "on half the IO libraries in the image,
+upstream's own placer would exit 1 on its first lookup."
+
+IT WOULD NOT. Upstream creates those sites from `PAD_FAKE_SITES` before its
+first lookup ever runs, which is exactly what those 2 distributions declare and
+what this module had not been reading. The libraries are not siteless; they
+declare their sites in the other view and say so in a comment. That mistaken
+sentence is what kept `PAD_SITE_NOT_FOUND` firing against PDKs that had
+declared the site, so it is corrected here rather than deleted — the wrong
+inference is the more useful record.
+
+`PAD_SITE_NOT_FOUND` remains a real branch, on its true grounds: a site name
+that NEITHER view declares. The sweep above is the standing evidence that it
+fires on no real PDK in the image.
 
 chip-AGNOSTIC: no chip, vendor, SKU, foundry, library or process-node literal.
 The only fixed strings are DEF/LEF keywords, upstream's variable names, the
@@ -172,6 +236,14 @@ UNPERFORMED_VARS: Tuple[str, ...] = (
 _LIBS_REF = "libs.ref"
 _IO_LIB_TOKEN = "io"
 
+# The TECH view the same distributions declare a pad SITE in, when their LEFs
+# do not. `libs.tech` is the reference-view directory's sibling every open PDK
+# in the pinned image ships; the flow directory under it is not named here —
+# every one is scanned, and only a file that actually declares the upstream
+# variable contributes anything.
+_LIBS_TECH = "libs.tech"
+_SITE_DECL_FILE = "config.tcl"
+
 
 # ── orientations ────────────────────────────────────────────────────────────
 #: The placer's spelling -> the DEF spelling. Both are accepted on input so a
@@ -189,6 +261,32 @@ _CW90 = {"N": "E", "E": "S", "S": "W", "W": "N",
 
 #: Orientations whose footprint is the master's SIZE with the axes swapped.
 _ROTATED = ("E", "W", "FE", "FW")
+
+#: What the placer ACTUALLY orients a vertical-side pad to, in DEF spelling.
+#:
+#: MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
+#: `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be reused
+#: by a later one:
+#:
+#:     ROTV = R0 / R90 / R180 / MX   ->   WEST orient=MXR90, EAST orient=R90
+#:                                        75 um along the row, 350 um into the
+#:                                        die, IDENTICAL in all four
+#:
+#: The vertical-side orientation is a CONSTANT of the placer, not a function of
+#: the declared rotation. Written here in the placer's own spelling
+#: (`MXR90` -> `FW`, `R90` -> `W`) so the DEF this step emits says what the tool
+#: would have said. Emitting the DECLARED orientation instead produced an
+#: artefact that contradicted its own geometry.
+VERTICAL_SIDE_ORIENT: Dict[str, str] = {
+    "W": ORIENT_ALIASES["MXR90"],
+    "E": ORIENT_ALIASES["R90"],
+}
+
+#: librelane's declared default for all three pad rotations
+#: (`librelane/config/flow.py`, `default="R0"` on each). A run whose config
+#: carries this value is indistinguishable from a run that set nothing, which
+#: is exactly how it should be treated.
+ROTATION_DEFAULT = "R0"
 
 
 def normalise_orient(token: object) -> Optional[str]:
@@ -385,15 +483,33 @@ def parse_lef_sites(text: str) -> Dict[str, Dict[str, object]]:
     return out
 
 
-def discover_io_lefs(pdk_root: Optional[str] = None,
-                     pdk: Optional[str] = None) -> List[Path]:
-    """Locate the PDK's IO cell library LEFs by distribution convention.
+#: `dict set ::env(PAD_FAKE_SITES) "<site>" "<width_um>, <height_um>"`, the
+#: one form the distributions in the image write. Both the quoted and the
+#: braced Tcl word forms are accepted because both are the same Tcl word.
+_FAKE_SITE_RE = re.compile(
+    r"^[^\S\n]*dict\s+set\s+::env\(\s*PAD_FAKE_SITES\s*\)\s+"
+    r"(?P<q1>[\"{])(?P<name>[^\"}\s]+)[\"}]\s+"
+    r"(?P<q2>[\"{])\s*(?P<w>[0-9]+(?:\.[0-9]*)?)\s*,"
+    r"\s*(?P<h>[0-9]+(?:\.[0-9]*)?)\s*[\"}]",
+    re.M)
 
-    An empty list means NOT RESOLVED. That is reported as a state of its own
-    rather than returned as an empty master table: an empty table and an
-    absent library are different facts, and a pad whose master cannot be
-    looked up has not been shown to be a PDK cell rather than a drawn one.
+
+def parse_pad_site_declarations(text: str) -> Dict[str, Tuple[float, float]]:
+    """`{site: (width_um, height_um)}` for every `PAD_FAKE_SITES` entry.
+
+    Upstream's own PDK variable, read verbatim. A file that declares none
+    contributes nothing — absence is reported by absence, never by a size this
+    function chose.
     """
+    out: Dict[str, Tuple[float, float]] = {}
+    for m in _FAKE_SITE_RE.finditer(text):
+        out[m.group("name")] = (float(m.group("w")), float(m.group("h")))
+    return out
+
+
+def _pdk_trees(pdk_root: Optional[str] = None,
+               pdk: Optional[str] = None) -> List[Path]:
+    """The PDK trees a run may read from, or an empty list for NOT RESOLVED."""
     root_s = pdk_root if pdk_root is not None else os.environ.get("PDK_ROOT")
     if not root_s:
         return []
@@ -407,11 +523,21 @@ def discover_io_lefs(pdk_root: Optional[str] = None,
         # into a 130-master table drawn from six unrelated processes, which
         # would have corroborated a master no run could ever have used.
         tree = root / name
-        trees = [tree] if tree.is_dir() else []
-    else:
-        trees = sorted(p for p in root.iterdir() if p.is_dir())
+        return [tree] if tree.is_dir() else []
+    return sorted(p for p in root.iterdir() if p.is_dir())
+
+
+def discover_io_lefs(pdk_root: Optional[str] = None,
+                     pdk: Optional[str] = None) -> List[Path]:
+    """Locate the PDK's IO cell library LEFs by distribution convention.
+
+    An empty list means NOT RESOLVED. That is reported as a state of its own
+    rather than returned as an empty master table: an empty table and an
+    absent library are different facts, and a pad whose master cannot be
+    looked up has not been shown to be a PDK cell rather than a drawn one.
+    """
     lefs: List[Path] = []
-    for tree in trees:
+    for tree in _pdk_trees(pdk_root, pdk):
         ref = tree / _LIBS_REF
         if not ref.is_dir():
             continue
@@ -421,10 +547,60 @@ def discover_io_lefs(pdk_root: Optional[str] = None,
     return lefs
 
 
-class IoLibrary:
-    """The masters and the PAD-class sites an IO cell library declares."""
+def discover_io_site_declarations(pdk_root: Optional[str] = None,
+                                  pdk: Optional[str] = None) -> List[Path]:
+    """Locate the PDK TECH-view files that DECLARE a pad site.
 
-    def __init__(self, lefs: Sequence[Path]):
+    The sibling of `discover_io_lefs`, and it exists because the LEF view is
+    not the only place a distribution declares a pad SITE — see this module's
+    header. Same tree resolution, same `io` token on the library directory,
+    and only files that actually name upstream's variable are returned, so a
+    tree that declares nothing yields an empty list rather than a file whose
+    contents would have to be interpreted.
+    """
+    found: List[Path] = []
+    for tree in _pdk_trees(pdk_root, pdk):
+        tech = tree / _LIBS_TECH
+        if not tech.is_dir():
+            continue
+        for flow in sorted(p for p in tech.iterdir() if p.is_dir()):
+            for lib in sorted(p for p in flow.iterdir() if p.is_dir()):
+                if _IO_LIB_TOKEN not in lib.name.lower():
+                    continue
+                cfg = lib / _SITE_DECL_FILE
+                if not cfg.is_file():
+                    continue
+                try:
+                    text = cfg.read_text(errors="replace")
+                except OSError:
+                    continue
+                if parse_pad_site_declarations(text):
+                    found.append(cfg)
+    return found
+
+
+#: A site the PDK's TECH view declares is CLASS PAD. Not a preference:
+#: MEASURED by driving `make_fake_io_site` and dumping the database — see this
+#: module's header. Named so the constant carries the reason.
+DECLARED_SITE_CLASS = "PAD"
+
+#: Which PDK view a resolved site came from. Carried into the artefact so a
+#: reader can tell a site that was READ from one that was DECLARED.
+SITE_SOURCE_LEF = "libs.ref LEF SITE declaration"
+SITE_SOURCE_DECLARED = "libs.tech PAD_FAKE_SITES declaration"
+
+
+class IoLibrary:
+    """The masters an IO cell library ships and the PAD-class sites the PDK
+    declares for it — across BOTH views the distributions use.
+
+    `sites` stays exactly what it was: the LEF view. `declared_sites` is the
+    tech view. `resolve_site` is the only lookup callers should use, and it
+    prefers the LEF, which carries real geometry, over a declaration.
+    """
+
+    def __init__(self, lefs: Sequence[Path],
+                 site_declarations: Sequence[Path] = ()):
         self.lefs = list(lefs)
         self.masters: Dict[str, Tuple[float, float]] = {}
         self.sites: Dict[str, Dict[str, object]] = {}
@@ -436,9 +612,55 @@ class IoLibrary:
             self.masters.update(parse_lef_macros(text))
             self.sites.update(parse_lef_sites(text))
 
+        self.site_declarations = list(site_declarations)
+        self.declared_sites: Dict[str, Dict[str, object]] = {}
+        #: site -> the differing declarations found for it. A PDK tree may
+        #: ship more than one IO library; upstream reads one config and never
+        #: sees a second, so this disagreement is ours to refuse. Resolving it
+        #: by file order would pick the site width the whole spacing
+        #: arithmetic rounds to out of a directory listing.
+        self.site_declaration_conflicts: Dict[str, List[Dict[str, object]]] = {}
+        for cfg in self.site_declarations:
+            try:
+                text = cfg.read_text(errors="replace")
+            except OSError:
+                continue
+            for name, size in parse_pad_site_declarations(text).items():
+                rec = {"class": DECLARED_SITE_CLASS, "size": size,
+                       "declared_in": str(cfg)}
+                prev = self.declared_sites.get(name)
+                if prev is None:
+                    self.declared_sites[name] = rec
+                elif tuple(prev["size"] or ()) != size:      # type: ignore[arg-type]
+                    self.site_declaration_conflicts.setdefault(
+                        name, [dict(prev)]).append(rec)
+
     @property
     def resolved(self) -> bool:
         return bool(self.masters)
+
+    def resolve_site(self, name: str) -> Optional[Dict[str, object]]:
+        """The site `name`, from whichever PDK view declares it, or None.
+
+        LEF first: where a library ships a real SITE record that record is the
+        geometry, and a declaration alongside it would be the redundant copy.
+        """
+        site = self.sites.get(name)
+        if site is not None:
+            return {"class": site["class"], "size": site["size"],
+                    "source": SITE_SOURCE_LEF}
+        declared = self.declared_sites.get(name)
+        if declared is not None:
+            return {"class": declared["class"], "size": declared["size"],
+                    "source": SITE_SOURCE_DECLARED,
+                    "declared_in": declared["declared_in"]}
+        return None
+
+    def pad_class_site_names(self) -> List[str]:
+        """Every PAD-class site this run can resolve, from either view."""
+        return sorted(
+            {n for n, s in self.sites.items() if s["class"] == "PAD"}
+            | set(self.declared_sites))
 
     def as_dict(self) -> Dict[str, object]:
         return {"resolved": self.resolved,
@@ -446,7 +668,14 @@ class IoLibrary:
                 "n_masters": len(self.masters),
                 "n_sites": len(self.sites),
                 "pad_class_sites": sorted(
-                    n for n, s in self.sites.items() if s["class"] == "PAD")}
+                    n for n, s in self.sites.items() if s["class"] == "PAD"),
+                "site_declarations": [str(p) for p in self.site_declarations],
+                "n_declared_sites": len(self.declared_sites),
+                "declared_pad_class_sites": sorted(self.declared_sites),
+                "pad_class_sites_resolvable": self.pad_class_site_names(),
+                "site_declaration_conflicts": {
+                    n: [dict(r, size=list(r["size"])) for r in recs]
+                    for n, recs in self.site_declaration_conflicts.items()}}
 
 
 # ── abutment ────────────────────────────────────────────────────────────────

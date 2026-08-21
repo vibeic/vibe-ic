@@ -391,7 +391,15 @@ def main(argv=None) -> int:
                             args.require_implementation_differs,
                             args.corpus_may_be_absent, args.json_out)
     if args.baseline is None or args.candidate is None:
-        ap.error("give --baseline A.json --candidate B.json, or --corpus DIR")
+        # `ap.error` exits 2, and PPA_INTERFACES §1 reserves 2 for "I could not
+        # look". An incomplete mode is a BAD INVOCATION, which is 3, and
+        # `cli_exit.refuse` is the one call that says so. The message names
+        # every mode this gate has -- a refusal that hides a mode is how a
+        # caller concludes the gate cannot do what it can.
+        return cli_exit.refuse(
+            "ppa_problem_integrity_check",
+            "give --baseline A.json --candidate B.json, or --corpus DIR, or "
+            "--corpus DIR --corpus-may-be-absent")
 
     docs = {}
     for label, path in (("baseline", args.baseline), ("candidate", args.candidate)):

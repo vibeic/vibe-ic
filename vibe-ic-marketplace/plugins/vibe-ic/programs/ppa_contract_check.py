@@ -318,7 +318,15 @@ def main(argv=None) -> int:
         return check_corpus(Path(args.corpus).resolve(), args.schema_dir,
                             args.corpus_may_be_absent, args.json_out)
     if args.contract is None:
-        ap.error("give --contract CONTRACT.json or --corpus DIR")
+        # `ap.error` exits 2, and PPA_INTERFACES §1 reserves 2 for "I could not
+        # look". Naming no mode at all is a BAD INVOCATION, which is 3, and
+        # `cli_exit.refuse` is the one call that says so. The message names
+        # every mode this gate has -- a refusal that hides a mode is how a
+        # caller concludes the gate cannot do what it can.
+        return cli_exit.refuse(
+            "ppa_contract_check",
+            "give --contract CONTRACT.json, or --corpus DIR, or "
+            "--corpus DIR --corpus-may-be-absent")
 
     document, reason = C.load_json(Path(args.contract))
     if reason is not None:

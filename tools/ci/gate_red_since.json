@@ -104,6 +104,13 @@
       "owner": "repo-gatekeeper",
       "why": "the shrink-detector literal in test_liar_census.py lags the flow's declared clause count again -- the fourth time (169->170, 170->175, 175->178, and now).",
       "bound_because": "MEASURED from the three previous instances: the literal was repaired in 2 commits between origin/main~249 and ~247, and in under 15 commits between origin/main~85 and ~70. 35 commits is half a day and more than twice the worst observed repair. The bound intentionally does NOT cover the structural fix the test's own docstring asks for -- deriving the floor from the flow -- because what closes this red is the bump, and pricing the bound at the structural fix would be buying four days of silence for a five-minute edit."
+    },
+    {
+      "gate": "PPA head-to-head records (cross-layer campaign)",
+      "since": "a00f53f2094812041c8aa6094f27058bc1b14ddd",
+      "max_commits": 200,
+      "owner": "vibe-ic#1241",
+      "why": "The gate now reads the 15 head-to-head records this repository actually holds and refuses one of them: ppa-crosslayer/records/h2h_F.json declares tuned_by_this_project:true on its own BASELINE, so the record behind the cross-layer lane's headline number is a within-project ranking and cannot carry a head-to-head claim. The finding is real and belongs to the ppa-crosslayer lane; it is acknowledged rather than wired around, and it closes when that record is either relabelled as a within-project comparison or re-measured against an untuned baseline."
     }
   ]
 }
