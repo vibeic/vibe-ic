@@ -7,50 +7,66 @@ re-measured here on both bases.
 **42 of the 54 are green. 12 remain, and they now form one dependency graph
 rather than a list.**
 
-## Base: rebased onto v1.11.33. NEITHER BRANCH HAS LANDED.
+## Base: rebased onto v1.11.51. The lane's code has LANDED.
 
-I was told main was v1.11.47 with `jmatrix/63x8-main-reds` landed as v1.11.44 and
-`jfindings/63x8-producer-identity` as v1.11.39. **None of that is true of the
-remote.** Checked four independent ways before saying so:
+This lane landed as v1.11.44. What is left here is the record plus one repair the
+merge itself needed. Rebased across three bases as main moved under it —
+v1.11.33 -> v1.11.47 -> v1.11.51 — and re-measured on each, by TEST ID, serially.
 
-```
-$ git show origin/main:.../plugin.json | grep version
-  "version": "1.11.33",
-$ git log --all --oneline --grep="v1\.11\.3[4-9]\|v1\.11\.4[0-9]" | wc -l
-0
-$ git merge-base --is-ancestor <each branch head> origin/main
-  jmatrix/63x8-main-reds            NOT on main
-  jfindings/63x8-producer-identity  NOT on main
-$ git grep -c CONTENT_ARM_UNGRADABLE_SELF_WRITTEN origin/main   -> 0
-$ git grep -c CROSSLAYER_SEARCH_UNDECLARED        origin/main   -> 0
-$ git grep -c _measured_subject                   origin/main   -> 0
-```
-
-The last check is the one that matters, because a landing rewrites SHAs: searched
-by CONTENT, not commit id, none of this work is on main. v1.11.34 and above do
-not exist on this remote.
-
-Main HAS moved, by 16 commits — `867de4289` (v1.11.18) to `e36d81c0a`
-(v1.11.33), the fourteen PPA lanes plus a PREPARE and an ACTIVATE. So the
-re-measurement was still worth doing, and this branch is now rebased onto it.
-The rebase was clean; main touched one file this branch touches
-(`test_matrix_d2_falsifiable.py`, at `e36d81c0a`) and every change survived.
-The matrix population is **69** under v1.11.33, unchanged.
-
-### A/B on the NEW base, by test id
-
-| | failed | passed |
+| base | the 54: red | green |
 |---|---|---|
-| bare `origin/main` v1.11.33, the 54 | **53** | 1 |
-| this branch rebased onto it, the 54 | **12** | **42** |
+| `867de4289` v1.11.18, bare | 53 | 1 |
+| v1.11.33, this lane | 12 | 42 |
+| v1.11.47, this lane | 14 | 40 |
+| **v1.11.51, this lane** | **11** | **43** |
 
-**Closes 41. Introduces 0** (`comm -13` empty). The 12 that remain are the
-*identical set* to the 12 measured on the old base — `diff` of the two sorted
-lists is empty — so sixteen commits of PPA work moved none of this either way.
+`git diff --stat origin/main..HEAD` is 5 files — lane-sized, as the sanity check
+requires.
 
-That bare-main figure is also the plainest possible confirmation of the
-paragraph above: **the family is exactly as red on today's main as it was on
-`867de4289`.** 53 of 54.
+**Two moved between v1.11.33 and v1.11.51 and both are worth naming.**
+
+`test_d7_required_outputs_list_is_complete[step31]` **CLOSED**, and not by me. It
+was the one bucket-B item I named and declined to fix, because I measured the
+knock-on: *"adding a `required_outputs` entry moves `required_output_entries`
+162 -> 163 and `FILE` 120 -> 121"*. Another lane declared
+`reports/phase3/drc_signoff.json` on step 31, the red closed, and the predicted
+knock-on happened exactly as stated.
+
+Three went RED at v1.11.47 and are closed again here: the entries pin and the two
+census-freshness IDs. **The census block went stale AGAIN, inside one batch.**
+That is the third recurrence of the failure §3 is about, and it happened while
+this branch was in flight.
+
+### The shared pin, re-derived rather than added up
+
+`test_output_entries_classify_into_the_four_kinds` is the constant two lanes
+moved. The landed note pinned **163/121**; the live tree answered **164/122**.
+Neither lane's number was right, because a third entry had landed after both
+notes were written. Re-derived on the merged tree and attributed by measurement —
+diffing the (step, entry) SET between the v1.11.18 yaml and this tree gives
+exactly two additions and no removals:
+
+    +1  1.6x    reports/crosslayer/rewrite_equivalence_check.json   (this lane)
+    +1  15.5ic  reports/phase3/pad_assignment.json                  (cpath)
+    +1  31      reports/phase3/drc_signoff.json                     (the d7 fix)
+
+### The attribution dispute is SETTLED, and both lanes were right
+
+The merged note recorded that two lanes attributed "the first +1" differently —
+one to 1.6x, one to the 37.5self/37.5ic swap — and left it open. Driving
+`flowref` at each revision's yaml through `VIBE_IC_MATRIX_FLOW_YAML`:
+
+| yaml at | steps | entries | FILE | 1.6x | 37.5self |
+|---|---|---|---|---|---|
+| `ff5071caa` | 68 | 154 | 114 | no | no |
+| `7fcbc7397~1` | 69 | 160 | 118 | no | **yes** |
+| `7fcbc7397` | 70 | **161** | **119** | **arrives** | yes |
+| `867de4289` | 69 | **162** | **120** | yes | **retired** |
+
+There are **two** +1s in that span, one per commit. `7fcbc7397` moved 160 -> 161
+and that is step 1.6x; `867de4289` moved 161 -> 162 and that is the swap.
+Neither lane was wrong — each attributed the increment it had measured, and the
+disagreement was that both were describing "the first" when there were two.
 
 ## 1. The one d8 red — both questions answered
 
