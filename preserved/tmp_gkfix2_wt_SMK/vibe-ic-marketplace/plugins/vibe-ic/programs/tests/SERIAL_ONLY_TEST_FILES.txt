@@ -1,0 +1,62 @@
+# Test files that must not share a pytest session with anything else.
+#
+# READ BY: programs/pytest_per_file_junit.py --serial-selection, which the
+# landing gate passes whenever it asks for width (`--aggregate-arg -n ...`).
+# Each file named here is pulled out of the wide session and run FIRST, alone.
+# When no width is requested the whole selection is one session as it always
+# was and this file changes nothing.
+#
+# THE ENTRY BAR: `--dist loadfile` already keeps every test of one FILE on one
+# worker, so module globals, module-scoped fixtures and in-file ordering are
+# safe without help. A file belongs here only when its state is the SHARED
+# TREE — the checkout every worker is reading — because no scheduling mode can
+# fix that. One measured mechanism per entry, or it does not go in.
+#
+# Blank lines and `#` comments are ignored.
+
+# MEASURED 2026-08-17. `test_the_real_program_runs_against_this_repo_and_
+# honours_its_boundary` reads the WHOLE repo's dirty set and skips on it:
+#
+#     if G.dirty_paths(repo_root):
+#         pytest.skip("tree already dirty — this test needs a clean tree ...")
+#
+# In the first `-n 8 --dist loadfile` run of a 102-file selection that test
+# went `passed` -> `skipped` while every other outcome held: a neighbour's
+# transient write into the checkout turned a real check into a no-op, which is
+# the quietest false green there is. Its `finally` is worse than the skip:
+#
+#     git -C <repo_root> checkout -- <dirty paths, or "." when there are none>
+#
+# On a concurrent session that reverts ANOTHER worker's in-flight write.
+programs/tests/test_issue1129_gatekeeper_prepare_landing.py
+
+# `test_the_default_run_never_touches_the_shipped_programs_tree` asserts that
+# `git status --porcelain programs` of the REAL plugin tree is byte-identical
+# before and after a probe. Any neighbour that writes into `programs/` during
+# that window makes it red for a reason that has nothing to do with its
+# subject — and one does: see the entry below.
+#
+# It is also unsafe at COLLECTION, one level earlier and one level worse. At
+# import time it computes
+#
+#     _TARGETS = sorted({_CANARY, *_changed_gate_programs()})
+#
+# and `_changed_gate_programs()` shells out to `git status --porcelain` on the
+# shared tree. Every xdist worker imports the module separately; if the tree is
+# transiently dirty for one of them and not the others, the workers parametrise
+# differently and xdist aborts the session with "Different tests were collected
+# between nodes" — the whole selection's record, lost to a neighbour's temp
+# file.
+programs/tests/test_gate_cli_entry_survives_weakening.py
+
+# THE WRITER the two entries above are exposed to.
+# `test_a_new_gate_with_an_unrouted_skip_fails_the_shipped_check` plants
+#
+#     programs/_i528_planted_unrouted_check.py
+#
+# INTO the shipped tree, runs the real ratchet over the real plugin, and
+# unlinks it in a `finally`. The window is a whole subprocess long. Serially it
+# is invisible to everyone; with workers alongside it, it is a file that
+# appears in `programs/` for seconds at a time, and the corpus has ~17 selected
+# files that enumerate that directory or diff its `git status`.
+programs/tests/test_gate_skip_routing_check.py
