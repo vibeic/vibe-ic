@@ -1200,6 +1200,52 @@ def test_two_counters_in_one_script_do_not_contaminate_each_other():
             f"{what} {matched!r} ({word})")
 
 
+#: Two literals that are NOT adjacent in the real script -- `_mid()` runs
+#: between them -- and neither carries a newline of its own, so only the JOIN
+#: keeps them apart. The second denies; the first holds a member.
+EMITTER_NON_ADJACENT_LITERALS = (
+    'def _mid():\n    return "  # unrelated\\n"\n\n\n'
+    'def s():\n    return (\n'
+    '        "  if {[catch {a}]} { incr _n }"\n'
+    '        + _mid()\n'
+    '        + "  puts \\"no repair could be applied\\""\n'
+    '        + "\\n  if {[catch {b}]} { incr _n }"\n'
+    '        + "\\n  if {$_n >= 2} { puts ALL }")\n')
+
+
+def test_literals_that_are_not_adjacent_cannot_lend_each_other_a_polarity():
+    """`emitted_script_of` claims that joining with a NEWLINE rather than
+    concatenating stops two literals which are not adjacent in the real script
+    -- anything assembled through a call between them -- from fusing into one
+    statement and lending each other a polarity. That was an argument with
+    nothing holding it up.
+
+    MEASURED by making the change it argues against, `"".join` in place of
+    `"\\n".join`:
+
+        joined by a newline   sites=2   refused=[]
+        concatenated          sites=1   refused=[('increment', 'no')]
+
+    So the claim is load-bearing, and the failure it prevents is the SILENT
+    one: a real member disappears because a denial from a DIFFERENT part of the
+    script reached it, and the guard then compares a population of 1 against a
+    denominator of 2 -- or, with one fewer site, agrees and prints PASS.
+
+    This is the shape the helper-assembled emitter under "WHAT THIS CANNOT
+    COUNT" is NOT: there the count is wrong and LOUD. Here it would be wrong and
+    quiet, which is why the join is not a stylistic choice."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E  # noqa: E402
+
+    rows, refused = E.counters(EMITTER_NON_ADJACENT_LITERALS)
+    assert refused == [], (
+        "a denial reached across the seam between two literals that are not "
+        f"adjacent in the emitted script: {refused}")
+    assert rows and rows[0][1] == 2, (
+        f"a member was lost to a neighbouring literal's polarity: {rows}")
+    assert sorted({v for _, _, d in rows for _, v in d}) == [2], rows
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
