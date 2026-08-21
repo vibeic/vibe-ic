@@ -2723,6 +2723,57 @@ inference; it was reading the right data as the wrong thing.** A flat ledger and
 a step's membership look identical when you want one of them badly enough.
 
 
+## M45 — the condition itself settles it. M44 is withdrawn; M43's CONCLUSION was right on wrong evidence.
+
+Third flip on one question, and this time the answer is a boolean I can read
+rather than a behaviour I have to interpret. `flow_compliance_check:10057`:
+
+```python
+if (passed and waiver_hints and not non_hint_reasons
+        and not skip_hints and not vacuous_hints):
+    result.status = "WAIVED"
+```
+
+**`and not vacuous_hints`.** The waiver branch DECLINES TO FIRE when the step
+also carries vacuous hints, and the chain falls through to `:10120`, which sets
+`VACUOUS_PASS`. **The precedence is explicit and deliberate.**
+
+**So the waiver hint IS carried** — `waiver_hints` is collected at `:9996` from
+the same `reasons` list — and M44's inference from "no waiver line printed" was
+wrong. The printer emits the reasons of the branch that FIRED; a carried hint
+whose branch was declined prints nothing. **Absence of a printed line is not
+absence of the hint**, which is the same "could not look ≠ looked and found
+nothing" error this document opens with, committed by me at the last possible
+moment.
+
+**And the design is coherent.** The intent recorded at `:9993` is to promote a
+waiver *"so the Overall verdict resolves to PASS_WITH_WAIVERS, never a bare
+PASS"*. A `VACUOUS_PASS` is not a bare PASS — it is already the more severe
+report. Declining to relabel a vacuous step as merely "waived" is the honest
+choice, and it agrees with Pillar 2.
+
+**Where that leaves the two reds: M43's CONCLUSION stands** — the test's
+expectation is too narrow, this is not a flow defect — **but M43's EVIDENCE was
+wrong** (four vacuous members read off a flat cross-step ledger; Step 4 has two).
+A right answer supported by a misread is not a finding, and I would have shipped
+it as one.
+
+### The sequence, because it is the most useful thing here
+
+| # | claim | rested on | verdict |
+|---|---|---|---|
+| M39 | probably a defect | inference from a docstring | wrong |
+| M43 | not a defect | flat ledger misread as step membership | **right conclusion, wrong evidence** |
+| M44 | a defect after all | "no waiver line printed" = hint absent | wrong |
+| **M45** | **not a defect — explicit `not vacuous_hints`** | **the branch condition** | **current** |
+
+**Three reversals on one two-red question.** Every wrong step came from
+interpreting OUTPUT — a docstring, a ledger, a printed reason list. The one that
+held came from reading the CONDITION that decides. When a question is "why did
+this resolve that way", the answer is in the predicate, not in what got printed
+afterwards.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -2808,7 +2859,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 |---|---|---|
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | `area_total_vs_budget_check` and `tapeout_docs_gen` must declare `ENFORCEMENT`. `advisory` is TRUTHFUL today and closes all four (M29 — the `program_exit_zero:` clauses execute nowhere). The only question is whether these two SHOULD be able to stop a step. | **policy, one line each** |
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
-| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. ~~SETTLED (M43)~~ — **M43 WAS WRONG, see M44.** I read a flat cross-step `GATE_RAN` ledger as Step 4's membership. Measured: Step 4 DECLARES `verilator_coverage_measure` as a `program_exit_zero`; the run returns it **rc=3 PASS_WITH_WAIVERS**; Step 4's reasons carry **no waiver line** (both vacuous gates got one). **The signal is produced and lost between gate and step — a real defect.** | **likely defect, evidenced** |
+| **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**; a vacuous step should not be relabelled merely "waived". The waiver hint IS carried; only its branch was declined, so nothing prints. **The test's expectation is too narrow.** (M39/M43/M44 superseded — three reversals, see M45.) | **answered** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
 | **`0.5ic`** (2 reds) | the shuttle operator's published project template — `from: external, check: none`. *"It is data we never went and got"* (M36). | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
