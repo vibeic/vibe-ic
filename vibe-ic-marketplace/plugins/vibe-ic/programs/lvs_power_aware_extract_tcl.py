@@ -330,6 +330,8 @@ extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
+feedback save $env(FEEDBACK_OUT)
+puts "MAGIC_EXT2SPICE_FEEDBACK $env(FEEDBACK_OUT) [feedback count]"
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """

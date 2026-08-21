@@ -785,7 +785,7 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
 
 
 def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
-                  safety_rtl: bool = False,
+                  safety_rtl: bool = False, flow_complete: bool = False,
                   waiver: Optional[Dict[str, Any]] = None,
                   role: Optional[str] = None) -> Scenario:
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_"))
@@ -796,6 +796,11 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
         project.mkdir()
         if seeded:
             _seed(project, declared_paths(step_id))
+        if flow_complete:
+            # everything the FLOW declares, not only this step's own
+            own = set(declared_paths(step_id))
+            _seed(project, [p for p in flow_declared_outputs()
+                            if p not in own])
         if rtl:
             rtl_path = project / P0_RTL_FILE
             rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -888,13 +893,125 @@ class GateOnlyEval:
 
 #: Reason prefixes flow_compliance_check uses to move a passing gate OUT of the
 #: plain PASS bucket. Read live from the module so a renamed prefix is noticed.
+#:
+#: `__JSON_VACUOUS_HINT__` ADDED 2026-08-21. It had been missing since it was
+#: introduced, and the omission was charging a step for disclosing through the
+#: STRONGER of the two vacuity channels.
+#:
+#: The consumer treats it as a peer of the other three, in one `elif` chain:
+#: `flow_compliance_check.py` ~8099 dispatches `_JSON_VACUOUS_HINT_PREFIX`,
+#: `_VACUOUS_HINT_PREFIX`, `_WAIVER_HINT_PREFIX` and `_SKIP_HINT_PREFIX` through
+#: the same branch structure, and ~10040 reads it to resolve the VACUOUS_PASS
+#: tier. And it is the channel the consumer's OWN comment prefers: the JSON hint
+#: is raised from the gate's `--json` report because (#887) "a disclosure a
+#: project-path length can delete is not a disclosure, and stdout is exactly
+#: that channel — the consumer sees only the last 300 chars".
+#:
+#: MEASURED before the change, over every step whose gate passes on an empty
+#: project: L1b fires on ['1.6x'] with three prefixes and on [] with four.
+#: NOTHING ELSE MOVES — the other sixteen already disclose through one of the
+#: original three or take the conditional-skip escape — so this widens the
+#: accepted disclosure set by exactly one channel and excuses exactly one step,
+#: the one whose gate writes `"status": "NOT_APPLICABLE"` into its own report
+#: and is read as vacuous by the flow for that reason.
+#:
+#: The three EXCLUDED hints are excluded on purpose and are pinned by
+#: `test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name`:
+#:   `_RAN_HINT_PREFIX`      — says the gate RAN. The opposite of a skip.
+#:   `_ADVISORY_HINT_PREFIX` — an advisory clause never blocked, so its pass was
+#:                             never in the plain PASS bucket to be moved out of.
+#:   `_STRUCTURE_ONLY_HINT_PREFIX` — a different tier about CONTENT, not a skip.
 def _disclosure_prefixes() -> Tuple[str, ...]:
     _ensure_programs_on_path()
     import flow_compliance_check as _fcc  # type: ignore
 
+    # READ OFF `flow_compliance_check`, never re-spelled here, so a marker the
+    # flow adds cannot go unrecognised by this dimension — which is exactly
+    # what happened to the fourth one below.
+    #
+    # `_JSON_VACUOUS_HINT_PREFIX` (vibe-ic#901) was added to the flow AFTER
+    # this tuple was written and never added here. It is a genuine vacuity
+    # disclosure, deliberately kept in a separate bucket from the legacy one
+    # because it is strictly ONE-DIRECTIONAL — it can only turn what would have
+    # been a BARE PASS into VACUOUS_PASS and can never take a step out of a
+    # tier origin/main gave it. So a gate that records it HAS disclosed, and
+    # the flow's own tier machinery already agrees: measured on step 1.6x, the
+    # tiers are {'EMPTY': 'MISSING', 'SEEDED': 'VACUOUS_PASS',
+    # 'FLOW_COMPLETE': 'VACUOUS_PASS'} — the pass is already outside the plain
+    # PASS bucket, which is precisely what L1b's first escape asks for.
+    #
+    # THIS DOES NOT WEAKEN L1b. An undisclosed pass on nothing still fires; the
+    # leg simply now recognises all four spellings of a disclosure instead of
+    # three, and it recognises them by reading the flow's own constants.
     return (_fcc._VACUOUS_HINT_PREFIX,
             _fcc._SKIP_HINT_PREFIX,
-            _fcc._WAIVER_HINT_PREFIX)
+            _fcc._WAIVER_HINT_PREFIX,
+            _fcc._JSON_VACUOUS_HINT_PREFIX)
+
+
+#: Hints the consumer's tier chain dispatches that this leg deliberately does
+#: NOT count as a skip disclosure. Every exclusion is conservative — it can only
+#: keep L1b CHARGING, never excuse a step — and each is justified from the
+#: consumer's own text rather than from the name:
+#:
+#:   _RAN_HINT_PREFIX        says the gate RAN. The opposite of a skip.
+#:   _ADVISORY_HINT_PREFIX   an advisory clause never blocked, so its pass was
+#:                           never in the plain PASS bucket to be moved out of.
+#:   _STRUCTURE_ONLY_HINT_PREFIX  a different tier, about artefact CONTENT.
+#:   _NOT_APPLICABLE_HINT_PREFIX  the consumer's own comment settles this one:
+#:                           "VISIBLE, NOT TIER-CHANGING ... It cannot promote
+#:                           or demote a step; it makes the non-verdict
+#:                           readable." A hint that leaves the step in the plain
+#:                           PASS bucket is not a disclosure L1b may accept, or
+#:                           L1b would excuse a pass the flow still counts.
+#:   _SUBSTANTIVE_HINT_PREFIX  asserts the gate DID audit, by another route —
+#:                           the opposite of the vacuity L1b looks for. A gate
+#:                           claiming substance on a tree containing NOTHING is
+#:                           precisely what this leg exists to charge.
+_EXCLUDED_TIER_HINTS: Tuple[str, ...] = (
+    "_RAN_HINT_PREFIX", "_ADVISORY_HINT_PREFIX", "_STRUCTURE_ONLY_HINT_PREFIX",
+    "_NOT_APPLICABLE_HINT_PREFIX", "_SUBSTANTIVE_HINT_PREFIX")
+
+
+def test_d6_every_tier_moving_hint_is_either_accepted_or_excluded_by_name():
+    """A disclosure channel added to the consumer must not go unnoticed here.
+
+    `__JSON_VACUOUS_HINT__` existed in `flow_compliance_check`, moved the step
+    tier, and was absent from `_disclosure_prefixes` — so L1b charged a step
+    that HAD disclosed. This is the guard that makes the next one loud: every
+    hint prefix the consumer dispatches in its tier chain must be either
+    accepted as a disclosure or named in `_EXCLUDED_TIER_HINTS` with a reason
+    beside it. Silence is not a decision.
+    """
+    _ensure_programs_on_path()
+    import flow_compliance_check as _fcc  # type: ignore
+
+    src = Path(_fcc.__file__).read_text(encoding="utf-8")
+    marker = "if hint.startswith(_RAN_HINT_PREFIX):"
+    assert src.count(marker) == 1, (
+        f"the gate-hint tier chain is no longer identifiable by "
+        f"{marker!r} ({src.count(marker)} matches); this guard can no longer "
+        f"find the branch it is about")
+    start = src.index(marker)
+    chain = src[start:start + 3000]
+    dispatched = {
+        name for name in dir(_fcc)
+        if name.endswith("_HINT_PREFIX") and f"startswith({name})" in chain}
+    accepted = {n for n in dir(_fcc)
+                if n.endswith("_HINT_PREFIX")
+                and getattr(_fcc, n) in _disclosure_prefixes()}
+    unclassified = dispatched - accepted - set(_EXCLUDED_TIER_HINTS)
+    assert not unclassified, (
+        f"the consumer's tier chain dispatches {sorted(unclassified)}, which "
+        f"L1b neither accepts as a disclosure nor excludes by name. A gate "
+        f"disclosing through one of them would be charged as UNDISCLOSED — "
+        f"exactly what __JSON_VACUOUS_HINT__ was doing to step 1.6x. Decide "
+        f"which it is and say so here.")
+    stale = set(_EXCLUDED_TIER_HINTS) - dispatched
+    assert not stale, (
+        f"{sorted(stale)} are excluded here but the consumer no longer "
+        f"dispatches them in its tier chain; the exclusion is describing an "
+        f"older module")
 
 
 def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
@@ -936,6 +1053,59 @@ def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# L6 — WAS THE SKIP LEGITIMATE, not merely disclosed
+# ══════════════════════════════════════════════════════════════════════
+#: Every path ANY step declares as a `required_outputs` alternative: the flow's
+#: own statement of what a COMPLETE run contains. 162 alternatives on the tree
+#: that added this leg.
+#:
+#: This is the discriminator this module's own "WHAT THIS CANNOT SEE" section
+#: says it lacks: "It cannot tell a legitimately-inapplicable step (step 14
+#: with no .ys script) from one that should have measured something and did
+#: not." L1-L5 all ask whether a skip is DISCLOSED. None asks whether it was
+#: ALLOWED. A disclosed skip that should never have been permitted is still a
+#: hole, and it is invisible here precisely because the disclosure is correct.
+#:
+#: THE RULE: a skip is legitimate only when it is keyed on something the flow
+#: NEVER PROMISES. If no step declares the artefact as a `required_outputs`
+#: entry, its absence is a genuine design fact — this IC has no analog blocks,
+#: no OTP, no .ys script — and skipping is the right answer. If some step DOES
+#: declare it, the flow asserts every complete run contains it, so its absence
+#: is a broken pipeline and "skip" converts a pipeline failure into a
+#: non-event on a tier that is not a failure.
+@lru_cache(maxsize=1)
+def flow_declared_outputs() -> Tuple[str, ...]:
+    out: List[str] = []
+    for sid in F.step_ids():
+        for entry in F.required_outputs(sid):
+            for alt in F.split_any_of(str(entry)):
+                if alt and alt not in out:
+                    out.append(alt)
+    return tuple(out)
+
+
+#: SHRINK-ONLY, and every entry carries the MEASURED tier it moves to once the
+#: flow's declared artefacts are present — which is the evidence that the skip
+#: was hiding something rather than reporting one.
+#:
+#: Landed armed rather than charging, on the same sequencing ground as
+#: vibe-ic#1070: `main` is red on 49 pytest failures with five agents
+#: repairing it, and three more red cells subtract from the only delta they
+#: have to read. A NEW member fails immediately; these three are named with
+#: their evidence and may only be DELETED, never added to.
+_DEFERRED_L6_SKIPS: Dict[str, str] = {
+    "12": "VACUOUS_PASS -> FAIL once the flow's declared artefacts exist — "
+          "the skip is standing in for a real failure",
+    "30": "VACUOUS_PASS -> PASS — keyed on an artefact step 30 never names but "
+          "another step declares (the SPEF; cf. this module's own note that "
+          "step 30's skip 'hinges on an artefact the step never names')",
+    "P0": "SKIPPED-CONDITION -> FAIL — the structural-RTL umbrella skips for "
+          "want of an artefact the flow guarantees",
+}
 
 
 @dataclass
@@ -983,6 +1153,8 @@ def _probe_step(step_id) -> Probe:
     probe.gate_only_empty = _gate_only_on_empty(step_id)
     probe.scenarios["EMPTY"] = _run_scenario(step_id, "EMPTY", seeded=False)
     probe.scenarios["SEEDED"] = _run_scenario(step_id, "SEEDED", seeded=True)
+    probe.scenarios["FLOW_COMPLETE"] = _run_scenario(
+        step_id, "FLOW_COMPLETE", seeded=True, flow_complete=True)
     if _reads_an_rtl_directory(step_id):
         # A step that reads RTL CONTENT cannot be shown anything by the
         # path-seeder, which materialises `phase2/stage1/rtl` as a bare
@@ -1006,16 +1178,105 @@ def _probe_step(step_id) -> Probe:
     return probe
 
 
-@lru_cache(maxsize=1)
+#: Probes already built this session, keyed by normalised step id. Replaces the
+#: single ``lru_cache``d whole-sweep dict so a session that can only ask about
+#: ONE step pays for one step. See ``_probe_budget`` (vibe-ic#1412).
+_PROBE_CACHE: Dict[str, Probe] = {}
+
+#: The step ids THIS session is able to ask about, or ``None`` for "any of the
+#: 63" — the conservative default, and what every whole-suite run gets. Set once
+#: by the ``_probe_budget`` fixture below, from pytest's OWN collected items.
+_PROBE_BUDGET: Optional[Tuple[str, ...]] = None
+
+
+def _build_probes(ids: Tuple[Any, ...]) -> None:
+    """Probe every id not already cached, in parallel, and cache the results."""
+    todo = [s for s in ids if F.normalize_id(s) not in _PROBE_CACHE]
+    if not todo:
+        return
+    # This one pytest item deliberately batches many independent, real flow
+    # probes.  Expose FINITE completed-work checkpoints to the landing
+    # supervisor; do not emit time/output/CPU heartbeats.  When the private
+    # plugin is not loaded (ordinary direct pytest), this remains a no-op.
+    progress_plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(progress_plugin, "domain_progress", None)
+    scope = f"matrix-d6-probes:{len(_PROBE_CACHE)}:{len(todo)}"
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        for completed, probe in enumerate(pool.map(_probe_step, todo), start=1):
+            _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
+            if progress is not None:
+                progress(scope, completed, len(todo))
+
+
+def _budget_from(items) -> Optional[Tuple[str, ...]]:
+    """The step ids these collected pytest items can ask about, or ``None``.
+
+    ``None`` means "any of the 63" and is returned the moment ONE selected item
+    is not a per-cell parametrisation, because such an item is assumed to sweep.
+    A plain function, not the fixture body, so the rule can be exercised against
+    constructed item lists without a nested pytest session.
+    """
+    wanted: List[str] = []
+    for item in items:
+        params = getattr(getattr(item, "callspec", None), "params", None) or {}
+        sid = getattr(params.get("cell"), "step_id", None)
+        if sid is None:
+            return None
+        wanted.append(str(sid))
+    return tuple(dict.fromkeys(wanted))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _probe_budget(request):
+    """Record which steps this session CAN ask about, before any test runs.
+
+    THE COST OF A PROBE IS 63 SUBPROCESS-HEAVY SCENARIOS PER STEP, AND UNTIL
+    vibe-ic#1412 EVERY SESSION PAID ALL 63 OF THEM (see ``probe_for``).
+
+    The measured consequence is not slowness, it is a WRONG ANSWER. The
+    mutation ledger's LOCK 2 replays each (entry, step) pair by running the ONE
+    cell nodeid as its own pytest process — twice, baseline and mutant — eight
+    pairs at a time (``matrix_mutation_ledger.replay_many(..., jobs=8)``). Each
+    of those eight concurrent cell processes was building all 63 probes, each
+    probe fanning out 8 more threads of ``flow_compliance_check`` subprocesses,
+    every one of them bounded at ``_SUBPROCESS_TIMEOUT_S``. The bound fired on a
+    box the replay was contending with ITSELF for, the uncaught
+    ``TimeoutExpired`` failed the cell, and the ledger read that failure as the
+    cell's COLOUR: ``baseline_rc=1`` -> ``ALREADY_RED`` -> "the witness was red
+    before the edit". Nothing had measured the witness at all.
+
+    So the budget is read off pytest's own collection rather than guessed. An
+    item parametrised over a ``cell`` asks about exactly that cell's step; ANY
+    other selected item is assumed to sweep, which restores the previous
+    whole-flow behaviour byte for byte. A whole-suite run therefore probes all
+    63 in one parallel pass exactly as before; the ledger's single-nodeid run
+    probes one.
+    """
+    global _PROBE_BUDGET
+    _PROBE_BUDGET = _budget_from(request.session.items)
+
+
 def _all_probes() -> Dict[str, Probe]:
-    ids = list(F.step_ids())
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        probes = list(pool.map(_probe_step, ids))
-    return {F.normalize_id(p.step_id): p for p in probes}
+    """Every step's probe. Still one parallel pass; still all 63."""
+    _build_probes(tuple(F.step_ids()))
+    return {F.normalize_id(s): _PROBE_CACHE[F.normalize_id(s)]
+            for s in F.step_ids()}
 
 
 def probe_for(step_id) -> Probe:
-    return _all_probes()[F.normalize_id(step_id)]
+    """This step's probe, building no more of the sweep than the session needs.
+
+    Falls back to probing the step ALONE if it is outside the recorded budget,
+    so a caller this fixture did not anticipate gets a correct probe rather than
+    a ``KeyError`` — slower, never wrong.
+    """
+    key = F.normalize_id(step_id)
+    if key not in _PROBE_CACHE:
+        _build_probes(tuple(F.step_ids()) if _PROBE_BUDGET is None
+                      else _PROBE_BUDGET)
+        if key not in _PROBE_CACHE:
+            _build_probes((step_id,))
+    return _PROBE_CACHE[key]
 
 
 @lru_cache(maxsize=1)
@@ -1076,7 +1337,8 @@ def _leg1b_gate_alone_does_not_pass_on_nothing(probe: Probe) -> List[str]:
     and asks whether the gate ALONE says pass. Two answers are legitimate:
 
       * the gate recorded a DISCLOSURE HINT (``__VACUOUS_HINT__`` /
-        ``__SKIP_HINT__`` / ``__WAIVER_HINT__``) — the pass carries a tier that
+        ``__SKIP_HINT__`` / ``__WAIVER_HINT__`` / ``__JSON_VACUOUS_HINT__``)
+        — the pass carries a tier that
         is not the plain PASS bucket, which is exactly what L3 asks for; or
       * every BLOCKING clause is an ``optional_program_exit_zero`` whose
         ``condition_files_exist`` is genuinely unmet on the empty tree — the
@@ -1099,7 +1361,8 @@ def _leg1b_gate_alone_does_not_pass_on_nothing(probe: Probe) -> List[str]:
         f"L1b GATE PASSES ON NOTHING, UNDISCLOSED: the real "
         f"flow_compliance_check._evaluate_gate returns passed=True for this "
         f"step's gate on a project containing NOTHING, and the pass carries no "
-        f"__VACUOUS_HINT__ / __SKIP_HINT__ / __WAIVER_HINT__ reason "
+        f"__VACUOUS_HINT__ / __SKIP_HINT__ / __WAIVER_HINT__ / "
+        f"__JSON_VACUOUS_HINT__ reason "
         f"(reasons={list(ev.reasons)[:3] or '[]'}). "
         + (
             "The gate declares no BLOCKING clause at all "
@@ -1346,6 +1609,59 @@ def _leg5_waiver_channel(probe: Probe) -> List[str]:
     return problems
 
 
+
+def _leg6_skip_is_keyed_on_something_the_flow_never_promises(
+        probe: Probe) -> List[str]:
+    """L6 — WAS THE SKIP ALLOWED?  (not: was it disclosed)
+
+    L1-L5 all ask whether a skip is reported honestly. This asks whether it
+    should have been permitted at all, which is a different question and the
+    one this module's own "WHAT THIS CANNOT SEE" section says it cannot
+    answer: it "cannot tell a legitimately-inapplicable step (step 14 with no
+    .ys script) from one that should have measured something and did not".
+
+    Both fixtures name the SAME step and differ only in what is on disk:
+
+      SEEDED         every path the STEP'S OWN yaml names.
+      FLOW_COMPLETE  the same, plus every `required_outputs` alternative ANY
+                     step declares — the flow's own statement of what a
+                     complete run contains.
+
+    A step that skips under SEEDED and STOPS skipping under FLOW_COMPLETE was
+    skipping for want of an artefact the flow GUARANTEES. In a healthy run
+    that artefact exists, so the branch is reachable only when an upstream
+    step failed to deliver — and "skip" is then precisely the wrong verdict,
+    because it parks a broken pipeline on a tier that is not a failure.
+
+    A step that skips under BOTH is keyed on something the flow never
+    promises, which is a real design fact and a legitimate skip. Measured, and
+    it agrees with this module's own worked example without being told to:
+    step 14 skips under both and is LEGITIMATE; step 4 and FS1 likewise.
+    """
+    problems: List[str] = []
+    seeded = probe.scenarios.get("SEEDED")
+    full = probe.scenarios.get("FLOW_COMPLETE")
+    if not seeded or not full:
+        return problems
+    if seeded.status not in SKIP_TIERS:
+        return problems
+    if full.status in SKIP_TIERS:
+        return problems                       # legitimate: keyed on a non-promise
+    sid = F.normalize_id(probe.step_id)
+    if sid in _DEFERRED_L6_SKIPS:
+        return problems                       # named in the shrink-only register
+    problems.append(
+        f"L6 SKIP WAS NOT ALLOWED: step {sid} resolves to {seeded.status!r} "
+        f"with only its own declared paths present, but to {full.status!r} "
+        f"once the artefacts the FLOW declares are present. The skip is keyed "
+        f"on something some step promises to produce, so it is reachable only "
+        f"when the pipeline is already broken — and it reports that as a "
+        f"non-failure. A disclosed skip that should never have been allowed "
+        f"is still a hole."
+    )
+    return problems
+
+
 _LEGS = (
     ("L1 no unconditional pass", _leg1_no_unconditional_pass),
     ("L1b gate alone does not pass on nothing",
@@ -1358,6 +1674,8 @@ _LEGS = (
      _leg3c_skip_not_inside_the_executed_pass_numerator),
     ("L4 yaml skip surfaces", _leg4_yaml_surfaces),
     ("L5 waiver channel is machine-readable", _leg5_waiver_channel),
+    ("L6 skip was allowed, not merely disclosed",
+     _leg6_skip_is_keyed_on_something_the_flow_never_promises),
 )
 
 
@@ -1372,6 +1690,7 @@ def _params():
     return out
 
 
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d6_skip_discipline(cell):
     """Every skip / vacuous-pass surface of this step is conditioned on a
@@ -1456,6 +1775,9 @@ def leg_capability(step_id) -> Dict[str, bool]:
         # the only tier whose fold into `pass_count` it can observe.
         "L3c": any(sc.status == "VACUOUS_PASS"
                    for sc in probe.scenarios.values()),
+        # L6 needs a scenario that lands on a skip tier at all — the same
+        # subject L2 needs, asked of a different pair of fixtures.
+        "L6": any(sc.status in SKIP_TIERS for sc in probe.scenarios.values()),
         # L4 needs an optional clause or a step-level condition.
         "L4": any(c.kind == F.K_OPTIONAL for c in clauses) or bool(cond),
         # L5 needs an ENV_UNAVAILABLE role binding.
@@ -1901,3 +2223,108 @@ def matrix_cell_state(step_id) -> str:
     if _waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# L6's own guards: the denominator, and the register that forgives three cells
+# ══════════════════════════════════════════════════════════════════════
+_FLOW_DECLARED_OUTPUT_FLOOR = 162
+
+
+def test_d6_l6_flow_declared_output_denominator_is_disclosed():
+    """L6's discriminator is the set of artefacts the flow PROMISES.
+
+    If that set ever resolves to zero — `required_outputs` renamed,
+    restructured, or the splitter changed — FLOW_COMPLETE becomes identical to
+    SEEDED, every skip classifies as LEGITIMATE, and the leg goes green over
+    nothing. That is the starvation shape this whole campaign was convened
+    over, so the denominator is pinned as a FLOOR and stated out loud.
+    """
+    declared = flow_declared_outputs()
+    assert len(declared) >= _FLOW_DECLARED_OUTPUT_FLOOR, (
+        f"the flow-declared artefact set SHRANK to {len(declared)}, floor is "
+        f"{_FLOW_DECLARED_OUTPUT_FLOOR}. L6 cannot tell a guaranteed artefact "
+        f"from an unpromised one with an empty set, so it would classify "
+        f"every skip as legitimate and report a confident zero."
+    )
+
+
+def test_d6_l6_separates_legitimate_skips_from_illegitimate_ones():
+    """Both directions, on the real tree, in one measurement.
+
+    The leg is only worth anything if it DISCRIMINATES. A classifier that
+    called every skip legitimate would pass every cell; one that called every
+    skip illegitimate would be a rename of L2. So both classes must be
+    non-empty and the legitimate class must contain this module's own worked
+    example — step 14, which its docstring names as THE legitimately-
+    inapplicable step ("step 14 with no .ys script").
+    """
+    legit, illegit = [], []
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if not seeded or not full or seeded.status not in SKIP_TIERS:
+            continue
+        (legit if full.status in SKIP_TIERS else illegit).append(
+            F.normalize_id(sid))
+    assert legit, (
+        "no skip classified LEGITIMATE — the leg has collapsed into 'every "
+        "skip is a defect', which is L2 under another name")
+    assert illegit, (
+        "no skip classified ILLEGITIMATE — the leg cannot fire at all, and a "
+        "detector that has never fired is indistinguishable from no detector")
+    assert "14" in legit, (
+        f"step 14 is this module's own named example of a legitimately "
+        f"inapplicable step (no .ys script) and L6 classified it "
+        f"{'ILLEGITIMATE' if '14' in illegit else 'not at all'}; "
+        f"legitimate={sorted(legit)} illegitimate={sorted(illegit)}")
+
+
+def test_d6_l6_deferred_register_only_shrinks():
+    """`_DEFERRED_L6_SKIPS` is an admission, not an exemption.
+
+    Every entry must still describe a live illegitimate skip. The moment a
+    step is repaired — it stops skipping, or its skip becomes keyed on
+    something the flow does not promise — the entry stops describing anything
+    and this test reddens until it is deleted. A shrink-only register that can
+    outlive its debt is a permanent amnesty with extra steps.
+    """
+    stale = []
+    for sid in sorted(_DEFERRED_L6_SKIPS):
+        assert F.has_step(sid), f"register names unknown step {sid!r}"
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if seeded is None or seeded.status not in SKIP_TIERS:
+            stale.append(f"{sid} no longer skips under SEEDED "
+                         f"(status={seeded.status if seeded else None!r})")
+        elif full is not None and full.status in SKIP_TIERS:
+            stale.append(f"{sid}'s skip is now keyed on something the flow "
+                         f"does not promise (FLOW_COMPLETE={full.status!r}) — "
+                         f"it is legitimate, so delete the register entry")
+    assert not stale, (
+        "the deferred-skip register no longer describes live defects — it may "
+        "only SHRINK, and shrinking means deleting the entry: "
+        + "; ".join(stale))
+
+
+def test_d6_l6_the_register_is_the_only_thing_holding_those_cells_green():
+    """Paired control: remove the forgiveness and exactly those cells go red.
+
+    Without this, a future edit could quietly stop the leg charging anything
+    while the register still looked like it was tracking three known holes —
+    a register describing a debt that is no longer measured.
+    """
+    charged = set()
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if not seeded or not full or seeded.status not in SKIP_TIERS:
+            continue
+        if full.status not in SKIP_TIERS:
+            charged.add(F.normalize_id(sid))
+    assert charged == set(_DEFERRED_L6_SKIPS), (
+        f"the register and the live measurement disagree: measured "
+        f"{sorted(charged)}, registered {sorted(_DEFERRED_L6_SKIPS)}")
