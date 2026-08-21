@@ -620,3 +620,85 @@ def test_that_failure_would_have_been_a_SILENT_SKIP_not_a_red_gate():
     ports = S.parse_top_ports(_RTL_IMPLICIT_SENSITIVITY, "chip_top")
     rep = S.evaluate({"slot_1x1": _slot_ingested()}, ports)
     assert rep["rc"] in (0, 1) and rep["verdict"] != "UNDECIDED"
+
+
+# --------------------------------------------------------------------------- #
+# what sits AFTER the port name — unpacked arrays and initialisers
+# --------------------------------------------------------------------------- #
+# Found by sweeping the PUBLISHED corpus: 174 of 31,873 real ports came back
+# named `1'b0`, `64'd0` or `[PMPNumRegions]`. Both causes sit after the name,
+# where a last-token read finds them instead of it.
+#
+# The unpacked case moves a NUMBER, and it moves it the dangerous way:
+# `input logic [33:0] csr_pmp_addr_i [PMPNumRegions]` is 4 x 34 bits and the
+# packed range alone reports 34. A smaller interface than the design has is how
+# a design that cannot be bonded out reads as FITS.
+#
+# `ibex` is one of the five ICs in this program's own docstring table, so this
+# was mis-measuring a design the file cites as evidence.
+
+_RTL_UNPACKED = """
+module chip_top #(parameter int unsigned NREG = 4) (
+    input  logic          clk,
+    input  logic [33:0]   addr_i [NREG],
+    output reg            done = 1'b0,
+    output reg   [63:0]   order = 64'd0
+);
+endmodule
+"""
+
+
+def test_an_unpacked_array_port_is_named_by_its_NAME_not_its_dimension():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    assert [p["name"] for p in ports] == ["clk", "addr_i", "done", "order"]
+
+
+def test_an_unpacked_array_multiplies_the_bit_count():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    w = {p["name"]: p["width"] for p in ports}
+    assert w["addr_i"] == 34 * 4, "the packed range alone was reported"
+    assert w["order"] == 64 and w["done"] == 1
+
+
+def test_an_unresolvable_array_length_is_UNDECIDED_never_a_guess():
+    """Same rule the packed range already follows: a length nobody supplied is
+    not a pad count this program may invent. None reaches the verdict as
+    UNDECIDED, which REFUSES rather than passes."""
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top")      # no params
+    w = {p["name"]: p["width"] for p in ports}
+    assert w["addr_i"] is None
+    rep = S.evaluate({"slot_1x1": _slot_ingested()}, ports)
+    assert rep["verdict"] == "UNDECIDED" and rep["rc"] == 2
+    assert "addr_i" in rep["unresolved_width_ports"]
+
+
+def test_a_port_initialiser_is_not_mistaken_for_the_port_name():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    names = [p["name"] for p in ports]
+    assert "1'b0" not in names and "64'd0" not in names
+
+
+def test_a_PACKED_range_is_not_read_as_an_unpacked_dimension():
+    """The regression guard: a packed range sits BEFORE the name, so nothing
+    trailing may be stripped. If this broke, every ordinary bus would lose its
+    width."""
+    rtl = ("module chip_top (input wire [7:0] bus, output wire done);\n"
+           "endmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [(p["name"], p["width"]) for p in ports] == [("bus", 8), ("done", 1)]
+
+
+def test_multiple_unpacked_dimensions_multiply_together():
+    rtl = ("module chip_top (input wire [7:0] mem [2][3], output wire d);\n"
+           "endmodule\n")
+    w = {p["name"]: p["width"] for p in S.parse_top_ports(rtl, "chip_top")}
+    assert w["mem"] == 8 * 2 * 3 and w["d"] == 1
+
+
+def test_the_undercount_would_have_been_a_FALSE_FITS():
+    """Why this is worth a test and not just a tidier name: the whole point of
+    the program is refusing a design that cannot be bonded out, and an
+    under-counted array is how one slips through."""
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    bits = S.interface_budget(ports)["signal_bits"]
+    assert bits == 34 * 4 + 64 + 1        # clk rides a dedicated pad
