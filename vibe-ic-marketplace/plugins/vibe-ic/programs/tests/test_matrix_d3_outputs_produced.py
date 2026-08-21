@@ -2338,7 +2338,12 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells_for(DIM)) == len(live) == 68
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(cells_for(DIM)) == len(live) == 69
 
 
 @needs_corpus
@@ -2801,7 +2806,7 @@ def test_d3_waivers_meet_the_registry_bar():
 
 
 def test_d3_cell_states_partition_all_steps():
-    """ENFORCED + WAIVED + NA == 68, computed live, with no cell in two states."""
+    """ENFORCED + WAIVED + NA == 69, computed live, with no cell in two states."""
     enforced, waived, na = [], [], []
     for cell in cells_for(DIM):
         sid = cell.step_id
@@ -2825,7 +2830,12 @@ def test_d3_cell_states_partition_all_steps():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(enforced) + len(waived) + len(na) == 68, (
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(enforced) + len(waived) + len(na) == 69, (
         f"enforced={len(enforced)} waived={len(waived)} na={len(na)}"
     )
     # The waived set must equal the registry exactly. This used to union the
@@ -2838,10 +2848,10 @@ def test_d3_cell_states_partition_all_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (51, 2, 15), (
+    assert (len(enforced), len(waived), len(na)) == (52, 2, 15), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(51, 2, 15) at smrg/retire-37p5self. A step moving between states "
+        f"(52, 2, 15) at jm9/d9-verdict-consumed. A step moving between states "
         f"is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
@@ -2952,6 +2962,25 @@ def test_d3_cell_states_partition_all_steps():
         "all. Only the hand-restated TRIPLE is a number a human must move, "
         "which is exactly what it is for: a step LEAVING has to force someone "
         "to say the number as loudly as one arriving."
+        "\n2026-08-21 (jm9/d9-verdict-consumed): (51, 2, 15) -> (52, 2, 15), "
+        "+1 STEP with NO reclassification. The step is `1.6x` (cross-layer "
+        "PPA rewrite), added in v1.11.15, and it arrives ENFORCED. Every "
+        "clause of that reading is re-derived rather than asserted: it "
+        "declares required_outputs "
+        "(`reports/crosslayer/rewrite_equivalence_check.json`, one entry), it "
+        "carries NO step-level `condition` (so NA_DORMANT_CONDITION is not "
+        "derivable for it, unlike the four path-specific steps above), and it "
+        "holds no dimension-3 waiver. ENFORCED 51 -> 52, WAIVED unmoved at 2, "
+        "NA unmoved at 15."
+        "\nTHIS PIN WAS ALREADY RED ON MAIN and had been since v1.11.15. It "
+        "is not collateral of the ninth dimension: `1.6x` landed six versions "
+        "before this branch was cut, the entry above it records `37.5self` "
+        "leaving at v1.11.18 without noticing that a different step had "
+        "arrived three versions earlier, and the triple was restated for the "
+        "departure only. That is the same half-moved-pair failure "
+        "`test_matrix_63x8_coverage.GRID_AS_MEASURED` was carrying on the "
+        "same tree, and it is why a step ARRIVING needs the same hand-"
+        "restatement this file already demands of one leaving."
     )
 
 

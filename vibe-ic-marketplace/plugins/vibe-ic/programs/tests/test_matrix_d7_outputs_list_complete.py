@@ -1134,7 +1134,7 @@ def test_unattributable_findings_are_surfaced_not_dropped():
 
 
 def test_every_cell_lands_in_exactly_one_state():
-    """68 cells; ENFORCED + WAIVED + NA == 68, and no cell is in two states.
+    """69 cells; ENFORCED + WAIVED + NA == 69, and no cell is in two states.
 
     The census is derived live, not written down: a step added to the yaml
     lands here as ENFORCED and this arithmetic keeps holding, while a waiver
@@ -1150,7 +1150,12 @@ def test_every_cell_lands_in_exactly_one_state():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(cells) == len(F.step_ids()) == 68
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert len(cells) == len(F.step_ids()) == 69
 
     state = Counter()
     for cell in cells:
@@ -1172,7 +1177,12 @@ def test_every_cell_lands_in_exactly_one_state():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert sum(state.values()) == 68, state
+    # RE-DERIVED 2026-08-21, 68 -> 69. NOT decremented or incremented by
+    # hand: measured with `len(F.step_ids())` on the live yaml. The
+    # population moved +'0.5ic', +'1.6x' (v1.11.15), -'37.5self'
+    # (v1.11.18) and this pin was moved for none of them, which is why it
+    # was already red on main before the ninth dimension landed.
+    assert sum(state.values()) == 69, state
     assert state["NA"] >= 1 and state["ENFORCED"] >= 1, state
     # Waivers must not be the majority strategy: if they ever are, this
     # dimension has stopped enforcing anything and should be redesigned.

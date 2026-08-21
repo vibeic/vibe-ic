@@ -1736,12 +1736,57 @@ CONTENT_ARM_BLIND: Tuple[str, ...] = ("2", "28", "A1", "A4", "D1")
 _CONTENT_BEARING_SUFFIXES: Tuple[str, ...] = (".json", ".jsonl")
 
 
+def _survived_the_gate(rec) -> Tuple[str, ...]:
+    """The rewritten files still carrying the WRONG body once the gate had run.
+
+    ``wrong_bytes`` is read off disk AFTER ``check_step`` returns, so this is a
+    measurement, not an inference from the yaml: if the bytes on disk are no
+    longer the ones the harness wrote, something in the run replaced them.
+
+    The something is usually the step's own gate. A step may declare, as a
+    ``required_outputs`` entry, the very path its gate passes to ``--json`` —
+    and then the gate WRITES that file during ``_evaluate_gate``, before the
+    output bookkeeping ever opens it. The wrong content is gone by the time
+    anything could grade it.
+    """
+    return tuple(
+        rel for rel, body in (rec.get("wrong_bytes") or {}).items()
+        if body == wrong_body(rel).encode("utf-8"))
+
+
 def _gradable(rec) -> bool:
-    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?"""
+    """Is this row's UNMOVED/MOVED a judgement about CONTENT at all?
+
+    THE SURVIVAL CLAUSE (2026-08-21). It is not enough that the harness WROTE a
+    wrong body; the wrong body has to still be there when the verdict is taken.
+    Otherwise UNMOVED says "the gate overwrote the file", which is not the same
+    finding as "the gate read the file and did not care", and this arm exists to
+    tell those two apart.
+
+    MEASURED across the whole real-gate PASS-tier population on this tree, and
+    the discrimination is narrow rather than sweeping: **one** step is
+    un-graded by it. `1.6x` declares exactly one output,
+    `reports/crosslayer/rewrite_equivalence_check.json`, which is the same path
+    its own gate command passes to `--json`. Survival 0 of 1. Every other
+    gradable step survives in full — 2, 28, 32, 35, 38, A1, A4 and D1 all 1/1 or
+    2/2 — so no step leaves `CONTENT_ARM_BLIND` because of this clause and the
+    disclosed blind set does not shrink.
+
+    Reproduced directly before the clause was written: seed
+    `rewrite_equivalence_check.json` with `wrong_body`, run the real
+    `check_step`, read the file back. `verdict` goes `"FAIL"` -> absent and the
+    bytes differ — the gate rewrote its own report. Without this clause `1.6x`
+    was charged as NEWLY BLIND, and the failure message diagnosed it as "a gate
+    that stopped reading", which is the opposite of what happened: no gate
+    stopped reading, a step arrived whose only declared artefact is one its gate
+    produces. Charging it would have been the campaign's own disease — measuring
+    something adjacent and reporting it as if it answered the question.
+    """
     rels = rec.get("rels") or ()
     if not rels or rec.get("unresolved_alts"):
         return False
-    return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES) for r in rels)
+    return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+               for r in _survived_the_gate(rec))
 
 
 def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one():
@@ -1776,6 +1821,58 @@ def test_a_readable_artefact_that_is_wrong_is_not_worth_the_same_as_a_right_one(
         f"shrink here and name the change that taught it. "
         f"gradable={sorted(gradable)} blind={sorted(blind)} pinned={sorted(pinned)}"
     )
+
+
+def test_the_survival_clause_is_load_bearing_and_narrow():
+    """MUTATION ARM for `_gradable`'s survival clause, in both directions.
+
+    LOAD-BEARING: with the clause reverted — grading on what the harness WROTE
+    rather than on what survived — at least one step re-enters the gradable
+    population as blind, and the ratchet above would charge it. If nothing
+    re-enters, the clause is dead weight and this test says so.
+
+    NARROW: the clause may not quietly un-grade a step that really is blind. The
+    set it removes is asserted by name, so widening it — a gate that starts
+    rewriting an artefact it used to merely read — reddens here rather than
+    silently shrinking the disclosed blind set.
+    """
+    recs = _content_arm_sweep()
+
+    def gradable_ignoring_survival(rec) -> bool:
+        rels = rec.get("rels") or ()
+        if not rels or rec.get("unresolved_alts"):
+            return False
+        return any(str(r).lower().endswith(_CONTENT_BEARING_SUFFIXES)
+                   for r in rels)
+
+    with_clause = {k for k, r in recs.items() if _gradable(r)}
+    without_clause = {k for k, r in recs.items()
+                      if gradable_ignoring_survival(r)}
+    removed = without_clause - with_clause
+
+    assert removed, (
+        "the survival clause removes NO step from the gradable population, so "
+        "it cannot be what keeps a gate-rewritten artefact from being charged "
+        "as blindness. Either every declared output now survives its own gate — "
+        "in which case delete the clause and say so — or the survival "
+        "measurement has stopped working")
+    assert not (with_clause - without_clause), (
+        f"the survival clause ADDED {sorted(with_clause - without_clause)} to "
+        f"the gradable population; it may only ever remove")
+    assert removed == {"1.6x"}, (
+        f"the survival clause un-grades {sorted(removed)}, pinned {{'1.6x'}}.\n"
+        f"Newly un-graded: {sorted(removed - {'1.6x'})} — a step's declared "
+        f"artefact is now being overwritten by its own gate before the verdict "
+        f"is taken, which removes it from this arm's reach and must be a "
+        f"decision, not a diff.\n"
+        f"No longer un-graded: {sorted({'1.6x'} - removed)} — its artefact now "
+        f"survives the gate, so it re-enters the population and its blindness "
+        f"becomes a real finding again.")
+    for key in removed:
+        assert key not in CONTENT_ARM_BLIND, (
+            f"{key} is un-graded by the survival clause AND named in "
+            f"CONTENT_ARM_BLIND; a step cannot be both out of reach and a "
+            f"recorded blind spot")
 
 
 def test_the_content_move_names_its_cause():
