@@ -17,8 +17,11 @@ host at 7c376e348, the repo-tools arm alone: ``asked 40 recorded 0 NORECORD
 40``, aggregate INCOMPLETE, zero junit cases.  Landing was impossible on any
 host of the fleet.
 
-``VIBEIC_TRUSTED_PYTEST_SITE`` opens ONE explicitly-named directory for that
-host, and nothing else changes:
+``VIBEIC_TRUSTED_PYTEST_SITE`` opens the explicitly-named directories for that
+host — one, or several separated by ``os.pathsep`` in the order they should
+answer, because a runner's import closure is not always one directory's worth of
+modules (MEASURED on this fleet: ``pygments`` lives in a different site
+directory from ``pytest``) — and nothing else changes:
 
   * it is OPT-IN, never derived by default.  A silent fallback to the host's
     own site directory would dissolve the digest-pinned guarantee on every host
@@ -155,39 +158,73 @@ def _derived_user_site() -> str:
     return derived
 
 
-def _host_lane(subject: Path, programs: Path) -> Path | None:
-    """Resolve, refuse and return the opted-in host site directory, or None.
+def _host_lane(subject: Path, programs: Path) -> list[Path]:
+    """Resolve, refuse and return the opted-in host site directories.
 
-    Returning None is the pinned-image lane and the default: an unset variable
-    changes nothing about this entry's behaviour.
+    Returning an EMPTY LIST is the pinned-image lane and the default: an unset
+    variable changes nothing about this entry's behaviour.
+
+    ONE VALUE MAY NAME MORE THAN ONE DIRECTORY, separated by ``os.pathsep``, in
+    the order they should answer.  A single directory is the same value it
+    always was and behaves identically, so nothing that names one changes.
+
+    WHY A LIST AND NOT ONE DIRECTORY.  The lane's promise is that the isolated
+    interpreter can resolve the RUNNER, and a runner is not one directory's
+    worth of modules.  MEASURED on this fleet at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    ``pytest`` imports ``pygments`` lazily, at terminal-writer time, so a lane
+    naming only the first directory IMPORTS and then dies mid-session with
+    ``No module named 'pygments'`` — the "imports and cannot report" shape
+    ``landing_pytest_runtime_preflight`` exists to catch.  The system
+    interpreter happens to survive it because ``-I`` suppresses only the USER
+    site directory and keeps ``/usr/lib/python3/dist-packages``; an interpreter
+    without that directory — a virtual environment, which is what a host that
+    followed CONTRIBUTING may well be running the landing from — has no such
+    luck and could not open the lane AT ALL, however precisely it named the
+    directory the runner lives in.
+
+    Every segment goes through the SAME resolution and the SAME two refusals as
+    before.  Widening the value does not widen what may be named.
     """
     requested = os.environ.get(HOST_SITE_ENV)
     if requested is None or not requested.strip():
-        return None
-    requested = requested.strip()
-    if requested == HOST_SITE_AUTO:
-        requested = _derived_user_site()
-    lane = Path(requested)
-    if not lane.is_absolute():
-        raise Refusal(f"{HOST_SITE_ENV} must name an absolute directory")
-    try:
-        resolved = lane.resolve(strict=True)
-    except OSError as exc:
-        raise Refusal(f"{HOST_SITE_ENV} does not resolve: {exc}") from exc
-    if not resolved.is_dir():
-        raise Refusal(f"{HOST_SITE_ENV} is not a directory: {resolved}")
-    # The same two refusals the module identities go through, for the same
-    # reason: a runtime the subject can name is a runtime the subject controls.
-    if _under(resolved, subject) or _under(resolved, programs):
-        raise Refusal(f"{HOST_SITE_ENV} resolved inside the subject checkout")
-    # ASSERTED, NOT ASSUMED. The lane restores this directory's pytest11 entry
+        return []
+    segments = [item.strip() for item in requested.strip().split(os.pathsep)]
+    if any(not item for item in segments):
+        raise Refusal(f"{HOST_SITE_ENV} contains an empty directory segment")
+    lanes: list[Path] = []
+    for segment in segments:
+        if segment == HOST_SITE_AUTO:
+            segment = _derived_user_site()
+        lane = Path(segment)
+        if not lane.is_absolute():
+            raise Refusal(f"{HOST_SITE_ENV} must name an absolute directory")
+        try:
+            resolved = lane.resolve(strict=True)
+        except OSError as exc:
+            raise Refusal(f"{HOST_SITE_ENV} does not resolve: {exc}") from exc
+        if not resolved.is_dir():
+            raise Refusal(f"{HOST_SITE_ENV} is not a directory: {resolved}")
+        # The same two refusals the module identities go through, for the same
+        # reason: a runtime the subject can name is a runtime the subject
+        # controls.
+        if _under(resolved, subject) or _under(resolved, programs):
+            raise Refusal(
+                f"{HOST_SITE_ENV} resolved inside the subject checkout")
+        if resolved not in lanes:
+            lanes.append(resolved)
+    # ASSERTED, NOT ASSUMED. The lane restores these directories' pytest11 entry
     # points; on this fleet one of them raises at import and takes the whole
     # session down at collection, so the token is load-bearing exactly here.
     if os.environ.get(AUTOLOAD_ENV) != "1":
         raise Refusal(
             f"{HOST_SITE_ENV} requires {AUTOLOAD_ENV}=1 on the child: the lane "
-            "restores this directory's entry-point plugins")
-    return resolved
+            "restores these directories' entry-point plugins")
+    return lanes
 
 
 def run(argv: Sequence[str]) -> int:
@@ -198,9 +235,11 @@ def run(argv: Sequence[str]) -> int:
     if any(item in {"", "."} for item in sys.path):
         raise Refusal("isolated interpreter still exposes the subject cwd")
 
-    lane = _host_lane(subject, programs)
-    if lane is not None:
-        sys.path.insert(0, str(lane))
+    # INSERTED AT POSITION 0, IN THE ORDER NAMED — see the module docstring for
+    # the measurement that rules out appending.
+    lanes = _host_lane(subject, programs)
+    if lanes:
+        sys.path[0:0] = [str(lane) for lane in lanes]
 
     import pytest  # type: ignore[import-not-found]  # image-owned dependency
     import _pytest  # type: ignore[import-not-found]

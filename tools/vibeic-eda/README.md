@@ -13,7 +13,7 @@ you have the whole fixed toolchain. The image is published to the **GitHub Conta
 Registry (GHCR)** and is public (no login required):
 
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.3.14
+docker pull ghcr.io/vibeic/vibeic-eda:latest
 ```
 
 > The image lives on GHCR (`ghcr.io/vibeic/...`), **not** Docker Hub — always use the
@@ -53,7 +53,7 @@ Full scoreboard (8 forks, gatekeeper-verified proofs): [`FIX_STATUS.md`](./FIX_S
 **Headless / batch (CI, scripted flows):**
 ```bash
 docker rm -f vibeic-eda 2>/dev/null || true   # "name already in use"? drop the old container first
-docker run -d --name vibeic-eda ghcr.io/vibeic/vibeic-eda:0.3.14 --skip sleep infinity
+docker run -d --name vibeic-eda ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
 docker exec vibeic-eda yosys --version
 docker exec vibeic-eda openroad -version
 ```
@@ -65,7 +65,7 @@ container, or you get `cd: No such file or directory`. Start it with an identity
 ```bash
 docker run -d --name vibeic-eda \
   -v "$PWD:$PWD" -w "$PWD" \
-  ghcr.io/vibeic/vibeic-eda:0.3.14 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
 # then point the MCP at it:  EDA_CONTAINER=vibeic-eda
 ```
 
@@ -73,14 +73,14 @@ docker run -d --name vibeic-eda \
 ```bash
 docker run -d --name vibeic-eda \
   -p 5901:5901 -p 8080:80 \
-  ghcr.io/vibeic/vibeic-eda:0.3.14
+  ghcr.io/vibeic/vibeic-eda:latest
 # noVNC:  http://localhost:8080     VNC: localhost:5901   (default password: abc123)
 ```
 
 **Mount your design directory:**
 ```bash
 docker run -it --rm -v "$PWD:/foss/designs/work" -w /foss/designs/work \
-  ghcr.io/vibeic/vibeic-eda:0.3.14 bash
+  ghcr.io/vibeic/vibeic-eda:latest bash
 ```
 
 Tools live at the same paths as the iic-osic-tools base (`/foss/tools/bin/...`), so any
@@ -93,11 +93,19 @@ it clones the existing container's mounts / cmd / user / workdir onto the new im
 refuses to interrupt an in-flight EDA job (override with `FORCE=1`), and verifies the
 image ID after the swap. Run it as your normal user (not root/sudo).
 ```bash
-./restart-eda.sh              # recreate on the PINNED version from ./VERSION
+./restart-eda.sh              # recreate on the newest vibeic-eda image THIS HOST holds, by DIGEST
 ./restart-eda.sh 0.2.11       # or any explicit tag / full image ref
 ```
-The no-argument default is deliberately the pinned `VERSION`, never a floating
-`latest` — a stale local `latest` would silently hand you an outdated toolchain.
+The no-argument default is deliberately a **digest**, never a floating `latest` —
+a stale local `latest` would silently hand you an outdated toolchain, and this
+host's `latest` really can be stale (measured 2026-08-21: local `latest` and the
+registry's `latest` were two different images at the same minute).
+
+It used to be `$(cat ./VERSION)` — vibeic-eda's version number kept in the vibe-ic
+repo, which meant a PR there for every image release. That file is gone; the
+script asks
+`vibe-ic-marketplace/plugins/vibe-ic/programs/_eda_image.py --judged` instead, so
+"which image" has one implementation rather than a bash second opinion.
 
 ---
 
@@ -146,7 +154,7 @@ Semantic versions track the fix-program milestones in `FIX_STATUS.md`:
 - `ghcr.io/vibeic/vibeic-eda:X.Y.Z` — immutable, reproducible from the pinned SHAs at that tag.
 - `ghcr.io/vibeic/vibeic-eda:latest` — the newest released `X.Y.Z`.
 
-Current: **0.3.14** — makes every EDA tool resolve on a **non-login `docker exec` PATH**
+Current: **0.3.16** — makes every EDA tool resolve on a **non-login `docker exec` PATH**
 (a global `ENV PATH` bakes `/foss/tools/bin` into the image), so the bare
 `docker exec vibeic-eda yosys --version` shown above works with no login shell and no
 per-command `export PATH`. Builds on **0.2.11**, which added **native in-KLayout

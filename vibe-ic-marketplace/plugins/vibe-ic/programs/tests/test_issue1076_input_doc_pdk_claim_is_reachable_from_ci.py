@@ -49,7 +49,6 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 CHECK = PROGRAMS / "input_doc_pdk_claim_vs_installed_pdk_check.py"
 SIBLING = PROGRAMS / "pdk_via_patch_meets_layer_min_width_check.py"
 HYGIENE = REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh"
-VERSION_PIN = REPO_ROOT / "tools" / "vibeic-eda" / "VERSION"
 
 sys.path.insert(0, str(PROGRAMS))
 import input_doc_pdk_claim_vs_installed_pdk_check as C  # noqa: E402
@@ -74,37 +73,41 @@ def test_the_checker_offers_the_mechanism_its_sibling_already_uses():
     assert "--advisory" in out, out
 
 
-def test_the_image_is_READ_from_the_repo_anchor_and_never_a_floating_tag():
+def test_the_image_is_RESOLVED_to_a_digest_and_never_a_floating_tag(monkeypatch):
     """`--from-image` decides WHICH artefacts the verdict is taken against, so
-    the image is part of the verdict. Reading `tools/vibeic-eda/VERSION` means
-    an anchor bump applies here with no edit and no registration, so this file
-    cannot become a second place the version is wrong."""
-    assert VERSION_PIN.is_file(), f"no anchor at {VERSION_PIN}"
-    anchor = VERSION_PIN.read_text().strip()
+    the image is part of the verdict, and the verdict has to say which bytes.
+
+    This used to read `tools/vibeic-eda/VERSION` — vibeic-eda's version number
+    stored in this repo, so every image release needed a PR here. It now
+    delegates to `_eda_image.judged_image()`, which is also what the two sibling
+    gates ask: one implementation of "which image may a gate look inside", not a
+    third copy that can drift from the other two."""
+    monkeypatch.setattr(C._img, "judged_image", lambda **kw: C._img.JudgedImage(
+        f"{C._img.IMAGE_REPO}@sha256:{'a' * 64}", "sha256:" + "a" * 64,
+        "repo-digest", "local", "", "0.3.19", "local-label", ""))
     image, why = C.pinned_image()
-    assert image is not None, why
-    assert image.endswith(":" + anchor), (
-        f"{image} does not carry the repo anchor {anchor}")
-    # An explicit image still wins, or the flag would be decorative...
-    assert C.pinned_image("x/y:1.2.3") == ("x/y:1.2.3", "")
-    # ...and with no anchor above it there is a REASON, never a `:latest`
-    # fallback whose bytes a third party controls.
-    image2, why2 = C.pinned_image()
-    assert ":latest" not in (image2 or ""), image2
-    assert why2 == ""
+    assert why == "" and image.endswith("@sha256:" + "a" * 64), (image, why)
+    assert ":latest" not in image
+    # An explicit image is passed THROUGH the same resolver, or the flag would
+    # be resolving by a second set of rules.
+    seen = {}
+    monkeypatch.setattr(C._img, "judged_image",
+                        lambda **kw: seen.update(kw) or C._img.JudgedImage(
+                            "x/y@sha256:" + "b" * 64, "sha256:" + "b" * 64,
+                            "given", "override", "", "9.9.9", "local-label", ""))
+    assert C.pinned_image("x/y:1.2.3")[0] == "x/y@sha256:" + "b" * 64
+    assert seen.get("explicit") == "x/y:1.2.3", seen
 
 
-def test_no_anchor_yields_a_reason_and_not_a_guess(monkeypatch, tmp_path):
-    """The packaged-plugin case: no repo above the file. "I could not resolve
-    an image" must arrive as a sentence, not as an image."""
-    lonely = tmp_path / "programs" / "x.py"
-    lonely.parent.mkdir(parents=True)
-    lonely.write_text("")
-    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
-    monkeypatch.setattr(C, "__file__", str(lonely))
+def test_no_resolvable_image_yields_a_reason_and_not_a_guess(monkeypatch):
+    """"I could not resolve an image" must arrive as a sentence, not as an image.
+    A `:latest` fallback here would hand the verdict to another org's next push
+    (vibe-ic#927), and a silent None would reach the report as "found nothing"."""
+    monkeypatch.setattr(C._img, "judged_image", lambda **kw: C._img.JudgedImage(
+        None, None, "", "", "no vibeic-eda image is present on this host"))
     image, why = C.pinned_image()
     assert image is None
-    assert "VERSION" in why and "floating tag" in why, why
+    assert "present on this host" in why, why
 
 
 def test_an_unstartable_image_is_disclosed_and_never_becomes_a_pass():
@@ -117,6 +120,12 @@ def test_an_unstartable_image_is_disclosed_and_never_becomes_a_pass():
 
 
 def test_the_image_is_PROBED_before_anything_is_started(monkeypatch):
+    # The image is RESOLVED by `_eda_image` before this helper runs; stub
+    # that so the assertions below are about THIS helper's argv, which is
+    # what the test is named for, and not about digest resolution.
+    monkeypatch.setattr(C._img, "judged_image", lambda **kw: C._img.JudgedImage(
+        "some/image:1.0", "sha256:" + "c" * 64, "repo-digest",
+        "override", "", "1.0", "local-label", ""))
     """A bare `docker run` on an absent tag PULLS — measured here at ~23 GB and
     minutes, inside a gate whose whole job takes 23 s. A hygiene run that
     silently downloads that is a gate people switch off, so presence is probed
@@ -141,6 +150,12 @@ def test_the_image_is_PROBED_before_anything_is_started(monkeypatch):
 
 
 def test_a_present_image_is_started_with_pull_disabled(monkeypatch):
+    # The image is RESOLVED by `_eda_image` before this helper runs; stub
+    # that so the assertions below are about THIS helper's argv, which is
+    # what the test is named for, and not about digest resolution.
+    monkeypatch.setattr(C._img, "judged_image", lambda **kw: C._img.JudgedImage(
+        "some/image:1.0", "sha256:" + "c" * 64, "repo-digest",
+        "override", "", "1.0", "local-label", ""))
     """The other half: when the probe succeeds the container IS started, and
     the start still cannot reach the network."""
     calls = []

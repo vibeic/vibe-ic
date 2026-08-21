@@ -1,0 +1,28 @@
+type: bug
+severity: P1
+component: forked place-and-route tool, routing and resizing stages
+plugin_version: "1.11.66"
+
+title: >-
+  A fatal condition downgraded to a warning leaves no machine-readable statement that the stage did not complete
+
+root_cause_layer: forked_tool
+tool: "OpenROAD"
+generating_step: "phase3.pnr_setup_repair"
+golden_sample: "none — no build of this tool emits the completion statement this record asks for, so the golden sample has to be created by the enhancement rather than captured from an existing run."
+bad_sample: "the routing log of a place-and-route run in which a pin the router could not reach is reported only as a downgraded warning, which the plugin has to scan for separately because it is no longer an error-severity line."
+problem: |
+  The forked place-and-route tool's standing practice is to downgrade a fatal abort to a warning so that a later change order can still proceed. The downgraded condition then survives only as a change of severity in the log: there is no stable, machine-readable statement that the stage did not complete and no identifier a reader can rely on across versions. A downstream reader screening for error-severity lines therefore stops seeing the condition at the exact moment it is downgraded, and each further downgrade removes another condition from the screen by construction.
+tool_enhancement: |
+  In the fork's router and resizer, every condition that has been downgraded from fatal must also emit a stable machine-readable completion record naming the stage, whether that stage finished, and which condition prevented it — independent of the severity the message was downgraded to. A reader must be able to ask whether the stage completed without enumerating the tool's current identifiers, so that a future downgrade adds to what the reader sees instead of subtracting from it.
+
+pattern: |
+  A tool converts a fatal condition into a warning so that a flow can continue past it, and each such downgrade silently removes that condition from the set a downstream severity screen can see, so the screen weakens with every release while continuing to report a clean result on the runs it can no longer judge.
+
+suggested_fix: |
+  Add a completion record to the fork's routing and resizing stages that is emitted regardless of severity downgrades, and make the plugin read that record instead of screening the log for error-severity identifiers.
+
+id: "ORGANIC-20260821-downgraded-abort-has-no-completion-record"
+submitted_at: "2026-08-21T22:08:47+08:00"
+session_context: >-
+  Captured while auditing which produced artefacts carry the identity of what they measured; a routing stage that aborted and a routing stage that finished currently produce reports the reader cannot separate once the abort has been downgraded.
