@@ -127,7 +127,36 @@ DIMENSION_MODULE_GLOB = "test_matrix_d[1-9]_*.py"
 #: probe, not a cell, and is not counted as one.
 _CELL_ID_RE = re.compile(r"^step(.+)$")
 
-VALID_STATES = ("ENFORCED", "WAIVED", "NA")
+#: THE GRID HAS FOUR STATES, and the fourth was added by owner ruling on
+#: 2026-08-21 after this file spent a release insisting on three.
+#:
+#: The three-state rule was right about the danger and wrong about the
+#: inventory. Its danger is real: a fourth state IS an escape hatch if a cell
+#: can enter it by saying nothing. But forcing every cell into ENFORCED /
+#: WAIVED / NA meant a cell whose evidence THIS REPOSITORY DOES NOT HOLD had to
+#: come out as one of them, and each of those three is a statement about the
+#: DESIGN. "I could not look" is not a verdict about the design, and the grid
+#: had no way to say it.
+#:
+#: MEASURED, and this is what forced the ruling: six dimension-3 cells (steps
+#: 15, 17, 19, 20, 30, 32) declare outputs whose manifest record cites a
+#: `home`-kind campaign run root that no corpus can supply on any host. They
+#: were reported ENFORCED — which claims their predicate passed — while their
+#: live predicate failed, and `test_no_cell_is_counted_enforced_while_its
+#: _predicate_is_red` named all six. Neither ENFORCED nor WAIVED nor NA was
+#: true of them. NOT_MEASURED is.
+#:
+#: WHAT STOPS IT BEING THE ESCAPE HATCH: the reason is REQUIRED. A cell may
+#: enter NOT_MEASURED only by naming the evidence that is missing, through
+#: `matrix_not_measured_reason(step_id)`, and a cell in this state with no
+#: reason is a bug in the emitter rather than a NOT_MEASURED cell —
+#: `test_every_not_measured_cell_names_the_evidence_it_lacks` refuses it. And
+#: NOT_MEASURED never counts as a pass: see
+#: `test_a_not_measured_cell_is_never_counted_as_enforced`.
+VALID_STATES = ("ENFORCED", "WAIVED", "NA", "NOT_MEASURED")
+
+#: The one state that is neither enforcement nor a decision about the design.
+NOT_MEASURED = "NOT_MEASURED"
 
 #: Dimensions that have answered ``matrix_cell_substitution`` — "was this cell's
 #: ENFORCED verdict measured against the step's own mechanism, or against a
@@ -670,10 +699,27 @@ def _state(dim: int, sid: str) -> str:
     value = fn(sid)
     assert value in VALID_STATES, (
         f"dimension {dim} step {sid}: matrix_cell_state returned {value!r}, "
-        f"which is not one of {VALID_STATES}. A fourth state is exactly the "
-        f"escape hatch the three-state rule forbids"
+        f"which is not one of {VALID_STATES}. A FIFTH state is exactly the "
+        f"escape hatch the state rule forbids — the fourth, NOT_MEASURED, "
+        f"exists by ruling and is fenced by a REQUIRED reason; a fifth would "
+        f"have neither"
     )
     return value
+
+
+def _not_measured_reason(dim: int, sid: str):
+    """The evidence this cell lacks, in the owning module's own words.
+
+    `None` when the module does not implement the protocol at all, which is
+    legitimate — a dimension with nothing unmeasurable never needs it. What is
+    NOT legitimate is a cell reported NOT_MEASURED whose module cannot say why,
+    and that is refused rather than defaulted.
+    """
+    mod = dimension_modules()[dim]
+    fn = getattr(mod, "matrix_not_measured_reason", None)
+    if not callable(fn):
+        return None
+    return fn(sid)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -920,7 +966,7 @@ def test_a_substituted_cell_is_never_counted_as_enforcing_its_own_mechanism():
 
 
 def test_every_cell_resolves_to_exactly_one_state():
-    """ENFORCED + WAIVED + NA == 536, decided by the module that owns the cell."""
+    """ENFORCED + WAIVED + NA + NOT_MEASURED == the grid, decided by the owning module."""
     census = state_census()
     assert len(census) == expected_cells()
     counts = {s: sum(1 for v in census.values() if v == s) for s in VALID_STATES}
@@ -934,10 +980,15 @@ def test_every_cell_resolves_to_exactly_one_state():
             f"dimension {dim} ({DIMENSION_NAMES[dim]}) has only {enforced} "
             f"ENFORCED cells out of {len(per)}: "
             f"{ {s: per.count(s) for s in VALID_STATES} }. More than half its "
-            f"grid is waived or inapplicable, so a green run says almost "
-            f"nothing about it."
+            f"grid is waived, inapplicable or unmeasured, so a green run says "
+            f"almost nothing about it. NOT_MEASURED counts against this floor "
+            f"exactly as WAIVED and NA do — the fourth state is a way to be "
+            f"honest about a gap, never a way to shrink the denominator."
         )
-    assert counts["ENFORCED"] + counts["WAIVED"] + counts["NA"] == expected_cells()
+    # FOUR terms since the 2026-08-21 ruling. Spelled out rather than summing
+    # `counts` so that a state added without a decision still breaks this line.
+    assert (counts["ENFORCED"] + counts["WAIVED"] + counts["NA"]
+            + counts[NOT_MEASURED]) == expected_cells()
 
 
 def test_state_agrees_with_the_waiver_registry_and_the_collected_marks():
@@ -1140,17 +1191,106 @@ def test_every_na_cell_asserts_a_live_precondition():
     # than once per NA cell, and checked for every dimension — including the
     # ones with no NA cell today, so a skip introduced later is caught before
     # it has an NA to hide behind.
+    # (3) NARROWED BY THE 2026-08-21 RULING, not relaxed. A cell test may skip
+    # ONLY in a dimension that can express NOT_MEASURED — i.e. one that
+    # implements `matrix_not_measured_reason` — because there the skip has
+    # somewhere honest to land and the per-cell binding in
+    # `test_a_skipped_cell_is_NOT_MEASURED_rather_than_silently_passing`
+    # forces it there WITH a named reason. A dimension without that vocabulary
+    # is refused exactly as before: its skip would leave a cell reporting
+    # "passed" while asserting nothing, which is what this leg exists for.
+    #
+    # The AST could only ever approximate the question — it asks about the
+    # SHAPE of the source, not about what a cell did. The binding above asks
+    # the cell. This leg is kept as the guard for dimensions that have not
+    # opted in at all.
     for dim, per_dim in funcs.items():
+        mod = dimension_modules()[dim]
+        can_say = callable(getattr(mod, "matrix_not_measured_reason", None))
         for func in per_dim:
             found = _calls_pytest_skip(dim, func)
-            if found:
+            if found and not can_say:
                 problems.append(
                     f"dimension {dim}: cell test {found}. A cell test may not "
-                    f"skip: the three states are ENFORCED, WAIVED (strict "
-                    f"xfail) and NA (asserted precondition)")
+                    f"skip unless its dimension implements "
+                    f"matrix_not_measured_reason(step_id): the states are "
+                    f"ENFORCED, WAIVED (strict xfail), NA (asserted "
+                    f"precondition) and NOT_MEASURED (named missing evidence), "
+                    f"and a skip with nowhere to land is silence wearing a hat")
 
     assert not problems, (
         f"{len(problems)} NA problem(s):\n  - " + "\n  - ".join(problems))
+
+
+def test_every_not_measured_cell_names_the_evidence_it_lacks():
+    """PIN 1 of the fourth state: no bare "could not determine".
+
+    A cell may enter NOT_MEASURED only by NAMING what is missing. A cell in
+    this state whose module returns nothing is a bug in the emitter, not a
+    NOT_MEASURED cell, and it is refused here rather than defaulted to a
+    sentence this file made up — a default reason would be this file forming a
+    second opinion about a cell it does not own, and would make the state
+    exactly the escape hatch the three-state rule was guarding against.
+
+    The reason must also be SUBSTANTIVE. A one-word answer names nothing, so
+    the same floor the waiver registry uses applies: it has to be long enough
+    to identify the evidence.
+    """
+    census = state_census()
+    not_measured = sorted(k for k, v in census.items() if v == NOT_MEASURED)
+    problems: List[str] = []
+    for sid, dim in not_measured:
+        reason = _not_measured_reason(dim, sid)
+        if reason is None:
+            problems.append(
+                f"{sid}/d{dim}: reported {NOT_MEASURED} but its module exposes "
+                f"no matrix_not_measured_reason(step_id) — the state is only "
+                f"available to a dimension that can say what it could not look "
+                f"at")
+        elif not str(reason).strip():
+            problems.append(
+                f"{sid}/d{dim}: reported {NOT_MEASURED} with an empty reason — "
+                f"a cell may not enter this state by saying nothing")
+        elif len(str(reason).strip()) < 20:
+            problems.append(
+                f"{sid}/d{dim}: reason {reason!r} is too short to name the "
+                f"missing evidence; NOT_MEASURED is not a shrug")
+    assert not problems, (
+        f"{len(problems)} {NOT_MEASURED} cell(s) do not name what they lack:"
+        f"\n  - " + "\n  - ".join(problems))
+
+
+def test_a_not_measured_cell_is_never_counted_as_enforced():
+    """PIN 2 of the fourth state: it is not a pass, in either census.
+
+    Checked on BOTH axes, because they are computed by different code and a
+    reader may quote either:
+
+      * the CONFIGURATION axis (`state_census`) must not report the cell
+        ENFORCED — trivially true by construction today, and asserted so that a
+        future `matrix_cell_state` cannot return NOT_MEASURED for a cell it
+        also counts as enforcing;
+      * the JOINED axis (`enforcement_census`) must not place it in any
+        ENFORCED bucket, which is the axis every published figure comes from.
+
+    A census that folds NOT_MEASURED into an enforcement total is precisely the
+    defect ORGANIC-20260808 reported one state over: a cell that is not
+    enforcing anything counted as evidence that it is.
+    """
+    census = state_census()
+    not_measured = {k for k, v in census.items() if v == NOT_MEASURED}
+    assert not (not_measured & {k for k, v in census.items()
+                                if v == "ENFORCED"}), (
+        "a cell is reported both NOT_MEASURED and ENFORCED")
+
+    joined = enforcement_census()
+    leaked = sorted(k for k in not_measured
+                    if str(joined.get(k, "")).upper().startswith("ENFORCED"))
+    assert not leaked, (
+        f"{len(leaked)} {NOT_MEASURED} cell(s) are counted as ENFORCED in the "
+        f"joined census: {leaked}. NOT_MEASURED is the absence of a "
+        f"measurement; counting it as enforcement is counting 'I could not "
+        f"look' as 'I looked and it was clean'.")
 
 
 def test_na_cells_are_a_minority_and_are_named():
@@ -1314,10 +1454,16 @@ def test_the_census_is_reported_for_humans(record_property):
 #: ``WAIVED`` expects ``xfailed`` and not ``passed`` on purpose — a waiver is a
 #: strict xfail, so a WAIVED cell that PASSES is an XPASS, which is the
 #: anti-rot mechanism firing and must be reported, not absorbed.
+#: ``NOT_MEASURED`` expects ``skipped``, and that pairing is the whole point of
+#: the fourth state. The cell says "I could not look" on the configuration axis
+#: and the run must actually decline to look — a NOT_MEASURED cell that PASSES
+#: has measured something after all and the state is a lie; one that FAILS is
+#: charging the design with a defect on evidence it just said it does not have.
 STATE_EXPECTS_OUTCOME: Dict[str, str] = {
     "ENFORCED": "passed",
     "WAIVED": "xfailed",
     "NA": "passed",
+    NOT_MEASURED: "skipped",
 }
 
 

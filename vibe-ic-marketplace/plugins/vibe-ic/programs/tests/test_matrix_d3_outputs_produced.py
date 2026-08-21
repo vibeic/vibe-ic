@@ -2298,14 +2298,24 @@ def test_d3_required_outputs_are_produced(cell):
     # for. The two conditions are BOTH required on purpose: a discovery bug that
     # emptied `run_roots()` while the corpus IS present must still redden here,
     # and `test_d3_run_root_discovery_is_live` is the test that says so.
+    # THE FOURTH STATE, DECLINING TO LOOK (owner ruling 2026-08-21). A record
+    # citing a root this module searches on NO host is not waiting on the
+    # corpus pointer and never will be. It used to be REFUSED here by name —
+    # `assert not cites` — which charged the flow with a failure on evidence
+    # this tree does not hold, and left the cell reported ENFORCED while its
+    # predicate was red. Six cells sat in that contradiction.
+    #
+    # Now the cell says NOT_MEASURED on the configuration axis and this body
+    # declines to look, so both axes agree and the census counts it as the
+    # absence of a measurement rather than as either colour. NOTHING IS
+    # EXCUSED: `matrix_not_measured_reason` names the exact citations, the
+    # state counts as nothing in every enforcement figure, and it
+    # self-invalidates the moment the record resolves.
+    _unmeasured = matrix_not_measured_reason(sid)
+    if _unmeasured is not None:
+        pytest.skip(f"NOT_MEASURED: {_unmeasured}")
+
     if not run_roots() and corpus_root() is None:
-        # ...and only over the entries an absent corpus can explain. A record
-        # citing a root this module searches on no host is not waiting on the
-        # pointer, so it is REFUSED here by name instead of leaving the
-        # denominator with the rest of the cell (see the section above
-        # `unanswerable_citations`).
-        cites = unanswerable_citations(sid)
-        assert not cites, _corpus_skip_would_hide(sid, cites)
         pytest.skip(SKIP_REASON)
 
     missing, details = audit_step(sid)
@@ -3346,44 +3356,65 @@ def test_d3_a_citation_no_corpus_can_answer_is_not_dropped_by_the_corpus_skip(
         f"a cell whose every citation the corpus could answer must still skip "
         f"with the corpus reason, not refuse: {skipped.value}")
 
-    # ---- FORWARD: the unanswerable citation refuses, by name ---------
+    # ---- FORWARD: the unanswerable citation is NOT_MEASURED, by name ----
     #
-    # NOT `pytest.raises`. The behaviour this guard exists to catch is the cell
-    # SKIPPING, and `Skipped` derives from `BaseException`, so it escapes
-    # `pytest.raises(AssertionError)` and skips this guard instead of failing
-    # it. MEASURED on the reverted tree: the guard reported `1 skipped` — a
-    # guard that answers the revert by going silent is the same silent-omission
-    # defect it was written against, one level up. So the outcome is classified
-    # here and every branch that is not a refusal is raised as one.
+    # THIS ARM CHANGED SHAPE ON 2026-08-21 AND GOT STRICTER, not looser. It used
+    # to require the cell to REFUSE — raise — because a skip was the only other
+    # option and a skip meant the entry left the denominator in silence. That
+    # reasoning was right while the grid had three states. The owner's ruling
+    # gave it a fourth, so silence is no longer what a skip means HERE: the cell
+    # reports NOT_MEASURED on the configuration axis, carrying a REQUIRED reason
+    # that names the citation, counting as nothing in every enforcement figure,
+    # and self-invalidating when the record resolves.
+    #
+    # So the arm now demands MORE than it did. A bare skip — the old silent
+    # shape, with the plain corpus reason — still fails it. A pass still fails
+    # it. And on top of both, the state must say NOT_MEASURED and the reason
+    # must name the path and the root, which the refusal version never checked
+    # from the state axis at all.
     sid = _synthetic_citation_world(monkeypatch, {
         ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
         UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
     })
+    # `matrix_cell_state` is not callable on a SYNTHETIC step — its NA leg looks
+    # the id up in the yaml — so the driver is asserted directly. It is the only
+    # input to the NOT_MEASURED branch of the state function, so this is the
+    # same claim reached one call earlier.
+    msg = matrix_not_measured_reason(sid)
+    assert msg is not None, (
+        f"a cell recording {UNANSWERABLE!r} against run root {NEVER!r} — which "
+        f"this module searches on no host — is not NOT_MEASURED. It cannot be "
+        f"ENFORCED (nothing looked), and it must not be swept into the corpus "
+        f"skip as though the pointer could settle it. vibe-ic#1266.")
     try:
         test_d3_required_outputs_are_produced(_Cell(sid))
-    except pytest.skip.Exception:
-        raise AssertionError(
-            f"the cell SKIPPED over a citation no corpus can answer: it "
-            f"records {UNANSWERABLE!r} against run root {NEVER!r}, which this "
-            f"module searches on no host, so the corpus pointer cannot settle "
-            f"it and the skip's reason is not true of it. The entry left the "
-            f"denominator in silence — vibe-ic#1266."
-        ) from None
-    except AssertionError as exc:
-        msg = str(exc)
+    except pytest.skip.Exception as skipped:
+        # `Skipped` IS the exception here, not a `pytest.raises` ExceptionInfo,
+        # so the message is on `.msg` — `.value` is an AttributeError and would
+        # turn this guard into an error instead of a verdict.
+        reason = getattr(skipped, "msg", None) or str(skipped)
+        assert reason != SKIP_REASON, (
+            f"the cell skipped with the plain CORPUS reason over a citation no "
+            f"corpus can answer. That reason is not true of it, and the entry "
+            f"left the denominator in silence — the exact vibe-ic#1266 defect.")
+        assert "NOT_MEASURED" in reason, (
+            f"the skip does not say NOT_MEASURED, so a reader cannot tell it "
+            f"from the corpus skip: {reason}")
+    except AssertionError:
+        raise
     else:
         raise AssertionError(
             f"the cell PASSED over a citation no corpus can answer "
             f"({UNANSWERABLE!r} from {NEVER!r}) — a clean run over a "
             f"population nothing looked at."
         )
-    for want in ("NOT DETERMINED", UNANSWERABLE, NEVER):
+    for want in (UNANSWERABLE, NEVER):
         assert want in msg, (
-            f"the refusal must say NOT DETERMINED and name the path and the "
-            f"root the record wanted; {want!r} is missing from:\n{msg}")
+            f"the NOT_MEASURED reason must name the path and the root the "
+            f"record wanted; {want!r} is missing from:\n{msg}")
     assert ANSWERABLE not in msg, (
-        f"the refusal named an entry the corpus CAN answer, so it is reporting "
-        f"the moved cells as a defect rather than carving out the citations "
+        f"the reason named an entry the corpus CAN answer, so it is reporting "
+        f"the moved cells as unmeasured rather than carving out the citations "
         f"nothing can settle:\n{msg}")
 
 
@@ -3420,19 +3451,27 @@ def test_d3_the_corpus_skip_covers_exactly_the_cells_it_can_explain():
             # The skip branch is not reached here, so there is nothing to
             # cross-check against; the predicate half above still ran.
             continue
+        # 2026-08-21: the cell now CARRIES the unanswerable citation as
+        # NOT_MEASURED instead of refusing over it, so the cross-check compares
+        # the predicate against that state rather than against a raise. The
+        # property is unchanged and the failure mode it guards is unchanged: a
+        # cell with an unanswerable citation must not be covered by the plain
+        # corpus skip, because that reason is not true of it.
         try:
             test_d3_required_outputs_are_produced(_Cell(sid))
-        except pytest.skip.Exception:
-            refused = False
+        except pytest.skip.Exception as skipped:
+            carried = "NOT_MEASURED" in (
+                getattr(skipped, "msg", None) or str(skipped))
         except AssertionError:
-            refused = True
+            carried = True          # a refusal also does not hide the entry
         else:
-            refused = False
-        if refused != bool(cites):
+            carried = False
+        if carried != bool(cites):
             disagree.append(
                 f"step {sid}: unanswerable_citations() found {len(cites)} but "
-                f"the cell {'refused' if refused else 'did not refuse'} — the "
-                f"predicate and the cell disagree about whether the corpus "
+                f"the cell "
+                f"{'carried it as NOT_MEASURED' if carried else 'did not'} — "
+                f"the predicate and the cell disagree about whether the corpus "
                 f"skip can explain this cell")
     assert not disagree, (
         f"{len(disagree)} disagreement(s) between the citations no corpus can "
@@ -5953,12 +5992,57 @@ def matrix_na_precondition(step_id):
             "root carries " + ", ".join(wanted))
 
 
+def matrix_not_measured_reason(step_id):
+    """What this cell could not look at, or None if it could look at everything.
+
+    THE FOURTH STATE, by owner ruling 2026-08-21. Six cells of this dimension —
+    steps 15, 17, 19, 20, 30 and 32 — declare an output whose manifest record
+    cites a run root of a kind this module searches on NO host. Setting
+    `$VIBE_IC_BENCHMARK_DATA` does not reach them; publishing the corpus does
+    not reach them; they are not waiting on a pointer.
+
+    They were reported ENFORCED, which claims their predicate passed, while the
+    predicate FAILED — `test_no_cell_is_counted_enforced_while_its_predicate_is
+    _red` named all six. That was the only thing the three-state grid let them
+    be, and it was a statement about the DESIGN that no evidence here supports.
+    The honest answer is that the measurement is absent, and this is the
+    sentence that says which measurement.
+
+    NOT A WAIVER, and it does not close anything. The cell leaves the
+    enforcement denominator and enters a state that counts as nothing, carrying
+    the citation it could not resolve. It returns to the denominator the moment
+    the record is re-pointed at a reachable root or such a run is published —
+    `unanswerable_citations` is re-derived live, so this state self-invalidates
+    exactly as an NA precondition does.
+    """
+    cites = unanswerable_citations(step_id)
+    if not cites:
+        return None
+    named = "; ".join(
+        f"{rel!r} from run root {root!r}" for rel, root, _ in cites)
+    return (
+        f"{len(cites)} declared output(s) cite a run root this dimension "
+        f"searches on no host, so no corpus can supply them: {named}. "
+        f"NOT a claim that the flow fails to produce these artefacts — nothing "
+        f"here measured that.")
+
+
 def matrix_cell_state(step_id) -> str:
-    """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
+    """``ENFORCED`` / ``WAIVED`` / ``NA`` / ``NOT_MEASURED`` for one cell.
+
+    PRECEDENCE, and it is deliberate: NA and WAIVED outrank NOT_MEASURED,
+    NOT_MEASURED outranks ENFORCED. NA is a fact about the design and WAIVED is
+    a registered decision carrying evidence — neither is unmade by this host
+    being unable to read something. ENFORCED is the one claim you cannot make
+    without looking, so "could not look" outranks it. That ordering is what
+    stops the fourth state quietly eating a waiver.
+    """
     if matrix_na_precondition(step_id) is not None:
         return "NA"
     if waiver_for(step_id) is not None:
         return "WAIVED"
+    if matrix_not_measured_reason(step_id) is not None:
+        return "NOT_MEASURED"
     return "ENFORCED"
 
 

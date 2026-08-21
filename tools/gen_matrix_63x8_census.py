@@ -784,7 +784,15 @@ def apply_anchor_rewrites(report: Dict) -> List[str]:
 #: they do not reach the cell count, naming what was counted — so a label added to
 #: `_join_axes` without a column here fails LOUDLY and by name, instead of silently
 #: shrinking the headline.
+#: `not_measured` joined this tuple on 2026-08-21 with the fourth cell state.
+#: It is the label of a cell that is CONFIGURED NOT_MEASURED and whose run
+#: agreed by declining to look — distinct from `enforced_skipped`, which is a
+#: cell configured as enforcing whose run skipped, i.e. a DISAGREEMENT. Both
+#: print in the NOT MEASURED column because a reader of that column wants the
+#: same thing from either, but the headline names them apart, because only one
+#: of them is a cell whose configuration was wrong.
 _LABEL_KEYS = ("enforced", "contradicted", "waived", "na",
+               "not_measured_agreed",
                "waived_contradicted", "na_contradicted",
                "enforced_skipped", "waived_skipped", "na_skipped")
 
@@ -812,6 +820,11 @@ _LABEL_COLUMN = {
     "contradicted": "contradicted",
     "waived_contradicted": "contradicted",
     "na_contradicted": "contradicted",
+    # KEYED APART FROM ITS COLUMN ON PURPOSE. `_fold_label_columns` sums the
+    # label keys that map to a column INTO that column, so a label sharing the
+    # column's name makes the sum read its own destination — a KeyError on the
+    # first dimension with none of them, and a self-reference on the rest.
+    "not_measured_agreed": "not_measured",
     "enforced_skipped": "not_measured",
     "waived_skipped": "not_measured",
     "na_skipped": "not_measured",
@@ -878,6 +891,9 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "na_contradicted": per.count("NA-CONTRADICTED"),
             "enforced_skipped": per.count("ENFORCED-SKIPPED"),
             "waived_skipped": per.count("WAIVED-SKIPPED"),
+            # The cell is CONFIGURED NOT_MEASURED and its run agreed by
+            # declining to look, so `_join_axes` labels it with the bare state.
+            "not_measured_agreed": per.count("NOT_MEASURED"),
             "na_skipped": per.count("NA-SKIPPED"),
         })
     _fold_label_columns(rows)
@@ -919,9 +935,19 @@ def _extra_labels(totals: Dict[str, int]) -> str:
     in its quieter form: the arithmetic reconciles and the reader still cannot see
     what it reconciled over. SKIPPED is the one that matters — it says the check
     exists and could not run, which is neither enforcement nor a contradiction.
+
+    `NOT_MEASURED` was added here on 2026-08-21 with the fourth cell state, and
+    it was added because it was MISSED: the headline enumerated 539 + 0 + 8 + 19
+    + 46 + 3 = 615 of 621 while the table total row correctly showed 55 in the
+    NOT MEASURED column. Six cells were in the partition and absent from the
+    sentence — this function's own docstring describing its own output. The
+    owner's ruling requires that any figure presented as enforcement state how
+    many cells it excluded; a headline that silently drops six is that
+    requirement failing.
     """
     parts = []
-    for key, word in (("waived_contradicted", "WAIVED-CONTRADICTED"),
+    for key, word in (("not_measured_agreed", "NOT_MEASURED"),
+                      ("waived_contradicted", "WAIVED-CONTRADICTED"),
                       ("na_contradicted", "NA-CONTRADICTED"),
                       ("enforced_skipped", "ENFORCED-SKIPPED"),
                       ("waived_skipped", "WAIVED-SKIPPED"),
