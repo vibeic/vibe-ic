@@ -464,6 +464,8 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
         + json.dumps(doc, indent=2))
 
 
+# ── what the polarity gate does and does not see ────────────────────────────────
+#
 def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
     """`phrases_of`' docstring claims the polarity gate clears it for a MECHANICAL
     reason rather than for the argument written above that claim. A claim a
@@ -553,6 +555,8 @@ _SPELLINGS = {
 }
 
 
+# ── the narrowing: the emitted script, not the file that prints it ──────────────
+#
 def test_the_narrowing_loses_no_site_in_any_emitter_spelling():
     """`emitted_script_of`'s docstring claims "nothing that was matchable stops
     being matchable" when the subject moved from the raw file to the string
@@ -615,6 +619,8 @@ _PIN_SPELLINGS = [
 ]
 
 
+# ── the PIN reader's negation grammar, spelling by spelling ─────────────────────
+#
 def test_the_pin_reader_gets_every_negation_spelling_right():
     """THE MEASUREMENT THAT MOVED THIS READER OFF THE PROSE VOCABULARY.
 
@@ -672,6 +678,8 @@ def test_the_old_wording_is_gone():
 '''
 
 
+# ── polarity may not manufacture a PASS ─────────────────────────────────────────
+#
 def test_polarity_cannot_empty_the_reach_into_a_PASS(tmp_path):
     """THE PROPERTY THE WHOLE POLARITY CHANGE TURNS ON, and the one it would be
     worst to get wrong.
@@ -703,6 +711,8 @@ def test_polarity_cannot_empty_the_reach_into_a_PASS(tmp_path):
     assert len(doc["denied_by_polarity"]) == 2, doc
 
 
+# ── what could not be read is REPORTED, never dropped ───────────────────────────
+#
 def test_a_source_that_will_not_parse_is_REPORTED_not_silently_skipped(tmp_path):
     """THE ONE DIRECTION THE NARROWING COULD QUIETLY LOSE.
 
@@ -755,6 +765,8 @@ def test_a_parseable_tree_reports_nothing_unparsed(tmp_path):
     assert json.loads((tmp_path / "r.json").read_text())["unparsed"] == []
 
 
+# ── cost: no parsed tree outlives the answer taken from it ──────────────────────
+#
 def test_no_parsed_tree_outlives_the_answer_taken_from_it():
     """MEASURED REGRESSION, PINNED STRUCTURALLY.
 
@@ -827,6 +839,8 @@ def extract(text, rec):
 '''
 
 
+# ── the polarity gate is sealed against its own sharpening ──────────────────────
+#
 def test_the_polarity_baseline_refuses_to_grow(tmp_path):
     """`phrases_of`' docstring cites this to explain why the polarity gate cannot
     simply be sharpened: a wider predicate makes pre-existing extractors visible
@@ -871,6 +885,8 @@ def test_the_polarity_baseline_refuses_to_grow(tmp_path):
     assert kept == ["one::extract"], kept
 
 
+# ── ... and the test side reads through a different branch ──────────────────────
+#
 def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
     """THE OTHER HALF OF THE UNPARSED REACH, and it had no test until it was
     looked for: `test_a_source_that_will_not_parse_is_REPORTED_not_silently_
@@ -927,6 +943,8 @@ EMITTER_WRAPPED_DENIAL = (
     '"""\n')
 
 
+# ── the cost `_RECORD_BREAKS` accepts, and that it is LOUD ──────────────────────
+#
 def test_the_accepted_under_reach_fails_LOUDLY(tmp_path):
     """THE COST OF `_RECORD_BREAKS`, DEMONSTRATED RATHER THAN ASSERTED.
 
@@ -985,6 +1003,8 @@ def _emitter_with(tcl_lines):
     return body + '    )\n'
 
 
+# ── SWEPT SPACES: every kind, route, form and boundary ──────────────────────────
+#
 def test_polarity_reaches_every_denominator_kind(tmp_path):
     """`counters_of` asks polarity about EVERY literal denominator, and
     `_DEN_TEMPLATES` recognises three kinds. Only `comparison` was ever
@@ -1301,6 +1321,8 @@ def test_one_unreadable_file_is_counted_once_not_once_per_check(tmp_path):
         "the head overstates how much of the tree went unread:\n" + r.stdout)
 
 
+# ── EVIDENCE: a refusal must send the reader to the right place ─────────────────
+#
 def test_a_refused_pin_points_at_the_phrase_not_the_keyword(tmp_path):
     """A refusal is only useful if it sends the reader to the right line. This
     branch already requires the COUNTER side's evidence to name the counter it
@@ -1406,6 +1428,8 @@ EMITTER_REFUSED_WITH_A_DENIAL = (
     '        "  if {$_n >= 2} { puts ALL }\\n")\n')
 
 
+# ── the reach is printed on EVERY verdict path ──────────────────────────────────
+#
 def test_the_reach_survives_a_REFUSAL(tmp_path):
     """"THE REACH IS PRINTED, ALWAYS" is this guard's own rule, and this branch
     has pinned it on the PASS path and on the VACUOUS path. Not on FAIL -- which
