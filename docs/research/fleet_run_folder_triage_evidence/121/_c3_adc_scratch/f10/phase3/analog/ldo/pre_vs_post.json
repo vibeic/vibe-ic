@@ -1,0 +1,8 @@
+{
+  "block": "ldo",
+  "specs": [
+    {"name": "PSRR_DC_dB",   "pre_value": 22.74, "post_value": 22.65, "delta_pct": 0.40},
+    {"name": "Vout_V",       "pre_value": 1.19426, "post_value": 1.19401, "delta_pct": 0.02},
+    {"name": "load_step_mV", "pre_value": 8.11, "post_value": 8.29, "delta_pct": 2.22}
+  ]
+}

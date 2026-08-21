@@ -82,6 +82,55 @@ def _flow_steps(flow) -> list:
     return steps if isinstance(steps, list) else []
 
 
+class DuplicateManifestKey(Exception):
+    """A step id recorded twice in the manifest — the copies may disagree."""
+
+
+def _load_manifest_no_duplicate_keys(path: Path):
+    """Parse the manifest and REFUSE a duplicated key.
+
+    MEASURED ON main, 2026-08-20
+    ============================
+    `json.loads` keeps the LAST of two same-named keys and says nothing. The
+    manifest carried each of `15.5ic`, `26.5ic`, `37.5ip`, `37.5ic` TWICE, and
+    the copies CONTRADICTED each other::
+
+        copy 1   "verdict": "ENFORCED"
+        copy 2   "verdict": "NA_DORMANT_CONDITION"
+
+    Every program read the second. Every human reading top-down read the first.
+    A reviewer and a gate looking at the same fixture would have reported
+    different states of the same cell and neither would have been lying — which
+    is worse than a wrong value, because there is no disagreement to notice.
+
+    The cause is mechanical: a step was ADDED to a fixture that already carried
+    it instead of the existing record being edited, and nothing in the toolchain
+    can see the difference after `json.loads` has run. So the check has to
+    happen DURING the parse, which is what `object_pairs_hook` is for.
+
+    Repo-wide sweep at the time of the fix: 84 tracked JSON files, exactly this
+    one affected, exactly those four keys.
+    """
+    dups: List[str] = []
+
+    def hook(pairs):
+        seen = set()
+        for key, _ in pairs:
+            if key in seen:
+                dups.append(key)
+            seen.add(key)
+        return dict(pairs)
+
+    doc = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=hook)
+    if dups:
+        raise DuplicateManifestKey(
+            f"{path.name} records {len(set(dups))} key(s) more than once: "
+            f"{', '.join(sorted(set(dups)))}. json.loads silently keeps the "
+            f"LAST copy, so a reader and a reviewer can see different values "
+            f"for the same step. Merge each pair into ONE record.")
+    return doc
+
+
 def audit(root: Path) -> Tuple[int, List[Tuple[str, str]], Dict[str, int]]:
     """Return (declared_count, uncovered, per_step_declared).
 
@@ -90,7 +139,7 @@ def audit(root: Path) -> Tuple[int, List[Tuple[str, str]], Dict[str, int]]:
     """
     import yaml  # deferred: keeps the import cost off callers that only --help
 
-    manifest = json.loads((root / _MANIFEST_REL).read_text(encoding="utf-8"))
+    manifest = _load_manifest_no_duplicate_keys(root / _MANIFEST_REL)
     flow = yaml.safe_load((root / _FLOW_REL).read_text(encoding="utf-8"))
 
     m_steps = manifest.get("steps") or {}

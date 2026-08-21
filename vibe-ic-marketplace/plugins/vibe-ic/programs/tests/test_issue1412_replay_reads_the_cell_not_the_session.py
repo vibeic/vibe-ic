@@ -236,13 +236,27 @@ def test_an_unreadable_report_is_a_REASON_not_a_colour(tmp_path, monkeypatch):
      '</testsuite></testsuites>', 1),
     ('<testsuites><testsuite><testcase name="a"><error/></testcase>'
      '</testsuite></testsuites>', 1),
-    ('<testsuites><testsuite><testcase name="a"><skipped/></testcase>'
-     '</testsuite></testsuites>', 0),
 ])
 def test_the_report_reader_maps_each_outcome_to_the_cell_colour(
         tmp_path, xml, expect_rc):
-    """`skipped` maps to 0 — the exit status said the same, and `proved` still
-    requires the MUTANT arm to go non-zero, so a skip cannot buy a red."""
+    """Passed, failed and errored are the three outcomes that ARE a colour.
+
+    `skipped` used to be a fourth row here, pinned at 0 on the argument quoted
+    below. It is no longer a colour at all and has moved to
+    `test_issue1421_a_skipped_cell_has_no_colour.py`, which pins the reason
+    string too. THE ROW WAS NOT DELETED TO MAKE ANYTHING GREEN — the argument
+    that justified it only ever covered one of the two ways to be wrong:
+
+        "the exit status said the same, and `proved` still requires the MUTANT
+        arm to go non-zero, so a skip cannot buy a red."
+
+    True, and beside the point. The skip conditions in a cell test are
+    properties of the CHECKOUT, not of the mutation, so they hold on BOTH arms:
+    the mutant arm skips too, `replay` reads 0 and 0, and the pair is scored
+    STAYED_GREEN — "the recorded proof no longer holds". A skip cannot buy a
+    red; it buys the FALSE NEGATIVE, which is the direction this ledger is for
+    (vibe-ic#1421).
+    """
     p = tmp_path / "cell.xml"
     p.write_text(xml, encoding="utf-8")
     # The process rc is passed only so an unreadable report can quote it; a

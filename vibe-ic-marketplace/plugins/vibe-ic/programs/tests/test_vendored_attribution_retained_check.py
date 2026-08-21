@@ -68,7 +68,7 @@ def test_deleting_the_record_while_the_code_stays_is_caught(tmp_path, capsys):
     root — and the gate must go red.
     """
     root = _repo(tmp_path / "r")
-    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream: somewhere, Apache-2.0\n")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream: somewhere, Apache-2.0 — covers rtl/\n")
     _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
     _commit(root)
     assert _run(root) == 0, capsys.readouterr().out
@@ -90,7 +90,7 @@ def test_removing_the_code_too_is_lawful_and_stays_green(tmp_path, capsys):
     forbid the very withdrawal the owner ruled for.
     """
     root = _repo(tmp_path / "r")
-    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream: somewhere, Apache-2.0\n")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream: somewhere, Apache-2.0 — covers rtl/\n")
     _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
     _commit(root)
 
@@ -106,7 +106,7 @@ def test_an_ancestor_record_covers_a_nested_file(tmp_path, capsys):
     down. Requiring one per directory would manufacture findings against every
     shipped manifest."""
     root = _repo(tmp_path / "r")
-    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream\n")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream — covers a/\n")
     _w(root, "bd/ic/x/a/b/c/deep.v", APACHE)
     _commit(root)
     assert _run(root) == 0, capsys.readouterr().out
@@ -139,7 +139,8 @@ def test_a_json_record_counts_as_a_record(tmp_path, capsys):
     """This tree ships `SOURCE_MANIFEST.json` as well as `.md` — the gate keys
     on the name, not on one extension."""
     root = _repo(tmp_path / "r")
-    _w(root, "bd/ic/x/SOURCE_MANIFEST.json", "{}\n")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.json",
+       '{"upstream": "somewhere", "covers": "rtl/"}\n')
     _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
     _commit(root)
     assert _run(root) == 0, capsys.readouterr().out
@@ -197,3 +198,108 @@ def test_the_shipped_corpus_is_covered():
     assert not res["uncovered"], (
         f"{len(res['uncovered'])} licence-declaring file(s) ship with no "
         f"attribution record: {[u['path'] for u in res['uncovered'][:10]]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# vibe-ic#1307 — COVERAGE-BY-LOCATION IS NOT COVERAGE-IN-FACT
+# ═══════════════════════════════════════════════════════════════════════
+# The always-fires mutant this suite has to kill is an EMPTY record. Before
+# #1307 the gate never opened the file it counted, so a zero-byte manifest
+# covered every licensed file beneath it and the gate printed
+# `every one of the 525 … is covered`. MEASURED on `1e21cc08b`: empty, noise
+# and real manifests produced byte-identical output and rc=0.
+#
+# The SIBLING case below is the load-bearing one. A fix that only catches
+# empty records still passes the situation that produced #1301: a real record
+# that names one file in a tree and never mentions the other.
+def test_a_record_that_names_the_file_covers_it(tmp_path, capsys):
+    """THE CONTROL. The rule must still accept a record that does its job."""
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream — covers rtl/vendored.v\n")
+    _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
+    _commit(root)
+    assert _run(root) == 0, capsys.readouterr().out
+
+
+def test_PAIRED_an_EMPTY_record_covers_nothing(tmp_path, capsys):
+    """THE MUTANT. Same tree, record emptied — must go red.
+
+    Under the pre-#1307 rule this returned 0, because the check was
+    `does a file named SOURCE_MANIFEST.* exist above this path`.
+    """
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "")
+    _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
+    _commit(root)
+    assert _run(root) == 1, capsys.readouterr().out
+    assert "NEVER NAMES THEM" in capsys.readouterr().out
+
+
+def test_PAIRED_a_record_naming_only_a_SIBLING_leaves_the_other_uncovered(
+        tmp_path, capsys):
+    """#1301's shape exactly, and the case a whitespace check would miss.
+
+    The record is real, substantial, and names a file in the same directory.
+    It says nothing about the second one — which is how the GF180MCU cell
+    models shipped unattributed while this gate reported green, because the
+    SkyWater file beside them had already been recorded.
+    """
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md",
+       "upstream: SkyWater PDK, Apache-2.0 — covers rtl/sky.v\n")
+    _w(root, "bd/ic/x/rtl/sky.v", APACHE)
+    _w(root, "bd/ic/x/rtl/gf180.v", APACHE)
+    _commit(root)
+    assert _run(root) == 1, capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "gf180.v" in out, out
+    assert "sky.v" not in out.split("NEVER NAMES THEM")[-1], (
+        "the NAMED sibling must not be charged: " + out)
+
+
+def test_a_DELETED_record_still_fails_the_old_way(tmp_path, capsys):
+    """NO REGRESSION. #1043's original defect must keep its own verdict.
+
+    Deleted record -> `uncovered` (nothing above it), NOT `unnamed`. The two
+    need different repairs, so they must not collapse into one message.
+    """
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream — covers rtl/\n")
+    _w(root, "bd/ic/x/rtl/vendored.v", APACHE)
+    _commit(root)
+    assert _run(root) == 0, capsys.readouterr().out
+    (root / "bd/ic/x/SOURCE_MANIFEST.md").unlink()
+    _commit(root)
+    assert _run(root) == 1
+    out = capsys.readouterr().out
+    assert "NO attribution record above them" in out, out
+
+
+def test_a_directory_PREFIX_counts_so_the_rule_is_not_transcription(
+        tmp_path, capsys):
+    """Records attribute vendored DIRECTORIES, and that must remain enough.
+
+    Demanding a line per file would make the rule a transcription exercise
+    authors satisfy mechanically — which is how a record stops being read.
+    """
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream — covers a/b/\n")
+    _w(root, "bd/ic/x/a/b/c/deep.v", APACHE)
+    _commit(root)
+    assert _run(root) == 0, capsys.readouterr().out
+
+
+def test_the_count_is_of_FILES_named_not_of_records_present(tmp_path, capsys):
+    """`11 attribution record(s)` read as a coverage measure and was not one.
+
+    It counted files matching a filename regex. The headline number is now
+    files a record NAMES, which is the quantity the verdict is about.
+    """
+    root = _repo(tmp_path / "r")
+    _w(root, "bd/ic/x/SOURCE_MANIFEST.md", "upstream — covers rtl/a.v\n")
+    _w(root, "bd/ic/x/rtl/a.v", APACHE)
+    _w(root, "bd/ic/x/rtl/b.v", APACHE)
+    _commit(root)
+    _run(root)
+    out = capsys.readouterr().out
+    assert "1 NAMED by a record" in out, out

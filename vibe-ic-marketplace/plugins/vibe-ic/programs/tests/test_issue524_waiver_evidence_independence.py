@@ -57,13 +57,26 @@ import _evidence_independence as _ei  # noqa: E402
 import _waiver_entries as _we  # noqa: E402
 import waivers_schema_check as wsc  # noqa: E402
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
 
-#: Repo root, from the plugin programs dir. Used only to reach the tracked
-#: corpus; the corpus is READ, never written.
-REPO_ROOT = PROGRAMS.parents[3]
-CORPUS = REPO_ROOT / "benchmark-data/evaluation/phase1_parity"
+def _corpus() -> Path:
+    """The parity corpus holding the tracked attestation entries.
+
+    It is no longer under this checkout — the published results moved to
+    vibeic/benchmark-data, and `_published_corpus` is what says where they are
+    and whether there are any. Read, never written. Only called from under
+    `@needs_corpus`, so `corpus_root()` is not None here.
+
+    The old `<repo>/benchmark-data/evaluation/phase1_parity` is still a
+    DIRECTORY in this checkout — it carries the design inputs — so guarding on
+    `CORPUS.is_dir()` asked a question that had stopped tracking the answer, and
+    the measurement below reported a defect where the honest reading is "the
+    entries I was going to classify are not here".
+    """
+    return corpus_root() / "evaluation" / "phase1_parity"
 
 SELF_REF = "reports/orchestrator/phase3_one_shot.json#steps[name=lvs]"
 
@@ -199,13 +212,13 @@ def test_assess_survives_a_malformed_evidence_field(tmp_path):
 # 2. The corpus measurement, pinned
 # ----------------------------------------------------------------------
 
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="tracked corpus not present")
+@needs_corpus
 def test_corpus_attestation_entries_measure_as_reported():
     """The 8 tracked attestation entries, classified. These are the numbers the
     disclosure-versus-refusal decision rests on; pinning them means a corpus
     edit that changes the picture cannot pass unnoticed."""
     rows = []
-    for wf in sorted(CORPUS.glob("*/waivers.json")):
+    for wf in sorted(_corpus().glob("*/waivers.json")):
         doc = json.loads(wf.read_text())
         for entry in _we.entries_by_key(doc).get("waivers", []):
             rows.append((wf.parent.name, entry.get("step"),

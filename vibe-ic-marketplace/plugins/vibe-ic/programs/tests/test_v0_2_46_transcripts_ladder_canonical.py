@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
+from _entry_guard_fixture import write_prompt_report  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -52,13 +53,9 @@ def _setup_run(tmp_path):
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--setup",
          "--dataset", str(ds), "--run", str(run)],
         capture_output=True, text=True, timeout=60)
-    # The 2026-06-28 vibe_ic_entry_guard gates scoring on Vibe-IC Phase-1 evidence
-    # (a canonical run carries reports/phase1_one_shot.json). Stamp the marker so
-    # this test exercises its actual SUBJECT — the DOWNSTREAM transcripts /
-    # blindness-audit NOTICE ladder — rather than being refused at the upstream
-    # entry gate. (§4.05: an existence marker only; no oracle content.)
-    (run / "reports").mkdir(parents=True, exist_ok=True)
-    (run / "reports" / "phase1_one_shot.json").write_text('{"phase1": "ok"}')
+    # Use the producer-derived prompt envelope so this downstream transcripts
+    # test does not depend on a self-authored existence marker.
+    write_prompt_report(run)
     return ds, run, r
 
 

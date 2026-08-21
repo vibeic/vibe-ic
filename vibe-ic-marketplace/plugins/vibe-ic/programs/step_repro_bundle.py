@@ -63,6 +63,9 @@ import tarfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+import _eda_image as _img  # the one site that answers "which image"
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:                          # pragma: no cover
@@ -107,21 +110,26 @@ def environment(project: Path) -> Dict[str, Any]:
     codes above draw one level up.
     """
     plugin_root = _HERE.parent
-    repo_root = plugin_root.parents[2] if len(plugin_root.parents) >= 3 else None
-    anchor = None
-    if repo_root is not None:
-        vf = repo_root / "tools" / "vibeic-eda" / "VERSION"
-        if vf.is_file():
-            try:
-                anchor = vf.read_text(encoding="utf-8").strip() or None
-            except OSError:
-                anchor = None
+    # WHICH TOOLCHAIN, BY ITS BYTES. This recorded `tools/vibeic-eda/VERSION` —
+    # vibeic-eda's version number stored in this repo, which charged a PR here
+    # per image release AND recorded a tag, which is a name its publisher can
+    # re-point. A bundle exists to make a run reproducible, so it records the
+    # DIGEST: `docker run <ref>` with the value below re-creates the toolchain.
+    # Null when this host has no vibeic-eda image, which is a fact the reader
+    # needs and is why every field here is nullable rather than omitted.
+    judged = _img.judged_image()
     return {
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "plugin_commit": _git(plugin_root, "rev-parse", "HEAD"),
         "plugin_dirty": bool(_git(plugin_root, "status", "--porcelain")),
         "project_commit": _git(project, "rev-parse", "HEAD"),
-        "eda_image_anchor": anchor,
+        "eda_image": judged.ref,
+        "eda_image_digest": judged.digest,
+        "eda_image_digest_kind": judged.digest_kind,
+        "eda_image_version": judged.version,
+        "eda_image_version_source": judged.version_source,
+        "eda_image_source": judged.source,
+        "eda_image_unavailable": judged.why_not or None,
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         # The two the container backend actually keys on. Recorded verbatim,
@@ -286,7 +294,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
-        a.json_out.write_text(json.dumps(rep, indent=2, sort_keys=True) + "\n",
+        atomic_write_text(a.json_out, json.dumps(rep, indent=2, sort_keys=True) + "\n",
                               encoding="utf-8")
 
     if rep["verdict"] == "REFUSED":

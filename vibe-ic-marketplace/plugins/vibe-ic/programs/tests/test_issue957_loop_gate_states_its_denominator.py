@@ -39,6 +39,37 @@ a gate wired outside a loop prints exactly what it printed before, its record
 entry is unchanged, and the per-cell coverage neither grew nor shrank. Without
 them the disclosure could be bought by moving output that was already right, or
 by quietly dropping a gate.
+
+WHEN THE PUBLISHED CORPUS IS NOT IN THIS CHECKOUT
+=================================================
+Everything above is measured over the loop's real subject — the PUBLISHED CELLS
+the hygiene script's own `git ls-files` selects. Those cells now live in
+https://github.com/vibeic/benchmark-data, so in this checkout that `ls-files`
+returns nothing and the whole family of real-script tests is asking about data
+that is not here. They are marked `@needs_corpus` and SKIP, naming the corpus;
+with `VIBE_IC_BENCHMARK_DATA` pointing at a clone they run as before.
+
+THE FAILURES WERE MEASURED, NOT ASSUMED, and all five come from the same
+emptiness. Two say so directly (`assert items`, and `gates == templated x
+items`). The other three are one step downstream: vibe-ic#1075 makes an empty
+corpus record ONE SYNTHETIC gate in the NOT_CHECKED tier, and that synthetic
+gate is `declared` but prints no `--list` row and is explained by no `run` line,
+so the two PAIRED GUARDS below go red on the record's shape. Re-measured on a
+fixture corpus of two items through the same `_gate_dispatch.sh`:
+
+    rows printed   3       declared  3       gates recorded  3
+    labels         ['a flat gate', 'per item (a)', 'per item (b)']
+    corpora        [{'items': 2, 'gates': 2, 'expansion': 'EXPANDED'}]
+
+— every one of them green. Nothing about the dispatcher or the reconciler is
+broken; they are being asked about a corpus that is not in this tree.
+
+The fifth, `test_every_published_cell_is_still_covered_by_every_per_cell_gate`,
+was not red at all: over zero cells it compares 0 against 0 and PASSES. That is
+worse than a red, and it is the reason it is marked too — a coverage guard that
+reports "every published cell is covered" while looking at none of them is the
+vacuous pass this whole file was written about, arriving through the
+denominator.
 """
 from __future__ import annotations
 
@@ -50,6 +81,13 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+#: NOTE the module below is `_published_corpus.py`, the suite-wide answer to
+#: "is the published corpus in this checkout?". The `_published_corpus()`
+#: FUNCTION further down this file is a different thing — it asks the hygiene
+#: script which items its own loop expands over. Importing a name out of the
+#: module rather than the module itself keeps the two from shadowing.
+from _published_corpus import needs_corpus
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -84,25 +122,30 @@ _538 = _load(_TESTS, "test_issue538_merge_gate_covers_ci_hygiene")
 
 
 # ── what the script's corpus IS, discovered rather than declared ────────────
+#: The producer the hygiene script itself hands to `gate_dispatch_over`.
+_CORPUS_PRODUCER = _REPO / "tools" / "ci" / "routed_def_corpus.py"
+
+
 def _published_corpus() -> list:
     """The items the gate script's own producer selects, run for real.
 
-    The glob is SCRAPED from the script — the single quoted pattern under
-    `benchmark-data` — so this test cannot disagree with the script about what
-    the corpus is, and cannot go stale when the layout moves. Present in the
-    script both before and after #957, so the discovery works in both arms and
-    only the disclosure assertions can fail.
+    ASKED OF THE SCRIPT'S OWN PRODUCER, which is the same reason the glob used
+    to be scraped out of the script: this test must not be able to disagree
+    with the script about what the corpus is, and must not go stale when the
+    layout moves. 7c376e348 (v1.10.69) moved the population out of an inline
+    `benchmark-data/...` glob and into `tools/ci/routed_def_corpus.py`, so
+    there is no longer a glob in the script to scrape — the scrape found zero
+    and this helper failed before any disclosure assertion could run. Running
+    the producer keeps the original property instead of re-copying its glob
+    here, which would be the second registry the scrape existed to avoid.
     """
-    text = _SCRIPT.read_text(errors="replace")
-    globs = sorted({m.group(1) for m in
-                    re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
-    assert len(globs) == 1, (
-        "the hygiene script no longer names exactly one published-corpus "
-        f"glob, so this test cannot know what the loop expands over: {globs}")
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "--", globs[0]],
-                         capture_output=True, text=True, timeout=_T)
+    out = subprocess.run(
+        ["python3", str(_CORPUS_PRODUCER), "--repo", str(_REPO)],
+        capture_output=True, text=True, timeout=_T)
+    # rc 2 is "I could not look", which this file never lets read as an empty
+    # corpus; the caller's `@needs_corpus` mark is what covers the absent one.
     assert out.returncode == 0, out.stderr
-    return [p for p in out.stdout.split() if p]
+    return [ln for ln in out.stdout.split() if ln]
 
 
 def _templated_decls():
@@ -139,6 +182,7 @@ _DENOM_RE = re.compile(r"\bof\s+(\d+)\b")
 # ==========================================================================
 # THE DISCLOSURE
 # ==========================================================================
+@needs_corpus
 def test_every_loop_driven_row_states_how_many_items_the_loop_expanded_over():
     """The defect, over the REAL script.
 
@@ -172,6 +216,7 @@ def test_every_loop_driven_row_states_how_many_items_the_loop_expanded_over():
             f"{len(items)}:\n  {ln}")
 
 
+@needs_corpus
 def test_the_rollup_names_the_corpus_and_the_size_it_expanded_over():
     """The roll-up is what a reader believes, and it is where this was missing.
 
@@ -198,10 +243,17 @@ def test_the_rollup_names_the_corpus_and_the_size_it_expanded_over():
         f"expanded over:\n{stderr}")
 
 
+@needs_corpus
 def test_the_declared_count_is_still_a_count_of_GATES_not_of_items():
     """PAIRED with the two above: the disclosure must not be bought by
     inflating `declared`, which is the number the merge gate reports coverage
-    against."""
+    against.
+
+    NEEDS THE CORPUS for a reason one step removed from the others: over an
+    EMPTY one, #1075's synthetic NOT_CHECKED gate is `declared` and prints no
+    `--list` row, so this reads 81 against 80 and reports a defect in the
+    dispatcher that a two-item fixture corpus shows is not there (3 == 3).
+    """
     _, _, doc = _list_run(_SCRIPT, _REPO)
     assert doc["declared"] == len(doc["gates"])
     assert doc["declared"] == sum(1 for ln in _list_run(_SCRIPT, _REPO)[0]
@@ -355,10 +407,17 @@ def test_a_gate_wired_OUTSIDE_a_loop_prints_exactly_its_label():
         f"{missing[:5]}")
 
 
+@needs_corpus
 def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
     """A denominator glued into the label would make every loop-driven record
     unattributable to the `run` line that produced it — two other programs
-    parse this script and reconcile exactly that."""
+    parse this script and reconcile exactly that.
+
+    NEEDS THE CORPUS for the same reason as its neighbour: over an empty one the
+    only unattributable label is #1075's own synthetic
+    `corpus "…" is EMPTY — nothing was checked over it`, which no `run` line
+    explains because no `run` line produced it.
+    """
     decls = GD.parse_declarations(_SCRIPT)
     _, _, doc = _list_run(_SCRIPT, _REPO)
     recorded = [g["label"] for g in doc["gates"]]
@@ -369,9 +428,18 @@ def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
     assert not silent, silent
 
 
+@needs_corpus
 def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     """The other half: a disclosure that was achieved by dropping a gate, or by
-    narrowing the corpus, would be a coverage cut wearing a fix's clothes."""
+    narrowing the corpus, would be a coverage cut wearing a fix's clothes.
+
+    THIS ONE WAS NOT RED. Over an empty corpus it compares `len(got)` to
+    `len(items)` with both zero and reports a pass, so a guard whose whole
+    subject is per-cell coverage was certifying coverage of nothing. It is
+    marked for that reason, not for a failure: the skip says "I could not look",
+    which is what was true, and the green said "every published cell is
+    covered", which was not.
+    """
     items = _published_corpus()
     stdout, _, _ = _list_run(_SCRIPT, _REPO)
     rows = [ln for ln in stdout.splitlines() if ln.strip()]

@@ -121,13 +121,48 @@ def _poll_source() -> str:
     raise AssertionError("poll.py not found above this test")
 
 
-def test_the_poller_raises_rather_than_reporting_an_empty_repository():
-    """`return []` on a failed page would tell the queue 'no open issues'."""
-    src = _poll_source()
-    assert "raise RuntimeError(" in src
-    i = src.index("status != 200 or not isinstance(data, list)")
-    tail = src[i:i + 900]
-    assert "raise RuntimeError(" in tail, "the failure path stopped raising"
+def _load_poll():
+    """The poller as a MODULE, with bytecode suppressed (see `_load`)."""
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / "skills" / "core-agent-loop" / "programs" / "poll.py"
+        if cand.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "poll_for_api_health", cand)
+            mod = importlib.util.module_from_spec(spec)
+            _prev = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
+            try:
+                spec.loader.exec_module(mod)
+            finally:
+                sys.dont_write_bytecode = _prev
+            return mod
+    raise AssertionError("poll.py not found above this test")
+
+
+def test_the_poller_raises_rather_than_reporting_an_empty_repository(
+        monkeypatch):
+    """`return []` on a failed page would tell the queue 'no open issues'.
+
+    EXECUTED, not grepped. This assertion used to locate a literal copy of
+    the poller's failure predicate in its source and read 900 characters
+    after it — so it broke the moment the transport changed (vibe-ic#1645
+    moved the enumeration to GraphQL, where the failed-page test is on an
+    object rather than a list) while saying nothing at all about what the
+    poller DOES. Running it is both stricter and transport-independent.
+    """
+    poll_mod = _load_poll()
+    monkeypatch.setattr(
+        poll_mod, "_api_request",
+        lambda url, token, payload=None: (403, {"message": "rate limited"}))
+
+    try:
+        got = poll_mod._list_open_issues("owner/name", "fake-token")
+    except RuntimeError as exc:
+        assert "403" in str(exc), exc
+        return
+    raise AssertionError(
+        f"a blocked call returned {got!r} instead of raising — the queue "
+        f"would read that as 'no open issues'")
 
 
 def test_the_poller_names_WHICH_limit_it_hit():

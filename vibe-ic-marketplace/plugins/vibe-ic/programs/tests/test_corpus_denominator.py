@@ -18,8 +18,23 @@ REPO = PLUGIN.parents[2]
 import sys  # noqa: E402
 sys.path.insert(0, str(PLUGIN / "programs"))
 import _corpus_denominator as CD  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
-IC = REPO / "benchmark-data" / "ic"
+
+def _ic() -> Path:
+    """The `ic/` tree of whichever published corpus is readable here.
+
+    NOT `REPO / "benchmark-data" / "ic"` unconditionally, and the difference is
+    the whole reason the two tests below were failing. That directory still
+    exists in this repository — it holds the design INPUTS, 542 files — while
+    the RESULT cells moved to `vibeic/benchmark-data`. So the old
+    `skipif(not IC.is_dir())` guard could never fire, and the two corpus tests
+    ran over a population of input directories and reported, in the words of one
+    of them, "the corpus shrank unexpectedly: (0, 12)". Nothing had shrunk: they
+    were measuring a different tree than the one they name.
+    """
+    root = corpus_root()
+    return (root if root is not None else REPO / "benchmark-data") / "ic"
 
 
 def _tree(root: Path, ic: str, run: str, step_index=None) -> Path:
@@ -141,21 +156,20 @@ def test_PAIRED_the_ratchet_ACCEPTS_unchanged_and_asks_to_hold_a_gain():
 # ===========================================================================
 # THE REAL CORPUS
 # ===========================================================================
-@pytest.mark.skipif(not IC.is_dir(), reason="no benchmark-data/ic here")
 def test_the_published_corpus_has_not_become_less_answerable():
-    d = CD.step_verdict_denominator(IC)
+    d = CD.step_verdict_denominator(_ic())
     ok, why = CD.ratchet_verdict(d)
     assert ok, why
 
 
-@pytest.mark.skipif(not IC.is_dir(), reason="no benchmark-data/ic here")
+@needs_corpus
 def test_the_measured_state_is_what_the_docstring_claims():
     """#1200's number, re-derived rather than quoted.
 
     If this fails the corpus moved, and the module's opening measurement — the
     thing a reader trusts — must move with it.
     """
-    d = CD.step_verdict_denominator(IC)
+    d = CD.step_verdict_denominator(_ic())
     assert d.n_total >= 70, f"the corpus shrank unexpectedly: {d.fraction()}"
     assert d.n_countable <= 5, (
         f"{d.n_countable} trees are now countable; the docstring says 2 and a "
