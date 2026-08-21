@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 32 records, and the sixteen already-program claims of which fifteen hold
+# The PPA cluster, DISTILLED — 33 records, and the sixteen already-program claims of which fifteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 32 records](#the-32-records)
+- [The 33 records](#the-33-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -75,7 +75,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 29 | deterministic rules — the default, and every one names its predicate |
+| **A** | 30 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -215,7 +215,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 32 records
+## The 33 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1005,7 +1005,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            29     (22 when the rule was written)
+    Bucket-A records            30     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1226,6 +1226,46 @@ the narrow form here is one raise site, but the same defeat arrives from a
 dataclass default, a `dict.get` fallback, or an attribute inherited from a base
 class, and the predicate — can the reading side produce this value with the
 declaration absent — covers all of them.
+
+---
+
+### A-31 · an emitted code skeleton must take the inputs its own step has · `capture.emit`
+
+Found by reading the sketches as the implementer who receives them, which is the
+one artefact class every other check in this report treats as opaque. Check 43
+confirms they are valid Python. They are, and the signature is wrong anyway:
+
+    def rule_gate_proof_vocabulary_has_a_producer(sample_text, ports):
+
+for a rule whose entire content is a set difference between two name registries.
+It receives no RTL source and no port list, and the pre-merge comment above it
+demands a corpus sweep against an RTL-benchmark scorer that cannot sweep a
+registry comparison.
+
+Both strings are hard-coded in the emitter, so the reach is every capture, not
+this one:
+
+    emitted rule functions taking `sample_text, ports`
+      this lane                                        29 of 29
+      the chip lane                                    13 of 13
+      the matrix lane                                  10 of 10
+                                                       ---------
+                                                       52 of 52
+
+Those three lanes cover phase-1 fact extraction, phase-2 final audit, phase-3
+DRC, IR-drop and post-route repair, and this layer's measurement seams. **Not one
+of those steps receives a sample text or a port list.** The prose in each sketch
+is precise and the `def` line above it contradicts the prose — which is worse
+than emitting no skeleton, because a specific wrong signature reads as
+instruction rather than as boilerplate.
+
+This is the **general-core / thin-adapter** principle the capture skill states in
+its own text, violated by the capture tool: the emitter is the general layer, and
+it emits one domain's adapter for everybody.
+
+**(o)** yes — on every sketch this lane produced.
+**(d)** yes, and it already has 23 instances outside this lane, in two sibling
+lanes that ran the same night and were captured by different agents.
 
 ---
 
@@ -1527,7 +1567,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          29     (26 when the rubric was applied)
+    Bucket-A records                          30     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1581,9 +1621,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 32 records**:
+the patterns were unchecked by anything. Over **all 33 records**:
 
-    pairs compared                      496
+    pairs compared                      528
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -2126,7 +2166,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 32 records emitted and validated — 29 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 33 records emitted and validated — 30 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2154,7 +2194,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 16 claims, **15 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 6 | A-3, A-4, A-13, A-22, A-25, A-30 |
+| **EXTRACT-NEW** | 7 | A-3, A-4, A-13, A-22, A-25, A-30, A-31 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2216,6 +2256,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-28 | 232 single-value | 115 files | upper bound on candidates, stated as such |
 | A-29 | 4 lanes | **3 wrong** | not my measurement — the convention commit's own |
 | A-30 | 1 raise site | **guard cannot fail** | proven by mutation; stated over semantics, not the syntax |
+| A-31 | 52 of 52 | **29 + 13 + 10** | the emitter's own template, across three lanes; not one step takes those inputs |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
