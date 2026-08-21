@@ -864,10 +864,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = int(rep["rc"])
 
     if a.out_json:
+        # WHERE A RELATIVE --json LANDS (#712). It used to land wherever the
+        # CALLER happened to be standing, because nothing resolved it against
+        # the project. Both wirings run with `cwd=<project>` so they were
+        # unaffected, but the contract was loose enough that
+        # `--json ../../x.json` wrote outside the project entirely. MEASURED
+        # while testing exactly that: a probe put a report in the repository
+        # root and another in the invoking user's home directory.
+        #
+        # A relative destination is now resolved against the PROJECT, which is
+        # what both callers already meant, and one that climbs out of it is a
+        # rejected command line (rc 3) rather than a silent write somewhere
+        # nobody will look. An ABSOLUTE path is left alone: that is an explicit
+        # choice by the caller, not an accident.
+        #
+        # HONEST LIMIT: containment is checked on the LOGICAL path. A symlink
+        # inside the project that points out of it still leads out. That is a
+        # layout its owner chose, and refusing it would break projects that
+        # legitimately share a reports tree.
+        out_path = a.out_json
+        if not os.path.isabs(out_path):
+            proj = os.path.abspath(a.project)
+            cand = os.path.normpath(os.path.join(proj, out_path))
+            if cand != proj and not cand.startswith(proj + os.sep):
+                _usage.usage_error(
+                    "slot_pad_budget_check",
+                    f"--json {a.out_json} climbs out of the project")
+                return _usage.RC_USAGE
+            out_path = cand
         # vibe-ic#1082 — a declared report destination is written through
         # `_atomic_artefact`, never a bare `open(..., 'w')`: a reader that finds
         # the file half-written cannot tell a truncated report from a short one.
-        write_json(a.out_json, rep, indent=2, sort_keys=True)
+        write_json(out_path, rep, indent=2, sort_keys=True)
     print(f"slot_pad_budget_check: {rep['verdict']}")
     if rep["verdict"] == "UNDECIDED":
         print(f"  {rep.get('reason', 'no reason recorded')}")
