@@ -1013,3 +1013,45 @@ Gate 3 stays **STILL-CANNOT**, and the sentence behind it is now a measurement
 rather than a search that stopped early. The missing artefact is a document
 declaring, *before the run*, which `(metric, scope)` pairs that run is required
 to produce — with a schema, which does not exist either (Part 9).
+
+---
+
+# Part 11 — reproduced from the pushed branch, on a checkout that had never run it
+
+Every number in Parts 1–10 was measured in one worktree. A result measured once,
+in the tree that produced it, is a result whose host-dependence nobody has tested
+— and this repository has a gate named `gates are host-independent` precisely
+because that has bitten before.
+
+So a second worktree was created from the pushed commit
+`f040adb0fbcd62e7f21172935a6b8c7ef93e4300`, `git clean -xdfq`, and all eleven
+wired rows were run there:
+
+    rc=2  PPA head-to-head records                      no corpus (published, other repo)
+    rc=1  PPA head-to-head records (cross-layer)        15 record(s), 1 refused, 2 undetermined
+    rc=2  PPA head-to-head records (end-to-end)          2 record(s), 0 refused, 2 undetermined
+    rc=0  PPA measurement contract (cross-layer)        21 contract(s), 0 refused, 0 undetermined
+    rc=0  PPA measurement contract (end-to-end)         61 contract(s), 0 refused, 0 undetermined
+    rc=2  PPA measurement contract                      no corpus (published, other repo)
+    rc=2  PPA measurement coverage                      NO_EXPECTATION_SET
+    rc=2  PPA promotion feasibility (cross-layer)       21 set(s), 0 infeasible, 21 undetermined
+    rc=2  PPA frontier recomputes                       the contract declares no objective
+    rc=0  PPA arms solved one problem (cross-layer)     20 pair(s), 0 refused, 0 undetermined
+    rc=0  PPA arms solved one problem (end-to-end)      60 pair(s), 0 refused, 0 undetermined
+
+**Identical to Part 7, row for row and count for count.** Nothing reported here
+is an artefact of the tree it was produced in.
+
+    91 passed   the six #1241 test files + test_issue1121_ppa_head_to_head.py
+    PASS        Appendix C, 9 applicable, 0 undetermined, on the fresh checkout
+
+The Appendix C run matters more than it looks: its answers document pins six
+artefact digests, and they were re-hashed against a checkout that had never seen
+them. An answer whose evidence only verifies in the tree that wrote it is not
+evidence.
+
+The seventh hygiene run — deliberately taken AFTER Parts 8–10 added roughly a
+thousand lines of prose, because this repository has gates that read tracked
+prose — is unchanged: declared 90, decided 80, passed 73, failed 7, NOT CHECKED
+10, and a failure set differing from the pristine baseline by exactly the one
+intended red, in both directions.
