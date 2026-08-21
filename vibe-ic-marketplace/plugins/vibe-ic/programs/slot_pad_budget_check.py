@@ -188,6 +188,70 @@ def slot_pad_inventory(slot_obj: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # the design's declared interface
 # --------------------------------------------------------------------------- #
+def _strip_hdl_comments(text: str) -> str:
+    """Verilog comments removed in ONE left-to-right pass.
+
+    WHY A PASS AND NOT TWO SUBSTITUTIONS (vibe-ic#731)
+    --------------------------------------------------
+    This was `re.sub("//[^\\n]*")` followed by `re.sub("/\\*.*?\\*/")`. Two
+    independent passes cannot express the one rule Verilog actually has:
+    whichever introducer opens FIRST owns the text after it. The `//` pass
+    runs with no idea a block comment is open, so a `*/` that happens to sit
+    behind a `//` is deleted with the line that carries it -- and the block
+    comment it terminated then has no terminator left for the second pass to
+    find, so the whole block survives into the scanned text.
+
+    MEASURED, on legal Verilog whose real ports are exactly `clk` and `done`:
+
+        input wire clk,   /* disabled,
+        output wire phantom,
+        // end of the disabled block */
+        output wire done
+
+    `phantom` is inside the block comment and does not exist. The two-pass
+    strip minted it as an output and counted its bit in the pad budget. That
+    is this gate's own founding defect -- a comment sentence minting a
+    declaration that is not there -- one level in, and it lands on the number
+    the budget verdict is computed from.
+
+    It cuts the other way too, which is the direction that matters more: the
+    same orphaned block glues itself to the front of the NEXT real port, the
+    chunk no longer starts with a direction keyword, and the port is dropped.
+    A dropped port is a smaller interface, and a smaller interface is how a
+    design that does not fit its slot reads as FITS.
+
+    Line geometry is preserved -- a block comment is replaced by the newlines
+    it spanned -- because the conditional-compilation scan below is
+    line-oriented and counts `ifdef`/`endif` nesting by line.
+
+    HONEST LIMIT: string literals are not tracked, so a `//` inside a string
+    opens a comment here. That is inherited from the two-pass form this
+    replaces, it cannot affect an ANSI port list (which admits no string
+    literal), and naming it is better than a lexer this file does not need.
+    """
+    out: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            if j < 0:
+                break
+            i = j                      # the newline itself is kept
+        elif two == "/*":
+            j = text.find("*/", i + 2)
+            if j < 0:
+                # Unterminated: everything from here on is comment body.
+                out.append("\n" * text.count("\n", i))
+                break
+            out.append("\n" * text.count("\n", i, j + 2))
+            i = j + 2
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 _DIR_RE = re.compile(r"^(input|output|inout)\b(.*)$", re.S)
 _RANGE_RE = re.compile(r"\[\s*([^\]:]+?)\s*:\s*([^\]]+?)\s*\]")
 
@@ -243,8 +307,8 @@ def parse_top_ports(text: str, top: str,
     Handles the ANSI header form every generated `chip_top` in this repo uses,
     with or without a parameter block.
     """
-    src = re.sub(r"//[^\n]*", "", text)
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    stripped = _strip_hdl_comments(text)
+    src = stripped
     # CONDITIONAL COMPILATION. A port list may be bracketed by `ifdef/`endif.
     # Leaving the directive lines in place GLUES them to the neighbouring
     # declaration, and the glued chunk no longer starts with a direction
@@ -295,11 +359,15 @@ def parse_top_ports(text: str, top: str,
     # text (the directives were stripped above so the parse would not lose
     # them). Reported, never guessed at.
     conditional: set = set()
-    raw_no_comment = re.sub(r"//[^\n]*", "", text)
-    raw_no_comment = re.sub(r"/\*.*?\*/", "", raw_no_comment, flags=re.S)
+    raw_no_comment = stripped
     depth_cond = 0
     for line in raw_no_comment.splitlines():
-        s = line.strip()
+        # Stripped again HERE, on the value the scan actually reads. The
+        # whole-text pass above already cleared it; this call is what makes
+        # that true LOCALLY, so a later change to where `raw_no_comment` comes
+        # from cannot quietly re-open the hole. `_DIR_RE` must never see a
+        # character a stripper has not looked at.
+        s = _strip_hdl_comments(line).strip()
         if re.match(r"^`(?:ifdef|ifndef)\b", s):
             depth_cond += 1
             continue
@@ -316,7 +384,9 @@ def parse_top_ports(text: str, top: str,
     ports: List[Dict[str, Any]] = []
     unparsed: List[str] = []
     for decl in rest[open_i + 1:close_i].split(","):
-        decl = decl.strip()
+        # Same rule as the conditional scan above: the chunk that reaches
+        # `_DIR_RE` is stripped on its own account, not on a sibling's.
+        decl = _strip_hdl_comments(decl).strip()
         if not decl:
             continue
         dm = _DIR_RE.match(decl)
