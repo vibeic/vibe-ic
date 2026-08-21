@@ -1655,8 +1655,8 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
-**Extended to thirteen, and one of the runs disproved a claim.** The same
-procedure was applied to ten more of the sixteen:
+**Extended to fifteen, and one of the runs disproved a claim.** The same
+procedure was applied to twelve more of the sixteen:
 
     F-10  de-duplicate by CONTENT, not by path
           -> 3 failed   test_one_measurement_is_not_counted_twice
@@ -1683,29 +1683,39 @@ Two more were driven the same way:
     (lane) a bad invocation is 3, not the could-not-check code
           -> 20 failed  test_unknown_flag_is_bad_invocation_not_undetermined
 
-So **thirteen of the sixteen ALREADY-PROGRAM claims have now been driven: twelve
-fire and one cannot.** The bundled validator was probed by letting a boolean
-validate as an integer — the JSON Schema subtlety a hand-written validator is
-most likely to get wrong — and `test_the_bundled_semantics` catches it. The three
-not driven are named rather than left to look covered: F-13 is enforced by a
-document and a naming convention, which a mutation cannot address; and the two
-denominator gates resisted an honest probe — the probe I built pointed each gate
-at a synthetic directory, and neither gate's population is the directory it is
-handed.
+So **fifteen of the sixteen ALREADY-PROGRAM claims have now been driven:
+fourteen fire and one cannot.** The bundled validator was probed by letting a
+boolean validate as an integer — the JSON Schema subtlety a hand-written
+validator is likeliest to get wrong — and `test_the_bundled_semantics` catches
+it. Only **F-13** is undriven, and it is enforced by a document and a naming
+convention, which a mutation cannot address.
 
-*An earlier version of this paragraph put the vacuous-population census in that
-last group. It did not belong there: I never probed it, and the sentence
-attributed to it a failure that happened to two other things. Probed properly, it
-fires — and one of the two tests that go red is already called
-`test_mutation_metric_extract_empty_bundle`, so the repository was doing this
-before I was.* The disclosure gate went
-on probing all 90 declared CI gates, and the zero-denominator gate's population is
-gates that *state* a zero population, which my stub never did. Both returned PASS
-for reasons unrelated to my input, so **neither is evidence and neither is
-counted**. Run against the real tree the second one reports 569 gates probed, 25
-stating a zero population, 24 refusing and 1 exempted; the single `[FAIL]` line my
-synthetic run produced was a stale-exemption notice caused by the truncated
-population, not a defect.
+*Two paragraphs here were wrong before they were right, and both errors were
+mine rather than the guards'.* The first put the vacuous-population census among
+the things that had defeated a probe. It did not belong there: I never probed it,
+and the sentence attributed to it a failure that had happened to two other
+things. Probed properly it fires — and one of the two tests that go red is
+already called `test_mutation_metric_extract_empty_bundle`, so the repository was
+doing this before I was.
+
+*The second said the two denominator gates "resisted an honest probe".* They did
+not. I handed each a synthetic directory; the disclosure gate went on probing all
+90 declared CI gates because its population is chosen by a `--population` switch
+I had not read, and the zero-denominator gate's population is gates that *state*
+a zero population, which my stub never did. Both returned PASS for reasons
+unrelated to my input, and I wrote that down as a property of the gates instead
+of a defect in the probe.
+
+Driven properly, with a two-arm control each — one stub committing the offence
+and one doing the right thing — both fire and both name the offending arm. The
+disclosure gate reports `PASS_WITHOUT_DENOMINATOR` against the silent stub and
+accepts the disclosing one. The zero-denominator gate probes two, finds both
+stating a zero population, and separates the one that refused from the one that
+exited 0. Against the real tree it reports 569 gates probed, 25 stating a zero
+population, 24 refusing and 1 exempted. The `[FAIL] STALE_INVENTORY_ENTRY` line
+the synthetic runs produced is not a defect either: it is the gate correctly
+noticing that a dated exemption stops describing anything once the population is
+a two-file temporary directory.
 
 Earlier in this list: F-2's guard requires each backend to be drivable or to
 raise with a reason of at least forty characters — and the production seam
