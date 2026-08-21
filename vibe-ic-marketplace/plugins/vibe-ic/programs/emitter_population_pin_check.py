@@ -427,10 +427,24 @@ def pins_of(tree: ast.AST) -> Tuple[Dict[str, Set[Tuple[str, int]]],
     THE PARENT MAP IS BUILT ONLY IF THERE IS A PHRASE TO JUDGE. It costs a walk
     of the whole tree plus a dict entry per node, and the great majority of test
     files carry no `of <N> <tail>` at all, so paying for it before knowing there
-    is a question is most of the cost of asking. MEASURED on the shipped tree:
-    parsing each test twice and mapping every one of them took this guard from
-    ~21s to ~32s; parsing once and mapping only where a phrase exists brings it
-    back.
+    is a question is paying to answer a question nobody asked.
+
+    IT IS WORTH A FEW PERCENT, AND THE NUMBER THAT USED TO BE HERE WAS WRONG.
+    This said the laziness took the guard "from ~32s back to ~21s". It did not:
+    that 11 seconds was a per-program AST cache introduced in the same commit,
+    which held ~820 trees live at 596 MB peak and slowed every allocation in the
+    run. The cache is gone; re-measured against an EAGER variant of this one
+    function with nothing else changed, interleaved and with the eager arm
+    FIRST so the ordering bias that produced the original figure could not
+    repeat:
+
+        eager   9.25  9.19  8.83 s user
+        lazy    9.14  8.65  8.79 s user
+
+    -- a few tenths of a second, close to this host's noise floor. The laziness
+    stays because not paying before the question is asked is right, not because
+    it buys eleven seconds. A number in a docstring is a claim; this one was
+    measuring the wrong thing and is corrected rather than quietly dropped.
     """
     kept: Dict[str, Set[Tuple[str, int]]] = {}
     refused: List[Tuple[str, int, str]] = []
