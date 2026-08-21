@@ -227,6 +227,41 @@ full-file runs genuinely starve the nested outcome run, which is the exact
 condition that test detects — the harness catching an abusive measurement
 configuration this work created, not a defect and not caused by this change.
 
+## The finding is bigger than red 13: FOUR modules carry an item near the window
+
+Red 13's section below traces its stall to one d3 item. That was the item the
+failure message happened to name. Asking the same question of all nine dimension
+modules — slowest item each, one process per file, **idle box, load 0.68** —
+says d3 is not even the worst:
+
+```
+d6_skip_discipline          46.06s   test_d6_skip_discipline[stepD1]        77% of the window
+d7_outputs_list_complete    17.28s   test_d7_required_outputs_list_is_..    29%
+d3_outputs_produced         16.85s   test_d3_the_producer_oracle_answ..     28%
+d8_missing_caught           13.65s   test_d8_downgrade_is_reachable_..      23%
+d9_verdict_consumed          5.27s                                           9%
+d4_criteria_match            4.39s                                           7%
+d1_wiring                    2.40s                                           4%
+d2_falsifiable               1.55s                                           3%
+d5_deps_correct              0.42s                                           1%
+```
+
+**d6 holds a single pytest item for 46 seconds against a 60-second no-progress
+window, on an idle machine.** Four of the nine modules carry an item worth a
+quarter of the window or more, and pytest emits no transition during any of
+them.
+
+That reframes red 13. It is not a d3 curiosity, and it is not really about
+`test_the_census_block_is_fresh`: the census and coverage runs drive all nine
+modules through the same nested driver, so the margin they actually run on is set
+by the WORST item in the set, which is d6's 46.06 s — **14 seconds of headroom
+before a stall kill, before any contention at all.**
+
+Nothing here says d6's item is wrong to be slow; it was not investigated and may
+be irreducible exactly as d3's proved to be. What is now measured is that the
+intra-item blind spot has a much smaller margin than red 13's own section
+implies, and that the number to watch is 46.06 s and not 18.95 s.
+
 ## 13 — not "the host". One item, 18.95 s, against a 60 s window
 
 Red 10 taught this report to read the failure text before classifying, so red 13
