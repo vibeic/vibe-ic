@@ -239,6 +239,18 @@ RULES: List[Rule] = [
          reason="For any field name present in both L4.register_map and L5 ADI list, "
                 "width_bits should match.",
          fn=None),
+
+    # ADVISORY: an L2/L15 "per-<axis>" (per-channel/per-column/per-bank/...)
+    # parameterization of a quantity must be backed by an L4 register ARRAY,
+    # not a single scalar register applied globally. High-precision (bound to
+    # the exact register name); warn-only so it never hard-fails the gate.
+    Rule(id="R_l2_per_axis_l4_array",
+         kind="derives", severity="warn",
+         a="L2_L4.__per_axis_granularity",
+         reason="When L2/L15 asserts a per-<axis> (per-channel/column/bank/lane/…) "
+                "parameterization of a quantity, L4 must expose it as a register "
+                "ARRAY/table, not a single scalar register.",
+         fn=None),
 ]
 
 
@@ -284,6 +296,156 @@ def aggregate_value(docs: Dict[str, Any], token: str) -> Any:
     if token == "__all_layers_present":
         return [l for l in FILE_BY_LAYER if l not in docs]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Per-<axis> granularity cross-layer consistency (L2/L15 vs L4 regmap)
+# ---------------------------------------------------------------------------
+# When an FRS / behavioural requirement asserts that a quantity is
+# parameterized PER an axis (per-channel / per-column / per-bank / per-lane …)
+# the register map must expose that quantity as an ARRAY / table, not a single
+# scalar register. The run that surfaced this: L2 said "per-output-channel
+# scale" but L4 exposed one scalar SCALE register (and the RTL applied it
+# globally) — a real doc-vs-doc inconsistency the gate missed.
+#
+# The check is HIGH-PRECISION by construction: it fires ONLY when a per-<axis>
+# phrase is grammatically bound to the EXACT NAME of an L4 register that is a
+# SCALAR (not an array). Anchoring on the register name (not a loose keyword
+# co-occurrence) keeps false-positives near zero — a doc that literally writes
+# "per-channel <regname>" almost always means an array of that register. It is
+# advisory (severity=warn) so it never hard-fails the gate; the recall limit
+# (the FRS noun must match the register name) is the SAFE direction for an
+# advisory. chip-AGNOSTIC: a general parameterization-axis vocabulary + English
+# grammar, no chip/vendor/SKU literal.
+_PER_AXIS_WORDS = (
+    "channel", "channels", "column", "columns", "row", "rows",
+    "bank", "banks", "lane", "lanes", "tap", "taps", "way", "ways",
+    "core", "cores", "element", "elements", "port", "ports",
+    "pixel", "pixels", "band", "bands", "head", "heads",
+    "filter", "filters", "kernel", "kernels", "partition", "partitions",
+    "slice", "slices", "segment", "segments", "group", "groups",
+    "neuron", "neurons", "unit", "units", "pe", "pes",
+)
+_AXIS_ALT = r'(?:' + '|'.join(_PER_AXIS_WORDS) + r')'
+# Register/entry fields that mark an ARRAY (a count / replication / dimension).
+_L4_ARRAY_COUNT_KEYS = ("count", "array_size", "num", "instances", "depth",
+                        "array_length", "copies", "n", "num_entries", "entries")
+_L4_ARRAY_FLAG_KEYS = ("array", "is_array", "replicated", "per_channel",
+                       "per_axis", "banked", "indexed")
+
+
+def _l4_register_entries(docs: Dict[str, Any]) -> List[dict]:
+    """Every L4 register entry (dict form), across the regmap key variants."""
+    for key in ("register_map", "registers", "regmap", "register_list",
+                "control_registers_logical", "runtime_registers"):
+        v = fetch_path(docs, f"L4.{key}")
+        if isinstance(v, list):
+            return [e for e in v if isinstance(e, dict)]
+        if isinstance(v, dict):
+            # dict-of-registers → synthesise entries carrying the key as name
+            return [{"name": k, **(val if isinstance(val, dict) else {})}
+                    for k, val in v.items()]
+    return []
+
+
+def _regname_re(name: str) -> Optional[str]:
+    """Regex fragment matching a register NAME as it appears in prose, allowing
+    an underscore to read as space/hyphen/underscore. Returns None for a name
+    too short/blank to anchor safely (< 3 significant chars)."""
+    parts = [p for p in re.split(r'_+', name.strip()) if p]
+    if not parts or sum(len(p) for p in parts) < 3:
+        return None
+    return r'[\s\-_]+'.join(re.escape(p) for p in parts)
+
+
+def _l4_register_is_array(entry: dict, all_names: List[str]) -> bool:
+    """True when an L4 register entry denotes an ARRAY (so per-axis is honored)."""
+    for k in _L4_ARRAY_COUNT_KEYS:
+        v = entry.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)) and v > 1:
+            return True
+    for k in _L4_ARRAY_FLAG_KEYS:
+        if entry.get(k) is True:
+            return True
+    name = str(entry.get("name", "")).strip()
+    # An index/array form in the name: SCALE[8] / SCALE[i] / SCALEx8 / SCALE_7.
+    if re.search(r'\[\s*\w+\s*\]|x\d+$|_\d+$', name):
+        return True
+    # Enumerated siblings: >=2 registers named <base><digits> / <base>_<digits>.
+    base = name.lower()
+    if base:
+        sib = re.compile(r'^' + re.escape(base) + r'_?\w*\d+$')
+        if sum(1 for s in all_names if s.lower() != base and sib.match(s.lower())) >= 2:
+            return True
+    return False
+
+
+def _l2_l15_text(docs: Dict[str, Any]) -> str:
+    """Concatenate the human-readable strings of the FRS/behavioural layers
+    (L2, and L15 if the doc-set carries it) into one lower-cased blob."""
+    chunks: List[str] = []
+
+    def _walk(node):
+        if isinstance(node, str):
+            chunks.append(node)
+        elif isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    for layer in ("L2", "L15"):
+        if layer in docs:
+            _walk(docs[layer])
+    return " ".join(chunks).lower()
+
+
+def _per_axis_binds_register(text: str, regname: str) -> Optional[str]:
+    """Return the matched per-<axis> phrase when ``text`` grammatically binds a
+    per-<axis> parameterization to ``regname``, else None. Three bound forms:
+      A  per[-]<mods><axis>[-]<name>      "per-output-channel scale"
+      B  <name> per <mods><axis>          "a separate scale per channel"
+      C  <axis>-wise <name>               "channel-wise scale"
+    """
+    nre = _regname_re(regname)
+    if not nre:
+        return None
+    name_p = r'(?:' + nre + r')s?'        # tolerate a prose plural (scale/scales)
+    mods = r'(?:[A-Za-z]+[\s\-]+){0,2}'   # up to 2 axis modifiers (output-, first-)
+    pats = [
+        re.compile(r'\bper[\s\-]+' + mods + r'(' + _AXIS_ALT + r')[\s\-]+' + name_p + r'\b', re.I),
+        re.compile(r'\b' + name_p + r'[\s\-]+per[\s\-]+' + mods + r'(' + _AXIS_ALT + r')\b', re.I),
+        re.compile(r'\b(' + _AXIS_ALT + r')[\s\-]?wise[\s\-]+' + name_p + r'\b', re.I),
+    ]
+    for p in pats:
+        m = p.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _per_axis_scalar_findings(docs: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """List of (register_name, axis) where L2/L15 asserts a per-<axis>
+    parameterization of a register that L4 exposes as a SCALAR."""
+    entries = _l4_register_entries(docs)
+    if not entries:
+        return []
+    text = _l2_l15_text(docs)
+    if "per" not in text and "wise" not in text:   # cheap early-out
+        return []
+    all_names = [str(e.get("name", "")) for e in entries]
+    hits: List[Tuple[str, str]] = []
+    for e in entries:
+        name = str(e.get("name", "")).strip()
+        if not name or _l4_register_is_array(e, all_names):
+            continue
+        axis = _per_axis_binds_register(text, name)
+        if axis:
+            hits.append((name, axis))
+    return hits
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +651,18 @@ def evaluate(docs: Dict[str, Any], rules: List[Rule]) -> List[Finding]:
                 passed = not mismatches
                 detail = f"width mismatches: " + ", ".join(f"{n}:L4={m4[n]},L5={m5[n]}" for n in mismatches[:5])
                 out.append(Finding(r.id, r.severity, passed, detail if not passed else f"{len(common)} common fields, all widths agree"))
+                continue
+            if r.id == "R_l2_per_axis_l4_array":
+                hits = _per_axis_scalar_findings(docs)
+                if not hits:
+                    out.append(Finding(r.id, "info", True,
+                                       "N/A — no per-<axis> quantity bound to a scalar register"))
+                    continue
+                detail = ("; ".join(
+                    f"L2/L15 says per-{axis} '{name}' but L4 exposes '{name}' as a "
+                    f"single scalar register (expected an array/table)"
+                    for name, axis in hits[:5]))
+                out.append(Finding(r.id, r.severity, False, detail))
                 continue
             if r.id == "R_bit_period_cycles":
                 cycles = fetch_path(docs, "L8R.bit_period_cycles")

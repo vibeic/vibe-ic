@@ -20,7 +20,7 @@ GOOD = """\
 
 BAD = """\
 * hardcoded absolute non-PDK path
-.include /home/reyerchu/scratch/my_models.lib
+.include /home/testuser/scratch/my_models.lib
 .lib /foss/pdks/gf180mcuD/libs.tech/ngspice/sm141064.ngspice typical
 .subckt amp vin vout vss
 .ends

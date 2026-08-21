@@ -11,7 +11,7 @@ a harness.
 |---|---|
 | `BENCHMARK_REGISTRY.json` | Single source of truth: every known open benchmark → run-shape (A/B/C/D/E), dataset URL, on-disk layout, scorer choice |
 | `score_iverilog_tb.py` | Generic Shape B + C scorer — iverilog substituting for VCS / Xcelium, runs vvp from the design dir so `$readmemh` resolves |
-| `score_cocotb_mcp.py` | Generic Shape D scorer — wraps `docker exec iic-eda … cocotb` (substitutes the gated `nvidia/cvdp-sim` image) |
+| `score_cocotb_mcp.py` | Generic Shape D scorer — wraps `docker exec vibeic-eda … cocotb` (substitutes the gated `nvidia/cvdp-sim` image) |
 | `gates_atomic.py` | Generic Shape C per-problem gate — drives `phase1_engine`, `spec_conformance_check`, `rtl_hygiene_lint --fix` (every verification step is a plugin PROGRAM) |
 | `blind_instructions_shape_b.md` | Per-shape blind-agent instructions (runner-driven, RTLLM-class) |
 | `blind_instructions_shape_c.md` | Per-shape blind-agent instructions (atomic micro-problems, VerilogEval-class) |

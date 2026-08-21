@@ -34,7 +34,7 @@ band / limit magnitude.
 
 HONEST FAIL / SKIP (NO vacuous PASS):
   * No analog/ dir, or no block carries BOTH spec.json AND
-    corner_results.json → exit 0 + INFO skip (nothing to check).
+    corner_results.json → rc 2 VACUOUS (nothing to check).
   * spec.json present but corner_results.json missing for a block that
     HAS a spec.json → FAIL (you declared specs but produced no corner
     evidence) unless the whole project has no corner data at all.
@@ -51,9 +51,14 @@ Usage:
         --json reports/gates/corner_yield_vs_spec.json
 
 Exit codes:
-    0 = PASS (all blocks' corners satisfy spec.json) or self-skip
+    0 = PASS: at least one block's spec.json + corner_results.json pair was
+        re-derived and every corner satisfies its limits
     1 = FAIL (a corner violates a spec, or a spec block has no limits)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no block
+        carries BOTH spec.json and corner_results.json, so no yield was
+        re-derived against any limit. #521: both used to be rc 0, on 197 of
+        the 200 tracked project roots — the whole-gate counterpart of the
+        "NO vacuous PASS" rules above. Also rc 2 for an IO / argument error.
 """
 from __future__ import annotations
 
@@ -64,9 +69,42 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import _vacuous_exit as _vx
+from _analog_a_check_common import (
+    CONTENT_DESIGN_BOUND, CONTENT_STRUCTURE_ONLY, CONTENT_UNDISCLOSED,
+    STRUCTURE_ONLY_TOKEN, classify_design_content,
+)
+
 
 _STUB_KEY = "extraction_strategy"
 _STUB_VAL = "deterministic_stub"
+
+# ── WHAT THE YIELD WAS RE-DERIVED OVER ────────────────────────────────────
+# THE RULE, with no tool or block name in it:
+#
+#   A gate that re-derives a verdict from an artefact's numbers is making a
+#   claim about the thing those numbers describe. It must read what that thing
+#   is, and it must not report a measurement of a library default as a
+#   measurement of the design — nor certify at all from an artefact that will
+#   not say which of the two it holds.
+#
+# Measured before this: on a project whose every corner artefact RECORDS that
+# its circuit came from a topology library and that no bound input reached any
+# device parameter, this gate re-derived the yield, found every corner inside
+# the spec band, and answered `[PASS]` rc 0. Nine real corners on a library
+# nominal is a self-test of the topology library; the spec it satisfied is the
+# design's, and the circuit that satisfied it is not.
+#
+# THREE OUTCOMES, ranked so that disclosure is never the expensive answer:
+#   design-bound  -> PASS, unchanged.
+#   structure-only-> PASS_STRUCTURE_ONLY. It certifies, in its own tier, and
+#                    leaves the design-bound pass count. Not a FAIL: the
+#                    bounded inputs did not determine the content, and failing
+#                    an honest ceiling teaches the next run to stop being
+#                    honest.
+#   undisclosed   -> does not certify. The gate cannot say what it graded, and
+#                    an artefact that will not say what it contains must not
+#                    be the evidence for a step.
 
 
 @dataclass
@@ -245,7 +283,16 @@ def _check_block(project: Path, bdir: Path, result: AuditResult) -> Optional[dic
             f"Block '{name}': deterministic-stub corner data — "
             f"yield-vs-spec gate skipped (PASS_WITH_STUB)",
             str(corner_path.relative_to(project))))
-        return {"block": name, "pass": True, "stub": True}
+        return {"block": name, "pass": True, "stub": True,
+                "content": CONTENT_UNDISCLOSED}
+
+    # READ, here, alongside the numbers it describes; ACTED ON at the end.
+    # The certification question ("may this be reported as this design's
+    # yield?") is asked LAST, so it never displaces the diagnosis of a block
+    # that is already failing for a value reason — a reader told "say what it
+    # contains" about a corner that violates its own spec limit would fix the
+    # wrong thing first.
+    content = classify_design_content(corner_json.get("design_content"))
 
     corners = corner_json.get("corners")
     if not isinstance(corners, list) or not corners:
@@ -301,6 +348,7 @@ def _check_block(project: Path, bdir: Path, result: AuditResult) -> Optional[dic
     detail = {
         "block": name,
         "pass": block_ok,
+        "content": content,
         "specs_with_limits": len(limits),
         "checked_corners": len(corners),
         "violations": violations,
@@ -308,7 +356,35 @@ def _check_block(project: Path, bdir: Path, result: AuditResult) -> Optional[dic
         "worst_margin": (None if worst_margin == float("inf")
                          else round(worst_margin, 6)),
     }
-    if block_ok:
+    if block_ok and content == CONTENT_UNDISCLOSED:
+        detail["pass"] = False
+        detail["reason"] = "design_content_undeclared"
+        result.findings.append(Finding(
+            "YIELD_SUBJECT_UNDECLARED", "ERROR",
+            f"Block '{name}': every corner satisfies every limit, and the "
+            f"corner artefact records no answer to what its circuit contains "
+            f"(`design_content` {corner_json.get('design_content')!r}) — so "
+            f"the yield re-derived here cannot be reported as this design's. "
+            f"A record that names a library default "
+            f"(`{CONTENT_STRUCTURE_ONLY}`) certifies in its own tier; "
+            f"declining to answer does not, or saying nothing would cost "
+            f"less than saying so.",
+            str(corner_path.relative_to(project))))
+        result.passed = False
+    elif block_ok and content == CONTENT_STRUCTURE_ONLY:
+        # Disclosed as a library default. The margins above are real and they
+        # are margins OF THAT TOPOLOGY — reported, never as this design's.
+        result.findings.append(Finding(
+            "YIELD_STRUCTURE_ONLY", "WARNING",
+            f"Block '{name}': {len(corners)} corners satisfy all "
+            f"{len(limits)} spec limit(s), and the corner artefact records "
+            f"that its circuit came from a topology library with no bound "
+            f"input reaching any device parameter. The yield re-derived here "
+            f"is the LIBRARY DEFAULT's yield against this spec, not the "
+            f"design's; worst corner '{worst_corner}' margin "
+            f"{worst_margin:.3f}",
+            str(corner_path.relative_to(project))))
+    elif block_ok:
         result.findings.append(Finding(
             "YIELD_OK", "INFO",
             f"Block '{name}': {len(corners)} corners satisfy all "
@@ -341,10 +417,20 @@ def run_audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "no_spec_data"}
         return result
 
+    so = [x["block"] for x in details
+          if x.get("pass") and x.get("content") == CONTENT_STRUCTURE_ONLY]
     result.summary = {
         "skipped": False,
         "blocks_checked": len(details),
         "blocks_pass": sum(1 for x in details if x.get("pass")),
+        # The design-bound pass count is the one a reader wants when asking
+        # "did this design's yield close" — `blocks_pass` answers a different
+        # question and is kept for back-compat.
+        "blocks_design_bound_pass": sum(
+            1 for x in details
+            if x.get("pass") and x.get("content") == CONTENT_DESIGN_BOUND),
+        "blocks_structure_only": len(so),
+        "structure_only_blocks": so,
         "blocks_fail": sum(1 for x in details if not x.get("pass")),
         "details": details,
         "pass": result.passed,
@@ -365,16 +451,44 @@ def main(argv: Optional[list] = None) -> int:
 
     result = run_audit(args.project_dir)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
+    # The tier travels on the verdict WORD, so a reader of the one line can
+    # tell a design-bound yield from a library default's without opening the
+    # JSON. `pass_token` is the seam `_vacuous_exit` already provides for
+    # exactly this (it is how PASS_WITH_WAIVERS reaches the line), and it
+    # applies only to a genuine pass — a failing run still reads FAIL.
+    so_blocks = result.summary.get("structure_only_blocks") or []
+    design_bound = result.summary.get("blocks_design_bound_pass", 0)
+    pass_token = ("PASS_STRUCTURE_ONLY"
+                  if (so_blocks and not design_bound) else "PASS")
+
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
     else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] corner_yield_vs_spec_check")
+        print(_vx.verdict_line("corner_yield_vs_spec_check", result.passed,
+                               skipped, reason, pass_token=pass_token))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
-    return 0 if result.passed else 1
+
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    # LAST, SHORT, and on every path — the disclosure the flow auditor reads
+    # from a fixed-width tail of this stream, whatever the verdict was. Written
+    # to stderr for the same reason `announce_vacuous` is: `--json` puts a
+    # document on stdout and a sentinel mixed into it would not parse.
+    if so_blocks:
+        names = ", ".join(str(b) for b in so_blocks)
+        if len(names) > 60:
+            names = f"{names[:57]}..."
+        print(f"{STRUCTURE_ONLY_TOKEN} {len(so_blocks)} corner_results.json "
+              f"artefact(s) ({names}) came from a library default, not a "
+              f"bound input [corner_yield_vs_spec_check]", file=sys.stderr)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":
