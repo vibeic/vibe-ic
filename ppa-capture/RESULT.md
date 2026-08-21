@@ -1127,6 +1127,37 @@ form of both: a member outside the declared population does not sit un-examined,
 it gets examined by an improvised arm and yields a confident wrong answer. Both
 records now carry it.
 
+## Input coverage — every named source now read
+
+The status checks in this lane were answered twice by an internal audit that
+compares records to each other, and twice it reported CLEAN while primary
+sources were still unread. **A consistency audit measures coherence, never
+coverage of the input.** So the last passes audited the input instead:
+
+| source | state |
+|---|---|
+| `ppa-e2e/FINDINGS.md` | read in full — all 18 |
+| `ppa-e2e/RESULT.md` | read in full, including §1–7 |
+| `ppa-e2e/METHOD.md` | read in full |
+| `ppa-crosslayer/RESULT.md` | read: §5–§10 and the requests |
+| six lane records | read: findings, *what I could not settle*, and every REQUESTS/HANDOFF section |
+
+The last section produced **no new record, and that is the correct outcome.** It
+reported two commands of one layer disagreeing on what a readable-but-empty input
+should return, and said the lane could not establish which answer was the
+layer's. Measured here:
+
+    readme extractor,  read-but-empty     rc=0
+    metric extract,    read-but-empty     rc=2
+    the layer's own present-but-empty test asserts   rc=2, three times
+
+**The layer does have an answer.** The lane could not see it because the answer
+lives in a test whose population is the filename prefix, and the command
+returning 0 is one of the executables that prefix misses. So the boundary does
+not merely leave members unchecked — **it hides the settled answer from the
+people who own them.** That is folded into **A-3** and **A-4** as their third
+measured instance rather than a twenty-ninth record.
+
 ---
 
 ## Summary
