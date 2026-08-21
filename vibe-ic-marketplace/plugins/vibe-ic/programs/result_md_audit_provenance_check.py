@@ -86,13 +86,37 @@ WAIVER_MIN_LEN = 40
 #
 #   {"pass_patterns": ["MD-?905 .* 0xF2", "byte\\[6\\]=0xF2"]}
 #
+# `PASS` used as an ASSERTION that something passed.
+#
+# The flow's own verdict vocabulary contains compounds that carry the token
+# while asserting the OPPOSITE of a pass:
+#
+#   VACUOUS-PASS   the gate ran and found nothing applicable.
+#                  flow_compliance_check excludes it from the executed-PASS
+#                  count in the very line it prints it on.
+#   PASS-VOIDED    a pass withdrawn because a dependency failed
+#                  (_flow_verdict_tiers).
+#
+# Both appear in the tally line a RESULT.md is expected to quote VERBATIM as
+# its evidence, so matching the bare token inside them reads an honest FAIL
+# report as a claim of success — and then demands burn provenance for a burn
+# the same document says never happened. Measured on a report whose text was
+# `absent FPGA hardware; 1 VACUOUS-PASS (FS1 FMEDA)`: `hardware` and `PASS`
+# fell within the 40-character window, from two unrelated clauses.
+#
+# Scope: this excludes the DISQUALIFYING COMPOUNDS only. The `[^\n]{0,40}`
+# adjacency windows below are still adjacency tests, not claim parsers — a
+# bare `PASS` from an unrelated clause inside the window still matches, and
+# closing that would require reading the sentence rather than the span.
+_PASS_CLAIM = r"(?<!VACUOUS-)(?<!NON-)(?<!NOT-)\bPASS\b(?!-VOID)"
+
 _CLAIMS_PASS_PATTERNS = (
-    r"\bPHASE\s*2\s*\+\s*3\b[^\n]{0,40}\bPASS\b",
+    r"\bPHASE\s*2\s*\+\s*3\b[^\n]{0,40}" + _PASS_CLAIM,
     r"\bsof[^\n]{0,40}\bsuccess\b",
     r"\bburn[^\n]{0,40}\b(?:success|completed|verified)\b",
     r"\bSOF[^\n]{0,40}\bprogrammed\b",
-    r"\bhardware[^\n]{0,40}\bPASS\b",
-    r"\boverall\s*verdict\s*[:=]\s*PASS\b",
+    r"\bhardware[^\n]{0,40}" + _PASS_CLAIM,
+    r"\boverall\s*verdict\s*[:=]\s*" + _PASS_CLAIM,
     r"\baudit[_\s]*verdict\s*[:=]\s*['\"]?PASS",
 )
 

@@ -1,0 +1,19 @@
+type: bug
+severity: P1
+component: program:phase3_one_shot_runner
+plugin_version: "1.9.76"
+
+title: >-
+  A macro obstruction believed to be respected was still being crossed by 45 supply segments
+
+pattern: |
+  A value that is populated, formatted like a measurement, and is not one.
+  The reader cannot tell it from a measured field, and the error is silent.
+
+suggested_fix: |
+  Measure obstruction compliance from the routed geometry against the vendor abstract, not from the flow's declaration that it is honouring the abstract. Then decide, per design, which shipped metal-stack variant of the macro admits a legal power connection; if none does, that is a publishable finding and moves the problem to the vendor rather than to the router. Two portable reproduction scripts ship with public-PDK material and run standalone.
+
+id: "ORGANIC-20260804-macro-obstruction-believed-respected-still-crossed"
+submitted_at: "2026-08-04T22:50:25+08:00"
+session_context: >-
+  2026-08-04. An earlier round concluded that respecting the obstruction disconnects the supply; the following round loaded the correct abstract and measured that the obstruction was still not being respected at all, so the earlier conclusion rested on a state that had not been reached. The later round also withdrew four of its own measurements before publishing, two of which were parser artefacts that would otherwise have corroborated a wrong conclusion.

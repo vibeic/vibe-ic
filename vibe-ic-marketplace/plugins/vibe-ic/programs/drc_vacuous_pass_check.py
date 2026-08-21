@@ -313,8 +313,20 @@ def _discover_layouts(path: Path) -> List[Path]:
     return out
 
 
-def _bind_layouts(cands: List[Path], log_text: str) -> Tuple[List[Path], bool]:
+def _cite_matcher(name: str) -> "re.Pattern":
+    """The token-boundary matcher for one candidate filename — the SAME regex
+    the whole-file binder used inline, factored out so the streaming pass builds
+    it once per candidate and tests it per line."""
+    return re.compile(r"(?<![\w.-])" + re.escape(name) + r"(?![\w-])")
+
+
+def _bind_layouts(cands: List[Path], cited: set) -> Tuple[List[Path], bool]:
     """Bind the layout(s) the report actually names.
+
+    `cited` is the set of candidate filenames the report text actually names,
+    computed in ONE streaming pass by `_scan_chunks` (the whole-file version used
+    to `re.search` each name over the fully-materialised report text; the set is
+    the identical membership, decided the same way — see `_cite_matcher`).
 
     CITATION IS A FILENAME, NOT A DESIGN NAME (vibe-ic#693). This used to also
     match `p.stem.split(".")[0]`, i.e. the bare design name. A KLayout sign-off
@@ -336,9 +348,7 @@ def _bind_layouts(cands: List[Path], log_text: str) -> Tuple[List[Path], bool]:
     named. Everything else falls back to unanimity over all candidates, where a
     single stray empty file cannot condemn and a genuinely empty tree still can.
     """
-    named = [p for p in cands
-             if re.search(r"(?<![\w.-])" + re.escape(p.name) + r"(?![\w-])",
-                          log_text)]
+    named = [p for p in cands if p.name in cited]
     if len(named) == 1:
         return named, True
     if named:
@@ -346,9 +356,14 @@ def _bind_layouts(cands: List[Path], log_text: str) -> Tuple[List[Path], bool]:
     return cands, False
 
 
+# Compiled once so the STREAMING pass can test it per line without recompiling
+# (the whole-file `_is_drc_log` below keeps its own call for the reference path).
+_IS_DRC_RE = re.compile(r"\bdrc\b|\bviolation|\berror", re.I)
+
+
 def _is_drc_log(text: str) -> bool:
     """Heuristic: does this look like a DRC report at all?"""
-    return bool(re.search(r"\bdrc\b|\bviolation|\berror", text, re.I))
+    return bool(_IS_DRC_RE.search(text))
 
 
 def _discover(path: Path, under: Optional[List[str]] = None) -> List[Path]:
@@ -427,6 +442,228 @@ def _classify_one(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# STREAMING read — never materialise the report.
+#
+# `_classify_one`/`_is_drc_log`/`_bind_layouts` above are the REFERENCE
+# semantics, expressed over a fully-materialised string. On a real sign-off
+# report that string is enormous — a measured run produced a multi-gigabyte,
+# ~10^8-line DRC report, and `Path.read_text` on it plus the several whole-file
+# regex passes ran past the flow's per-gate budget and were killed, so a step
+# that should get a verdict never got one.
+#
+# `_scan_chunks` derives the SAME four facts `audit` needs — (nonempty, is_drc,
+# classification, cited) — from a FIXED-SIZE SLIDING WINDOW over the report, so
+# peak memory is bounded by (one block + one carry) plus the handful of
+# geometry-summary counts / wording hints / cited names the report declares,
+# never by the file size. It reuses the identical compiled pattern tables and
+# reproduces the whole-file `re.search`/`finditer` results EXACTLY — not merely
+# per line — because the window carries an overlap and a match is COUNTED only
+# once it ends before the window's right margin (an "accept-once" watermark),
+# so a match up to `_CARRY_OVERLAP` chars long that straddles a block boundary
+# is still seen whole and counted a single time, in file order:
+#   * zero_count / is_drc / nonempty — search over each window (completeness;
+#     a boolean needs no dedup)                == any(search over whole text)
+#   * nonzero    — first accepted match, by pattern priority
+#                                              == the whole-text pattern priority
+#   * reported   — per-pattern accepted matches, pattern0..patternN, file order
+#                                              == `_reported_counts` grouping
+#   * wording    — names in table order        == `_wording_hints`
+#   * cited      — candidate-name membership    == `_bind_layouts`'s inline search
+# The one construct outside this equivalence is a decisive token separated from
+# its number by more than `_CARRY_OVERLAP` (256 KiB) of whitespace — orders of
+# magnitude larger than any real DRC-report record. The equivalence tests (the
+# window scanner vs `_classify_one` under a deliberately tiny window that forces
+# a boundary between almost every token, and the pre-fix program vs this one on
+# a real corpus report) pin it.
+# ---------------------------------------------------------------------------
+_READ_BLOCK = 1 << 22       # 4 MiB read granularity
+_CARRY_OVERLAP = 1 << 18    # 256 KiB — the max match length equivalence covers
+
+# Necessary-substring gates: a pattern CANNOT match a window that contains none
+# of these lowercase literals (each is a literal every match of the pattern must
+# contain — an alternation contributes one literal per branch). Skipping the
+# regex on a window that lacks them is a SOUND fast reject: it makes the scan a
+# near-single-pass on a real sign-off report (whose body is millions of geometry
+# records and rule-name categories, with no "error"/"violation"/"clean"/verb
+# text at all) while changing SPEED only, never the verdict. These stay in
+# lock-step with the pattern tables above and are pinned by the equivalence
+# fuzz. Parallel by index to the pattern lists they gate.
+_IS_DRC_TRIG = ("drc", "violation", "error")
+_ZERO_TRIG = (("violation", "error", "issue"),
+              ("violation", "error", "issue"),
+              ("clean", "clear"),
+              ("found",))
+_NONZERO_TRIG = (("violation", "error", "issue"),
+                 ("violation", "error", "issue"))
+_GEOM_KW = ("rectangle", "polygon", "shape", "geometr", "cell")
+_REPORTED_TRIG = (_GEOM_KW, _GEOM_KW, _GEOM_KW, ("area",))
+_WORDING_TRIG = (("loading", "reading"),        # loading_reading
+                 ("loaded",),                    # cell_loaded
+                 ("layout",),                    # layout_read
+                 ("checking",),                  # checking
+                 ("geometr", "empty", "nothing", "(?)", "couldn"))  # empty_diagnostic
+
+
+def _present(triggers, low: str) -> bool:
+    """True if any necessary-substring trigger is in the lower-cased window."""
+    return any(t in low for t in triggers)
+
+
+def _scan_chunks(read, layout_cands=(), block: int = _READ_BLOCK,
+                 overlap: int = _CARRY_OVERLAP) -> Tuple[bool, bool, dict, set]:
+    """Stream a decoded text source via ``read(n) -> str`` ("" at EOF) in fixed
+    sliding windows and return (nonempty, is_drc, classification, cited). See the
+    module comment above for the byte-identity argument. ``block``/``overlap``
+    are parameters only so a test can shrink the window to stress boundaries.
+
+    Each COUNTING pattern (the nonzero-count and geometry-count families) carries
+    its own absolute resume cursor. ``Pattern.finditer(buf, pos)`` resumes the
+    non-overlapping left-to-right walk at ``pos`` — stateless beyond position —
+    so resuming at the end of that pattern's last accepted match reproduces the
+    whole-text ``finditer`` walk EXACTLY, split across reads. A match is accepted
+    only once it ends at/before the window's right margin (``horizon``); anything
+    past it is deferred and re-found next read from the same cursor, so a match
+    up to ``overlap`` long that straddles a block boundary is counted once and
+    whole. Booleans (zero / is_drc / nonempty / wording / cited) need only
+    completeness, so they test the whole retained window each read."""
+    nonempty = False
+    is_drc = False
+    zero = False
+    nz_first: List[Optional[int]] = [None] * len(_NONZERO_COUNT_RE)
+    nz_cur = [0] * len(_NONZERO_COUNT_RE)        # absolute resume cursor / pattern
+    geom: List[List[float]] = [[] for _ in _REPORTED_COUNT_RE]
+    geom_cur = [0] * len(_REPORTED_COUNT_RE)     # absolute resume cursor / pattern
+    hint_seen: set = set()
+    cited: set = set()
+    # Build each candidate's token matcher once; the cheap `name in window`
+    # substring reject keeps the per-window cost near zero when nothing is cited.
+    cand = [(p.name, _cite_matcher(p.name)) for p in layout_cands]
+
+    buf = ""
+    buf_base = 0            # absolute offset of buf[0] in the decoded stream
+    while True:
+        chunk = read(block)
+        final = (chunk == "")
+        if chunk:
+            buf += chunk
+        if not buf and final:
+            break
+        # Matches ending at/before `horizon` (local index) are safe to accept;
+        # anything past it may still extend into the next read, so defer it. On
+        # the final window, accept to the very end.
+        horizon = len(buf) if final else max(0, len(buf) - overlap)
+        low = buf.lower()          # one lowercase pass drives every substring gate
+
+        # A boolean pattern is only HONOURED when its leftmost match ends at or
+        # before the horizon: that guarantees the match had real right context
+        # (buf extends `overlap` further, or this is EOF), so the window's right
+        # edge cannot fake a `\b`/`$` the whole file never had. Left context is
+        # real too — buf[0] is the file start or, after a trim, snapped to just
+        # after a newline. A match deferred past the horizon reappears whole in
+        # the next window, and the leftmost real match in the file is always
+        # accepted in the window where it sits interior — so existence (all a
+        # boolean needs) is decided exactly as the whole-file `search` decides.
+        def _hit(r):
+            m = r.search(buf)
+            return m is not None and m.end() <= horizon
+
+        if not nonempty and buf.strip():
+            nonempty = True
+        if not is_drc and _present(_IS_DRC_TRIG, low) and _hit(_IS_DRC_RE):
+            is_drc = True
+        if not zero:
+            for i, r in enumerate(_ZERO_COUNT_RE):
+                if _present(_ZERO_TRIG[i], low) and _hit(r):
+                    zero = True
+                    break
+        for i, r in enumerate(_NONZERO_COUNT_RE):
+            if nz_first[i] is not None:
+                continue
+            if not _present(_NONZERO_TRIG[i], low):
+                nz_cur[i] = max(nz_cur[i], buf_base + horizon)   # no match here
+                continue
+            deferred = False
+            for m in r.finditer(buf, max(0, nz_cur[i] - buf_base)):
+                if m.end() <= horizon:
+                    nz_first[i] = int(m.group(1))
+                    break                          # first match wins; pattern done
+                deferred = True
+                break                              # defer; keep cursor, retry next read
+            if nz_first[i] is None and not deferred:
+                nz_cur[i] = max(nz_cur[i], buf_base + horizon)
+        for i, r in enumerate(_REPORTED_COUNT_RE):
+            if not _present(_REPORTED_TRIG[i], low):
+                geom_cur[i] = max(geom_cur[i], buf_base + horizon)  # no match here
+                continue
+            deferred = False
+            for m in r.finditer(buf, max(0, geom_cur[i] - buf_base)):
+                if m.end() <= horizon:
+                    try:
+                        geom[i].append(float(m.group(1)))
+                    except ValueError:
+                        pass
+                    geom_cur[i] = buf_base + m.end()
+                else:
+                    deferred = True
+                    break
+            if not deferred:
+                geom_cur[i] = max(geom_cur[i], buf_base + horizon)
+        for j, (name, r) in enumerate(_WORDING_HINT_RE):
+            if name not in hint_seen and _present(_WORDING_TRIG[j], low) and _hit(r):
+                hint_seen.add(name)
+        for name, r in cand:
+            if name not in cited and name in buf and _hit(r):
+                cited.add(name)
+
+        if final:
+            break
+        # Retain the tail any still-active consumer could still need:
+        #   * each counting cursor's resume position (exact finditer walk), and
+        #   * `overlap` chars before the horizon, so a BOOLEAN match up to
+        #     `overlap` long that straddles this read's right edge is still whole
+        #     in the next window (booleans scan the whole window, no cursor).
+        # Everything before the minimum of those is decided for good.
+        active = list(geom_cur) + [nz_cur[i] for i in range(len(_NONZERO_COUNT_RE))
+                                   if nz_first[i] is None]
+        active.append(buf_base + max(0, horizon - overlap))
+        keep_from = max(0, min(active) - buf_base)
+        # Snap the cut back to JUST AFTER a newline so the next window's first
+        # char keeps a real left boundary. `\b` and the `(?<![\w.-])` citation
+        # look-behind at start-of-string then read identically to the whole file
+        # (a preceding '\n' is non-word and not in [\w.-]) — a mid-token cut
+        # would otherwise invent a boundary the whole-file regex never saw. DRC
+        # reports are newline-delimited, so a cut point is always available;
+        # absent one we simply keep the buffer and read on.
+        nl = buf.rfind("\n", 0, keep_from)
+        keep_from = nl + 1 if nl != -1 else 0
+        buf_base += keep_from
+        buf = buf[keep_from:]
+
+    nonzero = next((v for v in nz_first if v is not None), None)
+    counts = [c for lst in geom for c in lst]
+    classification = {
+        "zero_count": zero,
+        "nonzero_count": nonzero,
+        "reported_geometry_counts": counts,
+        "reported_geometry_max": max(counts) if counts else None,
+        "wording_hints": [name for name, _ in _WORDING_HINT_RE
+                          if name in hint_seen],
+    }
+    return nonempty, is_drc, classification, cited
+
+
+def _scan_report_file(fp: Path,
+                      layout_cands=()) -> Tuple[bool, bool, dict, set]:
+    """Stream one DRC report file. Opens with the SAME locale-default encoding +
+    `errors='replace'` that `Path.read_text(errors='replace')` used, so the
+    decoded stream — and therefore every regex result — is identical to the
+    whole-file path, without ever holding the file in memory. OSError propagates
+    to the caller, which treats it exactly as the old read failure did."""
+    with open(fp, "r", errors="replace") as fh:
+        return _scan_chunks(fh.read, layout_cands)
+
+
+# ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
 def audit(path: Path, layout: Optional[Path] = None,
@@ -456,28 +693,31 @@ def audit(path: Path, layout: Optional[Path] = None,
     layout_cands = [layout] if layout else _discover_layouts(path)
 
     for fp in files:
+        # STREAMED, never materialised — a real sign-off report is multi-GB and
+        # `read_text` + whole-file regex on it overran the flow's per-gate
+        # budget and was killed, so the step never got a verdict. `_scan_chunks`
+        # derives the identical facts from a fixed window (see its module note).
         try:
-            text = fp.read_text(errors="replace")
+            nonempty, is_drc, c, cited = _scan_report_file(fp, layout_cands)
         except OSError:
             result.findings.append(Finding(
                 rule="DRC_LOG_READABLE", severity="ERROR",
                 message="DRC log could not be read.", file=str(fp)))
             continue
-        if not text.strip():
+        if not nonempty:
             result.findings.append(Finding(
                 rule="DRC_LOG_NONEMPTY", severity="ERROR",
                 message="DRC log is empty.", file=str(fp)))
             per_file.append({"file": str(fp), "empty_file": True})
             continue
-        if not _is_drc_log(text):
+        if not is_drc:
             # Not actually a DRC report; ignore it.
             continue
         any_drc_log = True
-        c = _classify_one(text)
         c["file"] = str(fp)
 
         # --- establish geometry from OBSERVABLES, in decreasing authority ---
-        bound, is_bound = _bind_layouts(layout_cands, text)
+        bound, is_bound = _bind_layouts(layout_cands, cited)
         measures = [measure_layout(p) for p in bound]
         c["layout_measures"] = [asdict(m) for m in measures]
         c["layout_bound_by_name"] = is_bound

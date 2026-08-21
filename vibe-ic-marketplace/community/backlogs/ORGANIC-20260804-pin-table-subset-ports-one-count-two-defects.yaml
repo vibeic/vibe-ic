@@ -1,0 +1,19 @@
+type: bug
+severity: P1
+component: program:l_doc_cross_consistency_check
+plugin_version: "1.9.76"
+
+title: >-
+  The pin-table subset rule reports two different defects under one count
+
+pattern: |
+  A value that is populated, formatted like a measurement, and is not one.
+  The reader cannot tell it from a measured field, and the error is silent.
+
+suggested_fix: |
+  Split the verdict. An absent name that is structurally a parameter, a register field, an enum member or a layout-format class keyword is an extraction defect in the product-metadata layer; an absent name that is a genuine port is a completeness defect in the integration layer. Stop non-ports entering the pin table at the extractor, keyed on STRUCTURE rather than on a name list, because five designs produced four different contaminant grammars plus one clean case. The negative control must assert the real half still FAILS.
+
+id: "ORGANIC-20260804-pin-table-subset-ports-one-count-two-defects"
+submitted_at: "2026-08-04T22:50:25+08:00"
+session_context: >-
+  2026-08-04 commercial-PDK clean-run batch. Five designs hit the rule with four distinct contaminant grammars (a module parameter; register fields and enum members, 14 of 14; a direction keyword plus three layout-class keywords; a bare direction keyword) and one design where the rule was clean with real ports only. Filed as issue #791 with the per-design evidence.
