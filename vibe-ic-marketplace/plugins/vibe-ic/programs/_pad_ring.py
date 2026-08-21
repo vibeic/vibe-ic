@@ -84,9 +84,16 @@ not a declaration. The distribution declares the site in its TECH view:
 sites and their width and height tuple. Use this if the LEF does not include
 the site definitions for the IO pads." — and upstream's placer consumes it
 BEFORE its two site lookups, calling `make_fake_io_site` once per entry. This
-module borrowed 13 of upstream's 14 pad variables and dropped that one, so on
-every distribution that declares its sites this way the first lookup refused
-`PAD_SITE_NOT_FOUND` against a PDK that had in fact declared the site.
+module names 11 of upstream's 20 PDK-scoped `PAD_*` variables — the 8 geometric
+ones in the contract above plus the 3 it records as UNPERFORMED — and omitted
+this one. (RE-MEASURED 2026-08-22 by counting `Variable("PAD_…")` in upstream's
+`pad_variables`: 20, not the 14 an earlier draft of this paragraph asserted from
+our own `REQUIRED_VARS` count without checking theirs.) The other 8 it omits are
+file lists — LEFs, GDS, libs, CDLs, SPICE and Verilog models — and bondpad
+dimensions, none of which this step performs. `PAD_FAKE_SITES` is the one
+omission that cost anything: on every distribution that declares its sites that
+way the first lookup refused `PAD_SITE_NOT_FOUND` against a PDK that had in fact
+declared the site.
 
 MEASURED, not assumed, what the created site is: driving
 `make_fake_io_site -name X -width W -height H` against a real tech LEF and
