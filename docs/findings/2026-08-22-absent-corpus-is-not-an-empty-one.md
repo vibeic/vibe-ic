@@ -113,11 +113,14 @@ kept: `5 failed, 13 passed`, the sharpest being the machine-readable record —
 
 ## Corpus sweep
 
-23 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
+37 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
 `landing_merge_verdict`, `repo_hygiene_gates.sh` or the routed-DEF producer,
-run on this branch and, where red, re-run on a pristine `origin/main` worktree:
+run on this branch and, where red, re-run on a pristine `origin/main` worktree.
+876 passed, 2 skipped, 13 red — and every one of the 13 is accounted for below,
+none of them by this change:
 
-* 262 passed / 2 skipped, clean — the 9-file corpus and gate-wiring batch.
+* 262 passed / 2 skipped and 279 passed / 0 red — the two corpus-and-gate-wiring
+  batches (23 files), clean.
 * 9 red in `test_landing_merge_verdict.py` (end-to-end `gatekeeper-verify-merge`)
   — **the same 9 test IDs are red on pristine `origin/main`.** Pre-existing.
 * 3 red in `tools/ci/test_phase_b_activated_parity.py` and
