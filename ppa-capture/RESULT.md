@@ -1192,6 +1192,36 @@ not merely leave members unchecked — **it hides the settled answer from the
 people who own them.** That is folded into **A-3** and **A-4** as their third
 measured instance rather than a twenty-ninth record.
 
+## Landing readiness — measured base against head, not asserted
+
+A question I had never asked of my own branch: **would it land?** Three gates
+could plausibly care about a new top-level directory and 17 added routing
+entries. All three were run on this branch AND with the routing file reverted to
+its base content, then the outputs compared:
+
+| gate | base | head | comparison |
+|---|---|---|---|
+| tracked JSON/YAML parses | — | **rc 0** | clean on this branch |
+| gate is wired | rc 1, unwired 61 (baseline 59) | rc 1, unwired 61 | **name sets identical** |
+| checker execution wiring | rc 1 | rc 1 | **output byte-identical** |
+
+The two red gates are **pre-existing on main** and this branch moves neither —
+not the count, not the names, not a byte of the report. The 17 routing entries
+wire nothing that was unwired, which is consistent with **A-23**: every program
+this batch routes to was already reachable from an automatic verdict.
+
+Stated as a comparison rather than a verdict on purpose. A gate that is red on
+the base cannot answer *"did this change make it worse"* by its exit code — only
+the diff of its output can, which is the same rule this batch records twice
+over.
+
+**One honest note on how this was measured.** Comparing required temporarily
+reverting the routing file, running, and restoring it. The first attempt timed
+out mid-sequence, and I verified the restore had completed before continuing
+rather than assuming it — the working tree and `HEAD` agree at 54 steps. The
+third gate then needed a longer budget than the first attempt allowed; its
+result here is a completed run, not an inference from a partial one.
+
 ---
 
 ## Summary
