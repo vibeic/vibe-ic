@@ -1,0 +1,60 @@
+{
+  "date": "2026-08-22",
+  "totals": {
+    "A": 28,
+    "B": 0,
+    "C": 2,
+    "D": 0,
+    "T": 1
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/ppa_feasibility_check.py",
+      "programs/ppa_head_to_head_check.py",
+      "programs/plugin_change_pytest_gate.py",
+      "programs/_atomic_artefact.py",
+      "programs/ppa_search_run.py",
+      "programs/enhancement_emit.py",
+      "programs/backlog_sanitize_check.py",
+      "programs/changelog_command_reproducibility_check.py",
+      "programs/lec_post_layout_check.py",
+      "programs/crosslayer_search_space.py",
+      "programs/_ppa/metrics.py",
+      "programs/ppa_pareto_check.py",
+      "programs/flow_compliance_check.py",
+      "programs/_ppa/cli_exit.py",
+      "programs/tracked_json_yaml_parses_check.py",
+      "programs/_ppa/schema_validation.py"
+    ],
+    "bucket_T": [
+      "OpenROAD"
+    ]
+  },
+  "bucket_A_files": [
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_feasibility_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_head_to_head_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_plugin_change_pytest_gate_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__atomic_artefact_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_search_run_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_enhancement_emit_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_backlog_sanitize_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_changelog_command_reproducibility_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_lec_post_layout_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_search_space_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_metrics_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_pareto_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_flow_compliance_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_cli_exit_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_tracked_json_yaml_parses_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_schema_validation_rule_sketches.py"
+  ],
+  "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
+  "bucket_C_files": [
+    "ORGANIC-20260822-generated-header-derived-from-recorded-inputs.yaml",
+    "ORGANIC-20260822-optional-dependency-version-matrix.yaml"
+  ],
+  "bucket_T_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_T_forked_tool",
+  "bucket_T_files": [
+    "ORGANIC-20260822-postroute-repair-faults-after-route-completes.yaml"
+  ]
+}

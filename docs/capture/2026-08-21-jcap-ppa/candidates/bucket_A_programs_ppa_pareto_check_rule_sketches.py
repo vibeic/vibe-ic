@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/ppa_pareto_check.py
+# Corpus-sweep REQUIRED before merging into programs/ppa_pareto_check.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Pattern: A search exposes a lever whose values include switching a design property OFF, and ranks candidates on an objective that does not price that property. The optimum is then always at the setting that removes it, monotonically, and the ranking layer reports a straight win because it has no term for what was given up. The property is one nobody chose to trade — it was inserted deliberately, at a cost, for a downstream reason the objective never hears about. A reader who trusts the ranking adopts the candidate that deleted it.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_a_lever_that_deletes_a_design_property_must_be_priced_or_the_winner_is_a_trade(sample_text, ports):
+    """A lever whose range includes removing a design property is not an ordinary tuning knob, and a candidate that reached the top of the ranking by reducing that property has made a TRADE rather than an improvement. Declare such levers, and where the winner's setting is lower than the baseline's, report the ranking twice: the unconstrained optimum and the best candidate that preserved the property, with the difference attributed. Ranking them together and letting prose carry the caveat puts the decision in the one place a machine reader never looks."""
+    # Expected signal: WARN
+    # Suggested fix action: Mark, in the search space, every lever whose range includes disabling a declared design property, naming the property. At ranking time, partition the candidates by whether each preserved the baseline's level of that property, and publish BOTH tops: the unconstrained winner and the preserving winner, with the objective delta between them attributed to the lever. Refuse to present a single winner when the two differ. MEASURED on a 60-arm sweep: the published winner set the property to zero and won by 6.95 percent against the default; decomposing that move, 4.60 points are a genuine placement improvement and 2.46 points are bought by DELETING ALL TEN of the design's spare cells — roughly a third of the headline. The preserving candidate is a different arm, 2.4 percent worse on the objective and whole on the property. The ranking layer cannot express this: the word for that property does not appear anywhere in the search or frontier modules. Two separate lanes computed the distinction BY HAND and put it in prose, which is the evidence that the layer owes it.
+    return []  # list of findings — TODO implement
