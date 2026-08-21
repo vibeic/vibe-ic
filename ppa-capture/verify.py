@@ -282,6 +282,31 @@ _gone = sorted(n for n in _named if not _exists(n))
 check("every program named as enforcing a class exists",
       not _gone, f"{len(_named)} named, missing {_gone}")
 
+# 18. A-23, AUTOMATED. "A distilled rule must be routed into a program some
+#     verdict consults." I ran that by hand at 21 records and again at 26 —
+#     which is the check-that-was-run-once problem this whole file exists for.
+#
+#     WHAT THIS FAST FORM COVERS, AND WHAT IT DOES NOT. It reads the wiring
+#     gate's committed baseline: the 59 programs known to be consulted by no
+#     automatic verdict. That catches a record routed at a program already
+#     known unwired, at zero cost. It does NOT catch a program that became
+#     unwired after the baseline was written — for that, run the gate itself
+#     (`gate_is_wired_check.py`, about forty seconds). The difference is stated
+#     rather than left for a reader to assume the strong form.
+_bl = PLUG / "programs" / "gate_is_wired_baseline.json"
+if _bl.is_file():
+    _known = set(json.loads(_bl.read_text()).get("unwired", []))
+    control("wiring-baseline", bool(_known) and "no_such_gate" not in _known)
+    _tgt = {r["rule_name"]: pathlib.Path(
+                ROUTING["steps"][r["step"]]["bucket_A_program"]).stem
+            for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]}
+    _unw = sorted({n for n, prog in _tgt.items() if prog in _known})
+    check("no Bucket-A rule is routed at a known-unwired program",
+          not _unw, f"{len(set(_tgt.values()))} distinct targets, unwired {_unw}")
+else:
+    check("no Bucket-A rule is routed at a known-unwired program", False,
+          "wiring baseline absent — cannot answer, and this is not a pass")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
