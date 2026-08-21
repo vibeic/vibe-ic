@@ -564,3 +564,80 @@ def test_the_gate_names_no_pdk_cell_and_the_producer_names_no_requirement():
             f"{token!r} appears in the producer. Whether a population is "
             "sufficient is the declaration's question and the gate's "
             "comparison, never the producer's.")
+
+
+# ---------------------------------------------------------------------------
+# SURVIVAL -- the obligation that actually bears on a post-tape-out repair
+# ---------------------------------------------------------------------------
+#: The insertion count says what the placer put down. Every pass after it (CTS,
+#: hold fixing, routing, ECO, metal fill) could have stripped a spare, and a
+#: count of what was inserted cannot see that. `require_preservation` is the
+#: declaration asking the SHIPPED artefacts instead.
+DECL_PRESERVED = dict(DECL, require_preservation=True)
+
+
+def test_preservation_a_shipped_population_that_survived_is_satisfied():
+    ms = clean_nine() + spares() + [rec(F.ECO_M_SURVIVING, 10)]
+    r = F.promotion_verdict(cand("survived", ms), policy(DECL_PRESERVED))
+    assert r.verdict == F.FEASIBLE, r.codes
+    assert axis_of(r).status == F.AXIS_SATISFIED
+
+
+def test_preservation_spares_inserted_and_then_stripped_are_refused():
+    """The failure the insertion count cannot see. Ten spares were placed and
+    nine reached the shipped netlist: the design has nine, whatever the plan
+    said it inserted, and nine is below the declared floor of ten."""
+    ms = clean_nine() + spares() + [rec(F.ECO_M_SURVIVING, 9)]
+    r = F.promotion_verdict(cand("stripped", ms), policy(DECL_PRESERVED))
+    assert r.verdict == F.INFEASIBLE
+    assert axis_of(r).status == F.AXIS_VIOLATED
+    # the INSERTION count still reads ten and is still satisfied; the refusal
+    # comes from the shipped artefacts and not from a re-reading of the plan
+    ev = {e["metric"]: e.get("value") for e in axis_of(r).detail
+          if "value" in e}
+    assert ev[F.ECO_M_COUNT] == 10
+    assert ev[F.ECO_M_SURVIVING] == 9
+
+
+def test_preservation_required_but_never_measured_is_undetermined():
+    """A declaration that asks for survival and a run with no preservation
+    report is UNDETERMINED. It is NOT satisfied by the insertion count -- that
+    substitution is the entire reason survival is a separate obligation."""
+    ms = clean_nine() + spares() + [
+        rec(F.ECO_M_SURVIVING, None, status="NOT_MEASURED",
+            reason="no spare-preservation report was supplied")]
+    r = F.promotion_verdict(cand("unproven", ms), policy(DECL_PRESERVED))
+    assert r.verdict == F.UNDETERMINED
+    assert axis_of(r).status == F.AXIS_UNDETERMINED
+
+
+def test_preservation_is_not_proved_when_the_declaration_does_not_ask():
+    """And the same records under the declaration that does NOT ask for
+    survival are SATISFIED, with the omission stated by name. Only what the
+    declaration asks for is proved; what it did not ask for is disclosed."""
+    ms = clean_nine() + spares() + [
+        rec(F.ECO_M_SURVIVING, None, status="NOT_MEASURED",
+            reason="no spare-preservation report was supplied")]
+    r = F.promotion_verdict(cand("not-asked", ms), policy())
+    assert r.verdict == F.FEASIBLE
+    a = axis_of(r)
+    assert a.status == F.AXIS_SATISFIED
+    assert "require_preservation" in {row.get("obligation")
+                                      for row in a.applicability["not_proved"]}
+
+
+def test_preservation_a_no_witness_report_does_not_vouch_for_anything():
+    """`spare_cell_preservation_check` says NO_WITNESS when it could read no
+    name-bearing final artefact. Nothing vouched for any spare, so the producer
+    must emit an absence and not the report's `survived` number."""
+    src = {"path": "reports/spare_preservation.json", "sha256": DIGEST,
+           "tool": "phase3_one_shot_runner",
+           "parser": "ppa_eco_spare_records.py"}
+    row = P.survival_record(
+        {"inserted": 10, "survived": 10,
+         "artefact_agreement": {"status": "NO_WITNESS"}}, VIEW, src, None)
+    assert row["status"] == "NOT_MEASURED"
+    assert "value" not in row
+    r = F.promotion_verdict(cand("no-witness", clean_nine() + spares() + [row]),
+                            policy(DECL_PRESERVED))
+    assert r.verdict == F.UNDETERMINED

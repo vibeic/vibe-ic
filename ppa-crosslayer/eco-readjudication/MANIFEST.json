@@ -1,0 +1,191 @@
+{
+  "files": [
+    {
+      "bytes": 3562,
+      "sha256": "sha256:151b06c5496c139b529c82eb243fe44d6ed669a692b6a5d387efa2cce0577425",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/b000/spare_cells.json",
+      "trial": "b000",
+      "vendored_at": "inputs/b000/spare_cells.json"
+    },
+    {
+      "bytes": 137621,
+      "sha256": "sha256:02799d6451cdd77bb8bd40b9214cb9e75aab82649a9d85f424ba326197dd8b6f",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/b000/candidates.json",
+      "trial": "b000",
+      "vendored_at": "inputs/b000/candidates.json"
+    },
+    {
+      "bytes": 327,
+      "sha256": "sha256:be2cfe4fbc230d0917e50be4616dde354ee7ed9ba792c9a15f59c44b1e815d28",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/b000/run.json",
+      "trial": "b000",
+      "vendored_at": "inputs/b000/run.json"
+    },
+    {
+      "bytes": 44777,
+      "sha256": "sha256:367afe9f7d6c46038ddaecc39c6d32bcc71a01ef329b47c14d67c72592f7b490",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/b000/feasibility_report.json",
+      "trial": "b000",
+      "vendored_at": "inputs/b000/published_feasibility.json"
+    },
+    {
+      "bytes": 1200,
+      "sha256": "sha256:49ef6eed8eb961ccc40a17636e28520bdea0100b148af413777ad3f55cc48a85",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/p04/spare_cells.json",
+      "trial": "p04",
+      "vendored_at": "inputs/p04/spare_cells.json"
+    },
+    {
+      "bytes": 137777,
+      "sha256": "sha256:d82a11c952a732308e121f0cd4ff64d02b3963288c4d2ba98e51ec8775e791a9",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/p04/candidates.json",
+      "trial": "p04",
+      "vendored_at": "inputs/p04/candidates.json"
+    },
+    {
+      "bytes": 326,
+      "sha256": "sha256:d781694dbecdacdee0aeffe73a058689fd52fa95e1c2288316133f2f6be24695",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/p04/run.json",
+      "trial": "p04",
+      "vendored_at": "inputs/p04/run.json"
+    },
+    {
+      "bytes": 44774,
+      "sha256": "sha256:685a00657dbda5fbbef9fc2ae2d03511de4946fadefe358284c05c0bbb41bb3e",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/p04/feasibility_report.json",
+      "trial": "p04",
+      "vendored_at": "inputs/p04/published_feasibility.json"
+    },
+    {
+      "bytes": 1200,
+      "sha256": "sha256:1621b6606d6845d3ea405f78d2dac93f09cbb669f355cdc67c0c55103b6abddf",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/u01/spare_cells.json",
+      "trial": "u01",
+      "vendored_at": "inputs/u01/spare_cells.json"
+    },
+    {
+      "bytes": 137601,
+      "sha256": "sha256:38c641cdd6464e884edf9c02e20d6cbbe0450f2ca572d14b15983e5e160a0ff0",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/u01/candidates.json",
+      "trial": "u01",
+      "vendored_at": "inputs/u01/candidates.json"
+    },
+    {
+      "bytes": 326,
+      "sha256": "sha256:bb6a8e1ef89319c4351ea631ab7f3839d65cbde5d1de500efce6ee91bb569290",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/u01/run.json",
+      "trial": "u01",
+      "vendored_at": "inputs/u01/run.json"
+    },
+    {
+      "bytes": 44772,
+      "sha256": "sha256:414bd8aca272f58e4e776dce917f606128a388accd5a6b3f2b4870fae386d377",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/u01/feasibility_report.json",
+      "trial": "u01",
+      "vendored_at": "inputs/u01/published_feasibility.json"
+    },
+    {
+      "bytes": 1200,
+      "sha256": "sha256:5c4602d6a9cc3ffcc8bf2c6a8cc7f3ed09d3adfb5443458237fad0e4eac69a20",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z21/spare_cells.json",
+      "trial": "z21",
+      "vendored_at": "inputs/z21/spare_cells.json"
+    },
+    {
+      "bytes": 137662,
+      "sha256": "sha256:65b133764633d9fb1f57548b4224d0db109c6d151e8a9b103442c19d99fe6ef9",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z21/candidates.json",
+      "trial": "z21",
+      "vendored_at": "inputs/z21/candidates.json"
+    },
+    {
+      "bytes": 330,
+      "sha256": "sha256:11eef8a3b202023291182ddd5b6c164ac3340c09329856515497cf2a6a35f781",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z21/run.json",
+      "trial": "z21",
+      "vendored_at": "inputs/z21/run.json"
+    },
+    {
+      "bytes": 44774,
+      "sha256": "sha256:37e5aba9056e94d8f483dbf90b74778aefe8794eda1f3a5075d3262506b10f0e",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z21/feasibility_report.json",
+      "trial": "z21",
+      "vendored_at": "inputs/z21/published_feasibility.json"
+    },
+    {
+      "bytes": 3561,
+      "sha256": "sha256:9537ea55b66ff45ef7aff21cd66a2d4f305358895309ff64b63ee98c9838f04e",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z23/spare_cells.json",
+      "trial": "z23",
+      "vendored_at": "inputs/z23/spare_cells.json"
+    },
+    {
+      "bytes": 137837,
+      "sha256": "sha256:8591ae2f4e2e4d073382085cd6c556653a5437f1a2cb6571449d1846897d95a4",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z23/candidates.json",
+      "trial": "z23",
+      "vendored_at": "inputs/z23/candidates.json"
+    },
+    {
+      "bytes": 331,
+      "sha256": "sha256:9a930d2ca58d5d994772f43b5b9bcf90bae4e810fbe6bd0c32fb581da7d71c2c",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z23/run.json",
+      "trial": "z23",
+      "vendored_at": "inputs/z23/run.json"
+    },
+    {
+      "bytes": 44772,
+      "sha256": "sha256:d9ae1e1fdcefb30eb6042114f97cb1a8c7c6fa2c9dc11dfa64bbdf5baa29c417",
+      "source_branch": "ppa-crosslayer-search",
+      "source_commit": "a09819cb1f524b74d547427931010c6781bddafe",
+      "source_path": "ppa-crosslayer/records/trials/z23/feasibility_report.json",
+      "trial": "z23",
+      "vendored_at": "inputs/z23/published_feasibility.json"
+    }
+  ],
+  "schema": "vibeic.ppa.readjudication_manifest.v1",
+  "source": {
+    "commit": "a09819cb1f524b74d547427931010c6781bddafe",
+    "directory": "ppa-crosslayer/records/trials",
+    "repository_branch": "ppa-crosslayer-search"
+  },
+  "what": "The five published cross-layer arms this re-adjudication is computed over, copied BYTE FOR BYTE from the branch that published them. Nothing here is edited: the records are honest measurements and what changes is the verdict computed over them. `readjudicate.py` verifies every digest below before it reads a single number, so a re-adjudication over a modified record refuses rather than publishes."
+}
