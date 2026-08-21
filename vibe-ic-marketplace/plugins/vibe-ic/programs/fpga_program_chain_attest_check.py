@@ -135,14 +135,14 @@ def audit(manifest_entries: List[Dict[str, Any]]) -> List[Finding]:
         findings.append(Finding(
             "ERROR", "compile_hash_missing",
             "fpga_compile manifest entry has no compiled_artifact_sha256. "
-            "Update mcp-eda-server to v0.99 (the eda_fpga_compile tool now "
+            "Update mcp-eda to v0.99 (the eda_fpga_compile tool now "
             "records the SHA-256 of the produced SOF/BIT).",
         ))
     if not ph:
         findings.append(Finding(
             "ERROR", "program_hash_missing",
             "fpga_program manifest entry has no programmed_artifact_sha256. "
-            "Update mcp-eda-server to v0.99.",
+            "Update mcp-eda to v0.99.",
         ))
     if ch and ph and ch != ph:
         findings.append(Finding(

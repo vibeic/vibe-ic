@@ -24,7 +24,7 @@ Real occurrence (v068 <benchmark> fresh-agent):
 
   The fix is trivial once caught: make ranges contiguous
   (H1_MAX=199, H0_MIN=200, H0_MAX=639, BR_MIN=640). But it must be
-  caught at Phase-2a generation time — this gate does that.
+  caught at Phase 1 generation time — this gate does that.
 
 Generic applicability
 ---------------------

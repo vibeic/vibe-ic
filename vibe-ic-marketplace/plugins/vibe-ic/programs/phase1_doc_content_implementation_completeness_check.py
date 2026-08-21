@@ -3,7 +3,7 @@
 
 Generic Phase 1 (doc-extraction) coverage gate: every section heading / numbered list
 entry in ``input/docs/`` (or ``input_doc/``) should be cited by
-at least one L1-L13 doc field. Catches the recurring "agent skipped
+at least one L1-L23 doc field. Catches the recurring "agent skipped
 half the spec" pattern observed across multiple fresh-agent runs.
 
 User directive (Wave 47):

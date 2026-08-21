@@ -340,7 +340,7 @@ def audit_upstream(m: Dict[str, Any]) -> Dict[str, Any]:
 
 def main(argv: List[str]) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Audit ip_catalog manifests against upstream + local mirror")
+    ap = argparse.ArgumentParser(description="Audit ip-catalog manifests against upstream + local mirror")
     ap.add_argument("--catalog-dir", default=None)
     ap.add_argument("--no-network", action="store_true",
                     help="Skip upstream network calls (local-mirror only)")
@@ -380,7 +380,7 @@ def main(argv: List[str]) -> int:
             "results": results,
         }, indent=2))
     else:
-        print(f"=== ip_catalog upstream audit ({len(results)} IPs) ===")
+        print(f"=== ip-catalog upstream audit ({len(results)} IPs) ===")
         for r in results:
             ip = r["ip_name"]
             loc = r["local"]

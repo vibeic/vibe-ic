@@ -3,7 +3,7 @@ testability: structured
 
 # Wave 82 (v1.6.2) — generated to satisfy
 # test_tools_and_integration::test_every_skill_has_compliance_yaml.
-# Phase 2b RTL verification spot-check skill.
+# Phase 2 RTL verification spot-check skill.
 skill: phase2-rtl-verify
 
 requirements:
@@ -27,4 +27,4 @@ requirements:
 cross_checks:
   - id: X_text_only_skill
     description: "RTL verification spot-check report skill."
-    rule: postcheck_pass_only
+    rule: text_only_report

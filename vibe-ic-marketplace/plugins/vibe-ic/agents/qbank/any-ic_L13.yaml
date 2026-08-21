@@ -2,7 +2,7 @@ class: any-ic
 layer: L13
 # L13 LAB CALIBRATION — has TWO sections:
 #   • CONTRACT  (Phase 1 fills) — what counts as real-hardware PASS for THIS IC
-#   • EVIDENCE  (Phase 2b fills) — actual hid_tool transcripts + bitstream sha256
+#   • EVIDENCE  (Phase 2 fills) — actual hid_tool transcripts + bitstream sha256
 # `hardware_pass_attestation_check.py` reads both. Phase 1 only collects the
 # contract; the evidence block stays empty until real hardware is reachable.
 #
@@ -13,7 +13,7 @@ layer: L13
 #   L13.criterion_params.*    — knobs for the chosen criterion
 #   L13.tester                — name/model of the lab tester this IC is verified against
 #
-# Path convention (Phase-2b evidence — DO NOT ask in Phase 1):
+# Path convention (Phase 2 evidence — DO NOT ask in Phase 1):
 #   L13.known_pass_bitstream.{sof_path, sha256, ...}
 #   L13.known_pass_transcript.*
 qbank:

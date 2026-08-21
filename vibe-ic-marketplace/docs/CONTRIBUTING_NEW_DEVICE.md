@@ -6,7 +6,7 @@ This is a focused per-topic guide. For the umbrella partner-plugin layout
 ## What you ship
 
 ```
-mcp-eda-server/src/devices/<class>/<vendor>/
+mcp-eda/src/devices/<class>/<vendor>/
   manifest.json               REQUIRED
   driver.py | driver.js | driver.go | ... — exec'd by MCP server
   README.md                   REQUIRED
@@ -40,7 +40,7 @@ mcp-eda-server/src/devices/<class>/<vendor>/
 
 ## Auto-registration
 
-`mcp-eda-server/src/devices/_registry.js` walks `src/devices/**/manifest.json` at MCP server start. Drop your manifest, restart the server, your tools appear in Claude Code's MCP toolset. No edits to `src/index.js` required.
+`mcp-eda/src/devices/_registry.js` walks `src/devices/**/manifest.json` at MCP server start. Drop your manifest, restart the server, your tools appear in Claude Code's MCP toolset. No edits to `src/index.js` required.
 
 ## Driver contract
 
@@ -48,4 +48,4 @@ mcp-eda-server/src/devices/<class>/<vendor>/
 - Write a single JSON object to stdout (`{"success": bool, "mode": "...", ...}`)
 - Exit 0 on PASS, 1 on FAIL, 2 on input error
 
-The reference implementation is `mcp-eda-server/src/devices/tester/vendor-usb_hid_tester/driver.py`.
+The reference implementation is `mcp-eda/src/devices/tester/vendor-usb_hid_tester/driver.py`.
