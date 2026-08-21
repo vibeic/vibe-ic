@@ -648,6 +648,30 @@ that read the table are green with the entry in place (above).
 
 ---
 
+## Landing readiness, verified against current `main` (not against the fork point)
+
+`main` has moved **30 commits** since this branch forked (`a00f53f20` →
+`81cd5321b`), and it touched the one shipped file this branch changes — someone
+added 8 routing entries (`ppa.*`, `capture.*`, `repo.*`) while I added one.
+
+A clean merge proves nothing about semantics, so the merged tree was built and
+**run**, in a throwaway worktree, not inspected:
+
+```
+merge onto origin/main @ 81cd5321b     rc 0, zero conflict markers
+routing table after merge              47 steps — my phase3.pad_ring present,
+                                       all 8 of main's new entries preserved
+pytest on the MERGED tree              87 passed, 4 skipped
+enhancement_emit on the MERGED tree    rc 0, A=4 / T=1, routed to
+                                       programs/pad_ring_gen.py, nothing unrouted
+```
+
+Neither side's entries were lost and neither displaced the other — the two
+additions are at different points in the same object. The branch is landable on
+`main` as it stands today.
+
+---
+
 ## Reproduce
 
 On a clean tree (`git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`):
