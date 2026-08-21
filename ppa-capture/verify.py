@@ -439,6 +439,20 @@ _orph_rows = [s for s in _srows if _hmap.get(s, "") not in _names]
 check("no sweep-table row names a record that does not exist",
       not _orph_rows, f"{len(_srows)} rows, orphaned {_orph_rows}")
 
+# 26. the contents map lists every section, and every entry points at one.
+#     Both directions, because check 29 was the lesson: a map that omits a
+#     section hides it, and an entry for a section that was renamed sends the
+#     reader nowhere. This is the same relation as record-to-section, one level
+#     up, and it drifts the same way — the section heading "The twelve records"
+#     survived over a section holding twenty-nine until this map was built.
+_secs = [h for h in re.findall(r"^## (.+)$", MD, re.M) if not h.startswith("Contents")]
+_entries = re.findall(r"^- \[([^\]]+)\]\(#", MD, re.M)
+control("contents-map", bool(_secs) and bool(_entries))
+check("the contents map lists every section",
+      not (set(_secs) - set(_entries)), f"missing {sorted(set(_secs) - set(_entries))[:3]}")
+check("every contents entry names a real section",
+      not (set(_entries) - set(_secs)), f"dangling {sorted(set(_entries) - set(_secs))[:3]}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

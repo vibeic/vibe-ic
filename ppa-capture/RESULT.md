@@ -26,6 +26,30 @@ Sources: `ppa-e2e/FINDINGS.md` (F-1..F-18), `ppa-e2e/RESULT.md` (13 requests),
 
 Accepted with no refusal and no unrouted record.
 
+## Contents
+
+- [Count per bucket](#count-per-bucket)
+- [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
+- [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
+- [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
+- [The 29 records](#the-29-records)
+- [One change outside `ppa-capture/`](#one-change-outside-ppa-capture)
+- [Where each record came from](#where-each-record-came-from)
+- [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
+- [What remains open](#what-remains-open)
+- [The "could not settle" seam, read out and closed](#the-could-not-settle-seam-read-out-and-closed)
+- [Input coverage — every named source now read](#input-coverage--every-named-source-now-read)
+- [Landing readiness — measured base against head, not asserted](#landing-readiness--measured-base-against-head-not-asserted)
+- [Buildability — the deliverable's stated purpose, checked](#buildability--the-deliverables-stated-purpose-checked)
+- [No near-duplicates — and the first number I published from a broken instrument](#no-near-duplicates--and-the-first-number-i-published-from-a-broken-instrument)
+- [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
+- [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
+- [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
+- [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
+- [A dangling reference the whole verifier walked past](#a-dangling-reference-the-whole-verifier-walked-past)
+- [Summary](#summary)
+- [Next](#next)
+
 ## Count per bucket
 
 | bucket | n | |
@@ -171,7 +195,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The twelve records
+## The 29 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1502,7 +1526,7 @@ lane — the sweep table as the batch grew, and routing. Then it did not cover t
 brief's *first* requirement, the rule stated for each of the eighteen findings,
 nor whether the emitted backlogs still pass the sanitiser that consumes them —
 and two of those were refused on first write, so a later edit could refuse them
-again in silence. **Thirty checks now, plus an authoritative mode**, the last of them the one that closes the loop:
+again in silence. **Thirty-two checks now, plus an authoritative mode**, the last of them the one that closes the loop:
 `candidates/` is *generated*, so editing `recoveries.json` without re-emitting
 leaves sketches that still resolve by name, still read plausibly, and describe
 the previous version of the rule. Name resolution cannot see content drift.
@@ -1565,6 +1589,17 @@ makes.
 A suite of checks can share a blind spot precisely *because* it is a suite —
 thirty checks written from one habit of thought all point the same way. That is
 the batch's own central finding at the level of the checking apparatus.
+
+**Demonstrated once more while adding the contents map.** This document had run
+to 1,778 lines with no orientation, so a map was overdue on readability grounds
+alone. Building it surfaced a section headed **"The twelve records"** sitting
+over twenty-nine — stale for most of the lane, and invisible to all thirty
+checks because every one of them inspects the `###` record headings and none had
+ever looked at the `##` section headings above them. A level of the document
+nobody had thought to walk.
+
+The map is checked in both directions: every section listed, every entry
+pointing at a real section.
 ---
 
 ## Summary
@@ -1572,7 +1607,7 @@ the batch's own central finding at the level of the checking apparatus.
 **STATUS**: 29 records emitted and validated — 26 Bucket A, 2 C, 1 T, zero B,
 zero D. 16 rules found ALREADY-PROGRAM and named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 ppa-capture/verify.py` (30 fast + 2 authoritative). No gate
+re-measurable by `python3 ppa-capture/verify.py` (32 fast + 2 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -1747,7 +1782,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 ppa-capture/verify.py     30 checks, exit 0 = every claim holds
+    python3 ppa-capture/verify.py     32 checks, exit 0 = every claim holds
     python3 ppa-capture/verify.py --slow   + 2 authoritative gate-run checks
 
 **It was held to the two invocation properties this batch records about other
