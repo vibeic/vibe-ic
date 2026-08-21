@@ -86,6 +86,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import contract as C  # noqa: E402
 
 #: The plugin root is this file's grandparent; the schemas live beside
@@ -121,6 +122,20 @@ def schema_findings(document: Any, schema_dir: Path) -> List[Dict[str, Any]]:
             "PPA-C-010", C.SEV_UNDETERMINED,
             "jsonschema is not importable here, so the contract's shape was "
             "NOT validated. This is not the schema passing")]
+    # The SAME defect the ImportError branch above exists for, one version
+    # check further along: `Draft202012Validator` arrived in jsonschema 4.0.
+    # On an older library the attribute lookup raises AttributeError, which
+    # `raise SystemExit(main())` turns into exit code 1 -- and §1 says 1 is a
+    # finding about the DESIGN. Measured on this machine (jsonschema 3.2.0):
+    # every invocation crashed and reported rc=1, so a missing library was
+    # indistinguishable from a broken contract.
+    if not hasattr(jsonschema, "Draft202012Validator"):
+        return [C.finding(
+            "PPA-C-010", C.SEV_UNDETERMINED,
+            f"jsonschema {getattr(jsonschema, '__version__', 'unknown')} has "
+            f"no Draft202012Validator (it arrived in 4.0), so the contract's "
+            f"shape was NOT validated. This is not the schema passing",
+            jsonschema_version=getattr(jsonschema, "__version__", None))]
     path = Path(schema_dir) / "contract.v1.schema.json"
     schema, reason = C.load_json(path)
     if reason is not None:
@@ -174,7 +189,9 @@ def main(argv=None) -> int:
                     help="optional machine-readable report; nothing is "
                          "written unless this is given")
     ap.add_argument("--schema-dir", default=str(_DEFAULT_SCHEMA_DIR))
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     document, reason = C.load_json(Path(args.contract))
     if reason is not None:
@@ -219,4 +236,14 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # §1: 3 is INTERNAL ERROR. Letting this propagate exits 1, which is
+        # reserved for a finding about the design.
+        print(f"{cli_exit.MARK_REFUSE} ppa_contract_check: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was validated. rc=3 "
+              f"(NOT a finding about any contract).", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)

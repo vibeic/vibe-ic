@@ -74,6 +74,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports resolve however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import metrics as M
 
 RC_OK = 0
@@ -248,10 +249,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "policy; without it no winner is named.")
     ap.add_argument("--json", metavar="FILE", default=None,
                     help="write the machine-readable report here")
-    args = ap.parse_args(argv)
+    args, _rc = cli_exit.parse_or_refuse(ap, argv)
+    if args is None:
+        return _rc
 
     if (args.coverage is None) == (args.compare is None):
-        ap.error("give exactly one of --coverage BUNDLE or --compare A B")
+        return cli_exit.refuse(ap.prog, "give exactly one of --coverage BUNDLE or --compare A B")
 
     try:
         if args.coverage is not None:
