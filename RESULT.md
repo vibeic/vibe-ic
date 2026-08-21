@@ -1,5 +1,29 @@
 # Full test coverage for the two tape-out paths, IC and IP
 
+## LAND `test/pathsteps-ic-ip-matrix-rebased`
+
+Two refs are on the server and **the rebased one is the deliverable**:
+
+```
+test/pathsteps-ic-ip-matrix-rebased   <- LAND THIS. rebased onto e4c5840d6,
+                                         ahead 9 / behind 0, counts resolved
+                                         on the merged tree
+test/pathsteps-ic-ip-matrix           <- the same work on the OLDER base
+                                         8a9c5ad9e. Superseded; its
+                                         PROGRAM_INVENTORY counts are true of
+                                         a tree that no longer exists.
+```
+
+The old ref is still there because deleting it needed a permission this session
+does not have, so it could not be force-updated in place: the pre-push
+`COLLATERAL REVERT` gate reads `remote_sha..local_sha`, and after a rebase that
+range swallows main's own six commits and reports them as published-and-
+unpublished in one push. Pushing to a fresh ref made the same gate pass, which
+is the confirmation that the finding was the stale range and not a real
+collateral revert. **Please delete `test/pathsteps-ic-ip-matrix` when you take
+the rebased one.**
+
+---
 Branch `test/pathsteps-ic-ip-matrix`.
 
 **Cut** from `origin/main` **8a9c5ad9e** (`[v1.11.51]`, fetched 2026-08-21
