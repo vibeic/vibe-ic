@@ -43,7 +43,7 @@ def _drive(tmp_path, stub_body: str, budget: str = "240"):
     script.write_text(
         "set -u\n"
         f'PROGRAMS="{programs}"\nROOT="{tmp_path}"\nBASE="origin/main"\n'
-        f'GK_HYG_RECORD="{tmp_path}/rec.json"\nGK_HYG_RC=0\n'
+        f'GK_REVIEW_RECORD="{tmp_path}/review-hygiene.json"\n'
         f'GK_REVIEW_BUDGET_S="{budget}"\n'
         + _extract("run_gatekeeper_review")
         + 'run_gatekeeper_review; echo "RC=$?"\n',
@@ -187,7 +187,7 @@ def _drive_through_run(tmp_path, stub_body: str, budget: str = "240"):
     script.write_text(
         "set -u\n"
         f'PROGRAMS="{programs}"\nROOT="{tmp_path}"\nBASE="origin/main"\n'
-        f'GK_HYG_RECORD="{tmp_path}/rec.json"\nGK_HYG_RC=0\n'
+        f'GK_REVIEW_RECORD="{tmp_path}/review-hygiene.json"\n'
         f'GK_REVIEW_BUDGET_S="{budget}"\nLANE_DIR="{lanes}"\n'
         'LANE_BROKEN=0\nLANE_WAIT_RC=0\nLANDING_RECORD_ENABLED=0\nFAILED=0\n'
         'EMIT_OUT=""\nEMIT_RC=0\n'
