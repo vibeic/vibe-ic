@@ -62,7 +62,7 @@ from typing import Any, Callable, Iterator, List, Optional, Tuple
 from . import jsonschema_bundled as _bundled
 
 __all__ = ["PREFERRED", "ENGINE_LIBRARY", "ENGINE_BUNDLED", "Engine",
-           "resolve", "engine_report"]
+           "resolve", "engine_report", "reference_library"]
 
 #: THE DECLARATION. Distribution name, the minimum version that carries the
 #: validator class the shipped schemas need, and what it is wanted for. Every
@@ -211,6 +211,34 @@ def engine_or_skip(schema: Any):
                     "here looked. This is a SKIP and not a pass: "
                     + " ".join(notes))
     return engine
+
+
+def reference_library():
+    """The `jsonschema` MODULE itself when one is importable here, else `None`.
+
+    WHY THIS EXISTS AND WHY IT IS NOT A HOLE IN THE ONE-IMPORT-SITE RULE.
+    `resolve()` answers "can SOMETHING apply this schema", and for the shipped
+    schemas the bundled engine makes that answer yes on a bare host — which is
+    the whole point of this module. A DIFFERENTIAL caller asks a different
+    question: "is the REFERENCE implementation available here", because a
+    cross-check that obtained its reference through the bundled engine would be
+    comparing this package with itself.
+
+    That question still has to be asked through this module, not by a second
+    `import jsonschema` somewhere else, or the version probe, the fallback and
+    the refusal stop being inherited and R11 grows a second head. So the import
+    stays here and callers ask for the module by name.
+
+    A caller that only needs A validator wants `resolve()`; this is for the two
+    that specifically need the reference one, and
+    `test_ppa_schema_validation.test_jsonschema_is_imported_in_exactly_one_place`
+    is what keeps that list short.
+    """
+    try:
+        import jsonschema                               # noqa: WPS433
+    except ImportError:
+        return None
+    return jsonschema
 
 
 def engine_report(schema: Any) -> str:
