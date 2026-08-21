@@ -242,6 +242,10 @@
     "phase3.lec_post_layout": {
       "bucket_A_program": "programs/lec_post_layout_check.py",
       "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
+    },
+    "ppa.search_space": {
+      "bucket_A_program": "programs/crosslayer_search_space.py",
+      "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
     }
   },
   "default_routing": {

@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 17 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 18 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 14 | deterministic rules — the default, and every one names its predicate |
+| **A** | 15 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -664,6 +664,33 @@ verdict names a tool, not a scan over source.
 on the day it was found instead of open across a whole lane.
 **(d)** yes — it is per tool-invoking step, and the tree has many.
 
+### A-16 · an admitted lever must report its applicable site count · `ppa.search_space`
+
+From the source section I had skimmed rather than read — the cross-layer lane's
+account of **what it did not search**. One entry is a defect, not a choice:
+
+> *`state_encoding` was admitted and is VACUOUS on this design … the lever is
+> admitted, its applicable-site count is zero, and no candidate was authored.*
+
+Admission answers whether the specification PERMITS turning a lever. Whether
+there is anything here to turn is a property of the DESIGN, and the published
+space conflates them. Verified on the document itself:
+
+    admitted_count                                   5
+    keys carried by each admitted lever             10
+    of those keys, an applicable-site count          0
+
+So the lever with nothing to turn is indistinguishable from the four with plenty,
+and a planner reading `admitted_count` sizes a search against a dimension that
+cannot move. The lane that hit it wrote the fact down in prose; **nothing in the
+machine-readable space records it.**
+
+This is **A-8's problem on the input side** — and cheaper. A-8 catches an axis
+that did not move, after the arms are spent; this catches a lever that could not
+move, before the first one is.
+**(o)** yes. **(d)** yes — it is per lever per design, so it re-answers on the
+next design, where a different lever will be the vacuous one.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -845,6 +872,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-6 | — | 0 false positives | clean **where the record puts it**; placement warning |
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
+| A-16 | — | 5 admitted, 0 counted | verified on the published document |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |
