@@ -166,16 +166,59 @@ in §6.
 ## 6. The full-budget run
 
 Same chain, same tree, 1800 s budget, `VIBE_IC_BENCHMARK_DATA` bound to the
-published-corpus checkout. Recorded as it stands rather than predicted:
+published-corpus checkout.
 
-**At 721 s the review had not yet returned.** That is the whole of the budget
-argument, measured rather than argued: the 240 s the flag existed to fit is a
-deadline this review passes without deciding, and a landing wired that way
-refuses every time and names the wrong cause. The load it drives is its own —
-the hygiene set's parallel pytest population — not another tenant's, so this
-is the shape a real landing has.
+```
+# elapsed 631.5s  budget 1800s
+  FAIL  gatekeeper review (deadline adjudicated)
+    [ERROR] repo_hygiene_gates: ... [89/89 gate(s) ran in 551s; 13 NOT CHECKED (not a pass): ...]
+    [FAIL]  gate_red_since: 7 acknowledgement(s) expired — 15 NEW red, 8 acknowledged
+    [FAIL]  landing_is_one_commit: 30 commits ahead of origin/main
+    [FAIL]  landing_collateral_revert_check: ... 7a9ccd0bb removes 81 of the 145 line(s) ...
+FAILED=1
+```
 
-The final verdict and elapsed time are appended below when the run returns. If
-this section still ends here, the run had not returned by the end of the
-session and the number above is a LOWER BOUND, which is the only claim it was
-ever making.
+**`89/89 gate(s) ran in 551s`.** That line is the whole point of the change: the
+hygiene set was RUN, not adjudicated from a record. The bypass is gone and the
+set is paid for.
+
+**631.5 s against a 240 s budget, with the set alone costing 551 s.** Four
+minutes could not have contained this review on this host under any load. The
+number is measured, not argued, and it is what justifies moving the budget
+rather than keeping a deadline that can only expire.
+
+**`gate_red_since: 7 acknowledgement(s) expired`.** The deadline adjudication —
+the thing the record handover was invented to make reachable — happens without
+the handover. Nothing was lost by removing the flag.
+
+**The review DECIDED, and its decision reached the landing.** rc 1
+REQUEST_CHANGES, printed by the real `run` chain as `FAIL gatekeeper review`
+with `FAILED=1`. Together with the 5 s case in §5 — rc 2 UNDETERMINED, also
+`FAILED=1` — the wiring is shown deciding AND shown failing, which is the only
+pair that proves a wiring rather than a mention.
+
+### What in that output is NOT about this change, stated so it is not read as one
+
+* `landing_is_one_commit` and `landing_collateral_revert_check` fire because
+  the review was driven over the 30-commit BATCH branch without `--batch`,
+  which is exactly what the lander's own invocation does — it lands one commit.
+  They are properties of the subject, not of the wiring.
+* `repo_hygiene_gates` reports ERROR with 10 wiring errors, a shard whose
+  watchdog ended `stalled` at rc 199, and `13 NOT CHECKED`. That is this tree's
+  state. A landing on it refuses at this unit — correctly, and for reasons the
+  eight `gate_red_since` rows already describe.
+
+### A correction I owe, about my own measurement
+
+While the run was in flight I reported it "still running" at 721 s, 940 s and
+1104 s. All three were wrong. The poll was `pgrep -f drive_real_review.py`, and
+the background shells I had started to WAIT for that process carry the same
+string on their own command lines, so the poll was matching its waiters. The
+run had returned at 631.5 s. An earlier commit in this branch wrote 721 s into
+this section as a lower bound; the number above replaces it.
+
+Nothing downstream of that error changed — 631.5 s is still 2.6x the budget the
+removed flag existed to fit, so the conclusion it supported is unaffected. It
+is recorded because a measurement that answers about itself is the same class
+of defect as a gate that reads its own ledger, and this repo has been bitten by
+that one before.
