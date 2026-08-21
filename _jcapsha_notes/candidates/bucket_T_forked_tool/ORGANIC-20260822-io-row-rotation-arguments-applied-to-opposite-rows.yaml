@@ -1,0 +1,28 @@
+type: bug
+severity: P1
+component: program:pad_ring_gen
+plugin_version: "1.11.66"
+
+title: >-
+  The IO-row builder applies its two named rotation arguments to each other's rows
+
+root_cause_layer: forked_tool
+tool: "OpenROAD"
+generating_step: "phase3.pad_ring"
+golden_sample: "_jcapsha_notes/evidence/rotation_arguments_GOLDEN.txt"
+bad_sample: "_jcapsha_notes/evidence/rotation_two_arm_MEASURED.txt"
+problem: |
+  The IO-row builder takes one rotation argument named for the horizontal rows and one named for the vertical rows. MEASURED across seven separate tool processes, one per argument pair so no row from an earlier pass could be reused by a later one: varying the HORIZONTAL argument moves the WEST and EAST pads and leaves the SOUTH and NORTH pads untouched, and varying the VERTICAL argument moves the SOUTH and NORTH pads and leaves WEST and EAST untouched. Row identity was confirmed by die position, not by trusting the row names: the pad on the west row sits at the offset from the low-X edge and the pad on the south row at the offset from the low-Y edge. The tool's own script layer is CORRECT: dumping the command body from the running binary shows the two arguments bound to their own variables and passed to the row builder in the documented order, so the crossing is below the script layer, in the compiled row builder. Reproduced on two builds about 440 commits apart.
+tool_enhancement: |
+  In the compiled IO-row builder that the script layer calls with (horizontal rotation, vertical rotation, corner rotation, ring index), the horizontal rotation must be applied to the rows that run horizontally and the vertical rotation to the rows that run vertically. They are currently exchanged. The fix belongs in the fork of this tool: a plugin-side rule could only paper over it, because the plugin does not place the rows and any correction it applied would be a second guess layered on the first.
+
+pattern: |
+  A tool exposes two named arguments that select between two symmetric cases, and applies each to the other's case. The symmetry is what hides it: at the default, where both arguments carry the same value, the two wrong assignments are indistinguishable from the two right ones, so nothing fires until someone sets exactly one of them. A caller who sets the one named for the case they care about sees no change and concludes the argument is INERT, which is a different and much less alarming defect than the one they have.
+
+suggested_fix: |
+  Exchange the two parameters at the point the compiled row builder consumes them, and pin the fix with the two-arm measurement in the bad sample: hold one argument at the default and vary the other, in separate processes, asserting that only the rows the varied argument NAMES move. A single-arm probe cannot tell an inert argument from a crossed one, which is how this was first recorded as inertness.
+
+id: "ORGANIC-20260822-io-row-rotation-arguments-applied-to-opposite-rows"
+submitted_at: "2026-08-22T02:50:56+08:00"
+session_context: >-
+  Found while capturing a pad-ring recovery. The source report recorded the horizontal-side pad tracking the vertical argument as a SEPARATE oddity, observed and not chased. Running the decisive second arm turned it into the whole explanation.

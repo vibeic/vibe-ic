@@ -1,0 +1,19 @@
+########## ROTH=R0 ROTV=R0
+##### roth=R0 rotv=R0  (die 0..2262 um)
+  pw0 row-claim orient=MXR90  xMin=26.0 yMin=500.0  dx=350.0 dy=75.0
+  pw1 row-claim orient=R90  xMin=1886.0 yMin=500.0  dx=350.0 dy=75.0
+  ps0 row-claim orient=R0  xMin=500.0 yMin=26.0  dx=75.0 dy=350.0
+  ps1 row-claim orient=MX  xMin=500.0 yMin=1886.0  dx=75.0 dy=350.0
+########## ROTH=R90 ROTV=R0
+##### roth=R90 rotv=R0  (die 0..2262 um)
+  pw0 row-claim orient=MX  xMin=26.0 yMin=500.0  dx=75.0 dy=350.0
+  pw1 row-claim orient=R180  xMin=1806.1 yMin=500.0  dx=75.0 dy=350.0
+  ps0 row-claim orient=R0  xMin=500.0 yMin=26.0  dx=75.0 dy=350.0
+  ps1 row-claim orient=MX  xMin=500.0 yMin=1886.0  dx=75.0 dy=350.0
+########## ROTH=R0 ROTV=R90
+##### roth=R0 rotv=R90  (die 0..2262 um)
+  pw0 row-claim orient=MXR90  xMin=26.0 yMin=500.0  dx=350.0 dy=75.0
+  pw1 row-claim orient=R90  xMin=1886.0 yMin=500.0  dx=350.0 dy=75.0
+  ps0 row-claim orient=R90  xMin=500.0 yMin=26.0  dx=350.0 dy=75.0
+  ps1 row-claim orient=MYR90  xMin=500.0 yMin=1806.1  dx=350.0 dy=75.0
+PROBE_COMPLETE

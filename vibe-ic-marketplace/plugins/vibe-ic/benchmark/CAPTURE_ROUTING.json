@@ -100,6 +100,11 @@
       "bucket_A_program": "programs/flow_compliance_check.py",
       "bucket_B_skill_file": "skills/checkpoint-gate/SKILL.md"
     },
+    "phase3.pad_ring": {
+      "description": "Step 15.5ic pad-ring placement: the DECLARED pad ring is placed by upstream's own algorithm, or the config variables it went without are named. Its producer and its gate are pad_ring_gen.py / pad_ring_check.py, which is why this step does NOT route to phase3_one_shot_runner.py like its floorplan neighbour.",
+      "bucket_A_program": "programs/pad_ring_gen.py",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
     "phase3.floorplan": {
       "description": "Floorplan / die-area / core-utilization / macro placement setup ahead of PnR.",
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
