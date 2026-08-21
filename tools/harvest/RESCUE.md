@@ -51,3 +51,29 @@ there with `update-ref` (local, no hook), fetched into a clone whose hook passes
 that one — same object, same bytes, a gate that accepts it rather than a gate stepped around.
 
 Nothing was deleted and no existing ref was moved.
+
+## The set is not the name — one wrong annotation, and the class it belongs to
+
+The first audit asked *"is this sha in **some** rescue ref?"* and returned 120/120 clean.
+jharv3 pointed out that this is the wrong question: **a reader follows the ref the row names,
+not the set.** Re-run strictly — *does the ref THIS ROW NAMES contain the sha THIS ROW NAMES,
+read from the remote?* — it found one wrong row, `_v1126`. jharv3's audit found the identical
+row wrong from the other side, for a different reason.
+
+The row was wrong because the annotation came from a hand-written `clone -> ref` table, and that
+commit had been pushed to a ref of its own rather than to its clone's usual anchor. The table
+and the world disagreed, and the table won.
+
+So the fix is not the row. `bin_jharv2/rescue_map.py` now **indexes the real refs** — every
+rescue ref's tip and every one of its parents — and answers from that index. An annotation
+derived from the measurement cannot name a ref that does not contain its sha; one derived from
+a lookup table can, and did.
+
+**128 of 128 preservation claims now name a ref that actually contains the commit**, verified
+against the remote with `bin_jharv2/audit_named_ref.sh`. Zero rows say "not preserved".
+
+One more thing that audit taught: after the wording gained a second form (`IS the tip of` for a
+ref that is the commit, alongside `is a parent of`), the auditor's regex knew only the first and
+reported two good rows as `UNPARSEABLE`. That reads exactly like a defect and was not one. An
+auditor that does not understand the thing it audits produces findings indistinguishable from
+real ones.
