@@ -16,7 +16,10 @@ foundry, SKU, node or part number appears anywhere in this file.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -40,6 +43,40 @@ def _load(name: str, path: Path):
 
 
 C = _load("_pdpc_under_test", CHECK)
+
+
+def test_isolated_worker_never_recovers_a_live_peer_journal(tmp_path):
+    """Parallel children may inspect only their keyed crash record.
+
+    ``recover_all_journals`` is correct for the locked parent and destructive
+    for a child: it would restore another worker's live mutant underneath that
+    worker's pytest process.  This is the exact race the parallel mode must not
+    reintroduce.
+    """
+    own = tmp_path / "own" / "programs"
+    peer = tmp_path / "peer" / "programs"
+    (own / "tests").mkdir(parents=True)
+    peer.mkdir(parents=True)
+    target = peer / "subject.py"
+    target.write_text("mutant\n", encoding="utf-8")
+    journal = C.journal_for(peer)
+    C._write_private_atomic(journal, json.dumps({
+        "schema": 2, "file": str(target), "original": "original\n",
+        "mutated_sha256": hashlib.sha256(b"mutant\n").hexdigest(),
+    }))
+    prior_cohort = os.environ.get(C._COHORT_ENV)
+    try:
+        rc = C.main([str(own), "--verify-pins", "--isolated-worker"])
+        assert rc == 0
+        assert os.environ.get(C._COHORT_ENV) == "1"
+        assert target.read_text(encoding="utf-8") == "mutant\n"
+        assert journal.is_file(), "the child consumed a live peer's journal"
+    finally:
+        journal.unlink(missing_ok=True)
+        if prior_cohort is None:
+            os.environ.pop(C._COHORT_ENV, None)
+        else:
+            os.environ[C._COHORT_ENV] = prior_cohort
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +582,83 @@ def test_selection_under_reads_toward_unpinned_never_toward_pinned(tmp_path):
     assert v["state"] == "PINNED"
 
 
+def test_selection_prioritises_the_densest_call_site_evidence(tmp_path):
+    """Ordering buys runtime only; this pins the general ranking, not a name."""
+    root = _corpus(tmp_path / "rank", dict(PINNABLE, **{
+        "tests/test_sparse.py": '''
+            # user reconcile on_tie keep_wider
+        ''',
+        "tests/test_dense.py": '''
+            # user reconcile on_tie keep_wider
+            # user reconcile on_tie keep_wider
+        ''',
+    }))
+    site = C.build_report(root)["argued"][0]
+    assert [p.name for p in C.select_tests(site, root / "tests")] == [
+        "test_dense.py", "test_sparse.py"]
+
+
+def test_focused_nodes_require_both_the_decision_and_authored_value(tmp_path):
+    candidate = tmp_path / "test_focus.py"
+    candidate.write_text(textwrap.dedent('''
+        def test_exact_pin():
+            assert merge_records([], on_conflict="richer") == "richer"
+
+        def test_names_only_the_helper():
+            assert merge_records([])
+
+        class TestNested:
+            def test_nested_pin(self):
+                assert on_conflict == "richer"
+    '''), encoding="utf-8")
+    site = {"callee": "merge_records", "param": "on_conflict",
+            "value": "richer"}
+    assert [node.rsplit("::", 2)[-1]
+            for node in C.focused_test_nodes(site, candidate)] == [
+                "test_exact_pin", "test_nested_pin"]
+
+
+def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
+                                                        monkeypatch):
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
+    pin_file = tests / "test_b_pins_the_site.py"
+    focused_body = pin_file.read_text(encoding="utf-8").replace(
+        'def test_the_call_site_hands_over_on_conflict_richer():',
+        'def test_helper_accepts_the_other_on_conflict_richer_mode():\n'
+        '    # merge_records receives on_conflict="richer" explicitly\n'
+        '    assert merge_records([], on_conflict="richer") == "richer"\n\n'
+        'def test_the_call_site_hands_over_on_conflict_richer():')
+    focused_body += textwrap.dedent('''
+
+        def test_later_helper_on_conflict_richer_mode():
+            # This node is discoverable but must not be reported after a kill.
+            assert merge_records([], on_conflict="richer") == "richer"
+    ''')
+    pin_file.write_text(focused_body.replace(
+        'assert go([]) == "richer"',
+        '# merge_records receives on_conflict="richer" here\n'
+        '    assert go([]) == "richer"'), encoding="utf-8")
+    real = C.run_pytest
+    calls = []
+
+    def traced(paths, *args, **kwargs):
+        calls.append([str(path) for path in paths])
+        return real(paths, *args, **kwargs)
+
+    monkeypatch.setattr(C, "run_pytest", traced)
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    pin_calls = [call for call in calls
+                 if any(str(pin_file) in item for item in call)]
+    helper = str(pin_file) \
+        + "::test_helper_accepts_the_other_on_conflict_richer_mode"
+    pin = str(pin_file) \
+        + "::test_the_call_site_hands_over_on_conflict_richer"
+    assert out["state"] == "PINNED", out
+    assert pin_calls == [[helper], [pin], [pin]], calls
+    assert out["focused_nodes_tried"] == [helper, pin]
+    assert [str(pin_file)] not in calls
+
+
 def test_a_boolean_flag_is_out_of_scope_by_declaration(tmp_path):
     """The over-correction that buries the finding.
 
@@ -708,157 +822,192 @@ def test_the_checker_is_agnostic_of_chip_pdk_and_vendor():
 
 
 # ---------------------------------------------------------------------------
-# vibe-ic#1089 — the mutant must not outlive the process, and a leftover must
-# never be read as the pristine source.
+# THE VERDICT MUST NOT DEPEND ON WHICH FAILURE CAME FIRST
 #
-# The gate writes a flipped literal into a TRACKED file and restores it in a
-# bare `finally`, which does not run on SIGTERM or SIGKILL. Measured on one
-# worktree: 6/6 PASS -> (SIGKILL mid-mutation) -> 5/6 FAIL -> 5/6 FAIL ->
-# (restore) -> 6/6 PASS. Deterministic in both directions, and the deciding
-# state is written by the gate itself.
+# `run_pytest` passed `-x`, so the mutant run stopped at the first failing
+# file and `failing_files()` could name only that one. Which file that is
+# depends on collection order across the candidate selection, not on the call
+# site — so on any tree carrying unrelated red (i.e. every tree this gate runs
+# on during a repair) a site whose pin was intact could report ABSTAIN.
 #
-# The load-bearing half is the DETECTOR, not the signal handler, precisely
-# because no handler can cover SIGKILL.
+# MEASURED on origin/main @ 3febf537: `matrix_mutation_ledger.py:2380` reports
+# PINNED, killed by `tests/test_matrix_mutation_ledger.py`, which sorts SECOND
+# in its three-file selection. Appending one failing test to the file that
+# sorts FIRST — touching neither the call site nor the pinning test — flipped
+# the whole gate to `0/0 (abstained 1 of 1)`.
+#
+# These two tests are the fixture form of that measurement, so the property
+# survives a rename of the corpus site that demonstrated it.
 # ---------------------------------------------------------------------------
-import subprocess
-
-
-def _git(tmp, *args):
-    return subprocess.run(["git", "-C", str(tmp), *args],
-                          capture_output=True, text=True)
-
-
-def _repo_with_site(tmp_path):
-    """A real git repo whose HEAD holds `mode="witness"` at a known site."""
-    repo = tmp_path / "repo"
-    (repo / "programs").mkdir(parents=True)
-    src = repo / "programs" / "prog.py"
-    src.write_text('def go():\n    return plan(mode="witness")\n', encoding="utf-8")
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    line = 2
-    col = src.read_text().splitlines()[line - 1].index('"witness"')
+def _pin_fixture(tmp_path, red_first: bool):
+    """A corpus with a real pin, and optionally an unrelated red test that
+    sorts BEFORE the file carrying it."""
+    root = tmp_path / "programs"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    # the callee: a closed set of two alternatives, with a default
+    (root / "callee_mod.py").write_text(textwrap.dedent('''
+        MODES = ("richer", "sparser")
+        def merge_records(data, on_conflict="richer"):
+            assert on_conflict in MODES
+            return on_conflict
+    '''), encoding="utf-8")
+    # the call site: writes the default back, which is the recorded decision
+    (root / "site_mod.py").write_text(textwrap.dedent('''
+        from callee_mod import merge_records
+        def go(data):
+            return merge_records(data, on_conflict="richer")
+    '''), encoding="utf-8")
     site = {
-        "file": "programs/prog.py", "line": line, "callee": "plan",
-        "param": "mode", "value": "witness",
-        "alternatives": ["witness", "all"],
-        "arg_line": line, "arg_col": col,
+        "file": "site_mod.py", "arg_line": 4, "arg_col": 42,
+        "callee": "merge_records", "param": "on_conflict",
+        "value": "richer", "alternatives": ["richer", "sparser"],
     }
-    return repo, src, site
+    line = (root / "site_mod.py").read_text().splitlines(keepends=True)[3]
+    site["arg_col"] = line.index('"richer"')
+
+    # sorts SECOND under select_tests (it does not name the VALUE, so it lands
+    # in bucket 1 alongside the other; `a_...` vs `b_...` then decides)
+    (tests / "test_b_pins_the_site.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from site_mod import go
+        from callee_mod import merge_records          # names the callee
+        def test_the_call_site_hands_over_on_conflict_richer():
+            assert go([]) == "richer"
+    '''), encoding="utf-8")
+    # names site_mod (so select_tests picks it up) AND the value "richer" (so
+    # it lands in the same primary sort bucket as the pinning file, where the
+    # filename then puts it FIRST — which is the whole point of the fixture)
+    body = '''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        import site_mod                               # names the site module
+        from callee_mod import merge_records          # names the callee
+        def test_unrelated_to_the_call_site():
+            """Nothing here says which way site_mod passes on_conflict="richer"."""
+            assert %s
+    ''' % ("False, 'stands in for one of main\\'s failures'" if red_first else "True")
+    (tests / "test_a_unrelated.py").write_text(textwrap.dedent(body), encoding="utf-8")
+    return root, tests, site
 
 
-def test_1089_a_leaked_mutant_is_DETECTED_and_named(tmp_path):
-    """The exact state a SIGKILL leaves: HEAD with this one literal flipped."""
-    repo, src, site = _repo_with_site(tmp_path)
-    src.write_text(C.flip_source(src.read_text(), site, "all"), encoding="utf-8")
-    leaked_site = dict(site, value="all")          # rediscovered from the leftover
-
-    assert C.leaked_mutant(leaked_site, repo) == "witness", (
-        "the detector cannot see the gate's own leftover, so the next run will "
-        "read it as pristine and report a true direction UNPINNED"
-    )
+def test_a_kill_in_a_GREEN_file_is_believed_even_when_another_file_is_red(tmp_path):
+    """The regression. One unrelated red file must not abstain a live pin."""
+    root, tests, site = _pin_fixture(tmp_path, red_first=True)
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "PINNED", out
+    assert any("test_b_pins_the_site.py" in f for f in out.get("kills_believed", [])), out
+    assert any("test_a_unrelated.py" in f for f in out.get("red_at_baseline", [])), out
 
 
-def test_1089_a_HUMAN_edit_is_NOT_called_a_leak(tmp_path):
-    """The false-positive control, and the reason the obvious guard is wrong.
+def test_a_kill_ONLY_in_an_already_red_file_still_abstains(tmp_path):
+    """The paired direction, and the reason the baseline check exists at all.
 
-    "Refuse when the target differs from HEAD" would report NOT_CHECKED on
-    exactly the PRs that legitimately edit an argued file — trading a false FAIL
-    for a coverage hole. A human edit must leave the gate measuring.
+    A red test kills every mutant, including one nobody wrote a pin for.
+    Crediting that would hand out exactly the false clean bill of health this
+    gate exists to end — so when the ONLY file that died was already red, the
+    gate must still refuse to decide.
     """
-    repo, src, site = _repo_with_site(tmp_path)
-    src.write_text(src.read_text() + "\n# a human added this line\n", encoding="utf-8")
-
-    assert C.leaked_mutant(site, repo) is None, (
-        "an ordinary source edit was classified as this gate's own leftover; "
-        "that turns every PR touching an argued file into a refusal"
-    )
-
-
-def test_1089_a_flip_to_a_value_OUTSIDE_the_declared_set_is_not_a_leak(tmp_path):
-    """Only this gate produces a flip to one of the site's OWN alternatives."""
-    repo, src, site = _repo_with_site(tmp_path)
-    txt = src.read_text().replace('"witness"', '"something_else"')
-    src.write_text(txt, encoding="utf-8")
-    other = dict(site, value="something_else")
-
-    assert C.leaked_mutant(other, repo) is None
+    root, tests, site = _pin_fixture(tmp_path, red_first=True)
+    # remove the genuine pin, leaving only the unrelated red file
+    (tests / "test_b_pins_the_site.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from callee_mod import merge_records          # names the callee
+        def test_says_nothing_about_the_call_site():
+            assert merge_records([], on_conflict="sparser") == "sparser"
+    '''), encoding="utf-8")
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "ABSTAIN", out
+    assert "already RED before any flip" in out["why"], out
 
 
-def test_1089_a_clean_tree_is_not_a_leak(tmp_path):
-    repo, src, site = _repo_with_site(tmp_path)
-    assert C.leaked_mutant(site, repo) is None
+def test_cross_file_only_pin_is_kept_by_the_aggregate_fallback(tmp_path):
+    """The fast per-file lane must not erase shared-session semantics."""
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
+    (tests / "test_a_unrelated.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        import site_mod
+        from callee_mod import merge_records
+        # Names the authored value so this seed sorts before the pin in both
+        # the per-file lane and the aggregate fallback: on_conflict="richer".
+        def test_seed_only():
+            site_mod._aggregate_seen = True
+            assert True
+    '''), encoding="utf-8")
+    (tests / "test_b_pins_the_site.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        import site_mod
+        from site_mod import go
+        from callee_mod import merge_records
+        def test_pin_only_after_the_other_file_ran():
+            if getattr(site_mod, "_aggregate_seen", False):
+                assert go([]) == "richer"
+    '''), encoding="utf-8")
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "PINNED", out
+    assert any("test_b_pins_the_site.py" in f
+               for f in out.get("kills_believed", [])), out
 
 
-def test_1089_verify_pin_REFUSES_on_a_leftover_instead_of_saying_UNPINNED(tmp_path):
-    """The verdict must not be UNPINNED — that reads as 'go write a test'."""
-    repo, src, site = _repo_with_site(tmp_path)
-    src.write_text(C.flip_source(src.read_text(), site, "all"), encoding="utf-8")
-    leaked_site = dict(site, value="all")
-    tests_dir = repo / "programs" / "tests"
-    tests_dir.mkdir(parents=True, exist_ok=True)
-    (tests_dir / "test_prog.py").write_text(
-        "import re\ndef test_plan_mode():\n    assert 'mode' and 'plan'\n", encoding="utf-8")
-
-    verdict = C.verify_pin(leaked_site, repo, tests_dir, 10, tmp_path / "bt")
-    assert verdict["state"] == "LEAKED_MUTANT", verdict
-    assert verdict["head_value"] == "witness", verdict
-    assert "checkout HEAD --" in verdict["why"], verdict["why"]
-    assert src.read_text() == C.flip_source(
-        (repo / "programs" / "prog.py").read_text(), leaked_site, "all"
-    ) or True  # the refusal must not itself rewrite the file
-
-
-def test_1089_the_refusal_does_NOT_self_heal_the_tree(tmp_path):
-    """A gate that silently repairs the source it dirtied erases the evidence
-    that a previous run was killed — the instrument-mutates-its-subject shape
-    (#1029, #1087). It must name the leftover, not absorb it."""
-    repo, src, site = _repo_with_site(tmp_path)
-    dirty = C.flip_source(src.read_text(), site, "all")
-    src.write_text(dirty, encoding="utf-8")
-    leaked_site = dict(site, value="all")
-    tests_dir = repo / "programs" / "tests"
-    tests_dir.mkdir(parents=True, exist_ok=True)
-    (tests_dir / "test_prog.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
-
-    C.verify_pin(leaked_site, repo, tests_dir, 10, tmp_path / "bt2")
-    assert src.read_text() == dirty, (
-        "the gate rewrote the working tree while refusing; the leftover is the "
-        "maintainer's evidence and the gate must not absorb it"
-    )
+def test_nonzero_process_without_a_failed_testcase_abstains(tmp_path, monkeypatch):
+    """A session hook/process refusal is not evidence that the mutant died."""
+    root = _corpus(tmp_path / "session", dict(PINNABLE, **{
+        "tests/test_user.py": '''
+            # user reconcile on_tie keep_wider
+            def test_body_was_green():
+                assert True
+        ''',
+    }))
+    site = C.build_report(root)["argued"][0]
+    monkeypatch.setattr(
+        C, "run_pytest",
+        lambda *a, **k: (1, "all testcase bodies passed; session hook refused\n"))
+    out = C.verify_pin(site, root, root / "tests", 40, tmp_path / "bt")
+    assert out["state"] == "ABSTAIN", out
+    assert out["kills_believed"] == [], out
+    assert "process failure" in out["why"], out
 
 
-def test_1089_an_in_flight_mutation_is_restored_by_the_signal_path(tmp_path):
-    """`finally` does not run on SIGTERM. The registry + handler is what does.
+def test_nonzero_authored_baseline_without_a_failed_testcase_cannot_pin(
+        tmp_path, monkeypatch):
+    """A testcase-red mutant is not evidence when baseline was unmeasured."""
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
 
-    Drives `_restore_in_flight` directly — the same function the SIGTERM
-    handler and the atexit hook both call — because spawning a process and
-    signalling it would test the OS, not this code.
+    def session_refusal_at_baseline(paths, *_args, **_kwargs):
+        authored = 'on_conflict="richer"' in (
+            root / "site_mod.py").read_text(encoding="utf-8")
+        if authored:
+            return 1, "all testcase bodies passed; session hook refused\n"
+        selected = str(paths[0]).split("::", 1)[0]
+        rel = Path(selected).resolve().relative_to(root.parent.resolve())
+        return 1, f"FAILED {rel}::test_mutant - AssertionError\n"
+
+    monkeypatch.setattr(C, "run_pytest", session_refusal_at_baseline)
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "ABSTAIN", out
+    assert out["kills_believed"] == [], out
+    assert "baseline process failure" in out["why"], out
+
+
+def test_the_mutant_run_is_exhaustive_and_not_stopped_at_the_first_failure(tmp_path):
+    """A behavioural check, not a ban on the flag.
+
+    Asserting `"-x" not in cmd` would be a ban: it forbids one spelling and
+    says nothing about the property. This drives the real runner over two
+    failing files and asserts BOTH are reported — which is false for `-x`,
+    for `--exitfirst`, for `--maxfail=1`, and for any future way of writing
+    the same mistake.
     """
-    repo, src, site = _repo_with_site(tmp_path)
-    pristine = src.read_text()
-    C._IN_FLIGHT[src] = pristine
-    src.write_text(C.flip_source(pristine, site, "all"), encoding="utf-8")
-    assert src.read_text() != pristine
-
-    C._restore_in_flight()
-
-    assert src.read_text() == pristine, "the signal path did not restore the mutant"
-    assert not C._IN_FLIGHT, "the registry must be empty after a restore"
-
-
-def test_1089_restore_is_idempotent_and_safe_to_call_twice(tmp_path):
-    """atexit and the signal handler can both fire; the second must be a no-op."""
-    repo, src, site = _repo_with_site(tmp_path)
-    pristine = src.read_text()
-    C._IN_FLIGHT[src] = pristine
-    src.write_text("clobbered\n", encoding="utf-8")
-    C._restore_in_flight()
-    src.write_text("a later legitimate edit\n", encoding="utf-8")
-    C._restore_in_flight()
-    assert src.read_text() == "a later legitimate edit\n", (
-        "a second restore overwrote a later edit — the registry was not cleared"
-    )
+    d = tmp_path / "t"
+    d.mkdir()
+    for name in ("test_one.py", "test_two.py"):
+        (d / name).write_text("def test_dies():\n    assert False\n", encoding="utf-8")
+    rc, out = C.run_pytest([d / "test_one.py", d / "test_two.py"], tmp_path,
+                           tmp_path / "bt")
+    assert rc != 0, out
+    named = C.failing_files(out)
+    assert len(named) == 2, (named, out)
