@@ -124,6 +124,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+#: vibe-ic#1051 follow-up. This gate announced a skip in its own stdout and
+#: returned 0, so `flow_compliance_check` recorded a plain PASS — to every
+#: automated consumer, indistinguishable from a gate that read the layer and
+#: found it correct. The refusal itself was right and is unchanged; only the
+#: CHANNEL changes, so it survives into the flow record as VACUOUS_PASS. Same
+#: repair as #1002 and #1018, through the house rule `_vacuous_exit`.
+#:
+#: `skip_kind` exists because `skipped_reason` was overloaded: it carries BOTH
+#: "there was nothing to examine" AND "a human waived a finding". Only the
+#: first is vacuous. A waiver is a judgement ABOUT findings the gate made over
+#: artefacts it read, so routing it to rc 2 would claim the gate examined
+#: nothing when it examined everything and was overruled — and rc 3
+#: (PASS_WITH_WAIVERS) is a different tier that `_vacuous_exit` explicitly
+#: disclaims. The gate's own tests caught that; the distinction is recorded as
+#: a FIELD rather than re-derived from the reason text.
+import _vacuous_exit as _vx
+
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -406,6 +423,7 @@ def inspect(project: Path,
     }
 
     if not _l9_source_files(project):
+        summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
             "no L9 / constraint / floorplan source file in the project")
         return findings, summary
@@ -418,6 +436,7 @@ def inspect(project: Path,
         {"kind": k, "fraction": v, "source": s} for k, v, s in util_decls]
 
     if not die_decls and not util_decls:
+        summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
             "the design mandates no floorplan (no DIE_AREA / DIE_WIDTH+"
             "DIE_HEIGHT / PL_TARGET_DENSITY / FP_CORE_UTIL) — phase3 "
@@ -427,6 +446,7 @@ def inspect(project: Path,
     waiver = _waiver_rationale(project, WAIVER_ID)
     summary["waiver"] = waiver
     if waiver:
+        summary["skip_kind"] = "waiver"
         summary["skipped_reason"] = f"waiver {WAIVER_ID}: {waiver[:80]}"
         return findings, summary
 
@@ -609,7 +629,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"=== l9_floorplan_contract_check ({project.name}) ===")
     if summary.get("skipped_reason"):
         print(f"skipped: {summary['skipped_reason']}")
-        return 0
+        if summary.get("skip_kind") != "input-missing":
+            return 0          # a waiver is not an empty examination
+        # disclose on BOTH channels the consumer reads: the
+        # rc-independent `VACUOUS_PASS:` sentinel (stderr, so a
+        # `--json -` document on stdout stays parseable) and the rc.
+        _vx.announce_vacuous("l9_floorplan_contract_check", summary["skipped_reason"])
+        return _vx.RC_VACUOUS
     print(f"die declarations: {summary['die_declarations']}")
     print(f"resolved die: {summary['resolved_die']}  "
           f"L19 die: {summary['l19_die']}")

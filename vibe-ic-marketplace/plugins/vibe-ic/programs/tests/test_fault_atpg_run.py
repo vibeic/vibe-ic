@@ -58,40 +58,63 @@ def test_clock_arg_required(tmp_path):
 
 
 # --- image-resolution pinning ------------------------------------------------
-# The fork fallback tags must be PINNED (vibeic-eda:X.Y.Z), never :latest — a
-# floating tag can silently resolve to a stale local image whose tool behavior
-# no longer matches what the plugin was verified against. The pinned value is
-# kept in sync with tools/vibeic-eda/VERSION by sync_image_version.py (this
-# file is registered in its INSTALL_DOC_CANDIDATES).
-
-def _find_version_file():
-    for up in Path(__file__).resolve().parents:
-        c = up / "tools" / "vibeic-eda" / "VERSION"
-        if c.is_file():
-            return c
-    return None
-
+# A floating `:latest` must never reach `docker run` from this program: it does
+# not consult the registry, so it means "whatever this machine pulled, whenever".
+# `_eda_image.resolve()` answers a digest, or a named local tag, and says so on
+# stderr when it degrades.
+#
+# It used to be a literal kept in step with `tools/vibeic-eda/VERSION` by
+# `sync_image_version.py`. Both are deleted — that file held vibeic-eda's version
+# number inside this repo, so every image release needed a PR here — and the
+# helper that located it went with them, unused.
 
 def test_no_floating_fork_image_tag():
+    """A floating `:latest` must never reach `docker run` from this program.
+
+    THE SECOND HALF OF THIS TEST WAS RETIRED, and the reason is worth having in
+    front of whoever reads it next. It used to also require a literal
+    `vibeic-eda:X.Y.Z` in this file, on the stated ground that a pinned tag is
+    "what the plugin was verified against". Measured 2026-08-20: nothing ever
+    verified that — the publish step proved only that the tag was PULLABLE and
+    wrote the verification claim anyway. The image is now RESOLVED from the
+    registry to a DIGEST (`programs/_eda_image.py`), so demanding a version
+    literal here would demand back the thing that was removed.
+
+    What replaced it, by name, both proven to discriminate:
+      * `test_the_eda_image_is_resolved_not_remembered.py
+         ::test_the_image_consumers_carry_no_pinned_version[fault_atpg_run.py]`
+      * `...::test_resolve_returns_a_digest_not_a_floating_tag`
+
+    The half kept below is still true and still worth guarding: a digest is
+    fine, a floating tag is not.
+    """
     src = SCRIPT.read_text(encoding="utf-8")
     assert "vibeic-eda:latest" not in src, (
-        "fork image fallback must be pinned to vibeic-eda:X.Y.Z, not :latest"
+        "a floating :latest can silently resolve to a stale local image; the "
+        "image is resolved to a digest through programs/_eda_image.py"
     )
-    # the pinned fork tags must still be present (resolver not gutted)
-    assert re.search(r"ghcr\.io/vibeic/vibeic-eda:\d+\.\d+\.\d+", src)
 
 
-def test_pinned_tag_matches_version_source_of_truth():
-    vf = _find_version_file()
-    if vf is None:
-        pytest.skip("tools/vibeic-eda/VERSION not present (packaged plugin)")
-    version = vf.read_text(encoding="utf-8").strip()
+def test_this_program_pins_no_image_version_at_all():
+    """RETIRED AND RESTATED, not deleted.
+
+    This was `test_pinned_tag_matches_version_source_of_truth`: it required a
+    pinned `vibeic-eda:X.Y.Z` here and required it to equal
+    `tools/vibeic-eda/VERSION`. That invariant is gone by intent — the image is
+    resolved from the registry to a digest — so the guard is restated as its
+    NEGATION rather than removed, which is the only version of "retire a check"
+    that does not quietly reduce what is checked.
+
+    The cross-file half (agreement with VERSION) is carried by
+    `test_the_eda_image_is_resolved_not_remembered.py
+     ::test_no_module_level_constant_freezes_an_image_version`, which sweeps
+    every shipped program rather than this one.
+    """
     src = SCRIPT.read_text(encoding="utf-8")
     tags = re.findall(r"vibeic-eda:(\d+\.\d+\.\d+)", src)
-    assert tags, "expected pinned vibeic-eda:X.Y.Z tags in fault_atpg_run.py"
-    assert set(tags) == {version}, (
-        f"pinned tags {sorted(set(tags))} drifted from VERSION={version}; "
-        "run tools/vibeic-eda/sync_image_version.py --set/--bump"
+    assert not tags, (
+        f"{SCRIPT.name} pins {sorted(set(tags))}. The image is RESOLVED, not "
+        f"remembered: call programs/_eda_image.resolve()."
     )
 
 

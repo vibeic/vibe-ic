@@ -434,11 +434,18 @@ def test_every_flow_compliance_option_is_classified_as_ruler_or_not():
 # ─────────────────── the published artefact ──────────────────────────
 
 
+#: Under the 60s ceiling `ci_harness_timeout_ceiling_check` derives from the
+#: 180s harness bound: an inner call that can outlive the harness kills the
+#: SESSION instead of the test. The projects here are three files; the whole
+#: 32-test suite runs in ~20s.
+_SUBPROC_TIMEOUT = 55
+
+
 def _run_fcc(project: Path, *extra):
     env = dict(os.environ)
     return subprocess.run(
         [sys.executable, str(FCC), str(project), "--phase", "all", *extra],
-        capture_output=True, text=True, env=env, timeout=900)
+        capture_output=True, text=True, env=env, timeout=_SUBPROC_TIMEOUT)
 
 
 def _read_audit(project: Path):
@@ -560,7 +567,7 @@ def test_the_audit_survives_a_digest_that_cannot_be_computed(tmp_path,
         "import flow_compliance_check as f;"
         f"sys.exit(f.main([{str(root)!r}, '--phase', 'all']))")
     subprocess.run([sys.executable, "-c", code],
-                   capture_output=True, text=True, timeout=900)
+                   capture_output=True, text=True, timeout=_SUBPROC_TIMEOUT)
     audit = _read_audit(root)
     assert audit.get("step_counts") is not None
     assert audit.get("verdict")

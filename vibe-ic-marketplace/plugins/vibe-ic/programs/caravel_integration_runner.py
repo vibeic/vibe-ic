@@ -296,11 +296,21 @@ def step_b4_live_xor(
 # Phase C — precheck + cleanup + waiver
 # ---------------------------------------------------------------------------
 def step_c1_run_precheck(work_dir: Path) -> PhaseStepResult:
-    """Step C1: docker run efabless/mpw_precheck."""
+    """Step C1: docker run efabless/mpw_precheck.
+
+    RETIRED (vibe-ic#1744). The image this hint names belongs to a shuttle whose
+    operator ceased operating in 2025, so following the hint cannot produce an
+    external verdict. The step already returns NOT_RUN and still does — what
+    changes is that NOT_RUN here is now stated to be PERMANENT rather than a
+    step somebody has yet to get round to. The live external refusal is
+    `tapeout_readiness_check`."""
     target = work_dir / "caravel_user_project"
     return PhaseStepResult(
-        "C1", "C", "mpw_precheck (initial)", "NOT_RUN",
-        notes="external Docker step",
+        "C1", "C", "mpw_precheck (initial) — RETIRED shuttle", "NOT_RUN",
+        notes="external Docker step; RETIRED (#1744) — the shuttle operator "
+              "ceased operating in 2025, so this NOT_RUN is permanent and "
+              "reads as NOT_DETERMINED, never as a clean run. Live external "
+              "refusal: tapeout_readiness_check.",
         command_hint=(
             "docker run --rm -u $(id -u):$(id -g) "
             f"-v {target}:/work "
