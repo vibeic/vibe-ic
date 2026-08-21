@@ -68,6 +68,16 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Collection routes
+# through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the char-level comment strip again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -124,12 +134,28 @@ def _strip_block_comments(src: str) -> str:
     return re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
 
 
+def _blank_line_comments(src: str) -> str:
+    """ORGANIC #798 — blank `// ... <EOL>` comments to spaces, OFFSET-PRESERVING
+    (same length, same newline positions). The module-boundary + code detection
+    runs over THIS view so a `// ... module spec_ram ; ...` integration-prose
+    line cannot create a PHANTOM module (the DOTALL `MODULE_HEAD_RE` would
+    otherwise latch onto the word after the first commented `module` token, name
+    it the module, and swallow the file — leaving the REAL module unanalysed).
+    Because blanking preserves offsets, the latency-doc search still reads the
+    comment-PRESERVING `src` at the SAME offsets (the `//` doc-comment view)."""
+    return re.sub(r"//[^\n]*", lambda m: " " * len(m.group(0)), src)
+
+
 def check_file(path: Path) -> list[Finding]:
     raw = path.read_text(errors="replace")
     src = _strip_block_comments(raw)
+    # ORGANIC #798 — detect module boundaries over the `//`-BLANKED view (no
+    # phantom modules from comment prose); read latency `//` doc-comments from
+    # `src` at the shared offsets.
+    scan_src = _blank_line_comments(src)
     findings: list[Finding] = []
 
-    for mod_m in MODULE_HEAD_RE.finditer(src):
+    for mod_m in MODULE_HEAD_RE.finditer(scan_src):
         mod_name = mod_m.group(1)
         header = mod_m.group(2)
         body = mod_m.group(3)
@@ -155,7 +181,11 @@ def check_file(path: Path) -> list[Finding]:
 
         # For each registered-read output, check latency documentation
         # OR presence of a companion *_valid output port.
-        has_latency_doc = bool(LATENCY_DOC_RE.search(header)) or bool(
+        # ORGANIC #798 — read the latency doc-comment from the COMMENT-PRESERVING
+        # `src` at the shared offsets (the blanked scan_src has no `//` doc to
+        # read). The header span maps 1:1 because blanking preserves offsets.
+        header_raw = src[mod_m.start(2):mod_m.end(2)]
+        has_latency_doc = bool(LATENCY_DOC_RE.search(header_raw)) or bool(
             LATENCY_DOC_RE.search(
                 # include a few lines ABOVE the module declaration (docstring)
                 src[max(0, mod_start - 400):mod_start]
@@ -205,12 +235,9 @@ def check_file(path: Path) -> list[Finding]:
 def collect_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
-    if path.is_dir():
-        return sorted(
-            p for p in path.rglob("*")
-            if p.is_file() and p.suffix in (".v", ".sv", ".vh")
-        )
-    return []
+    # Kimi-scale fix: shared authored-RTL collector. This gate has always
+    # also scanned *.vh headers, so the suffix set is widened accordingly.
+    return rtl_source_files(path, exts=("*.v", "*.sv", "*.vh"))
 
 
 def main() -> int:

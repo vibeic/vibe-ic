@@ -14,6 +14,17 @@ import pytest
 mod = importlib.import_module("lvs_netgen_setup_emit")
 
 
+def _globalised(tcl: str) -> set:
+    """Exact set of net names on `global <name>` lines.
+
+    Token-exact on purpose: a substring probe like `"global VPW" in tcl` is
+    also satisfied by the `global VPWR` line, so a naive containment test can
+    report a net as globalised when it is not.
+    """
+    return {ln.split()[1] for ln in tcl.splitlines()
+            if ln.strip().startswith("global ") and len(ln.split()) >= 2}
+
+
 class TestPdkNormalize:
     def test_sky130_canonical(self):
         assert mod._normalize_pdk("sky130A") == "sky130A"
@@ -63,11 +74,51 @@ class TestRule1GlobalPowerNets:
             assert f"global {name}" in tcl
 
     def test_gf180_single_domain(self):
-        tcl = mod.build_supplementary_setup_tcl("gf180mcuC")
-        for name in ("VDD", "VSS", "VPWR", "VGND"):
-            assert f"global {name}" in tcl
+        # The REAL gf180mcu std-cell PG/well pin set, measured from the shipped
+        # `gf180mcu_fd_sc_mcu7t5v0.lef`: {VDD, VNW, VPW, VSS} and nothing else.
+        names = _globalised(mod.build_supplementary_setup_tcl("gf180mcuC"))
+        for name in ("VDD", "VSS", "VNW", "VPW"):
+            assert name in names, f"missing global {name}"
         # gf180 should NOT carry sky130-specific net names
-        assert "global vccd1" not in tcl
+        assert "vccd1" not in names
+
+    def test_gf180_does_not_globalise_sky130_rail_names(self):
+        """VPWR/VGND are SKY130 names that do not exist in gf180mcu.
+
+        Regression guard for the power-aware-LVS mismatch found by driving spm
+        to convergence on gf180mcuD: the gf180 list used to carry VPWR/VGND, so
+        it globalised two names matching nothing while MISSING the well-bias
+        pins VNW/VPW that the cells actually declare. netgen then saw a flat
+        per-instance `<inst>/VNW` net and the power-aware compare reported
+        "Netlists do not match" — masked on the plain compare, which drops the
+        wells entirely.
+        """
+        for pdk in ("gf180mcuC", "gf180mcuD"):
+            names = _globalised(mod.build_supplementary_setup_tcl(pdk))
+            assert "VPWR" not in names, f"{pdk} globalises sky130 VPWR"
+            assert "VGND" not in names, f"{pdk} globalises sky130 VGND"
+
+    def test_gf180_globalises_well_bias_pins(self):
+        """VNW/VPW carry the well bias and MUST be globalised for gf180."""
+        for pdk in ("gf180mcuC", "gf180mcuD"):
+            names = _globalised(mod.build_supplementary_setup_tcl(pdk))
+            assert "VNW" in names, f"{pdk} missing global VNW"
+            assert "VPW" in names, f"{pdk} missing global VPW"
+
+    def test_sky130_still_globalises_its_own_rail_names(self):
+        """Negative control on the blast radius: sky130 is UNTOUCHED.
+
+        VPWR/VGND are correct FOR SKY130 — the fix removes them only from the
+        gf180 entry, so a regression that stripped them globally is caught here.
+        """
+        names = _globalised(mod.build_supplementary_setup_tcl("sky130A"))
+        assert "VPWR" in names
+        assert "VGND" in names
+        # ...and sky130 must not acquire the gf180 well-pin names. NOTE the
+        # exact-token match matters: a substring test for "global VPW" is
+        # satisfied by the "global VPWR" line and would silently pass.
+        assert "VNW" not in names
+        assert "VPW" not in names
 
     def test_extra_power_nets_appended(self):
         opts = mod.LvsSetupOptions(extra_power_nets=["VBN_REF", "VBP_REF"])

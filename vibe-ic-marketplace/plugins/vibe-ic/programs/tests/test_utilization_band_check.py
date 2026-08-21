@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import utilization_band_check as u  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 _DENSITY_TMPL = (
@@ -146,10 +147,10 @@ def test_fraction_coerced_to_pct(tmp_path):
 # --------------------------------------------------------------------------
 # Real-corpus CLEAN sweep — the HARD rule: no legitimate design may FAIL.
 # --------------------------------------------------------------------------
-_CORPUS = Path("/home/reyerchu/AI_IC_design")
+_CORPUS = corpus_path()
 
 
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="real corpus not present")
+@pytest.mark.skipif(not _CORPUS.is_dir(), reason="real corpus not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_corpus_no_false_fail():
     projects = sorted({
         rpt.parent.parent

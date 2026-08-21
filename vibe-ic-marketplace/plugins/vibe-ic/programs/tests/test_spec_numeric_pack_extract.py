@@ -1,0 +1,216 @@
+"""Tests for spec_numeric_pack_extract.extract — PROGRAM-FIRST structural
+numeric-semantics (rounding/saturation) + packing/width-conversion extractor.
+
+Coverage:
+  (a) POSITIVE — a real rounding-mode sentence + a real width-ratio sentence,
+      VERBATIM from the scout-assigned CVDP prompts, assert the mode / ratio
+      items are recovered with the right structured fields.
+  (b) §4.05 NEGATIVE — "perform the computation" with NO stated rounding mode
+      or width ratio -> extract() returns [] (no leak from silence).
+  (c) chip-AGNOSTIC — a chip/vendor rename of the prompt does not change the
+      extracted structure (the extractor keys on numeric/idiom grammar, not on
+      any chip/SKU literal).
+"""
+from __future__ import annotations
+
+import spec_numeric_pack_extract as M
+
+
+# ---------------------------------------------------------------------------
+# (a) POSITIVE — real rounding-mode + real width-ratio sentences (VERBATIM)
+# ---------------------------------------------------------------------------
+def test_named_rounding_mode_round_to_nearest_even_verbatim():
+    # VERBATIM from cvdp_copilot_rounding_0001.txt (Behavior > Rounding Modes).
+    prompt = (
+        "RNE: Round to the nearest value, with ties resolved by rounding to "
+        "the nearest even.\n"
+        "RTZ: Truncate the fractional part without rounding up.\n"
+        "RUP: Round towards positive infinity (ceiling behavior).\n"
+        "RDN: Round towards negative infinity (floor behavior).\n"
+        "Set inexact = 1 if either roundin or stickyin is 1. "
+        "Set cout = 1 if the rounded value exceeds the representable range. "
+        "r_up indicates if rounding up occurred."
+    )
+    items = M.extract(prompt)
+    modes = {it["mode"] for it in items if it["kind"] == "rounding_mode"}
+    assert "round_to_nearest_even" in modes
+    assert "round_toward_zero" in modes
+    assert "round_ceiling" in modes
+    assert "round_floor" in modes
+
+    # the RNE item carries the tie-break + the status flags it states
+    rne = next(it for it in items
+               if it.get("mode") == "round_to_nearest_even")
+    assert "tie_break" in rne and "even" in rne["tie_break"].lower()
+    assert set(rne.get("status_flags", [])) == {"inexact", "cout", "r_up"}
+
+    # §4.05: a tie-break is NOT attached to a deterministic (non-nearest) mode
+    rtz = next(it for it in items if it.get("mode") == "round_toward_zero")
+    assert "tie_break" not in rtz
+
+
+def test_width_ratio_downscale_verbatim():
+    # VERBATIM from cvdp_copilot_axi_stream_downscale_0001.txt.
+    prompt = (
+        "Complete the given partial SystemVerilog code for an AXI stream data "
+        "digital circuit conversion that supports downscaling for single-"
+        "channel input data from a higher 16-bit width to a smaller width of "
+        "8-bits."
+    )
+    items = M.extract(prompt)
+    wc = [it for it in items if it["kind"] == "width_convert"]
+    assert len(wc) == 1
+    it = wc[0]
+    assert it["in_width"] == 16
+    assert it["out_width"] == 8
+    assert it["ratio"] == "2:1"
+    assert "down" in it["direction"].lower()
+
+
+def test_width_ratio_upscale_verbatim():
+    # VERBATIM from cvdp_copilot_axi_stream_upscale_0001.txt.
+    prompt = (
+        "A AXI stream data upsizer is a digital circuit used to upscale "
+        "single-channel input data from a smaller 24-bit width to a larger "
+        "width of 32-bits, supporting features like sign extension."
+    )
+    items = M.extract(prompt)
+    wc = [it for it in items if it["kind"] == "width_convert"]
+    assert len(wc) == 1
+    it = wc[0]
+    assert (it["in_width"], it["out_width"]) == (24, 32)
+    assert it["ratio"] == "3:4"
+    assert "up" in it["direction"].lower()
+
+
+def test_concat_pack_and_split_unpack_verbatim():
+    # VERBATIM from cvdp_copilot_concatenate_0001.txt (PROCESS state).
+    prompt = (
+        "Concatenates six 5-bit input vectors into a single 30-bit bus, "
+        "appends two 1 bits at the LSB to form a 32-bit bus, and splits it "
+        "into four 8-bit output vectors."
+    )
+    items = M.extract(prompt)
+    packs = [it for it in items if it["kind"] == "width_convert"]
+    # one concat (6x5 -> 30) and one split (32 -> 4x8)
+    concat = next(it for it in packs if it.get("n_inputs"))
+    assert concat["n_inputs"] == 6
+    assert concat["member_width"] == 5
+    assert concat["out_width"] == 30  # 6*5 (stated total 30 captured)
+
+    split = next(it for it in packs if it.get("n_outputs"))
+    assert split["n_outputs"] == 4
+    assert split["member_width"] == 8
+    assert split["in_width"] == 32
+
+
+def test_bitslice_width_pick_verbatim():
+    # VERBATIM from cvdp_copilot_gaussian_rounding_div_0005.txt.
+    prompt = (
+        "In step 2 of Gold-Schmidt algorithm the multiplication output can be "
+        "up to 48 bits long. However we select only the middle 18 bits for the "
+        "next stage of computation which is bits [26:9]."
+    )
+    items = M.extract(prompt)
+    wc = [it for it in items if it["kind"] == "width_convert"]
+    assert len(wc) == 1
+    it = wc[0]
+    assert it["slice_hi"] == 26
+    assert it["slice_lo"] == 9
+    assert it["out_width"] == 18          # 26-9+1
+    assert it["in_width"] == 48           # "48 bits long"
+
+
+def test_byte_order_with_byte_enable_lanes_verbatim():
+    # VERBATIM fragments from cvdp_copilot_wb2ahb_0001.txt.
+    prompt = (
+        "sel_i[3:0]: Byte enables to select which bytes are active.\n"
+        "Perform endian conversion for read and write data between Wishbone "
+        "and AHB. Convert between Wishbone's little-endian format and AHB's "
+        "data handling."
+    )
+    items = M.extract(prompt)
+    bo = [it for it in items if it["kind"] == "byte_order"]
+    assert len(bo) == 1
+    it = bo[0]
+    assert "endian" in it["byte_order"]
+    assert it["byte_enable_lanes"] == 4   # sel_i[3:0] -> 4 lanes
+
+
+def test_saturation_on_overflow():
+    # An explicit ACTIVE saturate-on-overflow requirement.
+    prompt = ("The accumulator must saturate to its maximum value on overflow "
+              "rather than wrapping around.")
+    items = M.extract(prompt)
+    sat = [it for it in items if it["kind"] == "saturation"]
+    assert len(sat) == 1
+    assert "saturat" in sat[0]["coverage_tokens"]
+
+
+# ---------------------------------------------------------------------------
+# (b) §4.05 NEGATIVE — silence yields nothing
+# ---------------------------------------------------------------------------
+def test_no_stated_mode_or_ratio_returns_empty():
+    # No named rounding mode, no stated width ratio, no endian token.
+    prompt = ("Perform the computation and drive the result onto the output "
+              "port. The module adds two operands and registers the sum on the "
+              "rising clock edge.")
+    assert M.extract(prompt) == []
+
+
+def test_around_does_not_fire_rounding():
+    # 'around' / 'wrap around' must NOT be misread as a rounding mode, and a
+    # bare 'wrap around' is not the active saturate verb. §4.05 no-leak.
+    prompt = ("The read pointer wraps around the circular buffer; route the "
+              "clock around the macro keep-out region.")
+    assert M.extract(prompt) == []
+
+
+def test_unstated_division_returns_empty():
+    # A non-restoring INTEGER division (cvdp_copilot_gaussian_rounding_div_0003
+    # shape) states NO named rounding mode and NO width ratio -> []. This is the
+    # honest §4.05 outcome: the topic word "division" is not a mode.
+    prompt = ("Implement an iterative non-restoring division of dividend by "
+              "divisor producing a quotient and remainder. Shift left the "
+              "concatenation of A and Q by 1 bit each iteration and check the "
+              "sign bit of A.")
+    assert M.extract(prompt) == []
+
+
+def test_empty_and_non_string_inputs():
+    assert M.extract("") == []
+    assert M.extract(None) == []          # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# (c) chip-AGNOSTIC — a chip/vendor rename does not change the structure
+# ---------------------------------------------------------------------------
+def test_chip_agnostic_rename_invariance():
+    base = (
+        "Round to the nearest value, with ties resolved by rounding to the "
+        "nearest even. Downscale the data from a 32-bit width to a smaller "
+        "width of 8-bits."
+    )
+    # rename every proper-noun-ish token to an unrelated vendor/SKU; the
+    # numeric/idiom grammar the extractor keys on is unchanged.
+    renamed = (
+        "Round to the nearest value, with ties resolved by rounding to the "
+        "nearest even. Downscale the AcmeChip XK-9000 data from a 32-bit width "
+        "to a smaller width of 8-bits."
+    )
+    a = M.extract(base)
+    b = M.extract(renamed)
+
+    def _shape(items):
+        return sorted(
+            (it["kind"], it.get("mode"), it.get("in_width"),
+             it.get("out_width"), it.get("ratio"))
+            for it in items
+        )
+
+    assert _shape(a) == _shape(b)
+    # and the structure is the expected one
+    kinds = {it["kind"] for it in a}
+    assert kinds == {"rounding_mode", "width_convert"}
+    wc = next(it for it in a if it["kind"] == "width_convert")
+    assert (wc["in_width"], wc["out_width"], wc["ratio"]) == (32, 8, "4:1")
