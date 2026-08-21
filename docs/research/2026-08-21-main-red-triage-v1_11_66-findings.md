@@ -151,6 +151,15 @@ Until one of those exists, every verdict this guard produces on 8hd-3 is
 "I could not look", and the honest record is that it is UNRUNNABLE here rather
 than failing.
 
+> **SUPERSEDED — read M8, M18 and M26 before acting on the paragraph above.**
+> It is wrong. The guard DOES run on this host in the degraded rebase-replay
+> tier; M8 measured G4 at 8/8 deterministic, and M18's two-lane A/B measured
+> **10 BOTH-lane reds** with the pinned image on the STRONG (`merge-tree`) tier.
+> Designs A and C have since closed four of them. This paragraph is kept as the
+> record of what I believed at the time, and as an example of the failure it
+> claims to be describing: I reported "I could not look" as a property of the
+> guard when it was a property of where I was looking from.
+
 ## M5 — ITEM 2: THE 22, GROUPED BY CAUSE
 
 | group | n | cause | one defect or several |
