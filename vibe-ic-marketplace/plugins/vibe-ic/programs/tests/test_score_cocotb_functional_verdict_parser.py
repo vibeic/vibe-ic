@@ -21,7 +21,7 @@ and the coverage classifier scans ONLY the scorer stdout/stderr — never
 score/src/harness_library.py or test_runner.py. The blind rule holds.
 
 PART 1/2 (parser + classifier unit tests) are pure-python and ALWAYS run.
-PART 3 (end-to-end) requires the iic-eda container and skips cleanly otherwise.
+PART 3 (end-to-end) requires the vibeic-eda container and skips cleanly otherwise.
 """
 import importlib.util
 import shutil
@@ -30,6 +30,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from _hostpaths import require_corpus
 
 SCRIPT = (Path(__file__).resolve().parents[2]
           / "benchmark" / "score_cocotb_mcp.py")
@@ -216,22 +218,26 @@ def test_float_coercion_short_circuits_when_tests_gt_zero():
 
 # ---------------------------------------------------------------------------
 # PART 3 — end-to-end: coverage-gate crash must NOT mask a functional PASS
-#          (requires the iic-eda container; skips cleanly otherwise)
+#          (requires the vibeic-eda container; skips cleanly otherwise)
 # ---------------------------------------------------------------------------
 
 def _need_iic_eda():
     if not shutil.which("docker"):
         pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", "iic-eda"],
+    # --type=container: a bare `docker inspect vibeic-eda` also resolves the
+    # IMAGE of that name, so on any host with the image pulled this guard
+    # passed and the test failed inside `docker exec` instead of skipping.
+    r = subprocess.run(["docker", "inspect", "--type=container",
+                        "-f", "{{.State.Running}}", "vibeic-eda"],
                        capture_output=True, text=True)
-    if r.returncode != 0:
-        pytest.skip("iic-eda container not available")
+    if r.returncode != 0 or r.stdout.strip() != "true":
+        pytest.skip("vibeic-eda container not available or not running")
 
 
 def _find_encoder_project():
     """Resolve a priority_encoder Shape-D project on the host, version-agnostic.
     Skips if none present so the test stays host-portable (no hardcoded version)."""
-    root = Path("/home/reyerchu/AI_IC_design")
+    root = require_corpus()
     cands = sorted(root.glob("_vibeic_cvdp_v*/cvdp_agentic_8x3_priority_encoder_0003"))
     if not cands:
         pytest.skip("no priority_encoder Shape-D project on host")
@@ -244,8 +250,8 @@ def test_priority_encoder_functional_pass_with_coverage_gate_flagged(tmp_path):
     r = subprocess.run(
         ["python3", str(SCRIPT), "--project", str(proj),
          "--top", "priority_encoder_8x3",
-         "--mount-root", "/home/reyerchu/AI_IC_design"],
-        capture_output=True, text=True, timeout=300)
+         "--mount-root", str(require_corpus())],
+        capture_output=True, text=True, timeout=60)
     score_json = proj / "reports" / "cocotb_score.json"
     assert score_json.is_file(), r.stdout + r.stderr
     d = json.loads(score_json.read_text())

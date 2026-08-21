@@ -12,4 +12,14 @@ requirements:
     pattern: '(##\s+Summary|\*\*STATUS\*\*:|## Result|## Verdict)'
     skill_section: 'Output/Handoff'
 
-cross_checks: []
+cross_checks:
+  # § 4.06 — if a RESULT.md invokes the "known-systematic tool blocker" disclosure it
+  # MUST cite the tracking issue number (#NNN). Claiming a blocker is known-systematic
+  # without a backlog/issue citation is an unsupported claim. Conditional: this fires
+  # ONLY when the disclosure phrase is present, so it never forces the phrase onto a
+  # RESULT.md that did not hit such a blocker (not a brittle unconditional gate).
+  - id: X_known_blocker_needs_issue_ref
+    description: "A 'known-systematic tool blocker' disclosure (SKILL.md § 4.06) must cite its tracking issue number (#NNN)"
+    rule: pattern_requires_tool
+    if_phrase_matches: 'known[-\s]systematic tool blocker'
+    tool_must_match: '#\d+'
