@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import _path_layout as _pl
+import _analog_a_check_common as _acc
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -118,9 +119,27 @@ VERDICT_SYM = {
 # Canonical roll-up print order. Any bucket the audit produces that is
 # NOT listed here is still printed (appended, sorted) — the roll-up must
 # never silently drop a bucket, or its rows stop summing to its own Total.
+# A bucket with no slot here is NOT RENDERED — see the print loop, which walks
+# ROLLUP_ORDER and never the roll-up's own keys. Four tiers were missing, so a
+# populated STRUCTURE-ONLY / INCOMPLETE / PASS-VOIDED-BY-DEPENDENCY / WAIVED
+# count had nowhere to appear.
+#
+# TWO HAND-TYPED LISTS HID EACH OTHER'S GAP.
+# test_rollup_order_covers_every_bucket_the_checker_can_emit was already written
+# to catch exactly this — but it derives `emitted` from
+# _TALLY_LABEL_TO_BUCKET.values(), and that map was missing the same tiers. The
+# guard could not fire while both copies were wrong in the same way, and it went
+# red the moment the map was derived from the shared vocabulary. Ordering is a
+# presentation choice and cannot be derived, so the list stays written out; the
+# existing test is what keeps it total.
+#
+# Order: full pass, then qualified done-claims, then excused, then non-green.
 ROLLUP_ORDER = (
-    "PASS", "VACUOUS-PASS", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
-    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED", "FAIL", "MISSING",
+    "PASS",
+    "VACUOUS-PASS", "STRUCTURE-ONLY", "INCOMPLETE",
+    "WAIVED", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
+    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED",
+    "PASS-VOIDED-BY-DEPENDENCY", "FAIL", "MISSING",
     NO_VERDICT,
 )
 STAGE_TITLE = [
@@ -648,7 +667,14 @@ def _run_audit(project: Path,
 # digits), so a step id added to the flow tomorrow is read, not silently
 # reclassified. chip-AGNOSTIC: step ids are flow structure, never chip,
 # vendor or SKU names.
-STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+"
+# vibe-ic#1744 — the "generic" shape above was still too narrow, and it failed
+# in exactly the way the paragraph above predicts. The half-steps introduced
+# with the chip/IP split (`0.5ic`, `15.5ic`, `26.5ic`, `37.5ip`, `37.5ic`) carry
+# a FRACTION and a trailing path SUFFIX, neither of which "short alpha prefix +
+# digits" can spell. All five matched nothing, so `.get(sid, "MISSING")` booked
+# every one of them as MISSING and the roll-up table would have disagreed with
+# the tally printed beside it by five steps — #428's defect, in new ids.
+STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+(?:\.[0-9]+)?[A-Za-z]{0,4}"
 _VERDICT_LINE_RE = re.compile(
     r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+(" + STEP_ID_RE + r")\s*:"
 )
@@ -664,17 +690,50 @@ def _parse_verdicts(audit_text: str) -> Dict[str, str]:
 # MISSING may carry a "(N blocked-by-upstream of step X)" parenthetical.
 _TALLY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z-]*[A-Z])=(\d+)")
 # The tally prints SKIPPED-CONDITION under the short label `SKIPPED`.
-_TALLY_LABEL_TO_BUCKET = {
-    "PASS": "PASS",
-    "FAIL": "FAIL",
-    "MISSING": "MISSING",
-    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
-    "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
+#: Hand-written ALIASES only: report-side spellings that differ from the
+#: producer's own word. Everything else is derived below.
+_TALLY_LABEL_ALIASES = {
     "SKIPPED": "SKIPPED-CONDITION",
-    "SKIPPED-CONDITION": "SKIPPED-CONDITION",
-    "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
-    "VACUOUS-PASS": "VACUOUS-PASS",
+    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
 }
+
+
+def _build_tally_label_map() -> dict:
+    """Every producer status gets a bucket, BY CONSTRUCTION.
+
+    THE DRIFT THIS CLOSES. This map used to be a hand-typed list of nine
+    labels, and the producer's vocabulary moved on without it. Three tiers had
+    no key -- STRUCTURE-ONLY, INCOMPLETE and PASS-VOIDED-BY-DEPENDENCY -- and
+    the blindness is two-sided:
+
+      * ``_parse_audit_tally`` keeps a label only when the map resolves it
+        (``if bucket is not None``), so those three were dropped on the way in;
+      * ``_reconcile_rollup``'s second loop admits a bucket only when it is
+        ``in _TALLY_LABEL_TO_BUCKET.values()``, so a bucket the roll-up
+        populated and the tally never named was filtered right back out.
+
+    So a disagreement in those tiers was reported as AGREEMENT and the
+    "Roll-up reconciliation FAILED" banner could not render -- in either
+    direction. PASS-VOIDED-BY-DEPENDENCY is the sharpest of the three: it is
+    the word #671 introduced precisely to say "this is NOT a pass".
+
+    ``_flow_verdict_tiers.PRODUCER_STATUSES`` is the authoritative vocabulary
+    and already carries an anti-drift test ("a word added there without a home
+    below is a test failure, not a silent escape"). That protection never
+    reached this copy because this copy was a copy. Deriving from it means the
+    next tier is covered without anyone remembering this file exists.
+    """
+    try:
+        from _flow_verdict_tiers import PRODUCER_STATUSES
+    except ImportError:  # pragma: no cover — shared module always ships
+        PRODUCER_STATUSES = set()
+    out = {s: s for s in PRODUCER_STATUSES}
+    # Aliases win: they encode a deliberate report-side renaming.
+    out.update(_TALLY_LABEL_ALIASES)
+    return out
+
+
+_TALLY_LABEL_TO_BUCKET = _build_tally_label_map()
 # The buckets `flow_compliance_check.py` prints UNCONDITIONALLY on its
 # tally line. A line missing any of them is not the tally.
 TALLY_MANDATORY_BUCKETS = frozenset(
@@ -956,12 +1015,36 @@ def _counts_snapshot(
     }
 
 
-def _snapshot_marker(audit_text: str, overall: str) -> str:
-    """A short, stable digest of the audit text + verdict, plus a UTC
-    timestamp, stamped beside the verdict so a reader knows the counts
-    are a point-in-time snapshot and a fresh `--strict` re-run may move
-    them once late artefacts land (#461 symptom (2))."""
-    h = hashlib.sha256(audit_text.encode("utf-8", errors="replace")).hexdigest()[:12]
+def _snapshot_marker(audit_text: str, overall: str,
+                     content_census: str = "") -> str:
+    """A short, stable digest of the audit text + verdict + the content
+    census, plus a UTC timestamp, stamped beside the verdict so a reader knows
+    the counts are a point-in-time snapshot and a fresh `--strict` re-run may
+    move them once late artefacts land (#461 symptom (2)).
+
+    WHY THE CENSUS FEEDS IT. THE RULE, with no tool or step name in it:
+
+        A digest quoted beside a set of counts is a claim that it identifies
+        the run those counts describe. It must therefore move when what the
+        counted artefacts SAY THEY CONTAIN moves — otherwise it identifies
+        two different runs by the same token.
+
+    Measured before this: three trees identical in every artefact except the
+    one recorded `design_content` value — design-bound, structure-only, and
+    silent — produced THE SAME sha256 here. A final report whose audit digest
+    cannot tell a designed run from a silent one is a digest that certifies
+    nothing, and it is quoted as proof.
+
+    The census is a pure function of the tree (see `_content_census`): sorted,
+    built from block names, step ids and the three content words only, with no
+    timestamp and no path in it. So the digest stays stable across repeated
+    runs over one tree, which is the property that made it worth quoting.
+    Empty census (a project with no such record at all) digests exactly the
+    audit text plus a fixed marker, so the shape is identical everywhere.
+    """
+    payload = audit_text if not content_census \
+        else f"{audit_text}\n{content_census}"
+    h = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()[:12]
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return f"snapshot {ts} · audit-digest sha256:{h} · overall {overall}"
 
@@ -1206,7 +1289,25 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     # violation falls in std-cell-library layer rules, and substitutes the
     # Magic count when a re-stream is authoritative. A report that
     # contradicts the run it summarises is worse than one that under-reports.
-    if pv.get("drc_signoff") == "(report missing)":
+    # ORGANIC-20260808 — the premise above ("nothing in this tree writes
+    # `drc_signoff.json`") STOPPED BEING TRUE. `eda_report_audit:drc` now
+    # stages one, and its schema is the same one ORGANIC-20260726 had to teach
+    # this function for LVS: it records `passed` / `summary` and carries
+    # NEITHER `verdict` NOR `status`. So the loop above resolves "?" — not
+    # "(report missing)" — and this echo, keyed on the old sentinel alone,
+    # stopped firing for exactly the runs that gained a report.
+    #
+    # MEASURED on a38902d16: 3 committed cells carry `drc_signoff.json` and
+    # all 3 lack both fields, so all 3 read "?" while their runner record says
+    # PASS. `test_organic399_drc_signoff_verdict_echoes_the_runner` catches it
+    # on `spm/v1.9.96_gf180mcuD` — runner "PASS", summary "?".
+    #
+    # UNRESOLVED IS THE SAME STATE AS ABSENT for this purpose: in both cases
+    # the JSON gave no verdict, so the runner's record is what the summary has
+    # to echo. #399's rule is untouched — the verdict still comes from the
+    # runner and is still never re-derived from the raw `.rpt`, which is the
+    # prototype #399 measured and rejected for contradicting five WAIVED runs.
+    if pv.get("drc_signoff") in ("(report missing)", "?"):
         _st, _ex = _runner_step_record(project, "drc")
         if _st:
             _bits = [f"{k}={_ex[k]}" for k in
@@ -1303,6 +1404,20 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
     # gate of record). `_analog_a_step_paths` mirrors their globs
     # exactly; see programs/analog_a{1..9}_*_check.py.
     block_grid = _gather_analog_block_grid(project, block_names)
+    # ONE read of the content question, THREE derived views. Two independent
+    # readers of the same field would be free to disagree about one artefact,
+    # which is the drift the shared whitelist exists to prevent.
+    content_grid = _gather_analog_content_grid(project, block_names,
+                                               block_grid)
+    structure_only_grid = {
+        b: {s: True for s, c in cells.items()
+            if c == _CONTENT_STRUCTURE_ONLY}
+        for b, cells in content_grid.items()}
+    structure_only_grid = {b: c for b, c in structure_only_grid.items() if c}
+    undisclosed_grid = {
+        b: {s: True for s, c in cells.items() if c == _CONTENT_UNDISCLOSED}
+        for b, cells in content_grid.items()}
+    undisclosed_grid = {b: c for b, c in undisclosed_grid.items() if c}
     # HW measurements present?
     hw_present = any((_pl.analog_dir(project) / n / "hw_measurements.json").is_file()
                      for n in block_names)
@@ -1320,8 +1435,121 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
             mixed_paths.append(f)
     return {"block_names": block_names,
             "block_grid": block_grid,
+            "content_grid": content_grid,
+            "structure_only_grid": structure_only_grid,
+            "undisclosed_grid": undisclosed_grid,
             "hw_tuning_invoked": hw_present,
             "mixed_paths": mixed_paths}
+
+
+# ── PRESENCE IS NOT THE SAME QUESTION AS CONTENT ──────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A grid cell that says an artefact exists must not, by looking the same,
+#   also say what is in it. When the producer recorded that the artefact's
+#   content came from a library default, the cell says that too.
+#
+# Measured before this: on a project whose A3 and A4 artefacts each RECORD
+# that their circuit came from a topology library with no bound input reaching
+# any device parameter, this grid rendered them with the same ✅ as a design
+# sized against its spec, and counted them, one for one, into "artefacts
+# present". A reader of the summary could not tell the two projects apart.
+#
+# READ from the producer's own record, never inferred: no consumer can look at
+# a `.sp` or a corner result and know whether a number in it came from a bound
+# input or from a default. Only the producer that resolved it knows, and it
+# wrote the answer down. Absence of the record is NOT read as structure-only —
+# "undeclared" is a different answer and the per-step gate owns it.
+#
+# Kept SEPARATE from `block_grid` on purpose. Presence and content are two
+# questions, `block_grid` answers the first, and folding a second answer into
+# its booleans would make every existing reader of it silently mean something
+# new.
+#
+# ── AND SAYING NOTHING IS A THIRD ANSWER, NOT THE FIRST ONE ───────────────
+# THE RULE, with no tool, step or block name in it, and it is the rule the
+# gates already apply, applied to a RENDERER:
+#
+#   A document that reports a measurement must not render a run that will not
+#   say what it measured identically to a run that said. Naming a library
+#   default is a disclosure and gets its own cell; declining to answer is a
+#   different answer and gets its own.
+#
+# MEASURED, on three synthetic trees identical in every artefact except the
+# one recorded value: the SILENT tree rendered BYTE-IDENTICALLY to the
+# design-bound one. The whole `final_summary.md` differed only in project name
+# and timestamp — the A1-A9 grid, the artefact count, and the audit digest all
+# agreed — so the document a reviewer reads FIRST could not tell a designed
+# run from one that says nothing at all.
+#
+# THE ORDERING, and the reason absence of the ARTEFACT still wins. A cell is
+# `—` when the artefact does not exist, whatever any record says: presence is
+# the rule the filesystem decides and it names the deeper cause. The content
+# question is asked LAST, of the cells that survive it, exactly as every gate
+# asks it last.
+#
+# THE PREDICATE IS IMPORTED, NOT RESTATED. The three answers this renderer
+# draws are the three answers the gates certify on, and a second copy of the
+# whitelist here would be free to drift from the one at the gate of record —
+# a cell signing off something the gate refuses, by another door. It lives in
+# `_analog_a_check_common`, beside this file, and is imported for the same
+# reason `_path_layout` is.
+_CONTENT_STRUCTURE_ONLY = _acc.CONTENT_STRUCTURE_ONLY
+_CONTENT_UNDISCLOSED = _acc.CONTENT_UNDISCLOSED
+_classify_content = _acc.classify_design_content
+_CONTENT_RECORDS = {
+    # step -> (filename, key path into the JSON document)
+    "A3": ("netlist_provenance.json", ("_provenance", "design_content")),
+    "A4": ("corner_results.json", ("design_content",)),
+}
+
+
+def _gather_analog_content_grid(project: Path, block_names: List[str],
+                                block_grid: Dict[str, Dict[str, bool]]
+                                ) -> Dict[str, Dict[str, str]]:
+    """`{block: {step: content_class}}` for every cell whose artefact is
+    PRESENT and for which a producer records what it contains.
+
+    Only cells that `block_grid` already says exist are classified: a step
+    that produced nothing raises no question about what it produced, and
+    answering one for it would replace an honest `—` with a content claim.
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    for name in block_names:
+        present = block_grid.get(name) or {}
+        cells: Dict[str, str] = {}
+        for step, (fname, keys) in _CONTENT_RECORDS.items():
+            if not present.get(step):
+                continue          # absent artefact — the `—` cell owns it
+            doc: Any = None
+            for base in (project / "phase3" / "analog" / name,
+                         project / "analog" / name):
+                p = base / fname
+                if not p.is_file():
+                    continue
+                doc = _safe_json(p)
+                for k in keys:
+                    doc = doc.get(k) if isinstance(doc, dict) else None
+                break
+            cells[step] = _classify_content(doc)
+        if cells:
+            out[name] = cells
+    return out
+
+
+def _content_census(content_grid: Dict[str, Dict[str, str]]) -> str:
+    """A canonical, run-stable one-line census of what every analog artefact
+    on this tree SAYS IT CONTAINS.
+
+    Feeds the audit digest (see `_snapshot_marker`). Deterministic by
+    construction: sorted, and built from block names, step ids and the three
+    content words only — no timestamp, no absolute path, nothing that changes
+    between two runs over the same tree.
+    """
+    parts = [f"{b}.{s}={content_grid[b][s]}"
+             for b in sorted(content_grid)
+             for s in sorted(content_grid[b])]
+    return "analog-content-census: " + (" ".join(parts) if parts else "(none)")
 
 
 def _analog_a_step_paths(project: Path, block: str) -> Dict[str, List[Path]]:
@@ -1513,7 +1741,12 @@ def _render(project: Path, run_audit: bool = True,
     # snapshot marker is stamped so a reader knows a fresh `--strict`
     # re-run can move the numbers (e.g. once late artefacts land).
     snap = _counts_snapshot(rollup, total_steps, flow=flow, verdicts=verdicts)
-    snapshot_marker = _snapshot_marker(audit_text, overall)
+    # The census is folded into the digest, not merely rendered: the digest is
+    # the token a reader quotes as proof of WHICH run these counts are, and it
+    # gave the same answer for a designed run and a silent one.
+    snapshot_marker = _snapshot_marker(
+        audit_text, overall,
+        _content_census(analog_ev.get("content_grid") or {}))
 
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     md: List[str] = []
@@ -1758,8 +1991,20 @@ def _render(project: Path, run_audit: bool = True,
     if tp_ev.get("vectors_csv"):
         md.append(f"- **Vector CSV**: `{tp_ev['vectors_csv']}`")
     md.append("")
-    md.append("_Per-opcode / per-mode coverage detail belongs in_ "
-              "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    # Spell the addendum as a CITATION only when this run actually ships it.
+    # Unconditionally backticking the path made every generated final_summary.md
+    # point at a file most runs do not ship — 14 of the 38 pre-existing
+    # unresolved citations counted in #1168. The guidance is unchanged either
+    # way; only the "this artefact is in the tree" claim is dropped when it is
+    # not true.
+    if chip_addendum:
+        md.append("_Per-opcode / per-mode coverage detail belongs in_ "
+                  "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    else:
+        md.append("_Per-opcode / per-mode coverage detail belongs in the "
+                  "chip-specific addendum (reports/chip_specific_summary.md), which "
+                  "this run does not ship — author it per chip. This section stays "
+                  "chip-agnostic._")
     md.append("")
 
     md.append("## Output #4 — Analog convergence (tuning loops)")
@@ -1782,11 +2027,53 @@ def _render(project: Path, run_audit: bool = True,
             md.append("**Per-block A1-A9 artefact presence:**")
             md.append("")
             steps_hdr = ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"]
+            so_grid = analog_ev.get("structure_only_grid") or {}
+            un_grid = analog_ev.get("undisclosed_grid") or {}
             md.append("| Block | " + " | ".join(steps_hdr) + " |")
             md.append("|---|" + "|".join([":---:"] * len(steps_hdr)) + "|")
+            any_so = False
+            any_un = False
             for name, grid in analog_ev["block_grid"].items():
-                cells_md = " | ".join("✅" if grid.get(s) else "—" for s in steps_hdr)
-                md.append(f"| `{name}` | {cells_md} |")
+                so = so_grid.get(name) or {}
+                un = un_grid.get(name) or {}
+                row_cells = []
+                for s in steps_hdr:
+                    # ABSENCE FIRST — the rule the filesystem decides. A step
+                    # that produced nothing raises no question about what it
+                    # produced. The content question is asked LAST, of the
+                    # cells that survive this one.
+                    if not grid.get(s):
+                        row_cells.append("—")
+                    elif so.get(s):
+                        row_cells.append("◐")
+                        any_so = True
+                    elif un.get(s):
+                        row_cells.append("?")
+                        any_un = True
+                    else:
+                        row_cells.append("✅")
+                md.append(f"| `{name}` | {' | '.join(row_cells)} |")
+            # Each legend is emitted only when its glyph is on the page, so
+            # the sentence a reader needs is the sentence they get.
+            if any_so:
+                md.append("")
+                md.append("_◐ = the step produced its declared artefact and "
+                          "the producer recorded that its content came from a "
+                          "library default: no bound input determined it. Not "
+                          "missing (re-running produces the same artefact) and "
+                          "not a design-bound ✅ (every number measured on it "
+                          "is a number about the default)._")
+            if any_un:
+                md.append("")
+                md.append("_? = the step produced its declared artefact and "
+                          "NOTHING records what is in it. This is not a ◐ — "
+                          "naming a library default is a disclosure and ranks "
+                          "above declining to answer — and it is not a "
+                          "design-bound ✅: absence of the record is not "
+                          "evidence of design content. The per-step gate "
+                          "refuses to certify these cells; fix them by "
+                          "republishing the upstream `design_content` record, "
+                          "not by deleting the question._")
         # Mixed-signal references — inline list (avoid nested bullets)
         if analog_ev.get("mixed_paths"):
             md.append("")
@@ -1961,8 +2248,25 @@ def _render(project: Path, run_audit: bool = True,
     if analog_ev.get("block_names"):
         n = len(analog_ev["block_names"])
         a_total = sum(sum(g.values()) for g in analog_ev["block_grid"].values())
+        # An artefact produced from a library default is PRESENT — the count
+        # keeps it — but a resource line that stopped there would say the same
+        # number for a design sized to its spec and for a topology library.
+        # The subset is named beside the total rather than deducted from it.
+        so_n = sum(len(c) for c in
+                   (analog_ev.get("structure_only_grid") or {}).values())
+        so_txt = (f"; {so_n} of them from a library default, not a bound input"
+                  if so_n else "")
+        # ...and the same is true of a run that says nothing: the count keeps
+        # it (the artefact IS present), and a line that stopped at the count
+        # would say the same number for a design sized to its spec and for an
+        # artefact nobody can attribute to any circuit.
+        un_n = sum(len(c) for c in
+                   (analog_ev.get("undisclosed_grid") or {}).values())
+        un_txt = (f"; {un_n} of them record nothing about what they contain"
+                  if un_n else "")
         md.append(f"- Analog blocks: {n} × 9 stages "
-                  f"= {n*9} per-block step-runs (artefacts present: {a_total}/{n*9})")
+                  f"= {n*9} per-block step-runs (artefacts present: "
+                  f"{a_total}/{n*9}{so_txt}{un_txt})")
         if analog and analog.get("tuning"):
             for t in analog["tuning"]:
                 md.append(f"- Closed-loop tuning ({t['block']}): "
@@ -2006,7 +2310,12 @@ def _render(project: Path, run_audit: bool = True,
                   "for IC-specific opcode coverage, tester fixture semantics, "
                   "analog tuning targets, and any chip-known issues.")
     else:
-        md.append("_No `reports/chip_specific_summary.md` present. Author it by hand "
+        # Same reason as the Output-#3 note above (#1168): this branch exists
+        # BECAUSE the file is absent, so its path must not be spelled as a
+        # citation of a shipped artefact. It stays readable as the file to
+        # author.
+        md.append("_No chip-specific addendum present; expected at "
+                  "reports/chip_specific_summary.md. Author it by hand "
                   "(or via a chip-specific Phase 1 skill) to document IC-specific "
                   "test interpretations, opcode tables, tuning-target values, etc. "
                   "This generator deliberately keeps the canonical summary "

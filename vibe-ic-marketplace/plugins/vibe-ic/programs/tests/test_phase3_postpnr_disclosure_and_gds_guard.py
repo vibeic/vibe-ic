@@ -66,10 +66,37 @@ def _project(tmp_path: Path, *, cached_die: str, cached_util: float) -> Path:
         d.mkdir(parents=True, exist_ok=True)
     (rtl / f"{TOP}.v").write_text(f"module {TOP}(); endmodule\n")
     (synth / f"{TOP}_synth.v").write_text(f"module {TOP}(); endmodule\n")
+    # Step 15 (PnR) DECLARES `phase2/stage2/synth/post_dft_netlist.v` as a
+    # required input owed by step 12, and the runner refuses to run a step
+    # whose declared inputs are absent. Without this file the geometry-change
+    # arm never reaches `step_pnr` at all:
+    #
+    #   BLOCKED pnr  REFUSED TO RUN: 1 declared input(s) ABSENT —
+    #                phase2/stage2/synth/post_dft_netlist.v (owed by step 12)
+    #
+    # so no new DEF is produced, and the `gds` and `pad_side_constraint` rows
+    # are never emitted — which is what the six assertions in this file were
+    # reading when they failed. It is invisible on the UNCHANGED-geometry arm
+    # because PnR short-circuits on "DEF already present" before the declared
+    # input is consulted, which is why only half this file went red.
+    #
+    # This belongs in the fixture rather than being worked around: the
+    # docstring above states the premise as "everything already exists from
+    # the previous run", and a post-DFT netlist is part of everything.
+    (synth / "post_dft_netlist.v").write_text(f"module {TOP}(); endmodule\n")
     (pnr / f"{TOP}.def").write_text(
         "DIEAREA ( 0 0 ) ( 1233000 1233000 ) ;\nPINS 0 ;\nEND PINS\n")
     (pnr / f"{TOP}.gds").write_text("STALE GDS FROM THE PREVIOUS DIE\n")
     R._write_pnr_args_sidecar(pnr, cached_die, cached_util)
+    # The fixture's premise is "a PREVIOUS RUN produced these", and a previous
+    # run is now IDENTIFIED — the cache is keyed on the producing build as well
+    # as on the design inputs (see `_producer_cache_valid_for`). Stamping the
+    # current build keeps this file testing what it was written to test, the
+    # #593 GEOMETRY guard, instead of tripping on the producer guard first.
+    # test_phase3_cache_producer_identity.py owns the producer key's coverage.
+    R._write_producer_identity(synth, "synth")
+    R._write_producer_identity(pnr, "pnr")
+    R._write_producer_identity(pnr, "gds")
     return tmp_path
 
 

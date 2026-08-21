@@ -48,7 +48,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gate_utils import dir_parts_excluded  # shared RTL-scope contract
 import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -83,16 +86,48 @@ IDLE_RESET_RE = re.compile(
 )
 
 
+def collect_files(rtl_dir: Path) -> List[Path]:
+    """The RTL files this gate examines. A NAMED function, not an inline
+    comprehension inside `audit`, so a test can drive THE REAL collector.
+
+    Skip the flow's own build/output trees. This was a bare rglob with no
+    exclusion; given a PROJECT directory — how the phase-2 umbrella invokes
+    it — it read every emitted netlist in the tree. MEASURED on
+    edge_llm_accel x nangate45: 39.14 s / 1.03 GB RSS, and a TIMEOUT under
+    the umbrella's per-gate budget that FAILed phase 2 before PnR.
+
+    Exclusion is delegated to the shared `gate_utils.dir_parts_excluded`, not
+    to a private `& EXCLUDED_DIRS` — this collector was the FOURTH one, and
+    importing only the NAME SET meant it silently missed the suffix rule when
+    one was added. Measured on a project with an out-of-cone sidecar: the other
+    three collectors saw `design.v`, this one also read the moved-aside
+    `orphan.v` and reported a finding against a file the flow does not compile
+    (vibe-ic#781 M1). There is exactly one policy function; four call sites.
+
+    The regression test for that defect had re-implemented this comprehension
+    inline with the raw name set, so it asserted on a COPY of the collector and
+    could never have caught the drift it was written to catch."""
+    if not rtl_dir.is_dir():
+        return []
+    return sorted(
+        p for p in list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv"))
+        if not dir_parts_excluded(p.relative_to(rtl_dir).parts[:-1]))
+
+
 def audit(rtl_dir: Path) -> AuditResult:
     result = AuditResult()
     if not rtl_dir.is_dir():
         result.summary = {"skipped": True, "reason": "not_a_directory"}
         return result
 
-    files = sorted(list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv")))
+    files = collect_files(rtl_dir)
     if not files:
         result.summary = {"skipped": True, "reason": "no_rtl_files"}
         return result
+    # WHAT WAS ACTUALLY READ — recorded on every exit path, including the
+    # self-skip ones, so "did this gate open a file it should not have?" is
+    # answerable from the result instead of only from a stopwatch.
+    scanned = sorted(p.name for p in files)
 
     has_break = False
     for f in files:
@@ -105,13 +140,15 @@ def audit(rtl_dir: Path) -> AuditResult:
             break
 
     if not has_break:
-        result.summary = {"skipped": True, "reason": "no_break_signals"}
+        result.summary = {"skipped": True, "reason": "no_break_signals",
+                          "files_scanned": scanned}
         result.findings.append(Finding(
             "SKIP", "INFO", "No break signals detected — not a break-based protocol.",
         ))
         return result
 
-    result.summary = {"skipped": False, "files_checked": []}
+    result.summary = {"skipped": False, "files_checked": [],
+                      "files_scanned": scanned}
 
     for f in files:
         try:
@@ -216,7 +253,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(txt)
         else:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.json).write_text(txt + "\n")
+            atomic_write_text(Path(args.json), txt + "\n")
     else:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")

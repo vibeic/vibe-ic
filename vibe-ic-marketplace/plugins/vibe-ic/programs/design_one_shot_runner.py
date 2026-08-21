@@ -80,11 +80,18 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
+import ctypes
+import errno
+import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -96,6 +103,7 @@ import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl autho
 import spec_declaration_emit as _decl  # the spec's FREE-CHOICE declaration contract
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
 # decision logic (same module Phase-3 step_synth delegates to), so the
 # Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
@@ -104,6 +112,9 @@ import synth_frontend as _sf
 import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only)
 import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
+import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -144,6 +155,7 @@ _FORCE_RTL_REGEN = False
 # not be mistaken for a human author's.
 _RTL_SESSION_OWNED = False
 _RTL_SESSION_PROJECT: Optional[Path] = None
+_RTL_SESSION_BINDING: Optional["_Phase1ProjectBinding"] = None
 
 def _find_protocol_tb() -> Path:
     """Walk up from PROGRAMS_DIR looking for tools/protocol_tb/aid_class_reference_tb.v."""
@@ -186,11 +198,26 @@ DEVICES_ROOT = _find_devices_root()
 @dataclass
 class StepResult:
     name: str
-    status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED
+    status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED / BLOCKED
     duration_s: float = 0.0
     detail: str = ""
     output_files: List[str] = field(default_factory=list)
     extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in phase3_one_shot_runner: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that
+    it would have fallen through that function's catch-all `return "PASS"` and
+    a refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
 
 
 # v1.6.181 (#72 P1-4) — hint-driven ECO remediation policy.
@@ -502,7 +529,23 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
     import _docker_watchdog as _dw
     _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
-    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
+    full = ["docker", "exec",
+            # The vibeic-eda image is entered through a LOGIN shell, whose
+            # profile prints a two-line banner ("[INFO] Final PATH variable:
+            # ...") to STDOUT AHEAD of the command output.
+            # `IIC_OSIC_TOOLS_QUIET` is the image's OWN documented knob for
+            # it (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes
+            # on it), and `phase3_one_shot_runner` already passes it here.
+            #
+            # This path was cold for simulation until #902 moved iverilog/vvp
+            # dispatch INTO the container: MEASURED on a converged cell, the
+            # banner then landed at the TOP of the sim transcript
+            # (`sim_full_stack/oracle_run/oracle.log` grew from 4 lines to 6),
+            # which is the same stdout-contamination the repo already refuses
+            # at source elsewhere. Suppressing it HERE keeps every consumer
+            # clean instead of asking each one to remember to filter.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", _wrapped]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
@@ -516,6 +559,32 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
         return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+def _compiler_was_not_found(rc: int, out: str, err: str) -> bool:
+    """Did the tool fail to EXECUTE, rather than run and reject the source?
+
+    vibe-ic#1394. The distinction is the whole difference between "could not
+    measure" and "measured and found a defect", and it has to be read off the
+    same two signals the runners above emit:
+
+      * `COMMAND_NOT_FOUND:` — written ONLY by the `except FileNotFoundError`
+        arms of `_run` / `_docker_exec_raw` (this file, two sites), so it is
+        never produced by a tool that started.
+      * rc 127 — POSIX / shell "command not found". Deliberately safe here:
+        `iverilog` exits 1 on a compile or elaboration error and reserves no
+        meaning for 127, and a container dispatch whose inner command is
+        missing returns bash's own 127.
+
+    Kept NARROW on purpose. A bare "No such file or directory" is NOT accepted
+    as a signal, because a genuine compile failure over a missing `include`
+    says exactly that — and treating that as "could not run" would convert a
+    real structural defect into a skip, which is the inverse of the bug this
+    predicate exists to fix and strictly worse than it.
+    """
+    if "COMMAND_NOT_FOUND:" in f"{out or ''}\n{err or ''}":
+        return True
+    return rc == 127
 
 
 def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
@@ -579,23 +648,380 @@ def _iverilog_available(container: str) -> bool:
     return bool(_shutil.which("iverilog"))
 
 
-def _iverilog_exec_container(container: str) -> bool:
+def _iverilog_sources_visible(argv: List[str], run_dir: Path,
+                              container: str) -> Tuple[bool, str]:
+    """(visible, reason) — can `container` SEE everything this stage needs?
+
+    #902 guard. `_to_container_path` returns the path UNTRANSLATED when no
+    bind-mount covers it, which inside the container is simply a missing file.
+    So the container is a usable execution site only when the run tree AND
+    every absolute path token in `argv` sit under one of its mounts. Answering
+    that BEFORE dispatching is what keeps the host fallback honest instead of
+    turning a working host sim into a container 'file not found'.
+
+    Absolute tokens are treated as paths (that is exactly the set
+    `_to_container_path` would rewrite); flags, `-D` defines and the bare tool
+    name are relative or dash-led and carry no mount. chip/tool-AGNOSTIC."""
+    if not _path_in_container(str(run_dir), container):
+        return False, ("run_dir is not bind-mounted into %r: %s"
+                       % (container, run_dir))
+    for tok in argv:
+        if not tok or not str(tok).startswith("/"):
+            continue
+        if not _path_in_container(str(tok), container):
+            return False, ("argv path is not bind-mounted into %r: %s"
+                           % (container, tok))
+    return True, "run_dir and every absolute argv path are bind-mounted"
+
+
+def _iverilog_exec_container(container: str,
+                             run_dir: Optional[Path] = None,
+                             argv: Optional[List[str]] = None) -> bool:
     """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
-    `container` (the host has no iverilog but the container does). When the
-    host has iverilog we keep the historical host execution (no docker
-    round-trip); the caller only reaches execution when `_iverilog_available`
-    already said yes, so 'not host' here implies 'container'."""
-    import shutil as _shutil
-    if _shutil.which("iverilog"):
+    `container`.
+
+    #902 — this used to return False whenever the HOST had ANY iverilog:
+
+        if _shutil.which("iverilog"):
+            return False
+
+    so a run that pinned an image (`--require-image`) VERIFIED that image and
+    then simulated with whatever iverilog the host happened to carry. MEASURED
+    across the fleet: three different Icarus frontends for the SAME cell (two
+    host versions and the container's), selected by which host the job landed
+    on, with the pin reported satisfied throughout — host and container even
+    report different line numbers for the same error, so a diagnosis taken on
+    one host does not transfer to another. The pin check answers 'is the image
+    present and correct'; it never answered 'did the tools come from it'.
+
+    The container is now PREFERRED whenever it has iverilog — the same
+    container-first order `_iverilog_available` already uses, so availability
+    and execution can no longer disagree about where the simulator is. The
+    host stays the fallback for the two cases where the container cannot do
+    the job: it has no iverilog, or it cannot SEE the run tree / sources. Both
+    fallbacks are RECORDED by `_record_sim_toolchain`, so the divergence
+    between the toolchain a run pinned and the one it used is never silent
+    again. chip-AGNOSTIC."""
+    if not container:
         return False
-    return bool(container) and _tool_in_container(container, "iverilog")
+    if not _tool_in_container(container, "iverilog"):
+        return False
+    if run_dir is not None:
+        ok, _reason = _iverilog_sources_visible(list(argv or []), run_dir,
+                                                container)
+        if not ok:
+            return False
+    return True
+
+
+# -------------------------------------------------------------------------
+# #902 second half — SIM-TOOLCHAIN PROVENANCE
+#
+# `--require-image` is verified once at launch and answers 'is that image
+# present on this container'. Nothing compared it against the toolchain the
+# run actually USED, so the host/container split above was invisible: the pin
+# WAS checked and WAS reported satisfied while the simulator came from
+# somewhere else entirely. The predicate change above removes the common
+# cause; this record removes the SILENCE, which is the part that made it
+# undiagnosable — the residual host fallbacks (container without iverilog, run
+# tree not mounted) are still real, and now they are written down.
+#
+# Best-effort by construction: every probe and every write is guarded, and a
+# failure degrades to a recorded note. A run must never fail because its
+# attribution could not be taken.
+# -------------------------------------------------------------------------
+
+#: Filename of the per-run sim-toolchain record. A module constant so the
+#: writer, the aggregator and the tests read ONE string instead of hand-typed
+#: copies that can drift apart.
+SIM_TOOLCHAIN_RECORD = "sim_toolchain.json"
+
+#: (run_dir, container, tool, locality) already recorded in this process, so
+#: repeated stages do not re-probe docker for an answer they already have.
+_SIM_TOOLCHAIN_SEEN: Dict[str, Dict[str, Any]] = {}
+
+
+def _project_top_level_dir_names() -> Tuple[str, ...]:
+    """The top-level folder names a project can nest a run_dir under,
+    DISCOVERED from `_path_layout` instead of typed here.
+
+    Every `<name>_dir(project)` helper in the layout module is called against a
+    probe root and the FIRST component of the returned relative path is
+    collected. A phase or top-level folder added to the layout is therefore
+    attributable on arrival, instead of being silently unattributable until
+    someone remembers to extend a literal list."""
+    probe = Path("/__vibeic_layout_probe__")
+    names = set()
+    for attr in dir(_pl):
+        if attr.startswith("_") or not attr.endswith("_dir"):
+            continue
+        fn = getattr(_pl, attr, None)
+        if not callable(fn):
+            continue
+        try:
+            got = fn(probe)
+        except Exception:                                    # noqa: BLE001
+            continue                       # needs more than a project root
+        try:
+            rel = Path(str(got)).relative_to(probe)
+        except (ValueError, TypeError):
+            continue
+        if rel.parts:
+            names.add(rel.parts[0])
+    return tuple(sorted(names))
+
+
+def _project_root_of_run_dir(run_dir: Path) -> Optional[Path]:
+    """The project a sim `run_dir` sits in — the directory above the layout
+    folder it is nested in. None when undecidable, which is REPORTED as
+    undecidable rather than guessed."""
+    parts = Path(run_dir).parts
+    tops = _project_top_level_dir_names()
+    for i, part in enumerate(parts):
+        if i > 0 and part in tops:
+            return Path(*parts[:i])
+    return None
+
+
+#: Sentinels the tool-identity probe prints its two answers behind. The
+#: container is entered through `bash -lc`, whose LOGIN PROFILE prints its own
+#: banner lines ("[INFO] Final PATH variable: ..."); a probe that trusted line
+#: ORDER recorded that banner AS the simulator's version — a record that lies
+#: in exactly the way this record exists to stop. Marked lines are order- and
+#: noise-independent, and the SAME script runs on both sides so host and
+#: container answers cannot be parsed by two rules that drift apart.
+_TOOL_PROBE_PATH_MARK = "__VIBEIC_TOOL_PATH__"
+_TOOL_PROBE_VER_MARK = "__VIBEIC_TOOL_VERSION__"
+
+
+def _tool_probe_script(tool: str) -> str:
+    """The one probe script, used on the host AND inside the container."""
+    import shlex as _shlex
+    t = _shlex.quote(tool)
+    return (
+        'export PATH=%s/bin:$PATH; '
+        'p="$(command -v %s 2>/dev/null || true)"; echo "%s$p"; '
+        # MEASURED: `iverilog -V` writes its banner to STDOUT while `vvp -V`
+        # writes the SAME banner to STDERR. A probe reading only stdout
+        # recorded the runtime half of the very same toolchain as unknown.
+        # Read stdout first, fall back to stderr — never merge the two
+        # streams, whose interleaving is not ordered.
+        'vo="$("$p" -V 2>/dev/null | head -1 || true)"; '
+        've="$("$p" -V 2>&1 1>/dev/null | head -1 || true)"; '
+        'if [ -n "$vo" ]; then echo "%s$vo"; else echo "%s$ve"; fi'
+        % (TOOLS_IN_CONTAINER, t, _TOOL_PROBE_PATH_MARK,
+           _TOOL_PROBE_VER_MARK, _TOOL_PROBE_VER_MARK)
+    )
+
+
+def _parse_tool_probe(out: str) -> Tuple[Optional[str], Optional[str]]:
+    """Pull the two MARKED answers out of a probe transcript, ignoring any
+    login-profile noise around them."""
+    path = version = None
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith(_TOOL_PROBE_PATH_MARK) and path is None:
+            path = ln[len(_TOOL_PROBE_PATH_MARK):].strip() or None
+        elif ln.startswith(_TOOL_PROBE_VER_MARK) and version is None:
+            version = ln[len(_TOOL_PROBE_VER_MARK):].strip() or None
+    return path, version
+
+
+def _probe_tool_identity(tool: str, container: str, in_container: bool
+                         ) -> Tuple[Optional[str], Optional[str]]:
+    """(path, version_banner) for `tool` ON THE SIDE IT WILL ACTUALLY RUN.
+
+    MEASURED by asking that side — never inferred from the caller's intent,
+    which is the whole failure this record exists to close. Returns (None,
+    None) when the probe cannot answer, which is recorded as unknown rather
+    than filled in from the other side."""
+    script = _tool_probe_script(tool)
+    try:
+        if in_container:
+            _rc, out, _err = _docker_exec(container, script, timeout=30)
+        else:
+            _rc, out, _err = _run(["bash", "-lc", script], timeout=30)
+        return _parse_tool_probe(out)
+    except Exception:                                        # noqa: BLE001
+        return None, None
+
+
+def _declared_container_image(project: Optional[Path], container: str
+                              ) -> Dict[str, Any]:
+    """What the RUN declared/pinned, read from the artifact the launch-time
+    check already wrote (`reports/container_image.json`). Falls back to a live
+    inspect when that artifact is absent, and says which source it used —
+    an unreadable source is reported as unknown, never as a match."""
+    rec: Dict[str, Any] = {"declared_image_ref": None, "declared_image_id": None,
+                           "require_image": None, "declared_image_source": None}
+    if project is not None:
+        p = _pl.reports_dir(project) / "container_image.json"
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(doc, dict):
+                rec["declared_image_ref"] = doc.get("image_ref")
+                rec["declared_image_id"] = doc.get("image_id")
+                rec["require_image"] = doc.get("require_image")
+                rec["declared_image_source"] = str(p)
+                return rec
+        except Exception:                                    # noqa: BLE001
+            pass
+    if container:
+        try:
+            import container_image_provenance as _cip
+            live = _cip.inspect_container(container)
+            if live.get("status") == "ok":
+                rec["declared_image_ref"] = live.get("image_ref")
+                rec["declared_image_id"] = live.get("image_id")
+                rec["declared_image_source"] = "docker inspect %s" % container
+        except Exception:                                    # noqa: BLE001
+            pass
+    return rec
+
+
+def _record_sim_toolchain(run_dir: Path, container: str, tool: str,
+                          in_container: bool,
+                          fallback_reason: Optional[str] = None,
+                          ) -> Dict[str, Any]:
+    """#902 — record WHICH simulator toolchain this sim actually executed, and
+    whether it is the one the run pinned.
+
+    Writes `<run_dir>/sim_toolchain.json` (it belongs beside the transcript it
+    explains) and merges into `<project>/reports/sim_toolchain.json` when the
+    project root resolves. The verdict is deliberately three-valued:
+
+      MATCH        a container was declared and the sim ran IN it
+      DIVERGED     a container was declared and the sim ran on the HOST — the
+                   exact shape that made published sim verdicts host-dependent
+      UNPINNED     no container declared at all (true host mode); nothing to
+                   match, and saying so is not the same as saying MATCH
+      UNDECIDABLE  the probe could not resolve the image identity
+
+    Never raises and never changes a sim verdict. chip/tool-AGNOSTIC."""
+    locality = "container" if in_container else "host"
+    key = "%s|%s|%s|%s" % (run_dir, container, tool, locality)
+    if key in _SIM_TOOLCHAIN_SEEN:
+        return _SIM_TOOLCHAIN_SEEN[key]
+
+    rec: Dict[str, Any] = {
+        "tool": tool,
+        "run_dir": str(run_dir),
+        "container": container or "",
+        "execution_locality": locality,
+        "host_fallback_reason": fallback_reason,
+    }
+    try:
+        import platform as _platform
+        rec["host"] = _platform.node()
+    except Exception:                                        # noqa: BLE001
+        rec["host"] = None
+
+    path, version = _probe_tool_identity(tool, container, in_container)
+    rec["tool_path"] = path
+    rec["tool_version"] = version
+
+    project = _project_root_of_run_dir(Path(run_dir))
+    rec["project"] = str(project) if project else None
+    rec.update(_declared_container_image(project, container))
+
+    if not container:
+        rec["sim_toolchain_matches_declared_image"] = None
+        rec["verdict"] = "UNPINNED"
+        rec["reason"] = ("no container declared for this run — the sim ran on "
+                         "the host and there is no pinned toolchain to match")
+    elif not in_container:
+        rec["sim_toolchain_matches_declared_image"] = False
+        rec["verdict"] = "DIVERGED"
+        rec["reason"] = (
+            "container %r was declared (image %s) but %s ran on the HOST (%s) "
+            "— the run VERIFIED one toolchain and USED another: %s"
+            % (container, rec.get("declared_image_ref"), tool,
+               rec.get("tool_version") or rec.get("tool_path") or "unknown",
+               fallback_reason or "reason not captured"))
+    elif rec.get("declared_image_id") or rec.get("declared_image_ref"):
+        rec["sim_toolchain_matches_declared_image"] = True
+        rec["verdict"] = "MATCH"
+        rec["reason"] = (
+            "%s ran INSIDE container %r (image %s) — the sim toolchain is the "
+            "declared one" % (tool, container, rec.get("declared_image_ref")))
+    else:
+        rec["sim_toolchain_matches_declared_image"] = None
+        rec["verdict"] = "UNDECIDABLE"
+        rec["reason"] = (
+            "%s ran INSIDE container %r but its image identity could not be "
+            "resolved — attribution unavailable, not assumed"
+            % (tool, container))
+
+    _SIM_TOOLCHAIN_SEEN[key] = rec
+    _write_sim_toolchain_record(Path(run_dir), project, rec)
+    if rec["verdict"] == "DIVERGED":
+        try:
+            print("[#902 sim-toolchain DIVERGED] " + rec["reason"],
+                  file=sys.stderr)
+        except Exception:                                    # noqa: BLE001
+            pass
+    return rec
+
+
+def _merge_sim_toolchain_record(path: Path, rec: Dict[str, Any]) -> None:
+    """Merge one record into the aggregate at `path`, keyed by
+    (run_dir, tool, execution_locality).
+
+    ONE merge routine for BOTH destinations on purpose: an earlier revision
+    wrote the per-run_dir file with a bare `write_text(rec)` and merged only
+    the reports copy, so the compile record and the vvp record — different
+    tools, same run_dir — overwrote each other and the file claimed the run
+    used ONE tool. Best-effort: IO/parse errors degrade, never raise."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records: List[Dict[str, Any]] = []
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(doc, dict) and isinstance(doc.get("records"), list):
+                records = [r for r in doc["records"] if isinstance(r, dict)]
+        except Exception:                                    # noqa: BLE001
+            records = []
+        ident = (rec["run_dir"], rec["tool"], rec["execution_locality"])
+        records = [r for r in records
+                   if (r.get("run_dir"), r.get("tool"),
+                       r.get("execution_locality")) != ident]
+        records.append(rec)
+        records.sort(key=lambda r: (str(r.get("run_dir")), str(r.get("tool")),
+                                    str(r.get("execution_locality"))))
+        verdicts: Dict[str, int] = {}
+        for r in records:
+            v = str(r.get("verdict"))
+            verdicts[v] = verdicts.get(v, 0) + 1
+        path.write_text(json.dumps(
+            {"records": records,
+             "verdicts": verdicts,
+             "diverged": verdicts.get("DIVERGED", 0),
+             "any_divergence": verdicts.get("DIVERGED", 0) > 0},
+            indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _write_sim_toolchain_record(run_dir: Path, project: Optional[Path],
+                                rec: Dict[str, Any]) -> None:
+    """Persist the record beside the transcript it explains, and — when the
+    project root resolves — into the run-level aggregate under `reports/`.
+
+    The run_dir copy is written only when that directory ALREADY exists: the
+    record documents a sim that ran there, so conjuring the directory into
+    being would file evidence of a run in a place no run ever happened."""
+    rd = Path(run_dir)
+    if rd.is_dir():
+        _merge_sim_toolchain_record(rd / SIM_TOOLCHAIN_RECORD, rec)
+    if project is not None:
+        _merge_sim_toolchain_record(
+            _pl.reports_dir(project) / SIM_TOOLCHAIN_RECORD, rec)
 
 
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
                         timeout: int = 120) -> Tuple[int, str, str]:
-    """Run one iverilog/vvp stage (a full argv) on the host, OR — when the
-    host lacks iverilog but `container` has it — dispatched INTO the container
-    against the bind-mounted (path-translated) project tree.
+    """Run one iverilog/vvp stage (a full argv) INSIDE `container` when it has
+    iverilog and can see the run tree, else on the host.
 
     The project is bind-mounted, so every path token in `argv` (the .vvp
     output, the TB, the RTL sources) is translated host→container via
@@ -603,9 +1029,28 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     `vvp`) carry no mount prefix and pass through untouched. The container
     cwd is the translated `run_dir` so `$readmem*` relative loads resolve, and
     `/foss/tools/bin` is put on PATH so the fork's iverilog/vvp are found.
-    chip-AGNOSTIC."""
-    if not _iverilog_exec_container(container):
-        # host execution (unchanged); a plain argv passes through _run's
+
+    #902 — the container is PREFERRED (it used to be the host whenever the
+    host had any iverilog, which made the simulator a property of the machine
+    the job landed on rather than of the pinned image), and either way the
+    locality is RECORDED by `_record_sim_toolchain` so a host fallback cannot
+    be silent. chip-AGNOSTIC."""
+    tool = os.path.basename(str(argv[0])) if argv else "iverilog"
+    in_container = _iverilog_exec_container(container, run_dir, argv)
+    fallback_reason: Optional[str] = None
+    if not in_container and container:
+        if not _tool_in_container(container, "iverilog"):
+            fallback_reason = ("container %r has no iverilog" % container)
+        else:
+            _ok, fallback_reason = _iverilog_sources_visible(
+                list(argv or []), run_dir, container)
+    try:
+        _record_sim_toolchain(run_dir, container, tool, in_container,
+                              fallback_reason)
+    except Exception:                                        # noqa: BLE001
+        pass                    # attribution must never fail the simulation
+    if not in_container:
+        # host execution; a plain argv passes through _run's
         # docker-exec-deadline rewriter untouched.
         return _run(argv, cwd=run_dir, timeout=timeout)
     import shlex as _shlex
@@ -694,7 +1139,7 @@ def _find_host_quartus_sh() -> Optional[str]:
                 cand2 = child / "bin" / "quartus_sh"
                 if cand2.is_file():
                     candidates.append(cand2)
-        except OSError:
+        except (OSError, RuntimeError):
             pass
 
     for c in candidates:
@@ -1120,6 +1565,7 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
 
     Spec is looked for at the conventional locations below; its ``module`` field
     names the emitted ``rtl/<module>.sv``."""
+    _phase1_project_checkpoint(project)
     spec = None
     for cand in ("phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json",
                  "input/rtl_spec.json", "phase2/stage1/rtl_spec.yaml",
@@ -1130,6 +1576,7 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
             break
     if spec is None:
         return None
+    _phase1_project_checkpoint(project)
 
     # ── ORGANIC #403 — the design's OWN implementation outranks a generator.
     #
@@ -1195,31 +1642,59 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
     except Exception:
         pass
     rtl_dir = _pl.rtl_dir(project)
-    rtl_dir.mkdir(parents=True, exist_ok=True)
     out = rtl_dir / f"{module}.sv"
     try:
-        r = subprocess.run([sys.executable, str(dispatcher), str(spec), "-o", str(out)],
-                           capture_output=True, text=True, timeout=120)
+        # The dispatcher writes outside the project first.  Only verified text
+        # is later linked through the held-root publisher, so a root swap in or
+        # around the subprocess cannot redirect its output into a replacement.
+        with tempfile.TemporaryDirectory(prefix="vibeic-rtl-dispatch-") as td:
+            staged_out = Path(td) / out.name
+            _phase1_project_checkpoint(project)
+            r = subprocess.run(
+                [sys.executable, str(dispatcher), str(spec),
+                 "-o", str(staged_out)],
+                capture_output=True, text=True, timeout=120)
+            _phase1_project_checkpoint(project)
+            if r.returncode == 3:
+                return None
+            if r.returncode != 0:
+                return StepResult(
+                    "rtl_gen", "FAIL", time.time() - t0,
+                    f"deterministic_rtl_dispatcher rejected {spec.name}: "
+                    f"{(r.stderr or r.stdout)[-300:]}")
+            rtl = staged_out.read_text(encoding="utf-8")
+    except _Phase1RtlOutputRefused:
+        raise
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"deterministic_rtl_dispatcher crashed on {spec.name}: {e}")
-    if r.returncode == 3:
-        return None  # not mechanically derivable → fall through to class/AI path
-    if r.returncode != 0:
-        return StepResult("rtl_gen", "FAIL", time.time() - t0,
-                          f"deterministic_rtl_dispatcher rejected {spec.name}: "
-                          f"{(r.stderr or r.stdout)[-300:]}")
     blob = (r.stdout or "") + (r.stderr or "")
     m = re.search(r"route . (\w+)", blob) or re.search(r":\s*([\w-]+)\s*. wrote", blob)
     gen = m.group(1) if m else "deterministic"
-    return StepResult(
-        "rtl_gen", "PASS", time.time() - t0,
-        f"deterministic RTL via {gen} (program-first; no LLM) → "
-        f"{out.relative_to(project)}",
-        output_files=[str(out)],
-        extras={"deterministic_generator": gen,
-                "rtl_spec": str(spec.relative_to(project)),
-                "program_first": True})
+    publication = None
+    try:
+        publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via {gen} (program-first; no LLM) → "
+            f"{out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": gen,
+                    "rtl_spec": str(spec.relative_to(project)),
+                    "program_first": True})
+        publication.require_current_chain()
+        return result
+    except Exception:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        raise
+    finally:
+        if publication is not None:
+            publication.close()
 
 
 def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
@@ -1237,6 +1712,7 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     arithmetic, or when RTL already exists (author guard) — so every
     non-matching design keeps today's behaviour byte-for-byte.
     """
+    _phase1_project_checkpoint(project)
     arith = {"digital_arithmetic_primitive", "digital_datapath",
              "arithmetic_primitive", "pure_datapath"}
     if ic_class not in arith:
@@ -1249,8 +1725,10 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
                              any(rtl_dir.rglob("*.sv"))):
         return None  # author/generator guard — never overwrite existing RTL
     try:
+        _phase1_project_checkpoint(project)
         r = subprocess.run([sys.executable, str(solver), str(project), "--emit"],
                            capture_output=True, text=True, timeout=60)
+        _phase1_project_checkpoint(project)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"serial_parallel_mul_synth crashed: {e}")
@@ -1263,14 +1741,2188 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     written = out.get("written")
     if not written:
         return None
+    declared = out.get("declaration_written")
     return StepResult(
         "rtl_gen", "PASS", time.time() - t0,
         f"deterministic serial-parallel multiplier RTL (program-first; no LLM) "
-        f"-> {Path(written).relative_to(project)}",
-        output_files=[written],
+        f"-> {Path(written).relative_to(project)}"
+        + (f"; L7 declaration -> {Path(declared).relative_to(project)}"
+           if declared else ""),
+        output_files=[written] + ([declared] if declared else []),
         extras={"deterministic_generator": "serial_parallel_mul_synth",
                 "program_first": True, "topology": "serial_parallel",
                 "spec": out.get("spec")})
+
+
+def _try_canonical_primitive_rtl(
+        project: Path, t0: float,
+        phase1_plain_text: Optional[str] = None) -> Optional[StepResult]:
+    """Program-first RTL for CANONICAL single-function primitive shapes whose
+    STRUCTURE the design description states unambiguously — clock dividers
+    (odd / 3.5x fractional), a 0->1->0 pulse detector, a serial->parallel byte
+    converter, a combinational long divider, a traffic-light FSM, a radix-2
+    signed/unsigned divider, an IEEE-754 single-precision multiplier, and an
+    async gray-code FIFO. `canonical_primitive_synth.detect_shape` matches on the
+    STATED structure (the "Module name:" token + declared port signature + a
+    distinctive prose phrase) and emits verified-correct RTL with NO LLM.
+
+    FAIL-CLOSED, same contract as `_try_serial_parallel_mul_rtl`: returns None
+    (fall through to the class-registry / AI path) when no shape tightly matches,
+    when RTL already exists (author/generator guard — never overwrite the design's
+    own implementation), or when the solver is unavailable. A wrong emit is worse
+    than an honest DEFER, so every non-matching design keeps today's behaviour.
+    chip-AGNOSTIC: keyed on stated structure, never on a design's leaf name."""
+    _phase1_project_checkpoint(project)
+    rtl_dir = _pl.rtl_dir(project)
+    if rtl_dir.is_dir() and (any(rtl_dir.rglob("*.v")) or
+                             any(rtl_dir.rglob("*.sv"))):
+        return None  # author/generator guard — never overwrite existing RTL
+    solver = PROGRAMS_DIR / "canonical_primitive_synth.py"
+    if not solver.is_file():
+        return None
+    try:
+        import canonical_primitive_synth as _cps  # noqa: E402
+    except Exception:
+        return None
+    desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+    _phase1_project_checkpoint(project)
+    if not desc:
+        return None
+    try:
+        shape = _cps.detect_shape(desc)
+    except Exception:
+        return None
+    if not shape:
+        return None  # DEFER → fall through to spec-to-rtl
+    module = _cps.module_name_of(desc) or "chip_top"
+    try:
+        rtl = _cps.emit_rtl(shape)
+    except Exception as e:
+        return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                          f"canonical_primitive_synth emit failed for {shape}: {e}")
+    _phase1_project_checkpoint(project)
+    out = rtl_dir / f"{module}.v"
+    publication = None
+    try:
+        # Use the same held-root, fd-bound no-clobber publisher as behavioral
+        # flow-back.  Canonical emission must not return to Path.write_text at
+        # the exact point where a replacement project could be adopted.
+        publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via canonical_primitive_synth[{shape}] "
+            f"(program-first; no LLM) -> {out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "canonical_primitive_synth",
+                    "shape": shape, "module": module,
+                    "program_first": True})
+        publication.require_current_chain()
+        return result
+    except Exception:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        raise
+    finally:
+        if publication is not None:
+            publication.close()
+
+
+def _phase1_declared_module_name(spec_text: str) -> Optional[str]:
+    """Return the ONE explicitly declared Phase-1 top name, else ``None``.
+
+    Plain input docs occur in both VerilogEval's module-header dialect and the
+    RTLLM ``Module name:`` dialect. Multiple identical declarations are harmless,
+    but conflicting names are an interface ambiguity and therefore an honest
+    SKIP (never guess ``chip_top``).
+    """
+    candidates = set()
+    patterns = (
+        r"(?im)^\s*module\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
+        r"(?i)\bmodule\s+(?:is\s+)?named\s+([A-Za-z_]\w*)\b",
+        r"(?im)^\s*module\s+name\s*:\s*(?:\n\s*)?([A-Za-z_]\w*)\b",
+        r'(?i)"(?:top_module|module_name)"\s*:\s*"([A-Za-z_]\w*)"',
+    )
+    for pattern in patterns:
+        candidates.update(m.group(1) for m in re.finditer(pattern, spec_text))
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+_PHASE1_PROSE_PROVENANCE_REFUSED = (
+    "PHASE1_OPERATOR_PROSE_PROVENANCE_REFUSED")
+_PHASE1_PROSE_PARSE_REFUSED = "PHASE1_OPERATOR_PROSE_PARSE_REFUSED"
+_PHASE1_PROSE_READ_REFUSED = "PHASE1_OPERATOR_PROSE_READ_REFUSED"
+_PHASE1_RTL_OUTPUT_REFUSED = "PHASE1_RTL_OUTPUT_PROVENANCE_REFUSED"
+
+
+@dataclass(frozen=True)
+class _Phase1PlainSpecGather:
+    """Total result of gathering operator-owned Phase-1 prose.
+
+    ``refusal`` is retained separately from empty text so a trust-boundary or
+    read failure cannot masquerade as an ordinary grammar nonmatch.
+    """
+    text: str
+    sources: Tuple[str, ...]
+    refusal: Optional[Dict[str, str]] = None
+
+
+def _phase1_plain_spec_gather_refusal(
+        project: Path, path: Path, finding: str, reason: str,
+        detail: str) -> _Phase1PlainSpecGather:
+    try:
+        path_label = str(path.relative_to(project))
+    except (TypeError, ValueError):
+        path_label = str(path)
+    return _Phase1PlainSpecGather(
+        "", (), {"finding": finding, "reason": reason,
+                 "path": path_label, "detail": detail})
+
+
+def _gather_phase1_plain_spec_text(
+        project: Path,
+        project_binding: Optional["_Phase1ProjectBinding"] = None,
+        ) -> _Phase1PlainSpecGather:
+    """Read only operator-supplied Phase-1 prose, never generated L-docs.
+
+    A generated L*.json may contain an LLM interpretation that is absent from
+    the source.  Letting it complete this deterministic parser would relabel an
+    AI-derived table as ``program-first; no LLM``.  Restricting the bridge to
+    input_prompt/input_doc keeps that provenance claim mechanically true.
+
+    Symlinks are not source provenance: an apparently allowed ``design.md`` can
+    otherwise point at generated_docs/L9 (or anywhere else) and cross this trust
+    boundary.  Any symlink entry fails the whole gather closed.  Every regular
+    source must also resolve beneath the resolved allowed root; a resolution or
+    traversal error is a refusal, never a silently skipped file.
+    """
+    project = Path(project)
+    chunks: List[str] = []
+    sources: List[str] = []
+    if project_binding is not None:
+        project_binding.require_current()
+    try:
+        # The caller-supplied project is the provenance boundary.  A symlinked
+        # boundary makes the lexical ``phase1/input_*`` claim unverifiable.
+        if project.is_symlink():
+            return _phase1_plain_spec_gather_refusal(
+                project, project, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "PROJECT_BOUNDARY_SYMLINK",
+                "the project provenance boundary is a symlink")
+        project_root = project.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return _phase1_plain_spec_gather_refusal(
+            project, project, _PHASE1_PROSE_PROVENANCE_REFUSED,
+            "PROJECT_BOUNDARY_UNRESOLVED",
+            f"the project provenance boundary could not be resolved: {exc}")
+    if project_binding is not None:
+        project_binding.require_current()
+    for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+        if project_binding is not None:
+            project_binding.require_current()
+        try:
+            source_rel = directory.relative_to(project)
+            # ``Path.is_symlink`` examines only the final component.  Inspect
+            # every component below the project boundary so ``phase1 -> L9``
+            # cannot make a regular-looking ``phase1/input_doc`` trustworthy.
+            cursor = project
+            for component in source_rel.parts:
+                cursor /= component
+                if cursor.is_symlink():
+                    return _phase1_plain_spec_gather_refusal(
+                        project, cursor, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_ANCESTOR_SYMLINK",
+                        "an operator-prose source ancestor is a symlink")
+            if not directory.exists():
+                continue
+            if not directory.is_dir():
+                return _phase1_plain_spec_gather_refusal(
+                    project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ROOT_NOT_DIRECTORY",
+                    "the operator-prose source root is not a directory")
+            allowed_root = directory.resolve(strict=True)
+            allowed_root.relative_to(project_root)
+            entries = sorted(allowed_root.rglob("*"))
+        except ValueError as exc:
+            return _phase1_plain_spec_gather_refusal(
+                project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "SOURCE_OUT_OF_ROOT",
+                f"the operator-prose source root escaped the project: {exc}")
+        except (OSError, RuntimeError) as exc:
+            return _phase1_plain_spec_gather_refusal(
+                project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                "SOURCE_TRAVERSAL_FAILED",
+                f"the operator-prose source tree could not be traversed: {exc}")
+        for path in entries:
+            # Resolve symlinks only to NAME the exact refusal.  No symlink is
+            # ever read, even when its target remains within allowed_root.
+            if path.is_symlink():
+                try:
+                    target = path.resolve(strict=True)
+                except FileNotFoundError as exc:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_BROKEN_LINK",
+                        f"an operator-prose source is a broken link: {exc}")
+                except (OSError, RuntimeError) as exc:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_LINK_RESOLUTION_FAILED",
+                        f"an operator-prose source link could not be resolved: {exc}")
+                try:
+                    target.relative_to(allowed_root)
+                except ValueError:
+                    return _phase1_plain_spec_gather_refusal(
+                        project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                        "SOURCE_OUT_OF_ROOT",
+                        "an operator-prose source link points outside its "
+                        "allowed root")
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ENTRY_SYMLINK",
+                    "an operator-prose source entry is a symlink")
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(allowed_root)
+                if (not resolved.is_file()
+                        or path.suffix.lower() not in (".md", ".txt")):
+                    continue
+            except ValueError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_OUT_OF_ROOT",
+                    f"an operator-prose source escaped its allowed root: {exc}")
+            except (OSError, RuntimeError) as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PROVENANCE_REFUSED,
+                    "SOURCE_ENTRY_RESOLUTION_FAILED",
+                    f"an operator-prose source could not be resolved: {exc}")
+            try:
+                # Operator prose is a UTF-8 contract.  Replacement characters
+                # would silently change the grammar the deterministic parser sees.
+                if project_binding is not None:
+                    project_binding.require_current()
+                chunks.append(resolved.read_text(encoding="utf-8"))
+                if project_binding is not None:
+                    project_binding.require_current()
+            except UnicodeError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_PARSE_REFUSED,
+                    "SOURCE_TEXT_PARSE_FAILED",
+                    f"operator prose is not valid UTF-8: {exc}")
+            except OSError as exc:
+                return _phase1_plain_spec_gather_refusal(
+                    project, path, _PHASE1_PROSE_READ_REFUSED,
+                    "SOURCE_READ_FAILED",
+                    f"operator prose could not be read: {exc}")
+            sources.append(str(source_rel / path.relative_to(allowed_root)))
+        if project_binding is not None:
+            project_binding.require_current()
+    if project_binding is not None:
+        project_binding.require_current()
+    return _Phase1PlainSpecGather("\n\n".join(chunks), tuple(sources))
+
+
+def _phase1_plain_spec_refusal_result(
+        t0: float, refusal: Dict[str, str]) -> StepResult:
+    """Retain a BLOCKING input-provenance refusal in the Phase-2 record.
+
+    BLOCKING is intentional: allowing a tainted/unreadable operator source to
+    fall through would make the authoring path look like an ordinary grammar
+    nonmatch.  This function writes nothing.
+    """
+    finding = refusal.get("finding", _PHASE1_PROSE_PROVENANCE_REFUSED)
+    reason = refusal.get("reason", "SOURCE_PROVENANCE_REFUSED")
+    detail = refusal.get("detail", "operator prose provenance was refused")
+    return StepResult(
+        "rtl_gen", _spf.REFUSAL_STATUS, time.time() - t0,
+        f"{finding}: BLOCKING deterministic Phase-1 prose flow-back; "
+        f"{reason}: {detail}. No RTL was written.",
+        extras={"finding": finding, "source_provenance": "refused",
+                "source_refusal": dict(refusal), "write_performed": False})
+
+
+class _Phase1RtlOutputRefused(RuntimeError):
+    """A fail-closed output-path condition, distinct from an I/O failure."""
+
+    def __init__(self, reason: str, path: Path, detail: str):
+        super().__init__(detail)
+        self.reason = reason
+        self.path = Path(path)
+        self.detail = detail
+
+
+def _phase1_rtl_output_refusal(
+        project: Path, path: Path, reason: str,
+        detail: str) -> Dict[str, str]:
+    try:
+        path_label = str(path.relative_to(project))
+    except (TypeError, ValueError):
+        path_label = str(path)
+    return {"finding": _PHASE1_RTL_OUTPUT_REFUSED, "reason": reason,
+            "path": path_label, "detail": detail}
+
+
+def _phase1_rtl_output_refusal_result(
+        t0: float, refusal: Dict[str, str]) -> StepResult:
+    reason = refusal.get("reason", "RTL_OUTPUT_PROVENANCE_REFUSED")
+    detail = refusal.get("detail", "the RTL output path was refused")
+    return StepResult(
+        "rtl_gen", _spf.REFUSAL_STATUS, time.time() - t0,
+        f"{_PHASE1_RTL_OUTPUT_REFUSED}: BLOCKING deterministic Phase-1 "
+        f"flow-back output; {reason}: {detail}. No RTL was written.",
+        extras={"finding": _PHASE1_RTL_OUTPUT_REFUSED,
+                "output_provenance": "refused",
+                "output_refusal": dict(refusal), "write_performed": False})
+
+
+def _validate_phase1_rtl_output_path(
+        project: Path, out: Path) -> Optional[Dict[str, str]]:
+    """Reject every static symlink/non-directory in the output ancestry.
+
+    This check produces an actionable refusal before classification reads an
+    existing target.  The publisher below repeats the boundary with directory
+    file descriptors so a check/use race still cannot redirect the write.
+    """
+    project = Path(project)
+    rtl_dir = _pl.rtl_dir(project)
+    if out.parent != rtl_dir or out.name in ("", ".", ".."):
+        return _phase1_rtl_output_refusal(
+            project, out, "RTL_OUTPUT_OUT_OF_ROOT",
+            "the deterministic output is not a direct child of canonical rtl/")
+    try:
+        if project.is_symlink():
+            return _phase1_rtl_output_refusal(
+                project, project, "PROJECT_BOUNDARY_SYMLINK",
+                "the project output boundary is a symlink")
+        project_root = project.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        return _phase1_rtl_output_refusal(
+            project, project, "PROJECT_BOUNDARY_UNRESOLVED",
+            f"the project output boundary could not be resolved: {exc}")
+
+    ancestors = (project / "phase2", project / "phase2" / "stage1", rtl_dir)
+    for path in (*ancestors, out):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_PATH_INSPECTION_FAILED",
+                f"the RTL output path could not be inspected: {exc}")
+        if stat.S_ISLNK(info.st_mode):
+            broken = not path.exists()
+            reason = ("RTL_OUTPUT_BROKEN_SYMLINK" if path == out and broken
+                      else "RTL_OUTPUT_SYMLINK" if path == out
+                      else "RTL_ANCESTOR_BROKEN_SYMLINK" if broken
+                      else "RTL_ANCESTOR_SYMLINK")
+            return _phase1_rtl_output_refusal(
+                project, path, reason,
+                "the RTL output path must not contain a symlink")
+        if path in ancestors and not stat.S_ISDIR(info.st_mode):
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_ANCESTOR_NOT_DIRECTORY",
+                "an RTL output ancestor is not a directory")
+        try:
+            path.resolve(strict=True).relative_to(project_root)
+        except ValueError as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_OUT_OF_ROOT",
+                f"the RTL output path escaped the project: {exc}")
+        except (OSError, RuntimeError) as exc:
+            return _phase1_rtl_output_refusal(
+                project, path, "RTL_OUTPUT_PATH_UNRESOLVED",
+                f"the RTL output path could not be resolved: {exc}")
+    return None
+
+
+def _phase1_fd_digest(fd: int) -> str:
+    """SHA-256 the inode held by ``fd`` without consuming its file offset."""
+    position = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+    finally:
+        os.lseek(fd, position, os.SEEK_SET)
+
+
+def _phase1_read_fd(fd: int) -> bytes:
+    position = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.lseek(fd, position, os.SEEK_SET)
+
+
+def _phase1_same_inode(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _phase1_open_publication_inode(
+        directory_fd: int, label: str) -> Tuple[int, Optional[str]]:
+    """Create a new inode in ``directory_fd`` and keep its fd open.
+
+    Linux ``O_TMPFILE`` gives the strongest shape: the inode has no mutable
+    pathname at all.  The named fallback is still published through
+    ``/proc/self/fd/<fd>`` while the descriptor remains open; its pathname is
+    cleanup-only and is never the publication authority.
+    """
+    tmpfile_flag = getattr(os, "O_TMPFILE", 0)
+    if tmpfile_flag:
+        try:
+            return os.open(
+                ".", os.O_RDWR | tmpfile_flag, 0o666,
+                dir_fd=directory_fd), None
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL, errno.EISDIR, errno.ENOENT,
+                                 errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM):
+                raise
+    for _attempt in range(64):
+        name = (f".{label}.tmp.{os.getpid()}."
+                f"{secrets.token_hex(16)}")
+        try:
+            fd = os.open(
+                name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o666, dir_fd=directory_fd)
+        except FileExistsError:
+            continue
+        return fd, name
+    raise OSError("could not reserve a unique publication inode")
+
+
+def _phase1_remove_inode_aliases(
+        directory_fd: int, inode_fd: int,
+        keep: Optional[str] = None) -> None:
+    """Remove only names that still bind the newly-created held inode."""
+    held = os.fstat(inode_fd)
+    for name in os.listdir(directory_fd):
+        if name == keep:
+            continue
+        try:
+            current = os.stat(
+                name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if _phase1_same_inode(held, current):
+            os.unlink(name, dir_fd=directory_fd)
+
+
+def _phase1_write_held_inode(fd: int, payload: bytes) -> str:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write while preparing publication inode")
+        view = view[written:]
+    os.fsync(fd)
+    digest = _phase1_fd_digest(fd)
+    expected = hashlib.sha256(payload).hexdigest()
+    if digest != expected:
+        raise OSError(
+            f"publication inode digest mismatch: {digest} != {expected}")
+    return digest
+
+
+def _phase1_link_held_inode(
+        inode_fd: int, directory_fd: int, destination: str) -> None:
+    """Atomically no-clobber link the exact inode bound by ``inode_fd``."""
+    try:
+        os.link(
+            f"/proc/self/fd/{inode_fd}", destination,
+            dst_dir_fd=directory_fd, follow_symlinks=True)
+    except FileExistsError as exc:
+        raise _Phase1RtlOutputRefused(
+            "RTL_OUTPUT_ALREADY_EXISTS", Path(destination),
+            "the publication destination appeared during no-clobber link") from exc
+
+
+@dataclass
+class _Phase1ProjectBinding:
+    """Held identity for the lexical project root used by one RTL step."""
+    project: Path
+    parent_fd: int
+    name: str
+    project_fd: int
+
+    @classmethod
+    def open(cls, project: Path) -> "_Phase1ProjectBinding":
+        project = Path(project)
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        name = project.name
+        if name in ("", ".", ".."):
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                "the project path has no safe basename")
+        try:
+            parent_fd = os.open(project.parent, flags)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                "the project output boundary parent could not be opened "
+                f"safely: {exc}") from exc
+        try:
+            project_fd = os.open(name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            os.close(parent_fd)
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_OPEN_REFUSED", project,
+                f"the project output boundary could not be opened safely: {exc}") from exc
+        binding = cls(project, parent_fd, name, project_fd)
+        try:
+            binding.require_current()
+        except Exception:
+            binding.close()
+            raise
+        return binding
+
+    def require_current(self) -> None:
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            live_fd = os.open(self.name, flags, dir_fd=self.parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION", self.project,
+                "the canonical project directory could not be reopened "
+                f"without following links: {exc}") from exc
+        try:
+            if not _phase1_same_inode(
+                    os.fstat(live_fd), os.fstat(self.project_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION",
+                    self.project,
+                    "the canonical project basename no longer names the "
+                    "held project directory")
+        finally:
+            os.close(live_fd)
+
+    def duplicate(self) -> "_Phase1ProjectBinding":
+        self.require_current()
+        parent_fd = os.dup(self.parent_fd)
+        try:
+            project_fd = os.dup(self.project_fd)
+        except OSError:
+            os.close(parent_fd)
+            raise
+        duplicate = _Phase1ProjectBinding(
+            self.project, parent_fd, self.name, project_fd)
+        try:
+            duplicate.require_current()
+        except Exception:
+            duplicate.close()
+            raise
+        return duplicate
+
+    def close(self) -> None:
+        for fd in (self.project_fd, self.parent_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+_PHASE1_ACTIVE_PROJECT_BINDING: Optional[_Phase1ProjectBinding] = None
+
+
+def _phase1_project_checkpoint(project: Path) -> None:
+    """Revalidate the step-entry binding when a deterministic stage uses it."""
+    binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    if binding is not None and Path(project) == binding.project:
+        binding.require_current()
+
+
+def _phase1_replace_session_binding(
+        binding: Optional[_Phase1ProjectBinding]) -> None:
+    global _RTL_SESSION_BINDING
+    prior = _RTL_SESSION_BINDING
+    _RTL_SESSION_BINDING = binding
+    if prior is not None and prior is not binding:
+        prior.close()
+
+
+@dataclass(frozen=True)
+class _Phase1TreeEntry:
+    kind: str
+    mode: int
+    digest: str = ""
+    target: str = ""
+
+
+def _phase1_tree_manifest_fd(
+        root_fd: int, project_label: Path,
+        ignore_top: Optional[set] = None) -> Dict[str, _Phase1TreeEntry]:
+    """Describe a tree without resolving any pathname above ``root_fd``."""
+    manifest: Dict[str, _Phase1TreeEntry] = {}
+    ignored = ignore_top or set()
+    dir_flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+
+    def _walk(directory_fd: int, prefix: str) -> None:
+        for name in sorted(os.listdir(directory_fd)):
+            if not prefix and name in ignored:
+                continue
+            rel = f"{prefix}/{name}" if prefix else name
+            try:
+                info = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_SNAPSHOT_INSPECTION_REFUSED",
+                    project_label / rel,
+                    f"a project entry could not be inspected safely: {exc}")
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISDIR(info.st_mode):
+                manifest[rel] = _Phase1TreeEntry("dir", mode)
+                try:
+                    child_fd = os.open(name, dir_flags, dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_OPEN_REFUSED", project_label / rel,
+                        f"a project directory could not be opened safely: {exc}")
+                try:
+                    if not _phase1_same_inode(info, os.fstat(child_fd)):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project directory changed identity while opening")
+                    _walk(child_fd, rel)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(info.st_mode):
+                try:
+                    file_fd = os.open(
+                        name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_OPEN_REFUSED", project_label / rel,
+                        f"a project file could not be opened safely: {exc}")
+                try:
+                    held = os.fstat(file_fd)
+                    if not _phase1_same_inode(info, held):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project file changed identity while opening")
+                    digest = _phase1_fd_digest(file_fd)
+                    after = os.fstat(file_fd)
+                    if (held.st_size != after.st_size
+                            or held.st_mtime_ns != after.st_mtime_ns
+                            or held.st_ctime_ns != after.st_ctime_ns):
+                        raise _Phase1RtlOutputRefused(
+                            "PROJECT_ENTRY_CHANGED_DURING_SNAPSHOT",
+                            project_label / rel,
+                            "a project file changed while it was read")
+                finally:
+                    os.close(file_fd)
+                manifest[rel] = _Phase1TreeEntry("file", mode, digest=digest)
+            elif stat.S_ISLNK(info.st_mode):
+                try:
+                    target = os.readlink(name, dir_fd=directory_fd)
+                except OSError as exc:
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_SNAPSHOT_READLINK_REFUSED",
+                        project_label / rel,
+                        f"a project symlink could not be read safely: {exc}")
+                manifest[rel] = _Phase1TreeEntry(
+                    "symlink", mode, target=target)
+            else:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_SPECIAL_ENTRY_REFUSED", project_label / rel,
+                    "the RTL transaction does not copy device/socket/FIFO entries")
+
+    _walk(root_fd, "")
+    return manifest
+
+
+def _phase1_copy_entry_fd(
+        src_parent_fd: int, src_name: str,
+        dst_parent_fd: int, dst_name: str,
+        project_label: Path) -> None:
+    """Copy one entry recursively between held directories, never following links."""
+    try:
+        info = os.stat(
+            src_name, dir_fd=src_parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_SNAPSHOT_INSPECTION_REFUSED",
+            project_label / src_name,
+            f"a project entry could not be inspected safely: {exc}") from exc
+    mode = stat.S_IMODE(info.st_mode)
+    dir_flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+    if stat.S_ISDIR(info.st_mode):
+        # Populate first, then apply the source mode.  Creating a read-only
+        # source directory with its final mode would make its own children
+        # impossible to snapshot.
+        src_fd: Optional[int] = None
+        dst_fd: Optional[int] = None
+        try:
+            os.mkdir(dst_name, mode=0o700, dir_fd=dst_parent_fd)
+            src_fd = os.open(src_name, dir_flags, dir_fd=src_parent_fd)
+            dst_fd = os.open(dst_name, dir_flags, dir_fd=dst_parent_fd)
+            if not _phase1_same_inode(info, os.fstat(src_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project directory changed identity while opening")
+            for child in sorted(os.listdir(src_fd)):
+                _phase1_copy_entry_fd(
+                    src_fd, child, dst_fd, child, project_label / src_name)
+            os.fchmod(dst_fd, mode)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_OPEN_REFUSED",
+                project_label / src_name,
+                f"a project directory could not be copied safely: {exc}") from exc
+        finally:
+            if dst_fd is not None:
+                os.close(dst_fd)
+            if src_fd is not None:
+                os.close(src_fd)
+        return
+    if stat.S_ISREG(info.st_mode):
+        try:
+            src_fd = os.open(
+                src_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=src_parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_OPEN_REFUSED",
+                project_label / src_name,
+                f"a project file could not be copied safely: {exc}") from exc
+        dst_fd: Optional[int] = None
+        published = False
+        try:
+            if not _phase1_same_inode(info, os.fstat(src_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_REPLACED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project file changed identity while opening")
+            payload = _phase1_read_fd(src_fd)
+            after = os.fstat(src_fd)
+            if (info.st_size != after.st_size
+                    or info.st_mtime_ns != after.st_mtime_ns
+                    or info.st_ctime_ns != after.st_ctime_ns):
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_ENTRY_CHANGED_DURING_SNAPSHOT",
+                    project_label / src_name,
+                    "a copied project file changed while it was read")
+            dst_fd, _tmp = _phase1_open_publication_inode(
+                dst_parent_fd, dst_name)
+            os.fchmod(dst_fd, mode)
+            _phase1_write_held_inode(dst_fd, payload)
+            _phase1_link_held_inode(dst_fd, dst_parent_fd, dst_name)
+            published = True
+            _phase1_remove_inode_aliases(
+                dst_parent_fd, dst_fd, keep=dst_name)
+        except OSError as exc:
+            # PARITY WITH THE DIRECTORY BRANCH ABOVE.  That branch contains
+            # every OSError of the whole copy as a named refusal; this one
+            # contained only the `open()`.  So a WRITE-side failure — ENOSPC,
+            # EDQUOT, EROFS, a mode revoked between stat and fchmod — escaped
+            # `step_rtl_gen` as a raw OSError instead of the BLOCKED StepResult
+            # every other snapshot failure returns.  `step_rtl_gen` catches
+            # `_Phase1RtlOutputRefused` and nothing else, so the caller got an
+            # exception where the contract promises a result.
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_COPY_REFUSED",
+                project_label / src_name,
+                f"a project file could not be copied safely: {exc}") from exc
+        finally:
+            if dst_fd is not None:
+                # The fallback publication inode initially has a hidden alias.
+                # A failed copy must not strand that alias in the held tree;
+                # after success retain only the requested destination name.
+                try:
+                    _phase1_remove_inode_aliases(
+                        dst_parent_fd, dst_fd,
+                        keep=dst_name if published else None)
+                finally:
+                    os.close(dst_fd)
+            os.close(src_fd)
+        return
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            os.symlink(
+                os.readlink(src_name, dir_fd=src_parent_fd), dst_name,
+                dir_fd=dst_parent_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_READLINK_REFUSED",
+                project_label / src_name,
+                f"a project symlink could not be copied safely: {exc}") from exc
+        return
+    raise _Phase1RtlOutputRefused(
+        "PROJECT_SPECIAL_ENTRY_REFUSED", project_label / src_name,
+        "the RTL transaction does not copy device/socket/FIFO entries")
+
+
+def _phase1_snapshot_to_stage(
+        binding: _Phase1ProjectBinding,
+        stage_project: Path) -> Dict[str, _Phase1TreeEntry]:
+    """Copy the exact held project inode to an isolated working project."""
+    binding.require_current()
+    stage_project.mkdir(mode=0o700)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    stage_fd = os.open(stage_project, flags)
+    try:
+        for name in sorted(os.listdir(binding.project_fd)):
+            _phase1_copy_entry_fd(
+                binding.project_fd, name, stage_fd, name, binding.project)
+        baseline = _phase1_tree_manifest_fd(
+            stage_fd, binding.project)
+    finally:
+        os.close(stage_fd)
+    binding.require_current()
+    live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
+    if live != baseline:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_CHANGED_DURING_SNAPSHOT", binding.project,
+            "the held project changed while the isolated RTL snapshot was built")
+    return baseline
+
+
+def _phase1_open_mode_adjustable_directory(
+        parent_fd: int, name: str, reason: str) -> Tuple[int, int]:
+    """Bind/open a directory even when its preserved mode denies traversal."""
+    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode):
+        raise _Phase1RtlOutputRefused(
+            reason, Path(name), "the transaction entry is not a directory")
+    path_flags = (getattr(os, "O_PATH", 0) | os.O_DIRECTORY
+                  | getattr(os, "O_NOFOLLOW", 0))
+    anchor_fd = os.open(name, path_flags, dir_fd=parent_fd)
+    directory_fd: Optional[int] = None
+    mode = stat.S_IMODE(info.st_mode)
+    changed_mode = False
+    try:
+        held = os.fstat(anchor_fd)
+        if not _phase1_same_inode(info, held):
+            raise _Phase1RtlOutputRefused(
+                reason, Path(name),
+                "a transaction directory changed identity while opening")
+        if mode & 0o700 != 0o700:
+            # The runner already requires Linux renameat2. /proc/self/fd names
+            # the held inode rather than following the mutable project entry.
+            os.chmod(f"/proc/self/fd/{anchor_fd}", mode | 0o700)
+            changed_mode = True
+        flags = (os.O_RDONLY | os.O_DIRECTORY
+                 | getattr(os, "O_NOFOLLOW", 0))
+        directory_fd = os.open(".", flags, dir_fd=anchor_fd)
+        if not _phase1_same_inode(held, os.fstat(directory_fd)):
+            raise _Phase1RtlOutputRefused(
+                reason, Path(name),
+                "a transaction directory changed identity after mode setup")
+        return directory_fd, mode
+    except Exception:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if changed_mode:
+            try:
+                os.chmod(f"/proc/self/fd/{anchor_fd}", mode)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(anchor_fd)
+
+
+def _phase1_remove_owned_entry_fd(parent_fd: int, name: str) -> None:
+    """Remove a transaction-owned entry despite preserved read-only modes.
+
+    Only private transaction-container entries may reach this helper.  It opens
+    every directory without following links, verifies the opened inode, then
+    grants owner traversal/write permission immediately before recursively
+    deleting it.  Canonical project entries never pass through this path.
+    """
+    info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if stat.S_ISDIR(info.st_mode):
+        child_fd, _mode = _phase1_open_mode_adjustable_directory(
+            parent_fd, name, "RTL_TRANSACTION_CLEANUP_ENTRY_REPLACED")
+        try:
+            if not _phase1_same_inode(info, os.fstat(child_fd)):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_CLEANUP_ENTRY_REPLACED", Path(name),
+                    "a transaction-owned directory changed identity")
+            for child in os.listdir(child_fd):
+                _phase1_remove_owned_entry_fd(child_fd, child)
+        finally:
+            os.close(child_fd)
+        os.rmdir(name, dir_fd=parent_fd)
+    else:
+        os.unlink(name, dir_fd=parent_fd)
+
+
+def _phase1_remove_owned_contents_fd(directory_fd: int) -> None:
+    """Drain one held private transaction directory."""
+    os.fchmod(
+        directory_fd,
+        stat.S_IMODE(os.fstat(directory_fd).st_mode) | 0o700)
+    for name in list(os.listdir(directory_fd)):
+        _phase1_remove_owned_entry_fd(directory_fd, name)
+
+
+def _phase1_cleanup_isolated_stage(
+        stage_binding: _Phase1ProjectBinding,
+        stage_temp: tempfile.TemporaryDirectory) -> None:
+    """Delete an isolated stage while rollback authority is still live."""
+    _phase1_remove_owned_contents_fd(stage_binding.project_fd)
+    try:
+        os.rmdir(stage_binding.name, dir_fd=stage_binding.parent_fd)
+    except FileNotFoundError:
+        pass
+    stage_temp.cleanup()
+
+
+def _phase1_rename_noreplace(
+        src_fd: int, src: str, dst_fd: int, dst: str) -> None:
+    """Linux renameat2(RENAME_NOREPLACE), anchored at held directories."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+            src_fd, os.fsencode(src), dst_fd, os.fsencode(dst), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), dst)
+
+
+class _Phase1WritableRenameSource:
+    """Temporarily permit a directory's cross-parent ``..`` update."""
+
+    def __init__(self, parent_fd: int, name: str):
+        self.parent_fd = parent_fd
+        self.name = name
+        self.fd: Optional[int] = None
+        self.mode: Optional[int] = None
+
+    def __enter__(self) -> "_Phase1WritableRenameSource":
+        info = os.stat(
+            self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            return self
+        self.fd, self.mode = _phase1_open_mode_adjustable_directory(
+            self.parent_fd, self.name,
+            "RTL_TRANSACTION_RENAME_SOURCE_REPLACED")
+        held = os.fstat(self.fd)
+        if not _phase1_same_inode(info, held):
+            try:
+                if self.mode is not None:
+                    os.fchmod(self.fd, self.mode)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_RENAME_SOURCE_REPLACED", Path(self.name),
+                "a directory changed identity before transactional rename")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        if self.fd is not None:
+            try:
+                if self.mode is not None:
+                    os.fchmod(self.fd, self.mode)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+        return False
+
+
+def _phase1_top_names_changed(
+        baseline: Dict[str, _Phase1TreeEntry],
+        final: Dict[str, _Phase1TreeEntry]) -> List[str]:
+    changed = set()
+    for rel in set(baseline) | set(final):
+        if baseline.get(rel) != final.get(rel):
+            changed.add(rel.split("/", 1)[0])
+    return sorted(changed)
+
+
+def _phase1_manifest_slice(
+        manifest: Dict[str, _Phase1TreeEntry],
+        top: str) -> Dict[str, _Phase1TreeEntry]:
+    """Return one top-level subtree with its root normalized to ``""``."""
+    prefix = top + "/"
+    return {
+        ("" if rel == top else rel[len(prefix):]): entry
+        for rel, entry in manifest.items()
+        if rel == top or rel.startswith(prefix)
+    }
+
+
+@dataclass
+class _Phase1StagedTreeTransaction:
+    """Published tree whose old subtrees remain available until acceptance."""
+
+    binding: _Phase1ProjectBinding
+    container_name: str
+    container_fd: int
+    baseline: Dict[str, _Phase1TreeEntry]
+    final: Dict[str, _Phase1TreeEntry]
+    records: List[Dict[str, Any]]
+    closed: bool = False
+
+    def _remove_entry(self, name: str) -> Optional[str]:
+        """Retry permission-normalizing cleanup; partial attempts are resumable."""
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            try:
+                _phase1_remove_owned_entry_fd(self.container_fd, name)
+                return None
+            except FileNotFoundError:
+                return None
+            except Exception as exc:
+                last = exc
+        return str(last)
+
+    def _drain(self) -> Optional[str]:
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            try:
+                _phase1_remove_owned_contents_fd(self.container_fd)
+                if not os.listdir(self.container_fd):
+                    return None
+            except Exception as exc:
+                last = exc
+        return str(last or "transaction container remained non-empty")
+
+    def _container_aliases(self, held: os.stat_result) -> List[str]:
+        """Project-root names currently bound to the held container inode."""
+        aliases: List[str] = []
+        for name in os.listdir(self.binding.project_fd):
+            try:
+                current = os.stat(
+                    name, dir_fd=self.binding.project_fd,
+                    follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if _phase1_same_inode(held, current):
+                aliases.append(name)
+        return aliases
+
+    def _remove_container_aliases(self) -> Optional[str]:
+        """Remove only project-root names still bound to the held container."""
+        held = os.fstat(self.container_fd)
+        last: Optional[Exception] = None
+        for _attempt in range(3):
+            aliases = self._container_aliases(held)
+            if not aliases:
+                return None
+            for name in aliases:
+                try:
+                    os.rmdir(name, dir_fd=self.binding.project_fd)
+                except Exception as exc:
+                    last = exc
+        # THE FINAL PASS WAS NEVER RE-READ.  The loop only re-scans at the TOP
+        # of an attempt, so a third attempt that actually removed every alias
+        # still fell through and reported `last` — an exception raised on an
+        # EARLIER pass, about a name that no longer exists.  That turned a
+        # cleanup which fully succeeded into ALIAS_CLEANUP_FAILED, i.e. a
+        # warning on a transaction with nothing left to warn about.
+        try:
+            if not self._container_aliases(held):
+                return None
+        except Exception as exc:  # the re-read itself is best-effort
+            last = last or exc
+        return str(last or "transaction container alias remained")
+
+    def _close(self) -> None:
+        if self.container_fd >= 0:
+            try:
+                os.close(self.container_fd)
+            except OSError:
+                pass
+            self.container_fd = -1
+        self.closed = True
+
+    def finalize(self) -> Optional[str]:
+        """Destroy rollback authority after the caller accepts the result.
+
+        The caller performs every failure-capable live-root/result check before
+        entering this method. Once backup deletion starts, cleanup residue can
+        no longer turn an accepted commit into a refusal: doing so would report
+        BLOCKED while leaving the already-accepted output published.
+        """
+        if self.closed:
+            return None
+        warnings: List[str] = []
+        try:
+            try:
+                drain_error = self._drain()
+            except Exception as exc:
+                drain_error = str(exc)
+            if drain_error is not None:
+                warnings.append(
+                    "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: " + drain_error)
+
+            # Even after an imperfect drain, make the best possible alias
+            # cleanup attempt.  ENOTEMPTY or an injected directory error is a
+            # warning now: rollback authority may already have been deleted.
+            try:
+                alias_error = self._remove_container_aliases()
+            except Exception as exc:
+                alias_error = str(exc)
+            if alias_error is not None:
+                warnings.append(
+                    "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: " + alias_error)
+        finally:
+            # Finalization is exception-total once irreversible cleanup starts.
+            # In particular, never strand a held descriptor in the caller.
+            self._close()
+        return "; ".join(warnings) or None
+
+    def rollback(self) -> List[str]:
+        """Restore every old canonical subtree before deleting staged-new work."""
+        if self.closed:
+            return []
+        errors: List[str] = []
+        blocked_old = False
+        for record in reversed(self.records):
+            top = record["top"]
+            new_name = record["new"]
+            rolled_new = False
+
+            # First remove the published new subtree from the canonical name,
+            # but retain it in the held container until the old tree is back.
+            if record["new_published"]:
+                try:
+                    try:
+                        os.stat(
+                            top, dir_fd=self.binding.project_fd,
+                            follow_symlinks=False)
+                        top_exists = True
+                    except FileNotFoundError:
+                        top_exists = False
+                    if top_exists:
+                        with _Phase1WritableRenameSource(
+                                self.binding.project_fd, top):
+                            _phase1_rename_noreplace(
+                                self.binding.project_fd, top,
+                                self.container_fd, new_name)
+                            rolled_new = True
+                            record["new_published"] = False
+                        tree = _phase1_tree_manifest_fd(
+                            self.container_fd, self.binding.project)
+                        if (_phase1_manifest_slice(tree, new_name)
+                                != _phase1_manifest_slice(self.final, top)):
+                            with _Phase1WritableRenameSource(
+                                    self.container_fd, new_name):
+                                _phase1_rename_noreplace(
+                                    self.container_fd, new_name,
+                                    self.binding.project_fd, top)
+                                rolled_new = False
+                                record["new_published"] = True
+                            raise _Phase1RtlOutputRefused(
+                                "RTL_TRANSACTION_PUBLISHED_TREE_CHANGED",
+                                self.binding.project / top,
+                                "a published subtree changed concurrently; "
+                                "it was retained without clobbering the old backup")
+                except Exception as exc:
+                    errors.append(str(exc))
+
+            # Restoration is deliberately independent of rolled-new cleanup.
+            # A 0555 staged subtree or injected cleanup error cannot skip this.
+            if record["old_moved"]:
+                try:
+                    with _Phase1WritableRenameSource(
+                            self.container_fd, record["old"]):
+                        _phase1_rename_noreplace(
+                            self.container_fd, record["old"],
+                            self.binding.project_fd, top)
+                        record["old_moved"] = False
+                except Exception as exc:
+                    blocked_old = True
+                    errors.append(str(exc))
+
+            # Only after canonical old state is secured may staged-new bytes go.
+            if rolled_new and not record["old_moved"] and new_name is not None:
+                cleanup_error = self._remove_entry(new_name)
+                if cleanup_error is not None:
+                    errors.append(cleanup_error)
+
+        # This also catches prepared partial copies that failed before their
+        # per-top record reached publication.
+        try:
+            if not blocked_old:
+                try:
+                    drain_error = self._drain()
+                except Exception as exc:
+                    drain_error = str(exc)
+                if drain_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: " + drain_error)
+                try:
+                    alias_error = self._remove_container_aliases()
+                except Exception as exc:
+                    alias_error = str(exc)
+                if alias_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: " + alias_error)
+        finally:
+            # PARITY WITH finalize().  finalize() was made exception-total
+            # because destroying rollback authority and THEN raising reports a
+            # committed success as BLOCKED.  rollback() is the other half of
+            # that same irreversible pair and was left unhardened: a raising
+            # _drain()/_remove_container_aliases() skipped _close(), leaked the
+            # held container fd, and escaped as a raw exception from a caller
+            # whose only contract is to RETURN the list of rollback errors.
+            # Worse, it escaped from inside an `except` block, so step_rtl_gen's
+            # `finally` then re-entered rollback() on the same half-rolled-back,
+            # still-open transaction.  Cleanup failure is reported, never
+            # raised, and the descriptor is released on every path.
+            self._close()
+        return errors
+
+
+def _phase1_finalize_accepted_transaction(
+        transaction: _Phase1StagedTreeTransaction) -> Optional[str]:
+    """Contain any unexpected finalizer defect after acceptance is irreversible."""
+    try:
+        return transaction.finalize()
+    except Exception as exc:
+        transaction._close()
+        return "RTL_TRANSACTION_FINALIZE_UNEXPECTED: " + str(exc)
+
+
+def _phase1_commit_staged_tree(
+        binding: _Phase1ProjectBinding,
+        stage_binding: _Phase1ProjectBinding,
+        baseline: Dict[str, _Phase1TreeEntry],
+        final: Dict[str, _Phase1TreeEntry],
+        ) -> _Phase1StagedTreeTransaction:
+    """Publish changed subtrees but retain rollback authority for the caller."""
+    tops = _phase1_top_names_changed(baseline, final)
+    binding.require_current()
+    live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
+    if live != baseline:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_CHANGED_BEFORE_RTL_COMMIT", binding.project,
+            "the held project no longer matches the snapshot used by RTL dispatch")
+    if not tops:
+        return _Phase1StagedTreeTransaction(
+            binding, "", -1, baseline, final, [], closed=True)
+
+    token = secrets.token_hex(20)
+    container_name = f".vibeic-rtl-txn.{token}"
+    os.mkdir(container_name, mode=0o700, dir_fd=binding.project_fd)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    container_fd: Optional[int] = None
+    try:
+        container_info = os.stat(
+            container_name, dir_fd=binding.project_fd,
+            follow_symlinks=False)
+        container_fd = os.open(
+            container_name, flags, dir_fd=binding.project_fd)
+        if not _phase1_same_inode(container_info, os.fstat(container_fd)):
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_CONTAINER_REPLACED",
+                binding.project / container_name,
+                "the private transaction container changed identity while opening")
+    except Exception:
+        if container_fd is not None:
+            os.close(container_fd)
+        try:
+            os.rmdir(container_name, dir_fd=binding.project_fd)
+        except OSError:
+            pass
+        raise
+
+    records: List[Dict[str, Any]] = []
+    for index, top in enumerate(tops):
+        records.append({
+            "top": top,
+            "new": f"new.{index}" if top in final else None,
+            "old": f"old.{index}" if top in baseline else None,
+            "old_moved": False,
+            "new_published": False,
+        })
+    transaction = _Phase1StagedTreeTransaction(
+        binding, container_name, container_fd, baseline, final, records)
+
+    try:
+        # The held private container is registered before any copy starts, so a
+        # partial copy and then an exception still has one cleanup authority.
+        for record in records:
+            top = record["top"]
+            new_name = record["new"]
+            if new_name is None:
+                continue
+            _phase1_copy_entry_fd(
+                stage_binding.project_fd, top,
+                container_fd, new_name, binding.project)
+            prepared_tree = _phase1_tree_manifest_fd(
+                container_fd, binding.project)
+            if (_phase1_manifest_slice(prepared_tree, new_name)
+                    != _phase1_manifest_slice(final, top)):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_PREPARED_VERIFY_FAILED",
+                    binding.project / top,
+                    "a prepared output subtree does not match staging")
+
+        binding.require_current()
+        if (_phase1_tree_manifest_fd(
+                binding.project_fd, binding.project,
+                ignore_top={container_name}) != baseline):
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_CHANGED_DURING_RTL_PREPARE", binding.project,
+                "the held project changed while final RTL subtrees were prepared")
+
+        for record in records:
+            top = record["top"]
+            old_name = record["old"]
+            new_name = record["new"]
+            if old_name is not None:
+                with _Phase1WritableRenameSource(
+                        binding.project_fd, top):
+                    _phase1_rename_noreplace(
+                        binding.project_fd, top,
+                        container_fd, old_name)
+                    record["old_moved"] = True
+                moved_tree = _phase1_tree_manifest_fd(
+                    container_fd, binding.project)
+                if (_phase1_manifest_slice(moved_tree, old_name)
+                        != _phase1_manifest_slice(baseline, top)):
+                    raise _Phase1RtlOutputRefused(
+                        "PROJECT_CHANGED_AT_RTL_COMMIT",
+                        binding.project / top,
+                        "the canonical subtree changed before its atomic "
+                        "compare-and-swap")
+            if new_name is not None:
+                prepared_tree = _phase1_tree_manifest_fd(
+                    container_fd, binding.project)
+                if (_phase1_manifest_slice(prepared_tree, new_name)
+                        != _phase1_manifest_slice(final, top)):
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_PREPARED_REPLACED",
+                        binding.project / top,
+                        "a prepared output subtree changed before publication")
+                with _Phase1WritableRenameSource(
+                        container_fd, new_name):
+                    _phase1_rename_noreplace(
+                        container_fd, new_name,
+                        binding.project_fd, top)
+                    record["new_published"] = True
+
+        # Every fallible validation remains before backup destruction. The
+        # caller performs one more live-root/result acceptance check while this
+        # returned handle still owns all old subtrees.
+        binding.require_current()
+        if (_phase1_tree_manifest_fd(
+                binding.project_fd, binding.project,
+                ignore_top={container_name}) != final):
+            raise _Phase1RtlOutputRefused(
+                "RTL_TRANSACTION_FINAL_VERIFY_FAILED", binding.project,
+                "the published project tree does not match staged outputs")
+        backup_tree = _phase1_tree_manifest_fd(
+            container_fd, binding.project)
+        for record in records:
+            if record["old"] is not None:
+                if (_phase1_manifest_slice(backup_tree, record["old"])
+                        != _phase1_manifest_slice(
+                            baseline, record["top"])):
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_BACKUP_CHANGED",
+                        binding.project / container_name / record["old"],
+                        "a transaction backup changed before acceptance")
+        binding.require_current()
+        return transaction
+    except Exception as exc:
+        rollback_errors = transaction.rollback()
+        if isinstance(exc, _Phase1RtlOutputRefused) and not rollback_errors:
+            raise
+        detail = f"RTL transaction failed and was rolled back: {exc}"
+        if rollback_errors:
+            detail += f"; rollback errors: {rollback_errors}"
+        raise _Phase1RtlOutputRefused(
+            "RTL_TRANSACTION_COMMIT_REFUSED", binding.project, detail) from exc
+def _phase1_remap_stage_value(
+        value: Any, stage_project: Path, project: Path) -> Any:
+    if isinstance(value, str):
+        stage_text = str(stage_project)
+        if value == stage_text or value.startswith(stage_text + os.sep):
+            return str(project) + value[len(stage_text):]
+        return value.replace(stage_text + os.sep, str(project) + os.sep)
+    if isinstance(value, list):
+        return [_phase1_remap_stage_value(v, stage_project, project)
+                for v in value]
+    if isinstance(value, tuple):
+        return tuple(_phase1_remap_stage_value(v, stage_project, project)
+                     for v in value)
+    if isinstance(value, dict):
+        return {k: _phase1_remap_stage_value(v, stage_project, project)
+                for k, v in value.items()}
+    return value
+
+
+def _phase1_stamp_held_session(
+        binding: _Phase1ProjectBinding, generator: str) -> None:
+    """Finish deferred provenance through isolation + held-dirfd commit."""
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    prior = _PHASE1_ACTIVE_PROJECT_BINDING
+    stage_binding: Optional[_Phase1ProjectBinding] = None
+    transaction: Optional[_Phase1StagedTreeTransaction] = None
+    stage_temp: Optional[tempfile.TemporaryDirectory] = None
+    try:
+        stage_temp = tempfile.TemporaryDirectory(prefix="vibeic-rtl-stamp-")
+        with contextlib.nullcontext(stage_temp.name) as td:
+            stage_project = Path(td) / binding.project.name
+            baseline = _phase1_snapshot_to_stage(binding, stage_project)
+            baseline_link = next(
+                (rel for rel, entry in baseline.items()
+                 if entry.kind == "symlink"), None)
+            if baseline_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_PROVENANCE_SYMLINK_REFUSED",
+                    binding.project / baseline_link,
+                    "deferred provenance will not read through a symlink in "
+                    "the isolated project snapshot")
+            stage_binding = _Phase1ProjectBinding.open(stage_project)
+            _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
+            _rtl_prov.stamp(stage_project, generator=generator)
+            stage_binding.require_current()
+            final = _phase1_tree_manifest_fd(
+                stage_binding.project_fd, binding.project)
+            final_link = next(
+                (rel for rel, entry in final.items()
+                 if entry.kind == "symlink"), None)
+            if final_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_PROVENANCE_SYMLINK_REFUSED",
+                    binding.project / final_link,
+                    "deferred provenance left a symlink in its isolated "
+                    "transaction")
+            _PHASE1_ACTIVE_PROJECT_BINDING = binding
+            transaction = _phase1_commit_staged_tree(
+                binding, stage_binding, baseline, final)
+            try:
+                binding.require_current()
+                _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
+            except Exception as exc:
+                # RELEASE OWNERSHIP BEFORE ROLLING BACK, not after.  The
+                # `finally` below rolls back whatever `transaction` still
+                # names; if rollback() itself failed mid-way the old order
+                # left it named and rolled the SAME transaction back twice.
+                rolling_back = transaction
+                transaction = None
+                rollback_errors = rolling_back.rollback()
+                if rollback_errors:
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_ROLLBACK_REFUSED", binding.project,
+                        f"deferred-stamp acceptance failed: {exc}; "
+                        f"rollback errors: {rollback_errors}") from exc
+                if isinstance(exc, _Phase1RtlOutputRefused):
+                    raise
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_STAGE_CLEANUP_REFUSED", binding.project,
+                    f"deferred-stamp stage cleanup failed: {exc}") from exc
+            accepted = transaction
+            transaction = None
+            _phase1_finalize_accepted_transaction(accepted)
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior
+        if stage_binding is not None:
+            stage_binding.close()
+        if stage_temp is not None:
+            try:
+                stage_temp.cleanup()
+            except OSError:
+                pass
+
+
+@dataclass
+class _Phase1RtlPublication:
+    project: Path
+    out: Path
+    project_parent_fd: int
+    project_name: str
+    project_fd: int
+    phase2_fd: int
+    stage1_fd: int
+    rtl_fd: int
+    output_fd: int
+    output_digest: str
+    ledger_fd: Optional[int] = None
+    ledger_digest: Optional[str] = None
+    ledger_prior: Optional[bytes] = None
+    ledger_was_present: bool = False
+    ledger_written: bool = False
+
+    def _entry_matches_fd(self, parent_fd: int, name: str, fd: int) -> bool:
+        try:
+            entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError:
+            return False
+        return _phase1_same_inode(entry, os.fstat(fd))
+
+    def require_project_binding(self) -> None:
+        """Require the live project basename to remain the held directory."""
+        _Phase1ProjectBinding(
+            self.project, self.project_parent_fd, self.project_name,
+            self.project_fd).require_current()
+
+    def require_current_chain(self) -> None:
+        self.require_project_binding()
+        links = (
+            (self.project_fd, "phase2", self.phase2_fd),
+            (self.phase2_fd, "stage1", self.stage1_fd),
+            (self.stage1_fd, "rtl", self.rtl_fd),
+        )
+        if not all(self._entry_matches_fd(parent, name, child)
+                   for parent, name, child in links):
+            raise _Phase1RtlOutputRefused(
+                "RTL_ANCESTOR_REPLACED_DURING_PUBLICATION", self.out.parent,
+                "the canonical output ancestry changed while output and "
+                "provenance were being published")
+        if not self._entry_matches_fd(self.rtl_fd, self.out.name,
+                                      self.output_fd):
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_REPLACED_DURING_PUBLICATION", self.out,
+                "the published RTL entry no longer names the held output inode")
+        if _phase1_fd_digest(self.output_fd) != self.output_digest:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_DIGEST_CHANGED_DURING_PUBLICATION", self.out,
+                "the held RTL output bytes changed during publication")
+        if self.ledger_fd is not None:
+            ledger_path = (
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME)
+            if not self._entry_matches_fd(
+                    self.stage1_fd, _rtl_prov.LEDGER_NAME, self.ledger_fd):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_REPLACED_DURING_PUBLICATION", ledger_path,
+                    "the provenance entry no longer names the held ledger inode")
+            if (self.ledger_digest is not None
+                    and _phase1_fd_digest(self.ledger_fd)
+                    != self.ledger_digest):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION", ledger_path,
+                    "the held provenance bytes changed during publication")
+
+    def require_existing_ledger_digest(
+            self, relative_name: str, expected_digest: str) -> None:
+        try:
+            ledger_fd = os.open(
+                _rtl_prov.LEDGER_NAME,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=self.stage1_fd)
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_OPEN_REFUSED",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                f"the digest authority could not be opened safely: {exc}")
+        try:
+            parsed = json.loads(_phase1_read_fd(ledger_fd).decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            os.close(ledger_fd)
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_PARSE_REFUSED",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                f"the digest authority could not be parsed: {exc}")
+        files = parsed.get("files") if isinstance(parsed, dict) else None
+        if (not isinstance(files, dict)
+                or files.get(relative_name) != expected_digest):
+            os.close(ledger_fd)
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION",
+                self.project / "phase2" / "stage1" / _rtl_prov.LEDGER_NAME,
+                "the held-chain ledger no longer carries the classified "
+                "primary digest")
+        self.ledger_fd = ledger_fd
+        self.ledger_digest = _phase1_fd_digest(ledger_fd)
+
+    def stamp(self, generator: str) -> Dict[str, Any]:
+        # The ledger must never be emitted into a project tree whose canonical
+        # root pathname has been renamed or replaced after output publication.
+        self.require_current_chain()
+        payload: Dict[str, Any] = {
+            "schema": _rtl_prov.SCHEMA_VERSION,
+            "generator": generator,
+            "stamped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "files": {self.out.name: self.output_digest},
+        }
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8")
+        ledger_name = _rtl_prov.LEDGER_NAME
+        try:
+            old_fd = os.open(
+                ledger_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=self.stage1_fd)
+        except FileNotFoundError:
+            old_fd = None
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_OPEN_REFUSED",
+                self.project / "phase2" / "stage1" / ledger_name,
+                f"the prior ledger could not be opened safely: {exc}")
+        if old_fd is not None:
+            try:
+                prior = _phase1_read_fd(old_fd)
+            finally:
+                os.close(old_fd)
+            self.ledger_prior = prior
+            self.ledger_was_present = True
+
+        ledger_fd, _tmp_name = _phase1_open_publication_inode(
+            self.stage1_fd, "rtl-provenance")
+        published = False
+        try:
+            expected_digest = _phase1_write_held_inode(ledger_fd, encoded)
+            if self.ledger_was_present:
+                staging = f".rtl-provenance.publish.{secrets.token_hex(24)}"
+                _phase1_link_held_inode(ledger_fd, self.stage1_fd, staging)
+                os.replace(
+                    staging, ledger_name,
+                    src_dir_fd=self.stage1_fd, dst_dir_fd=self.stage1_fd)
+            else:
+                _phase1_link_held_inode(
+                    ledger_fd, self.stage1_fd, ledger_name)
+            published = True
+            self.ledger_fd = ledger_fd
+            self.ledger_digest = expected_digest
+            self.ledger_written = True
+            _phase1_remove_inode_aliases(
+                self.stage1_fd, ledger_fd, keep=ledger_name)
+            if not self._entry_matches_fd(
+                    self.stage1_fd, ledger_name, ledger_fd):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_REPLACED_DURING_PUBLICATION",
+                    self.project / "phase2" / "stage1" / ledger_name,
+                    "the provenance entry does not name the held ledger inode")
+            if (_phase1_fd_digest(ledger_fd) != expected_digest
+                    or json.loads(_phase1_read_fd(ledger_fd)) != payload):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_LEDGER_DIGEST_CHANGED_DURING_PUBLICATION",
+                    self.project / "phase2" / "stage1" / ledger_name,
+                    "the published ledger bytes do not match the exact output "
+                    "digest payload")
+            self.require_current_chain()
+        except Exception:
+            if published:
+                try:
+                    self.rollback()
+                except OSError:
+                    pass
+            else:
+                _phase1_remove_inode_aliases(self.stage1_fd, ledger_fd)
+            os.close(ledger_fd)
+            if self.ledger_fd == ledger_fd:
+                self.ledger_fd = None
+                self.ledger_digest = None
+                self.ledger_written = False
+            raise
+        return payload
+
+    def rollback(self) -> None:
+        # Recheck the public root binding as required, but always clean through
+        # the already-held descriptors even when that binding was displaced.
+        # Aborting cleanup on a missing/replaced basename would strand our
+        # output and ledger in the renamed old tree.
+        try:
+            self.require_project_binding()
+        except _Phase1RtlOutputRefused:
+            pass
+        if self._entry_matches_fd(self.rtl_fd, self.out.name, self.output_fd):
+            os.unlink(self.out.name, dir_fd=self.rtl_fd)
+        if self.ledger_written and self.ledger_fd is not None:
+            ledger_name = _rtl_prov.LEDGER_NAME
+            if self._entry_matches_fd(
+                    self.stage1_fd, ledger_name, self.ledger_fd):
+                if self.ledger_was_present and self.ledger_prior is not None:
+                    restore_fd, _tmp = _phase1_open_publication_inode(
+                        self.stage1_fd, "rtl-provenance-rollback")
+                    try:
+                        _phase1_write_held_inode(restore_fd, self.ledger_prior)
+                        staging = (
+                            f".rtl-provenance.rollback."
+                            f"{secrets.token_hex(24)}")
+                        _phase1_link_held_inode(
+                            restore_fd, self.stage1_fd, staging)
+                        os.replace(
+                            staging, ledger_name,
+                            src_dir_fd=self.stage1_fd,
+                            dst_dir_fd=self.stage1_fd)
+                        _phase1_remove_inode_aliases(
+                            self.stage1_fd, restore_fd, keep=ledger_name)
+                    finally:
+                        os.close(restore_fd)
+                else:
+                    os.unlink(ledger_name, dir_fd=self.stage1_fd)
+
+    def close(self) -> None:
+        closed = set()
+        for fd in (self.ledger_fd, self.output_fd, self.rtl_fd,
+                   self.stage1_fd, self.phase2_fd, self.project_fd,
+                   self.project_parent_fd):
+            if fd is not None and fd not in closed:
+                closed.add(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+def _publish_phase1_rtl_no_clobber(
+        project: Path, out: Path, rtl: str,
+        project_binding: Optional[_Phase1ProjectBinding] = None,
+        ) -> _Phase1RtlPublication:
+    """Publish fd-bound RTL and retain the trusted directory chain.
+
+    The returned object MUST stay open through ledger publication and result
+    construction.  Neither output nor provenance returns to a mutable ancestor
+    pathname during that interval.
+    """
+    project = Path(project)
+    open_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    fds: List[int] = []
+    output_fd: Optional[int] = None
+    root_binding: Optional[_Phase1ProjectBinding] = None
+    try:
+        if (project_binding is None
+                and _PHASE1_ACTIVE_PROJECT_BINDING is not None
+                and _PHASE1_ACTIVE_PROJECT_BINDING.project == project):
+            project_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+        if project_binding is not None:
+            if project_binding.project != project:
+                raise _Phase1RtlOutputRefused(
+                    "PROJECT_BOUNDARY_BINDING_MISMATCH", project,
+                    "the publisher was given a different project-root binding")
+            root_binding = project_binding.duplicate()
+        else:
+            root_binding = _Phase1ProjectBinding.open(project)
+        root_binding.require_current()
+        project_name = root_binding.name
+        project_parent_fd = root_binding.parent_fd
+        project_fd = root_binding.project_fd
+        current_fd = project_fd
+        for component in ("phase2", "stage1", "rtl"):
+            root_binding.require_current()
+            try:
+                os.mkdir(component, mode=0o755, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            try:
+                info = os.stat(
+                    component, dir_fd=current_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_UNRESOLVED", out.parent,
+                    f"an RTL output ancestor could not be inspected: {exc}")
+            if stat.S_ISLNK(info.st_mode):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_SYMLINK", out.parent,
+                    "the RTL output ancestry changed to a symlink")
+            if not stat.S_ISDIR(info.st_mode):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_NOT_DIRECTORY", out.parent,
+                    "an RTL output ancestor is not a directory")
+            try:
+                current_fd = os.open(component, open_flags, dir_fd=current_fd)
+            except OSError as exc:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_ANCESTOR_OPEN_REFUSED", out.parent,
+                    f"an RTL output ancestor could not be opened safely: {exc}")
+            fds.append(current_fd)
+        phase2_fd, stage1_fd, rtl_fd = fds
+
+        root_binding.require_current()
+        try:
+            os.stat(out.name, dir_fd=rtl_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_PATH_INSPECTION_FAILED", out,
+                f"the RTL output entry could not be inspected: {exc}")
+        else:
+            raise _Phase1RtlOutputRefused(
+                "RTL_OUTPUT_ALREADY_EXISTS", out,
+                "the RTL output entry appeared before no-clobber publication")
+
+        root_binding.require_current()
+        output_fd, _tmp_name = _phase1_open_publication_inode(
+            rtl_fd, out.name)
+        output_digest = _phase1_write_held_inode(
+            output_fd, rtl.encode("utf-8"))
+        publication = _Phase1RtlPublication(
+            project, out, project_parent_fd, project_name, project_fd,
+            phase2_fd, stage1_fd, rtl_fd, output_fd, output_digest)
+        # Re-open the exact project basename through its held parent before the
+        # first public link.  A root rename/recreate therefore cannot make the
+        # old tree look like a successful canonical publication.
+        publication.require_project_binding()
+        _phase1_link_held_inode(output_fd, rtl_fd, out.name)
+        _phase1_remove_inode_aliases(rtl_fd, output_fd, keep=out.name)
+        publication.require_current_chain()
+        # Publication owns the duplicated/opened root descriptors from here.
+        root_binding = None
+        return publication
+    except Exception:
+        if output_fd is not None:
+            if fds:
+                try:
+                    _phase1_remove_inode_aliases(fds[-1], output_fd)
+                except OSError:
+                    pass
+            try:
+                os.close(output_fd)
+            except OSError:
+                pass
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if root_binding is not None:
+            root_binding.close()
+        raise
+
+
+def _stamp_phase1_rtl_publication(
+        publication: _Phase1RtlPublication,
+        generator: str) -> Dict[str, Any]:
+    """Named seam for the held-dirfd output+ledger transaction."""
+    return publication.stamp(generator)
+
+
+def _claim_rtl_session(project: Path) -> None:
+    """Record that this runner owns ``rtl/`` for the rest of the process.
+
+    Generation is not the last writer: alias, wrapper, and hygiene steps may add
+    or repair files later in the same run.  The exit callback re-stamps that
+    final runner-owned tree.  Without this claim, the next run calls those later
+    files ``authored`` and refuses to regenerate a tree the runner itself made.
+    The callback reads the module globals at exit; it does not capture a project
+    path in an uninspectable closure.
+    """
+    global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT
+    if not _RTL_SESSION_OWNED:
+        atexit.register(_finalize_rtl_provenance)
+    _RTL_SESSION_OWNED = True
+    _RTL_SESSION_PROJECT = project
+
+
+def _try_phase1_behavioral_fsm_rtl(
+        project: Path, t0: float, force_regen: bool = False,
+        gathered: Optional[_Phase1PlainSpecGather] = None,
+        project_binding: Optional[_Phase1ProjectBinding] = None,
+        ) -> Optional[StepResult]:
+    """Run flow-back under one root identity from gather through publish."""
+    project = Path(project)
+    if not _RTL_SESSION_OWNED and _RTL_SESSION_BINDING is not None:
+        # Tests and embedders may reset the ownership token without running the
+        # process-exit callback.  Do not retain a stale held root into a later
+        # independent dispatch.
+        _phase1_replace_session_binding(None)
+    owned_binding = project_binding is None
+    # A caller may reuse gathered bytes only when it also supplies the binding
+    # that was already held while those bytes were gathered.  Otherwise gather
+    # again after opening the root so stale pre-open prose cannot cross trees.
+    if owned_binding and gathered is not None:
+        gathered = None
+    binding: Optional[_Phase1ProjectBinding] = project_binding
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    prior_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    try:
+        if binding is None:
+            binding = _Phase1ProjectBinding.open(project)
+        elif binding.project != project:
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_BOUNDARY_BINDING_MISMATCH", project,
+                "flow-back was given a different project-root binding")
+        _PHASE1_ACTIVE_PROJECT_BINDING = binding
+        binding.require_current()
+        if gathered is None:
+            gathered = _gather_phase1_plain_spec_text(
+                project, project_binding=binding)
+        binding.require_current()
+        result = _try_phase1_behavioral_fsm_rtl_bound(
+            project, t0, force_regen, gathered, binding)
+        binding.require_current()
+        if (_RTL_SESSION_OWNED and _RTL_SESSION_PROJECT == project):
+            _phase1_replace_session_binding(binding.duplicate())
+        return result
+    except _Phase1RtlOutputRefused as exc:
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    finally:
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior_binding
+        if owned_binding and binding is not None:
+            binding.close()
+
+
+def _try_phase1_behavioral_fsm_rtl_bound(
+        project: Path, t0: float, force_regen: bool,
+        gathered: _Phase1PlainSpecGather,
+        project_binding: _Phase1ProjectBinding,
+        ) -> Optional[StepResult]:
+    """Flow plain Phase-1 prose through the deterministic artifact registry.
+
+    This bridge is deliberately narrow: only the registry's fail-closed
+    ``behavioral_fsm`` family is accepted.  Every other artifact keeps its
+    existing structured-spec / canonical / authoring path.  The registry owns
+    semantic recognition; this helper owns only raw-source gathering, an explicit
+    unambiguous top name, the authored-RTL guard/provenance ledger, and staging.
+    """
+    project_binding.require_current()
+    if gathered.refusal is not None:
+        return _phase1_plain_spec_refusal_result(t0, gathered.refusal)
+    desc = gathered.text
+    sources = list(gathered.sources)
+    if not desc:
+        return None
+    module = _phase1_declared_module_name(desc)
+    if module is None:
+        return None
+    try:
+        import spec_artifact_registry as _reg  # noqa: E402
+        kind, rtl = _reg.generate(desc, module)
+    except Exception:
+        return None
+    if kind != "behavioral_fsm" or not rtl:
+        return None
+    # The top argument is part of the registry contract, but verify it before
+    # touching the project so a future generator regression remains a DEFER.
+    if not re.search(r"(?m)^\s*module\s+" + re.escape(module) + r"\b", rtl):
+        return None
+    rtl_dir = _pl.rtl_dir(project)
+    out = rtl_dir / f"{module}.v"
+    project_binding.require_current()
+    output_refusal = _validate_phase1_rtl_output_path(project, out)
+    project_binding.require_current()
+    if output_refusal is not None:
+        return _phase1_rtl_output_refusal_result(t0, output_refusal)
+    if (_RTL_SESSION_OWNED and _RTL_SESSION_PROJECT == project
+            and out.is_file()
+            and out.read_text(errors="replace") == rtl):
+        # An ECO-loop re-entry occurs before the exit stamp, after alias/wrapper
+        # steps may have added runner-owned files.  The on-disk ledger is
+        # intentionally stale until process exit, so classifying here would call
+        # those additions "authored" and abandon this deterministic path.  The
+        # in-process ownership token is the stronger evidence for this interval.
+        project_binding.require_current()
+        return StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"existing session-owned behavioral FSM RTL is byte-identical "
+            f"to spec_artifact_registry[{kind}] -> {out.relative_to(project)}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources, "idempotent": True,
+                    "rtl_provenance": "session_owned"})
+    project_binding.require_current()
+    verdict, why, evidence = _rtl_prov.classify(project)
+    project_binding.require_current()
+    if verdict in _rtl_prov.PRESERVE_VERDICTS and not force_regen:
+        return None  # authored/unknown RTL — never overwrite or certify it
+    if verdict == _rtl_prov.GENERATED:
+        # Idempotent second run: accept only if the previously stamped file is
+        # byte-identical to what this version would emit.  A changed generator
+        # safely DEFERs instead of silently replacing a prior generated tree.
+        if out.is_file() and out.read_text(errors="replace") == rtl:
+            project_binding.require_current()
+            _claim_rtl_session(project)
+            return StepResult(
+                "rtl_gen", "PASS", time.time() - t0,
+                f"existing provenance-stamped behavioral FSM RTL is byte-identical "
+                f"to spec_artifact_registry[{kind}] -> {out.relative_to(project)}",
+                output_files=[str(out)],
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True,
+                        "spec_source": "phase1_plain_prose",
+                        "spec_sources": sources, "idempotent": True,
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        # The provenance ledger's deletion contract says removal alone is not
+        # authorship: regeneration may restore the file.  When a later
+        # runner-owned alias remains, classify() still returns GENERATED and
+        # names the missing primary in ``removed``.  Restore ONLY when the
+        # current deterministic bytes match that primary's recorded digest;
+        # this proves both that the path belonged to this generated tree and
+        # that neither the source nor generator has gone stale.  Other
+        # runner-owned aliases stay byte-for-byte untouched.
+        primary_rel = out.relative_to(rtl_dir).as_posix()
+        # ``classify`` exposes the removed digest from the SAME validated ledger
+        # snapshot that produced this verdict.  Re-reading the authority here
+        # would create a ledger-swap TOCTOU between classification and restore.
+        recorded_digest = (evidence.get("removed_digests") or {}).get(
+            primary_rel)
+        if (not out.exists() and not out.is_symlink()
+                and primary_rel in (evidence.get("removed") or [])
+                and isinstance(recorded_digest, str)):
+            deterministic_digest = hashlib.sha256(
+                rtl.encode("utf-8")).hexdigest()
+            if deterministic_digest == recorded_digest:
+                publication = None
+                try:
+                    publication = _publish_phase1_rtl_no_clobber(
+                        project, out, rtl)
+                    publication.require_existing_ledger_digest(
+                        primary_rel, recorded_digest)
+                    publication.require_current_chain()
+                    result = StepResult(
+                        "rtl_gen", "PASS", time.time() - t0,
+                        f"restored missing provenance-stamped behavioral FSM "
+                        f"primary from spec_artifact_registry[{kind}] -> "
+                        f"{out.relative_to(project)}; remaining runner-owned "
+                        f"RTL was retained unchanged",
+                        output_files=[str(out)],
+                        extras={"deterministic_generator":
+                                "spec_artifact_registry",
+                                "artifact_type": kind, "module": module,
+                                "program_first": True,
+                                "spec_source": "phase1_plain_prose",
+                                "spec_sources": sources,
+                                "restored_missing_primary": True,
+                                "rtl_provenance": verdict,
+                                "rtl_provenance_evidence": evidence})
+                    # Construct the complete result while the same trusted fds
+                    # still bind output and ledger, then make the final namespace
+                    # identity/digest check immediately before accepting it.
+                    publication.require_current_chain()
+                    _claim_rtl_session(project)
+                    return result
+                except _Phase1RtlOutputRefused as exc:
+                    if publication is not None:
+                        try:
+                            publication.rollback()
+                        except OSError:
+                            pass
+                    return _phase1_rtl_output_refusal_result(
+                        t0, _phase1_rtl_output_refusal(
+                            project, exc.path, exc.reason, exc.detail))
+                except OSError as exc:
+                    if publication is not None:
+                        try:
+                            publication.rollback()
+                        except OSError:
+                            pass
+                    return StepResult(
+                        "rtl_gen", "FAIL", time.time() - t0,
+                        f"could not restore provenance-stamped missing "
+                        f"behavioral FSM primary {out.relative_to(project)}: "
+                        f"{exc!r}",
+                        extras={"deterministic_generator":
+                                "spec_artifact_registry",
+                                "artifact_type": kind, "module": module,
+                                "program_first": True,
+                                "spec_source": "phase1_plain_prose",
+                                "spec_sources": sources,
+                                "restored_missing_primary": False,
+                                "rtl_provenance": verdict,
+                                "rtl_provenance_evidence": evidence})
+                finally:
+                    if publication is not None:
+                        publication.close()
+        if not force_regen:
+            return StepResult(
+                "rtl_gen", "WAIVED", time.time() - t0,
+                f"PRESERVED generator-owned RTL because current deterministic output "
+                f"differs; re-run with --force-rtl-regen to replace it ({why})",
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True, "preserved": True,
+                        "override_flag": "--force-rtl-regen",
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+    preserved_note = ""
+    if verdict != _rtl_prov.EMPTY:
+        # Explicit regeneration is destructive but recoverable: preserve the
+        # entire old RTL tree first, then clear it so a renamed top cannot leave
+        # stale sibling modules behind.
+        try:
+            project_binding.require_current()
+            kept = _rtl_prov.preserve(project)
+            project_binding.require_current()
+        except OSError as exc:
+            return StepResult(
+                "rtl_gen", "FAIL", time.time() - t0,
+                f"--force-rtl-regen could not preserve existing RTL: {exc!r}; "
+                "refusing to replace it",
+                extras={"preserved": False, "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        import shutil
+        shutil.rmtree(rtl_dir)
+        preserved_note = f"; prior RTL preserved to {kept.name}/"
+    publication = None
+    try:
+        project_binding.require_current()
+        publication = _publish_phase1_rtl_no_clobber(
+            project, out, rtl)
+        generator = "spec_artifact_registry[behavioral_fsm]"
+        _stamp_phase1_rtl_publication(publication, generator)
+        publication.require_current_chain()
+        result = StepResult(
+            "rtl_gen", "PASS", time.time() - t0,
+            f"deterministic RTL via spec_artifact_registry[{kind}] from "
+            f"Phase-1 prose (program-first; no LLM) -> "
+            f"{out.relative_to(project)}{preserved_note}",
+            output_files=[str(out)],
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources,
+                    "rtl_provenance": _rtl_prov.GENERATED})
+        publication.require_current_chain()
+        _claim_rtl_session(project)
+        return result
+    except _Phase1RtlOutputRefused as exc:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    except OSError as exc:
+        if publication is not None:
+            try:
+                publication.rollback()
+            except OSError:
+                pass
+        return StepResult(
+            "rtl_gen", "FAIL", time.time() - t0,
+            f"could not publish deterministic behavioral FSM RTL "
+            f"{out.relative_to(project)} without clobbering: {exc!r}",
+            extras={"deterministic_generator": "spec_artifact_registry",
+                    "artifact_type": kind, "module": module,
+                    "program_first": True,
+                    "spec_source": "phase1_plain_prose",
+                    "spec_sources": sources, "write_performed": False,
+                    "rtl_provenance": verdict,
+                    "rtl_provenance_evidence": evidence})
+    finally:
+        if publication is not None:
+            publication.close()
 
 
 def _enforce_power_up_determinism(rtl_dir: Path) -> int:
@@ -1301,20 +3953,31 @@ def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     return 0
 
 
-def _gather_spec_text(project: Path) -> str:
+def _gather_spec_text(
+        project: Path, phase1_plain_text: Optional[str] = None) -> str:
     """Concatenate the design's natural-language spec sources (input prompt,
     input docs, and the generated L-doc JSON) so a spec-PROSE gate (e.g. the
     worked-example oracle) can read the SAME worked-example prose the author
-    saw. Best-effort + bounded; returns "" when no text source exists."""
+    saw. Best-effort + bounded; returns "" when no text source exists.
+
+    ``phase1_plain_text`` is the immutable result of the strict pre-write gather
+    in ``step_rtl_gen``.  When supplied (including an honestly empty string), do
+    not re-read operator prose after that provenance check; only append generated
+    L-docs, which live on the separate structured-spec side of the boundary.
+    """
     chunks: List[str] = []
-    for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
-        if d.is_dir():
-            for f in sorted(d.rglob("*")):
-                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
-                    try:
-                        chunks.append(f.read_text(errors="replace"))
-                    except OSError:
-                        pass
+    if phase1_plain_text is not None:
+        if phase1_plain_text:
+            chunks.append(phase1_plain_text)
+    else:
+        for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+            if d.is_dir():
+                for f in sorted(d.rglob("*")):
+                    if f.is_file() and f.suffix.lower() in (".md", ".txt"):
+                        try:
+                            chunks.append(f.read_text(errors="replace"))
+                        except OSError:
+                            pass
     gd = _pl.generated_docs_dir(project)
     if gd.is_dir():
         for f in sorted(gd.glob("L*.json")):
@@ -1357,6 +4020,45 @@ def _resolve_top_module_text(mod_texts: Dict[str, str], top_name: str,
     return None
 
 
+def _repair_top_in_place(project: Path, rtl_files: List[Path],
+                         top_text: str, spec_text: str) -> Optional[str]:
+    """Try a gate-directed repair of the top module and write it back.
+
+    Returns a human-readable note on success, None when no repair was accepted.
+    The acceptance decision belongs entirely to `gate_directed_rtl_repair`,
+    which re-runs the SAME spec-derived oracle that raised the finding — this
+    helper only locates the file the module text came from and persists the
+    repaired bytes."""
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import gate_directed_rtl_repair as _gdr  # noqa: E402
+    except Exception:
+        return None
+    try:
+        res = _gdr.repair(top_text, spec_text)
+    except Exception:
+        return None
+    if res.get("verdict") != "REPAIRED":
+        return None
+    new_top = res["rtl"]
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        if top_text in txt:
+            try:
+                f.write_text(txt.replace(top_text, new_top, 1))
+            except OSError:
+                return None
+            return (f"{f.name}: worked-example oracle raised "
+                    f"{res['defect']}; repaired via {res['transform']} and "
+                    f"re-verified by the same spec-derived oracle")
+    return None
+
+
 def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     """Run the structural DETERMINISM gates over the authored RTL — the SAME
     gates the benchmark emit path applies (`shape_b_sample_export.guard_export`
@@ -1378,6 +4080,11 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         replays the spec's own cycle-by-cycle input→output example against the
         RTL; a registered (Moore) output that lags one cycle is caught. SKIPs
         unless a complete unambiguous example parses and all ports map.
+      • clock divider/generator WAVEFORM oracle (`clock_divider_ratio_oracle_check`)
+        — MEASURES the produced divide ratio / duty / reset value via a
+        spec-derived self-TB and fails a wrong RATIO/DUTY/reset at ANY code form
+        (freq_divbyeven / freq_divbyfrac false certificates). SKIPs unless the
+        spec is an unambiguous divider/generator contract and the sim runs clean.
 
     A fired gate is a real determinism bug → FAIL (an ECO point), exactly what
     the benchmark path blocks emit on; both gates self-skip otherwise."""
@@ -1397,11 +4104,13 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             _sys.path.insert(0, str(PROGRAMS_DIR))
         import clock_divider_phase_form_check as _cdp  # noqa: E402
         import worked_example_sequence_oracle_check as _wex  # noqa: E402
+        import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
     except Exception as e:  # pragma: no cover — defensive import guard
         return StepResult("determinism_gates", "SKIP", time.time() - t0,
                           f"gate modules unavailable: {e}")
     spec_text = _gather_spec_text(project)
     findings: List[str] = []
+    repairs: List[str] = []
     n_checked = 0
     mod_texts: Dict[str, str] = {}
     for f in rtl_files:
@@ -1442,15 +4151,65 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             try:
                 o = _wex.analyze(top_text, spec_text)
                 if o.get("verdict") == "BLOCK":
-                    findings.append(
-                        f"{o.get('module', 'top')}: worked-example oracle — RTL "
-                        f"mismatches the spec's disclosed example "
-                        f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
-                        f"{o['out_bits']}); the output must assert in the SAME cycle "
-                        f"as the trigger (a registered Moore output lags one cycle). "
-                        f"{o.get('log', '')}")
+                    # GATE-DIRECTED REPAIR — the oracle has named the defect
+                    # precisely, so try to ACT on it before reporting a bare
+                    # FAIL. `gate_directed_rtl_repair` applies a deterministic
+                    # source transform and accepts it only on this same
+                    # oracle's explicit PASS, so the gate is the acceptance
+                    # test and cannot be weakened by the repair. On success the
+                    # repaired RTL is written back to the file it came from and
+                    # the finding is not raised; on failure the FAIL stands.
+                    repaired = _repair_top_in_place(
+                        project, rtl_files, top_text, spec_text)
+                    if repaired:
+                        repairs.append(repaired)
+                    else:
+                        findings.append(
+                            f"{o.get('module', 'top')}: worked-example oracle — RTL "
+                            f"mismatches the spec's disclosed example "
+                            f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
+                            f"{o['out_bits']}); the output must assert in the SAME cycle "
+                            f"as the trigger (a registered Moore output lags one cycle). "
+                            f"{o.get('log', '')}")
             except Exception:
                 pass
+    # clock divider / generator WAVEFORM-MEASUREMENT oracle runs ONCE on the whole
+    # authored RTL: it builds a spec-derived self-TB, MEASURES the produced divide
+    # ratio / duty / reset value, and FAILs an UNAMBIGUOUS mismatch — the property
+    # the hidden TB checks that the structural gates cannot see (a wrong RATIO/DUTY
+    # at ANY code form; complements the odd two-edge-OR PHASE gate above). SKIPs on
+    # any ambiguity / tool failure / non-divider spec; purely additive.
+    if spec_text and mod_texts:
+        try:
+            full_rtl = "\n\n".join(mod_texts.values())
+            wf = _cdr.analyze(full_rtl, spec_text, top_name or None)
+            if wf.get("verdict") == "BLOCK":
+                findings.append(
+                    f"{wf.get('module', 'top')}: clock-divider/generator waveform "
+                    f"oracle — {wf.get('reason', '')} (measured via a spec-derived "
+                    f"self-testbench; expected ratio {wf.get('expected_ratio')}, "
+                    f"measured {wf.get('measured_ratio')}).")
+        except Exception:
+            pass
+    # multi-bit RAMP / triangle / sawtooth WAVEFORM oracle. `spec_conformance_check`
+    # already carries `waveform-peak-hold-dropped` for this family, but that rule is
+    # STRUCTURAL and by its own docstring "cannot count the hold without simulation";
+    # it says nothing about WHERE the ramp turns or how big each step is. This
+    # MEASURES the bounds, the step and the dwell against what the spec states.
+    # SKIPs unless the prose gives an unambiguous ramp contract; purely additive.
+    if spec_text and mod_texts:
+        try:
+            import ramp_waveform_oracle_check as _rwo  # noqa: E402
+            full_rtl = "\n\n".join(mod_texts.values())
+            rw = _rwo.analyze(full_rtl, spec_text, top_name or None)
+            if rw.get("verdict") == "BLOCK":
+                findings.append(
+                    f"{rw.get('module', 'top')}: ramp waveform oracle — "
+                    f"{rw.get('reason', '')} (measured via a spec-derived "
+                    f"self-testbench: {rw.get('evidence')}).")
+        except Exception:
+            pass
+
     if findings:
         return StepResult(
             "determinism_gates", "FAIL", time.time() - t0,
@@ -1458,11 +4217,15 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             extras={"gate": "determinism_gates",
                     "source": "shape_b_sample_export.guard_export checks C/D "
                               "(promoted to the shared phase-2 chain)"})
-    return StepResult(
-        "determinism_gates", "PASS", time.time() - t0,
-        f"determinism gates clean over {n_checked} RTL file(s) "
-        f"(clock-divider phase-form + worked-example oracle; both self-skip "
-        f"when not applicable)")
+    detail = (f"determinism gates clean over {n_checked} RTL file(s) "
+              f"(clock-divider phase-form + worked-example oracle + "
+              f"clock-divider waveform-ratio oracle; all self-skip when not "
+              f"applicable)")
+    if repairs:
+        detail += " | gate-directed repair: " + "; ".join(repairs)
+    return StepResult("determinism_gates", "PASS", time.time() - t0, detail,
+                      extras={"gate_directed_repairs": repairs} if repairs
+                      else None)
 
 
 def step_leaf_typo_aliases(project: Path) -> StepResult:
@@ -2194,6 +4957,65 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
            if rewired else ""), written)
 
 
+def _v_shipped_but_excluded(project: Path, module: str) -> Optional[str]:
+    """The project-relative path of a NON-STAGEABLE RTL source for `module` under
+    ``input/`` — a name like ``<module>.sv.<suffix>`` / ``<module>.v.<suffix>``
+    rather than a plain ``.sv`` / ``.v`` — else ``None``.
+
+    This is EVIDENCE FOR AN ADVISORY, NOT A VERDICT (vibe-ic#781 M2). The round-2
+    version returned a bool that FAILed the step, on the theory that such a
+    sibling proves "the design shipped the module and staging dropped it". It
+    does not: nothing in a filename distinguishes a dataset exclusion from an
+    editor backup (``<M>.sv.bak``), a patch reject (``<M>.v.rej``) or a
+    ``.orig``. Measured, a stray backup next to a legitimate BLACK-BOX macro
+    flipped its ADVISORY into a hard FAIL — a fabricated failure on a design
+    `origin/main` passes. The distinction is not provable from the text, so the
+    step now only NAMES the sibling and lets the missing module surface where it
+    always did: loudly, at elaboration.
+
+    §4.05 HYGIENE: the walk skips any path through an ORACLE / harness segment,
+    reusing `reused_ip_rtl_consume._is_oracle_parts` — the same policy the
+    consumer beside it already enforces — rather than a second private copy. A
+    file under ``input/tb/`` or ``input/golden/`` must never influence a step's
+    reported state at all.
+
+    chip-AGNOSTIC: pure filename structure; no chip / vendor / SKU /
+    exclusion-suffix literal — any FURTHER extension component after a ``.sv`` /
+    ``.v`` component counts.
+
+    The test is component-wise, NOT a string prefix (vibe-ic#781 H3). A
+    ``startswith(f"{module}.sv")`` prefix also matches ``<M>.svg``, ``<M>.sva``
+    and ``<M>.svh``. What follows ``.sv``/``.v`` must be a SEPARATE extension
+    component, so ``<M>.sv.unused`` matches while ``<M>.svg`` does not."""
+    base = project / "input"
+    if not base.is_dir():
+        return None
+    try:
+        from reused_ip_rtl_consume import _is_oracle_parts
+    except Exception:                                   # pragma: no cover
+        return None
+    try:
+        for cand in sorted(base.rglob(f"{module}.*")):
+            if not cand.is_file():
+                continue
+            rel = cand.relative_to(base)
+            if _is_oracle_parts(rel.parts[:-1]):
+                continue
+            # `module` can never contain a dot (Verilog identifier grammar), so
+            # splitting the basename on "." puts the module in parts[0], the
+            # source extension in parts[1] and the exclusion tag in parts[2:].
+            parts = cand.name.split(".")
+            if (len(parts) >= 3 and parts[0] == module
+                    and parts[1] in ("v", "sv")):
+                try:
+                    return str(cand.relative_to(project))
+                except ValueError:                      # pragma: no cover
+                    return cand.name
+    except OSError:
+        return None
+    return None
+
+
 def step_reused_ip_consume(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP RTL CONSUME step.
@@ -2274,6 +5096,232 @@ def step_reused_ip_consume(project: Path,
             pass
     res["chip_top_emitted"] = chip_top_emitted
     res["synth_top_resolved"] = synth_top_resolved
+
+    # --- TRANSITIVE-CONE REDUCTION (chip-AGNOSTIC) ---------------------------
+    # A reused-IP bundle is staged FLAT as a whole LIBRARY (every module of the
+    # IP + a large shared-primitive pool), of which the declared top instantiates
+    # only a fraction. Keeping the whole bundle drags in ORPHAN files whose own
+    # unmet macro/package/include deps break single-unit elaboration, plus
+    # DUPLICATE (shim + real) module definitions. Reduce the staged set to the
+    # transitive cone of the resolved top: orphans and out-of-cone duplicates
+    # vanish, packages are topologically ordered, and a module the top
+    # INSTANTIATES but no staged file DEFINES (a dataset-excluded variant a
+    # parameter default selects) is surfaced LOUDLY rather than silently emitting
+    # a chip_top that references an absent module. See rtl_transitive_cone.py.
+    #
+    # THE FLOOR IS THE UNREDUCED FLOW (vibe-ic#781, rounds 1-3). Everything below
+    # obeys one rule: this step must never be WORSE than staging everything.
+    # Concretely that means it does not FAIL on anything the unreduced flow
+    # passes, and it never moves a file aside on a guess. Two rounds shipped a
+    # step that moved an IMPLEMENTATION aside, kept a STUB and returned GREEN;
+    # the loud `already been declared` error those rounds "fixed" is the correct
+    # outcome. The only FAIL this block can still raise is a cone file that went
+    # MISSING from the staged tree — the one condition that is strictly worse
+    # than not reducing, and it is checked against the tree, not inferred.
+    #
+    # SCOPE, STATED HONESTLY (vibe-ic#781 L6): the reduction runs ONLY when the
+    # top actually resolved. `_v661_resolve_dut_module` returns None when the
+    # instantiation graph has 0 or >1 roots — and orphan files ARE extra roots,
+    # so the very over-staging this reduces can be what defeats root resolution.
+    # A bundle with orphans and no L9/--top-name/synth-top naming a staged module
+    # is therefore NOT reduced; that case is recorded in `cone_skipped` and named
+    # in the step detail rather than passing silently as if it had been covered.
+    _cone_note = ""
+    _cone_status = "PASS"
+    _cr = None
+    try:
+        import rtl_transitive_cone as _cone
+        _cone_root = synth_top_resolved
+        if not _cone_root:
+            res["cone_skipped"] = (
+                "no top resolved (0 or >1 instantiation-graph roots and no "
+                "L9/--top-name/synth-top naming a staged module) — the staged "
+                "set was NOT cone-reduced")
+            _cone_note += (
+                " Cone reduction NOT APPLIED: no top could be resolved, so the "
+                "whole staged set is the build set (orphan files are themselves "
+                "graph roots, which is what prevents root resolution).")
+        elif _cone_root not in set(_v661_rtl_module_names(project)):
+            res["cone_skipped"] = (
+                f"resolved top '{_cone_root}' is not among the staged module "
+                f"names — the staged set was NOT cone-reduced")
+            _cone_note += (
+                f" Cone reduction NOT APPLIED: top '{_cone_root}' is not a "
+                f"staged module.")
+        else:
+            # PHASE A — ANALYSIS. Pure; touches nothing on disk.
+            _cr = _cone.transitive_cone(_cone_root, rtl_dir)
+            res["cone_root"] = _cone_root
+            res["cone_files"] = len(_cr.cone_files)
+            res["cone_duplicate_definers"] = _cr.duplicate_definers
+            res["cone_conditional_duplicates"] = _cr.conditional_duplicates
+            res["cone_unconditional_duplicates"] = _cr.hard_duplicates
+            res["cone_unresolved_modules"] = _cr.unresolved_modules
+            res["cone_unresolved_includes"] = _cr.unresolved_includes
+            res["cone_unparseable_refs"] = _cr.unparseable_refs
+            res["cone_unreducible"] = _cr.unreducible
+            # PHASE B — MUTATION. `transitive_cone` has already forced
+            # `dropped_files` empty for every case it could not prove safe, so
+            # this call moves nothing unless the reduction is trustworthy.
+            _moved = _cone.prune_to_cone(rtl_dir, _cr) if _cr.reduced else []
+            res["cone_out_of_cone"] = _moved
+            if _moved:
+                _cone_note += (
+                    f" Cone-reduced to {len(_cr.cone_files)} file(s) "
+                    f"(moved {len(_moved)} out-of-cone aside into "
+                    f"{rtl_dir.name}{_cone.SIDECAR_SUFFIX}/; undo with "
+                    f"`rtl_transitive_cone.py --restore {rtl_dir}`).")
+            if _cr.unreducible:
+                # FAIL CLOSED: the inventory or the directive grammar could not
+                # be trusted, so the staged set is exactly the unreduced one.
+                _cone_note += (
+                    f" Cone reduction NOT APPLIED (fail-closed): "
+                    f"{_cr.unreducible}. The staged set is the whole provided "
+                    f"package, exactly as without this step.")
+            if _cr.hard_duplicates:
+                # A duplicate module definition is NEVER resolved here
+                # (vibe-ic#781 H1). Every candidate stays staged, so the
+                # frontend raises its own `already been declared` — loud,
+                # unmissable, and never a wrong answer. The two tie-breaks that
+                # have been tried both moved the IMPLEMENTATION aside and left a
+                # STUB compiling GREEN, which is strictly worse than this error.
+                # The step does NOT fail: a FAIL here would be a verdict the
+                # unreduced flow does not pass either, and `\`ifdef`-guarded
+                # variants prove the grammar cannot tell a defect from a normal
+                # vendor pattern. The frontend is the judge; this is the notice.
+                _dups = "; ".join(f"{m} declared by {cands}"
+                                  for m, cands in _cr.hard_duplicates)
+                _cone_note += (
+                    f" ADVISORY — DUPLICATE module definition(s), all "
+                    f"candidates KEPT staged: {_dups}. Nothing in the text says "
+                    f"which declaration the design meant, so this reducer "
+                    f"refuses to choose (a wrong pick is silent and green); the "
+                    f"duplicate-definition error stays visible to the frontend. "
+                    f"Remove the redundant declaration, or guard the variants "
+                    f"with `ifdef.")
+            if _cr.conditional_duplicates:
+                _cone_note += (
+                    f" NOTE: {_cr.conditional_duplicates} are declared more "
+                    f"than once under conditional compilation "
+                    f"(`ifdef-guarded technology variants / `define macro "
+                    f"bodies) — the normal vendor pattern, not a duplicate "
+                    f"definition; all variants stay staged and the "
+                    f"preprocessor selects one.")
+            if _cr.unresolved_includes:
+                _cone_note += (
+                    f" ADVISORY: `include target(s) no staged file provides: "
+                    f"{_cr.unresolved_includes} — the build will report "
+                    f"'Include file ... not found' with or without reduction.")
+            if _cr.unparseable_refs:
+                # A reference this grammar structurally CANNOT read (an escaped
+                # identifier, a macro-valued `include). Nothing is dropped on
+                # account of it, but silence would hide a real blind spot
+                # (vibe-ic#781 H5).
+                _cone_note += (
+                    f" ADVISORY (unparseable by the structural grammar, "
+                    f"kept conservatively — the cone is an over-approximation "
+                    f"for these): {_cr.unparseable_refs}.")
+            if _cr.unresolved_modules:
+                # Classify each unresolved instantiation for the OPERATOR, not
+                # for the verdict (vibe-ic#781 M2). A `<M>.sv.<tag>` sibling
+                # under input/ is EVIDENCE that an RTL source for the module
+                # exists in a form staging cannot consume — but a filename
+                # cannot tell a dataset exclusion from an editor backup, so it
+                # does not decide PASS/FAIL. Either way the module is absent,
+                # and an absent module is caught, loudly, at elaboration —
+                # which is exactly what happens without this step.
+                _excluded, _blackbox = {}, []
+                for _m in _cr.unresolved_modules:
+                    _ev = _v_shipped_but_excluded(project, _m)
+                    if _ev:
+                        _excluded[_m] = _ev
+                    else:
+                        _blackbox.append(_m)
+                res["cone_unresolved_excluded"] = sorted(_excluded)
+                res["cone_unresolved_excluded_evidence"] = _excluded
+                res["cone_unresolved_blackbox"] = _blackbox
+                if _excluded:
+                    _cone_note += (
+                        f" ADVISORY: top '{_cone_root}' instantiates "
+                        f"{sorted(_excluded)}, which NO staged file defines, "
+                        f"while a non-stageable RTL sibling exists under "
+                        f"input/ ({_excluded}) — staging cannot make this "
+                        f"design elaborate; provide the absent module or "
+                        f"correct the top's variant selection. Choosing a "
+                        f"different PRESENT variant would silently rewrite a "
+                        f"parameter selection and is NOT done.")
+                if _blackbox:
+                    _cone_note += (
+                        f" ADVISORY: top instantiates {_blackbox} with no "
+                        f"staged RTL source — treated as black-box hard-macro / "
+                        f"std-cell (resolved downstream by LIB/LEF).")
+    except Exception as _ce:
+        # vibe-ic#781 L5 — a crashed cone must not be invisible in the VERDICT.
+        # It used to land in `extras` only, where nothing reads it, so every
+        # project could have crashed here and still reported a clean PASS.
+        #
+        # The verdict is decided by WHAT IS ON DISK, not by which function was
+        # executing (vibe-ic#781 M3). Round 2 inferred "half-moved" from
+        # `_cr is not None`, so a crash that happened AFTER a complete, correct
+        # move — a malformed pre-existing restore manifest — reported a
+        # HALF-MOVED tree while `rtl/` held the entire cone and the sidecar held
+        # exactly the out-of-cone files, and printed a recovery command that
+        # itself crashed. `prune_to_cone` only ever moves files OUT, and only
+        # ever files the analysis put in `dropped_files`, so the staged set
+        # after ANY partial move is between the cone and the full package — i.e.
+        # never smaller than the build needs. The one outcome that IS worse than
+        # not reducing is a CONE file that is no longer in `rtl/`, so that is
+        # what is checked, and it is the only FAIL.
+        import traceback as _tb
+        res["cone_error"] = str(_ce)
+        res["cone_error_type"] = type(_ce).__name__
+        res["cone_error_traceback"] = _tb.format_exc()[-2000:]
+        _missing: List[str] = []
+        if _cr is not None:
+            _phase = "MUTATION"
+            try:
+                _missing = sorted(p.name for p in _cr.cone_files
+                                  if not (rtl_dir / p.name).is_file())
+            except Exception:                              # pragma: no cover
+                _missing = ["<could not verify the staged tree>"]
+        else:
+            _phase = "ANALYSIS"
+        res["cone_error_phase"] = _phase
+        res["cone_error_missing_from_rtl"] = _missing
+        if _missing:
+            _cone_status = "FAIL"
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — and the staged tree is "
+                f"INCOMPLETE: {_missing} are in the cone but no longer in "
+                f"{rtl_dir.name}/. Restore with "
+                f"`rtl_transitive_cone.py --restore {rtl_dir}`.")
+        elif _phase == "MUTATION":
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — the reduction did not complete. "
+                f"VERIFIED against the tree: every cone file is still staged, so "
+                f"the build set is a SUPERSET of the cone (at worst the "
+                f"unreduced package). Undo any partial move with "
+                f"`rtl_transitive_cone.py --restore {rtl_dir}`.")
+        else:
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — cone reduction did NOT run; "
+                f"the staged set is the whole provided package, unreduced.")
+
+    if res.get("staged_name_collisions"):
+        # PRE-EXISTING in `reused_ip_rtl_consume` (not introduced by the cone
+        # reduction): staging is FLAT, so two source files with the same
+        # basename compete for one staged name and the second is discarded
+        # first-wins. The filenames are a contract several downstream steps
+        # read, so the flattening is not changed here — but a source that is
+        # NOT in the build must not be invisible (vibe-ic#781 L-collision).
+        _cone_note += (
+            f" ADVISORY: {len(res['staged_name_collisions'])} basename "
+            f"collision(s) while flattening the provided tree — only the FIRST "
+            f"source of each name is staged, the rest are NOT in the build set: "
+            f"{res['staged_name_collisions']}.")
     _sv = (f" {res['sv_ingest_note']}" if res.get("sv_ingest_note") else "")
     if chip_top_emitted:
         _ct = f" Auto-emitted {chip_top_emitted} (thin wrapper)."
@@ -2284,10 +5332,10 @@ def step_reused_ip_consume(project: Path,
         _ct = (" Top resolution deferred to synth (graph-root/auto-emit "
                "fallback).")
     return StepResult(
-        "reused_ip_consume", "PASS", time.time() - t0,
+        "reused_ip_consume", _cone_status, time.time() - t0,
         f"Staged {len(res['staged'])} design-provided build-RTL file(s) into "
         f"phase2/stage1/rtl/ so synth no longer halts on empty rtl/."
-        + _ct + _sv,
+        + _ct + _sv + _cone_note,
         extras=res)
 
 
@@ -2413,17 +5461,205 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
 
 def step_rtl_gen(project: Path, ic_class: str,
                  force_regen: Optional[bool] = None) -> StepResult:
+    """Run RTL dispatch in isolation, then CAS-publish its complete delta."""
+    t0 = time.time()
+    project = Path(project)
+    binding: Optional[_Phase1ProjectBinding] = None
+    stage_binding: Optional[_Phase1ProjectBinding] = None
+    transaction: Optional[_Phase1StagedTreeTransaction] = None
+    replacement_binding: Optional[_Phase1ProjectBinding] = None
+    stage_temp: Optional[tempfile.TemporaryDirectory] = None
+    global _PHASE1_ACTIVE_PROJECT_BINDING
+    global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT, _RTL_SESSION_BINDING
+    prior_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+    prior_owned = _RTL_SESSION_OWNED
+    prior_project = _RTL_SESSION_PROJECT
+    prior_session_binding = _RTL_SESSION_BINDING
+    if not prior_owned and prior_session_binding is not None:
+        prior_session_binding.close()
+        prior_session_binding = None
+        _RTL_SESSION_BINDING = None
+    committed = False
+    try:
+        binding = _Phase1ProjectBinding.open(project)
+        stage_temp = tempfile.TemporaryDirectory(prefix="vibeic-rtl-step-")
+        with contextlib.nullcontext(stage_temp.name) as td:
+            stage_project = Path(td) / project.name
+            baseline = _phase1_snapshot_to_stage(binding, stage_project)
+            stage_binding = _Phase1ProjectBinding.open(stage_project)
+            _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
+            # A staged claim may hold its own duplicate, but it must never
+            # replace/close the prior live-project handle until commit wins.
+            _RTL_SESSION_BINDING = None
+            if prior_owned and prior_project == project:
+                _RTL_SESSION_PROJECT = stage_project
+            result = _step_rtl_gen_bound(
+                stage_project, ic_class, force_regen, t0, stage_binding,
+                snapshot_manifest=baseline)
+            stage_binding.require_current()
+            final = _phase1_tree_manifest_fd(
+                stage_binding.project_fd, project)
+            # PASS and WAIVED branches intentionally publish deterministic RTL
+            # or author-handoff artifacts.  A failed/refused branch has no
+            # authority to leak a generator's partial staging writes into the
+            # canonical project; its complete transaction is the baseline.
+            publish_changes = result.status in ("PASS", "WAIVED")
+            commit_manifest = final if publish_changes else baseline
+            final_link = None
+            if publish_changes:
+                final_link = next(
+                    (rel for rel, entry in final.items()
+                     if entry.kind == "symlink"
+                     and baseline.get(rel) != entry), None)
+            if final_link is not None:
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_OUTPUT_SYMLINK_REFUSED",
+                    project / final_link,
+                    "an RTL reader or generator left a symlink in the isolated "
+                    "transaction; it cannot be published into the held project")
+
+            # No helper above ever received the mutable live pathname.  Only
+            # this held-dirfd transaction can make its validated staged delta
+            # visible, and it can roll every changed top-level subtree back.
+            _PHASE1_ACTIVE_PROJECT_BINDING = binding
+            transaction = _phase1_commit_staged_tree(
+                binding, stage_binding, baseline, commit_manifest)
+            session_claimed = (
+                _RTL_SESSION_OWNED
+                and _RTL_SESSION_PROJECT == stage_project)
+            try:
+                # All failure-capable result acceptance stays on this side of
+                # finalize(), while the old canonical subtrees still exist.
+                binding.require_current()
+                result.detail = _phase1_remap_stage_value(
+                    result.detail, stage_project, project)
+                result.output_files = _phase1_remap_stage_value(
+                    result.output_files, stage_project, project)
+                result.extras = _phase1_remap_stage_value(
+                    result.extras, stage_project, project)
+                if session_claimed:
+                    replacement_binding = binding.duplicate()
+                # TemporaryDirectory cleanup is deliberately completed while
+                # old canonical subtrees are still held. Its __exit__ must not
+                # become a new post-finalize failure seam.
+                _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
+            except Exception as exc:
+                # Same ordering rule as the deferred-stamp path above: the
+                # `finally` rolls back whatever `transaction` still names, so
+                # ownership is released BEFORE the rollback is attempted.
+                rolling_back = transaction
+                transaction = None
+                rollback_errors = rolling_back.rollback()
+                if replacement_binding is not None:
+                    replacement_binding.close()
+                    replacement_binding = None
+                if rollback_errors:
+                    raise _Phase1RtlOutputRefused(
+                        "RTL_TRANSACTION_ROLLBACK_REFUSED", project,
+                        f"result acceptance failed: {exc}; rollback errors: "
+                        f"{rollback_errors}") from exc
+                if isinstance(exc, _Phase1RtlOutputRefused):
+                    raise
+                raise _Phase1RtlOutputRefused(
+                    "RTL_TRANSACTION_STAGE_CLEANUP_REFUSED", project,
+                    f"isolated RTL stage cleanup failed: {exc}") from exc
+
+            accepted = transaction
+            transaction = None
+            cleanup_warning = _phase1_finalize_accepted_transaction(accepted)
+            if cleanup_warning is not None:
+                result.extras["transaction_cleanup_warning"] = cleanup_warning
+
+            # No fallible project/path check may follow finalize(): rollback
+            # authority has now intentionally been destroyed.
+            if session_claimed:
+                staged_session_binding = _RTL_SESSION_BINDING
+                _RTL_SESSION_PROJECT = project
+                _RTL_SESSION_BINDING = replacement_binding
+                if staged_session_binding is not None:
+                    staged_session_binding.close()
+                if (prior_session_binding is not None
+                        and prior_session_binding is not replacement_binding):
+                    prior_session_binding.close()
+            else:
+                staged_session_binding = _RTL_SESSION_BINDING
+                _RTL_SESSION_OWNED = prior_owned
+                _RTL_SESSION_PROJECT = prior_project
+                _RTL_SESSION_BINDING = prior_session_binding
+                if staged_session_binding is not None:
+                    staged_session_binding.close()
+            committed = True
+            return result
+    except _Phase1RtlOutputRefused as exc:
+        return _phase1_rtl_output_refusal_result(
+            t0, _phase1_rtl_output_refusal(
+                project, exc.path, exc.reason, exc.detail))
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        if not committed:
+            if replacement_binding is not None:
+                replacement_binding.close()
+            if (_RTL_SESSION_BINDING is not None
+                    and _RTL_SESSION_BINDING is not prior_session_binding):
+                _RTL_SESSION_BINDING.close()
+            _RTL_SESSION_OWNED = prior_owned
+            _RTL_SESSION_PROJECT = prior_project
+            _RTL_SESSION_BINDING = prior_session_binding
+        _PHASE1_ACTIVE_PROJECT_BINDING = prior_binding
+        if stage_binding is not None:
+            stage_binding.close()
+        if stage_temp is not None:
+            try:
+                stage_temp.cleanup()
+            except OSError:
+                pass
+        if binding is not None:
+            binding.close()
+
+
+def _step_rtl_gen_bound(
+        project: Path, ic_class: str, force_regen: Optional[bool],
+        t0: float, project_binding: _Phase1ProjectBinding,
+        snapshot_manifest: Dict[str, _Phase1TreeEntry],
+        ) -> StepResult:
     """Emit RTL for ``ic_class``.
 
     ``force_regen`` overrides the authored-RTL guard for this call. When
     None (the default) the process-wide setting from ``--force-rtl-regen``
     applies. See ``rtl_provenance`` for what the guard protects.
     """
-    t0 = time.time()
+    project_binding.require_current()
+    # Operator-prose provenance is a pre-write boundary for the WHOLE dispatch,
+    # not merely the behavioral-FSM branch.  Several earlier deterministic
+    # emitters also read Phase-1 prose.  Letting one of them run first would let
+    # a symlinked, unreadable, or malformed source write RTL and bypass the named
+    # refusal below entirely.
+    _phase1_plain = _gather_phase1_plain_spec_text(
+        project, project_binding=project_binding)
+    project_binding.require_current()
+    if _phase1_plain.refusal is not None:
+        return _phase1_plain_spec_refusal_result(t0, _phase1_plain.refusal)
+    # The isolated project must not retain a portal back to a mutable external
+    # namespace.  Operator-prose links have already received their more precise
+    # named refusal above; any remaining symlink could be followed by one of the
+    # legacy readers or third-party generators that intentionally receive only
+    # this private snapshot.
+    staged_link = next(
+        (rel for rel, entry in snapshot_manifest.items()
+         if entry.kind == "symlink"), None)
+    if staged_link is not None:
+        raise _Phase1RtlOutputRefused(
+            "PROJECT_SYMLINK_NOT_ISOLATABLE",
+            project / staged_link,
+            "the isolated RTL dispatch snapshot contains a symlink that a "
+            "reader or generator could follow outside the held project tree")
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
     # mechanically derivable (FSM table / truth table / gate netlist / vector op),
     # emit RTL deterministically with NO LLM before any class-registry / AI path.
+    project_binding.require_current()
     _det = _try_deterministic_rtl_dispatch(project, t0)
+    project_binding.require_current()
     if _det is not None:
         return _det
     # Capture (spm x sky130A): the SERIAL-PARALLEL MULTIPLIER subset of the
@@ -2431,9 +5667,34 @@ def step_rtl_gen(project: Path, ic_class: str,
     # calibrates, so emit it deterministically from the L docs BEFORE WAIVE-ing
     # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
     # non-matching designs keep the existing class-registry / AI-fallback path.
+    project_binding.require_current()
     _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
+    project_binding.require_current()
     if _sp is not None:
         return _sp
+    # Canonical single-function primitive shapes (clock dividers, pulse detector,
+    # serial->parallel, combinational divider, traffic FSM, radix-2 divider,
+    # IEEE-754 multiplier, async gray FIFO): when the description STATES the
+    # structure unambiguously, emit verified-correct RTL deterministically BEFORE
+    # deferring to spec-to-rtl. DEFERs (returns None) on every non-matching shape.
+    project_binding.require_current()
+    _cp = _try_canonical_primitive_rtl(
+        project, t0, phase1_plain_text=_phase1_plain.text)
+    project_binding.require_current()
+    if _cp is not None:
+        return _cp
+    # A strictly recognized behavioral Moore FSM may live only in the original
+    # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
+    # rtl_spec).  Give that prose the same registry-backed deterministic path,
+    # while accepting only the behavioral_fsm family and otherwise DEFERring.
+    _behavior_force = (_FORCE_RTL_REGEN
+                       if force_regen is None else force_regen)
+    _bf = _try_phase1_behavioral_fsm_rtl(
+        project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
+        project_binding=project_binding)
+    project_binding.require_current()
+    if _bf is not None:
+        return _bf
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
@@ -2659,7 +5920,9 @@ def step_rtl_gen(project: Path, ic_class: str,
     _force = _FORCE_RTL_REGEN if force_regen is None else force_regen
     preserved_note = ""
     if not _RTL_SESSION_OWNED:
+        project_binding.require_current()
         _verdict, _why, _ev = _rtl_prov.classify(project)
+        project_binding.require_current()
         if _verdict in _rtl_prov.PRESERVE_VERDICTS:
             _skill = config.get("fallback_skill") or "spec-to-rtl"
             if not _force:
@@ -2689,7 +5952,9 @@ def step_rtl_gen(project: Path, ic_class: str,
             # RECOVERABLE. Copy to a uniquely-named sibling that no
             # later run reclaims, and name it in the result.
             try:
+                project_binding.require_current()
                 _kept = _rtl_prov.preserve(project)
+                project_binding.require_current()
                 preserved_note = (f", authored RTL preserved to "
                                   f"{_kept.name}/")
             except OSError as _e:
@@ -2713,18 +5978,25 @@ def step_rtl_gen(project: Path, ic_class: str,
     # above has established that rtl/ is generator-produced (or that an
     # explicit override already preserved it elsewhere), so the bytes
     # being dropped are reproducible by re-running the generator.
+    project_binding.require_current()
     backup_dir.parent.mkdir(parents=True, exist_ok=True)
+    project_binding.require_current()
     had_prior_rtl = rtl_dir.is_dir() and any(rtl_dir.iterdir())
     if had_prior_rtl:
+        project_binding.require_current()
         if backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
         # Atomic move: prior rtl/ becomes rtl.pre_gen_backup/.
         rtl_dir.rename(backup_dir)
+        project_binding.require_current()
     rtl_dir.mkdir(parents=True, exist_ok=True)
+    project_binding.require_current()
 
     cmd = ["python3", str(gen), str(project)] + list(
         config.get("rtl_gen_args") or [])
+    project_binding.require_current()
     rc, out, err = _run(cmd)
+    project_binding.require_current()
     emitted_any = rtl_dir.is_dir() and any(
         p.is_file() for p in rtl_dir.iterdir())
     if rc == 0 and emitted_any:
@@ -2745,7 +6017,9 @@ def step_rtl_gen(project: Path, ic_class: str,
             atexit.register(_finalize_rtl_provenance)
         _RTL_SESSION_OWNED = True
         _RTL_SESSION_PROJECT = project
+        project_binding.require_current()
         _rtl_prov.stamp(project, generator=gen_name)
+        project_binding.require_current()
         # Generation succeeded — keep backup_dir as a safety mirror.
         # (Not deleted: lets a fresh agent diff prior-vs-new on demand.)
         return StepResult("rtl_gen", "PASS",
@@ -3531,10 +6805,18 @@ def step_l10_unit_tb_gen(project: Path,
     """ORGANIC #797 — run the testbench_gen PRODUCER so L10 `functional_vector`
     cases get unit-TB skeletons under sim/tb/ (the id-substring trace evidence
     the Step-4 l10_tb_conformance gate counts). The producer was dormant — never
-    called by any one-shot runner. KIND-SCOPED to functional_vector so a
-    `cmd_response` case (opcode/summary oracle) never gets manufactured evidence
-    (§4.05 no-leak). SKIPs cleanly when there is no L10 / no functional_vector
-    case (arithmetic-DEFER / no-L10 ICs are unaffected)."""
+    called by any one-shot runner. The substance-floor SCAFFOLD is KIND-SCOPED
+    so a `cmd_response` case (opcode/summary oracle) never gets manufactured
+    evidence (§4.05 no-leak). SKIPs cleanly when there is no L10 / nothing this
+    producer can write (arithmetic-DEFER / no-L10 ICs are unaffected).
+
+    ORGANIC #761 — every SKIP here now states the LAYER fact, not the FILTER
+    fact. `no functional_vector L10 cases — nothing to produce` was true of the
+    filter and false of the layer: 95 cases existed, `l10_tb_conformance_check`
+    graded all 95, and nothing in the run connected the two numbers. The detail
+    line carries the case count, the kind histogram, this producer's own scope
+    and the named consequence, so the Step-4 FAIL cannot read as an extraction
+    gap when it is a scope mismatch."""
     t0 = time.time()
     try:
         import sys as _sys
@@ -3546,11 +6828,23 @@ def step_l10_unit_tb_gen(project: Path,
                           f"producer unavailable: {e}")
     _tb_report: dict = {}
     try:
-        emitted = _tbg.emit_unit_tbs(project, top_name, kind="functional_vector",
+        emitted = _tbg.emit_unit_tbs(project, top_name,
+                                     kind=_tbg.DEFAULT_SCAFFOLD_KIND,
                                      report=_tb_report)
     except Exception as e:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           f"L10 unreadable: {e}")
+
+    def _consequence(scope: dict) -> str:
+        """#761 — name the CONSUMER and what it will do with the cases this
+        producer did not write a TB for. A SKIP that does not say who grades
+        the remainder is what made the two scopes look like one."""
+        ungraded = int(scope.get("total") or 0)
+        if not ungraded:
+            return ""
+        return (f"; all {ungraded} will be graded by l10_tb_conformance_check "
+                f"and any without a TB will FAIL Step 4")
+
     if emitted == -1:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           "no L10_TEST_CASES.json — nothing to produce")
@@ -3561,18 +6855,31 @@ def step_l10_unit_tb_gen(project: Path,
         # commented out, which fabricated Step-4 evidence. Emitting nothing
         # leaves the downstream l10_tb_conformance gate to fail honestly on
         # missing coverage rather than pass on manufactured coverage.
+        _scope = _tb_report.get("scope") or {}
         return StepResult(
             "l10_unit_tb_gen", "SKIP", time.time() - t0,
-            f"no TB emitted (refused to fabricate): {_tb_report.get('reason')}")
+            f"no TB emitted (refused to fabricate): {_tb_report.get('reason')}"
+            + (f" [{_tbg.describe_scope(_scope)}{_consequence(_scope)}]"
+               if _scope else ""))
     if emitted == 0:
-        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
-                          "no functional_vector L10 cases — nothing to produce")
+        _scope = _tb_report.get("scope") or {}
+        return StepResult(
+            "l10_unit_tb_gen", "SKIP", time.time() - t0,
+            (f"no TB produced — {_tbg.describe_scope(_scope)}"
+             f"{_consequence(_scope)}")
+            if _scope else "no L10 test case — nothing to produce")
     out_dir = _pl.sim_dir(project) / "tb"
+    _scope = _tb_report.get("scope") or {}
+    _total = int(_scope.get("total") or 0)
     return StepResult(
         "l10_unit_tb_gen", "PASS", time.time() - t0,
-        f"emitted {emitted} functional_vector unit TB(s) instantiating DUT "
-        f"{_tb_report.get('dut_module')!r} under {out_dir} for Step-4 "
-        f"l10_tb_conformance evidence",
+        # #761 — report emitted AGAINST the layer total. "emitted N TB(s)" alone
+        # is the same half-a-fact the SKIP message used to be: N of how many?
+        f"emitted {emitted}"
+        + (f"/{_total}" if _total else "")
+        + f" unit TB(s) instantiating DUT {_tb_report.get('dut_module')!r} "
+        f"under {out_dir} for Step-4 l10_tb_conformance evidence"
+        + (f"; {_tbg.describe_scope(_scope)}" if _scope else ""),
         [str(out_dir)])
 
 
@@ -4681,7 +7988,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("CONNECTIVITY_PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "CONNECTIVITY_PASS\n")
     _bridge_xml = (
         "<results><verdict>CONNECTIVITY_PASS</verdict>"
         "<functional_verified>false</functional_verified>"
@@ -4696,7 +8003,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         "Connectivity/structural binding to real rtl/ PASSED "
         "(FULL_STACK_TB_DONE).</waiver_reason>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     return True
 
 
@@ -4733,7 +8040,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "PASS\n")
     _bridge_xml = (
         "<results><verdict>PASS</verdict>"
         f"<evidence>{log_rel}</evidence>"
@@ -4742,7 +8049,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         f"<vectors_total>{n_total}</vectors_total>"
         "<verification_track>oracle_tb</verification_track>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     # ORGANIC-20260606 #460 (reopened) — incidental cleanup: an old run may
     # have left a stale top-level sim/results.xml at the LEGACY wrong path
     # (project-root sim/, not the canonical phase2/stage1/sim/) carrying the
@@ -5128,6 +8435,47 @@ def _stamp_gate_report_dirs(project: Path) -> List[str]:
     return stamped
 
 
+def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
+    """Flow step 1.6x — a candidate RTL produced by a cross-layer PPA search
+    must still be the design the specification describes.
+
+    Runs the JUDGE (`crosslayer_rewrite_equivalence_check`), never the tool, so
+    this costs a file read on every ordinary design and nothing else. The judge
+    writes `reports/crosslayer/rewrite_equivalence_check.json` on EVERY run,
+    including the NOT_APPLICABLE one — which is the point: a design that ran no
+    cross-layer search must produce a RECORD saying so, not an absence a reader
+    has to interpret.
+
+    It is called UNCONDITIONALLY for the reason
+    `flow_condition_reachability_check` gave when step 1.6x was first written
+    conditional: "a check disabled by exactly the situation it was written
+    for". A search that rewrote the RTL and skipped its own snapshot would have
+    skipped the gate with it."""
+    t0 = time.time()
+    out_rel = "reports/crosslayer/rewrite_equivalence_check.json"
+    cmd = [sys.executable, str(Path(__file__).resolve().parent
+                               / "crosslayer_rewrite_equivalence_check.py"),
+           str(project),
+           "--report", "reports/crosslayer/rewrite_equivalence.json",
+           "--baseline-marker", "reports/crosslayer/baseline_rtl",
+           "--search-space", "reports/crosslayer/search_space.json",
+           "--json", out_rel]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        rc = r.returncode
+        detail = (r.stdout or r.stderr or "").strip().splitlines()
+        detail = detail[-1] if detail else f"rc={rc}"
+    except (subprocess.SubprocessError, OSError) as e:  # noqa: BLE001
+        return StepResult("crosslayer_rewrite_fidelity", "FAIL",
+                          time.time() - t0,
+                          f"the rewrite-fidelity judge could not run ({e}); "
+                          f"a check that could not look is not a clean check")
+    status = "PASS" if rc == 0 else "FAIL"
+    return StepResult("crosslayer_rewrite_fidelity", status,
+                      time.time() - t0, detail, [out_rel],
+                      extras={"exit_code": rc})
+
+
 def step_stamp_gate_reports(project: Path) -> StepResult:
     """ORGANIC-20260606 #497 ROUND-2: caller-side identity stamp of every
     gate/lint JSON the gate-audit step produced. Runs AFTER step_final_audit
@@ -5229,6 +8577,61 @@ def _is_reused_ip_project(project: Path) -> bool:
         return False
 
 
+def _persist_oracle_calibrated_framing(project: Path, log_text: str) -> None:
+    """Persist the oracle TB's MEASURED serial framing into
+    `arith_oracle_manifest.json`.
+
+    WHY THIS EXISTS (circular-dependency break). The generated oracle TB
+    SELF-CALIBRATES the serial framing — it searches (in_order, out_order,
+    offset) until one triple reassembles the DUT stream to the independently
+    computed golden for EVERY vector. That search result is a real
+    measurement. Before this, the TB printed only the match COUNT and threw
+    the winning triple away, and the manifest's `declared_*` fields were
+    copied from `plugin_output/declaration.json`.
+
+    That made the two artifacts mutually dependent:
+      * `arith_declaration_emit.py` needs a measured `latency_cycles` to
+        write declaration.json, and looks for it in this manifest;
+      * this manifest only carried a latency when declaration.json already
+        existed to declare one.
+
+    So for any IC whose spec DECLARES declaration.json as a required
+    artifact, `spec_required_artifact_check.py` FAILs the flow for a file the
+    flow cannot produce. Recording the MEASURED framing under distinct
+    `calibrated_*` keys breaks the cycle without ever letting a DECLARED
+    value masquerade as a measured one.
+
+    No-op unless the TB emitted ORACLE_TB_FRAMING, which it does only when a
+    single framing matched every vector. chip-AGNOSTIC: parses the runner's
+    own marker, no design literal.
+    """
+    m = re.search(r"ORACLE_TB_FRAMING\s+in_order=(\d+)\s+out_order=(\d+)"
+                  r"\s+latency_cycles=(\d+)", log_text or "")
+    if not m:
+        return
+    order = {0: "LSB_first", 1: "MSB_first"}
+    manifest_p = _pl.sim_full_stack_dir(project) / "arith_oracle_manifest.json"
+    if not manifest_p.is_file():
+        return
+    try:
+        d = json.loads(manifest_p.read_text())
+    except Exception:
+        return
+    if not isinstance(d, dict):
+        return
+    d["calibrated_bit_order"] = order.get(int(m.group(1)))
+    d["calibrated_out_bit_order"] = order.get(int(m.group(2)))
+    d["calibrated_latency"] = int(m.group(3))
+    d["calibrated_source"] = (
+        "measured by the oracle TB framing search (single framing matched "
+        "every vector); NOT copied from declaration.json")
+    try:
+        manifest_p.write_text(
+            json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
 def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
                    track_reason: str, t0: float,
                    container: str) -> Optional[StepResult]:
@@ -5252,6 +8655,24 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
            str(tb_path)] + [str(p) for p in rtl_files]
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, tb_path, run_dir, container, top_name)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the SAME absent-compiler defect #1398 fixed
+        # at the generic full-stack site, still live here. This site is
+        # reached FIRST (the oracle TB is tried before the skeleton), so on a
+        # project that has an oracle TB the guarded site below is never
+        # consulted and the run still ends in
+        #
+        #   FAIL "per-IC oracle TB (...) failed to compile against rtl/ —
+        #         real structural defect (#439). iverilog rc=127
+        #         stderr=COMMAND_NOT_FOUND: ... 'iverilog'"
+        #
+        # MEASURED on 8HD-9 against a DUT that is `assign data_out = data_in;`
+        # with iverilog only inside the container and the tree outside its
+        # bind mounts. Returning None is this helper's OWN documented contract
+        # for "no simulator available" — the caller falls through to the
+        # skeleton path, which is what `_iverilog_available` would have caused
+        # had it known where the dispatch would land.
+        return None
     if rc != 0:
         # ORGANIC (GAP-E2E-5) — an SV construct beyond the iverilog/sv2v OSS-sim
         # SUBSET (e.g. OpenTitan's cross-package `pkg::PARAM` in a param default,
@@ -5329,6 +8750,7 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
         # ONLY a genuine PASS reaches here: skeleton-WAIVED / FAILed oracle
         # runs return through other branches and never write this bridge.
         _emit_oracle_sim_bridge(project, transcript, n_pass, n_total)
+        _persist_oracle_calibrated_framing(project, out)
         return StepResult(
             "reference_tb", "PASS", time.time() - t0,
             (f"per-IC oracle TB {tb_path.name}: {n_pass}/{n_total} "
@@ -5460,6 +8882,12 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # ORGANIC-20260531: exclude FPGA / board-integration wrappers
         # (sibling-include or vendor-primitive) from the ASIC source list.
         rtl_files = _select_asic_rtl_sources(rtl_dir)
+        # ORGANIC-20260801 — stream staged hard-macro behavioral models (L8
+        # `.v`) into the sim compile set so an instantiated SRAM/IP macro is
+        # not `Unknown module type` at iverilog elaboration.
+        for _m in _staged_hardmacro_models(project, rtl_files):
+            if _m["v"] is not None:
+                rtl_files.append(_m["v"])
         run_dir = sim_dir / "generic_full_stack_run"
         run_dir.mkdir(parents=True, exist_ok=True)
         vvp = run_dir / "full_stack.vvp"
@@ -5472,9 +8900,62 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # the SV frontend also rejects still FAILs.
         rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
             cmd, rtl_files, tb_path, run_dir, container, top_name)
+        if rc != 0 and _compiler_was_not_found(rc, out, err):
+            # vibe-ic#1394 — THE COMPILER WAS ABSENT, which is not a defect
+            # in the DUT. `_iverilog_available(container)` above answers "is
+            # iverilog reachable SOMEWHERE"; the dispatch can still land
+            # somewhere it is not — the canonical case being a run_dir that
+            # is outside the container's bind mounts, which falls back to the
+            # HOST and finds no iverilog there. The runner already discloses
+            # that divergence (#902 sim-toolchain DIVERGED), so the
+            # information was present and only the VERDICT was wrong:
+            #
+            #   status FAIL, "real structural defect.
+            #                 iverilog rc=127 stderr=COMMAND_NOT_FOUND"
+            #
+            # A verdict that cites rc=127 as evidence of a structural defect
+            # contradicts itself in its own detail string. Route it to the
+            # same honest outcome the both-absent path below already reaches:
+            # nothing SIMULATED, so never a PASS, and never a FAIL either.
+            #
+            # MEASURED: this is why `test_phase2_class_aware_gating.py::
+            # test_generic_class_reference_tb_runs_full_stack_tb` FAILS from a
+            # /tmp checkout and PASSES from a mounted one on the same host and
+            # commit — a red inside main's quoted count that is not a defect.
+            _absent = (f"the simulator was NOT FOUND where the compile was "
+                       f"dispatched (rc={rc}) — no sim ran, so this is not "
+                       f"evidence about the DUT. Reachability, not the "
+                       f"design: a run_dir outside the container's bind "
+                       f"mounts falls back to the host. "
+                       f"stderr={(err or out)[-600:]}")
+            if results_path.is_file():
+                return StepResult(
+                    "reference_tb", "WAIVED",
+                    time.time() - t0,
+                    (f"AID reference TB SKIPPED ({track_reason}); {_absent} "
+                     f"Generic full-stack TB skeleton ({tb_path.name}) + "
+                     f"results.json present but NO sim ran (#439)."),
+                    [str(tb_path), str(results_path)],
+                    extras={"verification_track": "generic_full_stack",
+                            "aid_tb_skipped_reason": track_reason,
+                            "functional_verified": False,
+                            "fallback_skill": "testbench-author",
+                            "iverilog_available": False,
+                            "tb_frontend": tb_frontend})
+            return StepResult(
+                "reference_tb", "SKIP",
+                time.time() - t0,
+                (f"AID reference TB SKIPPED: {track_reason}. {_absent}"),
+                extras={"verification_track": "generic_full_stack",
+                        "aid_tb_skipped_reason": track_reason,
+                        "functional_verified": False,
+                        "iverilog_available": False,
+                        "tb_frontend": tb_frontend})
         if rc != 0:
             # A genuine compile/elaboration failure of the DUT is a REAL
-            # functional/structural defect — FAIL (honesty preserved).
+            # functional/structural defect — FAIL (honesty preserved). Only
+            # reached when the compiler RAN and rejected the source; the
+            # not-found case is routed above (#1394).
             return StepResult(
                 "reference_tb", "FAIL",
                 time.time() - t0,
@@ -5895,6 +9376,16 @@ def _select_asic_rtl_sources(rtl_dir: Path):
                       if "pkg" not in p.name and _keep(p))
     other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
     return pkg_files + other_sv + other_v
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260801-staged-hardmacro-model-not-injected-into-sim-or-synth
+# Staged hard-macro (SRAM/IP) model discovery + blackbox staging lives in the
+# shared `_hardmacro_stage` module so the Phase-2 sim/synth path here and the
+# `lec_run` equiv gold/gate build resolve an instantiated-but-staged macro the
+# SAME way. See that module's docstring for the full rationale.
+_staged_hardmacro_models = _hms.staged_hardmacro_models
+_emit_hardmacro_blackbox_stub = _hms.emit_blackbox_stub
 
 
 # ---------------------------------------------------------------------------
@@ -6340,6 +9831,23 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # frontend also rejects still FAILs.
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, PROTOCOL_TB, sim_dir, container, bound_top)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the AID track had no availability probe at
+        # all, so an absent compiler went straight to a bare
+        # FAIL "iverilog rc=127 stderr=COMMAND_NOT_FOUND", which names the
+        # DUT for a fact about where the tree sits. Nothing was compiled, so
+        # this step has no verdict on the design: SKIP and say why.
+        return StepResult(
+            "reference_tb", "SKIP",
+            time.time() - t0,
+            (f"AID reference TB NOT RUN — the simulator was NOT FOUND where "
+             f"the compile was dispatched (rc={rc}); no sim ran, so this is "
+             f"not evidence about the DUT. Reachability, not the design: a "
+             f"run_dir outside the container's bind mounts falls back to the "
+             f"host. stderr={(err or out)[-600:]}"),
+            extras={"tb_frontend": tb_frontend,
+                    "functional_verified": False,
+                    "iverilog_available": False})
     if rc != 0:
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
@@ -6455,7 +9963,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                 ],
             },
         )
-        (full_stack / "results.json").write_text(
+        _aa.write_text(full_stack / "results.json",
             json.dumps(results, indent=2) + "\n")
         # Mirror transcript so the gate's mtime check sees a fresh file.
         # Append an audit-trail narration block. The reference TB already
@@ -6542,14 +10050,38 @@ def _chip_top_match_paren(s: str, open_idx: int) -> int:
 
 
 def _chip_top_extract_param_and_ports(scan: str, start: int):
-    """From `start` (index of the '(' or '#' right after the module name),
-    return (param_block, port_block): param_block is the optional `#( … )`
-    (or ''), port_block is the `( … )` port list. (None, None) if unbounded.
-    `scan` MUST be comment-masked."""
+    """From `start` (index right after the module NAME, i.e. the first char
+    of whatever follows `module <name>`), return (param_block, port_block):
+    param_block is the optional `#( … )` (or ''), port_block is the `( … )`
+    port list. (None, None) if unbounded. `scan` MUST be comment-masked.
+
+    SV-2012 ANSI grammar puts zero-or-more `package_import_declaration`s
+    (`import <pkg>::*;`, `import <pkg>::<sym>;`) BETWEEN the module name and
+    the `#(parameter …)` / port list — e.g. OpenTitan's `module aes import
+    aes_pkg::*; import aes_reg_pkg::*; #( … ) ( … );`. The header scan skips
+    them here so a module whose real port list sits behind an import clause is
+    still discovered; before this, the DUT selector saw `import` where it
+    required `#`/`(` and the design's true top was invisible (it then wrapped
+    an unrelated leaf that DID match). Chip-AGNOSTIC: pure LEF-free SV header
+    grammar, keyed on the `import` keyword and its `;` terminator, no
+    chip/vendor/package literal."""
     n = len(scan)
     i = start
-    while i < n and scan[i] in ' \t\r\n':
-        i += 1
+    while True:
+        while i < n and scan[i] in ' \t\r\n':
+            i += 1
+        # A `package_import_declaration` is `import ...;`; one statement may
+        # chain several packages (`import a::*, b::*;`) and a header may carry
+        # several statements — consume each up to its `;`. `import` must be a
+        # whole token (a port named `importfoo` must not be eaten).
+        if (scan[i:i + 6] == 'import'
+                and (i + 6 >= n or scan[i + 6] in ' \t\r\n')):
+            semi = scan.find(';', i + 6)
+            if semi < 0:
+                return None, None
+            i = semi + 1
+            continue
+        break
     param_block = ''
     if i < n and scan[i] == '#':
         pj = scan.find('(', i)
@@ -6568,6 +10100,44 @@ def _chip_top_extract_param_and_ports(scan: str, start: int):
     if pe < 0:
         return None, None
     return param_block, scan[i:pe + 1]
+
+
+def _chip_top_extract_header_imports(scan: str, original: str,
+                                     start: int) -> str:
+    """Return the DUT header's `package_import_declaration`s verbatim (from
+    `original`), or '' if there are none.
+
+    When the auto-emitted pass-through wrapper wraps a module whose parameter
+    types / defaults or port types are PACKAGE-SCOPED (e.g. OpenTitan's `aes`:
+    `parameter sbox_impl_e SecSBoxImpl = SBoxImplDom`, `input tlul_pkg::tl_h2d_t
+    tl_i`), the wrapper must carry the SAME `import <pkg>::*;` clauses the DUT
+    declared — otherwise `sbox_impl_e` / `SBoxImplDom` / `NumAlerts` / … are
+    undeclared identifiers in the wrapper's scope and slang rejects it, even
+    though the DUT itself elaborates cleanly. `scan` MUST be comment-masked and
+    the SAME length as `original` (offsets are shared); `start` is the index
+    right after the module NAME. Chip-AGNOSTIC: pure `import`-keyword grammar,
+    no chip/vendor/package literal."""
+    n = len(scan)
+    i = start
+    first = None
+    last = None
+    while True:
+        while i < n and scan[i] in ' \t\r\n':
+            i += 1
+        if (scan[i:i + 6] == 'import'
+                and (i + 6 >= n or scan[i + 6] in ' \t\r\n')):
+            semi = scan.find(';', i + 6)
+            if semi < 0:
+                break
+            if first is None:
+                first = i
+            last = semi + 1
+            i = semi + 1
+            continue
+        break
+    if first is None or last is None:
+        return ''
+    return original[first:last]
 
 
 # IP/provenance header for flow-GENERATED design artifacts (README
@@ -7400,7 +10970,13 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # (we already checked above). Skip obvious helper / sub-module files
     # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
     import re as _re
-    mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+    # Name-only: `module <name>` may be followed by SV-2012 `import <pkg>::*;`
+    # clauses before the `#(params)` / port list, so we cannot require `#`/`(`
+    # to immediately follow the name here. `_extract_param_and_ports` skips the
+    # imports and enforces that a real `(port list)` follows (returns None
+    # otherwise), so a portless `module foo;` is still excluded exactly as
+    # before — only the import-behind-header case is newly reached.
+    mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\b", _re.M)
 
     # v0.1.62 fix (Bucket A — spm benchmark, chip_top auto-emit) — the
     # paren-matching walker that extracts the port list used to count `(`
@@ -7458,7 +11034,7 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
             if mod_name == synth_top:
                 return None  # already in some file
             param_block, port_block = _extract_param_and_ports(
-                text_scan, m.end() - 1)
+                text_scan, m.end())
             if port_block is not None:
                 file_mods.append((mod_name, param_block, port_block, f))
         if not file_mods:
@@ -7583,6 +11159,25 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
     # AND propagate them by name to the instance.
     param_header = f" {param_block.strip()}" if param_block.strip() else ""
+    # Re-emit the DUT header's package imports on the wrapper so package-scoped
+    # param types/defaults (`sbox_impl_e SecSBoxImpl = SBoxImplDom`) and port
+    # types (`tlul_pkg::tl_h2d_t tl_i`) resolve in the wrapper's own scope. A
+    # wrapper that copies the param/port block but not the imports fails slang
+    # with "use of undeclared identifier" on every package symbol. '' for a
+    # module that imports nothing (byte-identical to the historical wrapper).
+    import_header = ""
+    try:
+        _dut_txt = src_file.read_text(errors="ignore")
+        _dut_scan = _mask_comments(_dut_txt)
+        _dm = _re.search(r"\bmodule\s+" + _re.escape(mod_name) + r"\b",
+                         _dut_scan)
+        if _dm:
+            _imp = _chip_top_extract_header_imports(
+                _dut_scan, _dut_txt, _dm.end())
+            if _imp.strip():
+                import_header = "\n  " + _imp.strip() + "\n"
+    except Exception:
+        import_header = ""
     inst_params = ""
     if param_block.strip():
         pnames = []
@@ -7684,7 +11279,7 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
         f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
         f"// against L9's expected top without modifying the authored RTL.\n"
         f"`default_nettype none\n"
-        f"module {synth_top}{param_header} {wrapper_port_block};\n"
+        f"module {synth_top}{import_header}{param_header} {wrapper_port_block};\n"
         f"{nonansi_decls}"
         f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
         f"endmodule\n"
@@ -7774,6 +11369,16 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             rtl_files = _select_asic_rtl_sources(rtl_dir)  # re-glob staged deps
     except Exception:  # pragma: no cover — robustness aid must never crash synth
         _v662_dep = {}
+    # ORGANIC-20260801 — feed a `(* blackbox *)`-attributed copy of every
+    # instantiated staged hard-macro model (L8 `.v`) so the generic sanity
+    # synth resolves the macro as an interface blackbox instead of failing
+    # `Unknown module type`. Appended to rtl_files AFTER the #662 re-glob so
+    # it survives; flows through the primary, docker, and SV synth paths (all
+    # iterate rtl_files). No-op for designs without staged hard-macros.
+    for _m in _staged_hardmacro_models(project, rtl_files):
+        if _m["v"] is not None:
+            rtl_files.append(_emit_hardmacro_blackbox_stub(
+                _m["v"], _m["name"], synth_dir / "_hardmacro_bb"))
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose
@@ -7950,14 +11555,64 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                       "full flat glob to synth)"
                       if _verdict == "STAGED_DUPLICATE"
                       else " in the reachable closure")
-            return StepResult(
-                "yosys_synth", "FAIL",
-                time.time() - t0,
-                (f"CATALOG_GLUE_CLOSURE ({_issue}): vendor bundle "
-                 f"duplicate-module defect{_facet} of the staged synth "
-                 f"set — yosys-slang would crash with a raw 'duplicate "
-                 f"definition' abort. {_msg}{_prune_note}"),
-                extras={"catalog_glue_closure": _cg_report})
+            # ORGANIC — a duplicate whose variant file(s) are BYTE-IDENTICAL to
+            # the canonical are pure redundant copies (the same source staged
+            # under two names or two paths — the common vendor-bundle shape,
+            # e.g. an `_shim` alias that is a verbatim copy). Dropping a
+            # byte-identical copy CANNOT change synthesis: the module stays
+            # defined by the canonical, so no dependency is lost. That makes it
+            # categorically safe — unlike the reachability-PRUNE this gate
+            # deliberately never auto-applies (an unreachable-looking file may
+            # still be a needed dep via an include/import edge the graph missed).
+            # So de-dup the identical copies and PROCEED; the crash-gate still
+            # fires the moment a variant DIFFERS from its canonical (a real shim
+            # whose content only the author can adjudicate). chip-AGNOSTIC: pure
+            # byte-compare of the resolver's own canonical/variant paths.
+            _dedup_drop = set()
+            _dedup_unsafe = False
+            for _d in _dups:
+                try:
+                    _canon_bytes = Path(_d.get("canonical", "")).read_bytes()
+                except Exception:
+                    _canon_bytes = None
+                for _vs in _d.get("variants", []):
+                    _vp = Path(_vs)
+                    try:
+                        _same = (_canon_bytes is not None
+                                 and _vp.read_bytes() == _canon_bytes)
+                    except Exception:
+                        _same = False
+                    if _same:
+                        _dedup_drop.add(_vp.resolve())
+                    else:
+                        _dedup_unsafe = True
+            if _dedup_drop and not _dedup_unsafe:
+                _before_n = len(rtl_files)
+                rtl_files = [f for f in rtl_files
+                             if Path(str(f)).resolve() not in _dedup_drop]
+                _dedup_log = (
+                    f"[ADVISORY] CATALOG_GLUE_CLOSURE ({_issue}): auto-dropped "
+                    f"{_before_n - len(rtl_files)} BYTE-IDENTICAL redundant "
+                    f"duplicate-module file(s) from the synth set (canonical "
+                    f"kept; a byte-identical copy cannot change synthesis) — "
+                    f"{_msg}")
+                print(_dedup_log, file=sys.stderr)
+                _prune_advisory = {
+                    "issue": _issue,
+                    "auto_dropped_identical": sorted(
+                        str(p) for p in _dedup_drop),
+                    "catalog_glue_closure": _cg_report,
+                }
+                # fall through to synth on the de-duplicated set
+            else:
+                return StepResult(
+                    "yosys_synth", "FAIL",
+                    time.time() - t0,
+                    (f"CATALOG_GLUE_CLOSURE ({_issue}): vendor bundle "
+                     f"duplicate-module defect{_facet} of the staged synth "
+                     f"set — yosys-slang would crash with a raw 'duplicate "
+                     f"definition' abort. {_msg}{_prune_note}"),
+                    extras={"catalog_glue_closure": _cg_report})
         else:
             # ORGANIC #778 — NON-duplicate (PASS) verdict: the runner still feeds
             # the full flat glob to synth. If the closure flags an over-broad
@@ -9758,8 +13413,61 @@ def _dft_retain_unmeasured(project: Path, dft_dir: Path,
     return retained
 
 
+# The honest label for a netlist that IS technology-mapped but whose library is
+# not one the container configures. It is deliberately NOT `generic_unmapped`:
+# that string is an ATTESTATION downstream (`transition_coverage_check` grants
+# the ENGINE_LIMITED self-skip only when it is present, exactly so a MAPPED
+# netlist cannot claim it), so handing it to a mapped netlist qualifies the
+# design for a leniency its own evidence does not earn.
+_MAPPED_UNKNOWN_LIBRARY = "mapped_unknown_library"
+
+
+def _dft_atpg_pdk_label(pdk: Optional[str], netlist: "Path | None") -> str:
+    """The label published as `pdk_detected` — what was OBSERVED, not what
+    could be named.
+
+    `_dft_atpg_sniff_pdk` returns a bare string, and `""` collapses three
+    different states into one:
+
+      * recognised and nameable            -> the PDK name
+      * recognised but NOT nameable        -> ""   (the SKU lives in a private
+                                                    config, empty in public
+                                                    installs)
+      * mapped to a library absent from `PDK_CONFIG` (NanGate45, any foundry
+        library the container does not ship)  -> ""
+
+    Callers then wrote `pdk or "generic_unmapped"`, so the last two states were
+    published as "the netlist carries no library-mapped cells" — false in both.
+    MEASURED: a fully technology-mapped NanGate45 netlist (`INV_X1`, `NAND2_X1`,
+    `AOI21_X1`, `DFF_X1`; zero `$_*_` primitives) has
+    `is_generic_unmapped() == False` and `sniff_pdk_over_whole_netlist() ==
+    None` — the module's own oracle and the published label contradict each
+    other, and the wrong one reaches the reader.
+
+    FAIL-SAFE: anything that cannot be positively established as mapped keeps
+    the pre-existing `generic_unmapped` label, so no verdict moves. The only
+    direction this can move a verdict is STRICTER — a mapped netlist stops
+    qualifying for the `ENGINE_LIMITED` leniency, which is what that guard was
+    written to prevent.
+
+    chip/PDK-AGNOSTIC: no cell/vendor/SKU literal.
+    """
+    if pdk:
+        return pdk
+    if netlist is None:
+        return "generic_unmapped"
+    try:
+        import fault_atpg_run as _fatpg  # sibling program, same directory
+        if _fatpg.netlist_is_library_mapped(_whole_file_text(netlist)):
+            return _MAPPED_UNKNOWN_LIBRARY
+    except Exception:
+        pass
+    return "generic_unmapped"
+
+
 def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
-                           attempts: Optional[List[int]] = None) -> str:
+                           attempts: Optional[List[int]] = None,
+                           label: Optional[str] = None) -> str:
     """Prose reason for a step-11 ATPG death BY SIGNAL — a CRASH, not a gap.
 
     MEASURED (spm x sky130A, plugin v1.8.50, image 0.2.45): on a clean
@@ -9783,17 +13491,25 @@ def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
     engine defect to be fixed in the tool, and it is named as such.
     chip-AGNOSTIC / PDK-AGNOSTIC.
     """
-    detected = pdk or "generic_unmapped"
+    detected = label or pdk or "generic_unmapped"
     sig = exit_code - 128 if exit_code and exit_code >= 128 else None
     tried = (f" across {len(attempts)} attempt(s) (exits {attempts})"
              if attempts else "")
+    # Only a NAMED pdk is in PDK_CONFIG. Asserting it for a mapped netlist whose
+    # library we could not name would restate the very confusion this label was
+    # introduced to remove.
+    _in_config = (f"{detected} IS in fault_atpg_run.PDK_CONFIG"
+                  if detected not in (_MAPPED_UNKNOWN_LIBRARY,
+                                      "generic_unmapped")
+                  else "its standard-cell library is not one this container "
+                       "configures")
     return (
         f"OSS Fault ATPG CRASHED on a library-mapped {detected} netlist: the "
         f"engine process was killed by a signal (exit {exit_code}"
         + (f" = 128 + SIG{sig}" if sig is not None else "")
         + f"){tried}, so no coverage was produced. This is NOT a capability "
         f"gap and must not be recorded as one: the netlist is library-mapped, "
-        f"{detected} IS in fault_atpg_run.PDK_CONFIG, and the identical call "
+        f"{_in_config}, and the identical call "
         f"on the identical input has been measured to succeed on retry "
         f"(coverage measured, faults_total > 0). It is a REAL DEFECT OF AN "
         f"IMPLEMENTED CAPABILITY — an engine crash to be fixed in the Fault "
@@ -9801,7 +13517,7 @@ def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
     )
 
 
-def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
+def _dft_atpg_gap_reason(pdk: Optional[str], label: Optional[str] = None) -> str:
     """Prose reason for the step-11 ATPG disclosed-skip, naming THIS run's PDK.
 
     The reason string used to be a constant that said Fault "is not turnkey on
@@ -9820,7 +13536,24 @@ def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
     library-mapped cells at all, which is the actual condition the OSS engine
     trips on.
     """
-    detected = pdk or "generic_unmapped"
+    detected = label or pdk or "generic_unmapped"
+    if detected == _MAPPED_UNKNOWN_LIBRARY:
+        # The netlist IS technology-mapped. Saying "a library-MAPPED netlist is
+        # required" about a library-mapped netlist told the reader to go and
+        # produce the thing they had already produced, and blamed the OSS
+        # engine for a library-recognition gap. Name what was actually observed.
+        return (
+            "OSS Fault ATPG could not measure sign-off stuck-at coverage on "
+            "this netlist. The netlist IS technology-mapped, but its standard-"
+            "cell library is not one this container configures, so no cell "
+            "model / Liberty could be resolved for it and the engine had no "
+            "runnable input. This is NOT a demonstration that the engine "
+            "cannot do the work and must not be recorded as a capability gap "
+            "of the engine: it is an unconfigured-library gap. Real scan "
+            "insertion DID run (scan_netlist_prelim.v retained). The remedy is "
+            "to configure this library (or pass its Liberty / cell model "
+            "explicitly) — not a different ATPG tool."
+        )
     return (
         "OSS Fault ATPG could not measure sign-off stuck-at coverage on this "
         "netlist (a library-MAPPED netlist with real stdcell DFFs is "
@@ -9829,6 +13562,66 @@ def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
         "insertion DID run (scan_netlist_prelim.v retained). Sign-off ATPG "
         "coverage is a disclosed OSS capability gap; a mapped-netlist or "
         "commercial ATPG path closes it."
+    )
+
+
+# The mapped netlist Fault ATPG needs, and the step that writes it. Named as a
+# GLOB, not a path: `<top>` is the run's own top name, so no design literal
+# enters the program. `_dft_atpg_sniff_pdk` resolves the same sibling.
+_ATPG_MAPPED_NETLIST_GLOB = "phase2/stage2/synth/*_synth.v"
+
+
+def _dft_atpg_precondition_reason(sniffed_from: str) -> str:
+    """Prose for the step-11 ATPG not-run when the engine was handed a netlist
+    with NO library-mapped cells at all — a PRECONDITION, not a capability.
+
+    The third member of the same family as `_dft_atpg_crash_reason` (a signal
+    death) and vibe-ic#581 (a wall-clock expiry). All three used to fall into
+    the blanket arm and be recorded with
+    ``capability_flag: cap:atpg_signoff_coverage`` — a machine-readable
+    assertion that the OSS engine CANNOT measure sign-off stuck-at coverage.
+    A crash, a budget and a missing input each need a different remedy, and
+    none of them is "the tool is the wrong tool".
+
+    MEASURED inside ONE run (sha256 x sky130A, plugin v1.9.27, image 0.2.51).
+    Same engine, same design, same container; the only variable is whether the
+    mapped netlist existed yet:
+
+      * 16:37:33 — this flow's Phase-2 synth writes
+        ``phase2/stage2/synth/netlist.v`` technology-GENERIC by construction
+        (``dffunmap; abc -g cmos2``, no Liberty): 28 397 cells, all
+        ``$_NAND_`` / ``$_NOR_`` / ``$_NOT_`` / ``$_DFF_P_``, ZERO library
+        cells. That is a property of the flow, not of the design — every run
+        of this shape gets it.
+      * 16:37:33 — step 11 runs against exactly that and the engine reports
+        ``unsupported pdk: unmapped``, ``atpg_exit: null``,
+        ``faults_total: null``. It never got a runnable input, and the record
+        called it a capability gap closed by "a commercial ATPG path".
+      * 18:28:35 — Phase 3 writes the tech-mapped sibling ``<top>_synth.v``:
+        13 247 library cells.
+      * 18:28:48 — THIRTEEN SECONDS LATER the SAME `fault` binary builds a
+        real scan chain on it: ``reports/phase2/dft/scan_chain.json`` →
+        ``"chain_exit": 0``, ``"pdk": "sky130"``, 13 247 -> 14 225 instances,
+        DFT ports added. 18:28:55 — ``cut_netlist.v`` appears, which is the
+        very precondition DT1 had reported absent.
+
+    So the engine HAS the capability; step 11's Phase-2 pass simply runs
+    before the artefact it needs is produced. Recording that as a capability
+    gap points the reader at a commercial-tool remedy for a problem that is
+    ordering, and closes an investigation that should stay open. The record
+    now names the missing artefact instead. chip-AGNOSTIC / PDK-AGNOSTIC.
+    """
+    return (
+        "Fault ATPG NEVER RAN — precondition unmet: the netlist it was given "
+        f"({sniffed_from}) carries no library-mapped cells, so the engine had "
+        "no runnable input and reported `unsupported pdk: unmapped` without "
+        "attempting a measurement. This is NOT a capability gap and must not "
+        "be recorded as one: the mapped netlist the engine needs "
+        f"({_ATPG_MAPPED_NETLIST_GLOB}) is produced LATER by this same flow, "
+        "and the identical engine on the identical design has been measured "
+        "to build a scan chain and run ATPG as soon as it exists. The remedy "
+        "is to run stuck-at ATPG after technology mapping — not a different "
+        "ATPG tool."
     )
 
 
@@ -9868,8 +13661,19 @@ def _derive_dft_clock_name(blob: str) -> str:
                  "clk_in", "clkin")), "")
     if not clk and clk_ports:
         # Prefer a genuinely clock-like name over an incidental match, shortest.
+        # A clock token may appear as a PREFIX (clk_en_i), a SUFFIX (wb_clk_i,
+        # sys_clk, core_clk) or the whole word — so recognise `clk`/`clock`
+        # ANYWHERE in the name, not only at the start. The old filter required a
+        # `clk`-PREFIX or the literal substring `clock`, which EXCLUDED the very
+        # common suffix form `wb_clk_i` and then let a secondary `user_clock2`
+        # (which merely contains the longer token `clock`) win. Measured on
+        # caravel user_project_wrapper x sky130A: clock ports {wb_clk_i,
+        # user_clock2}; the 33 flops all clock off wb_clk_i, yet the old rule
+        # derived `user_clock2`. Every member of clk_ports already matched the
+        # clock regex above, so this only breaks ties toward the shortest
+        # genuinely-clock name.
         _clocky = [c for c in clk_ports
-                   if c.lower().startswith("clk") or "clock" in c.lower()]
+                   if "clk" in c.lower() or "clock" in c.lower()]
         clk = sorted(_clocky or clk_ports, key=len)[0]
     return clk
 
@@ -9926,6 +13730,42 @@ def _derive_dft_reset_name(blob: str) -> Tuple[str, bool]:
     if low in ("rst", "reset", "i_rst", "rst_i", "reset_i", "arst", "areset"):
         active_low = False
     return rst, active_low
+
+
+# Setup/reap margin added on TOP of the producer's own size-scaled wall cap: the
+# producer must, WITHIN the subprocess this runner grants it, enumerate the fault
+# sites, build the 2-frame LOC miter ONCE, run its calibration probe, solve the
+# right-sized sample up to WALL_BUDGET_MAX, AND reap its own Yosys container. That
+# tail is bounded but non-zero, so the outer wall is cap + margin, never == cap.
+_TDF_ATPG_SETUP_REAP_MARGIN_S = 900
+
+
+def _tdf_atpg_subprocess_timeout_s() -> int:
+    """Outer wall (seconds) for the transition/at-speed ATPG subprocess (Step 11
+    / DT1), i.e. the ``timeout=`` this runner passes to ``subprocess.run`` when it
+    invokes ``transition_fault_atpg_run.py``.
+
+    It MUST cover that producer's OWN size-scaled wall. The producer sizes its
+    fault sample to complete within ``_scaled_wall_budget(--timeout floor,
+    scan_flops)`` — 1800 s floor + 3 s/scan-flop, CAPPED at ``WALL_BUDGET_MAX``
+    (7200 s) — and runs its Yosys batch under a docker ``timeout`` of that same
+    scaled wall. If this runner's outer ``subprocess.run`` timeout is BELOW that
+    cap, then on any design large enough to earn more than the floor (any design
+    with scan flops) the runner SIGKILLs the producer mid-batch before it can
+    grade its sized sample: no ``transition_coverage.json`` is ever written, the
+    at-speed sub-check is left with no evidence (a hard FAIL, not a measured
+    number), and — because the reap runs in the producer we just killed — the
+    producer's Yosys container is orphaned and keeps burning CPU. A fixed outer
+    timeout below the producer's cap therefore silently DEFEATS the producer's
+    entire size-scaling. This wall tracks the producer's cap so it cannot drift
+    below it. Chip / PDK / vendor AGNOSTIC — keyed ONLY on the producer's own
+    WALL_BUDGET_MAX plus a fixed setup/reap margin, never on any design or
+    library literal."""
+    try:
+        from transition_fault_atpg_run import WALL_BUDGET_MAX as _cap
+    except Exception:
+        _cap = 7200  # producer default; keep in sync if it ever import-fails
+    return int(_cap) + _TDF_ATPG_SETUP_REAP_MARGIN_S
 
 
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
@@ -10032,6 +13872,11 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # mapped sibling was right there and sniffs cleanly to ihp-sg13g2.
         sniff_netlist, pdk = _dft_atpg_sniff_pdk(
             project, "phase2/stage2/synth/netlist.v")
+        # What gets PUBLISHED as `pdk_detected`. Computed from the netlist that
+        # was actually sniffed, so "I could not name the library" is never
+        # published as "there are no library-mapped cells". See
+        # `_dft_atpg_pdk_label`.
+        pdk_label = _dft_atpg_pdk_label(pdk, sniff_netlist)
         # ── Step 11a — REAL SCAN INSERTION, before ATPG ────────────────────
         # `fault chain` builds an actual scan chain: the flops are stitched
         # sin→sout and the module gains the DFT ports, so the netlist that goes
@@ -10055,6 +13900,29 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                      "phase2/stage2/synth/netlist.v",
                      "--clock", clk, "--json",
                      str(_scan_json.relative_to(project))]
+        # `fault chain` DEFAULTS to inserting a top-level boundary-scan
+        # register wrapping every port. On a FIXED-PINOUT WRAPPER — a design
+        # whose die outline and pin placement are fixed by a parent's DEF
+        # template (FP_DEF_TEMPLATE), so its ports connect to that parent, not
+        # to chip pads — that register is wrong DFT AND a timing/area hazard
+        # (#604: on caravel_user_project × sky130A the 606-cell register routed
+        # across the fixed 2920×3520 µm die at 25 ns gave an SS-corner setup
+        # violation of −0.73 ns and a +707% area blow-up). The producer decides
+        # `--skip-boundary` DETERMINISTICALLY from the fixed-pinout contract in
+        # its default `auto` mode; passing `--top-module` lets it match the DEF
+        # template to THIS top rather than a sub-macro's.
+        if top_name:
+            _scan_cmd += ["--top-module", top_name]
+        # Operator override of the boundary-scan decision. The DEFAULT is
+        # `auto` (the deterministic fixed-pinout selector above); an operator
+        # may force `on`/`off` via VIBEIC_DFT_SKIP_BOUNDARY. `off` restores the
+        # legacy always-insert-boundary behaviour — this is what the #604
+        # control run uses to reproduce the SS-corner violation as a
+        # ONE-VARIABLE experiment (same die, netlist, pins, image; only the
+        # boundary register differs). An unset/unknown value leaves `auto`.
+        _sb_env = (os.environ.get("VIBEIC_DFT_SKIP_BOUNDARY") or "").strip().lower()
+        if _sb_env in ("auto", "on", "off"):
+            _scan_cmd += ["--skip-boundary", _sb_env]
         # `fault chain --reset` DEFAULTS TO THE LITERAL NAME `rst`. Leaving it
         # unset makes fault declare `input rst;` in the chained netlist's body
         # without adding it to the module header, and fault's own yosys
@@ -10269,19 +14137,33 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     isinstance(_atpg_ec, int) and _atpg_ec >= 128)
                 if _atpg_sig_death:
                     _reason = _dft_atpg_crash_reason(
-                        pdk, _atpg_ec, cov.get("atpg_attempt_exits"))
+                        pdk, _atpg_ec, cov.get("atpg_attempt_exits"),
+                        pdk_label)
                     _extra_flag = {"engine_crash": True,
                                    "atpg_attempt_exits":
                                        cov.get("atpg_attempt_exits")}
+                elif not pdk:
+                    # A MISSING INPUT IS A PRECONDITION, NOT A CAPABILITY.
+                    # The sniff found no library-mapped cells in any candidate
+                    # netlist, so the engine was never handed something it
+                    # could run — see `_dft_atpg_precondition_reason` for the
+                    # two-run measurement. `capability_flag` is dropped here
+                    # for the same reason it is dropped on the crash and the
+                    # budget arms: the engine's capability is not what failed.
+                    _reason = _dft_atpg_precondition_reason(
+                        _rel_or_name(project, sniff_netlist))
+                    _extra_flag = {
+                        "not_run_stage": "precondition_unmet",
+                        "missing_precondition": _ATPG_MAPPED_NETLIST_GLOB}
                 else:
-                    _reason = _dft_atpg_gap_reason(pdk)
+                    _reason = _dft_atpg_gap_reason(pdk, pdk_label)
                     _extra_flag = {
                         "capability_flag": "cap:atpg_signoff_coverage"}
                 _dft_disclose_skip(
                     dft_dir / "dft_atpg_not_run.json",
                     _reason,
                     {**_extra_flag,
-                     "pdk_detected": pdk or "generic_unmapped",
+                     "pdk_detected": pdk_label,
                      "atpg_exit": cov.get("atpg_exit"),
                      "faults_total": cov.get("faults_total"),
                      # DFT_FCC / 11-d3 — the producer's own declaration and
@@ -10295,11 +14177,58 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                                               sniff_netlist),
                      "retained_evidence": retained,
                      "log_excerpt": log_tail})
-                results.append(StepResult("dft_insertion", "SKIP",
-                               time.time() - t0,
-                               f"DFT scan inserted; OSS ATPG coverage "
-                               f"engine-limited (pdk={pdk or 'generic'}) → "
-                               f"disclosed capability-gap"))
+                # The one-line step summary must carry the SAME distinction the
+                # record does: "engine-limited" on a run where the engine was
+                # never given a mapped netlist is the capability claim leaking
+                # back out through the console.
+                results.append(StepResult(
+                    "dft_insertion", "SKIP", time.time() - t0,
+                    (f"DFT scan inserted; stuck-at ATPG NEVER RAN — no "
+                     f"library-mapped netlist yet "
+                     f"({_ATPG_MAPPED_NETLIST_GLOB} is written later) → "
+                     f"precondition unmet, NOT a capability gap")
+                    if not pdk else
+                    (f"DFT scan inserted; OSS ATPG coverage "
+                     f"engine-limited (pdk={pdk}) → "
+                     f"disclosed capability-gap")))
+        except subprocess.TimeoutExpired as exc:
+            # vibe-ic#581 — A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP.
+            #
+            # This used to fall into the blanket `except Exception` below and be
+            # recorded with `capability_flag: cap:atpg_signoff_coverage`, which
+            # asserts the ENGINE cannot measure this design. The engine measured
+            # it fine — it ran out of OUR wall clock.
+            #
+            # MEASURED, a controlled A/B on one design (sha256 x sky130A) whose
+            # only variable is netlist size:
+            #      8 730 comb cells  -> finished, Stuck-at 95.05 % published
+            #     11 627 comb cells  -> timed out, recorded as a capability gap
+            # Nothing about the engine's ability changed between those arms.
+            #
+            # The distinction already exists one branch up, where a signal death
+            # is bookkept as `engine_crash` rather than against a capability the
+            # engine HAS. A timeout gets the same treatment: its own flag, the
+            # budget it blew, and the size that blew it — so a reader can tell
+            # "raise the budget" from "the tool cannot do this", which the
+            # capability flag actively prevented.
+            #
+            # The budget is still a size-independent constant. That is the OTHER
+            # half of #581 and it is deliberately NOT fixed here: scaling it needs
+            # a measured cells-per-second, and inventing a formula would replace a
+            # wrong constant with an unmeasured one.
+            _to = getattr(exc, "timeout", None)
+            _dft_disclose_skip(
+                dft_dir / "dft_atpg_not_run.json",
+                f"Fault ATPG exceeded its wall budget of {_to}s — the engine was "
+                f"running, not unable. This is a BUDGET outcome, not a capability "
+                f"gap (vibe-ic#581).",
+                {"budget_exceeded": True,
+                 "wall_budget_s": _to,
+                 "pdk_detected": pdk_label})
+            results.append(StepResult(
+                "dft_insertion", "SKIP", time.time() - t0,
+                f"Fault ATPG exceeded its {_to}s wall budget → disclosed-skip "
+                f"(budget, not capability)"))
         except Exception as exc:
             _dft_disclose_skip(dft_dir / "dft_atpg_not_run.json",
                                f"Fault ATPG execution error: {exc}",
@@ -10336,11 +14265,27 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                             "Step-11 scan cut produced no cut netlist to run "
                             "at-speed ATPG on")
     if _tdf_missing:
+        # A PRECONDITION IS NOT A CAPABILITY — the DT1 arm of the same split
+        # #581 made for the budget and `_dft_atpg_crash_reason` made for the
+        # crash. This record already SAYS `not_run_stage: precondition_unmet`
+        # ("cut_netlist.v absent"), and used to say
+        # `capability_flag: cap:at_speed_timing_graded_atpg` in the same
+        # breath — asserting the engine cannot do at-speed TDF ATPG on a run
+        # where the engine was never invoked. The ownership claim
+        # (`skips_required_output`) is kept: it says WHICH absent output this
+        # marker explains, which is true and is a different claim.
+        #
+        # DIRECTION OF THE CHANGE, stated: dropping the flag can only make a
+        # step's status the SAME or STRICTER (a capability-AWARE deferral
+        # MISSING->SKIPPED-CONDITION is refused), never looser. Measured on
+        # the published sha256 x sky130A tree, removing both DFT capability
+        # flags left `flow_compliance_check --strict` byte-identical.
         _dft_disclose_skip(
             _tdf_not_run,
             "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
             + "; ".join(_tdf_missing),
-            dict(_TDF_CAP, not_run_stage="precondition_unmet"))
+            {"skips_required_output": _TDF_CAP["skips_required_output"],
+             "not_run_stage": "precondition_unmet"})
     else:
         tdf_json.parent.mkdir(parents=True, exist_ok=True)
         tdf_cmd = [sys.executable,
@@ -10354,8 +14299,12 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
             tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
         try:
+            # Outer wall MUST cover the producer's OWN size-scaled wall (capped at
+            # WALL_BUDGET_MAX); a fixed value below that cap SIGKILLs the producer
+            # mid-batch on any flop-bearing design, so it writes no coverage and
+            # leaks its container. See _tdf_atpg_subprocess_timeout_s.
             _tdf_p = subprocess.run(tdf_cmd, capture_output=True, text=True,
-                                    timeout=1800)
+                                    timeout=_tdf_atpg_subprocess_timeout_s())
             if not tdf_json.is_file():
                 # Ran, produced nothing. The producer writes its JSON on every
                 # path it reaches, so reaching none of them is itself the
@@ -10377,6 +14326,50 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     _tdf_not_run.unlink()
                 except OSError:
                     pass
+        except subprocess.TimeoutExpired as exc:
+            # vibe-ic#581 (extended to the AT-SPEED path) — A TIMEOUT IS A BUDGET
+            # OUTCOME, NOT A CAPABILITY GAP.
+            #
+            # #581 split the stuck-at dispatch's timeout out of its blanket
+            # `except Exception` (see the sibling handler above at
+            # "Fault ATPG exceeded its wall budget"), but the transition/at-speed
+            # dispatch here was left with only `except Exception`, so a wall-clock
+            # expiry still lands in `_TDF_CAP` and is recorded with
+            # `capability_flag: cap:at_speed_timing_graded_atpg` — a machine-
+            # readable assertion that the ENGINE cannot do at-speed TDF ATPG.
+            #
+            # MEASURED on opentitan_aes x sky130A (fault 0.9.4, vibeic/yosys `sat`):
+            # the LOC miter builds and the SAT solver returns real per-fault STR/STF
+            # verdicts (cal_run.log: "VIBEICTDF _42764__A2 STR", 617 620 cells
+            # imported to the SAT DB, model FOUND) — the engine ran fine. What blew
+            # was OUR wall clock: ~57 s of kissat per fault x --max-faults 400 on a
+            # 2922-flop flattened AES cannot finish in 1800 s. Nothing about the
+            # engine's capability is in question; the remedy is "raise the budget
+            # or lower --max-faults", which the capability flag actively hides.
+            #
+            # A crash/RuntimeError/FileNotFoundError IS a capability gap and keeps
+            # the flag on the `except Exception` arm below — this is a split, not a
+            # deletion. TimeoutExpired subclasses SubprocessError (not OSError), so
+            # handler ORDER is the fix: this arm must precede `except Exception`.
+            #
+            # The producer NOW scales its own wall with scan-flop count (see
+            # transition_fault_atpg_run._scaled_wall_budget), and this runner's
+            # outer subprocess wall tracks the producer's WALL_BUDGET_MAX cap
+            # (see _tdf_atpg_subprocess_timeout_s), so a wall expiry here is a
+            # genuine budget outcome at the FULL scaled budget — not the old
+            # fixed-1800 s throttle that abandoned the producer before its own
+            # sized batch could finish.
+            _to = getattr(exc, "timeout", None)
+            _dft_disclose_skip(
+                _tdf_not_run,
+                f"transition-delay-fault ATPG exceeded its wall budget of {_to}s — "
+                f"the SAT engine was running, not unable. This is a BUDGET outcome, "
+                f"not a capability gap (vibe-ic#581).",
+                {"budget_exceeded": True,
+                 "wall_budget_s": _to,
+                 "skips_required_output":
+                     "reports/phase2/dft/transition_coverage.json",
+                 "not_run_stage": "producer_wall_budget_exceeded"})
         except Exception as exc:
             _dft_disclose_skip(
                 _tdf_not_run,
@@ -10534,6 +14527,116 @@ def _sha256_file(path: Path) -> Optional[str]:
     except OSError:
         return None
     return f"sha256:{h.hexdigest()}"
+
+
+def step_arith_declaration_emit(project: Path) -> StepResult:
+    """Run the deterministic `plugin_output/declaration.json` emitter.
+
+    WHY THIS STEP EXISTS. `arith_declaration_emit.py` shipped as an ORPHAN:
+    it was implemented and tested, but no runner, no step in
+    `flow/phase1_phase2_phase3.yaml` and no entry in
+    `benchmark/CAPTURE_ROUTING.json` ever invoked it. Meanwhile
+    `spec_required_artifact_check.py` FAILs the flow whenever a design's own
+    spec declares `plugin_output/declaration.json` as a required artifact —
+    so the flow was failing a run for an artifact that nothing in the flow
+    was wired to produce.
+
+    NON-BLOCKING BY CONSTRUCTION. The emitter is FAIL-CLOSED: when a required
+    field is not derivable it writes no file and exits rc=1. That is reported
+    here as SKIP with the emitter's own reason, never as FAIL — whether the
+    absent file MATTERS is `spec_required_artifact_check`'s decision (it
+    knows if the spec demanded it), not this producer's. So wiring this in
+    cannot newly fail any IC that was passing.
+
+    chip-AGNOSTIC: no design literal; the emitter derives every field from
+    the run's own RTL / L-docs / measured oracle framing.
+
+    WHICH EMITTER SPEAKS, AND WHY THAT ORDER MATTERS. The step above was wired
+    to `arith_declaration_emit.py` ALONE. That emitter resolves an
+    ARITHMETIC-PRIMITIVE field set — `bit_order`, `size_param`,
+    `multiplier_algorithm`, `integer_encoding`. But the artifact it produces is
+    the one `spec_required_artifact_check` demands whenever ANY design's own
+    spec declares it, and a spec is free to declare an entirely different field
+    set. MEASURED on a processor-class design whose spec declares an 8-field
+    contract (top module, memory size, reset polarity, clock port, bus
+    protocol, ...): the wired emitter fail-closed naming `bit_order`,
+    `size_param`, `multiplier_algorithm` and `integer_encoding` — four fields
+    that design's spec never mentions — so no file was written, the
+    required-artifact gate FAILed, and the whole flow halted in Phase 2 with a
+    remediation hint the author could not act on because it named the wrong
+    contract.
+
+    `spec_declaration_emit.py` is the CONTRACT-DRIVEN emitter for exactly this:
+    it reads the field list out of the PROJECT'S OWN Phase-1 documents. It was
+    wired in `--contract` mode only (the authoring hint), never as a producer.
+    So the general emitter existed, was tested, and could not write; the
+    arithmetic-only emitter was the sole producer and could not know the
+    contract.
+
+    Order: ask the contract-driven emitter FIRST. It exits 3 (NO_CONTRACT) when
+    the spec declares no declaration contract at all, which is precisely the
+    arithmetic-primitive case — so that rc falls through to the previous
+    behaviour, unchanged. When a contract IS declared, its fail-closed reason
+    names THAT SPEC'S fields, which is the reason an author can act on.
+
+    STILL NON-BLOCKING BY CONSTRUCTION: every path here returns PASS or SKIP,
+    never FAIL, so no IC that passes today can newly fail.
+    """
+    t0 = time.time()
+    out_p = project / "plugin_output" / "declaration.json"
+
+    def _fields_of(p: Path) -> str:
+        try:
+            return ", ".join(sorted(json.loads(p.read_text()).keys()))
+        except Exception:
+            return "(unreadable)"
+
+    def _run(prog_name: str) -> Optional[subprocess.CompletedProcess]:
+        prog = PROGRAMS_DIR / prog_name
+        if not prog.is_file():
+            return None
+        try:
+            return subprocess.run([sys.executable, str(prog), str(project)],
+                                  capture_output=True, text=True, timeout=120)
+        except Exception:
+            return None
+
+    # 1. The contract-driven emitter: the field list comes from THIS project's
+    #    spec, so it is the only one that can satisfy a spec-declared contract.
+    #    rc 3 = NO_CONTRACT and rc 4 = NOTHING_TO_DECLARE both mean "this spec
+    #    declares no machine-readable contract", i.e. fall through.
+    spec_cp = _run("spec_declaration_emit.py")
+    if spec_cp is not None and spec_cp.returncode not in (3, 4):
+        if spec_cp.returncode == 0 and out_p.is_file():
+            return StepResult("arith_declaration_emit", "PASS",
+                              time.time() - t0,
+                              f"spec_declaration_emit emitted "
+                              f"plugin_output/declaration.json "
+                              f"[{_fields_of(out_p)}]", [str(out_p)])
+        reason = (spec_cp.stderr or spec_cp.stdout
+                  or "").strip().replace("\n", " ")[:400]
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          f"spec_declaration_emit fail-closed "
+                          f"(rc={spec_cp.returncode}); no file written — "
+                          f"{reason}")
+
+    # 2. No spec-declared contract — the previous behaviour, byte for byte.
+    prog = PROGRAMS_DIR / "arith_declaration_emit.py"
+    if not prog.is_file():
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          f"emitter not present at {prog}")
+    cp = _run("arith_declaration_emit.py")
+    if cp is None:
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          "emitter did not run")
+    if cp.returncode == 0 and out_p.is_file():
+        return StepResult("arith_declaration_emit", "PASS", time.time() - t0,
+                          f"emitted plugin_output/declaration.json "
+                          f"[{_fields_of(out_p)}]", [str(out_p)])
+    reason = (cp.stderr or cp.stdout or "").strip().replace("\n", " ")[:400]
+    return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                      f"emitter fail-closed (rc={cp.returncode}); no file "
+                      f"written — {reason}")
 
 
 def step_emit_phase2_manifests(project: Path,
@@ -10696,13 +14799,13 @@ def step_emit_phase2_manifests(project: Path,
             "vectors_passed": orc_vp, "vectors_total": orc_vt})
     elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
         log_rel = str(ref_logs[0].relative_to(project))
-        (sim_dir / "pass.flag").write_text("PASS\n")
+        _aa.write_text(sim_dir / "pass.flag", "PASS\n")
         written.append("sim/pass.flag")
         w("sim/results.xml", {
             "verdict": "PASS",
             "evidence": log_rel,
         })
-        (sim_dir / "results.xml").write_text(
+        _aa.write_text(sim_dir / "results.xml",
             "<results><verdict>PASS</verdict>"
             f"<evidence>{log_rel}</evidence>"
             "<source>step_reference_tb transcript</source>"
@@ -10929,7 +15032,16 @@ def step_emit_phase2_manifests(project: Path,
         "skip_reason": (None if sof_present
                         else "not_attempted" if fpga_compile_step is None
                         else "attempted_incomplete"),
-        "compile_log": "fpga/compile.log",
+        # NAMED ONLY IF IT IS THERE (#645 landing). This was the literal
+        # "fpga/compile.log" unconditionally, so a SKIP payload — `audited:
+        # false`, no compile attempted — still pointed a reader at a log the
+        # deliverable does not carry. The key stays present (four consumers key
+        # on this shape and fields are ADDED, never removed); the VALUE becomes
+        # None when there is nothing to follow, and `evidence` below already
+        # says why. A field that names a proof when there is no proof reads
+        # exactly like one that has it.
+        "compile_log": ("fpga/compile.log"
+                        if (project / "fpga/compile.log").is_file() else None),
         "evidence": (fpga_compile_step.detail if fpga_compile_step
                      else "fpga_compile not run"),
         "audited": False,
@@ -11382,18 +15494,59 @@ def _finalize_rtl_provenance() -> None:
     additions as authored and PRESERVES the tree: the failure mode is
     "refuses to regenerate", never "destroys work".
     """
-    if not _RTL_SESSION_OWNED or _RTL_SESSION_PROJECT is None:
+    global _RTL_SESSION_BINDING
+    if (not _RTL_SESSION_OWNED or _RTL_SESSION_PROJECT is None
+            or _RTL_SESSION_BINDING is None):
         return
+    binding = _RTL_SESSION_BINDING
     try:
-        _rtl_prov.stamp(_RTL_SESSION_PROJECT, generator="design_one_shot_runner")
-    except OSError:
+        _phase1_stamp_held_session(
+            binding, generator="design_one_shot_runner")
+    except (OSError, _Phase1RtlOutputRefused):
         # Best-effort: a failed stamp must never change the run verdict.
         # It fails SAFE — an absent/stale ledger makes the next run treat
         # the tree as unprovable and preserve it.
         pass
+    finally:
+        # Finalization is the end of this held transaction.  Release the two
+        # descriptors even when stamping fails; the stale/absent ledger is the
+        # fail-safe state for the next run.
+        if _RTL_SESSION_BINDING is binding:
+            _RTL_SESSION_BINDING = None
+        binding.close()
+
+
+
+def _line_buffer_own_stream() -> None:
+    """Make this orchestrator's own prints land in the ORDER THEY HAPPENED.
+
+    Python block-buffers stdout when it is not a tty, so under the redirect
+    every real run uses (`> run.log 2>&1`) the parent's phase banners sat in a
+    4 KB buffer until exit while its children — which inherit the same fd and
+    write to it directly — flushed as they went. The file therefore recorded
+    ALL child output first and ALL banners last.
+
+    MEASURED (sha256 x sky130A, run1.log): `=== PHASE 2 ===` was followed
+    immediately by `DONE` with zero phase-2 output between them, which reads as
+    "phase 2 died instantly". Phase 2 had in fact run its full 3-iteration ECO
+    loop — at lines 109-131, ABOVE its own banner. Reproduced from first
+    principles with a 6-line parent/child script: banners emerge in order with
+    line buffering on and after everything with it off.
+
+    Nothing about the log is wrong except the order, which is the part a reader
+    uses to attribute a failure to a phase. Set once here rather than as
+    `flush=True` on each of the print sites, so a print added later cannot
+    silently reintroduce it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass          # a stream that cannot be reconfigured keeps its own
 
 
 def main() -> int:
+    _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--skip-hardware", action="store_true")
@@ -11482,7 +15635,16 @@ def main() -> int:
         return 0
 
     # Step 2 — RTL gen
-    plan.append(step_rtl_gen(project, ic_class))
+    # PRE-FLIGHT (canonical step 1). Its declared input is D1's ENTIRE L1-L13
+    # set, so a Phase 1 that produced a partial doc set can no longer be
+    # laundered into "the RTL generator produced nothing". Only THIS dispatch
+    # is gated: the later `step_rtl_gen` calls are ECO-loop RE-runs that fire
+    # after the first one has already read D1, so gating them would re-ask a
+    # question whose answer this call already established.
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "rtl_gen",
+        _preflight_refusal("rtl_gen"),
+        step_rtl_gen, project, ic_class))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
@@ -11520,6 +15682,12 @@ def main() -> int:
     # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
     # so a clean / not-applicable design always passes.
     plan.append(step_determinism_gates(project, args.top_name))
+
+    # Flow step 1.6x — cross-layer rewrite fidelity. Unconditional:
+    # the judge itself decides applicability and WRITES the verdict,
+    # so a design that ran no cross-layer search leaves a
+    # NOT_APPLICABLE record rather than a silence.
+    plan.append(step_crosslayer_rewrite_fidelity(project))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.
@@ -11761,8 +15929,23 @@ def main() -> int:
         last_rtl_hash = new_rtl_hash
 
     # Step 4 — yosys offline synth (Docker fallback if host yosys absent)
-    plan.append(step_yosys_synth(project, args.top_name, args.container,
-                                 ic_class))
+    # PRE-FLIGHT (canonical step 9). Step 9 also declares step 7's
+    # `phase2/stage2/constraints/*.sdc`; NO site in this runner writes that
+    # path (`step_sdc_gen` below emits into fpga_early_dir), so it is reported
+    # NOT-YET-DUE with the order contradiction named, never used to refuse.
+    #
+    # A pure-analog / all-analog-interface design has NO digital RTL track, so
+    # canonical step 1 produces no `phase2/stage1/rtl/*` BY DESIGN and
+    # step_yosys_synth already answers SKIP (deferred to the analog A1..A8
+    # track). Refusing there would turn a legitimate skip into BLOCKED, so the
+    # runner's OWN predicate — the same one the step itself uses — is handed to
+    # the pre-flight instead of a second copy of the judgement.
+    _analog_absent, _analog_reason = _analog_rtl_track_absent(project, ic_class)
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "yosys_synth",
+        _preflight_refusal("yosys_synth"),
+        step_yosys_synth, project, args.top_name, args.container, ic_class,
+        _preflight_not_applicable=(_analog_reason if _analog_absent else None)))
 
     # Step 4b — QSF / SDC auto-gen (Wave 72). Runs even when --skip-hardware
     # so the QSF/SDC artefacts are present for downstream lints/audits.
@@ -11880,11 +16063,29 @@ def main() -> int:
     # DFT-inserted and proven equivalent to the RTL. Heavy Fault ATPG is gated
     # off on --skip-phase3 lightweight runs; the fast LEC always runs. Each
     # sub-step is fail-safe (disclosed-skip sentinel, never silent, never faked).
-    plan.extend(step_dft_lec_chain(project, args.top_name, args.container,
-                                   ic_class, full_chip=not args.skip_phase3))
+    # PRE-FLIGHT (canonical steps 11-13). `gate` returns the chain's LIST
+    # unchanged, or a ONE-element list holding the refusal, so `plan.extend`
+    # behaves identically either way.
+    # Same analog deferral as the synth site above: with no digital RTL track
+    # there is no mapped netlist BY DESIGN, and the chain's own SKIP is the
+    # right answer. On a DIGITAL design whose synth produced no netlist the
+    # refusal IS the improvement — it charges the absence to step 9 instead of
+    # letting steps 11-13 report "not applicable" for something that was in
+    # fact starved.
+    _dft_chain = _spf.gate(
+        project, "design_one_shot_runner", "dft_lec_chain",
+        lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
+            detail, extras)],
+        step_dft_lec_chain, project, args.top_name, args.container,
+        ic_class, full_chip=not args.skip_phase3,
+        _preflight_not_applicable=(_analog_reason if _analog_absent else None))
+    plan.extend(_dft_chain)
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
+    # Emit plugin_output/declaration.json from the now-final RTL + the
+    # oracle TB's measured framing, BEFORE the manifests/audit read it.
+    plan.append(step_arith_declaration_emit(project))
     plan.append(step_emit_phase2_manifests(project, plan, args.top_name,
                                            args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
@@ -11913,6 +16114,15 @@ def main() -> int:
         "steps": [asdict(s) for s in plan],
         "verdict": _aggregate_verdict(plan),
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # phase2 is the most common standalone entry (`/vibe-ic-phase2`, and the
+    # `--skip-phase3` benchmark shape), and it used to leave no steps tree.
+    # Best-effort, non-gating; recorded in reports/audit/steps_view.json
+    # either way. Cheap enough to run here as well as at the chained end —
+    # MEASURED 0.22 s on an 89 MB run dir — and idempotent, so the phase3 /
+    # phase23 / top-orchestrator rebuild simply refreshes it.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="design_one_shot_runner")
     out = _pl.report_path(project, "phase2_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
@@ -11934,13 +16144,70 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # v1.6.153 (#60 P0-4) — STALE_BOARD_DETECTED counts as FAIL.
     # Anti-fabrication rule: a sub-gate that didn't execute in this
     # pipeline cannot contribute to a downstream PASS verdict.
-    _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED")
+    # BLOCKED — "refused for want of a declared input; the step never ran, so
+    # nothing is known". Named EXPLICITLY because everything this function does
+    # not enumerate falls through to the catch-all `return "PASS"` below: a
+    # pre-flight refusal that produced a green run would be strictly worse than
+    # the mis-attribution it was added to prevent.
+    _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED",
+                      "BLOCKED")
+    # THE CATCH-ALL IS NOW TOTAL. The comment above already names the hazard —
+    # "everything this function does not enumerate falls through to the
+    # catch-all `return "PASS"`" — and BLOCKED was added by hand once that bit.
+    # It bit again: SKIP is the MOST COMMON status this runner emits (53 call
+    # sites vs 34 FAIL and 22 PASS) and it was never enumerated, so it reached
+    # the same silent PASS.
+    #
+    # Enumerating every status the runner can emit means the next one invented
+    # cannot arrive as a silent pass. An unknown status is now reported rather
+    # than absorbed: it is NOT treated as a failure (that would turn a naming
+    # change into a red run), but it is never invisible.
+    _GREEN_STATUSES = ("PASS", "ADVISORY", "ECO_LOOP")
+    # ADVISORY is non-blocking BY CONTRACT (see _estimate_* — "status is always
+    # ADVISORY ... so this step cannot change _aggregate_verdict"). ECO_LOOP is
+    # a progress marker for an iteration, not a verdict; the iteration's outcome
+    # is carried by the steps around it.
+    # SKIPPED-CONDITION is a second skip spelling (rtl_gen and two verdict
+    # payloads). It was found by the totality test scraping the runner's own
+    # StepResult constructions rather than by anyone listing them here — which
+    # is the point of discovering the vocabulary instead of typing it.
+    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION")
+    _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
+              | set(_SKIP_STATUSES) | {"WAIVED"})
+
     has_fail = any(s.status in _FAIL_STATUSES for s in plan)
     has_waived = any(s.status == "WAIVED" for s in plan)
+    unknown = sorted({s.status for s in plan if s.status not in _KNOWN})
+    if unknown:
+        # Loud, and on stderr so it survives a caller that reads only stdout.
+        print(f"design_one_shot_runner: UNCLASSIFIED step status(es) "
+              f"{unknown} reached the verdict aggregator. They are not counted "
+              f"as failures, and they are not silently green either — classify "
+              f"them in _aggregate_verdict before relying on this verdict.",
+              file=sys.stderr)
     if has_fail:
         return "FAIL"
     if has_waived:
         return "PASS_WITH_WAIVERS"
+
+    # DISCLOSED, NOT RECLASSIFIED. A bare PASS carrying SKIPs is the defect the
+    # 63x8 round-2 review recorded: phase 3 reads SKIP as PASS_WITH_WAIVERS
+    # (see phase3_one_shot_runner, "reads SKIP as PASS_WITH_WAIVERS"), phase 2
+    # reads the identical word as clean. Because the phase-2 verdict is PASS
+    # and not PASS_WITH_WAIVERS, no waivers.json entry is required or
+    # auto-generated, so a disclosed skip never reaches the must-close list.
+    #
+    # The verdict is NOT changed here on purpose: doing so would restate every
+    # published phase-2 result, which is a call for whoever owns the benchmark
+    # contract, not for this function. Tracked as a vibe-ic issue with the
+    # measurement. What changes is that the gap can no longer be silent.
+    skipped = [s.name for s in plan if s.status in _SKIP_STATUSES]
+    if skipped:
+        print(f"design_one_shot_runner: verdict PASS carries "
+              f"{len(skipped)} SKIPPED step(s) that are NOT tracked as "
+              f"waivers and therefore reach no must-close list: "
+              f"{', '.join(sorted(skipped))}. Phase 3 reads the same word as "
+              f"PASS_WITH_WAIVERS.", file=sys.stderr)
     return "PASS"
 
 

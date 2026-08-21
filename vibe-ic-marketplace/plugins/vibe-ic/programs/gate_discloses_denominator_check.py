@@ -92,8 +92,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
@@ -300,22 +301,182 @@ _EMPTY_PROJECT_SILENT_PASS: Dict[str, Dict[str, str]] = {
 #: quietly dropped from the population.
 _UNDRIVEABLE: Dict[str, Dict[str, str]] = {}
 
-_RUN_RE = re.compile(
-    # Accepts BOTH `run` and its `run_*` variants. A wrapper added for one
-    # gate (`run_tolerating_uncheckable`) silently escaped this parser, so any
-    # gate wired through it would not be covered — a coverage hole in the very
-    # check that exists to close coverage holes.
-    r'^\s*run(?:_\w+)?\s+"([^"]+)"\s+"?(\$ROOT|\$PLUGIN)"?\s+(.+)$', re.M)
+# ── the ONE parser of the hygiene script ────────────────────────────────────
+# `gate_host_independence_check` imports `parse_declarations` from here rather
+# than carrying a second copy of it. It used to carry a verbatim copy of a
+# regex, and the copy is what let the gap below stay invisible in BOTH readers
+# at once: a defect fixed in one would have had to be noticed twice.
+#
+# MEASURED at v1.9.77, which is why this is a scanner and no longer a regex:
+#
+#     the dispatcher's own record (`--list --summary-json`)   68 invocations
+#     what the regex found                                    59
+#
+# The nine it could not see are 3 gates x 3 published cells, declared inside
+#
+#     for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
+#       run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename ...))" \
+#         "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
+#
+# and the regex missed them TWICE over:
+#
+#   * its label group was `"([^"]+)"`, which stops at the FIRST inner quote —
+#     the one inside `$(basename "$(dirname "$_cell")")` — so the line matched
+#     nothing at all and the gate was absent from the denominator; and
+#   * it never folded `\` continuations, so the four gates written across two
+#     lines were captured TRUNCATED. One of them, `severity=ERROR is consumed`,
+#     was thereby "probed" with a bare `\` as its last argument: what the
+#     host-independence probe compared was argparse rejecting a stray
+#     backslash (rc 2) in both trees, not the gate.
+#
+# A DECLARATION IS NOT AN INVOCATION, and conflating them is what made the
+# gap look like a parser bug alone. A `run` line inside a loop is declared
+# ONCE and invoked once per iteration, so the two counts differ BY DESIGN
+# (59 declarations, 68 invocations). Everything downstream reconciles them
+# instead of asserting they are equal.
+_RUN_HEAD_RE = re.compile(r'^(\s*)run(?:_\w+)?\s+(.*)$')
+
+# Shared with ``gate_host_independence_check``.  The declaration belongs to
+# the run line, so every meta-runner must preserve it; otherwise an excluded
+# remote gate simply comes back through a nested sweep.
+HOST_INDEPENDENCE_EXCLUDE_RE = re.compile(
+    r'^\s*#\s*host-independence:\s*EXCLUDE\b[\s—:-]*(.*?)\s*$')
+
+#: Shell parameters this repo's readers can resolve to a real path. Anything
+#: else in a declaration — a loop variable, a command substitution — is
+#: RUNTIME-EXPANDED: only bash, at the moment it iterates, knows what it is.
+_RESOLVABLE_VARS = frozenset({"ROOT", "PLUGIN", "PG", "PJSON"})
+_VAR_RE = re.compile(r'\$\{?([A-Za-z_]\w*)\}?')
 
 
-def parse_gates(script: Path) -> List[Tuple[str, str, str]]:
-    """(label, cwd-token, command) for every `run` line in the CI script."""
+class GateDecl(NamedTuple):
+    """One `run` line as the hygiene script DECLARES it.
+
+    `lineno` is 1-based and points at the line the `run` keyword is on, which
+    is what the host-independence EXCLUDE directive is anchored against.
+
+    `runtime_expansion` is None for a declaration a reader can drive as
+    written, and otherwise NAMES the piece only bash can resolve. It is a
+    disclosure, not a filter: such a gate stays in every denominator, and a
+    reader that cannot drive it must SAY so rather than drop it.
+    """
+    label: str
+    cwd_token: str
+    cmd: str
+    lineno: int
+    runtime_expansion: Optional[str]
+    host_independence_exclusion: Optional[str] = None
+
+
+def _logical_lines(text: str) -> List[Tuple[int, str]]:
+    """(1-based line number of the FIRST physical line, joined text).
+
+    Backslash continuations are folded, so a gate written across two lines is
+    read as the one command bash runs.
+    """
+    out: List[Tuple[int, str]] = []
+    buf: List[str] = []
+    start = 1
+    for i, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.rstrip()
+        if not buf:
+            start = i
+        if stripped.endswith("\\"):
+            buf.append(stripped[:-1].rstrip())
+            continue
+        buf.append(stripped)
+        out.append((start, " ".join(x for x in buf if x != "")))
+        buf = []
+    if buf:
+        out.append((start, " ".join(x for x in buf if x != "")))
+    return out
+
+
+def _read_quoted(s: str) -> Optional[Tuple[str, str]]:
+    """Read one double-quoted shell word off the front of `s`.
+
+    Returns (contents, rest) or None. A `"` inside a `$( … )` substitution does
+    NOT close the word — that is exactly the quote the old regex stopped at.
+    """
+    if not s.startswith('"'):
+        return None
+    depth = 0
+    i = 1
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            i += 2
+            continue
+        if c == "$" and s[i + 1:i + 2] == "(":
+            depth += 1
+            i += 2
+            continue
+        if c == ")" and depth:
+            depth -= 1
+        elif c == '"' and depth == 0:
+            return s[1:i], s[i + 1:]
+        i += 1
+    return None
+
+
+def _runtime_expansion(label: str, cmd: str) -> Optional[str]:
+    """The piece of this declaration only bash can resolve, or None."""
+    for where, text in (("label", label), ("command", cmd)):
+        if "$(" in text:
+            frag = text[text.index("$("):][:60]
+            return f"a command substitution in the {where}: {frag}"
+        for m in _VAR_RE.finditer(text):
+            if m.group(1) not in _RESOLVABLE_VARS:
+                return (f"the shell variable ${m.group(1)} in the {where} — "
+                        f"it is bound by the enclosing loop, not by this "
+                        f"reader")
+    return None
+
+
+def parse_declarations(script: Path) -> List[GateDecl]:
+    """Every gate the hygiene script declares, continuations folded."""
     try:
         text = script.read_text(errors="replace")
     except OSError:
         return []
-    return [(m.group(1), m.group(2), m.group(3).strip())
-            for m in _RUN_RE.finditer(text)]
+    physical = text.splitlines()
+    out: List[GateDecl] = []
+    for lineno, line in _logical_lines(text):
+        m = _RUN_HEAD_RE.match(line)
+        if not m:
+            continue
+        got = _read_quoted(m.group(2).strip())
+        if got is None:
+            continue
+        label, rest = got
+        rest = rest.lstrip()
+        cwd_quoted = _read_quoted(rest)
+        if cwd_quoted is not None:
+            cwd_token, rest = cwd_quoted
+        else:
+            parts = rest.split(None, 1)
+            if not parts:
+                continue
+            cwd_token, rest = parts[0], (parts[1] if len(parts) > 1 else "")
+        if cwd_token not in ("$ROOT", "$PLUGIN"):
+            continue
+        cmd = rest.strip()
+        if not cmd:
+            continue
+        above = physical[lineno - 2] if lineno >= 2 else ""
+        excluded = HOST_INDEPENDENCE_EXCLUDE_RE.match(above)
+        reason = None
+        if excluded:
+            reason = (excluded.group(1).strip()
+                      or "declared at the gate, no reason given")
+        out.append(GateDecl(label, cwd_token, cmd, lineno,
+                            _runtime_expansion(label, cmd), reason))
+    return out
+
+
+def parse_gates(script: Path) -> List[Tuple[str, str, str]]:
+    """(label, cwd-token, command) for every `run` line in the CI script."""
+    return [(g.label, g.cwd_token, g.cmd) for g in parse_declarations(script)]
 
 
 def _scratch_repo(base: Path) -> Path:
@@ -339,42 +500,200 @@ def _expand(cmd: str, repo_root: Path, scratch: Path) -> List[str]:
     c = c.replace('"', "")
     c = c.replace("$PLUGIN", str(_PLUGIN))
     c = c.replace("$ROOT", str(scratch))
+    # A LOOP VARIABLE IS BOUND TO THE SCRATCH TREE, and that is the faithful
+    # binding rather than a convenience: this probe's entire fixture is "drive
+    # the gate against an empty tree and see whether it says so", and the loop
+    # gates take exactly one argument — the directory to examine. Leaving the
+    # token unsubstituted handed the gate the literal string `$_cell`, which is
+    # a path that cannot exist, so the probe would have measured "the gate
+    # refused a nonexistent directory" and counted that as coverage.
+    c = _VAR_RE.sub(
+        lambda m: (m.group(0) if m.group(1) in _RESOLVABLE_VARS
+                   else str(scratch)), c)
     return c.split()
 
 
-def audit(repo_root: Path, timeout: int = 120) -> Tuple[str, List[Dict]]:
+class CiAudit(NamedTuple):
+    """The CI-population result, carrying its own denominator.
+
+    `declared` vs `probed` is the disclosure this program spent a version
+    demanding of everybody else and did not make itself: the verdict line said
+    "all N CI gate(s) disclose what they examined" using the DECLARED count
+    while N of them had never been launched at all.
+    """
+    verdict: str
+    findings: List[Dict]
+    declared: int
+    probed: int
+    not_driven: List[Tuple[str, str]]   # (label, why)
+    #: vibe-ic#1181 — the loop ran out of its AGGREGATE budget and stopped
+    #: early. Carried as its own field, not folded into `not_driven`, because
+    #: the two are different sentences: a gate that is `not_driven` was
+    #: examined and found undriveable, and a gate dropped by the budget was
+    #: never looked at. Only the second one makes the verdict unsafe to read
+    #: as clean.
+    truncated: bool = False
+
+
+def _driveable(argv: List[str]) -> Optional[str]:
+    """Why this argv cannot be launched, or None.
+
+    Checked BEFORE the run rather than inferred from the child's stderr: a
+    python interpreter that cannot open its script exits 2 with a message, and
+    rc 2 is indistinguishable here from a gate that honestly refused. MEASURED
+    on the real script at v1.9.77: 21 of 59 gates are `$PLUGIN`-relative
+    (`python3 programs/x.py`) and this probe runs every gate from the scratch
+    tree, so the interpreter never found the file — and all 21 were counted in
+    the "all 59 disclose" sentence.
+    """
+    if len(argv) < 2:
+        return "no program to launch"
+    prog = Path(argv[1])
+    if not prog.is_absolute():
+        return (f"the gate names a path relative to its own cwd ({argv[1]}) "
+                f"and this probe runs every gate from the scratch tree, so "
+                f"the interpreter cannot open it")
+    if not prog.is_file():
+        return f"{prog} does not exist"
+    return None
+
+
+def audit_ci(repo_root: Path, timeout: int = 120,
+             budget: Optional[float] = None,
+             skip_host_excluded: bool = False) -> CiAudit:
+    """Drive every declared CI gate over an empty scratch tree.
+
+    `timeout` bounds ONE gate. `budget` bounds the WHOLE loop, and vibe-ic#1181
+    is why it exists: without it this function's runtime is the SUM of up to 74
+    per-gate timeouts and nothing caps it. MEASURED on an idle host at
+    a38902d1 — 74 declared, 50 driven, **192.9s**, slowest single gate 35.1s.
+    That is already past the suite's own `--timeout=180`, and the worst case is
+    50 x 120s.
+
+    Why the per-test timeout could not save it: the wait is inside
+    `subprocess.run`, and `pytest-timeout --timeout-method=thread` cannot
+    interrupt a blocking syscall. The timeout fired, printed its stack, and the
+    invocation still never finished — so the WHOLE pytest run produced no
+    summary line and every other file in that selection went unmeasured. That
+    is the same ambiguity as `no tests ran`: it greps as neither pass nor fail.
+
+    TRUNCATION IS NOT A PASS. When the budget runs out the remaining gates are
+    recorded in `not_driven` and `truncated` is set, and the verdict becomes
+    `NOT_CHECKED` rather than `PASS` — "I could not look" must never arrive as
+    "I looked and it was clean". A FINDING still outranks it: a violation found
+    over a partial view is still a violation, which is the same rule
+    `flow_step_execution_coverage_check` applies to its own partial sweeps.
+    """
+
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
-    gates = parse_gates(script)
+    gates = parse_declarations(script)
     if not gates:
         # Never a silent PASS — this program's own denominator.
-        return "NOTHING_SCANNED", []
+        return CiAudit("NOTHING_SCANNED", [], 0, 0, [])
 
     findings: List[Dict] = []
-    with tempfile.TemporaryDirectory() as td:
-        scratch = _scratch_repo(Path(td))
-        for label, _wd, cmd in gates:
+    not_driven: List[Tuple[str, str]] = []
+    truncated = False
+    deadline = None if budget is None else time.monotonic() + float(budget)
+
+    # PARALLEL, AND A FRESH SCRATCH PER GATE — the two are one decision.
+    #
+    # vibe-ic#1181: serially this loop measured 192.9s on an idle host (74
+    # declared, 50 driven), already past the suite's `--timeout=180`, and the
+    # per-test timeout could not end it because the wait is inside
+    # `subprocess.run`. Fanning the gates out brings the wall clock under the
+    # harness bound, which is what actually closes the issue; the aggregate
+    # `budget` below stays as the backstop for the pathological case.
+    #
+    # The shared scratch could not survive the fan-out, and should not have
+    # survived serially either: THESE GATES WRITE INTO THE TREE THEY AUDIT.
+    # `_drive_on_empty_project` already says so for the other population — "a
+    # fresh directory per gate, never a shared one: gates write into the
+    # project they audit, so a shared scratch would let gate N's report become
+    # gate N+1's input and the population would stop being empty part-way
+    # through". The CI population had exactly that defect and it was invisible
+    # because the order was fixed. One scratch per gate removes it and is what
+    # makes concurrency safe.
+    def _probe(decl):
+        """Drive one gate in its own empty repo. Returns (kind, label, payload)."""
+        label, cmd = decl.label, decl.cmd
+        if skip_host_excluded and decl.host_independence_exclusion is not None:
+            return ("not_driven", label,
+                    "EXCLUDED from host-independence by its adjacent "
+                    f"declaration: {decl.host_independence_exclusion}")
+        if deadline is not None and time.monotonic() >= deadline:
+            return ("budget", label,
+                    f"aggregate budget of {budget:g}s exhausted before this "
+                    f"gate was launched (vibe-ic#1181)")
+        # Driveability is a property of the ARGV SHAPE, so it is
+        # decided before a scratch tree is made — making one for a
+        # gate that will not be driven is 74 wasted `git init`s.
+        # The placeholder never reaches a subprocess: the argv that
+        # runs is re-expanded against the real scratch below.
+        argv = _expand(cmd, repo_root, Path('/nonexistent-probe'))
+        why = _driveable(argv)
+        if why is not None:
+            return ("not_driven", label, why)
+        per_gate = timeout
+        if deadline is not None:
+            per_gate = max(1, min(timeout, int(deadline - time.monotonic())))
+        with tempfile.TemporaryDirectory() as gd:
+            scratch = _scratch_repo(Path(gd))
             argv = _expand(cmd, repo_root, scratch)
             try:
                 r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                                   text=True, timeout=timeout)
+                                   text=True, timeout=per_gate)
+            except subprocess.TimeoutExpired as exc:
+                if per_gate < timeout:
+                    return ("budget", label,
+                            f"aggregate budget of {budget:g}s ran out while "
+                            f"this gate was running (vibe-ic#1181)")
+                return ("unrunnable", label, str(exc))
             except (OSError, subprocess.SubprocessError) as exc:
-                findings.append({
-                    "gate": label, "kind": "GATE_UNRUNNABLE",
-                    "detail": f"could not be driven against a scratch tree: {exc}",
-                })
-                continue
+                return ("unrunnable", label, str(exc))
             out = (r.stdout or "") + (r.stderr or "")
             if r.returncode == 0 and not discloses(out):
+                return ("silent", label, out)
+            return ("ok", label, "")
+
+    workers = min(8, (os.cpu_count() or 2))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for kind, label, payload in ex.map(_probe, gates):
+            if kind == "budget":
+                truncated = True
+                not_driven.append((label, payload))
+            elif kind == "not_driven":
+                not_driven.append((label, payload))
+            elif kind == "unrunnable":
+                findings.append({
+                    "gate": label, "kind": "GATE_UNRUNNABLE",
+                    "detail": f"could not be driven against a scratch tree: "
+                              f"{payload}",
+                })
+            elif kind == "silent":
                 findings.append({
                     "gate": label, "kind": "PASS_WITHOUT_DENOMINATOR",
                     "detail": ("answered PASS over an EMPTY tree without "
                                "disclosing that it examined nothing — this "
                                "output is indistinguishable from a real clean "
                                "run"),
-                    "output_tail": out.strip().splitlines()[-1][:200]
-                    if out.strip() else "(no output at all)",
+                    "output_tail": payload.strip().splitlines()[-1][:200]
+                    if payload.strip() else "(no output at all)",
                 })
-    return ("FAIL" if findings else "PASS"), findings
+
+    # ORDER IS THE CLAIM. A finding survives truncation — a violation seen
+    # over a partial view is still a violation. Absence does not: with the
+    # loop cut short, "no findings" is a statement about how far it got.
+    verdict = "FAIL" if findings else ("NOT_CHECKED" if truncated else "PASS")
+    return CiAudit(verdict, findings, len(gates),
+                   len(gates) - len(not_driven), not_driven, truncated)
+
+
+def audit(repo_root: Path, timeout: int = 120,
+          budget: Optional[float] = None) -> Tuple[str, List[Dict]]:
+    """Back-compatible view of `audit_ci` — the verdict and the findings."""
+    res = audit_ci(repo_root, timeout=timeout, budget=budget)
+    return res.verdict, res.findings
 
 
 # ── population 2 (#511): every `programs/*_check.py`, over an empty PROJECT ──
@@ -712,6 +1031,57 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
     return ("FAIL" if findings else "PASS"), findings, stats
 
 
+# ---------------------------------------------------------------------------
+# THE ROLL-UP MUST NOT RENAME WHAT IT COUNTS (vibe-ic#972)
+#
+# Both verdict lines below used to report `len(findings)` under ONE sentence
+# describing ONE kind. MEASURED on the CI population: a run whose only finding
+# was a `GATE_UNRUNNABLE` — a gate that could not be launched at all, so nothing
+# was ever known about its disclosure — printed
+#
+#     [FAIL] 1 gate(s) of 50 probed (74 declared) answer PASS over an empty tree
+#            without disclosing it.
+#
+# "could not be driven" and "answered PASS without disclosing" are different
+# facts with different remedies, and the second is a claim about an output that
+# in this case never existed. The line also NAMED NO GATE, so the one sentence a
+# reader sees carried neither the right kind nor the subject.
+#
+# The kinds are DISCOVERED from the findings, never listed here: a kind added to
+# `audit_ci` or `audit_project_gates` arrives in this roll-up already reported.
+# Every kind names its gates, so the headline is actionable on its own.
+_KIND_HEADLINE = {
+    "PASS_WITHOUT_DENOMINATOR":
+        "answered PASS over an empty tree without disclosing it",
+    "GATE_UNRUNNABLE":
+        "could not be driven at all — nothing is known about their disclosure",
+    "PASS_ON_A_PROJECT_THAT_IS_NOT_THERE":
+        "answered rc 0 for a path that does not exist, without disclosing it",
+    "STALE_INVENTORY_ENTRY":
+        "are on the known-silent inventory but no longer match it",
+    "STALE_UNDRIVEABLE_ENTRY":
+        "are on the undriveable list but can now be driven",
+}
+
+
+def summarise_findings(findings: List[Dict]) -> List[str]:
+    """One line PER KIND, each naming its gates. Kinds come from the data.
+
+    A kind with no entry in `_KIND_HEADLINE` is still reported — under its own
+    name rather than under somebody else's sentence, which is the whole point.
+    """
+    by_kind: Dict[str, List[str]] = {}
+    for f in findings:
+        by_kind.setdefault(str(f.get("kind", "UNCLASSIFIED")), []).append(
+            str(f.get("gate", "(unnamed)")))
+    lines: List[str] = []
+    for kind in sorted(by_kind):
+        gates = sorted(by_kind[kind])
+        what = _KIND_HEADLINE.get(kind, f"are reported as {kind}")
+        lines.append(f"  {len(gates)} {kind}: {what} — {', '.join(gates)}")
+    return lines
+
+
 def _print_inventory(stats: Dict) -> None:
     """The inventory IS this check's denominator, so it is printed on every
     run — passing or failing. A count nobody sees until something breaks is
@@ -789,8 +1159,11 @@ def _main_project_population(a) -> int:
     _print_inventory(stats)
 
     if findings:
-        print(f"[FAIL] {len(findings)} disclosure finding(s) over "
-              f"{stats['gates_probed']} gate(s).", file=sys.stderr)
+        for line in summarise_findings(findings):
+            print(line, file=sys.stderr)
+        print(f"[FAIL] {len(findings)} finding(s) over "
+              f"{stats['gates_probed']} gate(s), by kind above.",
+              file=sys.stderr)
         return 1
     print(f"[PASS] every rc-0 gate of {stats['gates_probed']} either discloses "
           f"what it examined or is on the dated inventory above.",
@@ -813,20 +1186,54 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "*_check.py (default: this program's own directory)")
     ap.add_argument("--timeout", type=int, default=120,
                     help="per-gate probe budget in seconds (default 120)")
+    ap.add_argument("--budget", type=float, default=None,
+                    help="AGGREGATE wall-clock budget for the whole CI sweep "
+                         "in seconds. Unset = unbounded, which is what "
+                         "vibe-ic#1181 measured at 192.9s on an idle host. "
+                         "On exhaustion the sweep stops and reports "
+                         "NOT_CHECKED, never PASS.")
+    ap.add_argument(
+        "--skip-host-excluded", action="store_true",
+        help=("when this meta-gate is itself driven by host-independence, do "
+              "not indirectly launch declarations carrying an adjacent "
+              "host-independence EXCLUDE; every skip remains named"))
     a = ap.parse_args(argv)
 
     if a.population == "project":
         return _main_project_population(a)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    verdict, findings = audit(root, timeout=a.timeout)
-    gates = parse_gates(root / "tools" / "ci" / "repo_hygiene_gates.sh")
+    res = audit_ci(root, timeout=a.timeout, budget=a.budget,
+                   skip_host_excluded=a.skip_host_excluded)
+    verdict, findings = res.verdict, res.findings
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
             {"verdict": verdict, "population": "ci",
-             "gates_probed": len(gates),
+             # DECLARED is the denominator — every gate the script wires.
+             # PROBED is what this run could actually launch. They used to be
+             # the same number under the name `gates_probed`, which is how 21
+             # gates the interpreter never opened were reported as disclosing.
+             "gates_declared": res.declared,
+             "gates_probed": res.probed,
+             "truncated": res.truncated,
+             "not_driven": [{"gate": g, "why": w} for g, w in res.not_driven],
              "findings": findings}, indent=2) + "\n")
+
+    # vibe-ic#1181 — a sweep the budget cut short exits 2 NOT CHECKED, never
+    # 0. rc 0 from this program is read by the tier as "every CI gate discloses
+    # what it examined"; over a truncated sweep that sentence is about how far
+    # the loop got, not about the gates.
+    if verdict == "NOT_CHECKED":
+        print(f"NOT CHECKED: the CI sweep stopped after probing {res.probed} "
+              f"of {res.declared} declared gate(s) — its aggregate budget ran "
+              f"out. No finding was seen in what it did probe, but that is not "
+              f"a clean result over the gate set (vibe-ic#1181).",
+              file=sys.stderr)
+        for g, w in res.not_driven:
+            if "aggregate budget" in w:
+                print(f"    NOT PROBED  {g}", file=sys.stderr)
+        return 2
 
     if verdict == "NOTHING_SCANNED":
         print(f"NOTHING_SCANNED: no `run` lines parsed from "
@@ -841,12 +1248,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         if f.get("output_tail"):
             print(f"      last line: {f['output_tail']}", file=sys.stderr)
 
+    # WHATEVER THE OUTCOME, SAY WHAT WAS NOT DRIVEN. A gate that leaves the
+    # numerator without being named is how a set silently shrinks — the
+    # sentence below used to claim the DECLARED count either way.
+    for label, why in res.not_driven:
+        print(f"  [NOT DRIVEN] {label} — {why}", file=sys.stderr)
+
     if findings:
-        print(f"[FAIL] {len(findings)} gate(s) of {len(gates)} answer PASS "
-              f"over an empty tree without disclosing it.", file=sys.stderr)
+        for line in summarise_findings(findings):
+            print(line, file=sys.stderr)
+        print(f"[FAIL] {len(findings)} finding(s) over {res.probed} probed CI "
+              f"gate(s) of {res.declared} declared, by kind above.",
+              file=sys.stderr)
         return 1
-    print(f"[PASS] all {len(gates)} CI gate(s) disclose what they examined "
-          f"(probed against an empty tree).", file=sys.stderr)
+    print(f"[PASS] all {res.probed} probed CI gate(s) of {res.declared} "
+          f"declared disclose what they examined (probed against an empty "
+          f"tree); {len(res.not_driven)} could not be driven and are named "
+          f"above.", file=sys.stderr)
     return 0
 
 

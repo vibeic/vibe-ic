@@ -72,47 +72,29 @@ import sys
 from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
+import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+import _eda_image as _img
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 def _resolve_docker_image() -> str:
     """Resolve the EDA docker image, preferring the forked vibeic-eda
-    distribution (the iic-osic-tools fork this plugin actually ships and that
-    carries Fault + iverilog + yosys) over the upstream image, which may not be
-    pulled locally. Order: explicit env override → first locally-present
-    PINNED vibeic-eda tag → legacy upstream name (last resort).
+    distribution (the iic-osic-tools fork this plugin ships, carrying Fault +
+    iverilog + yosys) over the upstream image.
 
-    The fork tags below are pinned, never ``:latest``: a floating tag can
-    silently resolve to a stale local image whose tool behavior no longer
-    matches what the plugin was verified against. Every ``vibeic-eda:X.Y.Z``
-    literal here is a LIVE POINTER tracked by
-    ``tools/vibeic-eda/sync_image_version.py`` (this file is registered in its
-    INSTALL_DOC_CANDIDATES), so ``--set``/``--bump`` rewrites it mechanically
-    and ``--check`` fails the suite on drift — do not hand-edit out of step.
-
-    Historically this was hardcoded to ``hpretl/iic-osic-tools:latest``; on a
-    machine that only has the fork pulled, ``docker run`` failed with
-    image-not-found and the whole DFT step silently died. chip-AGNOSTIC."""
-    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
-    if env:
-        return env
-    candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.50",
-        "vibeic-eda:0.2.50",
-        "vibeic/vibeic-eda:0.2.50",
-        "hpretl/iic-osic-tools:latest",
-    )
-    for img in candidates:
-        try:
-            r = subprocess.run(["docker", "image", "inspect", img],
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                return img
-        except Exception:
-            pass
-    # nothing found locally — return the fork's pinned canonical name; the
-    # caller's `docker run` then pulls exactly the verified image (or surfaces
-    # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.2.50"
+    The version is ASKED FOR, not remembered. It used to be a pinned literal
+    kept in step by `sync_image_version.py`, on the stated grounds that the tag
+    "matches what the plugin was verified against" — and nothing ever verified
+    that. vibeic-eda's own release gate does, and `_eda_image` asks the registry
+    which image is current rather than trusting a local `:latest`, which is how
+    this once resolved to `hpretl/iic-osic-tools:latest` on a machine that had
+    only the fork and made the whole DFT step die on image-not-found.
+    chip-AGNOSTIC."""
+    return _img.resolve()
 
 
 DOCKER_IMAGE = _resolve_docker_image()
@@ -206,6 +188,35 @@ PDK_CONFIG = {
             "sg13g2_sdfrbp_1,sg13g2_sdfrbp_2,"
             "sg13g2_sdfrbpq_1,sg13g2_sdfrbpq_2,"
             "sg13g2_sdfbbp_1"
+        ),
+    },
+    # NanGate45 / FreePDK45 open academic 45nm stdcell library (OpenROAD's
+    # reference PDK; ships in the container at /foss/pdks/nangate45). Without
+    # this entry a FULLY tech-mapped NanGate45 netlist (NAND2_X1 / DFF_X1 /
+    # SDFF_X1, no Yosys generic primitives) sniffs to None -> the DFT step reads
+    # that None as `generic_unmapped` and refuses scan insertion with
+    # "no Liberty configured for pdk 'unmapped'", even though the netlist is
+    # mapped and the container ships this library's Liberty. That is the exact
+    # "could not NAME the PDK" != "no library-mapped cells" confusion the
+    # `netlist_is_library_mapped` docstring (above) warns about, surfacing on
+    # the resolution side. Adding the entry is the same remedy applied to
+    # ihp-sg13g2 above; it teaches the sniff (via pdk_cell_prefixes) and gives
+    # scan insertion its Liberty (SCAN_LIBERTY in fault_scan_chain_insert.py).
+    #
+    # cell_model is None ON PURPOSE: this build's container ships NO NanGate45
+    # Verilog simulation model (only .lib / .lef / .gds / .cdl), so Fault's
+    # iverilog-based stuck-at fault simulation cannot run. With cell_model=None,
+    # run_fault returns rc=2 "no Verilog cell model resolved" — an HONEST,
+    # disclosed engine-limited skip, NOT a fabricated coverage number and NOT a
+    # crash. This REPLACES the false "unsupported pdk: unmapped" (which wrongly
+    # blamed the netlist) with the true state: NanGate45 IS recognised and
+    # scan-insertable; only its ATPG fault-sim is engine-limited here.
+    "nangate45": {
+        "cell_model": None,
+        "dff_cells": (
+            "DFF_X1,DFF_X2,DFFR_X1,DFFR_X2,DFFS_X1,DFFS_X2,"
+            "DFFRS_X1,DFFRS_X2,SDFF_X1,SDFF_X2,SDFFR_X1,SDFFR_X2,"
+            "SDFFS_X1,SDFFS_X2,SDFFRS_X1,SDFFRS_X2"
         ),
     },
 }
@@ -592,6 +603,58 @@ def is_generic_unmapped(netlist_text: str) -> bool:
     return bool(_GENERIC_PRIM_RE.search(netlist_text or ""))
 
 
+# Language keywords and Verilog PRIMITIVE gates. `instantiated_modules` is
+# deliberately over-inclusive (see `_INST_RE`), so the caller must subtract the
+# non-cell vocabulary itself. This is a LANGUAGE fact, not a library one — no
+# cell/vendor/PDK name appears here, and adding a PDK never touches this set.
+# The primitive gates (`and`/`nor`/`buf`/…) are excluded ON PURPOSE: a netlist
+# built from them is gate-level but NOT library-mapped.
+_NON_CELL_IDENTIFIERS = frozenset("""
+module endmodule input output inout wire reg assign always initial begin end
+if else case casex casez endcase for while repeat forever function endfunction
+task endtask generate endgenerate parameter localparam defparam integer real
+genvar supply0 supply1 tri triand trior wand wor time realtime event signed
+unsigned logic bit byte shortint int longint specify endspecify primitive
+endprimitive table endtable posedge negedge disable force release fork join
+and or not nand nor xor xnor buf bufif0 bufif1 notif0 notif1 pmos nmos cmos
+rpmos rnmos rcmos tran tranif0 tranif1 rtran rtranif0 rtranif1 pullup pulldown
+""".split())
+
+
+def netlist_is_library_mapped(netlist_text: str) -> bool:
+    """True iff `netlist_text` positively shows TECHNOLOGY-MAPPED cells —
+    i.e. instantiations of named library cells rather than Yosys generic
+    primitives or Verilog primitive gates.
+
+    This is the POSITIVE complement of `is_generic_unmapped`, and it exists
+    because callers were using "I could not NAME the PDK" as though it were
+    "there are no library-mapped cells". Those are different questions:
+    a netlist mapped to a library that is simply absent from `PDK_CONFIG`
+    (NanGate45, any foundry library the container does not ship) answers NO to
+    the first and YES to the second. Publishing the first as the second tells a
+    reader the netlist is unmapped when it is fully mapped, and — worse — that
+    label is an ATTESTATION downstream (`transition_coverage_check` grants the
+    ENGINE_LIMITED skip only on `pdk_detected == "generic_unmapped"`, precisely
+    so a MAPPED netlist cannot claim it).
+
+    The rule here is the one `transition_fault_atpg_run` already applies for
+    the same decision: require POSITIVE structural evidence, never infer from
+    the absence of a name.
+
+    FAIL-SAFE in the only direction that matters: every unclear case returns
+    False, which leaves the pre-existing `generic_unmapped` label in place and
+    moves no verdict. A False positive can only cause a self-skip to be
+    REFUSED, never granted — it can never fabricate a pass.
+
+    Pure; no I/O. chip/PDK-AGNOSTIC: no cell-name vocabulary.
+    """
+    if not netlist_text:
+        return False
+    if is_generic_unmapped(netlist_text):
+        return False
+    return bool(instantiated_modules(netlist_text) - _NON_CELL_IDENTIFIERS)
+
+
 def _first_module_name(netlist_text: str) -> str | None:
     m = _MODULE_DECL_RE.search(netlist_text or "")
     return m.group(1) if m else None
@@ -770,6 +833,20 @@ def pdk_cell_prefixes() -> dict:
                 continue
             if "__" in cell:                     # <lib>__<cell>
                 prefixes.add(cell.split("__", 1)[0] + "__")
+            elif (dsm := re.match(r"(.+_[A-Za-z]+)\d+$", cell)):
+                # FLAT DRIVE-STRENGTH naming `<root>_X<drive>` (NanGate45 /
+                # FreePDK45: DFF_X1, SDFFRS_X2, NAND2_X1). The trailing integer
+                # is a DRIVE STRENGTH, not a cell instance, and there is no
+                # `<lib>_` separator. The plain `<lib>_<cell>` split below would
+                # yield the over-broad `DFF_`, which is a SUBSTRING of the Yosys
+                # generic primitive `$_DFF_P_` — so an UNMAPPED netlist would be
+                # misread as this PDK (a false pass of the sniff). Keep the
+                # drive-strength FAMILY root incl. the `_X` (`DFF_X`, `SDFFRS_X`):
+                # specific to the mapped library, never a substring of `$_DFF_`.
+                # No configured `__`-style PDK reaches here (they take the branch
+                # above); only genuine `_X<n>` families do. Still derived purely
+                # from `dff_cells` — no second table, no vendor/SKU literal.
+                prefixes.add(dsm.group(1))
             elif "_" in cell:                    # <lib>_<cell>
                 prefixes.add(cell.split("_", 1)[0] + "_")
             else:
@@ -832,6 +909,54 @@ def _count_yaml_block_items(text: str, key: str) -> int:
         if not ln[:1].isspace():
             break
     return n
+
+
+# ── A HIGH EXIT CODE IS NOT A DEATH CERTIFICATE ────────────────────────────
+#
+# `128+N means death by signal N` is the convention a SHELL uses to REPORT a
+# child's signal death. It says nothing about a process that calls exit(N)
+# itself with N >= 128, and the elaborator inside the ATPG engine does exactly
+# that: Icarus Verilog exits with its ERROR COUNT.
+#
+#   MEASURED (public, no PDK, no vendor, no design — 153 instantiations of an
+#   undeclared module; see the reproduction shipped with this fix):
+#       $ iverilog -o /dev/null probe.v > log 2>&1 ; echo $?
+#       154
+#       $ tail -3 log
+#       *** These modules were missing:
+#               MISSING_CELL referenced 153 times.
+#
+# So an ATPG input that is missing >= 128 cell models was being classified
+# "killed by signal N", retried _ATPG_MAX_ATTEMPTS times (a deterministic
+# failure retried three times fails three times), and then written up as an
+# engine crash that "must be re-driven, not waived" — while the true cause,
+# `Unknown module type: <cell>`, sat in the log this very function captured.
+#
+# THE DISCRIMINATOR: a process killed by a signal did not live long enough to
+# print a structured diagnosis. When the engine's own error grammar IS present,
+# the exit code is the engine's considered answer, not a death certificate.
+#
+# Deliberately NARROW. Anything ambiguous stays classified as signal death, so
+# a genuine SIGSEGV keeps its retry — see the reverse case in the test.
+# chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on compiler diagnostic grammar.
+_ATPG_SIGNAL_DEATH_FLOOR = 128
+_ATPG_ENGINE_DIAGNOSTIC_RE = re.compile(
+    r"^\s*\d+\s+error\(s\)\s+during\s+elaboration"
+    r"|These modules were missing"
+    r"|Unknown module type",
+    re.MULTILINE,
+)
+
+
+def atpg_exit_is_signal_death(exit_code: int, engine_log: str) -> bool:
+    """True iff `exit_code` should be read as death by signal.
+
+    Below the floor it never is. At or above the floor it is — UNLESS the
+    engine printed its own error diagnosis, which a signal-killed process
+    cannot have done. Pure; no I/O."""
+    if exit_code < _ATPG_SIGNAL_DEATH_FLOOR:
+        return False
+    return not _ATPG_ENGINE_DIAGNOSTIC_RE.search(engine_log or "")
 
 
 def parse_atpg_coverage(cov_text: str, atpg_log: str, atpg_exit: int) -> dict:
@@ -1040,18 +1165,93 @@ ENV_PREAMBLE = (
 )
 
 
+#: vibe-ic#623 — how much longer than the caller's budget the CONTAINER-SIDE
+#: deadline allows, so an engine that is nearly finished can flush its result
+#: instead of having it thrown away.
+#:
+#: A CAP ON FLUSH TIME, NOT AN ESTIMATE OF HOW LONG ATPG NEEDS — #581 declined
+#: to invent the latter and that stands. MEASURED overshoots, same design, two
+#: plugin versions and two images, off artefact mtimes alone:
+#:
+#:     v1.9.27 / 0.2.51   not_run.json 18:58:49   coverage.yml 19:04:20   +331 s
+#:     v1.9.8  / 0.2.48   not_run.json 06:28:45   coverage.yml 06:33:57   +312 s
+#:
+#: both carrying a byte-identical `ratio: 9.16633307933807e-1`. 600 covers both
+#: with headroom. The cost is paid ONLY when the engine is still working, and it
+#: is bounded: at budget + this, the container kills its own process.
+ATPG_FLUSH_GRACE_S = 600
+
+
+def atpg_container_deadline(timeout: int,
+                            flush_grace_s: int = ATPG_FLUSH_GRACE_S) -> int:
+    """Seconds the CONTAINER-SIDE deadline allows: the caller's budget plus the
+    bounded flush grace, never below 1.
+
+    A pure function so the arithmetic is testable without handing a
+    production-sized budget to a launcher — `timeout=1800` in a test is a
+    1800-second bound the harness can outlive, and asserting on the number is
+    what the test is actually for.
+
+    NEVER 0: coreutils `timeout 0` means NO deadline, which is precisely the
+    state this change exists to remove, so it is the one value the arithmetic
+    must not be able to produce.
+    """
+    return max(1, int(timeout) + max(0, int(flush_grace_s)))
+
+
 def _run_docker(
     project: Path,
     cmd: list[str],
     timeout: int = 600,
     pdk_dir: Path | None = None,
+    flush_grace_s: int = ATPG_FLUSH_GRACE_S,
 ) -> tuple[int, str, str]:
     """Run a command inside iic-osic-tools.
     - project mounted at /work
     - pdk_dir (shared_pdk) mounted at /pdk (optional, for custom PDKs)
+
+    THE DEADLINE IS ENFORCED INSIDE THE CONTAINER (vibe-ic#623), which is this
+    repo's own landed doctrine — see `_container_exec`. The client-side
+    `timeout=` used to be the only bound, and it bounds the docker CLIENT: on
+    expiry Python killed the client while the container carried on, because the
+    engine is not a child of the client and no signal crosses the boundary. Two
+    separate harms followed from that one fact:
+
+      * THE COMPLETED MEASUREMENT WAS DISCARDED. The engine kept running,
+        finished, wrote `coverage.yml` into the mounted project — 331 s and
+        312 s after the caller had already recorded "no measurement" — and
+        nothing ever looked again. `--rm` then removed the evidence that it had
+        run at all.
+      * THE CONTAINER WAS NEVER REAPED. It self-removes only when the engine
+        finishes on its own; one was recorded still burning a core after the
+        flow had ended. `--rm` makes it look self-cleaning, which is why this
+        stayed invisible.
+
+    Both are the same defect and coreutils `timeout`, running INSIDE the
+    container as the engine's own parent, fixes both: the engine is signalled
+    where it lives, so nothing orphans, and expiry becomes an ordinary rc 124
+    rather than an exception thrown past callers.
+
+    The container-side deadline is `timeout + flush_grace_s` on purpose. Killing
+    an engine that is minutes from finishing, because a size-independent
+    constant expired, discards work the run exists to produce; the grace is a
+    bounded extension for exactly that, and the caller's own budget still
+    governs when the extension starts. `-k` escalates to SIGKILL for an engine
+    that ignores SIGTERM while writing.
+
+    The client-side wait is RETAINED, strictly larger, as a backstop for the
+    container itself being wedged — which no container-side deadline can cover.
+    Because it is larger the container-side deadline always fires first in the
+    normal case.
+
+    DEGRADES LOUDLY: an image without `timeout` returns 127 from the shell, so
+    the caller learns the deadline could NOT be enforced instead of running
+    unbounded behind a deadline that exists only in the caller's belief.
     """
+    deadline = atpg_container_deadline(timeout, flush_grace_s)
     docker_cmd = [
         "docker", "run", "--rm",
+        *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
@@ -1059,13 +1259,22 @@ def _run_docker(
         docker_cmd += ["-v", f"{pdk_dir}:/pdk"]
     docker_cmd += [
         DOCKER_IMAGE,
-        "-c", ENV_PREAMBLE + " ".join(cmd),
+        "-c", (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
+               + shlex.quote(ENV_PREAMBLE + " ".join(cmd))),
     ]
     try:
-        r = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(docker_cmd, capture_output=True, text=True,
+                           timeout=deadline + _CE.CLIENT_GRACE_S)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
-        return 124, "", "docker command timed out"
+        # The BACKSTOP fired, which now means the container itself is wedged —
+        # the container-side deadline is strictly earlier, so a merely-slow
+        # engine can no longer reach this branch.
+        return 124, "", (
+            f"docker client backstop fired after "
+            f"{deadline + _CE.CLIENT_GRACE_S}s: the container-side deadline "
+            f"({deadline}s) did not fire first, so the container — not the "
+            f"engine — is unresponsive")
     except FileNotFoundError:
         return 127, "", "docker binary not found in PATH"
 
@@ -1233,6 +1442,45 @@ def run_transition_atpg(project: Path,
         supported, reason, transition_target, plan_rel, measured)
 
 
+def _write_coverage_rpt(path: Path, *, clock: str, netlist_rel: str, pdk: str,
+                        coverage_ratio: float, faults_covered: int,
+                        faults_total: int, min_coverage: float,
+                        trans_line: str, cov_out: str, tv_out: str) -> None:
+    """Write the human-readable stuck-at coverage report (atpg_coverage.rpt).
+
+    Factored out of run_fault so the CONTRACT-NAMED report can be written twice:
+    a durable stuck-at snapshot the moment stuck-at is measured, then a final
+    version once the (independent, long-running) transition pass has resolved.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "Fault ATPG Coverage Report\n"
+        "==========================\n"
+        f"Clock         : {clock}\n"
+        f"Netlist       : {netlist_rel}\n"
+        f"PDK           : {pdk}\n"
+        f"Stuck-at %    : {coverage_ratio:.2f}\n"
+        f"Covered / Total: {faults_covered} / {faults_total}\n"
+        f"Target (min)  : {min_coverage:.2f}\n"
+        f"Result        : {'PASS' if coverage_ratio >= min_coverage else 'FAIL'}\n"
+        f"{trans_line}"
+        "\n"
+        f"(coverage metadata: {cov_out})\n"
+        f"(test vectors    : {tv_out})\n"
+    )
+
+
+def _write_coverage_json(path: Path, report: dict) -> None:
+    """Write the machine-readable coverage report (reports/dft/coverage.json).
+
+    This is the artefact `dft_signoff_check` / `dft_atpg_coverage_check` read.
+    Written by run_fault ITSELF (not deferred to the CLI wrapper) so an
+    in-process caller gets the contract-named artefact too.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2))
+
+
 def run_fault(
     project: Path,
     netlist_rel: str,
@@ -1248,6 +1496,7 @@ def run_fault(
     transition_probe_fn=None,
     cell_model_override: str | None = None,
     dff_cells_override: str | None = None,
+    json_out: "Path | str | None" = None,
 ) -> tuple[int, dict]:
     """Run Fault cut+atpg in the Docker container. Returns (exit, report_dict).
 
@@ -1300,6 +1549,17 @@ def run_fault(
         return 2, {"error": "no Verilog cell model resolved: pass "
                             "--cell-model-path or use a PDK with a configured "
                             "cell_model"}
+    if pdk == "gf180" and not cell_model_override:
+        # ciel's gf180mcu path is content-addressed (versions/<hash>/...) and
+        # the hash PDK_CONFIG carries is a point-in-time fallback that goes
+        # stale whenever vibeic-eda's gf180mcu pin advances — see
+        # pdk_cell_models.GF180_CIEL_HASH_FALLBACK. Re-resolve it live against
+        # THIS run's own image/container before trusting it.
+        _parts = cell_model.split(" ")
+        _resolved = _pcm.materialize_gf180_paths(
+            _parts, lambda argv, t: _run_docker(project, argv, timeout=t,
+                                                pdk_dir=pdk_dir))
+        cell_model = " ".join(_resolved)
     # Flop-cell resolution: explicit override wins; else auto-detect from the
     # netlist and union with the PDK-config seed so cut never misses the real
     # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).
@@ -1328,6 +1588,33 @@ def run_fault(
 
     netlist_abs = f"/work/{netlist_rel}"
     cut_abs = f"/work/{cut_out}"
+
+    # `fault cut`/`fault atpg` abort on any `inout` port — AUCOHL/Fault's
+    # Module.Port.extract has no bidirectional polarity (see _dft_netlist_ports).
+    # `fault cut` sometimes SURVIVES an inout and passes it through into the cut
+    # netlist, and then `fault atpg` dies on it with exit 70 / faults_total=0 —
+    # which reads exactly like an "engine-limited" coverage gap. Measured on
+    # caravel_user_project x sky130A: `inout [28:0] analog_io;` made ATPG exit 70
+    # while the engine measures 60.5% once it is gone. Strip UNCONNECTED inout
+    # ports from the netlist the cut reads; the cut netlist is a fault-sim
+    # intermediate that is never built, so no restore is needed (an inout with no
+    # scannable logic — an analog pass-through / unbonded pad — contributes no
+    # fault the coverage number depends on, and is not part of the testable
+    # logic). A CONNECTED inout is left in place (it carries real nets) and the
+    # honest failure is reported rather than a wrong netlist produced.
+    try:
+        import _dft_netlist_ports as _dnp        # sibling module; no import cycle
+        _nl_txt = (project / netlist_rel).read_text(errors="replace")
+        _unconn = [n for n in _dnp.find_inout_ports(_nl_txt)
+                   if not _dnp.port_is_connected(_nl_txt, n)]
+        if _unconn:
+            _stripped = _dnp.strip_inout_ports(_nl_txt, _unconn)
+            if not (set(_dnp.find_inout_ports(_stripped)) & set(_unconn)):
+                _atpg_in_rel = "phase2/stage2/dft/atpg_input.v"
+                (project / _atpg_in_rel).write_text(_stripped, encoding="utf-8")
+                netlist_abs = f"/work/{_atpg_in_rel}"
+    except Exception:
+        pass    # fall back to the original netlist; fault then reports honestly
 
     # Step A: fault cut (DFF-flattening). Note: fault cut does NOT take --top.
     cut_cmd = [
@@ -1466,8 +1753,51 @@ def run_fault(
     #     "the OSS tool cannot do this" is a false capability gap.
     #
     # chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on the POSIX convention that
-    # 128+N means death by signal N.
-    _ATPG_SIGNAL_DEATH_FLOOR = 128
+    # 128+N means death by signal N -- AND, since this fix, on the engine's own
+    # diagnostic grammar, because that convention is a shell's reporting
+    # convention and not a property of the exit code. See
+    # atpg_exit_is_signal_death() above.
+    # ── SIZE-SCALED WALL ────────────────────────────────────────────────────
+    # This was a fixed `timeout=1800`. A fixed wall asks "has 30 minutes
+    # passed", and is read as "can this engine grade this design" — two
+    # different questions that agree only on designs small enough for the
+    # answer not to matter.
+    #
+    # MEASURED (ibex x sky130A, 2026-08-05). `fault` ATPG on the sky130-mapped
+    # 31k-cell netlist RUNS: `fault chain` built a real scan chain from
+    # `ibex_core_synth.v` against the PDK liberty, with real scan DFFs, and the
+    # engine was mid-grade when the wall expired. Its own record says so —
+    # "the engine was running, not unable ... a BUDGET outcome, not a
+    # capability gap". A fixed 1800 s turned a large design's honest partial
+    # coverage into an absent measurement.
+    #
+    # The sibling at-speed engine already fixed this and its comment names
+    # "the old 1800 s" as the defect; the same constant was still live here.
+    # `_scaled_wall_budget` and `parse_cut_ports` are imported rather than
+    # copied, so the two engines cannot drift apart, and the size signal is the
+    # SAME quantity the coefficient was measured against: the pseudo-PI/PO
+    # pairs the cut exposed, i.e. the flop count.
+    #
+    # The caller's 1800 stays the FLOOR — a small design's wall is unchanged to
+    # the second. NOT MEASURED, and stated rather than hidden: the per-flop
+    # coefficient was measured for the 2-frame LOC miter of the at-speed
+    # engine, not for stuck-at. It is used here as a floor-RAISING term with
+    # the same campaign ceiling, which can only ever give a large design more
+    # room; the budget actually used is recorded below so the next round can
+    # measure the real stuck-at curve instead of inheriting this one.
+    _atpg_wall = 1800
+    _atpg_scan_flops = 0
+    try:
+        import transition_fault_atpg_run as _tdf
+        _cut_for_wall = project / cut_out
+        if _cut_for_wall.is_file():
+            _, _, _, _pairs = _tdf.parse_cut_ports(
+                _cut_for_wall.read_text(errors="replace"))
+            _atpg_scan_flops = len(_pairs)
+            _atpg_wall = _tdf._scaled_wall_budget(1800, _atpg_scan_flops)
+    except Exception:
+        pass          # unreadable cut -> the floor, never a guess
+
     _ATPG_MAX_ATTEMPTS = 3
     atpg_attempts: list[int] = []
     ec, out, err = -1, "", ""
@@ -1480,15 +1810,15 @@ def run_fault(
             (project / cov_out).unlink()
         except OSError:
             pass
-        ec, out, err = _run_docker(project, [atpg_shell], timeout=1800,
+        ec, out, err = _run_docker(project, [atpg_shell], timeout=_atpg_wall,
                                    pdk_dir=pdk_dir)
         atpg_attempts.append(ec)
-        if ec < _ATPG_SIGNAL_DEATH_FLOOR:
+        if not atpg_exit_is_signal_death(ec, out + "\n" + err):
             break            # clean exit (0 or a considered non-zero) — done
         if (project / cov_out).exists():
             break            # died late but the metadata landed — keep it
     atpg_log = (out + "\n" + err)[-2000:]
-    atpg_signal_death = ec >= _ATPG_SIGNAL_DEATH_FLOOR
+    atpg_signal_death = atpg_exit_is_signal_death(ec, out + "\n" + err)
 
     cov_file = project / cov_out
     cov_text = cov_file.read_text() if cov_file.exists() else ""
@@ -1499,6 +1829,156 @@ def run_fault(
     coverage_source = parsed["coverage_source"]
     faults_total_source = parsed["faults_total_source"]
     coverage_measured = parsed["coverage_measured"]
+
+    # ── DURABLE STUCK-AT SNAPSHOT — emit the CONTRACT-NAMED artefacts NOW ──
+    #
+    # The `fault atpg` engine has written coverage.yml (its native
+    # machine-readable metadata) and the stuck-at ratio is parsed. Emit the two
+    # artefacts the sign-off gate actually reads — atpg_coverage.rpt and
+    # reports/dft/coverage.json — RIGHT HERE, before the expensive,
+    # timeout-prone transition (at-speed) pass below and independent of the CLI
+    # wrapper's own json write.
+    #
+    # WHY (measured, opentitan_aes × sky130A, r5→r8): stuck-at ATPG completed
+    # and left coverage.yml carrying a real ratio (0.507), but the
+    # machine-readable coverage.json / atpg_coverage.rpt the gate NAMES were
+    # written only AFTER the transition pass — and coverage.json only in
+    # main(). When the transition pass ran long and the run was interrupted (or
+    # a library caller used run_fault() directly), the completed stuck-at
+    # measurement survived only in coverage.yml, which `dft_signoff_check` does
+    # not read, so it reported "no DFT/ATPG coverage evidence found" on a design
+    # that HAD been measured — a measurement that exists reading identically to
+    # a tool that never ran. A completed measurement must not become invisible
+    # to the gate because a SECOND, independent fault model ran long afterwards.
+    #
+    # This is NOT a second file written only to be found: it is the producer's
+    # OWN declared output (see this module's docstring — "reports/dft/
+    # coverage.json … machine-readable"), emitted at the point in its lifecycle
+    # where the real data first exists. chip-AGNOSTIC and PDK-AGNOSTIC: no
+    # design/PDK literal; keyed only on the fixed two-fault-model ordering.
+    scan_netlist_present = (
+        project / "phase2/stage2/dft/scan_netlist.v").is_file()
+    json_out_path = (Path(json_out) if json_out is not None
+                     else _pl.report_path(project, "dft/coverage.json"))
+
+    # ── TEST coverage (vibe-ic#603): raw FAULT coverage is what Fault reports;
+    # sign-off TEST coverage removes the ATPG-UNTESTABLE faults (the unused pad
+    # frame: unobservable inputs / constant-driven outputs) from the denominator.
+    # Both numbers are kept distinct so neither stands in for the other. The
+    # std-cell Liberty (pin directions) lives in the EDA container, so it is read
+    # out host-side, exactly as fault_cut_async_observe does. SOUND-only: the
+    # excluded set is UNCOVERED ∩ structurally-untestable, so a detected fault is
+    # never removed and test coverage can never exceed 100 %.
+    test_coverage = None
+    try:
+        import dft_test_coverage as _dtc            # sibling; no import cycle
+        import atpg_untestable_fault_classify as _auc
+        if cov_file.exists() and (project / cut_out).exists():
+            _lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
+            if _lib_ctr:
+                _ec_l, _lib_text, _ = _run_docker(
+                    project, ["cat", _lib_ctr], timeout=120, pdk_dir=pdk_dir)
+                if _ec_l == 0 and _lib_text:
+                    _dirs = _auc.parse_liberty_pin_directions(_lib_text)
+                    test_coverage = _dtc.compute(
+                        project / cut_out, cov_file, directions=_dirs)
+                    (project / "phase2/stage2/dft/test_coverage.json").write_text(
+                        json.dumps(test_coverage, indent=2))
+    except Exception as _tc_exc:   # measurement-only: never fail the run on it
+        test_coverage = {"computed": False, "reason": f"exception: {_tc_exc}"}
+
+    def _assemble_report(transition_block):
+        rep = {
+            "tool": "fault",
+            "clock": clock,
+            "pdk": pdk,
+            "netlist": netlist_rel,
+            # DECLARED, so no consumer has to infer this program's outputs.
+            # `cut_netlist.v` is the combinational ATPG view; the scan-INSERTED
+            # implementation netlist is a different artefact, different owner.
+            "cut_netlist": cut_out,
+            "writes_scan_netlist": False,
+            "scan_netlist_present": scan_netlist_present,
+            "scan_netlist_owner": "fault_scan_chain_insert.py (`fault chain`)",
+            "netlist_switch_note": netlist_switch_note,
+            # Disclosed so a reader can see the PDK was DERIVED, and from what.
+            "pdk_sniff_note": pdk_sniff_note,
+            "pdk_used": pdk,
+            # vibe-ic#603 (PR #615) folded into PR #610's durable snapshot:
+            # raw FAULT coverage and sign-off TEST coverage are kept DISTINCT
+            # so neither stands in for the other, and the snapshot carries
+            # both from the moment stuck-at is first measured.
+            "test_coverage": test_coverage,
+            # THE COMPLETE #615 FIELD SET, taken from that PR verbatim
+            # rather than retyped: `dft_atpg_coverage_check` reads
+            # `test_coverage_pct` by NAME, and a hand-copied subset had
+            # already dropped two of them — a merge that compiles and
+            # leaves the consumer blind.
+            # vibe-ic#603 — RAW fault coverage above (coverage_pct) is Fault's ratio;
+            # TEST coverage below is detected / (total − ATPG-untestable). Distinct on
+            # purpose: the gate judges TEST coverage, the report keeps RAW visible.
+            "test_coverage_pct": (test_coverage.get("test_coverage_pct")
+                                  if test_coverage and test_coverage.get("computed")
+                                  else None),
+            "test_coverage_measured": bool(
+                test_coverage and test_coverage.get("computed")),
+            "test_coverage_untestable_excluded": (
+                test_coverage.get("untestable_faults_excluded")
+                if test_coverage and test_coverage.get("computed") else None),
+            "test_coverage_source": (
+                "dft_test_coverage: (unobservable|uncontrollable) \u2229 uncovered"
+                if test_coverage and test_coverage.get("computed")
+                else (test_coverage.get("reason") if test_coverage else
+                      "not computed (no liberty / no cut netlist / no "
+                      "coverage.yml)")),
+            "coverage_pct": coverage_ratio,
+            "faults_covered": faults_covered,
+            "faults_total": faults_total,
+            # DFT_FCC / 11-d3 — the producer DECLARES whether this is a real
+            # measurement, and names the artefact each number came from.
+            "coverage_measured": coverage_measured,
+            "coverage_source": coverage_source,
+            "faults_total_source": faults_total_source,
+            "cell_model": cell_model,
+            "dff_cells": dff_cells,
+            "target_pct": min_coverage,
+            "stuck_at_ge_target": coverage_ratio >= min_coverage,
+            "atpg_exit": ec,
+            # Retry history + crash classification, so a consumer can tell "the
+            # engine crashed" from "the engine answered".
+            "atpg_attempt_exits": atpg_attempts,
+            # The budget this run actually had, and the design size it was
+            # sized from. "exceeded its wall budget" without the number is a
+            # verdict nobody downstream can check or re-plan against.
+            "atpg_wall_budget_s": _atpg_wall,
+            "atpg_wall_budget_basis": (
+                f"floor 1800 s + per-flop term on {_atpg_scan_flops} scan flop(s)"
+                if _atpg_scan_flops else "floor 1800 s (no cut flops resolved)"),
+            "atpg_signal_death": atpg_signal_death,
+            "log_tail": atpg_log[-500:],
+        }
+        if transition_block is not None:
+            rep["transition"] = transition_block
+            # Flat mirror fields so a simple consumer can read them without
+            # descending into the nested block.
+            rep["transition_coverage_pct"] = transition_block.get("coverage_pct")
+            rep["transition_target_pct"] = transition_block.get("target_pct")
+            rep["transition_ge_target"] = transition_block.get("ge_target")
+            rep["transition_supported"] = transition_block.get("supported")
+            rep["transition_engine_limited"] = transition_block.get(
+                "engine_limited")
+        return rep
+
+    # Durable stuck-at-only snapshot: the at-speed pass has not run yet.
+    _pending_trans = (
+        "Transition     : PENDING (at-speed pass not yet run)\n"
+        if run_transition else "Transition     : SKIPPED (--no-transition)\n")
+    _write_coverage_rpt(
+        project / rpt_out, clock=clock, netlist_rel=netlist_rel, pdk=pdk,
+        coverage_ratio=coverage_ratio, faults_covered=faults_covered,
+        faults_total=faults_total, min_coverage=min_coverage,
+        trans_line=_pending_trans, cov_out=cov_out, tv_out=tv_out)
+    _write_coverage_json(json_out_path, _assemble_report(None))
 
     # ── Transition (at-speed) fault model — SECOND model, own target ──
     transition = None
@@ -1527,22 +2007,15 @@ def run_fault(
             f"(target {transition_target:.2f}%, "
             f"{'PASS' if transition.get('ge_target') else 'FAIL'})\n")
 
-    # Write human-readable report
-    (project / rpt_out).write_text(
-        "Fault ATPG Coverage Report\n"
-        "==========================\n"
-        f"Clock         : {clock}\n"
-        f"Netlist       : {netlist_rel}\n"
-        f"PDK           : {pdk}\n"
-        f"Stuck-at %    : {coverage_ratio:.2f}\n"
-        f"Covered / Total: {faults_covered} / {faults_total}\n"
-        f"Target (min)  : {min_coverage:.2f}\n"
-        f"Result        : {'PASS' if coverage_ratio >= min_coverage else 'FAIL'}\n"
-        f"{trans_line}"
-        "\n"
-        f"(coverage metadata: {cov_out})\n"
-        f"(test vectors    : {tv_out})\n"
-    )
+    # Re-write both contract-named artefacts with the COMPLETE result now that
+    # the transition pass has resolved. The snapshot above already guaranteed
+    # the gate can read a real stuck-at measurement even if this second pass
+    # never returned.
+    _write_coverage_rpt(
+        project / rpt_out, clock=clock, netlist_rel=netlist_rel, pdk=pdk,
+        coverage_ratio=coverage_ratio, faults_covered=faults_covered,
+        faults_total=faults_total, min_coverage=min_coverage,
+        trans_line=trans_line, cov_out=cov_out, tv_out=tv_out)
 
     # ── `scan_netlist.v` IS NOT THIS PROGRAM'S TO WRITE ────────────────────
     # This used to be:
@@ -1566,59 +2039,12 @@ def run_fault(
     # MEASURING that the chain covers every flop in the input. This program now
     # writes only the ATPG artefacts it actually measures, and DECLARES what
     # its own view is so no consumer has to infer it.
-    scan_netlist_rel = "phase2/stage2/dft/scan_netlist.v"
-    scan_netlist_present = (project / scan_netlist_rel).is_file()
 
-    report = {
-        "tool": "fault",
-        "clock": clock,
-        "pdk": pdk,
-        "netlist": netlist_rel,
-        # DECLARED, so no consumer has to infer what this program's outputs are.
-        # `cut_netlist.v` is the combinational ATPG view; the scan-INSERTED
-        # implementation netlist is a different artefact with a different owner.
-        "cut_netlist": cut_out,
-        "writes_scan_netlist": False,
-        "scan_netlist_present": scan_netlist_present,
-        "scan_netlist_owner": "fault_scan_chain_insert.py (`fault chain`)",
-        "netlist_switch_note": netlist_switch_note,
-        # Disclosed so a reader can see the PDK was DERIVED, and from what,
-        # rather than taken from the caller. None when the caller's PDK stood.
-        "pdk_sniff_note": pdk_sniff_note,
-        "pdk_used": pdk,
-        "coverage_pct": coverage_ratio,
-        "faults_covered": faults_covered,
-        "faults_total": faults_total,
-        # DFT_FCC / 11-d3 — the producer DECLARES whether this run is a real
-        # measurement, and names the artefact each number was read out of, so
-        # no consumer has to re-derive that from a single scraped integer.
-        "coverage_measured": coverage_measured,
-        "coverage_source": coverage_source,
-        "faults_total_source": faults_total_source,
-        "cell_model": cell_model,
-        "dff_cells": dff_cells,
-        "target_pct": min_coverage,
-        "stuck_at_ge_target": coverage_ratio >= min_coverage,
-        "atpg_exit": ec,
-        # The retry history and the crash classification, so a consumer can
-        # tell "the engine crashed" from "the engine answered". Before this,
-        # both collapsed into an absent coverage artefact and the step reported
-        # a SIGSEGV as a disclosed OSS capability gap. `atpg_attempt_exits`
-        # names every attempt; a single-element list is the unchanged
-        # first-try-succeeded case.
-        "atpg_attempt_exits": atpg_attempts,
-        "atpg_signal_death": atpg_signal_death,
-        "log_tail": atpg_log[-500:],
-    }
-    if transition is not None:
-        report["transition"] = transition
-        # Flat mirror fields so a simple consumer/gate can read them without
-        # descending into the nested block.
-        report["transition_coverage_pct"] = transition.get("coverage_pct")
-        report["transition_target_pct"] = transition.get("target_pct")
-        report["transition_ge_target"] = transition.get("ge_target")
-        report["transition_supported"] = transition.get("supported")
-        report["transition_engine_limited"] = transition.get("engine_limited")
+    # Final report — includes the transition (at-speed) block now that it has
+    # resolved. Re-write the machine-readable coverage.json so the complete
+    # result supersedes the durable stuck-at-only snapshot written above.
+    report = _assemble_report(transition)
+    _write_coverage_json(json_out_path, report)
 
     return (0 if report["stuck_at_ge_target"] else 1), report
 
@@ -1701,6 +2127,14 @@ def main(argv: list[str] | None = None) -> int:
         if candidate.exists():
             pdk_dir = candidate
 
+    # coverage.json is now written by run_fault ITSELF (durably, at the moment
+    # the stuck-at measurement exists — see the DURABLE STUCK-AT SNAPSHOT block)
+    # so an interruption of the later transition pass, or an in-process caller
+    # that never reaches this wrapper, still leaves the gate its contract-named
+    # artefact. Pass the resolved path through so --json still honours a custom
+    # destination.
+    json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
+
     exit_code, report = run_fault(
         project,
         netlist_rel=args.netlist,
@@ -1715,9 +2149,14 @@ def main(argv: list[str] | None = None) -> int:
         run_transition=not args.no_transition,
         cell_model_override=args.cell_model_path,
         dff_cells_override=args.dff_cells,
+        json_out=json_path,
     )
 
-    json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
+    # Idempotent safety net: run_fault writes coverage.json itself on every path
+    # that reaches the stuck-at measurement, but its EARLY-return error stubs
+    # (cut failure, no resolvable cell model) return before that write. Preserve
+    # the prior contract that a CLI invocation always leaves a coverage.json —
+    # on the normal path this re-writes the identical final report.
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, indent=2))
 

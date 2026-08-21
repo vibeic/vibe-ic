@@ -57,7 +57,7 @@ from typing import List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ic_class_profile import detect_ic_class  # noqa: E402
 from _electrical_mention import (  # noqa: E402
-    ELECTRICAL_MENTION_RE as _RE_ELEC,
+    search_line as _elec_search_line,
 )
 
 
@@ -134,7 +134,7 @@ def _scan_docs(project: Path) -> List[Tuple[Path, int, str]]:
             except Exception:
                 continue
             for i, line in enumerate(text.splitlines(), start=1):
-                m = _RE_ELEC.search(line)
+                m = _elec_search_line(line)
                 if m:
                     hits.append((doc, i, m.group(0)))
                     if len(hits) >= 50:

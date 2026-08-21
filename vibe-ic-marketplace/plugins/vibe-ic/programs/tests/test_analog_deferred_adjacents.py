@@ -80,9 +80,38 @@ def _layout_stub(project: Path, block: str):
     (d / "lvs_match.flag").write_text("lvs: match\n")
 
 
-def _prevspost_ok(project: Path, block: str):
+def _content_ok(project: Path, block: str):
+    """The pre-layout corner result, carrying the record of WHAT CIRCUIT the
+    downstream artefacts describe.
+
+    Every test in this file is about BLOCK COVERAGE (how many declared blocks
+    produced an artefact at all), so each needs artefacts that clear every
+    other rule; without this record they would now fail on content instead,
+    and a coverage test that fails for a content reason measures neither.
+
+    IT LIVES HERE AND NOT IN THE DOWNSTREAM ARTEFACT, and the move is the
+    point: `_prevspost_ok` used to write `design_content` into
+    `pre_vs_post.json` and ship no corner artefact at all, because the A7 gate
+    read the derived file FIRST. Nothing deterministic writes the field there
+    — an AI skill authors that file — so a fixture that bought a design-bound
+    PASS with it was asserting that an AI-authored claim outranks the
+    deterministic record. A comparison cannot be more design-bound than the
+    pre-layout result it is compared against, and a hardmacro cannot model a
+    circuit its own corner sweep never names.
+    """
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
+    (d / "corner_results.json").write_text(json.dumps({
+        "block": block, "_provenance": "real_ngspice",
+        "corners": [{"name": "tt_27c_1v8", "simulator_run": True}],
+        "design_content": "structure_and_geometry"}))
+
+
+def _prevspost_ok(project: Path, block: str):
+    """A well-formed A7 comparison, over a baseline that says what it is."""
+    d = project / "phase3" / "analog" / block
+    d.mkdir(parents=True, exist_ok=True)
+    _content_ok(project, block)
     (d / "pre_vs_post.json").write_text(json.dumps({
         "pre": {"gain_db": 60.0}, "post": {"gain_db": 59.0}}))
 
@@ -90,6 +119,7 @@ def _prevspost_ok(project: Path, block: str):
 def _hardmacro_ok(project: Path, block: str):
     d = project / "phase3" / "analog" / "hardmacro" / block
     d.mkdir(parents=True, exist_ok=True)
+    _content_ok(project, block)
     (d / f"{block}.lef").write_text(
         f"VERSION 5.8 ;\nMACRO {block}\n  SIZE 100 BY 200 ;\n"
         f"END {block}\nEND LIBRARY\n" + "#" * 400)
@@ -461,7 +491,17 @@ def _pv_project(tmp_path: Path, drc: str, lvs: str) -> Path:
     (ad / "spec.json").write_text("{}")
     (ad / "topology.md").write_text("# ldo\n")
     (ad / "ldo.sp").write_text(".title ldo\n.end\n")
-    (ad / "corner_results.json").write_text("{}")
+    # WAS `{}`. An empty object is a corner artefact that declares nothing —
+    # no corners, no provenance, no statement of what circuit it measured —
+    # and every test here asserting a whole-project rc 0 was therefore also
+    # asserting that such an artefact signs off A4. These fixtures are about
+    # the A6 PV markers, so A4 carries what a run that reached it would.
+    (ad / "corner_results.json").write_text(json.dumps({
+        "netlist_provenance": "a3_netlist",
+        "design_content": "structure_and_geometry",
+        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
+        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
+    }))
     (ad / "layout.mag").write_text("magic\n")
     (ad / "drc_clean.flag").write_text(drc)
     (ad / "lvs_match.flag").write_text(lvs)

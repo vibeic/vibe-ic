@@ -1,0 +1,3085 @@
+{
+  "flow": "phase1_phase2_phase3",
+  "project": "/home/reyerchu/_c_aes9_run/design",
+  "strict": true,
+  "strict_structural": false,
+  "strict_step_artifacts": false,
+  "phase": "all",
+  "counts": {
+    "PASS": 5,
+    "FAIL": 3,
+    "MISSING": 4,
+    "WAIVED": 4,
+    "DEFERRED-BY-UPSTREAM": 24,
+    "SKIPPED-CONDITION": 21,
+    "SKIPPED-SETUP-REQUIRED": 0,
+    "VACUOUS_PASS": 2,
+    "INCOMPLETE": 0
+  },
+  "overall": "FAIL",
+  "advisories": [],
+  "structural_fail_lines": [],
+  "step_artifact_fail_lines": [],
+  "thin_input_waivers": [],
+  "allow_thin_input": false,
+  "input_doc_count": 10,
+  "ordering_violations": [
+    "[9] Synthesis (Yosys \u2192 mapped netlist) = PASS marked done while dependency [8] \ud83d\udd01 SDC validation = MISSING",
+    "[9] Synthesis (Yosys \u2192 mapped netlist) = PASS marked done while dependency [7] Constraint setup (SDC + PVT matrix) = MISSING",
+    "[12] Post-DFT optimization (resynth / buffering) = PASS marked done while dependency [11] DFT insertion (scan chain + ATPG + at-speed + BSDL) = FAIL",
+    "[12] Post-DFT optimization (resynth / buffering) = PASS marked done while dependency [10] \ud83d\udd01 Pre-layout STA (multi-corner) = MISSING",
+    "[12] Post-DFT optimization (resynth / buffering) = PASS marked done while dependency [8] \ud83d\udd01 SDC validation = MISSING",
+    "[12] Post-DFT optimization (resynth / buffering) = PASS marked done while dependency [7] Constraint setup (SDC + PVT matrix) = MISSING",
+    "[14] \ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [8] \ud83d\udd01 SDC validation = MISSING",
+    "[14] \ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [7] Constraint setup (SDC + PVT matrix) = MISSING",
+    "[14] \ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [11] DFT insertion (scan chain + ATPG + at-speed + BSDL) = FAIL",
+    "[14] \ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific) = VACUOUS-PASS marked done while dependency [10] \ud83d\udd01 Pre-layout STA (multi-corner) = MISSING"
+  ],
+  "steps": [
+    {
+      "id": "P0",
+      "name": "Structural-RTL gates (P0 umbrella, 207 of 243 checkers returned a verdict)",
+      "stage": "stage1",
+      "status": "FAIL",
+      "reasons": [
+        "Failed gates (3):",
+        "  - l_doc_structured_field_count_check \u2014 FAIL \u2014 Wave 31/32 (v0.119.64): 2 L doc(s) carry fewer typed structured fields than required:",
+        "  - phase1_doc_input_completeness_check \u2014 FAIL \u2014 3 input doc(s) below 100% capture (program + AI). Per-doc report: reports/phase1/phase1_input_vs_generated_completeness.json",
+        "  - project_outputs_in_tree_check \u2014 [WARN] project_outputs_in_tree_check: 2 dangling external-path reference(s) (file no longer exists \u2014 likely lost to /tmp sweep):",
+        "NEVER VALIDLY INVOKED (36 of 243 registered gates) \u2014 argument parsing rejected the umbrella's argv, so these gates returned no verdict and what they audit is UNCHECKED:",
+        "  - tristate_self_rx_mask_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - pulse_decoder_edge_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - packet_length_check_present (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - otp_write_lock_gate_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - l12_sequence_implementation_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - transient_signal_latch_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - bit_count_modulo_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - cmd_arg_range_validation_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - response_payload_template_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - pre_awake_silence_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - oe_pattern_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --out-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - crc_bitorder_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --crc-signal, --out-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - interface_encoding_audit (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir, --top-module, --out-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - mask_application_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: no masks supplied (--masks or --mask) \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - crc_seed_consistency_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --vectors-json \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - protocol_gap_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --name, --end-signal, --bus-idle, --min-cycles, --out-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - warn_acceptance_policy_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --project-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - tristate_bus_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --bus-name, --drivers, --out-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - periodic_signal_required_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: no required signals supplied (--periodic or --required) \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - fpga_async_input_synchronizer_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: top module not resolved (give --top or --qsf) \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - cross_constant_invariant_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - backlog_sanitize_check (NOT INVOKED: argparse rejected the umbrella's argv: one of the arguments --file --dir is required \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - fpga_qsf_lint (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --qsf-file, --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - fresh_agent_provenance_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: reference_dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - json_schema_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --json-file \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - l9_completeness_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --l9-file \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - module_port_audit (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - openroad_tcl_deprecation_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - output_artifact_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --base-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - payload_bit_position_check (NOT INVOKED: gate requires an option the umbrella does not supply: error: empty bitmap (give --bitmap or --layer-l3/--layer-l4) \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - phase1_gate_contract_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - practical_notes_specificity_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - rtl_precheck_gate (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - scope_periodic_pulse_check (NOT INVOKED: argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - testbench_exists_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "  - tester_oracle_health_check (NOT INVOKED: argparse rejected the umbrella's argv: the following arguments are required: --config \u2014 this gate returned NO verdict; the umbrella has not checked what it audits)",
+        "SKIP: l9_response_delay_schema_check",
+        "SKIP: rtl_response_byte_oracle_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).)",
+        "SKIP: tristate_active_drive_check",
+        "SKIP: otp_image_layer_consistency_check",
+        "SKIP: spice_correlation_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: analog_block_coverage_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: analog_corner_sweep_check",
+        "SKIP: analog_netlist_pdk_check",
+        "SKIP: analog_hw_spice_correlation_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: analog_hardmacro_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: mixed_signal_cosim_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: analog_pre_vs_post_layout_check",
+        "SKIP: analog_flow_compliance_check",
+        "SKIP: analog_digital_interface_check",
+        "SKIP: analog_a6_block_pv_check",
+        "SKIP: break_framing_vs_l3_check",
+        "SKIP: break_handler_safety_check",
+        "SKIP: tx_abort_during_transmission_check",
+        "SKIP: protocol_fsm_topology_check",
+        "SKIP: clock_divider_period_check",
+        "SKIP: cross_module_1cycle_handshake_check",
+        "SKIP: crc_oracle_vector_check",
+        "SKIP: tristate_pullup_assertion_check",
+        "SKIP: protocol_ip_simulation_required_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: bram_init_portable_compat_check",
+        "SKIP: bram_pdob_combinational_check",
+        "SKIP: klayout_deck_mode_check",
+        "SKIP: waiver_staleness_check",
+        "SKIP: regmap_bit_layout_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).)",
+        "SKIP: bit_level_full_stack_tb_oracle_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: l3_opcode_response_template_check",
+        "SKIP: l3_opcode_argument_constraints_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: doc_consistency_no_unresolved_conflicts_check",
+        "SKIP: l1_electrical_specs_typed_depth_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: l4_regmap_enumerated_values_typed_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).)",
+        "SKIP: l4_regmap_declared_register_coverage_check",
+        "SKIP: l4_regmap_phase2_emitter_contract_check",
+        "SKIP: l5_analog_block_spec_actionable_check",
+        "SKIP: l6_fsm_scaffold_actionable_check",
+        "SKIP: l8_clock_domains_typed_check",
+        "SKIP: l11_otp_lock_dependencies_typed_check",
+        "SKIP: l12_behavioral_sequences_steps_typed_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: l10_test_cases_cover_l3_constraints_check",
+        "SKIP: l11_sequence_covers_l6_reject_rules_check",
+        "SKIP: assertion_covers_l3_constraints_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: analog_content_detected_must_emit_l5_check (SKIP: N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.)",
+        "SKIP: l9_submodule_conformance_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).)",
+        "SKIP: metadata_content_substance_check (SKIP: N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).)",
+        "SKIP: fpga_program_chain_attest_check",
+        "SKIP: phase1_k5_quality_check",
+        "SKIP: deliverable_verdict_consistency_check",
+        "SKIP: l24_signoff_evidence_backed_check",
+        "SKIP: l25_reliability_envelope_actionable_check",
+        "SKIP: l26_mechanical_applicability_derived_check"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": [
+        {
+          "name": "self_rx_mask_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tristate_self_rx_mask_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "timer_freeze_after_state_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "pulse_decoder_edge_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "packet_length_check_present",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "otp_write_lock_gate_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "l12_sequence_implementation_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "nba_addr_read_race_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "sustained_vs_edge_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "transient_signal_latch_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "periodic_timer_vs_rx_activity_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "memory_read_pipeline_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_engine_isolation_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bit_count_modulo_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "cmd_arg_range_validation_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "response_payload_template_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "pre_awake_silence_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "dispatch_register_default_reset_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "host_soft_reset_unwake_path_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "dispatch_fetch_loop_population_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "dispatcher_tx_arm_order_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rig_topology_disclosure_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_wrapper_input_polluter_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "oe_pattern_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --out-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "crc_bitorder_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-files, --crc-signal, --out-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "interface_encoding_audit",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir, --top-module, --out-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "phy_counter_audit",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "mask_application_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "gate requires an option the umbrella does not supply: error: no masks supplied (--masks or --mask)",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "protocol_delimiter_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_seed_consistency_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --vectors-json",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "crc_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_residual_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "handshake_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "gap_reset_granularity_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "protocol_gap_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --name, --end-signal, --bus-idle, --min-cycles, --out-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "trailing_delimiter_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "device_response_no_br_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "warn_acceptance_policy_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --project-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "tristate_bus_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --bus-name, --drivers, --out-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "fsm_error_invariant",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bitwidth_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "periodic_signal_required_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "gate requires an option the umbrella does not supply: error: no required signals supplied (--periodic or --required)",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "fpga_async_input_synchronizer_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "gate requires an option the umbrella does not supply: error: top module not resolved (give --top or --qsf)",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "cdc_async_input_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bus_turnaround_consumes_spec_constant_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "dead_timing_constant_warn",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l9_response_delay_schema_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "fetch_round_trip_sentinel_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rtl_response_byte_oracle_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "scope_response_byte_decode_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tristate_active_drive_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "otp_image_layer_consistency_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "spice_correlation_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "analog_block_coverage_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "analog_corner_sweep_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_netlist_pdk_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_hw_spice_correlation_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "analog_hardmacro_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "mixed_signal_cosim_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "analog_pre_vs_post_layout_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_flow_compliance_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_digital_interface_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_a1_spec_extract_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a2_topology_select_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a3_netlist_gen_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a4_corner_sweep_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a5_layout_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a6_block_pv_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "analog_a7_post_layout_resim_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a8_hardmacro_gen_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_a9_hw_verify_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "break_framing_vs_l3_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "break_handler_safety_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "tx_abort_during_transmission_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "protocol_fsm_topology_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "clock_divider_period_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "cross_module_1cycle_handshake_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "frame_end_detection_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_oracle_vector_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "arbiter_starvation_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tristate_pullup_assertion_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "protocol_ip_simulation_required_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "bram_init_portable_compat_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "bram_pdob_combinational_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "klayout_deck_mode_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "waiver_staleness_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "provenance_hash_audit",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "frame_end_gap_in_l8_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l8_frame_end_gap_derivation_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "half_duplex_response_window_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "response_latency_observability_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tb_timing_extremes_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_port_qsf_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "wake_pulse_implementation_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "half_duplex_frame_end_idle_reset_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tx_timing_use_max_of_range_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "single_bus_driver_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "half_duplex_wrapper_open_drain_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "cmd_protocol_byte_exact_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "otp_field_map_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "frs_timing_range_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "regmap_bit_layout_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "oracle_dump_required_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_pad_fanout_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "hw_acceptance_test_passed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_top_pin_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tx_bit_width_min_resolution_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_clock_divider_antipattern_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tx_bit_timing_units_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "clock_cascade_synthesis_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "cmd_response_otp_provenance_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "cmd_argument_validation_present_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_pad_pullup_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "vendor_fpga_reference_table_extraction_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "chip_clock_toggle_divider_when_master_already_target_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "toggle_divider_hierarchical_clock_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l2_timing_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "per_opcode_response_latency_table_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_parameters_extracted_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rig_topology_image_extracted_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "binary_doc_low_extraction_warn",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_constants_rtl_doc_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "extraction_coverage_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "phase1_coverage_report_present_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "extraction_evidence_schema_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "nba_shift_register_same_cycle_read_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bit_level_full_stack_tb_oracle_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "crc_compute_done_before_tx_start_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "opcode_dispatch_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fsm_state_coverage_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_classifier_thresholds_match_l8_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "tx_phy_bit_cell_total_consumed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_ibt_frame_end_semantics_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_byte_assembler_ibt_flush_recovery_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "wake_gen_bus_active_reset_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bram_init_file_actually_loaded_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "self_rx_mask_required_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_q_settle_cycle_after_last_feed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_search_path_includes_required_dirs_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "wake_pulse_width_matches_measurement_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "wake_pulse_emit_gated_by_first_rx_command_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "otp_module_uses_supported_pattern_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "phase1_no_waivers_used_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "phase1_all_l_docs_present_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_deglitch_filter_required_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_sdc_clock_constraint_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "fpga_sta_negative_slack_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "slave_tx_no_device_break_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_classifier_no_threshold_gap_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_byte_valid_requires_ibt_gate_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "bram_read_latency_consume_alignment_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_residue_settle_state_required_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_polyform_outputreversal_pairing_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "send_test_active_drive_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "connect_vs_send_test_parity_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "protocol_reference_tb_pass_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "function_void_with_output_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rx_last_bit_frame_end_commit_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l_doc_structured_field_count_check",
+          "verdict": "FAIL",
+          "message": "FAIL \u2014 Wave 31/32 (v0.119.64): 2 L doc(s) carry fewer typed structured fields than required:",
+          "evidence": {
+            "exit_code": 1
+          }
+        },
+        {
+          "name": "l_doc_aggregated_blob_size_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "extraction_coverage_denominator_audit",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "phase1_doc_input_completeness_check",
+          "verdict": "FAIL",
+          "message": "FAIL \u2014 3 input doc(s) below 100% capture (program + AI). Per-doc report: reports/phase1/phase1_input_vs_generated_completeness.json",
+          "evidence": {
+            "exit_code": 1
+          }
+        },
+        {
+          "name": "l_doc_unique_content_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "result_md_audit_provenance_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l6_reject_rules_from_rx_event_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l3_opcode_response_template_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l3_opcode_argument_constraints_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "doc_consistency_no_unresolved_conflicts_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l1_electrical_specs_typed_depth_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "l1_pin_table_aliases_typed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l1_pin_bus_width_actionable_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l2_named_constant_resolvable_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l3_opcode_dispatch_key_actionable_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l4_regmap_enumerated_values_typed_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "l4_regmap_declared_register_coverage_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l4_regmap_phase2_emitter_contract_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l5_analog_block_spec_actionable_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l6_fsm_scaffold_actionable_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l8_clock_domains_typed_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l11_otp_lock_dependencies_typed_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l12_behavioral_sequences_steps_typed_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "byte_assembler_explicit_9bit_reject_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "cmd_buf_index_semantic_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l3_opcode_pre_wake_allowed_typed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l10_test_cases_cover_l3_constraints_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l11_sequence_covers_l6_reject_rules_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "assertion_covers_l3_constraints_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false (verification_track='generic_full_stack'). This IC has no SW-visible command protocol / opcode argument map / protocol behavioral steps, so the protocol gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "l20_dft_scan_topology_actionable_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l22_verification_plan_measurable_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l23_security_requirements_typed_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "analog_content_detected_must_emit_l5_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': analog_applicable=false (verification_track='generic_full_stack'). This IC has no analog content, so the analog block-coverage / hardmacro / mixed-signal gate does not apply. Core functional gates (lint/synth/CDC/sim) still run.",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "phase1_doc_content_implementation_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "pdk_analog_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "otp_image_nonzero_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "project_outputs_in_tree_check",
+          "verdict": "FAIL",
+          "message": "[WARN] project_outputs_in_tree_check: 2 dangling external-path reference(s) (file no longer exists \u2014 likely lost to /tmp sweep):",
+          "evidence": {
+            "exit_code": 1
+          }
+        },
+        {
+          "name": "wake_gen_silence_gate",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "dispatch_handler_completeness",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "crc_validation_present",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "scope_reply_preamble_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "rig_firmware_capability_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l9_rtl_pin_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "l9_submodule_conformance_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "analog_artefact_substance_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "chip_gds_canonical_real_file_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "gds_substance_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "canonical_path_symlink_forbid_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "metadata_content_substance_check",
+          "verdict": "SKIP",
+          "message": "N/A for class 'crypto_accelerator': command_protocol_applicable=false AND the L docs record a no-opcode / no-regmap input \u2014 there are no opcodes to build golden bytes from, no register fields, no submodule decomposition, no protocol metadata. The primitive-appropriate set (generic_full_stack reference TB vs the L9 contract, lint, synth, latch checks) still runs and still gates (ORGANIC-20260605 #419).",
+          "evidence": {
+            "skip_kind": "class-not-applicable"
+          }
+        },
+        {
+          "name": "phase1_structured_field_substance_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "provenance_output_hash_completeness_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "agent_report_sha256_attestation_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "derived_clock_sdc_required_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "cross_constant_invariant_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "dispatcher_response_size_table_audit",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "pad_drive_high_active_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "waiver_legitimacy_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "backlog_sanitize_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: one of the arguments --file --dir is required",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "fpga_program_chain_attest_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "fpga_qsf_lint",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --qsf-file, --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "fresh_agent_provenance_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: reference_dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "ic_class_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "json_schema_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --json-file",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "l9_completeness_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --l9-file",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "layer_extension_presence_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "manifest_leak_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "module_port_audit",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "no_protocol_consistency_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "openroad_tcl_deprecation_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "output_artifact_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --base-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "payload_bit_position_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "gate requires an option the umbrella does not supply: error: empty bitmap (give --bitmap or --layer-l3/--layer-l4)",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "phase1_k5_quality_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "phase1_quality_parity_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "phase1_gate_contract_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "practical_notes_specificity_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "rtl_precheck_gate",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "scope_periodic_pulse_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: unrecognized arguments: /home/reyerchu/_c_aes9_run/design",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "spec_required_artifact_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        },
+        {
+          "name": "testbench_exists_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --rtl-dir",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "tester_oracle_health_check",
+          "verdict": "NOT_INVOCABLE",
+          "message": "argparse rejected the umbrella's argv: the following arguments are required: --config",
+          "evidence": {
+            "exit_code": 2
+          }
+        },
+        {
+          "name": "deliverable_verdict_consistency_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l24_signoff_evidence_backed_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l25_reliability_envelope_actionable_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l26_mechanical_applicability_derived_check",
+          "verdict": "SKIP",
+          "message": "",
+          "evidence": {
+            "exit_code": 2,
+            "skip_kind": "input-missing"
+          }
+        },
+        {
+          "name": "l19_pdk_floorplan_contract_check",
+          "verdict": "PASS",
+          "message": "",
+          "evidence": {
+            "exit_code": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "D1",
+      "name": "Phase 1 Doc Extraction (17 skills + dialogue entry \u2192 L1-L27)",
+      "stage": "stage_phase1",
+      "status": "VACUOUS_PASS",
+      "reasons": [
+        "vacuous: gate program signalled VACUOUS_PASS (input not applicable): phase1_expert_parse_track .",
+        "ADVISORY (non-blocking, #306): ok: phase1_expert_track_evidence_check .",
+        "ADVISORY (non-blocking, #306): ok: l16_compliance_properties_actionable_check .",
+        "ADVISORY (non-blocking, #306): FINDING: l17_channel_catalog_consumer_contract_check . :: phase 2 emits would therefore not match the design.\",\n      \"evidence\": {\n        \"declared_clock_evidence\": [\n          \"L6_CONTROL_LOGIC.json.fsm_states[6]\"\n        ],\n        \"synthesised_ports\": [",
+        "ADVISORY (non-blocking, #306): n/a (input not present): l21_macro_supply_rail_declared_check .",
+        "ADVISORY (non-blocking, #306): FINDING: l8_sta_clock_period_design_owned_check . :: no design input owns.\n  Fix: put the operating frequency in L8 (clock_mhz, or a clock_domains[] entry with freq_mhz/period_ns/freq_hz), or set waiver `l8_sta_clock_period_not_design_owned` (>=40 chars",
+        "ADVISORY (non-blocking, #306): ok: l7_debug_access_grounding_check .",
+        "ADVISORY (non-blocking, #306): ok: l8_clock_period_actionability_check .",
+        "ADVISORY (non-blocking, #306): ok: l9_floorplan_contract_check .",
+        "ADVISORY (non-blocking, #306): n/a (input not present): l10_test_case_oracle_anchor_check .",
+        "ADVISORY (non-blocking, #306): ok: l11_otp_content_consumer_contract_check .",
+        "ADVISORY (non-blocking, #306): ok: l12_sequences_in_consumed_layer_check .",
+        "ADVISORY (non-blocking, #306): ok: l13_bringup_contract_check .",
+        "ADVISORY (non-blocking, #306): ok: l14_protocol_versioning_contract_check .",
+        "ADVISORY (non-blocking, #306): ok: l15_encoding_tables_contract_check .",
+        "ADVISORY (non-blocking, #306): ok: l18_interconnect_topology_factuality_check .",
+        "ADVISORY (non-blocking, #306): n/a (input not present): cross_layer_reference_check ."
+      ],
+      "evidence": [
+        "phase1/generated_docs/L1_DATASHEET.json",
+        "phase1/generated_docs/L2_FRS.json",
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json",
+        "phase1/generated_docs/L4_REGMAP.json",
+        "phase1/generated_docs/L5_ADI_SPEC.json",
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json",
+        "phase1/generated_docs/L7_TEST_DEBUG.json",
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+        "phase1/generated_docs/L10_TEST_CASES.json",
+        "phase1/generated_docs/L11_OTP_CONTENT.json",
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
+        "phase1/generated_docs/L13_LAB_CALIBRATION.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 1,
+      "name": "Spec-to-RTL",
+      "stage": "stage1",
+      "status": "PASS",
+      "reasons": [],
+      "evidence": [
+        "phase2/stage1/rtl/aes.sv",
+        "phase2/stage1/rtl/prim_diff_decoder.v",
+        "reports/phase1/extraction_coverage_report.md",
+        "reports/phase1/extraction_coverage_report.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 2,
+      "name": "\ud83d\udd01 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)",
+      "stage": "stage1",
+      "status": "PASS",
+      "reasons": [],
+      "evidence": [
+        "reports/phase2/lint/rtl_hygiene.json",
+        "reports/phase2/lint/rom_init_lint.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 3,
+      "name": "\ud83d\udd01 CDC / RDC check",
+      "stage": "stage1",
+      "status": "PASS",
+      "reasons": [],
+      "evidence": [
+        "reports/phase2/cdc/crossing.json",
+        "reports/phase2/cdc/async_input.json",
+        "reports/phase2/cdc/reset_dep.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 4,
+      "name": "\ud83d\udd01 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
+      "stage": "stage1",
+      "status": "WAIVED",
+      "reasons": [
+        "WAIVED-DEFERRED: gate program signalled PASS_WITH_WAIVERS (#651 \u2014 a slot credited via a waiver, NOT a bare PASS; production tapeout review must close it): cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json",
+        "WAIVED-DEFERRED: gate program signalled PASS_WITH_WAIVERS (#651 \u2014 a slot credited via a waiver, NOT a bare PASS; production tapeout review must close it): verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json",
+        "ADVISORY (non-blocking, #306): n/a (input not present): coverage_closure ."
+      ],
+      "evidence": [
+        "phase2/stage1/sim/results.xml",
+        "phase2/stage1/sim/pass.flag",
+        "reports/phase2/coverage/coverage_actual.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 5,
+      "name": "\ud83d\udd01 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
+      "stage": "stage1",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "SKIPPED-CONDITION: gate evidence self-reports a skip (#608/#675): phase2/stage1/formal/formal_not_run.json: sibling self-reports verdict=SKIPPED-CONDITION (no clean formal proof in this chain \u2014 reference-TB simulation results are NOT a proof and are never copied here (#433c/#440). The deterministic reset-safety har)"
+      ],
+      "evidence": [
+        "phase2/stage1/sim_full_stack/results.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": true,
+      "gate_records": null
+    },
+    {
+      "id": 6,
+      "name": "FPGA early prototype + verification report audit",
+      "stage": "stage1",
+      "status": "WAIVED",
+      "reasons": [
+        "ENV_UNAVAILABLE waiver applied (natural verdict was FAIL/MISSING): ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype] (approver: field-agent-attest (fpga-board cap-gap tier))",
+        "  \u21b3 natural: missing files (any_of=False): ['phase2/stage1/fpga/output_files/*.sof']"
+      ],
+      "evidence": [
+        "reports/phase2/fpga/quartus_map_audit.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 7,
+      "name": "Constraint setup (SDC + PVT matrix)",
+      "stage": "stage2",
+      "status": "MISSING",
+      "reasons": [
+        "no required_outputs found (expected: ['phase2/stage2/constraints/*.sdc', 'phase2/stage2/constraints/pvt_matrix.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 8,
+      "name": "\ud83d\udd01 SDC validation",
+      "stage": "stage2",
+      "status": "MISSING",
+      "reasons": [
+        "no required_outputs found (expected: ['reports/phase2/sdc_check.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 9,
+      "name": "Synthesis (Yosys \u2192 mapped netlist)",
+      "stage": "stage2",
+      "status": "PASS",
+      "reasons": [],
+      "evidence": [
+        "phase2/stage2/synth/netlist.v",
+        "phase2/stage2/synth/stats.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 10,
+      "name": "\ud83d\udd01 Pre-layout STA (multi-corner)",
+      "stage": "stage2",
+      "status": "MISSING",
+      "reasons": [
+        "no required_outputs found (expected: ['phase3/stage3/sta/pre_pnr_timing.rpt', 'reports/phase3/sta/pre_pnr_summary.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 11,
+      "name": "DFT insertion (scan chain + ATPG + at-speed + BSDL)",
+      "stage": "stage2",
+      "status": "FAIL",
+      "reasons": [
+        "program failed: dft_signoff_check . --json reports/phase2/dft/dft_signoff.json",
+        "output: : [\n      \"no coverage.json \u2014 cannot read a transition (at-speed) fault-model record\"\n    ]\n  },\n  \"bsdl\": {\n    \"status\": \"SKIP\",\n    \"padded\": false,\n    \"reasons\": [\n      \"design is a bare core / "
+      ],
+      "evidence": [
+        "phase2/stage2/dft/scan_netlist.v",
+        "reports/phase2/dft/bsdl_plan.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "FS1",
+      "name": "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)",
+      "stage": "stage2",
+      "status": "FAIL",
+      "reasons": [
+        "program failed: fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json",
+        "output: fmeda_fault_injection_coverage: DC=UNMEASURED (0 faults injected) floor=99.0 ASIL-D \u2192 FAIL \u2014 iverilog/vvp injection run FAILED (exit=2) \u2014 no result was produced, so diagnostic coverage is UNMEASURED ("
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "DT1",
+      "name": "Transition-delay-fault (at-speed LOC) ATPG",
+      "stage": "stage2",
+      "status": "MISSING",
+      "reasons": [
+        "no required_outputs found (expected: ['reports/phase2/dft/transition_coverage.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 12,
+      "name": "Post-DFT optimization (resynth / buffering)",
+      "stage": "stage2",
+      "status": "PASS",
+      "reasons": [],
+      "evidence": [
+        "phase2/stage2/synth/post_dft_netlist.v"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 13,
+      "name": "\ud83d\udd01 Equivalence check (RTL \u2261 post-DFT netlist)",
+      "stage": "stage2",
+      "status": "WAIVED",
+      "reasons": [
+        "WAIVED-DEFERRED: gate program signalled PASS_WITH_WAIVERS (#651 \u2014 a slot credited via a waiver, NOT a bare PASS; production tapeout review must close it): lec_equivalence_check . --json reports/lec_equivalence_check.json"
+      ],
+      "evidence": [
+        "reports/lec.rpt",
+        "reports/lec.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A1",
+      "name": "Analog Spec Extraction",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A2",
+      "name": "Analog Topology Selection",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A3",
+      "name": "Analog Netlist Generation",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A4",
+      "name": "Analog Corner Sweep (PVT)",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A5",
+      "name": "Analog Layout",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A6",
+      "name": "Analog Physical Verification (per-block DRC + LVS before merge)",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A7",
+      "name": "\ud83d\udd01 Post-Layout Resimulation",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A8",
+      "name": "Hardmacro Generation (LEF + Liberty + GDS + Verilog)",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "A9",
+      "name": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
+      "stage": "stage_analog",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 14,
+      "name": "\ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
+      "stage": "stage2",
+      "status": "VACUOUS_PASS",
+      "reasons": [
+        "vacuous: gate program signalled VACUOUS_PASS (input not applicable): yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
+      ],
+      "evidence": [
+        "phase2/stage2/synth/netlist.v"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 15,
+      "name": "Floorplan + PDN",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/floorplan.def', 'phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 16,
+      "name": "Clock planning",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/cts/clock_plan.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 17,
+      "name": "Placement (global + detailed)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/placed.def'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 18,
+      "name": "Spare-cell + ECO-prep insertion (Design-for-ECO)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/spare_cells.json', 'reports/spare_cell_coverage.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 19,
+      "name": "CTS (Clock Tree Synthesis)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/post_cts.def', 'phase3/stage3/cts/clock_tree.rpt'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 20,
+      "name": "\ud83d\udd01 Post-CTS hold fixing",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/post_hold.def'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 21,
+      "name": "Routing (global + detailed)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/routed.def', 'phase3/stage3/pnr/routed.drc.rpt', 'reports/phase3/drc_router.rpt'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 22,
+      "name": "Parasitic Extraction (RC \u2192 SPEF)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "DT2",
+      "name": "Path-delay-fault (at-speed, timing-graded) ATPG",
+      "stage": "stage2",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase2/stage2/dft/cut_netlist.v', 'phase3/stage3/extracted/*.spef', 'phase3/stage3/pnr/*_pnr.v']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "DT3",
+      "name": "Small-delay-defect (SDD) at-speed grade",
+      "stage": "stage2",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['reports/phase2/dft/path_delay_coverage.json', 'reports/phase2/dft/transition_coverage.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 23,
+      "name": "\ud83d\udd01 Post-route STA (multi-corner multi-mode sign-off)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/sta/post_route_timing.rpt', 'reports/phase3/sta/post_route_summary.json', 'reports/phase3/sta/sta_corner_record_completeness.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 24,
+      "name": "\ud83d\udd01 IR Drop (static + dynamic)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/ir_drop.rpt', 'reports/phase3/ir_drop.json', 'reports/phase3/ir_drop_signoff.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 25,
+      "name": "\ud83d\udd01 EM check (electromigration lifetime)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/em.rpt', 'reports/phase3/em.json', 'reports/phase3/em_signoff.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 26,
+      "name": "\ud83d\udd01 Antenna check (gate-oxide protection)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/antenna.rpt', 'reports/phase3/antenna.json', 'reports/phase3/antenna_signoff.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 27,
+      "name": "\ud83d\udd01 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 28,
+      "name": "\ud83d\udd01 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/perc_equivalent.json', 'reports/phase3/perc_equivalent.rpt', 'reports/phase3/PERC_SIGNOFF_MEMO.md', 'reports/phase2/gates/perc_signoff.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 29,
+      "name": "Post-Layout Gate-Level Simulation (Post-Sim + SDF)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 30,
+      "name": "Post-Layout SPICE Verification (critical-path correlation + analog)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp', 'phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 31,
+      "name": "\ud83d\udd01 Physical Verification (DRC + LVS + ERC + Density)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/drc_signoff.rpt', 'reports/phase3/lvs.rpt', 'reports/phase3/erc.rpt', 'reports/phase3/lvs.json', 'reports/phase2/gates/erc_density.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 32,
+      "name": "\ud83d\udd01 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
+      "stage": "stage3",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag', 'phase3/stage3/eco/eco_trigger_decision.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 33,
+      "name": "Power analysis (pre/post-layout)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/power.rpt', 'reports/phase3/power.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 34,
+      "name": "Metal Fill (ECO-aware density fill insertion)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done', 'reports/density.json OR reports/phase3/density.json', 'reports/density.rpt OR reports/phase3/density.rpt'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 35,
+      "name": "DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/phase3/dfm_screen.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 36,
+      "name": "Tapeout checklist (final sign-off confirmation)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['reports/audit/tapeout_checklist.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 37,
+      "name": "GDSII output (only if Step 31 PV fully clean)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage4/gds/*.gds'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 38,
+      "name": "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)",
+      "stage": "stage4",
+      "status": "DEFERRED-BY-UPSTREAM",
+      "reasons": [
+        "deferred-by-upstream(13, ticket=?): step 13 is a waived ancestor of this step in the declared blocks_on ORDER, so this step never ran. The flow declares no inputs, so whether its artefacts would have appeared had 13 run is not established from the flow \u2014 one waiver, one deduction",
+        "no required_outputs found (expected: ['phase3/stage4/foundry_handoff/mask_spec.json', 'phase3/stage4/foundry_handoff/wat_plan.json', 'phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt', 'phase3/stage4/foundry_handoff/corner_test_vectors.json', 'reports/phase3/foundry_handoff_audit.json'])"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "deferred-by-upstream(13, ticket=?)",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 39,
+      "name": "FPGA final sign-off (recompile + on-board test)",
+      "stage": "stage4",
+      "status": "WAIVED",
+      "reasons": [
+        "ENV_UNAVAILABLE waiver applied (natural verdict was FAIL/MISSING): ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype] (approver: field-agent-attest (fpga-board cap-gap tier))",
+        "  \u21b3 natural: program failed: fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1",
+        "  \u21b3 natural: output: /fpga/ (need one of: ['quartus_pgm', 'Blaster', 'USB-Blaster', 'JTAG chain']...)\n  \u2717 [error] no-hardware-evidence: no non-JSON hardware evidence found. Need at least one of: reports/fpga/on_board_evid"
+      ],
+      "evidence": [
+        "reports/phase2/fpga/on_board_pass.json"
+      ],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "M1",
+      "name": "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)",
+      "stage": "stage_mixed_signal",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "M2",
+      "name": "Mixed-Signal Power Domain + Level Shifter / Isolation Verification",
+      "stage": "stage_mixed_signal",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "M3",
+      "name": "Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)",
+      "stage": "stage_mixed_signal",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": "M4",
+      "name": "Mixed-Signal Sign-Off (top-level PV + final verdict)",
+      "stage": "stage_mixed_signal",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 40,
+      "name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
+      "stage": "stage5_manufacturing",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 41,
+      "name": "Wafer Sort / Probe Test (ATE + probe card)",
+      "stage": "stage5_manufacturing",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 42,
+      "name": "Packaging (assembly: wirebond / FC-CSP / WLCSP)",
+      "stage": "stage5_manufacturing",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 43,
+      "name": "Final Test (ATE: functional + parametric + burn-in)",
+      "stage": "stage5_manufacturing",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    },
+    {
+      "id": 44,
+      "name": "Reliability qualification (HTOL / FIT attestation)",
+      "stage": "stage5_manufacturing",
+      "status": "SKIPPED-CONDITION",
+      "reasons": [
+        "condition not met: {'files_exist': ['phase3/stage5_manufacturing/silicon_received.json']}"
+      ],
+      "evidence": [],
+      "gate_output": "",
+      "cascade_note": "",
+      "self_skip_disclosed": false,
+      "gate_records": null
+    }
+  ]
+}

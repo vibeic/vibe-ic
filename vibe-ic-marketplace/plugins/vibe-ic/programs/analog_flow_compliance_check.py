@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import _gate_denominator as _gd
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 GATE = "analog_flow_compliance_check"
 
@@ -79,6 +80,32 @@ DENOMINATOR_UNIT = ("A1-A9 step obligation(s) evaluated (one per declared "
 #: rc 2 is this repo's NOT-CHECKED tier: `flow_compliance_check` promotes it
 #: to the VACUOUS_PASS verdict tier rather than a bare PASS.
 RC_PASS, RC_FAIL, RC_VACUOUS = 0, 1, 2
+
+# ── the third disposition ─────────────────────────────────────────────────
+# The matrix had two answers for an obligation that was not waived: the
+# artefact is there (PASS) or it is not (MISSING). A third case exists and was
+# being reported as the first: the artefact IS there, and its content came from
+# a library default because no bound input determined it.
+#
+# THE RULE, with no tool, step or block name in it:
+#
+#   A step that produced its declared artefact from a library default, because
+#   no bound input determined its content, is neither complete nor absent. It
+#   gets its own cell value; it is never counted as a pass; it is never counted
+#   as missing; and the ONE line this gate prints carries its count.
+#
+# It is not MISSING because the artefact exists, is well-formed, and re-running
+# the step will not produce a different one — sending a reader to look for
+# work already done as well as the inputs allow is a false lead.
+# It is not PASS because every number measured on that artefact is a number
+# about the default, and a pass would let a library topology be reported as a
+# designed one.
+# It is not FAIL because nothing is wrong: the bounded inputs did not determine
+# the content, and inventing content to fill that gap is the failure this whole
+# track exists to prevent. A run that is honest about its ceiling must not be
+# scored below one that is not.
+CELL_STRUCTURE_ONLY = "PASS_STRUCTURE_ONLY"
+VERDICT_STRUCTURE_ONLY = "PASS_STRUCTURE_ONLY"
 
 
 @dataclass
@@ -256,6 +283,103 @@ def _pv_flag_signed_off(project: Path, block: str, name: str,
     return matched is True
 
 
+def _a4_signed_off(project: Path, block: str) -> bool:
+    """A4 sign-off evidence, not merely A4's filename.
+
+    Presence alone is NOT evidence, for exactly the reason `_pv_flag_signed_off`
+    above exists. Measured on a real round: ten blocks each carried a
+    corner_results.json and this cell read `PASS` for all ten, while A1/A2/A3
+    read `MISSING` for all ten in the same matrix — A3's declared output
+    `<block>.sp` existed for none of them, so every deck the sweep simulated was
+    its own built-in testbench. A matrix that says "netlist MISSING, corner
+    sweep PASS" for the same block is reporting a measurement of something the
+    run never built.
+
+    Delegates to `analog_a4_corner_sweep_check`'s own provenance predicates so
+    the two can never disagree about the same artefact — the same delegation
+    `_pv_flag_signed_off` makes to the A6 gate. On import failure it degrades to
+    the historic presence check, which is what it always was."""
+    path = None
+    for d in _block_dirs(project, block, "A4"):
+        cand = d / "corner_results.json"
+        if cand.is_file():
+            path = cand
+            break
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    try:
+        import analog_a4_corner_sweep_check as _a4
+    except Exception:  # pragma: no cover — degraded to the historic minimum
+        return True
+    rel = str(path)
+    corners = data.get("corners") if isinstance(data.get("corners"), list) else []
+    if _a4._netlist_disclosed_fail(project, block, data, rel) is not None:
+        return False
+    if _a4._netlist_absent_fail(project, block, data, corners, rel) is not None:
+        return False
+    # ...and the third of the gate's certification predicates. Delegated for
+    # the same reason as the other two: this matrix and the gate of record
+    # must not be able to disagree about the same artefact. Without it the
+    # cell read a signed-off A4 for an artefact the gate itself refuses to
+    # certify — which is the "A3 MISSING / A4 PASS" shape one door along.
+    if _a4._content_undisclosed_fail(block, data, rel) is not None:
+        return False
+    return True
+
+
+def _structure_only(project: Path, block: str, step_id: str) -> bool:
+    """True when this obligation WAS met and the artefact that met it records
+    that its content came from a library default.
+
+    READ from the artefact's own record — this gate cannot look at a netlist
+    or a corner result and know whether a number in it came from a bound input
+    or from a default. Only the producer that resolved it knows, and it wrote
+    the answer down. Absence of the record is NOT read as structure-only:
+    "undeclared" is a different answer and the per-step gate owns it.
+
+    CLASSIFIED THROUGH THE SHARED SITE, not by a local `==`. This matrix is a
+    THIRD consumer of the same two artefacts the A3 and A4 gates certify, and a
+    private comparison here is free to drift from the one the gates certify on —
+    which is exactly how `analog_a3_netlist_gen_check` came to have a disclosed
+    tier and no undisclosed one while `analog_one_shot_runner` read the same
+    sidecar through the whitelist. Degrades to the historic answer only if the
+    shared module cannot be imported at all."""
+    if step_id == "A3":
+        name, key = _acc_netlist_record()
+    elif step_id == "A4":
+        name, key = "corner_results.json", ("design_content",)
+    else:
+        return False
+    for d in _block_dirs(project, block, step_id):
+        p = d / name
+        if not p.is_file():
+            continue
+        try:
+            import _analog_a_check_common as _aac
+        except Exception:  # pragma: no cover — degraded to the historic answer
+            return False
+        return _aac.content_class_of_artefact(p, key) == \
+            _aac.CONTENT_STRUCTURE_ONLY
+    return False
+
+
+def _acc_netlist_record() -> tuple:
+    """`(filename, key path)` of the A3 producer's record, from the shared
+    module when it is importable. Named once, there, so this matrix and the A3
+    gate cannot come to look in two different places."""
+    try:
+        import _analog_a_check_common as _aac
+        return (_aac.NETLIST_PROVENANCE_ARTEFACT, _aac.NETLIST_CONTENT_KEYS)
+    except Exception:  # pragma: no cover
+        return ("netlist_provenance.json", ("_provenance", "design_content"))
+
+
 def _check_step(project: Path, block: str, step_id: str) -> bool:
     if step_id == "A1":
         return _any_file(project, block, "A1", "spec.json")
@@ -264,7 +388,7 @@ def _check_step(project: Path, block: str, step_id: str) -> bool:
     elif step_id == "A3":
         return _any_glob(project, block, "A3", "*.sp")
     elif step_id == "A4":
-        return _any_file(project, block, "A4", "corner_results.json")
+        return _a4_signed_off(project, block)
     elif step_id == "A5":
         return (_any_file(project, block, "A5", "layout.mag") or
                 _any_glob(project, block, "A5", "*.gds"))
@@ -358,11 +482,29 @@ def run_audit(project: Path) -> AuditResult:
 
     matrix: Dict[str, Dict[str, str]] = {}
     total_missing = 0
+    structure_only_cells: List[str] = []
 
     for block in blocks:
         matrix[block] = {}
         for step_id, step_name in ANALOG_STEPS:
             if _check_step(project, block, step_id):
+                if _structure_only(project, block, step_id):
+                    matrix[block][step_id] = CELL_STRUCTURE_ONLY
+                    structure_only_cells.append(f"{block}/{step_id}")
+                    result.findings.append(Finding(
+                        rule=f"ANALOG_{step_id}_STRUCTURE_ONLY",
+                        severity="WARNING",
+                        message=(
+                            f"Block '{block}' step {step_id} ({step_name}): "
+                            f"{CELL_STRUCTURE_ONLY} — the declared artefact "
+                            f"exists and its content came from a library "
+                            f"default because no bound input determined it. "
+                            f"Not missing (re-running produces the same "
+                            f"artefact) and not a design-bound pass (every "
+                            f"number measured on it is a number about the "
+                            f"default)."),
+                    ))
+                    continue
                 matrix[block][step_id] = "PASS"
                 result.findings.append(Finding(
                     rule=f"ANALOG_{step_id}_PASS",
@@ -390,7 +532,15 @@ def run_audit(project: Path) -> AuditResult:
 
     if total_missing > 0:
         result.passed = False
-    result.verdict = "PASS" if result.passed else "FAIL"
+    # `passed` is untouched by the third disposition: a library default is an
+    # honest ceiling, not a defect, so it cannot make a run non-green. The
+    # VERDICT WORD changes, because "PASS" on its own would say the artefacts
+    # are design-bound and they are not.
+    if result.passed:
+        result.verdict = (VERDICT_STRUCTURE_ONLY if structure_only_cells
+                          else "PASS")
+    else:
+        result.verdict = "FAIL"
 
     total_waived = sum(1 for b in matrix.values()
                        for s in b.values() if s == "WAIVED")
@@ -401,6 +551,8 @@ def run_audit(project: Path) -> AuditResult:
         "matrix": matrix,
         "total_missing": total_missing,
         "total_waived": total_waived,
+        "total_structure_only": len(structure_only_cells),
+        "structure_only_cells": structure_only_cells,
         "pass": result.passed,
     }
     # Every obligation in the matrix reached the rule body — each one is a
@@ -415,7 +567,8 @@ def run_audit(project: Path) -> AuditResult:
         details={"blocks": [str(b) for b in blocks],
                  "steps": [s for s, _ in ANALOG_STEPS],
                  "missing": total_missing,
-                 "waived": total_waived}))
+                 "waived": total_waived,
+                 "structure_only": len(structure_only_cells)}))
     return result
 
 
@@ -454,13 +607,23 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     if not args.json:
         # The verdict line carries the denominator ON ITSELF: a reader of the
         # one line this gate prints must be able to see how many A-step
         # obligations stood behind it (#511).
-        print(f"[{result.verdict}] {GATE}: {_gd.line_of(result.summary)}")
+        # The third disposition rides ON THE ONE LINE, not only in the JSON.
+        # A field a reader has to open a file to see is the same silence the
+        # field was added to close.
+        so = result.summary.get("total_structure_only") or 0
+        so_str = (f"  STRUCTURE-ONLY={so} "
+                  f"(artefact produced from a library default, not from a "
+                  f"bound input: "
+                  f"{', '.join(result.summary.get('structure_only_cells') or [])})"
+                  if so else "")
+        print(f"[{result.verdict}] {GATE}: "
+              f"{_gd.line_of(result.summary)}{so_str}")
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")

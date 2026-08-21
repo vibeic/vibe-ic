@@ -73,8 +73,18 @@ def test_v029_phase_2_limits_step_set(tmp_path):
     r = _run(str(tmp_path), "--phase", "2")
     # Empty project always FAILs Step 1 etc; what we test is that
     # Phase-3 step names are NOT in the report.
-    assert "tapeout" not in r.stdout.lower(), \
-        f"--phase 2 must not include tapeout step in output: {r.stdout}"
+    # THE STEP, not the substring. A bare `"tapeout" not in stdout.lower()` was a
+    # proxy for "no Phase-3-only step appears", and it stopped measuring that the
+    # moment a PHASE-AGNOSTIC step acquired an artefact whose NAME contains the
+    # word: step 0.5ic (in scope for both phases, as this command's own NOTE says)
+    # declares `input/submission_template/tapeout_declaration.json` and gates on
+    # `tapeout_declaration_check`, so the proxy fired on a report that contained
+    # no Phase-3-only step at all. The phase-3-only step it was really guarding is
+    # 36, `Tapeout checklist`; asserting that name keeps the property and drops
+    # the false positive. Its sibling below already asserts on a step NAME
+    # (`Spec-to-RTL`) for the symmetric direction — this is the same rule.
+    assert "Tapeout checklist" not in r.stdout, \
+        f"--phase 2 must not include the Phase-3-only step 36: {r.stdout}"
     assert "phase 2" in r.stdout.lower() or "phase=2" in r.stdout.lower() \
         or r.returncode in (1, 2), r.stdout
 
@@ -181,7 +191,199 @@ def _make_phase2_project(tmp_path,
     return project
 
 
-def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
+# The 13 L-doc prefixes `phase1_all_l_docs_present_check` requires, under the
+# canonical filenames step D1 declares as its `required_outputs`. Written out
+# rather than derived from the flow so that a fixture this test OWNS cannot
+# silently change shape when the flow's output list is edited.
+_L_DOCS = (
+    "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP", "L5_ADI_SPEC",
+    "L6_CONTROL_LOGIC", "L7_TEST_DEBUG", "L8_TIMING_WAVEFORM",
+    "L8_RTL_CONSTANTS", "L9_INTEGRATION_SPEC", "L10_TEST_CASES",
+    "L11_OTP_CONTENT", "L12_BEHAVIORAL_SEQUENCES", "L13_BRINGUP",
+)
+
+
+def _satisfy_p0_ancestry(project: Path) -> Path:
+    """Give the fixture the Phase-1 chain P0 declares it depends on.
+
+    P0 (the structural-RTL pre-flight) declares `blocks_on: [1]`, and step 1
+    declares `blocks_on: [D1]`. That edge is not incidental — vibe-ic#923
+    (332b9985) wrote it down deliberately, because without it "a FAILED Phase 1
+    would not have redded" the pre-flight, and it is pinned by
+    `test_flow_blocks_on_declares_phase1_dependency`.
+
+    So a project carrying ONE .sv file and nothing else is a project whose P0
+    verdict rests on a chain that never ran, and the step-execution ordering
+    guard is right to void it. Verdict-SCOPE claims about `--strict-structural`
+    cannot be made on such a tree: whatever the scoping code does, the run
+    fails, and a test asserting otherwise is asserting the pre-#923 flow.
+
+    This adds the minimum that makes D1 and step 1 stop being MISSING, so the
+    scope claim is exercised against the thing it is actually about — steps 2-6,
+    which stay MISSING because nothing here writes lint / CDC / sim / formal /
+    FPGA artefacts.
+
+    THE SENTENCE ABOVE IS A CLAIM, AND vibe-ic#1446 CAUGHT IT BEING FALSE.
+    D1 declares 19 `required_outputs` and the gate holds ALL of them ("satisfied:
+    18/19 — the gate passed, but every declared output must be produced, not just
+    one"), so ONE artefact added to that list downgrades D1 to MISSING and this
+    helper stops closing the chain — silently, because a stale fixture does not
+    fail, it just stops testing anything. That is what happened: #1159 added
+    `L21_POWER_INTENT.json` to D1's `required_outputs` 25 seconds after this
+    helper landed, and the resulting ordering violation was then masked by the
+    #1429 guard filter that landed 2 minutes after THAT. Hence
+    `assert_p0_ancestry_closed` below — the claim is now checked at the point of
+    use rather than asserted in prose, so the next output added to D1 reddens a
+    test that NAMES the missing artefact instead of quietly hollowing this one.
+
+    AND IT CAUGHT IT A SECOND TIME (vibe-ic#1351). #1348 added
+    `phase1/extraction_patterns.json` to D1's `required_outputs`, so the helper
+    closed 18 of 19 and `assert_p0_ancestry_closed` went red NAMING the missing
+    entry — which is the guard working, not a defect in it. The 19th is staged
+    below. Both times the addition was correct and both times the fixture was
+    the stale side; that is why the precondition is checked rather than trusted.
+    """
+    gd = project / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    for name in _L_DOCS:
+        (gd / f"{name}.json").write_text(
+            json.dumps({"schema": name, "generated_by": "test fixture"}))
+    # NOT one of `_L_DOCS`: that tuple is the set `phase1_all_l_docs_present_
+    # check` requires, and this is not one of them — it is a D1 `required_
+    # outputs` entry (#1159), which is a different contract enforced by a
+    # different rule. Kept separate so neither comment has to lie.
+    (gd / "L21_POWER_INTENT.json").write_text(
+        json.dumps({"schema": "L21_POWER_INTENT", "generated_by": "test fixture",
+                    "supply_pins": [], "external_supplies": [], "pads": []}))
+    rp = project / "reports" / "phase1"
+    rp.mkdir(parents=True, exist_ok=True)
+    (rp / "extraction_coverage_report.md").write_text(
+        "# extraction coverage\n\n100%\n")
+    (rp / "extraction_coverage_report.json").write_text(
+        json.dumps({"coverage_pct": 100}))
+    # The 18th declared output. `phase1_expert_parse_track` writes this itself
+    # when it runs for real, but on this tree it signals VACUOUS_PASS and writes
+    # nothing, so a hand-staged Phase 1 has to stage it like the other 17.
+    # `phase1_expert_track_evidence_check` anticipates exactly that ("the flat
+    # path is accepted too so a hand-staged project is not mistaken for a track
+    # that never ran"). `findings: []` + a verdict is its RAN_EMPTY shape — the
+    # track ran and genuinely found nothing — which is the honest thing for a
+    # fixture with no design content to claim. Anything less parses as
+    # MALFORMED, which would swap the staleness this repairs for a new one.
+    ra = project / "reports" / "audit" / "phase1"
+    ra.mkdir(parents=True, exist_ok=True)
+    (ra / "expert_parse_track.json").write_text(json.dumps({
+        "program": "phase1_expert_parse_track.py",
+        "verdict": "PASS",
+        "findings": [],
+        "ai_subtrack": {"status": "SKIPPED-CONDITION"},
+        "generated_by": "test fixture",
+    }))
+    # The 19th declared output (#1348). Same reason as the 18th above: the
+    # canonical catalogue is seeded by `phase1_doc_one_shot_runner.py`
+    # (`_seed_canonical_from_backfilled_subset`), which RETURNS WITHOUT WRITING
+    # when no auto-discovered literal was backfilled into a typed L doc — and on
+    # a tree with no `input/docs` nothing can be. So a hand-staged Phase 1 has to
+    # stage it like the other 18.
+    #
+    # An object carrying only the provenance key is the seeder's own empty
+    # shape: `canonical_payload` starts as `{"_comment": ...}` and is then
+    # `update()`d with the promoted patterns, so zero promoted patterns is
+    # exactly this file. `extraction_coverage_check._load_explicit_patterns`
+    # requires a top-level object (anything else is WARN + ignored) and skips
+    # non-list values, so this parses as a catalogue with no entries rather than
+    # as MALFORMED — the same distinction the expert-track entry above turns on.
+    (project / "phase1" / "extraction_patterns.json").write_text(json.dumps({
+        "_comment": ("Canonical extraction patterns. No auto-discovered "
+                     "literal was backfilled into a typed L doc on this tree, "
+                     "so the catalogue is empty; staged by test fixture."),
+    }))
+    return project
+
+
+#: The step listing abbreviates exactly two of the producer's own status words;
+#: every other label is the word itself. Kept as a rendering map, NOT as a
+#: judgement about done-ness — the judgement below stays derived from
+#: `_flow_verdict_tiers`, the one place a verdict word is classified (#634). A
+#: label that is neither an alias here nor a `PRODUCER_STATUSES` member makes
+#: the precondition REFUSE rather than guess, so a renamed rendering reddens
+#: this file instead of quietly widening what counts as "closed".
+_LABEL_TO_PRODUCER_STATUS = {
+    "WAIVED-DEFERRED": "WAIVED",
+    "PASS-VOIDED": "PASS-VOIDED-BY-DEPENDENCY",
+}
+
+
+def assert_p0_ancestry_closed(out: str) -> None:
+    """Fail if `_satisfy_p0_ancestry`'s tree did not actually close the chain.
+
+    A PRECONDITION, not an assertion about the code under test. Every caller of
+    `_satisfy_p0_ancestry` is making a claim about what happens once P0's
+    ancestry is SATISFIED; on a tree where D1 has not completed that claim is
+    being made about the opposite input, and the test passes or fails for
+    reasons unrelated to what it is named after.
+
+    Checks the step listing rather than the ordering-violation block on purpose:
+    the violation block is what the guard consumes, so reading it here would
+    make the precondition and the assertion share a failure mode.
+
+    WHAT IT MEASURES vs WHAT IT CLAIMED (vibe-ic#1351). Until now the test was
+    `!= "MISSING"`, i.e. it measured one spelling of one way to break the chain
+    while claiming the chain was CLOSED. Measured on this fixture's own tree,
+    removing one artefact each and running the real gate:
+
+        remove phase1/extraction_patterns.json    D1=MISSING  P0=PASS-VOIDED  REJECTED
+        remove reports/phase1/…_report.json       D1=FAIL     P0=PASS-VOIDED  ACCEPTED  <-
+        remove generated_docs/L4_REGMAP.json      D1=FAIL     P0=PASS-VOIDED  ACCEPTED  <-
+        remove reports/audit/phase1/expert_…json  D1=MISSING  P0=PASS-VOIDED  REJECTED
+
+    A D1 that FAILS breaks P0's ancestry exactly as a D1 that is MISSING does —
+    same voided P0, same two ordering violations — and the precondition waved it
+    through. Under `--strict-structural` the run still exits 0 (the violation
+    names D1, which #1429 scopes out), so nothing else in the caller could have
+    noticed: the precondition is the only thing standing between that test and
+    vacuity.
+
+    So the question asked here is now the ordering guard's own: for an ORDINARY
+    PROCESS step, which D1 is, `analyze()` raises no violation unless the
+    ancestor's word is non-green — EXCUSED ancestors and qualified done-claims
+    (VACUOUS-PASS, STRUCTURE-ONLY, INCOMPLETE) both close the chain under one,
+    and only a sign-off / terminal hand-off / stage-5 attestation ancestor is
+    held to full PASS (`_blocks_when_vacuous`). D1 is none of those and cannot
+    become one without a flow change far larger than this file. The predicate is
+    imported from `_flow_verdict_tiers`, which exists precisely so this
+    classification is not re-enumerated per consumer and so a tier invented
+    tomorrow is adjudicated without anyone remembering to come here.
+    """
+    # Function-local: `programs/` is on `sys.path` via conftest, and a helper
+    # this file's other 30-odd tests do not use should not be able to error the
+    # whole module at collection time if that ever stops being true.
+    import _flow_verdict_tiers as _T
+
+    m = re.search(r"^\s*\S*\s*\[([\w-]+)\s*\] Step\s+D1:", out, re.M)
+    assert m, f"precondition: step D1 must appear in the report:\n{out}"
+    label = m.group(1)
+    status = _LABEL_TO_PRODUCER_STATUS.get(label, label)
+    assert _T.normalize(status) in _T.PRODUCER_STATUSES, (
+        f"precondition NOT DETERMINED: the step listing rendered D1 as "
+        f"{label!r}, which is neither one of `_flow_verdict_tiers."
+        f"PRODUCER_STATUSES` nor a rendering this file knows how to translate. "
+        f"A precondition that cannot classify the word cannot say the chain is "
+        f"closed, so it refuses instead of guessing. Add the rendering to "
+        f"`_LABEL_TO_PRODUCER_STATUS` (or the word to PRODUCER_STATUSES, where "
+        f"its done-ness is decided):\n" + out)
+    assert not _T.is_non_green(status), (
+        f"precondition: `_satisfy_p0_ancestry` no longer closes P0's ancestry "
+        f"— D1 is {label} on the tree it builds, so any claim this test makes "
+        f"about a SATISFIED ancestry is being made about the wrong input. "
+        f"Either D1 gained a `required_outputs` entry the fixture does not "
+        f"write (the report names it on D1's `required_outputs missing:` "
+        f"line), or one of D1's gate clauses now FAILs on what the fixture "
+        f"stages:\n" + out)
+
+
+def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]],
+               *, passing: int = 0):
     """Monkey-patch _run_structural_rtl_gates to report the chosen per-gate
     exit codes directly, bypassing subprocess invocation.
 
@@ -191,10 +393,25 @@ def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
     state a gate's outcome ONLY in prose and every consumer believed it; that
     is the same coupling this issue removes from production, and a stub that
     kept it would be testing a contract the shipped code no longer has.
+
+    `passing` (vibe-ic#1446) — SYNTHETIC GATES THAT ACTUALLY PASSED, for the
+    callers whose premise is "every structural gate PASSED". `_patch_run(mod,
+    {})` publishes NO record, and no record is not a pass: the umbrella's
+    empty-denominator guard (#599/#901/#947) reports INCOMPLETE, which says
+    nobody looked. The two are opposite claims and the tests here need BOTH —
+    `test_strict_structural_does_not_excuse_a_broken_p0_ancestry` is about a P0
+    that answered nothing, `test_strict_structural_only_structural_gates` is
+    about a P0 that answered PASS — so the distinction is a parameter rather
+    than a default. Deliberately mirrors `_stub_structural_gates(passing=…)` in
+    `test_issue1429_ordering_guard_is_scoped_not_disabled.py`, whose docstring
+    made this same point first; the DEFAULT stays 0 so no existing caller
+    silently changes the claim it is making.
     """
     fails = []
     skips = []
-    records = []
+    records = [mod._p0_gate_record(f"synthetic_pass_gate_{i}", "PASS", "",
+                                   {"exit_code": 0})
+               for i in range(passing)]
     for name, (code, msg) in stub_results.items():
         if code == 1:
             fails.append(f"FAIL: {name} — {msg}")
@@ -329,17 +546,45 @@ def test_strict_structural_only_structural_gates(tmp_path,
     step-level gates are MISSING/FAIL → with --phase 2 --strict-
     structural, Overall must NOT be FAIL because step-level gates are
     informational only. Step-level FAIL/MISSING is reported in the
-    step listing, but verdict scope is structural-RTL only."""
-    project = _make_phase2_project(tmp_path, ())
+    step listing, but verdict scope is structural-RTL only.
+
+    THE FIXTURE NOW SATISFIES P0's DECLARED ANCESTRY, and that is the repair.
+    This test used to run on a tree holding one `.sv` file, which was enough
+    only while P0 declared no dependencies. vibe-ic#923 gave P0
+    `blocks_on: [1]` on purpose, step 1 already declared `blocks_on: [D1]`, and
+    the ordering guard then — correctly — voided P0's own claim because the
+    chain under it had never run. The run failed for a reason that has nothing
+    to do with verdict SCOPE, so the scope claim was no longer being tested at
+    all. `_satisfy_p0_ancestry` closes the chain; steps 2-6 stay MISSING, which
+    is the population this test is about, and the negative arm below pins the
+    #923 behaviour so nobody "repairs" this by scoping the ordering guard out.
+    """
+    project = _satisfy_p0_ancestry(_make_phase2_project(tmp_path, ()))
 
     mod = _import_fcc()
-    # No structural FAILs.
-    _patch_run(monkeypatch, mod, {})
+    # No structural FAILs — and, per vibe-ic#1446, that is NOT the same as no
+    # structural gates. This test's first sentence says "a project whose
+    # structural-RTL gates ALL PASS"; publishing zero records made P0
+    # INCOMPLETE (0 of 246 checkers returned a verdict), which is the OPPOSITE
+    # claim and the input the negative arm below owns. `passing=2` makes the
+    # premise true, so the scope question this test asks is asked of a P0 that
+    # actually answered.
+    _patch_run(monkeypatch, mod, {}, passing=2)
     rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
     out = capsys.readouterr().out
-    # Empty-ish project will surface step-level MISSING for steps 1-6
-    # (e.g. no L*.json, no rtl etc.). Those should be reported but the
-    # verdict must NOT be FAIL purely because of them.
+    # PRECONDITION #1 (vibe-ic#1446): the fixture's own promise. Without it this
+    # test ran on a tree whose D1 was MISSING — i.e. on the BARE-ancestry input
+    # the test two functions down owns — and was green only because the guard
+    # filter it was paired with looked at the dependency instead of the step
+    # that claimed done.
+    assert_p0_ancestry_closed(out)
+    # PRECONDITION #2, not decoration: if steps 2-6 were not MISSING this test
+    # would be asserting that a clean run is clean.
+    for sid in (2, 3, 4, 5, 6):
+        assert re.search(rf"^\s*\S*\s*\[MISSING\s*\] Step\s+{sid}:",
+                         out, re.M), (
+            f"precondition: step {sid} must be MISSING for the scope claim "
+            f"to mean anything:\n{out}")
     assert "Phase 2 strict-structural mode" not in out, out
     # Overall verdict could be PASS or PASS_WITH_WAIVERS (but never
     # FAIL purely due to step-level MISSING when structural gates
@@ -348,6 +593,115 @@ def test_strict_structural_only_structural_gates(tmp_path,
         "structural-only mode should NOT FAIL on step-level "
         "MISSING/FAIL alone:\n" + out)
     assert rc == 0, out
+
+
+# ── vibe-ic#1351 — the precondition's own falsifiability ─────────────────
+#
+# `assert_p0_ancestry_closed` is the ONLY thing keeping the test above from
+# testing nothing: under `--strict-structural` a broken P0 ancestry still exits
+# 0 (the violation names D1, which #1429 scopes out of the verdict), so a
+# hollowed fixture is green and silent. A guard in that position has to be shown
+# capable of failing, or "it passed" and "it could not tell" are the same
+# reading — which is the defect the guard exists to prevent, one level up.
+#
+# Each arm below breaks the chain a DIFFERENT way and the arm asserts which,
+# because that is the part that decayed: the pre-#1351 form of the precondition
+# tested `!= "MISSING"` and therefore accepted the FAIL arm outright.
+
+_ANCESTRY_BREAKS = (
+    # (artefact removed from the closed tree, the word D1 then reports)
+    # ABSENT — a `required_outputs` entry the fixture stops writing. This is the
+    # break #1159 and #1348 both produced.
+    ("phase1/extraction_patterns.json", "MISSING"),
+    # FAILED — an artefact D1's own gate clause reads and rejects the absence
+    # of. Same voided P0, same two ordering violations, DIFFERENT word; accepted
+    # by the pre-#1351 precondition.
+    ("phase1/generated_docs/L4_REGMAP.json", "FAIL"),
+)
+
+
+def _p0_ancestry_report(tmp_path, monkeypatch, capsys, *, remove=None) -> str:
+    """The real gate's printed report for `_satisfy_p0_ancestry`'s tree, with at
+    most one declared artefact removed first."""
+    project = _satisfy_p0_ancestry(_make_phase2_project(tmp_path, ()))
+    if remove is not None:
+        victim = project / remove
+        assert victim.is_file(), (
+            f"precondition: `_satisfy_p0_ancestry` must stage {remove!r} for "
+            f"removing it to break anything — if it no longer does, this arm "
+            f"is testing an empty operation")
+        victim.unlink()
+    mod = _import_fcc()
+    _patch_run(monkeypatch, mod, {}, passing=2)
+    mod.main([str(project), "--phase", "2", "--strict-structural"])
+    return capsys.readouterr().out
+
+
+def test_the_p0_ancestry_precondition_passes_on_the_intact_tree(
+        tmp_path, monkeypatch, capsys):
+    """Direction 1 of 2: the guard must accept the input it is written for, or
+    the arms below prove only that it rejects everything."""
+    out = _p0_ancestry_report(tmp_path, monkeypatch, capsys)
+    assert_p0_ancestry_closed(out)
+
+
+@pytest.mark.parametrize("removed,expected_word", _ANCESTRY_BREAKS)
+def test_the_p0_ancestry_precondition_catches_a_chain_broken_either_way(
+        tmp_path, monkeypatch, capsys, removed, expected_word):
+    """Direction 2 of 2, once per way the chain breaks."""
+    out = _p0_ancestry_report(tmp_path, monkeypatch, capsys, remove=removed)
+
+    # This arm's premise: removing THIS artefact produces THIS word. Asserted so
+    # that an arm which stops exercising its break mode says so, instead of
+    # passing on a duplicate of the other arm's.
+    m = re.search(r"^\s*\S*\s*\[([\w-]+)\s*\] Step\s+D1:", out, re.M)
+    assert m and m.group(1) == expected_word, (
+        f"precondition: removing {removed!r} was chosen because it makes D1 "
+        f"{expected_word}; it now reports "
+        f"{(m.group(1) if m else 'NO D1 LINE')!r}, so this arm no longer covers "
+        f"that break mode:\n{out}")
+
+    with pytest.raises(AssertionError) as exc:
+        assert_p0_ancestry_closed(out)
+    assert "no longer closes P0's ancestry" in str(exc.value), str(exc.value)
+    assert expected_word in str(exc.value), str(exc.value)
+
+
+def test_the_p0_ancestry_precondition_refuses_a_word_it_cannot_classify():
+    """A precondition that cannot classify the verdict word has NOT looked, so
+    it must refuse rather than fall through to "not MISSING, therefore closed".
+    Planted word, no gate run — the point is the classification, and
+    `_flow_verdict_tiers` is where a real new word gets its home."""
+    planted = "  ? [MOSTLY-FINE      ] Step D1: Phase 1 Doc Extraction  (stage_phase1)\n"
+    with pytest.raises(AssertionError) as exc:
+        assert_p0_ancestry_closed(planted)
+    assert "NOT DETERMINED" in str(exc.value), str(exc.value)
+    assert "MOSTLY-FINE" in str(exc.value), str(exc.value)
+
+
+def test_strict_structural_does_not_excuse_a_broken_p0_ancestry(
+        tmp_path, monkeypatch, capsys):
+    """The other half of the scope, and the reason the fixture above grew.
+
+    `--strict-structural` narrows the verdict to P0 — it does not make P0's own
+    claim unfalsifiable. On the tree the test above used to run on (RTL only, no
+    Phase 1), P0 depends on a chain that never ran, so the step-execution
+    ordering guard voids it and the run FAILs. vibe-ic#923 wrote that edge down
+    for exactly this outcome.
+
+    Pinned here so the paired repair is visible: the run above is green because
+    its chain is closed, NOT because step-level state stopped counting.
+    """
+    project = _make_phase2_project(tmp_path, ())   # deliberately bare
+
+    mod = _import_fcc()
+    _patch_run(monkeypatch, mod, {})
+    rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "Overall: FAIL" in out, out
+    assert "Step-execution ordering violations" in out, out
+    assert re.search(r"\[P0\].*marked done while dependency", out), out
 
 
 def test_strict_step_artifacts_includes_step_gates(tmp_path,

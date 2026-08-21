@@ -24,6 +24,51 @@ This gate, per hardmacro block:
      XY records → coordinate extents in database units → microns).
   3. compares LEF width/height against GDS width/height; FAIL when
      either differs by more than `--tol-pct` (default 2.0 %).
+  4. compares the GDS top-cell bounding-box LOWER-LEFT against the frame
+     the LEF declares; FAIL when they differ by more than `--tol-um`
+     (default 0.01 um) and no `ORIGIN` / `FOREIGN` offset declares it.
+
+REGISTRATION — why step 4 exists (MEASURED, 2026-08-01, IHP SG13G2):
+
+    delta_sigma.lef :  ORIGIN 0 0 ;   SIZE 556.810 BY 158.400 ;
+    delta_sigma.gds :  bbox (-0.620,-30.320)-(556.190,128.080)
+                       w=556.810  h=158.400
+    ldo.lef         :  ORIGIN 0 0 ;   SIZE 429.170 BY 169.600 ;
+    ldo.gds         :  bbox (-0.620,-31.920)-(428.550,137.680)
+                       w=429.170  h=169.600
+
+Both SIZES are EXACT. Both GDSs are 30 um out of registration, and this
+gate said so out loud:
+
+    PASS: analog_lef_gds_outline_check - 2/2 block(s) LEF outline matches GDS
+
+Magic's `lef write` normalises the abstract to the cell bounding box, so
+every LEF pin rect is expressed relative to the bbox lower-left; magic's
+`gds write` preserves the layout's own coordinates. When the source `.mag`
+does not happen to start at the origin the two halves of the SAME hardmacro
+are shipped in DIFFERENT coordinate frames, and nothing downstream notices:
+the LEF outline is the right SIZE in the wrong PLACE. Verified pin by pin -
+every LEF PORT rect hits ZERO shapes on its stated layer at its stated
+coordinates and EXACTLY ONE after translating by the GDS bbox lower-left.
+
+The consequence is silicon-fatal and silent. The placer reserves the LEF
+outline and routes to the LEF pin locations; the streamed layout puts the
+macro body 30.32 um lower, on top of eight rows of legally placed standard
+cells. Measured downstream on that layout, Magic's extractor merged the
+macro's own `vss` port with a neighbouring cell's VDD pin AND with another
+cell's VSS pin, collapsing the whole supply system into ONE node - the
+extracted netlist had 4448 references to a single net `VSS` and no `VDD`
+at all, and top-level LVS could not match a single port.
+
+Width and height are the two numbers a misregistered pair agrees on. This
+gate compared exactly those two and nothing else, so the one defect class
+its own docstring calls "a real, silicon-relevant defect" - the macro
+overlapping its neighbours - was the class it could not see.
+
+BLOCKING (unchanged posture): the registration finding uses the same FAIL
+tier as the outline finding, because a macro whose two halves disagree
+about where they are is not usable by any downstream tool. It is a strict
+ADDITION to detection: no input that FAILs today PASSes after this change.
 
 Honest FAIL / SKIP contract (NO FABRICATION):
   * no `analog/analog_block_list.json` (or empty) → VACUOUS_PASS
@@ -52,6 +97,7 @@ Honest FAIL / SKIP contract (NO FABRICATION):
 Usage:
     python3 analog_lef_gds_outline_check.py <project_dir> [--json <out>]
                                             [--block <name>] [--tol-pct 2.0]
+                                            [--tol-um 0.01]
 
 Exit codes:
     0 = PASS / VACUOUS_PASS
@@ -70,6 +116,7 @@ import struct
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl
@@ -87,12 +134,25 @@ except ImportError:  # pragma: no cover - allow direct import in tests
 
 GATE = "analog_lef_gds_outline_check"
 DEFAULT_TOL_PCT = 2.0
+# Registration tolerance in microns. Absolute, not a percentage: a frame
+# offset is a displacement, and a percentage of a big macro would license a
+# displacement bigger than a standard-cell row on a big macro and forbid a
+# legal grid rounding on a small one.
+DEFAULT_TOL_UM = 0.01
 
 # LEF SIZE line:  SIZE 100 BY 100 ;   /  SIZE 12.5 BY 8.0 ;
 _LEF_SIZE_RE = re.compile(
     r"\bSIZE\s+([0-9]*\.?[0-9]+)\s+BY\s+([0-9]*\.?[0-9]+)\s*;",
     re.IGNORECASE,
 )
+
+_NUM = r"[-+]?[0-9]*\.?[0-9]+"
+# MACRO ORIGIN line:  ORIGIN 0 0 ;
+_LEF_ORIGIN_RE = re.compile(
+    rf"\bORIGIN\s+({_NUM})\s+({_NUM})\s*;", re.IGNORECASE)
+# MACRO FOREIGN line:  FOREIGN <cell> [x y [orient]] ;
+_LEF_FOREIGN_RE = re.compile(
+    rf"\bFOREIGN\s+\S+(?:\s+({_NUM})\s+({_NUM}))?[^;]*;", re.IGNORECASE)
 
 # GDSII record types we care about.
 _GDS_HEADER = 0x0002
@@ -154,6 +214,43 @@ def parse_lef_size(lef_text: str) -> Optional[Tuple[float, float]]:
         return (float(m.group(1)), float(m.group(2)))
     except ValueError:  # pragma: no cover - regex already constrains
         return None
+
+
+def parse_lef_frame_ll(lef_text: str) -> Tuple[float, float, str]:
+    """Return (expected_llx_um, expected_lly_um, source) — where the LEF says
+    the GDS top-cell bounding box's LOWER-LEFT corner must sit.
+
+    LEF/DEF semantics, in the order this function applies them:
+
+      * `FOREIGN <cell> x y ;` — the offset of the referenced GDSII/OASIS
+        structure relative to the macro origin. When present WITH a point it
+        is the authoritative statement of the two frames' relationship, so
+        the expected lower-left IS that point.
+      * `ORIGIN x y ;` — the position of the macro origin inside the macro's
+        own bounding box. The box therefore starts at (-x, -y) relative to
+        that origin. `ORIGIN 0 0` (the near-universal case, and the LEF
+        default when the statement is absent) means the box starts at (0, 0).
+
+    Returns the ORIGIN-derived answer with source `"ORIGIN"`, the
+    FOREIGN-derived answer with source `"FOREIGN"`, or (0.0, 0.0) with source
+    `"LEF-default"` when the MACRO declares neither. A `FOREIGN` with no point
+    declares no offset and is therefore NOT an explanation — it falls through
+    to ORIGIN, exactly as the LEF default does."""
+    mf = _LEF_FOREIGN_RE.search(lef_text)
+    if mf and mf.group(1) is not None and mf.group(2) is not None:
+        try:
+            return (float(mf.group(1)), float(mf.group(2)), "FOREIGN")
+        except ValueError:  # pragma: no cover - regex already constrains
+            pass
+    mo = _LEF_ORIGIN_RE.search(lef_text)
+    if mo:
+        try:
+            # `+ 0.0` normalises the -0.0 that negating a zero produces.
+            return (-float(mo.group(1)) + 0.0, -float(mo.group(2)) + 0.0,
+                    "ORIGIN")
+        except ValueError:  # pragma: no cover - regex already constrains
+            pass
+    return (0.0, 0.0, "LEF-default")
 
 
 # ───────────────────────── GDS bbox parse ──────────────────────────
@@ -291,9 +388,17 @@ def _struct_bbox(name, structs, memo, stack):
     return bb
 
 
-def parse_gds_bbox(raw: bytes) -> Optional[Tuple[float, float]]:
-    """Return (width_um, height_um) of the TOP-LEVEL bounding box of a GDSII
-    stream, resolving cell references through their placement transforms.
+def parse_gds_bbox_extent(raw: bytes) -> Optional[Tuple[float, float,
+                                                        float, float]]:
+    """Return (llx_um, lly_um, urx_um, ury_um) — the TOP-LEVEL bounding box of
+    a GDSII stream IN FULL, resolving cell references through their placement
+    transforms.
+
+    `parse_gds_bbox` below is the width/height projection of this and is kept
+    as the public two-tuple API. The projection is the whole reason the
+    registration defect was invisible: a macro shipped 30 um out of frame has
+    exactly the right width and height, so a caller that only ever saw
+    (w, h) could not have caught it no matter how tight its tolerance.
 
     A GDS layout is a CELL HIERARCHY. The previous implementation unioned every
     XY record in the whole file into ONE flat coordinate space, which mixes a
@@ -337,7 +442,19 @@ def parse_gds_bbox(raw: bytes) -> Optional[Tuple[float, float]]:
     height = (max_y - min_y) * um_per_dbu
     if width <= 0 or height <= 0:
         return None
-    return (width, height)
+    return (min_x * um_per_dbu, min_y * um_per_dbu,
+            max_x * um_per_dbu, max_y * um_per_dbu)
+
+
+def parse_gds_bbox(raw: bytes) -> Optional[Tuple[float, float]]:
+    """Return (width_um, height_um) of the TOP-LEVEL bounding box of a GDSII
+    stream. Width/height projection of `parse_gds_bbox_extent`; unchanged
+    public API."""
+    ext = parse_gds_bbox_extent(raw)
+    if ext is None:
+        return None
+    llx, lly, urx, ury = ext
+    return (urx - llx, ury - lly)
 
 def _gds_real8(b: bytes) -> float:
     """Decode an 8-byte GDSII real (excess-64 hex exponent)."""
@@ -417,7 +534,75 @@ def _hardmacro_is_stub(hm_dir: Path, block: str) -> bool:
     return False
 
 
-def check_block(project: Path, block: str, tol_pct: float) -> dict:
+#: `MANUFACTURINGGRID 0.005 ;` — the standard LEF token. Same pattern
+#: `def_manufacturing_grid_check` uses; NOT that function, because it falls back
+#: to a PDK default when the tech LEF is unreadable and here a guessed grid
+#: would decide between two remedies. "I could not read the grid" must stay its
+#: own answer.
+_MFG_GRID_RE = re.compile(r"MANUFACTURINGGRID\s+([0-9.]+)\s*;", re.IGNORECASE)
+
+#: Where a tech LEF is found, in the order to look. Nothing is defaulted.
+_TECH_LEF_GLOBS = (
+    "phase3/stage3/pnr/*.tlef", "phase3/stage3/pnr/*tech*.lef",
+    "pdk/**/*.tlef", "**/*.tlef",
+)
+
+
+def manufacturing_grid_um(project: Path, tech_lef: "str | None" = None):
+    """The PDK manufacturing grid in um, or None when it could not be read.
+
+    vibe-ic#595. The registration offset alone does not say WHICH remedy is
+    safe, and the two are not equivalent:
+
+      * stream the GDS in the LEF's frame  — a rigid translation. DRC and LVS
+        are translation-INVARIANT, so this cannot change either verdict, but it
+        CAN move every coordinate off the manufacturing grid if the offset is
+        not an exact multiple of it. This repo has already paid for an off-grid
+        streamout once.
+      * declare `FOREIGN <cell> <llx> <lly> ;` — moves nothing, but depends on a
+        sign convention and OpenROAD's stream-out does not honour FOREIGN
+        uniformly.
+
+    Whether the offset is a whole number of grid steps is the fact that decides
+    it, and it was not being measured. It is measured here and REPORTED; the
+    choice stays with the flow owner, which is what the issue asked for.
+    """
+    if tech_lef:
+        try:
+            m = _MFG_GRID_RE.search(Path(tech_lef).read_text(errors="replace"))
+            if m:
+                return float(m.group(1))
+        except OSError:
+            return None
+        return None
+    for pat in _TECH_LEF_GLOBS:
+        for c in sorted(project.glob(pat))[:4]:
+            try:
+                m = _MFG_GRID_RE.search(c.read_text(errors="replace"))
+            except OSError:
+                continue
+            if m:
+                return float(m.group(1))
+    return None
+
+
+def offset_on_grid(off_x: float, off_y: float, grid_um: "float | None"):
+    """(is_multiple, detail). `None` when the grid is unknown — never True."""
+    if not grid_um or grid_um <= 0:
+        return None, ("the manufacturing grid could not be read, so whether a "
+                      "rigid translation would stay on-grid is UNKNOWN")
+    # Compare in grid steps with a tolerance well under half a step, so
+    # floating-point noise in the um values cannot decide it either way.
+    def _steps(v):
+        n = v / grid_um
+        return abs(n - round(n)) < 1e-6
+    ok = _steps(off_x) and _steps(off_y)
+    return ok, (f"offset is {'an exact' if ok else 'NOT an exact'} multiple of "
+                f"the {grid_um:g}um manufacturing grid")
+
+
+def check_block(project: Path, block: str, tol_pct: float,
+                tol_um: float = DEFAULT_TOL_UM, tech_lef: Optional[str] = None) -> dict:
     """Return a verdict dict for one block:
       status ∈ {PASS, FAIL, NOT_PACKAGED, STUB_NOT_PACKAGED}
     Only FAIL is a violation; NOT_PACKAGED and STUB_NOT_PACKAGED are DISCLOSED
@@ -480,17 +665,23 @@ def check_block(project: Path, block: str, tol_pct: float) -> dict:
     except OSError as e:
         return {"block": block, "status": "FAIL", "findings": [{
             "rule": "A8_GDS_UNREADABLE", "detail": str(e)}]}
-    gds_bbox = parse_gds_bbox(raw)
-    if gds_bbox is None:
+    gds_extent = parse_gds_bbox_extent(raw)
+    if gds_extent is None:
         return {"block": block, "status": "FAIL", "findings": [{
             "rule": "A8_GDS_NO_GEOMETRY",
             "detail": f"{gds_path.name} carries no parseable GDS "
                       f"boundary/box geometry (stub or truncated)"}]}
 
     lw, lh = lef_size
-    gw, gh = gds_bbox
+    gllx, glly, gurx, gury = gds_extent
+    gw, gh = gurx - gllx, gury - glly
     dw = abs(lw - gw) / gw * 100.0 if gw else float("inf")
     dh = abs(lh - gh) / gh * 100.0 if gh else float("inf")
+
+    exp_llx, exp_lly, frame_src = parse_lef_frame_ll(lef_text)
+    off_x, off_y = gllx - exp_llx, glly - exp_lly
+    grid_um = manufacturing_grid_um(project, tech_lef)
+    on_grid, grid_detail = offset_on_grid(off_x, off_y, grid_um)
 
     rec = {
         "block": block,
@@ -498,18 +689,52 @@ def check_block(project: Path, block: str, tol_pct: float) -> dict:
         "gds": str(gds_path),
         "lef_size_um": [round(lw, 4), round(lh, 4)],
         "gds_bbox_um": [round(gw, 4), round(gh, 4)],
+        "gds_bbox_ll_um": [round(gllx, 4), round(glly, 4)],
+        "lef_frame_ll_um": [round(exp_llx, 4), round(exp_lly, 4)],
+        "lef_frame_source": frame_src,
+        "registration_offset_um": [round(off_x, 4), round(off_y, 4)],
+        "manufacturing_grid_um": grid_um,
+        "offset_is_grid_multiple": on_grid,
         "width_delta_pct": round(dw, 3),
         "height_delta_pct": round(dh, 3),
         "tol_pct": tol_pct,
+        "tol_um": tol_um,
     }
+    findings = []
     if dw > tol_pct or dh > tol_pct:
-        rec["status"] = "FAIL"
-        rec["findings"] = [{
+        findings.append({
             "rule": "A8_LEF_GDS_OUTLINE_MISMATCH",
             "detail": (f"LEF SIZE {lw:g}x{lh:g}um vs GDS bbox "
                        f"{gw:.3f}x{gh:.3f}um: Δw={dw:.2f}% Δh={dh:.2f}% "
                        f"(tol {tol_pct}%)"),
-        }]
+        })
+    # Registration: the SIZE can be exact and the pair still unusable.
+    if abs(off_x) > tol_um or abs(off_y) > tol_um:
+        findings.append({
+            "rule": "A8_LEF_GDS_REGISTRATION_MISMATCH",
+            "detail": (
+                f"GDS top-cell bbox lower-left is ({gllx:.3f},{glly:.3f})um "
+                f"but the LEF frame ({frame_src}) puts it at "
+                f"({exp_llx:.3f},{exp_lly:.3f})um: offset "
+                f"({off_x:+.3f},{off_y:+.3f})um exceeds tol {tol_um}um. "
+                f"The abstract and the layout are in DIFFERENT coordinate "
+                f"frames — every PIN rect in the LEF is {-off_x:+.3f},"
+                f"{-off_y:+.3f}um away from the metal it names, and the "
+                f"placer will reserve the outline where the body is not. "
+                f"Declare the offset with `FOREIGN <cell> {gllx:g} {glly:g} ;`"
+                f" or stream the GDS in the LEF's frame. "
+                + (f"{grid_detail}, so translating the stream is a rigid, "
+                   f"grid-preserving move and DRC/LVS are invariant under it."
+                   if on_grid is True else
+                   f"{grid_detail} — translating the stream would put every "
+                   f"coordinate off-grid, so FOREIGN is the safe remedy here."
+                   if on_grid is False else
+                   f"{grid_detail}, so neither remedy can be recommended from "
+                   f"this run.")),
+        })
+    if findings:
+        rec["status"] = "FAIL"
+        rec["findings"] = findings
     else:
         rec["status"] = "PASS"
     return rec
@@ -518,7 +743,9 @@ def check_block(project: Path, block: str, tol_pct: float) -> dict:
 # ───────────────────────────── main ────────────────────────────────
 
 def build_report(project: Path, block_filter: Optional[str],
-                 tol_pct: float) -> Tuple[int, dict]:
+                 tol_pct: float,
+                 tol_um: float = DEFAULT_TOL_UM,
+                 tech_lef: Optional[str] = None) -> Tuple[int, dict]:
     blocks = _load_block_list(project)
     if blocks is None:
         # A PROJECT THAT IS NOT THERE IS NOT A DIGITAL PROJECT. Measured:
@@ -548,7 +775,8 @@ def build_report(project: Path, block_filter: Optional[str],
     if block_filter:
         blocks = [block_filter]
 
-    results = [check_block(project, b, tol_pct) for b in blocks]
+    results = [check_block(project, b, tol_pct, tol_um, tech_lef)
+               for b in blocks]
     failed = [r for r in results if r["status"] == "FAIL"]
     passed = [r for r in results if r["status"] == "PASS"]
     not_pkg = [r for r in results if r["status"] == "NOT_PACKAGED"]
@@ -559,6 +787,7 @@ def build_report(project: Path, block_filter: Optional[str],
         "gate": GATE,
         "verdict": verdict,
         "tol_pct": tol_pct,
+        "tol_um": tol_um,
         "blocks_checked": len(results),
         "blocks_pass": len(passed),
         "blocks_fail": len(failed),
@@ -581,10 +810,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="restrict to a single block")
     ap.add_argument("--tol-pct", type=float, default=DEFAULT_TOL_PCT,
                     help=f"max LEF-vs-GDS outline delta %% (default {DEFAULT_TOL_PCT})")
+    ap.add_argument("--tech-lef", default=None,
+                    help="tech LEF to read MANUFACTURINGGRID from; #595 — "
+                         "whether the registration offset is a whole number "
+                         "of grid steps is what decides between translating "
+                         "the stream and declaring FOREIGN. Auto-located "
+                         "under the project when omitted, and reported as "
+                         "UNKNOWN rather than defaulted when neither works.")
+    ap.add_argument("--tol-um", type=float, default=DEFAULT_TOL_UM,
+                    help=("max LEF-frame-vs-GDS-bbox registration offset in "
+                          f"microns (default {DEFAULT_TOL_UM})"))
     args = ap.parse_args(argv)
 
     try:
-        rc, report = build_report(args.project_dir, args.block, args.tol_pct)
+        rc, report = build_report(args.project_dir, args.block, args.tol_pct,
+                                  args.tol_um, tech_lef=args.tech_lef)
     except Exception as e:  # truly fatal (programming error)
         print(f"ERROR: {GATE}: {e}", file=sys.stderr)
         return 2
@@ -592,14 +832,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
     verdict = report["verdict"]
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")
     elif verdict == "PASS":
         print(f"PASS: {GATE} — {report['blocks_pass']}/"
-              f"{report['blocks_checked']} block(s) LEF outline matches GDS")
+              f"{report['blocks_checked']} block(s) LEF outline AND frame "
+              f"match GDS")
         # Disclose every block that was NOT compared, by name and reason —
         # a PASS that quietly skipped blocks is the failure mode this gate
         # was written to end.

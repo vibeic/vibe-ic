@@ -84,7 +84,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _evidence_independence as _ev_ind  # noqa: E402  (path bootstrap above)
+import _signoff_drc_format as _sdf  # noqa: E402  (ONE producer/dialect answer)
 import _waiver_entries as _we  # noqa: E402  (#519's ONE waiver reader)
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +243,15 @@ def _parse_drc_violations(art: Path) -> Tuple[Optional[int], str]:
     # <category> rule descriptions. An empty <items></items> = 0 = clean.
     if "<report-database" in text or "<items>" in text or "</item>" in text:
         return len(re.findall(r"<item>", text)), "klayout_items"
+    # (2b) SVRF-native sign-off — a per-rule FAIL/PASS tally and NO summary
+    # line. MEASURED before this branch existed: a clean 4533-PASS foundry-deck
+    # sign-off returned (None, "no count pattern"), i.e. the HIGHEST-authority
+    # producer was the one this release-gating tier could not judge, while the
+    # router's projection below was judged PASS. Same grammar as
+    # `signoff_audit` and `eda_report_audit`, imported rather than re-authored.
+    _svrf = _sdf.svrf_fail_count(text)
+    if _svrf is not None:
+        return _svrf, "svrf_rule_fails"
     # (3) plain-text report — explicit count patterns; else "DRC clean: YES".
     for rx in _DRC_COUNT_RES:
         hits = rx.findall(text)
@@ -278,6 +289,46 @@ def check_tier_1_drc(project_dir: Path) -> TierResult:
                             notes="no DRC sign-off report "
                                   "(reports/phase3/drc_signoff.rpt) — "
                                   "§4.05: absent → SKIP")
+    # THE TIER IS NAMED FOR ITS PRODUCER AND MUST CHECK IT. MEASURED on
+    # origin/main, handed a project whose `reports/phase3/drc_signoff.rpt` is
+    # the router's own detailed-route projection::
+    #
+    #   check_tier_1_drc(proj) -> TierResult(tier_id='T1',
+    #       name='Full DRC (KLayout/Magic)', verdict='PASS',
+    #       details={'violations': 0, 'count_source': 'text_count'},
+    #       release_gating=True)
+    #
+    # A release-gating tier literally named for KLayout/Magic issuing PASS from
+    # an OpenROAD router log. The router's DRC is a routability measurement over
+    # its own database, not a rule deck applied to a layout.
+    #
+    # THE RULE IS MONOTONE: router evidence can WITHHOLD credit, never grant it,
+    # and it can never REMOVE a failure. A router-level violation is a real
+    # defect and keeps its FAIL (FAIL is not waivable; downgrading it to NOT_RUN
+    # would have made it deferrable through waivers.json — a weakening). Only
+    # the router's CLEAN — the verdict it is not competent to give — becomes
+    # NOT_RUN, which is the state the governed waiver channel exists for.
+    _prod = _sdf.classify_file(art)
+    if _prod.kind == _sdf.OPENROAD:
+        _n, _src = _parse_drc_violations(art)
+        if _n is None or _n == 0:
+            return TierResult(
+                "T1", "Full DRC (KLayout/Magic)", "NOT_RUN",
+                details={"producer": _prod.kind, "evidence": _prod.evidence,
+                         "router_violations": _n},
+                artifact_path=str(art),
+                notes="the sign-off DRC artifact is the ROUTER's own "
+                      "detailed-route DRC projection, not a KLayout/Magic/SVRF "
+                      "sign-off deck run — this tier did not run. §4.05: a "
+                      "producer that cannot answer the question is a SKIP, "
+                      "never a pass.")
+        return TierResult(
+            "T1", "Full DRC (KLayout/Magic)", "FAIL",
+            details={"violations": _n, "count_source": _src,
+                     "producer": _prod.kind},
+            artifact_path=str(art),
+            notes="ROUTER-level DRC violations. The sign-off deck did not run, "
+                  "so this count is a floor, not the sign-off verdict.")
     n, src = _parse_drc_violations(art)
     if n is None:
         return TierResult(
@@ -1737,7 +1788,8 @@ class LadderReport:
                      "deferred_from")}
                 for t in waived_tiers(self.tiers)],
             "waiver_disclosures": list(self.waiver_disclosures),
-            "emitted_by": "signoff_ladder_run v0.1.51 (release-gate-wired)",
+            "emitted_by": _pmd.emitted_by("signoff_ladder_run",
+                                         "release-gate-wired"),
         }
 
 

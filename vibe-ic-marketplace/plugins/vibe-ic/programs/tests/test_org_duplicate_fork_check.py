@@ -17,6 +17,7 @@ here, because each one, wrong, causes a distinct kind of damage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -136,6 +137,137 @@ def test_a_fork_with_no_readable_parent_blocks_the_verdict(monkeypatch, capsys):
     monkeypatch.setattr(D, "_gh", _fake_gh(repos, {}))
     assert D.main(["vibeic"]) == D.RC_CANNOT_CHECK
     assert "no readable parent" in capsys.readouterr().err
+
+
+# ── #619 — an empty listing is not a clean org ─────────────────────────────
+#
+# `gh repo list <owner>` exits 0 with `[]` for an owner that does not exist, so
+# every one of these arrived as `rows == []` and left as `[OK] ... rc 0`. The
+# two registry-wide meta-checks flagged this file for exactly that.
+
+
+def test_zero_repositories_listed_is_not_a_clean_org(monkeypatch, capsys):
+    """THE LOAD-BEARING CASE, and the one a name-shape check cannot reach:
+    `vibeic-typo-xyz` is a perfectly well-formed owner name that does not
+    exist. Measured against the real CLI on 2026-08-01:
+
+        $ gh repo list vibeic-typo-xyz --limit 3 --json name,isFork
+        []
+        rc=0
+
+    Before this change that read `[OK] no upstream in vibeic-typo-xyz is forked
+    more than once.` — a monitoring run pointed at a misspelled org reporting
+    the account clean forever, which is the precise failure this program was
+    written to prevent."""
+    monkeypatch.setattr(D, "_gh", _fake_gh([], {}))
+    rc = D.main(["vibeic-typo-xyz"])
+    err = capsys.readouterr().err
+    assert rc == D.RC_CANNOT_CHECK, "an org that was never read reported clean"
+    assert "[OK]" not in err
+    assert "0 repositories" in err
+    # The three causes, because "clean" sends a reader nowhere.
+    assert "spelled right" in err and "read:org" in err
+
+
+def test_a_path_where_an_org_belongs_is_refused_without_a_network_call(
+        monkeypatch, capsys):
+    """How this file became the shape it audits: the registry-wide fixtures
+    drive every gate with a PROJECT PATH as argument one. `.` and an absent
+    path are not owner names, and both used to come back `[OK]`."""
+    def _no_gh(args, timeout=None):       # pragma: no cover - must not be hit
+        raise AssertionError("the network was called for a non-owner argument")
+    monkeypatch.setattr(D, "_gh", _no_gh)
+    for bad in (".", "/nonexistent/vibeic-absent-project-fixture/no-such-project",
+                "vibeic/vibe-ic", "trailing-", "under_score", ""):
+        assert D.main([bad]) == D.RC_CANNOT_CHECK, f"{bad!r} was accepted"
+    err = capsys.readouterr().err
+    assert "not a GitHub owner name" in err
+    # `-leading` never reaches main() (argparse claims it as a flag), so the
+    # rule itself is exercised where it lives.
+    assert "error" in D.find_duplicates("-leading")
+
+
+def test_an_org_with_no_forks_is_an_honest_zero_and_says_so(monkeypatch, capsys):
+    """The OTHER direction, and the reason the fix is not "refuse every zero":
+    an org whose repositories really were read and contained no forks is clean.
+    rc 0 is correct — but it has to publish the number it is clean over."""
+    repos = [{"name": f"own{i}", "isFork": False} for i in range(7)]
+    monkeypatch.setattr(D, "_gh", _fake_gh(repos, {}))
+    rc = D.main(["vibeic"])
+    err = capsys.readouterr().err
+    assert rc == D.RC_CLEAN, "a real org with no forks must not be refused"
+    assert "[OK]" in err
+    assert "7 repositories listed" in err, \
+        "the honest zero published no denominator"
+
+
+def test_every_rc0_line_carries_its_denominator(monkeypatch, capsys):
+    """The disclosure the meta-checks require: no rc-0 verdict from this gate
+    may state the FINDING without the POPULATION it was found over.
+
+    16 forks among 20 repositories, so the two halves of the denominator are
+    DIFFERENT numbers and the line has to carry both — a scan size is not a
+    hit count, which is the distinction `_gate_denominator` exists to keep."""
+    repos = [_fork(f"tool{i}", f"up{i}/tool{i}") for i in range(16)]
+    repos += [{"name": f"own{i}", "isFork": False} for i in range(4)]
+    fps = {}
+    for i in range(16):
+        fps[f"up{i}/tool{i}"] = f"m@{i}"
+        fps[f"vibeic/tool{i}"] = f"m@{i}"
+    monkeypatch.setattr(D, "_gh", _fake_gh(repos, fps))
+    assert D.main(["vibeic"]) == D.RC_CLEAN
+    err = capsys.readouterr().err
+    assert "examined 16 fork" in err, err
+    assert "of 20 considered" in err, err
+
+
+def test_the_denominator_is_machine_readable_too(monkeypatch, tmp_path):
+    """A human line a machine cannot parse is half a disclosure."""
+    repos = [_fork("sv-elab"), _fork("sv-elab-1"),
+             {"name": "own", "isFork": False}]
+    fps = {"povik/sv-elab": _UP_FP, "vibeic/sv-elab": _UP_FP,
+           "vibeic/sv-elab-1": _UP_FP}
+    monkeypatch.setattr(D, "_gh", _fake_gh(repos, fps))
+    out = tmp_path / "forks.json"
+    D.main(["vibeic", "--json", str(out)])
+    rep = json.loads(out.read_text())
+    den = rep["denominator"]
+    assert den["examined"] == 2, den          # two forks grouped
+    assert den["considered"] == 3, den        # three repositories listed
+    assert den["details"]["repositories_listed"] == 3
+    assert den["details"]["distinct_upstreams"] == 1
+
+
+def test_the_guard_is_what_produces_the_refusal(monkeypatch, capsys):
+    """NEGATIVE CONTROL — a test that cannot fail against the pre-fix code
+    proves nothing, so this reconstructs the pre-fix path and asserts the
+    DEFECT REPRODUCES. It is the control for
+    `test_zero_repositories_listed_is_not_a_clean_org` directly above: without
+    the zero-rows guard, the same input this suite now refuses comes back
+    `[OK] ... rc 0`.
+
+    If this ever stops reproducing, the guard above stopped being the thing
+    doing the work and both tests need re-deriving."""
+    monkeypatch.setattr(D, "_gh", _fake_gh([], {}))
+    monkeypatch.setattr(D, "_ORG_NAME", re.compile(r"^.*$"))  # guard 1 off
+    original = D.find_duplicates
+
+    def without_the_zero_rows_guard(org, limit=D.DEFAULT_REPO_LIMIT):
+        res = original(org, limit)
+        if "error" in res and "0 repositories" in res["error"]:
+            # Exactly what the function returned before this change.
+            return {"org": org, "groups": [],
+                    "forks_with_unreadable_parent": [],
+                    "denominator": {"unit": "fork", "examined": 0,
+                                    "considered": 0,
+                                    "not_applicable_reason": "n/a"}}
+        return res
+
+    monkeypatch.setattr(D, "find_duplicates", without_the_zero_rows_guard)
+    rc = D.main(["vibeic-typo-xyz"])
+    assert rc == D.RC_CLEAN, \
+        "the pre-fix path no longer reproduces the defect; this control is dead"
+    assert "[OK]" in capsys.readouterr().err
 
 
 if __name__ == "__main__":

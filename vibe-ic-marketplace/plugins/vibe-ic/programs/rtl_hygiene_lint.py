@@ -21,7 +21,7 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      (e.g., `output reg q;` clocked by `<= d` with no reset and no `= 0` →
       powers up as X; deterministic references expect 0 at t=0)
      v0.1.24: `--fix` REPAIRS this deterministically in-place (inserts
-     `initial <reg>=0;`), and now also covers an internal reg that drives an
+     `initial <reg>=0;`), and now also covers an internal variable that drives an
      output via a continuous assign (Prob053-class). The lesson is enforced by
      the tool, not by a caller/prompt that can forget or be told to ignore it.
   6. Incomplete sensitivity list
@@ -41,11 +41,11 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      evaluated with PRE-edge input values (one-cycle skew). The fix is to
      inline the expression inside the always block (NBA RHS pre-fetch
      semantics) OR pre-register the input. Chip-AGNOSTIC sequential hazard.
-  10. Power-up determinism for INTERNAL regs in reset-less modules (v0.1.38)
-     The existing rule 5 covers registered OUTPUT ports and an internal reg
+  10. Power-up determinism for INTERNAL state in reset-less modules (v0.1.38)
+     The existing rule 5 covers registered OUTPUT ports and an internal variable
      that directly drives an output via `assign out = q`. v0.1.38 extends
-     `--fix` to ALSO cover ALL internal `reg` declarations in reset-less
-     modules — the X-propagation through internal pipeline regs at t=0
+     `--fix` to ALSO cover ALL internal `reg`/`logic` declarations in reset-less
+     modules — the X-propagation through internal pipeline state at t=0
      corrupts the output even when the output itself is initialized. Same
      conservative gate (no reset port). Chip-AGNOSTIC.
      v0.1.39 honesty correction (audit Finding 3): the v0.1.38 release
@@ -113,6 +113,7 @@ from typing import List, Dict, Set, Tuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _provenance as _prov  # noqa: E402  (ORGANIC #770)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -1893,6 +1894,88 @@ def _registered_nba_lhs(src: str) -> Set[str]:
     return registered
 
 
+def rule_undriven_output_port(src: str, path: str) -> List[Finding]:
+    """An OUTPUT port that is never driven anywhere in its own module.
+
+    Such a port has no driver at all, so it holds X for the entire simulation
+    (Z if it is a tri-state net). Anything that waits on it — a status flag, a
+    completion signal, a handshake — waits forever, and the run ends by timeout
+    rather than by mismatch, which is the hardest failure shape to attribute.
+
+    This is the interface contract the spec declares: a module that names an
+    output promises to drive it. `rule_undriven_and_unread` covers declared
+    internal WIRES, but `find_declarations` does not read ANSI port headers, so
+    no rule saw output PORTS; `rule_uninit_registered_output` covers a DRIVEN
+    output that lacks a power-up value, which is a different defect.
+
+    Scoped PER MODULE — a name driven in a sibling module must never credit a
+    same-named port here.
+
+    Zero-false-positive carve-outs, each for a shape where "no driver in this
+    file" is legitimate rather than a defect:
+      * a module with no body (no assign / always / instantiation) is a
+        black-box or stub declaration;
+      * `inout` ports, whose driver may legitimately be external;
+      * a port connected to an instance, since the submodule may drive it.
+
+    chip-AGNOSTIC: pure structural. No signal-name, design or vendor literal.
+    """
+    findings: List[Finding] = []
+
+    for mm in re.finditer(r'\bmodule\s+(\w+)', src):
+        end = src.find('endmodule', mm.end())
+        body = src[mm.end():end if end != -1 else len(src)]
+        mod_off = mm.end()
+
+        # A module with no drivers at all is a black-box / stub declaration.
+        if not re.search(r'\b(?:assign|always|always_ff|always_comb|initial)\b', body) \
+           and not re.search(r'\.\s*\w+\s*\(', body):
+            continue
+
+        out_ports: Dict[str, int] = {}
+        for m in re.finditer(
+                r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+|unsigned\s+)?'
+                r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', body):
+            name = m.group(1)
+            if name and name not in VERILOG_KEYWORDS:
+                out_ports.setdefault(name, src[:mod_off + m.start()].count('\n') + 1)
+        if not out_ports:
+            continue
+
+        # A `.*` wildcard connection binds every same-named signal implicitly,
+        # so nothing in this module can be shown undriven by inspection.
+        if re.search(r'\.\s*\*', body):
+            continue
+
+        driven = collect_lhs_set(body)
+        # Instance connections. `collect_instance_connections` returns a dict
+        # keyed by PORT name, so two instances sharing a port name overwrite
+        # each other and signals go missing — collect them directly instead.
+        connected: Set[str] = set()
+        for m in re.finditer(r'\.\s*\w+\s*\(([^()]*)\)', body):
+            connected |= {t for t in re.findall(r'[A-Za-z_]\w*', m.group(1))
+                          if t not in VERILOG_KEYWORDS}
+        # SystemVerilog IMPLICIT port connection: `.q_o` with no parentheses is
+        # shorthand for `.q_o(q_o)` and drives the same-named signal. This idiom
+        # is pervasive in real SV; missing it reports correct code as undriven.
+        for m in re.finditer(r'\.\s*([A-Za-z_]\w*)\s*(?=[,)])', body):
+            connected.add(m.group(1))
+        # An output given a declaration-time initialiser is driven.
+        for m in re.finditer(r'\boutput\b[^;,)]*?([A-Za-z_]\w*)\s*=', body):
+            driven.add(m.group(1))
+
+        for name, lineno in sorted(out_ports.items(), key=lambda kv: kv[1]):
+            if name in driven or name in connected:
+                continue
+            findings.append(Finding(
+                path, lineno, 'ERROR', 'undriven-output-port', name,
+                f"output port '{name}' is never driven in module "
+                f"'{mm.group(1)}' (no assignment, no continuous driver, no "
+                f"instance connection) — it holds X for the whole simulation, "
+                f"so anything waiting on it never proceeds."))
+    return findings
+
+
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     """
     Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
@@ -1940,7 +2023,7 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     # matched-LHS scope minus the in-paren relational-comparison false matches
     # (§4.05 no-leak — see `_registered_nba_lhs`).
     registered = _registered_nba_lhs(src)
-    has_initial = bool(re.search(r'\binitial\b', src))
+    initially_assigned = _initially_assigned_signals(src)
 
     for name, lineno in out_ports.items():
         if name not in registered:
@@ -1952,8 +2035,7 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
         # Declaration-time initializer: a decl line for `name` containing `=`.
         decl_init = re.search(
             r'\b(?:output|reg|logic)\b[^;\n]*\b' + re.escape(name) + r'\s*=', src)
-        if decl_init or (has_initial and re.search(
-                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(name) + r'\s*(<=|=)', src)):
+        if decl_init or name in initially_assigned:
             continue
         f = Finding(
             path, lineno, 'WARN', 'uninit-registered-output', name,
@@ -5727,16 +5809,333 @@ def autofix_input_reg_port(path: Path) -> Tuple[int, List[str]]:
     return count, dirs
 
 
+# ---------------------------------------------------------------------------
+# ORGANIC-20260803 — ANSI `output` port re-declared as `reg` in the module body.
+#
+# In ANSI-2001 / SystemVerilog port style the direction (and any range) live
+# INSIDE the port-list parentheses:
+#       module m (input clk, output [15:0] p, output rdy);
+# that header entry ALREADY declares `p` (implicitly a net). Re-declaring the
+# same name in the body as a `reg` is a DUPLICATE declaration and hard-ERRORs on
+# every conforming simulator (iverilog 12/14, verilator, the CVDP icarus-13
+# scorer):
+#       error: 'p' has already been declared in this scope.
+#       ...    : It was declared here as a net.
+# A registered output is a single object; the ONLY correct rewrite is to promote
+# the HEADER entry to `output reg` and DELETE the body `reg` decl (preserving any
+# power-up initializer as a standalone `initial NAME = <val>;`).
+#
+# This is DISTINCT from the legal NON-ANSI idiom, which this rule must NEVER
+# touch — there the direction is declared in the BODY, and a separate `reg` is
+# the intended storage decl:
+#       module m (p, rdy);
+#         output [15:0] p;   // direction decl in the BODY (non-ANSI)
+#         reg    [15:0] p;   // separate storage decl — LEGAL, no conflict
+# The discriminator is strictly POSITIONAL: fire ONLY when the `output` appears
+# INSIDE the module port-list parentheses (ANSI) AND the same name is re-declared
+# `reg` AFTER the header close-paren. That pair is always a compile error, so the
+# repair has zero false positives (a legal design cannot contain it).
+# chip-AGNOSTIC: pure Verilog port-direction grammar.
+# ---------------------------------------------------------------------------
+def _module_port_and_body_spans(text: str) -> List[Tuple[int, int, int]]:
+    """Yield (hdr_open_idx, hdr_close_idx, body_end_idx) for each module that
+    uses an ANSI/paren port list. body_end is the module's `endmodule` (or EOF).
+    Depth-matched so nested parens (`#( ... )` params, nested concats) are safe."""
+    ends = [m.end() for m in re.finditer(r'\bendmodule\b', text)]
+    spans: List[Tuple[int, int, int]] = []
+    for hm in re.finditer(r'\bmodule\b\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\(', text):
+        depth, i = 0, hm.end() - 1
+        op = i
+        while i < len(text):
+            c = text[i]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        cp = i
+        body_end = next((e for e in ends if e > cp), len(text))
+        spans.append((op, cp, body_end))
+    return spans
+
+
+def _find_output_reg_redecls(text: str) -> List[Dict[str, object]]:
+    """Return one dict per ANSI `output` port illegally re-declared as `reg` in
+    the body (the 'already declared' compile error). Empty list on legal code."""
+    hits: List[Dict[str, object]] = []
+    for (op, cp, body_end) in _module_port_and_body_spans(text):
+        header = text[op + 1:cp]
+        hbase = op + 1
+        body = text[cp + 1:body_end]
+        bbase = cp + 1
+        # ANSI output port, one name per `output` keyword, NOT already reg/wire/
+        # logic (those are correct or non-conflicting).
+        for m in re.finditer(
+                r'\boutput\b(?!\s+(?:reg|wire|logic))\s*(?:signed\s+)?'
+                r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)', header):
+            name = m.group(1)
+            if name in VERILOG_KEYWORDS:
+                continue
+            reg_re = re.compile(
+                r'\breg\b\s*(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
+                + re.escape(name) + r'\b\s*(=\s*[^;]*?)?\s*;')
+            bm = reg_re.search(body)
+            if not bm:
+                continue
+            hits.append({
+                'name': name,
+                'hdr_start': hbase + m.start(),
+                'hdr_end': hbase + m.end(),
+                'hdr_text': m.group(0),
+                'body_start': bbase + bm.start(),
+                'body_end': bbase + bm.end(),
+                'init': (bm.group(1) or '').strip(),  # e.g. "= 8'b0" or ""
+                'lineno': text[:hbase + m.start()].count('\n') + 1,
+            })
+    return hits
+
+
+def rule_output_port_reg_redeclared(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for h in _find_output_reg_redecls(src):
+        name = h['name']
+        findings.append(Finding(
+            path, int(h['lineno']), 'ERROR', 'output-port-reg-redeclared', str(name),
+            f"ANSI `output {name}` in the port list is ALSO re-declared `reg "
+            f"{name};` in the body — a duplicate declaration that ELAB_ERRORs "
+            f"('{name}' has already been declared in this scope). A registered "
+            f"output is one object: write `output reg [W-1:0] {name}` in the "
+            f"header and delete the body `reg`. rtl_hygiene_lint --fix repairs "
+            f"this deterministically (init preserved as `initial {name}=…;`)."))
+    return findings
+
+
+def autofix_output_reg_redeclared(path: Path) -> Tuple[int, List[str]]:
+    """ORGANIC-20260803 — repair an ANSI `output` port re-declared as `reg` in
+    the body. Promotes the header entry to `output reg` and removes the body
+    `reg` decl, preserving any power-up initializer as a standalone `initial`.
+    Returns (count_fixed, [names]); no-op (0, []) when nothing matches.
+    chip-AGNOSTIC; zero false positives (the pattern is always a compile error)."""
+    text = path.read_text(errors='replace')
+    hits = _find_output_reg_redecls(text)
+    if not hits:
+        return 0, []
+    edits: List[Tuple[int, int, str]] = []
+    names: List[str] = []
+    for h in hits:
+        names.append(str(h['name']))
+        # promote the header entry: `output` -> `output reg`
+        new_hdr = re.sub(r'\boutput\b', 'output reg', str(h['hdr_text']), count=1)
+        edits.append((int(h['hdr_start']), int(h['hdr_end']), new_hdr))
+        # body reg decl: delete, or keep power-up value as a standalone initial
+        init = str(h['init'])
+        repl = f"initial {h['name']} {init};" if init else ""
+        edits.append((int(h['body_start']), int(h['body_end']), repl))
+    for (s, e, r) in sorted(edits, key=lambda x: x[0], reverse=True):
+        text = text[:s] + r + text[e:]
+    path.write_text(text)
+    return len(hits), names
+
+
+# ---------------------------------------------------------------------------
+# Rule 34 — simulation oscillator delayed blocking self-toggle
+# ---------------------------------------------------------------------------
+# A no-input clock/oscillator model commonly toggles an output on an exact delay:
+#
+#     initial begin clk = 0; forever #5 clk = ~clk; end
+#
+# A testbench sampling at the SAME timestamp races the blocking write in the
+# active region.  ``clk <= ~clk`` schedules the transition in the NBA region,
+# preserving the intended half-period waveform while making sampling order
+# deterministic.  This is NOT a blanket blocking→NBA rewrite: the detector is
+# confined to an unsynthesizable no-input module, an output that self-toggles
+# after ``#delay`` inside ``initial/forever`` or a bare ``always``, and exactly
+# one separate literal initialization.  Ordinary combinational and edge-clocked
+# synthesizable assignments cannot match.
+_DELAYED_BLOCKING_SELF_TOGGLE_RE = re.compile(
+    r'#\s*(?:\([^;]*?\)|(?:\d+(?:\.\d+)?|[A-Za-z_]\w*))\s*'
+    r'(?P<name>[A-Za-z_]\w*)\s*(?P<op>(?<![<>=!])=(?!=))\s*'
+    r'~\s*(?P=name)\s*;', re.S)
+_BARE_ALWAYS_RE = re.compile(r'(?<![\w$])always(?![\w$])')
+_FOREVER_RE = re.compile(r'(?<![\w$])forever(?![\w$])')
+
+
+def _blank_preprocessor_conditionals(src: str) -> str:
+    """Blank every conditional-compilation branch without shifting offsets.
+
+    This autofixer has no access to the simulator/synthesizer's ``-D`` macro
+    environment.  Treating a branch as active would therefore be a guess, and
+    procedural keywords in an inactive (even syntactically incomplete) branch
+    can lend false scope to live code after `` `endif``.  Exclude the complete
+    conditional region, including nested branches, and leave unconditional
+    source available to the rule.  This is deliberately fail-closed: a real
+    oscillator behind a macro is left untouched rather than rewritten under an
+    unproved configuration.
+    """
+    out: List[str] = []
+    depth = 0
+    continuation = False
+    conditional_open = re.compile(r'^\s*`(?:ifdef|ifndef)\b')
+    conditional_close = re.compile(r'^\s*`endif\b')
+    directive = re.compile(r'^\s*`[A-Za-z_]\w*')
+
+    for line in src.splitlines(keepends=True):
+        opens = bool(conditional_open.match(line))
+        closes = bool(conditional_close.match(line))
+        hidden = depth > 0 or opens or closes or continuation \
+            or bool(directive.match(line))
+        if hidden:
+            out.append(''.join('\n' if ch == '\n' else '\r' if ch == '\r'
+                               else ' ' for ch in line))
+        else:
+            out.append(line)
+
+        if opens:
+            depth += 1
+        if closes and depth > 0:
+            depth -= 1
+        continuation = (bool(directive.match(line)) or continuation) \
+            and line.rstrip('\r\n').rstrip().endswith('\\')
+
+    return ''.join(out)
+
+
+def _bare_always_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for delay-driven ``always`` statements only."""
+    spans: List[Tuple[int, int]] = []
+    for m in _BARE_ALWAYS_RE.finditer(src):
+        nxt = re.search(r'\S', src[m.end():])
+        if not nxt:
+            continue
+        body_start = m.end() + nxt.start()
+        if src[body_start] == '@':
+            continue
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
+
+
+def _forever_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for each ``forever`` statement body."""
+    spans: List[Tuple[int, int]] = []
+    for m in _FOREVER_RE.finditer(src):
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
+
+
+def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]:
+    """Return conservative delayed self-toggle sites with raw-text offsets."""
+    if _is_testbench(raw, path):
+        return []
+    scan = _blank_preprocessor_conditionals(strip_comments(raw))
+    sites: List[Dict] = []
+    for _module_name, lo, hi in _module_regions(scan):
+        region = scan[lo:hi]
+        structural = _blank_string_literals(region)
+        # This rule models a source/oscillator, not a DUT clocked by an input.
+        if re.search(r'\binput\b', structural):
+            continue
+        initial_spans = _initial_spans(structural)
+        bare_always_spans = _bare_always_spans(structural)
+        forever_spans = _forever_spans(structural)
+        for m in _DELAYED_BLOCKING_SELF_TOGGLE_RE.finditer(structural):
+            name = m.group('name')
+            # The toggled signal must be a module output (ANSI or body style).
+            if not re.search(r'\boutput\b[^;)]*\b' + re.escape(name) + r'\b',
+                             structural, re.S):
+                continue
+
+            # The toggle must be structurally INSIDE the qualifying process.
+            # Looking only for the last preceding `initial`/`always` leaked
+            # across completed blocks and into task bodies, where `--fix`
+            # changed unrelated delayed assignments.  Bound each process first.
+            in_initial_forever = (
+                any(start <= m.start() < end for start, end in initial_spans)
+                and any(
+                    start <= m.start() < end
+                    # A forever loop that waits on an event before this toggle
+                    # is event-driven, not the delay-only oscillator class.
+                    # An unresolved macro in the same prefix may expand to the
+                    # event control, so it is equally non-rewritable.
+                    and '@' not in structural[start:m.start()]
+                    and '`' not in structural[start:m.start()]
+                    for start, end in forever_spans))
+            in_bare_always = any(
+                start <= m.start() < end
+                and '@' not in structural[start:m.start()]
+                # Without the caller's macro environment, a backtick token in
+                # the owning `always` prefix may expand to an event control
+                # (for example `EVENT -> @(posedge clk)`).  Rewriting in that
+                # state would guess that an event-driven process is a free-
+                # running oscillator, so leave it untouched.
+                and '`' not in structural[start:m.start()]
+                for start, end in bare_always_spans)
+            if not (in_initial_forever or in_bare_always):
+                continue
+
+            writes = list(re.finditer(
+                r'\b' + re.escape(name) +
+                r'\b\s*(?:<=|(?<![<>=!])=(?!=))', structural))
+            if len(writes) != 2:
+                continue
+            # The only other write must be a literal initialization before the
+            # toggle.  Extra functional/reset writes make the rewrite ambiguous.
+            literal_inits = list(re.finditer(
+                r'\b' + re.escape(name) +
+                r"\b\s*=\s*(?:\d+'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+|\d+)\s*;",
+                structural))
+            if len(literal_inits) != 1 or literal_inits[0].start() >= m.start():
+                continue
+            sites.append({
+                'name': name,
+                'op_start': lo + m.start('op'),
+                'op_end': lo + m.end('op'),
+                'line': scan.count('\n', 0, lo + m.start('op')) + 1,
+            })
+    return sites
+
+
+def rule_delayed_blocking_clock_toggle(src: str, path: str) -> List[Finding]:
+    return [Finding(
+        path, int(site['line']), 'WARN',
+        'delayed-blocking-clock-toggle', str(site['name']),
+        "delay-driven no-input oscillator uses a blocking self-toggle; a "
+        "testbench sampling at the same timestamp races the active-region "
+        "write. Use `<=` for the delayed toggle (rtl_hygiene_lint --fix).")
+        for site in _delayed_blocking_clock_toggle_sites(src, path)]
+
+
+def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
+    """Change only proven delay-oscillator self-toggle operators from = to <=."""
+    raw = path.read_text(errors='replace')
+    sites = _delayed_blocking_clock_toggle_sites(raw, str(path))
+    if not sites:
+        return 0, []
+    for site in sorted(sites, key=lambda item: int(item['op_start']), reverse=True):
+        start, end = int(site['op_start']), int(site['op_end'])
+        raw = raw[:start] + '<=' + raw[end:]
+    path.write_text(raw)
+    return len(sites), [str(site['name']) for site in sites]
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
+    results += rule_output_port_reg_redeclared(src, str(path))
+    results += rule_delayed_blocking_clock_toggle(src, str(path))
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
+    results += rule_undriven_output_port(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
@@ -5792,6 +6191,342 @@ def lint_file(path: Path) -> List[Finding]:
     return results
 
 
+def _procedural_statement_end(text: str, pos: int, depth: int = 0) -> int:
+    """Return the end offset of one masked procedural statement.
+
+    Unlike the older first-semicolon shortcut, this covers the compound
+    statements that may legally follow ``initial`` without an outer ``begin``:
+    if/else, case/endcase, fork/join, loops, and timing/event controls.  A
+    malformed or over-deep construct returns ``pos`` so callers fail closed and
+    do not credit assignments outside the construct.
+    """
+    if depth > 64:
+        return pos
+    n = len(text)
+    i = pos
+    while i < n and text[i].isspace():
+        i += 1
+    if i >= n:
+        return pos
+
+    def _keyword_block_end(
+            start: int, opener_re: str, closer_re: str) -> int:
+        level = 0
+        token_re = re.compile(
+            r'\b(' + opener_re + r'|' + closer_re + r')\b')
+        for token in token_re.finditer(text, start):
+            if re.fullmatch(opener_re, token.group(1)):
+                level += 1
+            else:
+                level -= 1
+                if level == 0:
+                    end = token.end()
+                    label = re.match(
+                        r'\s*:\s*[A-Za-z_]\w*', text[end:])
+                    return end + (label.end() if label else 0)
+        return start
+
+    word = re.match(r'[A-Za-z_]\w*', text[i:])
+    keyword = word.group(0) if word else ''
+    word_end = i + word.end() if word else i
+
+    if keyword in {'unique', 'unique0', 'priority'}:
+        return _procedural_statement_end(text, word_end, depth + 1)
+    if keyword == 'begin':
+        return _keyword_block_end(i, r'begin', r'end')
+    if keyword in {'case', 'casex', 'casez', 'randcase'}:
+        return _keyword_block_end(
+            i, r'(?:case|casex|casez|randcase)', r'endcase')
+    if keyword == 'fork':
+        return _keyword_block_end(
+            i, r'fork', r'(?:join|join_any|join_none)')
+
+    if keyword == 'if':
+        cond = word_end
+        while cond < n and text[cond].isspace():
+            cond += 1
+        if cond >= n or text[cond] != '(':
+            return pos
+        close = _matching_paren(text, cond)
+        if close < 0:
+            return pos
+        then_end = _procedural_statement_end(text, close, depth + 1)
+        if then_end <= close:
+            return pos
+        tail = then_end
+        while tail < n and text[tail].isspace():
+            tail += 1
+        else_match = re.match(r'else\b', text[tail:])
+        if else_match:
+            else_end = _procedural_statement_end(
+                text, tail + else_match.end(), depth + 1)
+            return else_end if else_end > tail + else_match.end() else pos
+        return then_end
+
+    if keyword in {'for', 'foreach', 'while', 'repeat', 'wait'}:
+        cond = word_end
+        while cond < n and text[cond].isspace():
+            cond += 1
+        if cond >= n or text[cond] != '(':
+            return pos
+        close = _matching_paren(text, cond)
+        if close < 0:
+            return pos
+        body_end = _procedural_statement_end(text, close, depth + 1)
+        return body_end if body_end > close else pos
+
+    if keyword == 'forever':
+        body_end = _procedural_statement_end(text, word_end, depth + 1)
+        return body_end if body_end > word_end else pos
+
+    if keyword == 'do':
+        body_end = _procedural_statement_end(text, word_end, depth + 1)
+        if body_end <= word_end:
+            return pos
+        tail = body_end
+        while tail < n and text[tail].isspace():
+            tail += 1
+        while_match = re.match(r'while\b', text[tail:])
+        if not while_match:
+            return pos
+        cond = tail + while_match.end()
+        while cond < n and text[cond].isspace():
+            cond += 1
+        if cond >= n or text[cond] != '(':
+            return pos
+        close = _matching_paren(text, cond)
+        if close < 0:
+            return pos
+        semi = close
+        while semi < n and text[semi].isspace():
+            semi += 1
+        return semi + 1 if semi < n and text[semi] == ';' else pos
+
+    if text[i] == '@':
+        control = i + 1
+        while control < n and text[control].isspace():
+            control += 1
+        if control < n and text[control] == '(':
+            after_control = _matching_paren(text, control)
+            if after_control < 0:
+                return pos
+        else:
+            event = re.match(r'(?:\*|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)',
+                             text[control:])
+            if not event:
+                return pos
+            after_control = control + event.end()
+        body_end = _procedural_statement_end(
+            text, after_control, depth + 1)
+        return body_end if body_end > after_control else pos
+
+    if text[i] == '#':
+        control = i + 1
+        while control < n and text[control].isspace():
+            control += 1
+        if control < n and text[control] == '(':
+            after_control = _matching_paren(text, control)
+            if after_control < 0:
+                return pos
+        else:
+            delay = re.match(
+                r'(?:\d+(?:\.\d*)?|\.\d+|[A-Za-z_$][\w$]*)',
+                text[control:])
+            if not delay:
+                return pos
+            after_control = control + delay.end()
+        body_end = _procedural_statement_end(
+            text, after_control, depth + 1)
+        return body_end if body_end > after_control else pos
+
+    # Simple statement: the first semicolon outside (), [], or {} terminates it.
+    paren = bracket = brace = 0
+    for cursor in range(i, n):
+        char = text[cursor]
+        if char == '(':
+            paren += 1
+        elif char == ')':
+            paren = max(0, paren - 1)
+        elif char == '[':
+            bracket += 1
+        elif char == ']':
+            bracket = max(0, bracket - 1)
+        elif char == '{':
+            brace += 1
+        elif char == '}':
+            brace = max(0, brace - 1)
+        elif char == ';' and paren == bracket == brace == 0:
+            return cursor + 1
+    return pos
+
+
+def _initially_assigned_signals(src: str) -> Set[str]:
+    """Return whole-signal LHS names assigned by module-scope ``initial``.
+
+    The power-up fixer used to search only 200 characters after an ``initial``
+    keyword.  That missed long but valid initial blocks and made a generated
+    block with many assignments non-idempotent: names beyond the window were
+    appended again on the next ``--fix`` run.  Walk each initial statement or
+    balanced ``begin``/``end`` block instead.  The structural view masks
+    comments and strings while preserving offsets, so their text cannot forge
+    block delimiters or assignments.
+    """
+    masked = _mask_function_task_bodies(_mask_comments_and_strings(src))
+    assigned: Set[str] = set()
+    for initial in re.finditer(r'\binitial\b', masked):
+        statement_start = initial.end()
+        statement_end = _procedural_statement_end(masked, statement_start)
+        if statement_end <= statement_start:
+            continue
+        statement = masked[statement_start:statement_end]
+        # Reuse the statement-level assignment scanner rather than matching a
+        # bare ``name <=`` token.  The latter also matches relational ``<=`` in
+        # an initial condition/RHS (``if (q <= d)`` or ``y = q <= d``) and would
+        # falsely claim that ``q`` already has a deterministic power-up value.
+        # ``_ctx_assignments`` accepts only depth-zero assignment operators and
+        # only bare whole-signal LHS names, so bit/part/array-element writes do
+        # not prove full initialization either.
+        for name, _rhs, _offset in _ctx_assignments(statement):
+            assigned.add(name)
+    return assigned
+
+
+def _blank_balanced_begin_end_scopes(src: str) -> str:
+    """Blank every outermost balanced ``begin``/``end`` scope.
+
+    Declarations inside procedural or implicit-generate blocks are not
+    addressable from the module-scope initializer.  Blanking the whole outer
+    scope (including its header back to the preceding semicolon) also prevents
+    a completed empty block from contaminating the prefix of the next legal
+    module item.  Newlines and offsets are preserved.  An unmatched opener is
+    blanked through EOF, which is the fail-closed direction.
+    """
+    out = list(src)
+    depth = 0
+    outer_start = -1
+    for token in re.finditer(r'\b(begin|end)\b', src):
+        if token.group(1) == 'begin':
+            if depth == 0:
+                outer_start = src.rfind(';', 0, token.start()) + 1
+            depth += 1
+            continue
+        if depth == 0:
+            continue
+        depth -= 1
+        if depth == 0 and outer_start >= 0:
+            scope_end = token.end()
+            label = re.match(
+                r'\s*:\s*[A-Za-z_]\w*', src[scope_end:])
+            if label:
+                scope_end += label.end()
+            for idx in range(outer_start, scope_end):
+                if out[idx] != '\n':
+                    out[idx] = ' '
+            outer_start = -1
+    if depth > 0 and outer_start >= 0:
+        for idx in range(outer_start, len(out)):
+            if out[idx] != '\n':
+                out[idx] = ' '
+    return ''.join(out)
+
+
+def _module_scope_scalar_state(src: str) -> Dict[str, int]:
+    """Return module-scope scalar ``reg``/``logic`` declarations by name.
+
+    ``src`` is one top-module scope with explicit generate bodies already
+    masked.  Skip the module header, unpacked memories, net-qualified
+    ``wire logic`` declarations, aggregate fields, and declarations nested in
+    task/function/class/clocking/covergroup/property/sequence/checker or any
+    ``begin/end`` scope.  Those nested names cannot be referenced by the
+    module-scope initial block emitted by the autofix.
+    """
+    structural = _mask_comments_and_strings(src)
+    structural = _mask_function_task_bodies(structural)
+    # Other declaration-bearing scopes can legally live in a module but their
+    # local `logic` fields are not module-scope variables.  Mask their bodies
+    # with offset-preserving whitespace, matching the existing task/function
+    # treatment above.
+    for opener, closer in (
+            ('class', 'endclass'), ('clocking', 'endclocking'),
+            ('covergroup', 'endgroup'), ('property', 'endproperty'),
+            ('sequence', 'endsequence'), ('checker', 'endchecker')):
+        out = list(structural)
+        depth = 0
+        block_start = -1
+        for token in re.finditer(
+                r'\b(' + opener + r'|' + closer + r')\b', structural):
+            if token.group(1) == opener:
+                if depth == 0:
+                    block_start = token.end()
+                depth += 1
+            elif depth > 0:
+                depth -= 1
+                if depth == 0 and block_start >= 0:
+                    for idx in range(block_start, token.start()):
+                        if out[idx] != '\n':
+                            out[idx] = ' '
+                    block_start = -1
+        structural = ''.join(out)
+    structural = _blank_balanced_begin_end_scopes(structural)
+    header_end = structural.find(';')
+    body_offset = header_end + 1 if header_end >= 0 else 0
+    body = structural[body_offset:]
+    state: Dict[str, int] = {}
+    for declaration in re.finditer(
+            r'\b(?:reg|logic)\b(?:\s+signed)?\s*'
+            r'(?:\[[^\]]+\]\s*)?([^;]+);', body):
+        # A `logic` data type may qualify a net (`wire logic q`).  The match
+        # begins at `logic`, so inspect the current declaration prefix and keep
+        # such names out of the variable set.
+        statement_start = body.rfind(';', 0, declaration.start()) + 1
+        prefix = body[statement_start:declaration.start()]
+        # A genuine plain module-item declaration starts a fresh statement,
+        # optionally after synthesis attributes or a fully masked scope.  The
+        # maskers intentionally preserve their opener/closer keywords, so
+        # remove those inert markers before judging the prefix.  Reject every
+        # other qualifier we do not model (including `wire logic` and the first
+        # field of an aggregate) instead of risking an out-of-scope name.
+        prefix_modeled = re.sub(r'\(\*[\s\S]*?\*\)', ' ', prefix)
+        # A declaration after a completed procedural/named block is still a
+        # module item.  The previous semicolon is commonly the final assignment
+        # *inside* that block, leaving ``end`` (and an optional block label) in
+        # this prefix.  Treat completed structural delimiters as inert; the
+        # `_enclosing_begin_end` check below independently rejects declarations
+        # that are still inside an open procedural or implicit-generate scope.
+        prefix_modeled = re.sub(
+            r'\bend\b\s*(?::\s*[A-Za-z_]\w*)?', ' ', prefix_modeled)
+        prefix_modeled = re.sub(
+            r'\b(?:static|begin|endcase|fork|join|join_any|join_none|'
+            r'generate|endgenerate|task|endtask|function|endfunction|'
+            r'class|endclass|clocking|endclocking|covergroup|endgroup|'
+            r'property|endproperty|sequence|endsequence|checker|endchecker)\b',
+            ' ', prefix_modeled)
+        if prefix_modeled.strip():
+            continue
+        # Subsequent packed struct/union fields begin after a semicolon but
+        # still sit inside an unmatched brace pair.
+        before = body[:declaration.start()]
+        if before.count('{') != before.count('}'):
+            continue
+        # `if (P) begin : g ... end` and `for (genvar ...) begin : g ... end`
+        # are implicit generate scopes even without generate/endgenerate.
+        # Procedural block-local declarations have the same non-addressable
+        # relationship to a module-scope initial block.
+        if _enclosing_begin_end(body, declaration.start()) is not None:
+            continue
+        lineno = src[:body_offset + declaration.start()].count('\n') + 1
+        for item in re.finditer(
+                r'([A-Za-z_]\w*)\s*(\[[^\]]+\])?\s*(?:=[^,;]+)?',
+                declaration.group(1)):
+            name = item.group(1)
+            unpacked_range = item.group(2)
+            if (not name or name in VERILOG_KEYWORDS or name in state
+                    or unpacked_range):
+                continue
+            state[name] = lineno
+    return state
+
+
 def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     """Deterministically REPAIR the `uninit-registered-output` finding in-place.
 
@@ -5830,6 +6565,9 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     # serv_immdec imm19_12_20/...) — the autofix then emitted broken initial
     # refs that failed elaboration. chip-AGNOSTIC: structural masking only.
     src_scope_nogen = _mask_generate_blocks(src_scope)
+    initially_assigned = _initially_assigned_signals(src_scope_nogen)
+    module_state = _module_scope_scalar_state(src_scope_nogen)
+    registered = _registered_nba_lhs(src_scope_nogen)
     names: List[str] = []
     seen: Set[str] = set()
     # (a) registered OUTPUT ports with no power-up (the WARN-rule set).
@@ -5857,23 +6595,19 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     # that are wires in this module (even if the same name is a reg in a
     # sibling submodule that lives in the same file).
     top_wires = set(re.findall(
-        r'\b(?:wire|output\s+wire|input\s+wire|inout\s+wire)\b(?:\s+signed)?\s*'
+        r'\b(?:wire|output\s+wire|input\s+wire|inout\s+wire)\b'
+        r'(?:\s+logic)?(?:\s+signed)?\s*'
         r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', src_scope))
     if is_resetless:
         out_ports = set(re.findall(
             r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
             r'([A-Za-z_]\w*)\s*(?=[,;)=])', src_scope))
-        # v0.2.55 — `registered` from the GENERATE-MASKED scope so generate-
-        # scoped regs (whose `<=` lives inside a generate body) are NOT eligible
-        # for a module-scope `initial` (they would fail elaboration).
-        registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope_nogen)}
-        has_initial = bool(re.search(r'\binitial\b', src_scope))
         for om in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src_scope):
             if om.group(1) not in out_ports:
                 continue
             for rhs_id in re.findall(r'\b([A-Za-z_]\w*)\b', om.group(2)):
-                if rhs_id in registered and rhs_id not in seen \
+                if rhs_id in registered and rhs_id in module_state \
+                        and rhs_id not in seen \
                         and rhs_id not in VERILOG_KEYWORDS \
                         and rhs_id not in top_wires \
                         and rhs_id not in reset_covered_fix:
@@ -5889,11 +6623,11 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
                         continue
                     decl_init = re.search(
                         r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id) + r'\s*=', src_scope)
-                    in_initial = has_initial and re.search(
-                        r'\binitial\b[\s\S]{0,200}?\b' + re.escape(rhs_id) + r'\s*(<=|=)', src_scope)
-                    if not decl_init and not in_initial:
+                    if not decl_init and rhs_id not in initially_assigned:
                         names.append(rhs_id); seen.add(rhs_id)
-    # (c) v0.1.38 — ALL internal `reg` declarations in reset-less modules.
+    # (c) v0.1.38 — ALL internal variable declarations in reset-less modules.
+    # SystemVerilog `logic` is a variable data type just like Verilog `reg`;
+    # both can hold reset-less sequential state and need identical handling.
     # v0.1.40 — top-module-scoped; skip memory arrays; skip names that are
     # wires in this module's scope.
     # v0.1.41 — also skip regs declared inside `generate ... endgenerate`
@@ -5901,45 +6635,14 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     # cannot be referenced by an `initial begin local_reg = 0; end` block
     # at module scope (iverilog: "Could not find variable").
     if is_resetless:
-        # Mask out generate-block bodies so the reg/wire/registered scans
-        # don't see them. Replacement preserves character offsets for any
-        # caller that re-resolves line numbers.
-        src_no_gen = _mask_generate_blocks(src_scope)
-        all_regs: Dict[str, int] = {}
-        # v0.1.40 — match `reg [...] name1, name2;` OR `reg name [0:D-1];`
-        # (memory) — the memory form is REJECTED at the per-name walk by the
-        # trailing-`[…]` test.
-        for m in re.finditer(
-                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src_no_gen):
-            lineno_d = src_no_gen[:m.start()].count('\n') + 1
-            decl_body = m.group(1)
-            # Walk the comma-separated names; reject any name whose decl has
-            # a trailing `[...]` (memory array) — those need element-wise init
-            # via an integer loop, which the scalar `name = 0;` autofix would
-            # mis-emit as `MEM = 0;` (iverilog: 'Could not find variable').
-            for nm_match in re.finditer(
-                    r'([A-Za-z_]\w*)\s*(\[[^\]]+\])?\s*(?:=[^,;]+)?', decl_body):
-                nm = nm_match.group(1)
-                trailing_bracket = nm_match.group(2)
-                if not nm or nm in VERILOG_KEYWORDS or nm in all_regs:
-                    continue
-                if trailing_bracket:
-                    # memory array — skip; element-wise init is out of scope
-                    # for this autofix (would need an integer loop).
-                    continue
-                all_regs[nm] = lineno_d
-        registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_no_gen)}
-        has_initial = bool(re.search(r'\binitial\b', src_no_gen))
-        for nm in all_regs:
+        for nm in module_state:
             if nm in seen or nm not in registered or nm in top_wires \
                     or nm in reset_covered_fix:
                 continue
             decl_init = re.search(
-                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src_no_gen)
-            in_initial = has_initial and re.search(
-                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src_no_gen)
-            if decl_init or in_initial:
+                r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(nm) + r'\s*=',
+                src_scope_nogen)
+            if decl_init or nm in initially_assigned:
                 continue
             names.append(nm); seen.add(nm)
     if not names:
@@ -6027,7 +6730,10 @@ def main():
                          'enforcing the power-up determinism lesson; and (b) the '
                          'unguarded-sim-only-assert finding (fence immediate `assert` '
                          'statements in `// synthesis translate_off … translate_on` so '
-                         'they stop false-failing the synth gate). Regardless of caller/prompt.')
+                         'they stop false-failing the synth gate); and (c) a narrowly '
+                         'proven delay-driven no-input oscillator blocking self-toggle '
+                         '(rewrite `=` to `<=` to remove active-region sampling races). '
+                         'Regardless of caller/prompt.')
     ap.add_argument('--strict', action='store_true',
                     help='ORGANIC #770 — sole-emit hard-block mode. Identical '
                          'gating to the default (an ADVISORY prose-heuristic '
@@ -6068,6 +6774,8 @@ def main():
         cast_total = 0
         inreg_total = 0
         sens_total = 0
+        outreg_total = 0
+        clock_toggle_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -6082,6 +6790,14 @@ def main():
             if ir:
                 print(f"{f}: removed illegal `reg` from {ir} input/inout "
                       f"port(s): {irdirs}")
+            # ORGANIC-20260803 — repair an ANSI `output` port re-declared as
+            # `reg` in the body (the 'already declared' duplicate-decl compile
+            # error). Runs alongside the input/inout repair; both are pure
+            # port-grammar rewrites with zero semantic change.
+            orr, orrnames = autofix_output_reg_redeclared(p)
+            if orr:
+                print(f"{f}: promoted {orr} ANSI output port(s) to `output reg` "
+                      f"(removed duplicate body `reg`): {orrnames}")
             n, names = autofix_uninit_registered_output(p)
             if n:
                 print(f"{f}: inserted `initial` power-up 0 for {names}")
@@ -6100,9 +6816,15 @@ def main():
             s, slabels = autofix_incomplete_sensitivity(p)
             if s:
                 print(f"{f}: rewrote incomplete sensitivity list(s) to @(*): {slabels}")
-            if _iv and pre_ok and (ir or n or g or w or s) and not _compiles(p):
+            # Delay-driven no-input oscillator: NBA preserves the half-period
+            # waveform and removes same-timestamp active-region sampling races.
+            ct, ctlabels = autofix_delayed_blocking_clock_toggle(p)
+            if ct:
+                print(f"{f}: rewrote delayed oscillator self-toggle(s) to NBA: "
+                      f"{ctlabels}")
+            if _iv and pre_ok and (ir or orr or n or g or w or s or ct) and not _compiles(p):
                 p.write_text(pre_text)
-                ir = n = g = w = s = 0
+                ir = orr = n = g = w = s = ct = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -6112,11 +6834,15 @@ def main():
             cast_total += w
             inreg_total += ir
             sens_total += s
+            outreg_total += orr
+            clock_toggle_total += ct
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
               f"inserted {cast_total} value-identical width cast(s), "
               f"removed illegal `reg` from {inreg_total} input/inout port(s), "
-              f"rewrote {sens_total} incomplete sensitivity list(s) to @(*)")
+              f"promoted {outreg_total} duplicate-declared output port(s) to `output reg`, "
+              f"rewrote {sens_total} incomplete sensitivity list(s) to @(*), "
+              f"rewrote {clock_toggle_total} delayed oscillator self-toggle(s) to NBA")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
@@ -6150,7 +6876,7 @@ def main():
         print(f"{fd.file}:{fd.line}: [{fd.severity}] {fd.rule}: {fd.message}{suffix}")
 
     if args.json:
-        Path(args.json).write_text(json.dumps([asdict(f) for f in filtered], indent=2))
+        atomic_write_text(Path(args.json), json.dumps([asdict(f) for f in filtered], indent=2))
 
     # ORGANIC #770 round-2 — only a BLOCK-eligible finding hard-blocks (trips
     # rc=1). A STRUCTURAL / corroborated finding (a genuine bug) stays

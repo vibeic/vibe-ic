@@ -274,6 +274,15 @@ _EXCLUDED: Dict[str, str] = {
 #
 # MEASURED 2026-07-28 at v1.7.84 + the four fixes that land with this file:
 # 52 gates carry 97 skip paths that exit 0 where no consumer channel fires.
+# (v1.7.84+ update: +1 gate / +1 path for buffer_occupancy_flag_latency_check
+#  → 53 gates / 98 skip paths; the empty/full stale-pointer latency screen has
+#  the same "no occupancy flag present → SKIP" unrouted branch.)
+# (2026-08-13 update: +1 gate / +1 path for vendored_attribution_retained_check
+#  → 52 gates / 97 paths becomes 53 / 98. It is not a NEW defect: the branch was
+#  always there, and wiring the checker into the corpus run (#1253, closing a
+#  #1241 row) is what made it a GATE and so brought it into this population.
+#  Closing one #1241 row opened this one — the entry below says why it is listed
+#  rather than drained.)
 # #515 fixed 4 and #521 fixed 19; this is 97 more, and the reason neither
 # earlier round saw them is exactly what #528 says — a sweep whose
 # preconditions decide what it can find reports a clean zero when nothing
@@ -309,8 +318,27 @@ _EXCLUDED: Dict[str, str] = {
 # `rc != 0 -> RED` reader, and its own tests updated. `--strict` reports the
 # residual as a FAIL for whoever does that.
 _UNROUTED_INVENTORY: Dict[str, int] = {
-    "analog_content_detected_must_emit_l5_check": 1,
+    # l7_debug_access_grounding_check, l8_clock_period_actionability_check,
+    # l9_floorplan_contract_check: DRAINED (#1052). All three ended their skip
+    # path with `print("skipped: …"); return 0` — free prose, which is not a
+    # channel. They now route through `_vacuous_exit`: rc 2 AND the sentinel.
+    # Found by the #1051 carpet sweep, which reproduced from the OTHER side
+    # (behaviourally, on an empty tree) what this module had already recorded
+    # statically as three of its 97. Entries DELETED, not zeroed, per the rule
+    # below. `l_doc_todo_stub_count_check` was fixed in the same change and was
+    # never in this inventory: its exit lived behind a computed verdict string,
+    # so it enumerated as `skip_paths: 0` + unanalysable rather than as a
+    # residual entry — it now enumerates as 1 routed.
+    # analog_content_detected_must_emit_l5_check: DRAINED (#833). Its one
+    # unrouted branch ("no analog keywords found" -> rc 0) now routes through
+    # `_vacuous_exit`. The entry is DELETED rather than zeroed, because the
+    # ratchet's "fixed" direction demands exactly that: a list that keeps
+    # claiming what is already fixed is a baseline outliving its truth.
     "bram_init_file_actually_loaded_check": 1,
+    # buffer_occupancy_flag_latency_check (empty/full stale-pointer latency
+    # gate) SKIPs (exit 0) on any design with no occupancy flag — an unrouted
+    # skip path, same shape as nba_shift_register_same_cycle_read_check below.
+    "buffer_occupancy_flag_latency_check": 1,
     "byte_assembler_explicit_9bit_reject_check": 5,
     "cmd_buf_index_semantic_consistency_check": 7,
     "connect_vs_send_test_parity_check": 1,
@@ -328,10 +356,7 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "half_duplex_response_window_check": 1,
     "l3_opcode_pre_wake_allowed_typed_check": 5,
     "l6_reject_rules_from_rx_event_check": 6,
-    "l7_debug_access_grounding_check": 1,
-    "l8_clock_period_actionability_check": 1,
     "l8_frame_end_gap_derivation_check": 1,
-    "l9_floorplan_contract_check": 1,
     "l9_rtl_pin_consistency_check": 3,
     "metadata_content_substance_check": 1,
     "nba_shift_register_same_cycle_read_check": 1,
@@ -356,6 +381,31 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "slave_tx_no_device_break_check": 1,
     "tb_timing_extremes_check": 1,
     "tx_phy_bit_cell_total_consumed_check": 2,
+    # vendored_attribution_retained_check (#1241 / #1253): the gate is wired
+    # into the corpus run at `tools/ci/repo_hygiene_gates.sh`, and wiring it is
+    # what makes it a gate and so subjects it to this ratchet. Its one unrouted
+    # branch is `not res["licensed"]` -> `[VACUOUS_PASS] ... this gate checked
+    # nothing` -> rc 0.
+    #
+    # LISTED RATHER THAN ROUTED, and the reason is a genuine conflict rather
+    # than reluctance. Routing means rc 2, and rc 2 has no home here:
+    #   * plain `run` makes rc 2 a FAIL, which would make the gate object to a
+    #     lawful total withdrawal of the vendored code — the one thing
+    #     `test_removing_the_code_too_is_lawful_and_stays_green` records the
+    #     owner ruling it must not do;
+    #   * `run_tolerating_uncheckable` makes rc 2 non-fatal, but
+    #     `test_the_hygiene_script_declares_it_as_a_blocking_gate` requires the
+    #     blocking form.
+    # Splitting the two does not rescue it: lawful withdrawal and a
+    # misconfigured scope are the SAME observation to this gate (both
+    # `tracked=0, licensed=0`), so nothing it can see tells them apart.
+    #
+    # The cheap escape was measured and rejected. Emitting the `VACUOUS_PASS:`
+    # sentinel while keeping `return 0` turns THIS check green, because
+    # sentinel-only counts as routed — and changes nothing real, because
+    # `tools/ci/_gate_dispatch.sh` reads rc and never the sentinel. A routing
+    # that routes nowhere is worse than a declared debt.
+    "vendored_attribution_retained_check": 1,
     "wake_gen_bus_active_reset_check": 2,
     "wake_gen_silence_gate": 4,
     "wake_pulse_emit_gated_by_first_rx_command_check": 2,
@@ -573,16 +623,56 @@ def _literals(node: ast.AST) -> List[str]:
             if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def _leading_literal(call: ast.Call) -> Optional[str]:
+#: Returned when the line's verdict word is COMPUTED, so this scanner cannot
+#: read it out of the source at all. Distinct from None ("no literal here"),
+#: because the two must not be tallied the same way — see `_leading_literal`.
+_INTERPOLATED = object()
+
+
+def _verdict_is_interpolated(arg: ast.AST) -> bool:
+    """Does this argument begin with an interpolation, or with punctuation
+    followed by one?
+
+    `print(f"[{label}] some_check ...")` renders its verdict word from `label`.
+    The leading STRING constant is `"["`, which carries no token, so a scanner
+    reading literals sees nothing and — before this — recorded neither a skip
+    nor an uncertainty. Measured (vibe-ic#707) across the analog-hil family:
+    `skip_paths=0 unresolved=0` for four gates that plainly have skip paths.
+
+    That is the shape #693 is about, one level down: the ratchet's `98 == 98`
+    balance was computed over a population that STRUCTURALLY excluded them, so
+    it reported balance for lines it could not see.
+    """
+    if not isinstance(arg, ast.JoinedStr):
+        return False
+    for v in arg.values:
+        if isinstance(v, ast.FormattedValue):
+            return True
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            # punctuation/whitespace before the first interpolation is a prefix,
+            # not a verdict; anything else is a real leading literal.
+            if v.value.strip(" \t[(<-—|") == "":
+                continue
+            return False
+    return False
+
+
+def _leading_literal(call: ast.Call):
     """The first string constant of a `print` call's FIRST positional arg.
 
     The first argument is what lands at the start of the line, and line-START
     is exactly what the consumer's matcher requires. Taking any literal in the
     call would let a `VACUOUS_PASS` appearing mid-sentence read as a routed
     disclosure it is not.
+
+    Returns `_INTERPOLATED` when the verdict word is computed rather than
+    written — an answer this scanner cannot give, which must be COUNTED as
+    such rather than pass for "there is no skip here".
     """
     if not call.args:
         return None
+    if _verdict_is_interpolated(call.args[0]):
+        return _INTERPOLATED
     lits = _literals(call.args[0])
     return lits[0] if lits else None
 
@@ -674,6 +764,25 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
     """
     paths: List[SkipPath] = []
     unresolved: List[int] = []
+    #: `print` calls whose VERDICT WORD is computed (vibe-ic#707). Paired at
+    #: FUNCTION scope, not block scope, and that is what makes the count mean
+    #: something. The real shape is
+    #:
+    #:     label = "NOT CHECKED" if verdict == "SKIP" else verdict
+    #:     print(f"[{label}] some_check ...")
+    #:     for b in report["blocks"]: ...
+    #:     if verdict == "SKIP":
+    #:         return 2
+    #:
+    #: — announce, then unrelated statements, then a skip-tier return nested in
+    #: an `if`. Block-local pairing never sees it (measured: 0 unresolved for
+    #: all four analog-hil gates), and counting every interpolated print instead
+    #: took the unanalysable tally from 9 to 311, which is noise rather than
+    #: disclosure. A function that announces a COMPUTED verdict AND returns a
+    #: skip tier has a skip path this scanner cannot read — that pair, once per
+    #: function, is the honest unit.
+    interpolated_announce: List[int] = []
+    skip_tier_return = False
 
     def walk(block: List[ast.stmt]) -> None:
         pending: Optional[Tuple[int, str, str]] = None   # lineno, token, text
@@ -681,7 +790,9 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
             call = _is_print(stmt)
             if call is not None:
                 text = _leading_literal(call)
-                if text is not None:
+                if text is _INTERPOLATED:
+                    interpolated_announce.append(stmt.lineno)
+                elif text is not None:
                     tok = _skip_token(text)
                     if tok:
                         pending = (stmt.lineno, tok, text)
@@ -692,6 +803,9 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
             if term is not None:
                 lineno, value = term
                 rc, routed = _static_rc(value)
+                if rc == 2:
+                    nonlocal skip_tier_return
+                    skip_tier_return = True
                 if pending is not None:
                     p_line, p_tok, p_text = pending
                     if routed:
@@ -722,6 +836,12 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
                 walk(handler.body)
 
     walk(fn.body)
+    # vibe-ic#707 — a function that announces a COMPUTED verdict and returns a
+    # skip tier has a skip path whose word this scanner never read. Recorded
+    # ONCE, and only when both halves are present, so the tally stays a
+    # disclosure rather than a count of every f-string in the tree.
+    if interpolated_announce and skip_tier_return:
+        unresolved.append(interpolated_announce[0])
     return paths, unresolved
 
 

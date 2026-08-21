@@ -409,8 +409,16 @@ def test_a4_presence_matches_compliance_checker_path(tmp_path):
     (analog / "analog_block_list.json").write_text(json.dumps(
         {"blocks": [{"name": "blk0"}]}))
     # A4 artefact at the CHECKER's canonical path.
+    #
+    # `design_content` is written because the grid now draws THREE answers,
+    # not two: a design-bound ✅, a disclosed library default ◐, and a `?` for
+    # an artefact that records nothing about what it contains. This test is
+    # about PRESENCE AT THE RIGHT PATH; without the field its artefact would
+    # render `?` and the assertion below would fail for a content reason,
+    # measuring neither presence nor content.
     (analog / "blk0" / "corner_results.json").write_text(json.dumps(
-        {"corners": [{"name": "tt", "simulator_run": True}]}))
+        {"corners": [{"name": "tt", "simulator_run": True}],
+         "design_content": "structure_and_geometry"}))
     grid = g._gather_analog_block_grid(tmp_path, ["blk0"])
     assert grid["blk0"]["A4"] is True
 

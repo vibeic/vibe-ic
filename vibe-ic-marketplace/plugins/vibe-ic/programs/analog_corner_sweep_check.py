@@ -35,7 +35,9 @@ from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
+import _analog_a_check_common as _acc
 from _analog_stub_marker import is_stub_json  # v1.6.177 (#72 P1-6)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 MIN_CORNERS = 9
 
@@ -95,6 +97,7 @@ def run_audit(project: Path) -> AuditResult:
     blocks_pass = 0
     blocks_stub = 0   # v1.6.177 (#72 P1-6)
     blocks_derived = 0  # v0.2.68 (#438a)
+    blocks_structure_only: list = []
     block_details = []
 
     for cf in corner_files:
@@ -245,7 +248,51 @@ def run_audit(project: Path) -> AuditResult:
                                   "mc_yield_pct": mc_yield})
             continue
 
+        # ── WHAT THE SWEEP SWEPT ──────────────────────────────────────────
+        # THE RULE, with no tool or block name in it: a gate that certifies a
+        # measurement must read what was measured, and an artefact that
+        # declines to say what it contains must not certify.
+        #
+        # This gate counts corners and grades specs; both are true of a
+        # library nominal exactly as they are of a design sized to its spec,
+        # and until this branch it said the same `[PASS]` for either. Ranked
+        # so that disclosure is never the expensive answer: an artefact that
+        # names a library default certifies in its own tier, and one that
+        # names nothing does not certify at all.
+        content = _acc.classify_design_content(data.get("design_content"))
+        if content == _acc.CONTENT_UNDISCLOSED:
+            result.findings.append(Finding(
+                rule="CORNER_SUBJECT_UNDECLARED",
+                severity="ERROR",
+                message=(f"Block '{block_name}': {total} corners and every "
+                         f"spec clean, and the artefact records no answer to "
+                         f"what circuit produced them (`design_content` "
+                         f"{data.get('design_content')!r}). Naming a library "
+                         f"default certifies in its own tier; declining to "
+                         f"answer does not, or saying nothing would cost less "
+                         f"than saying so."),
+                file=str(cf.relative_to(project)),
+            ))
+            result.passed = False
+            block_details.append({"block": block_name, "pass": False,
+                                  "reason": "design_content_undeclared",
+                                  "total_corners": total})
+            continue
+
         blocks_pass += 1
+        if content == _acc.CONTENT_STRUCTURE_ONLY:
+            blocks_structure_only.append(block_name)
+            result.findings.append(Finding(
+                rule="CORNER_SWEEP_STRUCTURE_ONLY",
+                severity="WARNING",
+                message=(f"Block '{block_name}': {total} corners are real "
+                         f"measurements OF A LIBRARY TOPOLOGY — the artefact "
+                         f"records that its circuit class came from a topology "
+                         f"library and that no bound input reached any device "
+                         f"parameter. Not missing (re-running produces the "
+                         f"same artefact) and not a design-bound pass."),
+                file=str(cf.relative_to(project)),
+            ))
         if derived_n:
             # #438(a): tier-relevant disclosure — executed base sims are
             # genuine and PASS, but the block must never read as a fully
@@ -285,6 +332,11 @@ def run_audit(project: Path) -> AuditResult:
         verdict_tier = "PASS_WITH_STUB"
     elif result.passed and blocks_stub:
         verdict_tier = "PASS_WITH_STUB_PARTIAL"
+    elif result.passed and blocks_structure_only:
+        # Ahead of the derived tier on purpose: "which circuit" outranks "how
+        # many of its corners were arithmetic". A sweep of a library nominal
+        # is not this design's sweep however many corners it executed.
+        verdict_tier = "PASS_STRUCTURE_ONLY"
     elif result.passed and blocks_derived:
         verdict_tier = "PASS_WITH_DERIVED_CORNERS"
 
@@ -294,6 +346,8 @@ def run_audit(project: Path) -> AuditResult:
         "blocks_pass": blocks_pass,
         "blocks_stub": blocks_stub,
         "blocks_with_derived_corners": blocks_derived,  # #438(a)
+        "blocks_structure_only": len(blocks_structure_only),
+        "structure_only_blocks": blocks_structure_only,
         "blocks_fail": blocks_checked - blocks_pass,
         "min_corners_required": MIN_CORNERS,
         "details": block_details,
@@ -322,21 +376,36 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
     skipped = _vx.summary_is_skipped(result.summary)
     reason = _vx.skip_reason(result.summary)
 
+    so_blocks = (result.summary or {}).get("structure_only_blocks") or []
     if not args.json:
-        print(_vx.verdict_line("analog_corner_sweep_check", result.passed,
-                               skipped, reason))
+        # The tier travels on the verdict WORD — `pass_token` is the seam
+        # `_vacuous_exit` already provides for it — so a reader of the one
+        # line can tell a design's sweep from a library topology's.
+        print(_vx.verdict_line(
+            "analog_corner_sweep_check", result.passed, skipped, reason,
+            pass_token=((result.summary or {}).get("verdict_tier") or "PASS")))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
     if result.passed and skipped:
         _vx.announce_vacuous(result.program, reason)
+    # LAST, SHORT, and on every path — the disclosure the flow auditor reads
+    # from a fixed-width tail of this stream, whatever the verdict was.
+    if so_blocks:
+        names = ", ".join(str(b) for b in so_blocks)
+        if len(names) > 60:
+            names = f"{names[:57]}..."
+        print(f"{_acc.STRUCTURE_ONLY_TOKEN} {len(so_blocks)} "
+              f"corner_results.json artefact(s) ({names}) came from a library "
+              f"default, not a bound input [analog_corner_sweep_check]",
+              file=sys.stderr)
     return _vx.exit_code(result.passed, skipped)
 
 

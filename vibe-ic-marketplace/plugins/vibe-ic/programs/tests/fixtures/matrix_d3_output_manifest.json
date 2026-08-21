@@ -1,1337 +1,1512 @@
 {
- "_comment": "Dimension 3 (outputs_produced) evidence manifest. For every required_outputs entry of every flow step: where a real run produced it, at what path, and at what size in bytes. Measured 2026-07-27 on the campaign host. HISTORY + REPRODUCIBILITY RECORD - the test re-verifies every claim live against whichever run root is present.",
- "_measured": "2026-07-27",
- "_dimension": 3,
- "_admissibility": "A run root counts as a real flow run only if it carries provenance.jsonl or reports/orchestrator/. Agent scratch trees with hand-seeded artefacts (e.g. a GDS written by a throwaway mkgds.py) are excluded: counting a seeded input as a produced output is exactly the false-pass this campaign exists to remove.",
- "run_roots": {
-  "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e": {
-   "kind": "home",
-   "rel": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e"
+  "_comment": "Dimension 3 (outputs_produced) evidence manifest. For every required_outputs entry of every flow step: where a real run produced it, at what path, and at what size in bytes. Measured 2026-07-27 on the campaign host. HISTORY + REPRODUCIBILITY RECORD - the test re-verifies every claim live against whichever run root is present.",
+  "_measured": "2026-07-27",
+  "_dimension": 3,
+  "_admissibility": "A run root counts as a real flow run only if it carries provenance.jsonl or reports/orchestrator/. Agent scratch trees with hand-seeded artefacts (e.g. a GDS written by a throwaway mkgds.py) are excluded: counting a seeded input as a produced output is exactly the false-pass this campaign exists to remove.",
+  "run_roots": {
+    "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e": {
+      "kind": "home",
+      "rel": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e"
+    },
+    "AI_IC_design/4th_benchmark/cv32e40p_e2e": {
+      "kind": "home",
+      "rel": "AI_IC_design/4th_benchmark/cv32e40p_e2e"
+    },
+    "AI_IC_design/4th_benchmark/ibex_e2e": {
+      "kind": "home",
+      "rel": "AI_IC_design/4th_benchmark/ibex_e2e"
+    },
+    "benchmark-data/ic/caravel_user_project": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/caravel_user_project"
+    },
+    "benchmark-data/ic/sha256": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/sha256"
+    },
+    "benchmark-data/ic/sha256/clean_run_v1427_20260715": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/sha256/clean_run_v1427_20260715"
+    },
+    "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2"
+    },
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/spm/v1.9.96_gf180mcuD"
+    },
+    "benchmark-data/ic/subservient": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/subservient"
+    },
+    "benchmark-data/ic/u_hawaii_adc": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/u_hawaii_adc"
+    },
+    "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": {
+      "kind": "published",
+      "rel": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A"
+    },
+    "campaign_pdk/spm/_aborted_tmpplugin_run": {
+      "kind": "home",
+      "rel": "campaign_pdk/spm/_aborted_tmpplugin_run"
+    },
+    "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721": {
+      "kind": "home",
+      "rel": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721"
+    },
+    "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A": {
+      "kind": "repo",
+      "rel": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
+      "note": "carries phase2/stage2/dft/* that step 11 declares; tracked at HEAD"
+    },
+    "benchmark-data/evaluation/phase1_parity/espi": {
+      "kind": "repo",
+      "rel": "benchmark-data/evaluation/phase1_parity/espi",
+      "note": "carries phase3/stage3/sim_postlayout/pass.flag that step 29 declares; tracked at HEAD"
+    }
   },
-  "AI_IC_design/4th_benchmark/cv32e40p_e2e": {
-   "kind": "home",
-   "rel": "AI_IC_design/4th_benchmark/cv32e40p_e2e"
-  },
-  "AI_IC_design/4th_benchmark/ibex_e2e": {
-   "kind": "home",
-   "rel": "AI_IC_design/4th_benchmark/ibex_e2e"
-  },
-  "benchmark-data/ic/caravel_user_project": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/caravel_user_project"
-  },
-  "benchmark-data/ic/sha256": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/sha256"
-  },
-  "benchmark-data/ic/sha256/clean_run_v1427_20260715": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/sha256/clean_run_v1427_20260715"
-  },
-  "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2"
-  },
-  "benchmark-data/ic/spm/v1.5.66_gf180mcuD": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/spm/v1.5.66_gf180mcuD"
-  },
-  "benchmark-data/ic/subservient": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/subservient"
-  },
-  "benchmark-data/ic/u_hawaii_adc": {
-   "kind": "repo",
-   "rel": "benchmark-data/ic/u_hawaii_adc"
-  },
-  "campaign_pdk/spm/_aborted_tmpplugin_run": {
-   "kind": "home",
-   "rel": "campaign_pdk/spm/_aborted_tmpplugin_run"
-  },
-  "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721": {
-   "kind": "home",
-   "rel": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721"
+  "steps": {
+    "D1": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase1/generated_docs/L1_DATASHEET.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L1_DATASHEET.json",
+          "path": "phase1/generated_docs/L1_DATASHEET.json",
+          "size_bytes": 37719
+        },
+        "phase1/generated_docs/L2_FRS.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L2_FRS.json",
+          "path": "phase1/generated_docs/L2_FRS.json",
+          "size_bytes": 11361
+        },
+        "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
+          "path": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
+          "size_bytes": 1144
+        },
+        "phase1/generated_docs/L4_REGMAP.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L4_REGMAP.json",
+          "path": "phase1/generated_docs/L4_REGMAP.json",
+          "size_bytes": 921
+        },
+        "phase1/generated_docs/L5_ADI_SPEC.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L5_ADI_SPEC.json",
+          "path": "phase1/generated_docs/L5_ADI_SPEC.json",
+          "size_bytes": 1045
+        },
+        "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
+          "path": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
+          "size_bytes": 1086
+        },
+        "phase1/generated_docs/L7_TEST_DEBUG.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L7_TEST_DEBUG.json",
+          "path": "phase1/generated_docs/L7_TEST_DEBUG.json",
+          "size_bytes": 3780
+        },
+        "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
+          "path": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
+          "size_bytes": 1591
+        },
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+          "path": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+          "size_bytes": 9484
+        },
+        "phase1/generated_docs/L10_TEST_CASES.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L10_TEST_CASES.json",
+          "path": "phase1/generated_docs/L10_TEST_CASES.json",
+          "size_bytes": 2867
+        },
+        "phase1/generated_docs/L11_OTP_CONTENT.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L11_OTP_CONTENT.json",
+          "path": "phase1/generated_docs/L11_OTP_CONTENT.json",
+          "size_bytes": 622
+        },
+        "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
+          "path": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
+          "size_bytes": 391
+        },
+        "phase1/generated_docs/L13_*.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L13_*.json",
+          "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
+          "size_bytes": 3356
+        },
+        "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+          "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+          "size_bytes": 3207
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "path": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "size_bytes": 531
+        },
+        "reports/phase1/extraction_coverage_report.md": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase1/extraction_coverage_report.md",
+          "path": "reports/phase1/extraction_coverage_report.md",
+          "size_bytes": 1694
+        },
+        "reports/phase1/extraction_coverage_report.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase1/extraction_coverage_report.json",
+          "path": "reports/phase1/extraction_coverage_report.json",
+          "size_bytes": 4610
+        },
+        "reports/audit/phase1/expert_parse_track.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/audit/phase1/expert_parse_track.json",
+          "path": "reports/audit/phase1/expert_parse_track.json",
+          "size_bytes": 7399
+        },
+        "phase1/extraction_patterns.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/extraction_patterns.json",
+          "path": "phase1/extraction_patterns.json",
+          "size_bytes": 7608,
+          "note": "added with the vibe-ic#1348 declaration of this entry in D1's required_outputs; measured 2026-08-15, not on the 2026-07-27 sweep the rest of this file records. It resolves live in 9 of the 10 admissible run roots, so no verdict here rests on the recorded size."
+        }
+      }
+    },
+    "1": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage1/rtl/*.v",
+          "path": "phase2/stage1/rtl/spm.v",
+          "size_bytes": 5442
+        }
+      }
+    },
+    "2": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/lint/rtl_hygiene.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/lint/rtl_hygiene.json",
+          "path": "reports/phase2/lint/rtl_hygiene.json",
+          "size_bytes": 2
+        },
+        "reports/phase2/lint/rom_init_lint.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/lint/rom_init_lint.json",
+          "path": "reports/phase2/lint/rom_init_lint.json",
+          "size_bytes": 2
+        }
+      }
+    },
+    "3": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/cdc/crossing.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/cdc/crossing.json",
+          "path": "reports/phase2/cdc/crossing.json",
+          "size_bytes": 506
+        },
+        "reports/phase2/cdc/async_input.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/cdc/async_input.json",
+          "path": "reports/phase2/cdc/async_input.json",
+          "size_bytes": 377
+        },
+        "reports/phase2/cdc/reset_dep.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/cdc/reset_dep.json",
+          "path": "reports/phase2/cdc/reset_dep.json",
+          "size_bytes": 390
+        }
+      }
+    },
+    "4": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256",
+          "alternative": "phase2/stage1/sim/results.xml",
+          "path": "phase2/stage1/sim/results.xml",
+          "size_bytes": 101
+        },
+        "reports/phase2/coverage/coverage_actual.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/coverage/coverage_actual.json",
+          "path": "reports/phase2/coverage/coverage_actual.json",
+          "size_bytes": 525
+        }
+      }
+    },
+    "5": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage1/formal/*.sby": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "alternative": "phase2/stage1/formal/*.sby",
+          "path": "phase2/stage1/formal/formal_spm_formal.sby",
+          "size_bytes": 368
+        },
+        "phase2/stage1/formal/results.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "alternative": "phase2/stage1/formal/results.json",
+          "path": "phase2/stage1/formal/results.json",
+          "size_bytes": 1405
+        },
+        "phase2/stage1/sim_full_stack/results.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256",
+          "alternative": "phase2/stage1/sim_full_stack/results.json",
+          "path": "phase2/stage1/sim_full_stack/results.json",
+          "size_bytes": 3119
+        }
+      }
+    },
+    "6": {
+      "verdict": "WAIVED",
+      "entries": {
+        "phase2/stage1/fpga/output_files/*.sof": {
+          "status": "UNPROVEN"
+        },
+        "phase2/stage1/fpga/output_files/*.map.rpt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase2/fpga/quartus_map_audit.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/fpga/quartus_map_audit.json",
+          "path": "reports/phase2/fpga/quartus_map_audit.json",
+          "size_bytes": 263
+        }
+      },
+      "unproven": [
+        "phase2/stage1/fpga/output_files/*.map.rpt",
+        "phase2/stage1/fpga/output_files/*.sof"
+      ]
+    },
+    "7": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage2/constraints/*.sdc": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/constraints/*.sdc",
+          "path": "phase2/stage2/constraints/spm.sdc",
+          "size_bytes": 1049
+        },
+        "phase2/stage2/constraints/pvt_matrix.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/constraints/pvt_matrix.json",
+          "path": "phase2/stage2/constraints/pvt_matrix.json",
+          "size_bytes": 971
+        }
+      }
+    },
+    "8": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/sdc_check.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/sdc_check.json",
+          "path": "reports/phase2/sdc_check.json",
+          "size_bytes": 1740
+        }
+      }
+    },
+    "9": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage2/synth/netlist.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/synth/netlist.v",
+          "path": "phase2/stage2/synth/netlist.v",
+          "size_bytes": 48138
+        },
+        "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json": {
+          "status": "PRODUCED_LIVE",
+          "producer": "synth_area_stats_emit",
+          "argv": [
+            "."
+          ],
+          "writes": "phase2/stage2/synth/stats.json",
+          "base_run": "benchmark-data/ic/caravel_user_project",
+          "size_bytes": 1624
+        }
+      }
+    },
+    "10": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/sta/pre_pnr_timing.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage3/sta/pre_pnr_timing.rpt",
+          "path": "phase3/stage3/sta/pre_pnr_timing.rpt",
+          "size_bytes": 3202
+        },
+        "reports/phase3/sta/pre_pnr_summary.json": {
+          "status": "PRODUCED_LIVE",
+          "producer": "sta_report_check",
+          "argv": [
+            ".",
+            "--mode",
+            "sta",
+            "--under",
+            "phase3/stage3/sta/pre_pnr_timing.rpt",
+            "--under",
+            "phase3/stage3/sta/per_corner",
+            "--json",
+            "reports/phase3/sta/pre_pnr_summary.json"
+          ],
+          "writes": "reports/phase3/sta/pre_pnr_summary.json",
+          "base_run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "size_bytes": 1696,
+          "base_run_note": "RE-MEASURED 2026-08-10, not renamed. Commit 51517e71 retired benchmark-data/ic/spm/v1.5.66_gf180mcuD and bulk-renamed all 65 run/base_run citations onto the replacement cell. That is correct for a PRODUCED_BY_RUN `run`; it INVERTS a PRODUCED_LIVE `base_run`, because the replacement cell carries this artefact TRACKED AT HEAD (885 B, added by that same commit) while the retired one did not - verified with `git ls-tree -r 51517e71^ -- <retired cell>`, which lists post_route_signoff_corner.json, spef_vs_estimate_discrepancy.json and sta_corner_record_completeness.json under reports/phase3/sta/ and no pre_pnr_summary.json. A live production cannot be proved against a tree that already holds the artefact, so the record had become unprovable by construction and the cell was red. It is re-pointed at the run root step 10's OTHER declared output is already evidenced by, so both of this steps entries now come from ONE run: the run that produced phase3/stage3/sta/pre_pnr_timing.rpt is the run whose summary of that report is produced here. THE OLD RECORD WAS ALREADY HOLLOW, which is why this is not a like-for-like re-point: 969 B is exactly what this producer writes into a tree carrying NO STA report at all (passed:false, findings [STA_REPORT_EXISTS, SCOPE_NOT_FOUND], files_found:0, BOTH --under scopes in scoped_under_missing), byte-identical from four independent admissible roots measured on this commit. produce_live now refuses a base run in which no declared --under scope exists, so that absence record can never again be counted as a produced artefact."
+        }
+      }
+    },
+    "11": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage2/dft/scan_netlist.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/dft/scan_netlist.v",
+          "path": "phase2/stage2/dft/scan_netlist.v",
+          "size_bytes": 81570,
+          "note": "vibe-ic#1266 — RE-POINTED. This record cited 'AI_IC_design/4th_benchmark/ibex_e2e', a kind='home' root no checkout carries, while the entry was in fact being answered by a search of the admissible roots. Re-measured live: the artefact is tracked at HEAD in this root, non-empty and non-symlink, and the run's OWN write ledger (reports/write_ledger.json captured 2026-08-08T02:48:29Z) records step 11 as having written exactly this path. That is a provenance any checkout can re-derive; the old one was a claim about one machine."
+        },
+        "phase2/stage2/dft/atpg_coverage.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/dft/atpg_coverage.rpt",
+          "path": "phase2/stage2/dft/atpg_coverage.rpt",
+          "size_bytes": 421,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
+        },
+        "phase2/stage2/dft/transition_atpg_plan.md": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/dft/transition_atpg_plan.md",
+          "path": "phase2/stage2/dft/transition_atpg_plan.md",
+          "size_bytes": 2050,
+          "note": "vibe-ic#1266 — RE-POINTED off 'campaign_pdk/spm/_aborted_tmpplugin_run'. That citation was the worst of the five: besides naming a tree no checkout carries, the run it named ABORTED, so the record asserted production by a run that did not finish. This root's write ledger records step 11 as having written this exact path."
+        },
+        "reports/phase2/dft/coverage.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/dft/coverage.json",
+          "path": "reports/phase2/dft/coverage.json",
+          "size_bytes": 3549,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
+        },
+        "reports/phase2/dft/bsdl_plan.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/dft/bsdl_plan.json",
+          "path": "reports/phase2/dft/bsdl_plan.json",
+          "size_bytes": 1179
+        },
+        "phase2/stage2/dft/coverage.yml": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/dft/coverage.yml",
+          "path": "phase2/stage2/dft/coverage.yml",
+          "size_bytes": 28797
+        }
+      }
+    },
+    "FS1": {
+      "verdict": "NA_NO_REQUIRED_OUTPUTS",
+      "entries": {}
+    },
+    "DT1": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/dft/transition_coverage.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/dft/transition_coverage.json",
+          "path": "reports/phase2/dft/transition_coverage.json",
+          "size_bytes": 35030
+        }
+      }
+    },
+    "DT2": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/dft/path_delay_coverage.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/dft/path_delay_coverage.json",
+          "path": "reports/phase2/dft/path_delay_coverage.json",
+          "size_bytes": 19313
+        }
+      }
+    },
+    "DT3": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase2/dft/sdd_coverage.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/dft/sdd_coverage.json",
+          "path": "reports/phase2/dft/sdd_coverage.json",
+          "size_bytes": 9109
+        }
+      }
+    },
+    "12": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage2/synth/post_dft_netlist.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/synth/post_dft_netlist.v",
+          "path": "phase2/stage2/synth/post_dft_netlist.v",
+          "size_bytes": 39179
+        }
+      }
+    },
+    "13": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/lec.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/lec.rpt",
+          "path": "reports/lec.rpt",
+          "size_bytes": 20543
+        },
+        "reports/lec.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/lec.json",
+          "path": "reports/lec.json",
+          "size_bytes": 1219
+        }
+      }
+    },
+    "A1": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/spec.json OR phase1/analog/*/spec.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/spec.json",
+          "path": "phase3/analog/delta_sigma/spec.json",
+          "size_bytes": 1231
+        }
+      }
+    },
+    "A2": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/topology.md OR phase2/analog/*/topology.md": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/topology.md",
+          "path": "phase3/analog/delta_sigma/topology.md",
+          "size_bytes": 3794
+        }
+      }
+    },
+    "A3": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/*.sp OR phase2/analog/*/*.sp": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/*.sp",
+          "path": "phase3/analog/delta_sigma/delta_sigma.sp",
+          "size_bytes": 2131
+        }
+      }
+    },
+    "A4": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/corner_results.json",
+          "path": "phase3/analog/ldo/corner_results.json",
+          "size_bytes": 4854
+        }
+      }
+    },
+    "A5": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/layout.mag",
+          "path": "phase3/analog/delta_sigma/layout.mag",
+          "size_bytes": 681
+        }
+      }
+    },
+    "A7": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/pre_vs_post.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/pre_vs_post.json",
+          "path": "phase3/analog/ldo/pre_vs_post.json",
+          "size_bytes": 821
+        }
+      }
+    },
+    "A8": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/hardmacro/*/*.lef": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/hardmacro/*/*.lef",
+          "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lef",
+          "size_bytes": 934
+        },
+        "phase3/analog/hardmacro/*/*.lib": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/hardmacro/*/*.lib",
+          "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lib",
+          "size_bytes": 766
+        },
+        "phase3/analog/hardmacro/*/*.gds": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A",
+          "alternative": "phase3/analog/hardmacro/*/*.gds",
+          "path": "phase3/analog/hardmacro/ldo/ldo.gds",
+          "size_bytes": 641262
+        },
+        "phase3/analog/hardmacro/*/*.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/hardmacro/*/*.v",
+          "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.v",
+          "size_bytes": 822
+        }
+      },
+      "unproven": []
+    },
+    "A9": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/hw_measurements.json",
+          "path": "phase3/analog/delta_sigma/hw_measurements.json",
+          "size_bytes": 724
+        }
+      }
+    },
+    "14": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase2/stage2/synth/netlist.v": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/synth/netlist.v",
+          "path": "phase2/stage2/synth/netlist.v",
+          "size_bytes": 48138
+        }
+      }
+    },
+    "15": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/floorplan.def": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "alternative": "phase3/stage3/pnr/floorplan.def",
+          "path": "phase3/stage3/pnr/floorplan.def",
+          "size_bytes": 44558
+        },
+        "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/pnr/pdn.done",
+          "path": "phase3/stage3/pnr/pdn.done",
+          "size_bytes": 144
+        }
+      }
+    },
+    "15.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/padring.def": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/padring.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/pad_assignment.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
+    "16": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/cts/clock_plan.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/cts/clock_plan.json",
+          "path": "phase3/stage3/cts/clock_plan.json",
+          "size_bytes": 388
+        }
+      }
+    },
+    "17": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/placed.def": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "alternative": "phase3/stage3/pnr/placed.def",
+          "path": "phase3/stage3/pnr/placed.def",
+          "size_bytes": 97843
+        }
+      }
+    },
+    "18": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/spare_cells.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256",
+          "alternative": "phase3/stage3/pnr/spare_cells.json",
+          "path": "phase3/stage3/pnr/spare_cells.json",
+          "size_bytes": 34545
+        },
+        "reports/spare_cell_coverage.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/spare_cell_coverage.json",
+          "path": "reports/spare_cell_coverage.json",
+          "size_bytes": 438
+        }
+      }
+    },
+    "19": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/post_cts.def": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "alternative": "phase3/stage3/pnr/post_cts.def",
+          "path": "phase3/stage3/pnr/post_cts.def",
+          "size_bytes": 121170
+        },
+        "phase3/stage3/cts/clock_tree.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/cts/clock_tree.rpt",
+          "path": "phase3/stage3/cts/clock_tree.rpt",
+          "size_bytes": 606
+        }
+      }
+    },
+    "20": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/post_hold.def": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "alternative": "phase3/stage3/pnr/post_hold.def",
+          "path": "phase3/stage3/pnr/post_hold.def",
+          "size_bytes": 121185
+        }
+      }
+    },
+    "21": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/routed.def": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase3/stage3/pnr/routed.def",
+          "path": "phase3/stage3/pnr/routed.def",
+          "size_bytes": 517754
+        },
+        "phase3/stage3/pnr/routed.drc.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/pnr/routed.drc.rpt",
+          "path": "phase3/stage3/pnr/routed.drc.rpt",
+          "size_bytes": 19045
+        },
+        "reports/phase3/drc_router.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "reports/phase3/drc_router.rpt",
+          "path": "reports/phase3/drc_router.rpt",
+          "size_bytes": 19208
+        },
+        "reports/phase3/drc_router.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "22": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase3/stage3/extracted/*.spef",
+          "path": "phase3/stage3/extracted/spm.spef",
+          "size_bytes": 342755
+        }
+      }
+    },
+    "23": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/sta/post_route_timing.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage3/sta/post_route_timing.rpt",
+          "path": "phase3/stage3/sta/post_route_timing.rpt",
+          "size_bytes": 3229
+        },
+        "reports/phase3/sta/post_route_summary.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/sta/post_route_summary.json",
+          "path": "reports/phase3/sta/post_route_summary.json",
+          "size_bytes": 1152,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer sta_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/sta/sta_corner_record_completeness.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+          "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
+          "path": "reports/phase3/sta/sta_corner_record_completeness.json",
+          "size_bytes": 3822
+        },
+        "reports/phase3/sta/post_route_signoff_corner.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/sta/post_route_signoff_corner.json",
+          "path": "reports/phase3/sta/post_route_signoff_corner.json",
+          "size_bytes": 393
+        }
+      }
+    },
+    "24": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/ir_drop.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/ir_drop.rpt",
+          "path": "reports/phase3/ir_drop.rpt",
+          "size_bytes": 3464
+        },
+        "reports/phase3/ir_drop.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/ir_drop.json",
+          "path": "reports/phase3/ir_drop.json",
+          "size_bytes": 600
+        },
+        "reports/phase3/ir_drop_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/ir_drop_signoff.json",
+          "path": "reports/phase3/ir_drop_signoff.json",
+          "size_bytes": 555,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/dynamic_ir.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/dynamic_ir.json",
+          "path": "reports/phase3/dynamic_ir.json",
+          "size_bytes": 1887
+        }
+      }
+    },
+    "25": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/em.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/em.rpt",
+          "path": "reports/phase3/em.rpt",
+          "size_bytes": 3253
+        },
+        "reports/phase3/em.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/em.json",
+          "path": "reports/phase3/em.json",
+          "size_bytes": 292
+        },
+        "reports/phase3/em_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/em_signoff.json",
+          "path": "reports/phase3/em_signoff.json",
+          "size_bytes": 717,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer em_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        }
+      }
+    },
+    "26": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/antenna.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/antenna.rpt",
+          "path": "reports/phase3/antenna.rpt",
+          "size_bytes": 487
+        },
+        "reports/phase3/antenna.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/antenna.json",
+          "path": "reports/phase3/antenna.json",
+          "size_bytes": 236
+        },
+        "reports/phase3/antenna_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/antenna_signoff.json",
+          "path": "reports/phase3/antenna_signoff.json",
+          "size_bytes": 188,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer antenna_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        }
+      }
+    },
+    "26.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage3/pnr/die_finished.def OR phase3/stage3/pnr/die_finishing.SKIPPED.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/die_finishing.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
+    "27": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/si_crosstalk.json",
+          "path": "reports/phase3/si_crosstalk.json",
+          "size_bytes": 860
+        },
+        "reports/phase3/si_mcf_sta.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/si_mcf_sta.json",
+          "path": "reports/phase3/si_mcf_sta.json",
+          "size_bytes": 2750
+        }
+      }
+    },
+    "28": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/perc_equivalent.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/perc_equivalent.json",
+          "path": "reports/phase3/perc_equivalent.json",
+          "size_bytes": 8142
+        },
+        "reports/phase3/perc_equivalent.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/perc_equivalent.rpt",
+          "path": "reports/phase3/perc_equivalent.rpt",
+          "size_bytes": 4066
+        },
+        "reports/phase3/PERC_SIGNOFF_MEMO.md": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/PERC_SIGNOFF_MEMO.md",
+          "path": "reports/phase3/PERC_SIGNOFF_MEMO.md",
+          "size_bytes": 3966
+        },
+        "reports/phase2/gates/perc_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "reports/phase2/gates/perc_signoff.json",
+          "path": "reports/phase2/gates/perc_signoff.json",
+          "size_bytes": 523
+        }
+      }
+    },
+    "29": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
+          "alternative": "phase3/stage3/sim_postlayout/pass.flag",
+          "path": "phase3/stage3/sim_postlayout/pass.flag",
+          "size_bytes": 341,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/cv32e40p_e2e', a kind='home' root no checkout carries. Re-measured live: this root carries pass.flag non-empty, non-symlink and tracked at HEAD. Weaker than step 11's four re-points and said so rather than blurred: this root carries no write ledger, so the record rests on the pre-ledger evidence rules alone and does NOT claim the run's own log attributed the write to step 29."
+        },
+        "reports/phase2/gates/post_layout_sim.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
+          "alternative": "reports/phase2/gates/post_layout_sim.json",
+          "path": "reports/phase2/gates/post_layout_sim.json",
+          "size_bytes": 569,
+          "note": "vibe-ic#983 ruling 2. The SUBSTANCE arm of step 29, newly declared. Recorded PRODUCED_BY_RUN because espi carries it non-empty and tracked at HEAD, which is what that status asserts. Stated plainly so no reader over-reads it: this report's ONLY producer is step 29's own BLOCKING gate clause (no runner invokes post_layout_sim_check), so its presence in a published tree is the gate's output archived alongside the run, not an independent production event. Measured: declaring it moves 0 of the 6 published trees carrying a post-layout sim dir."
+        }
+      }
+    },
+    "30": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "AI_IC_design/4th_benchmark/cv32e40p_e2e",
+          "alternative": "phase3/stage3/spice/*.sp",
+          "path": "phase3/stage3/spice/critical_path.sp",
+          "size_bytes": 917
+        },
+        "phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "alternative": "phase3/stage3/spice/correlation.json",
+          "path": "phase3/stage3/spice/correlation.json",
+          "size_bytes": 976
+        }
+      }
+    },
+    "31": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/drc_signoff.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/drc_signoff.rpt",
+          "path": "reports/phase3/drc_signoff.rpt",
+          "size_bytes": 139888
+        },
+        "reports/phase3/lvs.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs.rpt",
+          "path": "reports/phase3/lvs.rpt",
+          "size_bytes": 37676
+        },
+        "reports/phase3/erc.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/erc.rpt",
+          "path": "reports/phase3/erc.rpt",
+          "size_bytes": 3009
+        },
+        "reports/phase3/lvs.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "reports/phase3/lvs.json",
+          "path": "reports/phase3/lvs.json",
+          "size_bytes": 225
+        },
+        "reports/phase2/gates/erc_density.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "reports/phase2/gates/erc_density.json",
+          "path": "reports/phase2/gates/erc_density.json",
+          "size_bytes": 1188
+        },
+        "reports/phase3/magic_illegal_overlap.json": {
+          "status": "UNPROVEN",
+          "provenance_note": "declared 2026-08-20 to close the dimension-7 finding W1:gate_output_read_elsewhere on step 31. UNPROVEN and not PRODUCED_BY_RUN because no run root this module may consult carries the path: `find` over the published corpus (vibeic/benchmark-data @ 146d665) and over every in-repo root returns nothing, and magic_illegal_overlap_check postdates every published cell. The UNPROVEN branch re-searches every admissible root on each call, so the first run tree that publishes the file closes this entry live and the record reddens in the other direction."
+        },
+        "reports/phase3/lvs_verdict.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "declared 2026-08-20 alongside magic_illegal_overlap.json, and unlike it this one is EVIDENCED. Recorded against the run root and byte size it was MEASURED at in the published corpus (146d665); the other two published spm cells carry it too (v1.10.18_sky130A 1117 B, v1.5.58_ihp-sg13g2 944 B), so the entry resolves rather than moving the d7 finding into d3.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs_verdict.json",
+          "path": "reports/phase3/lvs_verdict.json",
+          "size_bytes": 1131
+        }
+      }
+    },
+    "32": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/eco/eco_log.json",
+          "path": "phase3/stage3/eco/eco_log.json",
+          "size_bytes": 370
+        },
+        "phase3/stage3/eco/eco_trigger_decision.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+          "alternative": "phase3/stage3/eco/eco_trigger_decision.json",
+          "path": "phase3/stage3/eco/eco_trigger_decision.json",
+          "size_bytes": 208
+        }
+      }
+    },
+    "33": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/power.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/power.rpt",
+          "path": "reports/phase3/power.rpt",
+          "size_bytes": 2330
+        },
+        "reports/phase3/power.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/power.json",
+          "path": "reports/phase3/power.json",
+          "size_bytes": 165
+        }
+      }
+    },
+    "34": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/subservient",
+          "alternative": "phase3/stage3/pnr/metal_fill.done",
+          "path": "phase3/stage3/pnr/metal_fill.done",
+          "size_bytes": 373
+        },
+        "reports/density.json OR reports/phase3/density.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/density.json",
+          "path": "reports/density.json",
+          "size_bytes": 389
+        },
+        "reports/density.rpt OR reports/phase3/density.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/density.rpt",
+          "path": "reports/density.rpt",
+          "size_bytes": 585
+        }
+      }
+    },
+    "35": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/phase3/dfm_screen.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/dfm_screen.json",
+          "path": "reports/phase3/dfm_screen.json",
+          "size_bytes": 1521
+        }
+      }
+    },
+    "36": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "reports/audit/tapeout_checklist.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/audit/tapeout_checklist.json",
+          "path": "reports/audit/tapeout_checklist.json",
+          "size_bytes": 1187
+        }
+      }
+    },
+    "37": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage4/gds/*.gds": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase3/stage4/gds/*.gds",
+          "path": "phase3/stage4/gds/spm.gds",
+          "size_bytes": 1180456
+        }
+      }
+    },
+    "37.5ip": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage4/hardmacro/*.lef": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.lib": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.gds": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage4/hardmacro/*.v": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/NO_TEMPLATE.txt"
+      ]
+    },
+    "37.5ic": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/phase3/tapeout_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/general_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/shuttle_precheck.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/SIGNOFF_*.html": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase3/docs/BRIEF_*.html": {
+          "status": "UNPROVEN"
+        }
+      },
+      "condition_files": [
+        "input/submission_template/slots/*.yaml",
+        "input/submission_template/SELF_TAPEOUT.txt"
+      ]
+    },
+    "38": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/stage4/foundry_handoff/mask_spec.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage4/foundry_handoff/mask_spec.json",
+          "path": "phase3/stage4/foundry_handoff/mask_spec.json",
+          "size_bytes": 781
+        },
+        "phase3/stage4/foundry_handoff/wat_plan.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage4/foundry_handoff/wat_plan.json",
+          "path": "phase3/stage4/foundry_handoff/wat_plan.json",
+          "size_bytes": 772
+        },
+        "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
+          "path": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
+          "size_bytes": 267
+        },
+        "phase3/stage4/foundry_handoff/corner_test_vectors.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+          "alternative": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
+          "path": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
+          "size_bytes": 1069
+        },
+        "reports/phase3/foundry_handoff_audit.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/foundry_handoff_audit.json",
+          "path": "reports/phase3/foundry_handoff_audit.json",
+          "size_bytes": 2567
+        }
+      }
+    },
+    "39": {
+      "verdict": "WAIVED",
+      "entries": {
+        "phase2/stage1/fpga/final/*.sof": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase2/fpga/on_board_pass.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase2/fpga/on_board_pass.json",
+          "path": "reports/phase2/fpga/on_board_pass.json",
+          "size_bytes": 732
+        }
+      },
+      "unproven": [
+        "phase2/stage1/fpga/final/*.sof"
+      ]
+    },
+    "A6": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/*.lyrdb",
+          "path": "phase3/analog/ldo/klayout_drc.lyrdb",
+          "size_bytes": 33542
+        },
+        "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/u_hawaii_adc",
+          "alternative": "phase3/analog/*/lvs_match.flag",
+          "path": "phase3/analog/delta_sigma/lvs_match.flag",
+          "size_bytes": 779
+        }
+      }
+    },
+    "M1": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/mixed_signal/top_merged.gds": {
+          "status": "UNPROVEN"
+        },
+        "reports/analog/mixed_signal/merge.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/mixed_signal/top_merged.gds",
+        "reports/analog/mixed_signal/merge.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
+    },
+    "M2": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/analog/mixed_signal/power_domain.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/analog/mixed_signal/level_shifter.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/analog/mixed_signal/isolation.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "reports/analog/mixed_signal/power_domain.json",
+        "reports/analog/mixed_signal/level_shifter.json",
+        "reports/analog/mixed_signal/isolation.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
+    },
+    "M3": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/mixed_signal/cosim/mixed_signal_results.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/analog/mixed_signal/interface_si.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/mixed_signal/cosim/mixed_signal_results.json",
+        "reports/analog/mixed_signal/interface_si.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
+    },
+    "M4": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "reports/analog/mixed_signal/signoff.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "reports/analog/mixed_signal/signoff.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
+    },
+    "40": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage5_manufacturing/mask_set_received.json": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage5_manufacturing/wafer_lot_received.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/stage5_manufacturing/mask_set_received.json",
+        "phase3/stage5_manufacturing/wafer_lot_received.json"
+      ],
+      "condition_files": [
+        "phase3/stage5_manufacturing/silicon_received.json"
+      ]
+    },
+    "41": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage5_manufacturing/wafer_sort_yield.json": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage5_manufacturing/wafer_map.csv": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/stage5_manufacturing/wafer_map.csv",
+        "phase3/stage5_manufacturing/wafer_sort_yield.json"
+      ],
+      "condition_files": [
+        "phase3/stage5_manufacturing/silicon_received.json"
+      ]
+    },
+    "42": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage5_manufacturing/packaging_log.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/stage5_manufacturing/packaging_log.json"
+      ],
+      "condition_files": [
+        "phase3/stage5_manufacturing/silicon_received.json"
+      ]
+    },
+    "43": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage5_manufacturing/final_test_yield.json": {
+          "status": "UNPROVEN"
+        },
+        "phase3/stage5_manufacturing/burn_in_results.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/stage5_manufacturing/burn_in_results.json",
+        "phase3/stage5_manufacturing/final_test_yield.json"
+      ],
+      "condition_files": [
+        "phase3/stage5_manufacturing/silicon_received.json"
+      ]
+    },
+    "44": {
+      "verdict": "NA_DORMANT_CONDITION",
+      "entries": {
+        "phase3/stage5_manufacturing/htol_results.json": {
+          "status": "UNPROVEN"
+        }
+      },
+      "unproven": [
+        "phase3/stage5_manufacturing/htol_results.json"
+      ],
+      "condition_files": [
+        "phase3/stage5_manufacturing/silicon_received.json"
+      ]
+    },
+    "P0": {
+      "verdict": "NA_NO_REQUIRED_OUTPUTS",
+      "entries": {}
+    },
+    "0.5ic": {
+      "verdict": "ENFORCED",
+      "entries": {
+        "input/submission_template/slots/*.yaml OR input/submission_template/NO_TEMPLATE.txt OR input/submission_template/SELF_TAPEOUT.txt": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/submission_template.json": {
+          "status": "UNPROVEN"
+        },
+        "input/submission_template/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        },
+        "reports/phase1/tapeout_declaration.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    },
+    "1.6x": {
+      "verdict": "ENFORCED",
+      "_comment": "Flow step 1.6x is NEW; no PUBLISHED run predates it, so its declared output has no run evidence yet and the truthful status is UNPROVEN. It is not WAIVED and not dormant: the step is unconditional and its judge writes this artefact on every run, including the NOT_APPLICABLE one.",
+      "entries": {
+        "reports/crosslayer/rewrite_equivalence_check.json": {
+          "status": "UNPROVEN"
+        }
+      }
+    }
   }
- },
- "steps": {
-  "D1": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase1/generated_docs/L1_DATASHEET.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L1_DATASHEET.json",
-     "path": "phase1/generated_docs/L1_DATASHEET.json",
-     "size_bytes": 37719
-    },
-    "phase1/generated_docs/L2_FRS.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L2_FRS.json",
-     "path": "phase1/generated_docs/L2_FRS.json",
-     "size_bytes": 11361
-    },
-    "phase1/generated_docs/L3_CMD_PROTOCOL.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
-     "path": "phase1/generated_docs/L3_CMD_PROTOCOL.json",
-     "size_bytes": 1144
-    },
-    "phase1/generated_docs/L4_REGMAP.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L4_REGMAP.json",
-     "path": "phase1/generated_docs/L4_REGMAP.json",
-     "size_bytes": 921
-    },
-    "phase1/generated_docs/L5_ADI_SPEC.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L5_ADI_SPEC.json",
-     "path": "phase1/generated_docs/L5_ADI_SPEC.json",
-     "size_bytes": 1045
-    },
-    "phase1/generated_docs/L6_CONTROL_LOGIC.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
-     "path": "phase1/generated_docs/L6_CONTROL_LOGIC.json",
-     "size_bytes": 1086
-    },
-    "phase1/generated_docs/L7_TEST_DEBUG.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L7_TEST_DEBUG.json",
-     "path": "phase1/generated_docs/L7_TEST_DEBUG.json",
-     "size_bytes": 3780
-    },
-    "phase1/generated_docs/L8_TIMING_WAVEFORM.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
-     "path": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
-     "size_bytes": 1591
-    },
-    "phase1/generated_docs/L9_INTEGRATION_SPEC.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-     "path": "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-     "size_bytes": 9484
-    },
-    "phase1/generated_docs/L10_TEST_CASES.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L10_TEST_CASES.json",
-     "path": "phase1/generated_docs/L10_TEST_CASES.json",
-     "size_bytes": 2867
-    },
-    "phase1/generated_docs/L11_OTP_CONTENT.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L11_OTP_CONTENT.json",
-     "path": "phase1/generated_docs/L11_OTP_CONTENT.json",
-     "size_bytes": 622
-    },
-    "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
-     "path": "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json",
-     "size_bytes": 391
-    },
-    "phase1/generated_docs/L13_*.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase1/generated_docs/L13_*.json",
-     "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
-     "size_bytes": 3356
-    },
-    "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/caravel_user_project",
-     "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
-     "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
-     "size_bytes": 3207
-    }
-   }
-  },
-  "1": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage1/rtl/*.v",
-     "path": "phase2/stage1/rtl/spm.v",
-     "size_bytes": 5442
-    },
-    "reports/phase1/extraction_coverage_report.md": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase1/extraction_coverage_report.md",
-     "path": "reports/phase1/extraction_coverage_report.md",
-     "size_bytes": 1415
-    },
-    "reports/phase1/extraction_coverage_report.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase1/extraction_coverage_report.json",
-     "path": "reports/phase1/extraction_coverage_report.json",
-     "size_bytes": 3139
-    }
-   }
-  },
-  "2": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/lint/rtl_hygiene.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/lint/rtl_hygiene.json",
-     "path": "reports/phase2/lint/rtl_hygiene.json",
-     "size_bytes": 2
-    },
-    "reports/phase2/lint/rom_init_lint.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/lint/rom_init_lint.json",
-     "path": "reports/phase2/lint/rom_init_lint.json",
-     "size_bytes": 2
-    }
-   }
-  },
-  "3": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/cdc/crossing.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/cdc/crossing.json",
-     "path": "reports/phase2/cdc/crossing.json",
-     "size_bytes": 506
-    },
-    "reports/phase2/cdc/async_input.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/cdc/async_input.json",
-     "path": "reports/phase2/cdc/async_input.json",
-     "size_bytes": 377
-    },
-    "reports/phase2/cdc/reset_dep.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/cdc/reset_dep.json",
-     "path": "reports/phase2/cdc/reset_dep.json",
-     "size_bytes": 390
-    }
-   }
-  },
-  "4": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256",
-     "alternative": "phase2/stage1/sim/results.xml",
-     "path": "phase2/stage1/sim/results.xml",
-     "size_bytes": 101
-    },
-    "reports/phase2/coverage/coverage_actual.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/coverage/coverage_actual.json",
-     "path": "reports/phase2/coverage/coverage_actual.json",
-     "size_bytes": 525
-    }
-   }
-  },
-  "5": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage1/formal/*.sby": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
-     "alternative": "phase2/stage1/formal/*.sby",
-     "path": "phase2/stage1/formal/formal_spm_formal.sby",
-     "size_bytes": 368
-    },
-    "phase2/stage1/formal/results.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
-     "alternative": "phase2/stage1/formal/results.json",
-     "path": "phase2/stage1/formal/results.json",
-     "size_bytes": 1405
-    },
-    "phase2/stage1/sim_full_stack/results.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256",
-     "alternative": "phase2/stage1/sim_full_stack/results.json",
-     "path": "phase2/stage1/sim_full_stack/results.json",
-     "size_bytes": 3119
-    }
-   }
-  },
-  "6": {
-   "verdict": "WAIVED",
-   "entries": {
-    "phase2/stage1/fpga/output_files/*.sof": {
-     "status": "UNPROVEN"
-    },
-    "phase2/stage1/fpga/output_files/*.map.rpt": {
-     "status": "UNPROVEN"
-    },
-    "reports/phase2/fpga/quartus_map_audit.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/fpga/quartus_map_audit.json",
-     "path": "reports/phase2/fpga/quartus_map_audit.json",
-     "size_bytes": 263
-    }
-   },
-   "unproven": [
-    "phase2/stage1/fpga/output_files/*.map.rpt",
-    "phase2/stage1/fpga/output_files/*.sof"
-   ]
-  },
-  "7": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage2/constraints/*.sdc": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage2/constraints/*.sdc",
-     "path": "phase2/stage2/constraints/spm.sdc",
-     "size_bytes": 1049
-    },
-    "phase2/stage2/constraints/pvt_matrix.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage2/constraints/pvt_matrix.json",
-     "path": "phase2/stage2/constraints/pvt_matrix.json",
-     "size_bytes": 971
-    }
-   }
-  },
-  "8": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/sdc_check.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/sdc_check.json",
-     "path": "reports/phase2/sdc_check.json",
-     "size_bytes": 1740
-    }
-   }
-  },
-  "9": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage2/synth/netlist.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage2/synth/netlist.v",
-     "path": "phase2/stage2/synth/netlist.v",
-     "size_bytes": 48138
-    },
-    "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "synth_area_stats_emit",
-     "argv": [
-      "."
-     ],
-     "writes": "phase2/stage2/synth/stats.json",
-     "base_run": "benchmark-data/ic/caravel_user_project",
-     "size_bytes": 1624
-    }
-   }
-  },
-  "10": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/sta/pre_pnr_timing.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage3/sta/pre_pnr_timing.rpt",
-     "path": "phase3/stage3/sta/pre_pnr_timing.rpt",
-     "size_bytes": 3202
-    },
-    "reports/phase3/sta/pre_pnr_summary.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "sta_report_check",
-     "argv": [
-      ".",
-      "--mode",
-      "sta",
-      "--json",
-      "reports/phase3/sta/pre_pnr_summary.json"
-     ],
-     "writes": "reports/phase3/sta/pre_pnr_summary.json",
-     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 955
-    }
-   }
-  },
-  "11": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage2/dft/scan_netlist.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/ibex_e2e",
-     "alternative": "phase2/stage2/dft/scan_netlist.v",
-     "path": "phase2/stage2/dft/scan_netlist.v",
-     "size_bytes": 1531464
-    },
-    "phase2/stage2/dft/atpg_coverage.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/ibex_e2e",
-     "alternative": "phase2/stage2/dft/atpg_coverage.rpt",
-     "path": "phase2/stage2/dft/atpg_coverage.rpt",
-     "size_bytes": 643
-    },
-    "phase2/stage2/dft/transition_atpg_plan.md": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/_aborted_tmpplugin_run",
-     "alternative": "phase2/stage2/dft/transition_atpg_plan.md",
-     "path": "phase2/stage2/dft/transition_atpg_plan.md",
-     "size_bytes": 1968
-    },
-    "reports/phase2/dft/coverage.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/ibex_e2e",
-     "alternative": "reports/phase2/dft/coverage.json",
-     "path": "reports/phase2/dft/coverage.json",
-     "size_bytes": 675
-    },
-    "reports/phase2/dft/bsdl_plan.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/dft/bsdl_plan.json",
-     "path": "reports/phase2/dft/bsdl_plan.json",
-     "size_bytes": 1179
-    }
-   }
-  },
-  "FS1": {
-   "verdict": "NA_NO_REQUIRED_OUTPUTS",
-   "entries": {}
-  },
-  "DT1": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/dft/transition_coverage.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/dft/transition_coverage.json",
-     "path": "reports/phase2/dft/transition_coverage.json",
-     "size_bytes": 35030
-    }
-   }
-  },
-  "DT2": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/dft/path_delay_coverage.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/dft/path_delay_coverage.json",
-     "path": "reports/phase2/dft/path_delay_coverage.json",
-     "size_bytes": 19313
-    }
-   }
-  },
-  "DT3": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase2/dft/sdd_coverage.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/dft/sdd_coverage.json",
-     "path": "reports/phase2/dft/sdd_coverage.json",
-     "size_bytes": 9109
-    }
-   }
-  },
-  "12": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage2/synth/post_dft_netlist.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage2/synth/post_dft_netlist.v",
-     "path": "phase2/stage2/synth/post_dft_netlist.v",
-     "size_bytes": 39179
-    }
-   }
-  },
-  "13": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/lec.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/lec.rpt",
-     "path": "reports/lec.rpt",
-     "size_bytes": 20543
-    },
-    "reports/lec.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/lec.json",
-     "path": "reports/lec.json",
-     "size_bytes": 1219
-    }
-   }
-  },
-  "A1": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/spec.json OR phase1/analog/*/spec.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/spec.json",
-     "path": "phase3/analog/delta_sigma/spec.json",
-     "size_bytes": 1231
-    }
-   }
-  },
-  "A2": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/topology.md OR phase2/analog/*/topology.md": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/topology.md",
-     "path": "phase3/analog/delta_sigma/topology.md",
-     "size_bytes": 3794
-    }
-   }
-  },
-  "A3": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/*.sp OR phase2/analog/*/*.sp": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/*.sp",
-     "path": "phase3/analog/delta_sigma/delta_sigma.sp",
-     "size_bytes": 2131
-    }
-   }
-  },
-  "A4": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/corner_results.json",
-     "path": "phase3/analog/ldo/corner_results.json",
-     "size_bytes": 4854
-    }
-   }
-  },
-  "A5": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/layout.mag",
-     "path": "phase3/analog/delta_sigma/layout.mag",
-     "size_bytes": 681
-    }
-   }
-  },
-  "A7": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/pre_vs_post.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/pre_vs_post.json",
-     "path": "phase3/analog/ldo/pre_vs_post.json",
-     "size_bytes": 821
-    }
-   }
-  },
-  "A8": {
-   "verdict": "WAIVED",
-   "entries": {
-    "phase3/analog/hardmacro/*/*.lef": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/hardmacro/*/*.lef",
-     "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lef",
-     "size_bytes": 934
-    },
-    "phase3/analog/hardmacro/*/*.lib": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/hardmacro/*/*.lib",
-     "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lib",
-     "size_bytes": 766
-    },
-    "phase3/analog/hardmacro/*/*.gds": {
-     "status": "UNPROVEN"
-    },
-    "phase3/analog/hardmacro/*/*.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/hardmacro/*/*.v",
-     "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.v",
-     "size_bytes": 822
-    }
-   },
-   "unproven": [
-    "phase3/analog/hardmacro/*/*.gds"
-   ]
-  },
-  "A9": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/hw_measurements.json",
-     "path": "phase3/analog/delta_sigma/hw_measurements.json",
-     "size_bytes": 724
-    }
-   }
-  },
-  "14": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase2/stage2/synth/netlist.v": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase2/stage2/synth/netlist.v",
-     "path": "phase2/stage2/synth/netlist.v",
-     "size_bytes": 48138
-    }
-   }
-  },
-  "15": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/floorplan.def": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-     "alternative": "phase3/stage3/pnr/floorplan.def",
-     "path": "phase3/stage3/pnr/floorplan.def",
-     "size_bytes": 44558
-    },
-    "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/pnr/pdn.done",
-     "path": "phase3/stage3/pnr/pdn.done",
-     "size_bytes": 144
-    }
-   }
-  },
-  "16": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/cts/clock_plan.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/cts/clock_plan.json",
-     "path": "phase3/stage3/cts/clock_plan.json",
-     "size_bytes": 388
-    }
-   }
-  },
-  "17": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/placed.def": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-     "alternative": "phase3/stage3/pnr/placed.def",
-     "path": "phase3/stage3/pnr/placed.def",
-     "size_bytes": 97843
-    }
-   }
-  },
-  "18": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/spare_cells.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256",
-     "alternative": "phase3/stage3/pnr/spare_cells.json",
-     "path": "phase3/stage3/pnr/spare_cells.json",
-     "size_bytes": 34545
-    },
-    "reports/spare_cell_coverage.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/spare_cell_coverage.json",
-     "path": "reports/spare_cell_coverage.json",
-     "size_bytes": 438
-    }
-   }
-  },
-  "19": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/post_cts.def": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-     "alternative": "phase3/stage3/pnr/post_cts.def",
-     "path": "phase3/stage3/pnr/post_cts.def",
-     "size_bytes": 121170
-    },
-    "phase3/stage3/cts/clock_tree.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/cts/clock_tree.rpt",
-     "path": "phase3/stage3/cts/clock_tree.rpt",
-     "size_bytes": 606
-    }
-   }
-  },
-  "20": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/post_hold.def": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-     "alternative": "phase3/stage3/pnr/post_hold.def",
-     "path": "phase3/stage3/pnr/post_hold.def",
-     "size_bytes": 121185
-    }
-   }
-  },
-  "21": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/routed.def": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase3/stage3/pnr/routed.def",
-     "path": "phase3/stage3/pnr/routed.def",
-     "size_bytes": 517754
-    },
-    "phase3/stage3/pnr/routed.drc.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/pnr/routed.drc.rpt",
-     "path": "phase3/stage3/pnr/routed.drc.rpt",
-     "size_bytes": 19045
-    },
-    "reports/phase3/drc_router.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/caravel_user_project",
-     "alternative": "reports/phase3/drc_router.rpt",
-     "path": "reports/phase3/drc_router.rpt",
-     "size_bytes": 19208
-    }
-   }
-  },
-  "22": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase3/stage3/extracted/*.spef",
-     "path": "phase3/stage3/extracted/spm.spef",
-     "size_bytes": 342755
-    }
-   }
-  },
-  "23": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/sta/post_route_timing.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage3/sta/post_route_timing.rpt",
-     "path": "phase3/stage3/sta/post_route_timing.rpt",
-     "size_bytes": 3229
-    },
-    "reports/phase3/sta/post_route_summary.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "sta_report_check",
-     "argv": [
-      ".",
-      "--mode",
-      "sta",
-      "--json",
-      "reports/phase3/sta/post_route_summary.json"
-     ],
-     "writes": "reports/phase3/sta/post_route_summary.json",
-     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 955
-    },
-    "reports/phase3/sta/sta_corner_record_completeness.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
-     "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
-     "path": "reports/phase3/sta/sta_corner_record_completeness.json",
-     "size_bytes": 3822
-    }
-   }
-  },
-  "24": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/ir_drop.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/ir_drop.rpt",
-     "path": "reports/phase3/ir_drop.rpt",
-     "size_bytes": 3464
-    },
-    "reports/phase3/ir_drop.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/ir_drop.json",
-     "path": "reports/phase3/ir_drop.json",
-     "size_bytes": 600
-    },
-    "reports/phase3/ir_drop_signoff.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "ir_drop_report_check",
-     "argv": [
-      ".",
-      "--mode",
-      "ir_drop",
-      "--json",
-      "reports/phase3/ir_drop_signoff.json"
-     ],
-     "writes": "reports/phase3/ir_drop_signoff.json",
-     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 508
-    }
-   }
-  },
-  "25": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/em.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/em.rpt",
-     "path": "reports/phase3/em.rpt",
-     "size_bytes": 3253
-    },
-    "reports/phase3/em.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/em.json",
-     "path": "reports/phase3/em.json",
-     "size_bytes": 292
-    },
-    "reports/phase3/em_signoff.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "em_report_check",
-     "argv": [
-      ".",
-      "--mode",
-      "em",
-      "--json",
-      "reports/phase3/em_signoff.json"
-     ],
-     "writes": "reports/phase3/em_signoff.json",
-     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 168
-    }
-   }
-  },
-  "26": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/antenna.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/antenna.rpt",
-     "path": "reports/phase3/antenna.rpt",
-     "size_bytes": 487
-    },
-    "reports/phase3/antenna.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/antenna.json",
-     "path": "reports/phase3/antenna.json",
-     "size_bytes": 236
-    },
-    "reports/phase3/antenna_signoff.json": {
-     "status": "PRODUCED_LIVE",
-     "producer": "antenna_report_check",
-     "argv": [
-      ".",
-      "--mode",
-      "antenna",
-      "--json",
-      "reports/phase3/antenna_signoff.json"
-     ],
-     "writes": "reports/phase3/antenna_signoff.json",
-     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 188
-    }
-   }
-  },
-  "27": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/si_crosstalk.json",
-     "path": "reports/phase3/si_crosstalk.json",
-     "size_bytes": 860
-    }
-   }
-  },
-  "28": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/perc_equivalent.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/perc_equivalent.json",
-     "path": "reports/phase3/perc_equivalent.json",
-     "size_bytes": 8142
-    },
-    "reports/phase3/perc_equivalent.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/perc_equivalent.rpt",
-     "path": "reports/phase3/perc_equivalent.rpt",
-     "size_bytes": 4066
-    },
-    "reports/phase3/PERC_SIGNOFF_MEMO.md": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/PERC_SIGNOFF_MEMO.md",
-     "path": "reports/phase3/PERC_SIGNOFF_MEMO.md",
-     "size_bytes": 3966
-    },
-    "reports/phase2/gates/perc_signoff.json": {
-     "status": "PRODUCED_BY_RUN",
-     "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
-     "run": "benchmark-data/ic/caravel_user_project",
-     "alternative": "reports/phase2/gates/perc_signoff.json",
-     "path": "reports/phase2/gates/perc_signoff.json",
-     "size_bytes": 523
-    }
-   }
-  },
-  "29": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/cv32e40p_e2e",
-     "alternative": "phase3/stage3/sim_postlayout/pass.flag",
-     "path": "phase3/stage3/sim_postlayout/pass.flag",
-     "size_bytes": 194
-    }
-   }
-  },
-  "30": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/cv32e40p_e2e",
-     "alternative": "phase3/stage3/spice/*.sp",
-     "path": "phase3/stage3/spice/critical_path.sp",
-     "size_bytes": 917
-    },
-    "phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/ibex_e2e",
-     "alternative": "phase3/stage3/spice/correlation.json",
-     "path": "phase3/stage3/spice/correlation.json",
-     "size_bytes": 976
-    }
-   }
-  },
-  "31": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/drc_signoff.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/drc_signoff.rpt",
-     "path": "reports/phase3/drc_signoff.rpt",
-     "size_bytes": 139888
-    },
-    "reports/phase3/lvs.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/lvs.rpt",
-     "path": "reports/phase3/lvs.rpt",
-     "size_bytes": 37676
-    },
-    "reports/phase3/erc.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/erc.rpt",
-     "path": "reports/phase3/erc.rpt",
-     "size_bytes": 3009
-    },
-    "reports/phase3/lvs.json": {
-     "status": "PRODUCED_BY_RUN",
-     "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
-     "run": "benchmark-data/ic/caravel_user_project",
-     "alternative": "reports/phase3/lvs.json",
-     "path": "reports/phase3/lvs.json",
-     "size_bytes": 225
-    },
-    "reports/phase2/gates/erc_density.json": {
-     "status": "PRODUCED_BY_RUN",
-     "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
-     "run": "benchmark-data/ic/caravel_user_project",
-     "alternative": "reports/phase2/gates/erc_density.json",
-     "path": "reports/phase2/gates/erc_density.json",
-     "size_bytes": 1188
-    }
-   }
-  },
-  "32": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/eco/eco_log.json",
-     "path": "phase3/stage3/eco/eco_log.json",
-     "size_bytes": 370
-    },
-    "phase3/stage3/eco/eco_trigger_decision.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
-     "alternative": "phase3/stage3/eco/eco_trigger_decision.json",
-     "path": "phase3/stage3/eco/eco_trigger_decision.json",
-     "size_bytes": 208
-    }
-   }
-  },
-  "33": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/power.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/power.rpt",
-     "path": "reports/phase3/power.rpt",
-     "size_bytes": 2330
-    },
-    "reports/phase3/power.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/power.json",
-     "path": "reports/phase3/power.json",
-     "size_bytes": 165
-    }
-   }
-  },
-  "34": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/subservient",
-     "alternative": "phase3/stage3/pnr/metal_fill.done",
-     "path": "phase3/stage3/pnr/metal_fill.done",
-     "size_bytes": 373
-    },
-    "reports/density.json OR reports/phase3/density.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/density.json",
-     "path": "reports/density.json",
-     "size_bytes": 389
-    },
-    "reports/density.rpt OR reports/phase3/density.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/density.rpt",
-     "path": "reports/density.rpt",
-     "size_bytes": 585
-    }
-   }
-  },
-  "35": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/phase3/dfm_screen.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/dfm_screen.json",
-     "path": "reports/phase3/dfm_screen.json",
-     "size_bytes": 1521
-    }
-   }
-  },
-  "36": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/audit/tapeout_checklist.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/audit/tapeout_checklist.json",
-     "path": "reports/audit/tapeout_checklist.json",
-     "size_bytes": 1187
-    }
-   }
-  },
-  "37": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage4/gds/*.gds": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "phase3/stage4/gds/*.gds",
-     "path": "phase3/stage4/gds/spm.gds",
-     "size_bytes": 1180456
-    }
-   }
-  },
-  "38": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/stage4/foundry_handoff/mask_spec.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage4/foundry_handoff/mask_spec.json",
-     "path": "phase3/stage4/foundry_handoff/mask_spec.json",
-     "size_bytes": 781
-    },
-    "phase3/stage4/foundry_handoff/wat_plan.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage4/foundry_handoff/wat_plan.json",
-     "path": "phase3/stage4/foundry_handoff/wat_plan.json",
-     "size_bytes": 772
-    },
-    "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
-     "path": "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
-     "size_bytes": 267
-    },
-    "phase3/stage4/foundry_handoff/corner_test_vectors.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
-     "alternative": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
-     "path": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
-     "size_bytes": 1069
-    },
-    "reports/phase3/foundry_handoff_audit.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase3/foundry_handoff_audit.json",
-     "path": "reports/phase3/foundry_handoff_audit.json",
-     "size_bytes": 2567
-    }
-   }
-  },
-  "39": {
-   "verdict": "WAIVED",
-   "entries": {
-    "phase2/stage1/fpga/final/*.sof": {
-     "status": "UNPROVEN"
-    },
-    "reports/phase2/fpga/on_board_pass.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "alternative": "reports/phase2/fpga/on_board_pass.json",
-     "path": "reports/phase2/fpga/on_board_pass.json",
-     "size_bytes": 732
-    }
-   },
-   "unproven": [
-    "phase2/stage1/fpga/final/*.sof"
-   ]
-  },
-  "A6": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/*.lyrdb",
-     "path": "phase3/analog/ldo/klayout_drc.lyrdb",
-     "size_bytes": 33542
-    },
-    "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
-     "alternative": "phase3/analog/*/lvs_match.flag",
-     "path": "phase3/analog/delta_sigma/lvs_match.flag",
-     "size_bytes": 779
-    }
-   }
-  },
-  "M1": {
-   "verdict": "WAIVED",
-   "entries": {
-    "phase3/mixed_signal/top_merged.gds": {
-     "status": "UNPROVEN"
-    },
-    "reports/analog/mixed_signal/merge.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/merge.json",
-     "path": "reports/analog/mixed_signal/merge.json",
-     "size_bytes": 497
-    }
-   },
-   "unproven": [
-    "phase3/mixed_signal/top_merged.gds"
-   ]
-  },
-  "M2": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/analog/mixed_signal/power_domain.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/power_domain.json",
-     "path": "reports/analog/mixed_signal/power_domain.json",
-     "size_bytes": 980
-    },
-    "reports/analog/mixed_signal/level_shifter.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/level_shifter.json",
-     "path": "reports/analog/mixed_signal/level_shifter.json",
-     "size_bytes": 237
-    },
-    "reports/analog/mixed_signal/isolation.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/isolation.json",
-     "path": "reports/analog/mixed_signal/isolation.json",
-     "size_bytes": 233
-    }
-   }
-  },
-  "M3": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "phase3/mixed_signal/cosim/mixed_signal_results.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "phase3/mixed_signal/cosim/mixed_signal_results.json",
-     "path": "phase3/mixed_signal/cosim/mixed_signal_results.json",
-     "size_bytes": 964
-    },
-    "reports/analog/mixed_signal/interface_si.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/interface_si.json",
-     "path": "reports/analog/mixed_signal/interface_si.json",
-     "size_bytes": 520
-    }
-   }
-  },
-  "M4": {
-   "verdict": "ENFORCED",
-   "entries": {
-    "reports/analog/mixed_signal/signoff.json": {
-     "status": "PRODUCED_BY_RUN",
-     "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-     "alternative": "reports/analog/mixed_signal/signoff.json",
-     "path": "reports/analog/mixed_signal/signoff.json",
-     "size_bytes": 631
-    }
-   }
-  },
-  "40": {
-   "verdict": "NA_DORMANT_CONDITION",
-   "entries": {
-    "phase3/stage5_manufacturing/mask_set_received.json": {
-     "status": "UNPROVEN"
-    },
-    "phase3/stage5_manufacturing/wafer_lot_received.json": {
-     "status": "UNPROVEN"
-    }
-   },
-   "unproven": [
-    "phase3/stage5_manufacturing/mask_set_received.json",
-    "phase3/stage5_manufacturing/wafer_lot_received.json"
-   ],
-   "condition_files": [
-    "phase3/stage5_manufacturing/silicon_received.json"
-   ]
-  },
-  "41": {
-   "verdict": "NA_DORMANT_CONDITION",
-   "entries": {
-    "phase3/stage5_manufacturing/wafer_sort_yield.json": {
-     "status": "UNPROVEN"
-    },
-    "phase3/stage5_manufacturing/wafer_map.csv": {
-     "status": "UNPROVEN"
-    }
-   },
-   "unproven": [
-    "phase3/stage5_manufacturing/wafer_map.csv",
-    "phase3/stage5_manufacturing/wafer_sort_yield.json"
-   ],
-   "condition_files": [
-    "phase3/stage5_manufacturing/silicon_received.json"
-   ]
-  },
-  "42": {
-   "verdict": "NA_DORMANT_CONDITION",
-   "entries": {
-    "phase3/stage5_manufacturing/packaging_log.json": {
-     "status": "UNPROVEN"
-    }
-   },
-   "unproven": [
-    "phase3/stage5_manufacturing/packaging_log.json"
-   ],
-   "condition_files": [
-    "phase3/stage5_manufacturing/silicon_received.json"
-   ]
-  },
-  "43": {
-   "verdict": "NA_DORMANT_CONDITION",
-   "entries": {
-    "phase3/stage5_manufacturing/final_test_yield.json": {
-     "status": "UNPROVEN"
-    },
-    "phase3/stage5_manufacturing/burn_in_results.json": {
-     "status": "UNPROVEN"
-    }
-   },
-   "unproven": [
-    "phase3/stage5_manufacturing/burn_in_results.json",
-    "phase3/stage5_manufacturing/final_test_yield.json"
-   ],
-   "condition_files": [
-    "phase3/stage5_manufacturing/silicon_received.json"
-   ]
-  },
-  "44": {
-   "verdict": "NA_DORMANT_CONDITION",
-   "entries": {
-    "phase3/stage5_manufacturing/htol_results.json": {
-     "status": "UNPROVEN"
-    }
-   },
-   "unproven": [
-    "phase3/stage5_manufacturing/htol_results.json"
-   ],
-   "condition_files": [
-    "phase3/stage5_manufacturing/silicon_received.json"
-   ]
-  },
-  "P0": {
-   "verdict": "NA_NO_REQUIRED_OUTPUTS",
-   "entries": {}
-  }
- }
 }

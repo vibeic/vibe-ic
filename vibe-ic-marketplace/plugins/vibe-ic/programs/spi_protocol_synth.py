@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -143,7 +144,9 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         d = _read(p)
         d.setdefault("otp_present", False)
         d.setdefault("notes",
-            "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file.")
+            "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file."
+            if is_spi else
+            "No OTP / fuse / configuration-ROM content in the spec. All configuration is via the run-time register file.")
         _write(p, d)
     # L13 lab cal N/A
     p = gd / "L13_LAB_CALIBRATION.json"
@@ -187,24 +190,75 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
             "Error and fault condition detection and handling",
             "Reset behavior verification",
             "Back-to-back / sustained operation"]
-    for ld_name, payload in [
-        ("L19_CONSTRAINTS_PDK.json", {
+    # TWO findings, both real, merged rather than chosen between (#714, #715).
+    #
+    # WHEN the note may attach (#714/#715 found this independently). Each
+    # `notes` string EXPLAINS an empty record, so it may only sit beside a
+    # record that really is empty. `setdefault` guards the KEY, not the CLAIM:
+    # on a doc the extractor already populated, the `*_present` flag it wrote
+    # survives while `notes` is still absent, and the canned "...does not
+    # include..." sentence lands next to the populated field. Measured: an L19
+    # carrying a `pdk_target` read from the design's own input prose, with
+    # `constraints_present: true` and an `sdc_constraints_path`, was emitted
+    # alongside a note saying the spec "does not include PDK / timing
+    # constraints". The record answered the same question twice in opposite
+    # directions, and the prose is the half a human reads.
+    #
+    # Both gates are kept, because they catch different things: `contradicted`
+    # is any payload fact the document already disagrees with (it reaches
+    # `sdc_constraints_path`, and L22, which has no presence flag at all), and
+    # the presence-key test reads the flag's EFFECTIVE value after it settles.
+    #
+    # WHAT the note says (#715). The canned strings were peripheral/SPI-flavored
+    # even for a non-SPI IC — "Block-level peripheral spec", "The peripheral
+    # register file", "for the serial peripheral" — so an IC that is not a
+    # peripheral at all was described as one. Same treatment the category lists
+    # already got: SPI wording behind `is_spi`, neutral wording otherwise.
+    if is_spi:
+        _l19_notes = ("Block-level peripheral spec does not include PDK / timing "
+                      "constraints; these are deferred to the SoC integration spec.")
+        _l20_notes = ("Block guide does not specify DFT/scan topology; this is "
+                      "deferred to SoC integration. The peripheral register file "
+                      "is amenable to standard scan insertion at the SoC level.")
+        _l23_notes = ("Block guide does not specify confidentiality / integrity / "
+                      "authentication requirements for the serial peripheral. Any "
+                      "access-control (e.g. privileged-mode register access) is "
+                      "deferred to SoC integration.")
+    else:
+        _l19_notes = ("Spec does not state PDK / timing constraints; these are "
+                      "deferred to integration.")
+        _l20_notes = ("Spec does not specify DFT/scan topology; this is deferred "
+                      "to integration. The register state of this design is "
+                      "amenable to standard scan insertion.")
+        _l23_notes = ("Spec does not specify confidentiality / integrity / "
+                      "authentication requirements. Any access control is "
+                      "deferred to integration.")
+    for ld_name, presence_key, payload in [
+        ("L19_CONSTRAINTS_PDK.json", "constraints_present", {
             "constraints_present": False,
-            "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."}),
-        ("L20_DFT_SCAN_TOPOLOGY.json", {
+            "notes": _l19_notes}),
+        ("L20_DFT_SCAN_TOPOLOGY.json", "dft_present", {
             "dft_present": False,
-            "notes": "Block guide does not specify DFT/scan topology; this is deferred to SoC integration. The peripheral register file is amenable to standard scan insertion at the SoC level."}),
-        ("L22_VERIFICATION_PLAN.json", _l22_payload),
-        ("L23_SECURITY_REQUIREMENTS.json", {
+            "notes": _l20_notes}),
+        ("L22_VERIFICATION_PLAN.json", None, _l22_payload),
+        ("L23_SECURITY_REQUIREMENTS.json", "security_requirements_present", {
             "security_requirements_present": False,
-            "notes": "Block guide does not specify confidentiality / integrity / authentication requirements for the serial peripheral. Any access-control (e.g. privileged-mode register access) is deferred to SoC integration."}),
+            "notes": _l23_notes}),
     ]:
         q = gd / ld_name
         if q.is_file():
             d = _read(q)
             f = d.get("fields") or {}
+            contradicted = any(k in f and f[k] != v
+                               for k, v in payload.items() if k != "notes")
+            gated_note = payload.get("notes") if presence_key else None
             for k, v in payload.items():
+                if k == "notes" and (contradicted or gated_note is not None):
+                    continue          # decided below, once the flag has settled
                 f.setdefault(k, v)
+            if (gated_note is not None and not contradicted
+                    and not f.get(presence_key)):
+                f.setdefault("notes", gated_note)
             d["fields"] = f
             _write(q, d)
 
@@ -580,7 +634,7 @@ def _apply_spi_specific(gd: Path, spi_ic_name: Optional[str]) -> None:
         d = _read(p)
         d.setdefault("module_role",
             "Synchronous serial peripheral block within an MCU; couples to MCU bus on one side (8-bit register file at module-defined offsets) and to 4 external pins on the other.")
-        d["top_module"] = "SPI"
+        _ptm.apply(d, "SPI")
         d.setdefault("integration_overview", {
             "host_bus_side": "8-bit register access at SoC-defined base address + 3-bit module offset.",
             "external_pin_side": "4 pins: MOSI, MISO, SS, SCK.",

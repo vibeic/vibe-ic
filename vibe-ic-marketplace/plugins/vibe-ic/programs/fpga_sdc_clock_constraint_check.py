@@ -114,6 +114,47 @@ def _has_posedge_clock(rtl_files: List[Path]) -> bool:
     return False
 
 
+# ---------------- board-oscillator frequency, from the port name ---------- #
+
+# Board top-level clock ports conventionally spell the oscillator's frequency
+# in the port name (CLOCK_50, CLK_100MHZ, SYSCLK_125, OSC_32KHZ). That name is
+# a statement about the PHYSICAL part soldered to the board, and no SDC can
+# change it. Chip-AGNOSTIC: this is board-file naming convention, not a
+# vendor / chip / SKU token.
+_PORT_FREQ_UNIT_RE = re.compile(
+    r"(?i)^(?:CLK|CLOCK|SYSCLK|OSC|XTAL)[A-Z0-9]*?_?(\d+(?:\.\d+)?)\s*(M|K)HZ$")
+_PORT_FREQ_BARE_RE = re.compile(
+    r"(?i)^(?:CLK|CLOCK|SYSCLK|OSC|XTAL)_(\d+)$")
+
+# A bare trailing number is only read as MHz inside a plausible oscillator
+# band; below it the token is far more likely to be an index (clk_0, clk_2).
+_BARE_MHZ_MIN, _BARE_MHZ_MAX = 10, 1000
+
+
+def port_name_declared_freq_mhz(port: str) -> Optional[Tuple[float, str]]:
+    """The oscillator frequency a board clock PORT NAME states, in MHz, with
+    the reading used. ``None`` when the name states nothing.
+
+    Deliberately conservative: an explicit unit is always honoured; a bare
+    trailing number is honoured only inside a plausible oscillator band, so a
+    port index (``clk_0``, ``clk_2``) is never mistaken for a frequency."""
+    p = (port or "").strip().strip("{}[]")
+    if not p:
+        return None
+    m = _PORT_FREQ_UNIT_RE.match(p)
+    if m:
+        val = float(m.group(1))
+        return (val if m.group(2).upper() == "M" else val / 1000.0,
+                "explicit unit in port name")
+    m = _PORT_FREQ_BARE_RE.match(p)
+    if m:
+        val = float(m.group(1))
+        if _BARE_MHZ_MIN <= val <= _BARE_MHZ_MAX:
+            return (val, "bare frequency in port name (MHz by board "
+                         "convention)")
+    return None
+
+
 # ------------------------ SDC parsing ------------------------------ #
 
 _CC_RE = re.compile(
@@ -435,6 +476,59 @@ def audit(project: Path) -> Tuple[str, List[str]]:
                         "the actual silicon clock — silent timing violation."
                     )
                     return ("FAIL", msgs)
+
+    # Rule 3b: a create_clock on a board OSCILLATOR port must carry the
+    # OSCILLATOR's period, not the design's.
+    #
+    # Rule 3 compares the SDC against the design's declared clock period, so a
+    # generator that binds the design period to a board oscillator port agrees
+    # with itself and PASSes — while telling the FPGA tool the wrong frequency
+    # for the physical part. The port name is the independent witness: a port
+    # called CLOCK_50 is wired to a 50 MHz can, whatever the design wants, and
+    # the design's slower clock can only be reached through a divider or PLL —
+    # which in SDC is a create_generated_clock. With no generated clock the SDC
+    # is asserting that the oscillator itself runs at the design's period.
+    board_osc_mismatch = None
+    for c in create_clocks:
+        if c["period_ns"] is None or not c.get("port"):
+            continue
+        declared = port_name_declared_freq_mhz(c["port"])
+        if not declared:
+            continue
+        osc_mhz, how = declared
+        osc_period_ns = 1000.0 / osc_mhz
+        ratio = abs(c["period_ns"] - osc_period_ns) / osc_period_ns
+        if ratio <= 0.05:
+            continue
+        factor = max(c["period_ns"], osc_period_ns) / min(c["period_ns"],
+                                                          osc_period_ns)
+        detail = (f"  sdc file: {c.get('sdc_file')}\n"
+                  f"  create_clock -name {c.get('name')} "
+                  f"-period {c['period_ns']} ns [get_ports {c['port']}]\n"
+                  f"  port name states {osc_mhz:g} MHz "
+                  f"= {osc_period_ns:g} ns ({how});\n"
+                  f"  constrained period is {factor:.1f}x that.")
+        if sdc_has_pll:
+            msgs.append(
+                "WARN — FPGA_SDC_BOARD_OSC_MISMATCH (generated clock "
+                "present)\n" + detail +
+                "\n  A create_generated_clock is declared, so a divided/"
+                "multiplied application clock is modelled — advisory only.")
+        elif factor >= 2.0:
+            # Only a gross disagreement is failed: a real wrong-oscillator
+            # error is a whole multiple, while a few-percent drift is a
+            # rounding or margin choice that is not worth blocking on.
+            board_osc_mismatch = (
+                "FAIL — FPGA_SDC_BOARD_OSC_MISMATCH\n" + detail +
+                "\n  No create_generated_clock is declared, so nothing in this "
+                "SDC divides the oscillator down to the constrained period: "
+                "the FPGA tool will time-budget the design against a clock the "
+                "board does not deliver.")
+        else:
+            msgs.append("WARN — FPGA_SDC_BOARD_OSC_DRIFT\n" + detail)
+    if board_osc_mismatch:
+        msgs.append(board_osc_mismatch)
+        return ("FAIL", msgs)
 
     # Rule 4: WARN when only one clock constrained but multiple posedge clocks
     rtl_clk_sigs = find_rtl_clock_ports(rtl_files)

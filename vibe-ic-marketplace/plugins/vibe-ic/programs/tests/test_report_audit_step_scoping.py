@@ -236,15 +236,31 @@ def test_d1_unscoped_discovery_is_unchanged(tmp_path):
     assert "scoped_under" not in doc["summary"]
 
 
-def test_d1_step31_declares_no_scope():
-    """Sign-off DRC is deliberately project-wide; this change must not have
-    narrowed it."""
+def test_d1_step31_scopes_to_its_own_declared_artefact():
+    """Step 31's DRC gate reads THE SIGN-OFF REPORT and nothing else.
+
+    This assertion used to read `"--under" not in cmd` — "sign-off DRC is
+    deliberately project-wide". vibe-ic#584 then scoped step 31 to
+    `reports/phase3/drc_signoff.rpt` (see line ~223 of this same file, which
+    already knows that) and this guard was left asserting the superseded
+    premise, so it has been RED on origin/main ever since — measured on a
+    pristine checkout of origin/main, not inferred. It is corrected here rather
+    than left red because the line it guards is the line this change edits.
+
+    What it pins now is the property that actually matters and that #584
+    landed: the step-31 gate must not reach outside its own artefact — in
+    particular it must never pick up step 21's router report.
+    """
     flow = _FLOW.read_text(errors="replace")
     cmds = re.findall(r'"(drc_report_check [^"]*)"', flow)
     step31 = [c for c in cmds if "drc_signoff.json" in c]
     assert step31, "step 31's drc gate is no longer declared"
     for cmd in step31:
-        assert "--under" not in cmd.split(), cmd
+        unders = [t.split()[0] for t in cmd.split("--under ")[1:]]
+        assert unders == ["reports/phase3/drc_signoff.rpt"], cmd
+        assert not any("drc_router" in u for u in unders), cmd
+        # and it must carry the sign-off policy step 21 must never carry
+        assert "--signoff" in cmd.split(), cmd
 
 
 def test_d1_an_empty_project_still_fails(tmp_path):

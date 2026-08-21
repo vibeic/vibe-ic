@@ -126,7 +126,12 @@ def test_postfix_tcl_ties_off_spare_inputs():
     assert "odb::dbITerm_connect" in tcl
     assert 'getIoType] eq "INPUT"' in tcl
     assert "SPARE_TIEOFF_DONE" in tcl
-    assert "place_inst -name spare_tielo_drv" in tcl
+    # r4 — one tie driver PER SPARE, so the driver name is derived from the
+    # spare inside the loop instead of being the single literal
+    # `spare_tielo_drv`. The property this line defends — a tie DRIVER is
+    # actually placed, not just a net created — is unchanged.
+    assert "place_inst -name ${_dnm}_drv" in tcl
+    assert "set _dnm spare_tielo_$_sn" in tcl
     # FIRM lock + check_placement (#562) preserved after the tie-off block
     assert "SPARE_FIRM_LOCKED" in tcl
     assert "check_placement" in tcl

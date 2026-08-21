@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -63,6 +64,7 @@ from _rtl_include_hub import (  # noqa: E402
     drop_include_hubs as _drop_include_hubs,
     macro_headers_first as _macro_headers_first,
 )
+import _hardmacro_stage as _hms  # noqa: E402 — staged SRAM/IP macro blackbox
 
 PROGRAM = "lec_run"
 
@@ -75,7 +77,25 @@ DEFAULT_LIBERTY = (
 # ~2k compared points through equiv_induct -seq 64) runs far past the old
 # 1800s, and a killed run produced NO evidence — indistinguishable at the
 # gate from a real mismatch. Tunable via --timeout for smaller budgets.
-DEFAULT_YOSYS_TIMEOUT_S = 7200
+# ORGANIC-20260801 — VIBEIC_LEC_YOSYS_TIMEOUT_S overrides the default for very
+# large (>1M-cell) golds whose MONOLITHIC equiv legitimately exceeds — or is
+# deliberately bounded below (a giant gold that cannot converge in any open-tool
+# budget honestly lands SKIPPED-CONDITION, never a fake PASS) — the historical
+# 7200s. Symmetric with the synth step's VIBEIC_PHASE2_SYNTH_TIMEOUT_S. The
+# runner reads this SAME constant for its outer subprocess budget and inherits
+# the env into the lec_run subprocess, so both stay in lock-step. Byte-identical
+# (7200) when the env var is unset. chip-AGNOSTIC.
+def _env_yosys_timeout_default() -> int:
+    try:
+        v = int(os.environ.get("VIBEIC_LEC_YOSYS_TIMEOUT_S", "") or 0)
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    return 7200
+
+
+DEFAULT_YOSYS_TIMEOUT_S = _env_yosys_timeout_default()
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
 
@@ -205,6 +225,49 @@ def induction_did_not_converge(text: str):
     if _PROVED_ZERO_RE.search(text):
         return True, ("equiv_induct proved 0 previously-unproven cells across "
                       "the escalating -seq sweep (a flat induction wall)")
+    return False, ""
+
+
+# #778 / round-2 subservient×sky130A — the escalating `-seq 4/16/64` induction
+# ladder can run OUT of depth on a deep bit-serial datapath (SERV accumulates
+# its memory ADDRESS bit-serially, threading bufreg→bufreg2→arbiter→mux far past
+# a single 32-cycle period) while its DEEPEST rung is STILL proving new cells.
+# MEASURED (subservient×sky130A, 3544 points): equiv_simple proved 3369, then
+# equiv_induct proved 35 (-seq 4), 22 (-seq 16), 27 (-seq 64) — a strictly
+# positive, still-descending tail — leaving 91 unproven with ZERO counterexample
+# (all on `o_wb_mem_adr`/`arbiter.o_wb_mem_adr`). That is "converging but
+# ladder-exhausted", NOT a flat wall (`Proved 0`, handled above) and NOT a proven
+# difference (a counterexample, handled by _MISMATCH_EVIDENCE_RE). It is the SAME
+# disclosed sequential-depth capability gap as `induction_did_not_converge`, so
+# it must ALSO reclassify to INCONCLUSIVE, never a false NOT_EQUIVALENT.
+_EQUIV_INDUCT_MARKER_RE = re.compile(r"equiv_induct", re.IGNORECASE)
+
+
+def induction_ladder_exhausted(text: str):
+    """(bool, evidence) — True when the equiv_INDUCT ladder made POSITIVE but
+    INCOMPLETE progress: at least one induct rung proved >0 previously-unproven
+    cells, yet points remain unproven at equiv_status. This is the -seq depth
+    budget running out on a deep sequential design, NOT a proven difference
+    (witnessed by a counterexample) and NOT a flat wall (`Proved 0`). PRECISION-
+    first / §4.05 NO-LEAK: the caller MUST also confirm NO counterexample AND
+    unproven>0 before re-classing to INCONCLUSIVE. The `Proved N` scan is scoped
+    to the region AFTER the first equiv_induct marker so equiv_simple's OWN
+    proved-count can never trigger it — a genuine mismatch (MISMATCH_OUTPUT:
+    equiv_simple proves 33, equiv_induct then proves 0 and leaves 7 unproven)
+    has NO post-induct `Proved N>0` line and correctly stays FAIL. chip-AGNOSTIC:
+    pure yosys log phrases, no chip/vendor literal."""
+    m = _EQUIV_INDUCT_MARKER_RE.search(text)
+    if not m:
+        return False, ""
+    induct_region = text[m.start():]
+    proved = [int(n) for n in _PROVED_SIMPLE_RE.findall(induct_region)]
+    total = sum(n for n in proved if n > 0)
+    if total > 0:
+        return True, (
+            f"equiv_induct proved {total} previously-unproven cell(s) across "
+            "the escalating -seq sweep but the ladder was exhausted before full "
+            "convergence — a bounded sequential-depth induction gap, not a flat "
+            "wall and not a counterexample")
     return False, ""
 
 # Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
@@ -781,13 +844,131 @@ def parse_equiv_output(text: str) -> Dict:
         # WITHOUT the flat-wall signature also stays FAIL. Never a PASS.
         _noconv, _noconv_ev = induction_did_not_converge(text)
         _has_ctrex = bool(_MISMATCH_EVIDENCE_RE.search(text))
-        if _noconv and not _has_ctrex and (unproven or 0) > 0:
+        # #778 — a `-seq` ladder that ran out of depth WHILE STILL PROVING new
+        # cells on its deepest rung (converging, not a flat wall) is the same
+        # disclosed sequential-depth capability gap. Only consulted when there is
+        # neither a flat wall nor a counterexample, so it can never soften a real
+        # mismatch (which prints a counterexample → stays the blocking FAIL).
+        if not _noconv and not _has_ctrex:
+            _noconv, _noconv_ev = induction_ladder_exhausted(text)
+        # A WALL-CLOCK KILL THAT MADE PARTIAL PROGRESS.
+        #
+        # The three budget guards above all have a precondition this shape
+        # fails, so it fell through to the blocking FAIL below:
+        #   * the `parse_error + _TIMEOUT_RE` branch needs NOTHING parsed;
+        #   * the `proven is None and unproven is None` branch needs NEITHER
+        #     count parsed;
+        #   * `induction_did_not_converge` needs `Proved 0` or `Circuit
+        #     inherently diverges`, and `induction_ladder_exhausted` needs an
+        #     `equiv_induct` marker — NEITHER exists when the clock kills the
+        #     run during equiv_simple, before equiv_induct ever starts.
+        #
+        # So a run killed mid-`equiv_simple` AFTER it proved some cells parses
+        # as `proven=N>0`, `unproven=total-N>0`, no flat wall, no ladder, no
+        # counterexample — and was reported as
+        #     "N/T proven, U unproven — the RTL and gate netlist MAY GENUINELY
+        #      DIFFER at these points."
+        # from a log whose last line is this program's OWN
+        # `_TIMEOUT_MARKER`. That is the exact harm the module docstring says
+        # this file exists to prevent: "a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch", to be "NAMED
+        # (raise --timeout) instead of read as a mismatch that was never
+        # found."
+        #
+        # THE PRECISE DISTINCTION — a MEASURED unproven count vs an INFERRED
+        # one. This is the line the existing doctrine already draws, which the
+        # budget branches simply never consulted:
+        #
+        #   * `equiv_status` emitted "Of those cells N are proven and M are
+        #     unproven" (_FINAL_RE). Those M points WERE attempted and left
+        #     unproven — a real per-point verdict. A timeout marker arriving
+        #     afterwards (e.g. rc=137 re-attaching it) cannot retract it, and
+        #     it must STAY FAIL. Asserted by
+        #     `test_lec_run.test_container_timeout_rc_with_recorded_mismatch_still_fails`
+        #     and `test_v1462_lvs_lec_manifest_capture
+        #      .test_timeout_with_partial_completed_verdict_still_fails`.
+        #
+        #   * NO `_FINAL_RE` line: `unproven` was not measured at all, it was
+        #     RECONSTRUCTED by `total - proven` further up. Those points were
+        #     never attempted — the clock killed the run first. Reporting them
+        #     as points where the designs "may genuinely differ" states a
+        #     comparison that never happened.
+        #
+        # So the re-class fires only on (timeout marker) AND (no completed
+        # equiv_status) AND (no counterexample). §4.05 PRECISION-first /
+        # NO-LEAK: each of the three conjuncts removes a way this could soften
+        # a real result, and `_TIMEOUT_RE` is written only by the two kill
+        # paths in run_yosys_equiv, so an in-budget run is untouched.
+        _budget_killed = bool(_TIMEOUT_RE.search(text))
+        _measured_verdict = bool(_FINAL_RE.search(text))
+        if _budget_killed and not _measured_verdict and not _has_ctrex \
+                and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "the wall-clock budget killed yosys mid-proof, before "
+                "equiv_induct ran — the unproven remainder was never "
+                "attempted, not refuted")
+        # NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A).
+        # A miter WAS built — `not parse_error`, so `total` is known — but
+        # NEITHER a proven NOR an unproven count was ever recorded: equiv_make
+        # ran and then NO equiv_simple / equiv_induct / equiv_status verdict
+        # reached the log, and NO counterexample was seen. A COMPLETED equiv
+        # pass ALWAYS emits at least one count — equiv_status' "N proven / M
+        # unproven" (_FINAL_RE), equiv_simple's "Proved N previously unproven"
+        # (_PROVED_SIMPLE_RE, N may be 0), or equiv_induct's "Found N unproven
+        # … in module equiv" (_INDUCT_FOUND_RE) — so `proven is None AND
+        # unproven is None` means the proof was CUT OFF before any point was
+        # decided: an external kill / crash / container interruption that did
+        # NOT route through the wall-budget marker path (_TIMEOUT_RE absent, so
+        # _budget_killed above did not fire). Zero decided points + zero
+        # counterexamples = no equivalence evidence in EITHER direction — the
+        # exact no-evidence state this module's docstring exists to keep OUT of
+        # a false NOT_EQUIVALENT ("a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch"). §4.05 NO-LEAK:
+        # a real mismatch carries a counterexample (_has_ctrex) OR a completed
+        # status with unproven>0 (proven parsed), so it can NEVER reach here —
+        # this softens ONLY a run that decided nothing. INCONCLUSIVE, never
+        # FAIL, never PASS. MEASURED WITNESS: opentitan_aes's Step-13 lec.rpt
+        # ended mid-`equiv_simple` (only ~1720/31850 cells attempted, no
+        # equiv_status, no "Proved N", no marker) and was booked FAIL "may
+        # genuinely differ" — a fabricated non-equivalence that blocked 24
+        # downstream steps.
+        _no_completed_comparison = (proven is None and unproven is None)
+        if _no_completed_comparison and not _has_ctrex and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "equiv_make built the miter but NO equiv_simple/induct/status "
+                "verdict was ever recorded (no proven and no unproven count) "
+                "and no counterexample was seen — the proof was cut off before "
+                "any point was decided (an interrupted/killed/crashed run "
+                "outside the wall-budget marker path)")
+        if _no_completed_comparison and _noconv and not _has_ctrex:
+            # The miter was built but the proof was cut off before ANY point was
+            # decided. Distinct wording from the convergence-wall case below:
+            # equiv_induct never even ran here, so "did NOT converge" would be
+            # inaccurate — the run recorded NO verdict at all.
+            equivalent = False
+            verdict = "INCONCLUSIVE"
+            verdict_explanation = (
+                f"A {total if total is not None else '?'}-point equivalence "
+                "miter was built, but the proof recorded NO decided points "
+                f"({_noconv_ev}) and NO counterexample "
+                "(non_equivalent_points=0). A run that decided nothing is NOT "
+                "evidence of non-equivalence: a real difference produces a "
+                "counterexample or a completed equiv_status with unproven>0. "
+                "→ INCONCLUSIVE (a killed/interrupted run outside the "
+                "wall-budget marker path), never a false NOT_EQUIVALENT. Re-run "
+                "uninterrupted (raise --timeout) or close with sign-off LEC "
+                "(Conformal/VC LEC). Visible non-PASS (equivalent:false) — "
+                "never a vacuous PASS a regression could hide behind.")
+        elif _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
             verdict_explanation = (
                 f"{proven if proven is not None else 0}/"
                 f"{total if total is not None else '?'} proven, "
-                f"{unproven} unproven — but equiv_induct did NOT converge "
+                f"{unproven if unproven is not None else '?'} unproven — but "
+                "equiv_induct did NOT converge "
                 f"({_noconv_ev}) and NO counterexample was recorded "
                 "(non_equivalent_points=0). Non-convergence is NOT "
                 "non-equivalence: a real difference produces a counterexample. "
@@ -834,6 +1015,15 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "equivalent": parsed["equivalent"],
         # proven $equiv cell count — >0 required for a non-vacuous PASS.
         "compared_points": proven if proven is not None else 0,
+        # The SIZE of the proof obligation, i.e. how many $equiv points
+        # equiv_make built. `parse_equiv_output` has always measured this (it
+        # is the `total` it uses to reconstruct the other two counts) and
+        # build_report has always dropped it, so an INCONCLUSIVE lec.json said
+        # `compared_points: 0` and gave a reader NO way to tell "the budget
+        # nearly covered it, raise --timeout" from "this miter is orders of
+        # magnitude beyond any budget on this machine". Those call for opposite
+        # actions. None only when no total was parseable (never fabricated).
+        "miter_points": parsed.get("total"),
         # Yosys equiv_status does not emit a distinct proven-non-equivalent
         # count; a genuine difference surfaces as `unproven`, so this stays 0.
         "non_equivalent_points": 0,
@@ -1239,6 +1429,20 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -copy-from gate -as gate {top}\n"
         f"equiv_make gold gate equiv\n"
         f"hierarchy -top equiv\n"
+        # SAT-FREE structural pre-reduction BEFORE any SAT is spent. equiv_struct
+        # merges the $equiv key-points whose driving cones are structurally
+        # identical across gold and gate (the majority of a name-mapped
+        # RTL-vs-synth miter) by structural hashing alone — no solver call. This
+        # is SOUND: it only collapses provably-identical structure, so it can
+        # NEVER launder a real mismatch into a proof (a genuinely different cone
+        # survives to equiv_simple/equiv_induct below). Without it, equiv_simple
+        # SAT-hammers EVERY key-point including the trivially-identical ones, so a
+        # large design (measured: a 31 850-point AES miter) exhausts the wall
+        # clock mid-equiv_simple and yields a false INCONCLUSIVE. equiv_struct
+        # AUGMENTS, never REPLACES, the SAT stages that follow — it only shrinks
+        # the set they must decide (measured 31 850 -> 3 333, a 10x cut). This is
+        # the same pre-pass yosys's own `equiv_opt` runs. chip/PDK-AGNOSTIC.
+        f"equiv_struct\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
         f"equiv_induct -seq 16\n"
@@ -1726,6 +1930,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gate_abs = str(gate_netlist.resolve())
+
+    # ORGANIC-20260801 — an instantiated hard-macro (SRAM/IP) whose model is
+    # STAGED under input/pdk_local (L8) is UNDEFINED in rtl/, so the GOLD read
+    # aborts `unknown module <macro>` (0 compared points → false FAIL) and the
+    # synth GATE netlist instantiates it without a module decl. Blackbox the
+    # macro on BOTH sides — prepend a `(* blackbox *)` stub to the gold read
+    # AND pass it as `blackbox_v` for the gate read — so the miter proves the
+    # surrounding logic under an assume-guarantee on identical macro
+    # interfaces. No-op when the design stages no hard-macro (byte-identical).
+    macro_blackbox_v: List[str] = []
+    for _m in _hms.staged_hardmacro_models(project, gold_files):
+        if _m["v"] is not None:
+            _stub = _hms.emit_blackbox_stub(
+                _m["v"], _m["name"], rpt_out.parent / "lec_hardmacro_bb")
+            macro_blackbox_v.append(str(_stub.resolve()))
+    if macro_blackbox_v:
+        gold_files = macro_blackbox_v + gold_files
+        print(f"[lec_run] staged hard-macro blackbox: "
+              f"{[Path(s).name for s in macro_blackbox_v]}", file=sys.stderr)
+
     # A pre-techmap generic `$_`-primitive netlist must be read with `-icells`
     # and NO Liberty, else `hierarchy -check` aborts on an undefined `\$_DFF_P_`
     # module before any $equiv point is built (compared_points=0 false-FAIL).
@@ -1841,6 +2065,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _run(frontend: str, slang_prefix: str = "",
              defines: str = "-DSIMULATION -DYOSYS"):
         script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
+                                    blackbox_v=macro_blackbox_v or None,
                                     gate_is_generic=gate_is_generic,
                                     gold_frontend=frontend,
                                     slang_prefix=slang_prefix,

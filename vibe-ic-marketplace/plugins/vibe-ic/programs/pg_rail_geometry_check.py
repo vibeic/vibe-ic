@@ -16,10 +16,11 @@ the same file carries dozens of `... SHAPE STRIPE` rows. So the macro's
 highest-voltage supply pin was bound to a net with zero geometry — and THREE
 tools reported success:
 
-  * ``PG_CONNECT_AUDIT: unconnected=0`` — that audit counts pins whose net
+  * ``PG_NET_OWNERSHIP_AUDIT: no_net=0`` — that audit counts pins whose net
     pointer is NULL. This pin's pointer is not NULL; it points at the empty
     rail. It measures "is the pin attached to a name", not "is the name
-    attached to metal".
+    attached to metal". (Named ``PG_CONNECT_AUDIT: unconnected=0`` and
+    published as "N/N connected" through v1.9.62 — fixed at the source.)
   * ``[INFO PSM-0040] All shapes on net <RAIL> are connected.`` — vacuously
     true. All zero shapes are connected to each other.
   * The router itself: nothing to route means nothing to fail on.

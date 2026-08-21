@@ -44,8 +44,12 @@ import argparse
 import json
 import os
 import time
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _shape_refusal as _sr  # noqa: E402  (#991)
 
 # ── Liveness doctrine (v0.3.46, addressing the budget-guess critique) ───────
 # The STUCK signal is NOT "elapsed > a guessed per-step duration budget".
@@ -180,17 +184,39 @@ def _newest_artifact_mtime(project: Path, phase: str) -> Optional[float]:
     return newest if newest > 0 else None
 
 
-def _completed_steps(report: dict) -> List[dict]:
-    steps = report.get("steps") or report.get("plan") or []
-    return steps if isinstance(steps, list) else []
+def _completed_steps(report: dict
+                     ) -> Tuple[List[dict], Optional[Dict[str, Any]]]:
+    """`(steps, mismatch)`.
+
+    #991 — this was `steps if isinstance(steps, list) else []`, and the
+    coerced empty was BYTE-IDENTICAL to a report with no `steps` key: both
+    produced `current_step: null, steps_completed: 0`, and 86 of the 176
+    reports published in this tree legitimately have no `steps` key at all.
+    MEASURED, the two states are NOT equivalent for this program — a report
+    whose plan is unreadable also loses the per-step silence window, so
+    `max_silence_s` silently reverts from the step's own tolerance to the
+    600s default and a healthy quiet step is called STUCK.
+    """
+    for key in ("steps", "plan"):
+        v = (report or {}).get(key)
+        if v:                     # preserves the original `or` chain exactly:
+            return _sr.read_list(v, key)   # a falsy value falls through
+    return [], None
 
 
-def _current_step(report: Optional[dict]) -> Tuple[Optional[str], int]:
-    """Return (current_step_name, n_completed). The current step is the
-    first non-terminal one, else the last."""
+def _current_step(report: Optional[dict]
+                  ) -> Tuple[Optional[str], int, Optional[Dict[str, Any]]]:
+    """Return (current_step_name, n_completed, plan_mismatch). The current
+    step is the first non-terminal one, else the last. `plan_mismatch` is the
+    stated description of a plan this program could not read — never `None`
+    merely because the plan was empty."""
     if not report:
-        return None, 0
-    steps = _completed_steps(report)
+        return None, 0, None
+    steps, mismatch = _completed_steps(report)
+    if mismatch is not None:
+        # NOT "no steps done". This program does not know how many are done;
+        # saying 0 would be a measurement it did not make.
+        return None, 0, mismatch
     done = 0
     for s in steps:
         if not isinstance(s, dict):
@@ -200,10 +226,10 @@ def _current_step(report: Optional[dict]) -> Tuple[Optional[str], int]:
                   "ENV_UNAVAILABLE", "COVERAGE-INCOMPLETE"):
             done += 1
         else:
-            return str(s.get("name") or "?"), done
+            return str(s.get("name") or "?"), done, None
     last = steps[-1].get("name") if steps and isinstance(steps[-1], dict) \
         else None
-    return last, done
+    return last, done, None
 
 
 def _last_log_line(log: Optional[Path]) -> str:
@@ -255,7 +281,7 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
     now = time.time() if now is None else now
     report = _read_report(project, phase)
     verdict_in_report = (report or {}).get("verdict")
-    cur_step, n_done = _current_step(report)
+    cur_step, n_done, plan_unreadable = _current_step(report)
     log = _newest_log(project, phase)
     # Heartbeat = the most recent of (live log mtime, newest artifact
     # mtime). A run that touches EITHER is making progress. `silence` is
@@ -278,6 +304,13 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
         "phase": phase,
         "current_step": cur_step,
         "steps_completed": n_done,
+        # #991 — stated, not inferred. `None` when the plan was readable (or
+        # legitimately absent); otherwise the description of what arrived, so
+        # `current_step: null, steps_completed: 0` can never be read as "this
+        # run has not started a step" when the truth is "I could not read the
+        # plan". `steps_completed` is 0 in BOTH cases and only this key tells
+        # them apart.
+        "plan_unreadable": plan_unreadable,
         "pid": resolved_pid,
         "pid_alive": alive,
         "heartbeat_log": str(log) if log else None,
@@ -297,6 +330,34 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
     # tolerance window — applies whether or not we can probe the PID
     # (the log's mtime is the real timestamp of the last heartbeat).
     silent_too_long = (silence is not None and silence > silence_window)
+
+    # NO EVIDENCE OF A RUN AT ALL is its own answer, and until v1.9.78 this
+    # program did not have it — the `UNKNOWN` state its own docstring and
+    # `_EXIT` table promise (rc 3, "UNKNOWN/no-run") was unreachable, so a
+    # directory with no report, no recorded PID and no artifact of any kind
+    # fell through to `RUNNING` and exited 0.
+    #
+    # MEASURED on `benchmark-data/ic/sha256/clean_run_v1432int_commercial`,
+    # whose NDA whitelist publishes RESULT.md and nothing else: this printed
+    #     RUNNING — step 'None' (0 done), NO OUTPUT YET (no heartbeat file)
+    # and returned 0. Both halves are wrong in the same direction as #590: a
+    # caller that asks "is the runner done, hung or dead?" is told a run is in
+    # flight, and the exit code says nothing is wrong — over a directory in
+    # which nothing has ever been observed to run.
+    #
+    # A JUST-LAUNCHED RUN IS NOT THIS CASE and must not be caught by it: the
+    # runner records `run.pid` / `.runner.lock`, so `resolved_pid` is set and
+    # the RUNNING_ON_TIME branch below answers "running; no heartbeat artifact
+    # observed yet". The distinction is a live PID, which is exactly the
+    # difference between "started and quiet" and "nothing here".
+    if hb_mtime is None and resolved_pid is None:
+        base["state"] = "UNKNOWN"
+        base["reason"] = (
+            "no final verdict, no recorded PID and no log or artifact of any "
+            "kind under this project — there is no run here to report on. "
+            "This is NOT a pass and NOT a run in progress; it is the absence "
+            "of anything to look at")
+        return base
 
     if resolved_pid is None or alive is None:
         # No PID to probe liveness. Silence is still decisive evidence.
@@ -341,6 +402,23 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
 def summarize(rep: dict) -> str:
     st = rep.get("state")
     step = rep.get("current_step")
+    # #991 — the ONE line an operator actually reads. Without this, an
+    # unreadable plan renders as `step 'None' (0 done)`, which is exactly what
+    # a run that has completed nothing renders as, and the silence window that
+    # decided this verdict silently reverted to the default. Prefixed rather
+    # than appended so it cannot be cut off by a terminal width.
+    _pu = rep.get("plan_unreadable")
+    _pfx = ""
+    if _pu:
+        _pfx = (f"PLAN UNREADABLE ({_sr.sentence(_pu)}) — `current_step` and "
+                f"`steps_completed` below are NOT measurements, and the "
+                f"silence window is the {rep.get('max_silence_s')}s DEFAULT "
+                f"rather than this step's own. ")
+        return _pfx + _summarize_state(rep, st, step)
+    return _summarize_state(rep, st, step)
+
+
+def _summarize_state(rep: dict, st: Any, step: Any) -> str:
     if st == "DONE":
         return f"DONE — verdict={rep.get('verdict')} ({rep['phase']})"
     if st == "DIED":
@@ -374,21 +452,83 @@ _EXIT = {"DONE": 0, "RUNNING_ON_TIME": 0, "RUNNING": 0, "STUCK": 1,
          "DIED": 2, "UNKNOWN": 3}
 
 
+#: The linear phases, earliest first. `analog` and `phase23` are alternative
+#: shapes rather than points on this line, so they are not ordered here — they
+#: are still selected when they are the only evidence present.
+_PHASE_ORDER = ("phase1", "phase2", "phase3")
+
+
+def _phase_was_reached(project: Path, phase: str) -> bool:
+    """Did the run GET to this phase — whether or not it finished it?
+
+    Evidence, in the order it becomes available to a phase that is running:
+    its working tree, any log it writes, or its final report. A phase that
+    was killed has the first two and not the third, and that is exactly the
+    case `_detect_phase` used to be unable to see.
+    """
+    for fname in (project / "reports" / "orchestrator" / _PHASE_REPORTS[phase],
+                  project / "reports" / _PHASE_REPORTS[phase]):
+        if fname.is_file():
+            return True
+    if phase in ("phase2", "phase3") and (project / phase).is_dir():
+        return True
+    for pat in _PHASE_LOG_GLOBS.get(phase, []):
+        try:
+            if any(project.glob(pat)):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _detect_phase(project: Path) -> str:
-    """auto: the phase with the newest one_shot.json (most recent run),
-    else phase3 if its tree exists, else orchestrator."""
+    """auto: the FURTHEST phase the run reached, not the newest report.
+
+    THE DEFECT (vibe-ic#590). This took "the phase with the newest
+    `one_shot.json`". A phase that was KILLED never writes one, so the only
+    report on disk belonged to the last phase that SUCCEEDED — and `auto`
+    selected it. The failure mode chose the phase that hides it, and the later
+    a run died the more confidently this reported success:
+
+        killed mid-phase2, phase3 never started
+          auto          DONE — verdict=PASS (phase1)      rc 0
+          --phase phase2  STUCK — no output for 8221s     (the true answer)
+
+    Ordering by REACH inverts that. A phase with a working tree or a log and no
+    report is FURTHER than one that completed, because completing is what
+    produced the report the other one lacks. `phase23` and `analog` are
+    alternative run shapes rather than points on the phase1->3 line, so they are
+    chosen only when nothing on that line was reached.
+    """
+    # AN ORCHESTRATOR VERDICT MEANS THE RUN FINISHED, and it outranks reach.
+    # Ordering by reach without this check calls a COMPLETED run dead: phase3
+    # legitimately writes no report of its own when it is skipped or waived, so
+    # its tree exists, its report does not, and reach alone reads that as "died
+    # in phase3". Measured over the 182 tracked run dirs while writing this —
+    # 11 flipped 0 -> 1/2, and 3 of the first 4 inspected (ibex, sha256,
+    # opentitan_aes on the commercial PDK) had an orchestrator verdict on disk.
+    # Those are finished runs and calling them STUCK would be a false finding
+    # of exactly the kind this program exists to remove.
+    for cand in (project / "reports" / "orchestrator" / _PHASE_REPORTS["orchestrator"],
+                 project / "reports" / _PHASE_REPORTS["orchestrator"]):
+        if cand.is_file():
+            return "orchestrator"
+
+    for phase in reversed(_PHASE_ORDER):
+        if _phase_was_reached(project, phase):
+            return phase
+    # Off-line shapes: whichever left a report, newest first — the old rule,
+    # which is correct when there is no linear phase to be further than.
     newest_phase, newest_m = None, -1.0
-    for ph, fname in _PHASE_REPORTS.items():
-        for cand in (project / "reports" / "orchestrator" / fname,
-                     project / "reports" / fname):
+    for ph in ("phase23", "analog", "orchestrator"):
+        for cand in (project / "reports" / "orchestrator" / _PHASE_REPORTS[ph],
+                     project / "reports" / _PHASE_REPORTS[ph]):
             if cand.is_file():
                 m = cand.stat().st_mtime
                 if m > newest_m:
                     newest_m, newest_phase = m, ph
     if newest_phase:
         return newest_phase
-    if (project / "phase3").is_dir():
-        return "phase3"
     return "orchestrator"
 
 

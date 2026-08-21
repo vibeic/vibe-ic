@@ -107,7 +107,7 @@ def _find_entry(entries: List[dict], out_rel: str,
     """Return (matching_entry, reasons_if_none)."""
     reasons: List[str] = []
     matches = []
-    for e in entries:
+    for i, e in enumerate(entries):
         if not _declares(e, out_rel, out_sha):
             continue
         if e.get("exit_code", -1) != 0:
@@ -120,15 +120,22 @@ def _find_entry(entries: List[dict], out_rel: str,
                            f"tool '{e.get('tool')}' not in allowed "
                            f"{sorted(allowed_tools)}")
             continue
-        matches.append(e)
+        matches.append((i, e))
     if not matches:
         if not reasons:
             reasons.append(f"no entry in provenance.jsonl declares "
                            f"'{out_rel}' as an output")
         return None, reasons
-    # pick the most recent matching entry
-    matches.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-    return matches[0], []
+    # Pick the most recent matching entry. TIES BREAK TOWARD THE LATER LOG
+    # POSITION, not the earlier one: `timestamp` is second-resolution, so a
+    # correction written in the same second as the record it supersedes ties,
+    # and a stable descending sort would then hand back the SUPERSEDED entry —
+    # the opposite of "most recent". (The failure is safe-direction — the
+    # superseded digest no longer matches the file, so the check FAILs rather
+    # than passing — but it FAILs a corrected ledger for the wrong reason.)
+    matches.sort(key=lambda ie: (ie[1].get("timestamp", ""), ie[0]),
+                 reverse=True)
+    return matches[0][1], []
 
 
 def main(argv: List[str] | None = None) -> int:

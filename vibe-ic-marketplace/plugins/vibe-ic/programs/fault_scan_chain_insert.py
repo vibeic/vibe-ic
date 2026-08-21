@@ -51,6 +51,8 @@ from pathlib import Path
 
 import _path_layout as _pl
 import fault_atpg_run as _fatpg
+import floorplan_contract as _fpc
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +73,15 @@ SCAN_LIBERTY = {
               "gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib"),
     "ihp-sg13g2": ("/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/"
                    "sg13g2_stdcell_typ_1p20V_25C.lib"),
+    # NanGate45 / FreePDK45 (OpenROAD reference PDK). The container ships the
+    # typical-corner Liberty; `fault chain` needs exactly this to stitch the
+    # scan chain. Keyed by the same `nangate45` id fault_atpg_run.PDK_CONFIG now
+    # uses, so cell-MODEL and Liberty can never resolve from different libraries
+    # (the two-table invariant ORGANIC #410 established). See the PDK_CONFIG
+    # note there: this makes scan insertion RUN on a mapped NanGate45 netlist
+    # that was previously refused as pdk 'unmapped'.
+    "nangate45": ("/foss/pdks/nangate45/libs.ref/NangateOpenCellLibrary/lib/"
+                  "NangateOpenCellLibrary_typical.lib"),
 }
 
 # `fault chain`'s DFT port option names.  These are OPTION NAMES we pass, so
@@ -276,9 +287,237 @@ def resolve_liberty(pdk: str, override: str | None) -> tuple[str | None, str]:
                   f"(known: {sorted(SCAN_LIBERTY)}) — pass --liberty")
 
 
+# The project's OWN staged Liberty dir. A design on a PDK not in SCAN_LIBERTY
+# (a foundry PDK the container does not ship, sniffed to 'unmapped') stages its
+# corner libraries here — the SAME dir the pre-layout STA and pvt_matrix steps
+# already read. Using it is NOT the cross-foundry substitution the SCAN_LIBERTY
+# comment forbids: it is the design's own PDK, mounted under /work, so the chain
+# is built from the very cells the netlist is mapped to.
+_STAGED_LIBERTY_DIR = "input/pdk/liberty"
+# Typical (TT) process-corner designators — the corner SCAN_LIBERTY itself pins
+# for every built-in PDK (all its entries are `__tt_`/`_typ_`). Matched with the
+# same general convention used elsewhere; no PDK / vendor cell is hard-coded.
+_TYP_CORNER_RE = re.compile(
+    r"(?:^|[_/\-.\s:,=])(tt|typical|typ|nom)(?:[_/\-.\s:,=]|$)", re.IGNORECASE)
+
+
+def staged_own_liberty(project: Path) -> tuple[str | None, str]:
+    """(container /work Liberty path, note) for the project's OWN staged corner
+    libraries, or (None, note). PURE w.r.t. the project input.
+
+    Picks the TYPICAL corner when the file names disclose one; if exactly one
+    library is staged it is used unambiguously. Two-or-more staged with NO
+    identifiable typical corner is AMBIGUOUS and REFUSES (None) rather than
+    guess a corner — the same refuse-don't-guess stance as `resolve_liberty`.
+    """
+    lib_dir = project / _STAGED_LIBERTY_DIR
+    if not lib_dir.is_dir():
+        return None, f"no {_STAGED_LIBERTY_DIR}/ staged"
+    libs = sorted(lib_dir.glob("*.lib"))
+    if not libs:
+        return None, f"no *.lib in {_STAGED_LIBERTY_DIR}/"
+    typ = [p for p in libs if _TYP_CORNER_RE.search(p.name)]
+    if len(typ) == 1:
+        chosen = typ[0]
+    elif len(libs) == 1:
+        chosen = libs[0]
+    else:
+        return None, (
+            f"{len(libs)} staged libraries and no single TYPICAL corner "
+            f"identifiable by name ({[p.name for p in libs]}) — refusing to "
+            f"guess a corner")
+    return (f"/work/{_STAGED_LIBERTY_DIR}/{chosen.name}",
+            f"project-staged {_STAGED_LIBERTY_DIR}/{chosen.name} (own PDK)")
+
+
+# ---------------------------------------------------------------------------
+# `inout` port handling — `fault chain` cannot parse a bidirectional port
+# ---------------------------------------------------------------------------
+# The pure netlist port helpers (find_inout_ports / port_is_connected /
+# port_list_successor / strip_inout_ports / restore_inout_ports) live in
+# `_dft_netlist_ports.py`, shared with `fault_atpg_run.py`'s ATPG cut — both
+# fault entry points abort on an inout port.  Re-exported here so this module's
+# callers and its tests keep referring to them unqualified.
+from _dft_netlist_ports import (  # noqa: E402,F401
+    find_inout_ports, port_is_connected, port_list_successor,
+    strip_inout_ports, restore_inout_ports)
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+
+def decide_skip_boundary(project: Path, mode: str,
+                         top_module: str | None) -> tuple[bool, dict]:
+    """Resolve the `--skip-boundary` decision.  PURE w.r.t. the project input.
+
+    `mode` is one of "auto" (default), "on", "off":
+      * "on"  — always skip the boundary register (explicit override);
+      * "off" — never skip it (explicit override, restores legacy default);
+      * "auto" — DETERMINISTIC selection: skip iff the design is a fixed-pinout
+        wrapper (see floorplan_contract.is_fixed_pinout_wrapper), because its
+        ports are a parent interface, not chip pads.  No agent chooses this.
+
+    Returns (skip: bool, evidence: dict).  The evidence records the mode and,
+    in auto mode, the fixed-pinout contract that drove the decision — so a
+    reader can audit WHY the boundary register was or was not inserted.
+    """
+    if mode == "on":
+        return True, {"mode": "on",
+                      "reason": "explicit --skip-boundary=on override"}
+    if mode == "off":
+        return False, {"mode": "off",
+                       "reason": "explicit --skip-boundary=off override "
+                                 "(legacy default: boundary scan inserted)"}
+    # auto
+    try:
+        is_fixed, ev = _fpc.is_fixed_pinout_wrapper(project, top_module)
+    except Exception as exc:                                   # noqa: BLE001
+        # A detection failure must NEVER silently drop the boundary register —
+        # fall back to the legacy default (insert it) and say why.
+        return False, {"mode": "auto", "detection_error": str(exc),
+                       "reason": "fixed-pinout detection failed → legacy "
+                                 "default (boundary scan inserted)"}
+    ev = dict(ev)
+    ev["mode"] = "auto"
+    return is_fixed, ev
+
+
+# `--skip-boundary` was added to the `fault` fork after image 0.2.52 (present in
+# 0.2.54+; MEASURED: `fault chain --help` on 0.2.52 does NOT list it, on 0.2.54
+# does — same 0.9.4 binary string, rebuilt between tags). The boundary decision
+# in `decide_skip_boundary` is PURE w.r.t. the project and image-INDEPENDENT, so
+# on a fixed-pinout wrapper `auto` decides skip=True regardless of image. If that
+# runs against an older `fault` the binary REJECTS the flag: MEASURED
+#   `Error: Unknown option '--skip-boundary'` -> RC=64, no netlist produced.
+# Without this classifier the failure surfaces as the generic "produced no scan
+# netlist" and the wrapper that MOST needs skip-boundary silently loses its scan
+# chain, the real cause (image too old) buried in log_tail with no remedy. This
+# is chip-AGNOSTIC — it keys on the TOOL's own error string, not on any design.
+_SKIP_BOUNDARY_UNSUPPORTED_RE = re.compile(
+    r"(?:unknown|unrecognized|unexpected|invalid)\s+option[^\n]*--skip-boundary",
+    re.IGNORECASE)
+
+
+def skip_boundary_unsupported_in_log(log: str) -> bool:
+    """True iff `fault chain`'s output shows it rejected `--skip-boundary` as an
+    unsupported option.  PURE — a string check on the tool's own error,
+    unit-testable without Docker.
+
+    This detects the SYMPTOM only.  It does NOT establish the cause: the same
+    error is produced both by a build that genuinely predates the flag and by a
+    step that ran a DIFFERENT IMAGE than the run declared (measured: a run
+    pinned to and verifying 0.2.58 executed this step in stock
+    `hpretl/iic-osic-tools:latest`).  The caller names the image it used and
+    lists both causes; do not re-collapse them to one here."""
+    return bool(_SKIP_BOUNDARY_UNSUPPORTED_RE.search(log or ""))
+
+
+# `fault chain` builds the scan wrapper's module HEADER from the design's own
+# port list plus the scan pins (sin/sout/shift/tck/test), but declares the
+# chain's reset in the BODY under the fixed name `rst`. When the design's reset
+# is called anything else — `rst_ni`, `resetn`, `rst_n`, … — `rst` is declared
+# and never listed, so fault's own yosys re-synthesis rejects the netlist it
+# just wrote and NOTHING is published.
+#
+# MEASURED (vibe-ic, opentitan_aes x sky130A, image ghcr.io/vibeic/vibeic-eda:
+# 0.2.54): `fault chain` reported "Internal scan chain successfully
+# constructed. Length: 66 / Boundary scan cells ... 105 / Total ... 171" and
+# then died with
+#   chained.v.chain-intermediate.v:10209: ERROR: Module port `\rst' is not
+#   declared in module header.
+# The chain was BUILT and thrown away. Before this classifier the report said
+# only "`fault chain` produced no scan netlist" + a log tail, so the next blind
+# run could not tell this from a genuine no-flops design.
+_MISSING_HEADER_PORT_RE = re.compile(
+    r"Module port `\\?([^']+?)'\s+is not declared in module header", re.I)
+
+
+def chain_resynth_missing_header_ports(log: str) -> list:
+    """Port names `fault chain`'s own re-synthesis rejected as body-declared
+    but absent from the wrapper's module header, in first-seen order.
+
+    PURE — a string check on the tool's own error, unit-testable without
+    Docker. Empty list means this failure mode is not present."""
+    seen: list = []
+    for m in _MISSING_HEADER_PORT_RE.finditer(log or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+# The SECOND way `fault chain` builds a chain and then throws it away.
+#
+# fault's internal yosys re-synthesis must bind every module the netlist
+# instantiates. A hard macro supplied to the flow as LEF + Liberty only — an
+# ordinary design input, and what every SRAM/OTP/PHY IP ships — has no Verilog
+# model in that yosys invocation, so `hierarchy -check` aborts. The chain is
+# already built when this happens.
+#
+# Before this classifier the report carried only
+#     "`fault chain` produced no scan netlist"
+# which is TRUE and ADJACENT: it names the missing artefact, not the reason,
+# and is byte-indistinguishable from a design that legitimately has no
+# flip-flops to chain. Downstream, `cut_netlist.v` is then absent and the DT1 /
+# DT2 transition- and path-delay steps record "NEVER RAN — precondition unmet",
+# so the whole DFT tail reads as a capability that was never exercised rather
+# than as one input the tool was never given.
+#
+# MEASURED (a design whose OTP macro is staged as LEF + Liberty with no Verilog
+# model, ghcr.io/vibeic/vibeic-eda:0.2.65) — the tool's own lines:
+#     Internal scan chain successfully constructed. Length: 271
+#     Boundary scan cells successfully chained. Length:  3
+#     Total scan-chain length:  274
+#     Resynthesizing with yosys…
+#     ERROR: Module `\<MACRO>' referenced in module `\<top>.original' in cell
+#            `\<inst>' is not part of the design.
+#     A yosys error has occurred.
+#
+# chip-AGNOSTIC: a pure string check on yosys' own error text. No vendor, SKU,
+# process node or part number participates.
+_UNRESOLVED_MODULE_RE = re.compile(
+    r"Module\s+`\\?([^']+?)'\s+referenced\s+in\s+module\s+`\\?[^']*?'"
+    r"\s+in\s+cell\s+`\\?[^']*?'\s+is\s+not\s+part\s+of\s+the\s+design",
+    re.I)
+
+#: `fault chain` prints this only after it has actually constructed a chain.
+#: It is what licenses the "BUILT then discarded" claim — without it this
+#: program would be asserting a build it never saw evidence of.
+_CHAIN_TOTAL_LEN_RE = re.compile(
+    r"Total\s+scan-chain\s+length:\s*(\d+)", re.I)
+
+
+def chain_resynth_unresolved_modules(log: str) -> list:
+    """Module names `fault chain`'s own re-synthesis could not bind, in
+    first-seen order.
+
+    These are modules the netlist INSTANTIATES but for which that yosys
+    invocation was handed no model — typically a hard macro supplied as
+    LEF/Liberty only. PURE — a string check on the tool's own error,
+    unit-testable without Docker. Empty list means this failure mode is not
+    present."""
+    seen: list = []
+    for m in _UNRESOLVED_MODULE_RE.finditer(log or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def chain_reported_total_length(log: str):
+    """The total scan-chain length `fault chain` reported CONSTRUCTING, or
+    None when it never said it built one.
+
+    Guards the `chain_built_then_discarded` claim: a report that asserts a
+    chain was built and discarded, on a log that never showed a chain being
+    built, would be this program inventing the very kind of adjacent fact the
+    classifier exists to remove. PURE."""
+    last = None
+    for last in _CHAIN_TOTAL_LEN_RE.finditer(log or ""):
+        pass
+    return int(last.group(1)) if last else None
+
 
 def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk: str, reset: str | None = None,
@@ -286,11 +525,19 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
               liberty_override: str | None = None,
               dff_cells_override: str | None = None,
               pdk_dir: Path | None = None,
+              skip_boundary: str = "auto",
+              top_module: str | None = None,
               timeout: int = 900) -> tuple[int, dict]:
     """Insert a real scan chain.  Returns (exit_code, report_dict).
 
     Never raises for a tool failure: every outcome comes back as a report the
     caller can write verbatim, so an absent artefact is never silence.
+
+    `skip_boundary` ("auto"|"on"|"off", see decide_skip_boundary) governs
+    whether `fault chain` inserts a top-level boundary-scan register.  In the
+    default "auto" mode a fixed-pinout wrapper (FP_DEF_TEMPLATE) DETERMINISTIC-
+    ally selects `--skip-boundary`; every other design keeps the legacy
+    default.  The internal scan chain is inserted either way.
     """
     # Same resolver the ATPG producer uses — `fault chain` needs a
     # library-mapped netlist for exactly the reason `fault cut` does, so the
@@ -319,6 +566,25 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             pdk, pdk_cfg = sniffed, _fatpg.PDK_CONFIG[sniffed]
 
     liberty, lib_note = resolve_liberty(pdk, liberty_override)
+    if liberty and pdk == "gf180" and not liberty_override:
+        # Same staleness as fault_atpg_run's cell-model resolution — ciel's
+        # gf180mcu path is content-addressed and SCAN_LIBERTY's hash is a
+        # point-in-time fallback. Re-resolve live before trusting it.
+        liberty = _pcm.materialize_gf180_paths(
+            [liberty],
+            lambda argv, t: _fatpg._run_docker(project, argv, timeout=t,
+                                               pdk_dir=pdk_dir))[0]
+    if not liberty:
+        # PDK not in SCAN_LIBERTY and no explicit --liberty: fall back to the
+        # design's OWN staged corner libraries. A foundry PDK the container does
+        # not ship sniffs to 'unmapped', and the runner forwards no --liberty
+        # for it — yet the design stages its libraries under input/pdk/liberty/
+        # (the same dir STA/pvt already read). Without this, scan insertion is
+        # unreachable for every non-built-in PDK that stages its own libs, which
+        # then leaves step 11 MISSING and VOIDS the whole DFT-dependent tail.
+        staged, staged_note = staged_own_liberty(project)
+        if staged:
+            liberty, lib_note = staged, staged_note
     if not liberty:
         return 2, {"stage": "liberty", "netlist": netlist_rel, "pdk": pdk,
                    "error": lib_note}
@@ -341,28 +607,208 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     (project / work_rel).mkdir(parents=True, exist_ok=True)
     out_rel = f"{work_rel}/chained.v"
 
+    # `fault chain` aborts on any `inout` port (see find_inout_ports).  Strip
+    # UNCONNECTED inout ports from the netlist fault reads; connected ones stay
+    # (and are reported).  The stripped ports are restored into fault's output.
+    inout_ports = find_inout_ports(netlist_text)
+    stripped_inout: dict = {}
+    stripped_successors: dict = {}
+    connected_inout: list = []
+    fault_input_rel = netlist_rel
+    for _name, _decl in inout_ports.items():
+        if port_is_connected(netlist_text, _name):
+            connected_inout.append(_name)
+        else:
+            stripped_inout[_name] = _decl
+            stripped_successors[_name] = port_list_successor(netlist_text, _name)
+    if stripped_inout:
+        stripped_text = strip_inout_ports(netlist_text, list(stripped_inout))
+        # Redirect ONLY if every targeted port actually left the netlist —
+        # otherwise leave fault to fail honestly on the original.
+        if not (set(find_inout_ports(stripped_text)) & set(stripped_inout)):
+            fault_input_rel = f"{work_rel}/fault_input.v"
+            (project / fault_input_rel).write_text(stripped_text,
+                                                   encoding="utf-8")
+        else:
+            stripped_inout.clear()
+
+    # Boundary-scan decision — DETERMINISTIC in the default "auto" mode: a
+    # fixed-pinout wrapper (FP_DEF_TEMPLATE) gets `--skip-boundary`.  Recorded
+    # in the report so the choice is auditable, never a silent flag.
+    skip_boundary_flag, skip_boundary_evidence = decide_skip_boundary(
+        project, skip_boundary, top_module)
+
     cmd = ["fault", "chain",
            "--liberty", liberty,
            "--clock", clock,
            "--dff", dff_cells,
            "-o", f"/work/{out_rel}"]
+    if skip_boundary_flag:
+        cmd.append("--skip-boundary")
     if reset:
         cmd += ["--reset", reset]
         if reset_active_low:
             cmd += ["--reset-active-low"]
-    cmd.append(f"/work/{netlist_rel}")
+    cmd.append(f"/work/{fault_input_rel}")
 
     ec, out, err = _fatpg._run_docker(project, cmd, timeout=timeout,
                                       pdk_dir=pdk_dir)
     log = (out + "\n" + err)
     produced = project / out_rel
     if ec != 0 or not produced.is_file():
-        return 1, {"stage": "chain", "exit": ec, "netlist": netlist_rel,
-                   "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
-                   "log_tail": log[-1500:],
-                   "error": "`fault chain` produced no scan netlist"}
+        err_report = {"stage": "chain", "exit": ec, "netlist": netlist_rel,
+                      "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
+                      "skip_boundary": skip_boundary_flag,
+                      "skip_boundary_mode": skip_boundary,
+                      "skip_boundary_evidence": skip_boundary_evidence,
+                      "log_tail": log[-1500:],
+                      "error": "`fault chain` produced no scan netlist"}
+        if skip_boundary_flag and skip_boundary_unsupported_in_log(log):
+            # DEGRADE LOUDLY, never silently: the deterministic decision was to
+            # skip the boundary register (correct for a fixed-pinout wrapper),
+            # but THIS build of `fault` predates `--skip-boundary` and rejected
+            # it. Say the cause and BOTH remedies, so the next blind run's
+            # failure is self-explaining instead of a generic "no scan netlist".
+            err_report["skip_boundary_unsupported_by_binary"] = True
+            # NAME THE IMAGE THAT ACTUALLY RAN. The previous wording asserted a
+            # cause it never measured — "this build of the `fault` binary
+            # predates the flag" — and the first thing a reader does with that
+            # is check their image and find it is new enough. MEASURED on
+            # caravel_user_project x sky130A (v1.9.65): the run was pinned to,
+            # and reports/container_image.json VERIFIED,
+            # the vibeic-eda fork at tag 0.2.58 (spelled without the registry
+            # prefix on purpose: this is a HISTORICAL MEASUREMENT, not a live
+            # image pointer for `sync_image_version.py` to keep in step), whose
+            # `fault chain --help` DOES
+            # list `--skip-boundary` — while this step resolved its own image
+            # independently and ran stock hpretl/iic-osic-tools:latest, which
+            # does not. "Your image is too old" was false; "a different image
+            # ran than the one you pinned" was true. A diagnostic that names the
+            # wrong cause costs more than one that names none, so this states
+            # the image identity as the FIRST fact and offers the version
+            # explanation only as one of the possibilities.
+            err_report["image_used"] = _fatpg.DOCKER_IMAGE
+            err_report["error"] = (
+                f"`fault chain` rejected `--skip-boundary`. The image this step "
+                f"ran in was {_fatpg.DOCKER_IMAGE!r} — verify it with "
+                f"`docker run --rm --entrypoint bash {_fatpg.DOCKER_IMAGE} -lc "
+                f"'fault chain --help' | grep skip-boundary` before concluding "
+                f"anything about the binary's age. TWO distinct causes produce "
+                f"this exact error: (1) the image is a build that predates the "
+                f"flag (added to the fork after 0.2.52; MEASURED absent on "
+                f"0.2.52, present on 0.2.54+); or (2) THIS STEP RAN A DIFFERENT "
+                f"IMAGE THAN THE RUN DECLARED — it resolves an image of its own "
+                f"by local-tag presence and falls back to the upstream "
+                f"distribution, which ships stock tools without this project's "
+                f"forks, so a run pinned to a new-enough image can still land "
+                f"here. Compare the value above against "
+                f"reports/container_image.json:image_ref. The fixed-pinout "
+                f"wrapper's correct DFT is internal-scan-only, which needs "
+                f"`--skip-boundary`. Remedies: (a) make this step use the run's "
+                f"image — set VIBEIC_fatpg.DOCKER_IMAGE to it (the one-shot runner now "
+                f"exports this automatically from the verified container); "
+                f"(b) run in an image whose `fault chain --help` lists the flag "
+                f"(>=0.2.54); or (c) set VIBEIC_DFT_SKIP_BOUNDARY=off to accept "
+                f"legacy boundary-scan insertion — but on a fixed-pinout wrapper "
+                f"that re-introduces the SS-corner setup violation (#604) and a "
+                f"large area blow-up.")
+            return 1, err_report
+        _missing_hdr = chain_resynth_missing_header_ports(log)
+        if _missing_hdr:
+            # DEGRADE LOUDLY: the chain was CONSTRUCTED and then discarded by
+            # fault's own re-synthesis. Say so, name the port, and name the
+            # remedy — otherwise this is indistinguishable from a design that
+            # legitimately has no scan chain to build.
+            err_report["chain_resynth_missing_header_ports"] = _missing_hdr
+            err_report["chain_built_then_discarded"] = True
+            err_report["error"] = (
+                f"`fault chain` BUILT the scan chain and then rejected its own "
+                f"intermediate netlist: port(s) {_missing_hdr} are declared in "
+                f"the wrapper's body but absent from its module header, so the "
+                f"re-synthesis fault runs internally fails and nothing is "
+                f"published. This is an upstream `fault chain` wrapper defect, "
+                f"not a property of this design: fault names the chain reset "
+                f"`rst` in the body while the header carries the design's own "
+                f"reset name, so EVERY design whose reset is not literally "
+                f"`rst` (rst_ni, rst_n, resetn, reset, …) hits it. The chain "
+                f"itself is sound — see the constructed/boundary/total lengths "
+                f"in log_tail. Remedies: (a) run in an image whose `fault "
+                f"chain` emits the port in the header; or (b) re-drive the "
+                f"design with its reset port named `rst`. VERIFIED on "
+                f"opentitan_aes x sky130A: adding the missing name to the "
+                f"header makes the identical intermediate elaborate under "
+                f"`yosys hierarchy -check` with rc=0.")
+            return 1, err_report
+        _unresolved = chain_resynth_unresolved_modules(log)
+        if _unresolved:
+            # DEGRADE LOUDLY, exactly as the header-port branch above does.
+            # The generic "produced no scan netlist" is true and useless here:
+            # it describes the absent artefact, not the one missing input that
+            # caused it, and it reads the same as a design with no flops.
+            err_report["chain_resynth_unresolved_modules"] = _unresolved
+            _total_len = chain_reported_total_length(log)
+            if _total_len is not None:
+                # Only claim BUILT-then-discarded when the tool itself said it
+                # built one. Otherwise name the unresolved module and stop.
+                err_report["chain_built_then_discarded"] = True
+                err_report["chain_reported_total_length"] = _total_len
+            err_report["error"] = (
+                f"`fault chain`'s own yosys re-synthesis could not bind "
+                f"module(s) {_unresolved}: the netlist INSTANTIATES them but "
+                f"that yosys invocation was handed no model for them, so "
+                f"`hierarchy -check` aborts and nothing is published"
+                + (f" — AFTER the chain was successfully constructed "
+                   f"(total scan-chain length {_total_len}; see log_tail). "
+                   if _total_len is not None else ". ")
+                + f"This is a MISSING INPUT, not a property of this design "
+                f"and not an engine crash: a hard macro staged as LEF + "
+                f"Liberty only (SRAM / OTP / PHY IP normally is) has no "
+                f"Verilog view for `fault chain` to elaborate. Consequence if "
+                f"unread: `cut_netlist.v` is never written, so the DT1 "
+                f"transition-fault and DT2 path-delay steps both record "
+                f"'NEVER RAN — precondition unmet' and the DFT tail looks "
+                f"like an unexercised capability rather than one absent "
+                f"input. Remedies: (a) give the re-synthesis a blackbox stub "
+                f"for the macro built from its Liberty/LEF port list — the "
+                f"flow already emits exactly this for the back end as "
+                f"reports/phase3/physical_cell_stubs.v, and phase 3 already "
+                f"discovers the macro library set via _discover_local_macros "
+                f"over input/pdk_local/; or (b) stage a synthesizable "
+                f"(blackbox-annotated) Verilog view of the macro alongside "
+                f"its LEF/Liberty. NOTE `fault chain --help` declares "
+                f"'-l, --liberty <liberty>  Liberty file. (Required.)' — "
+                f"singular and NOT repeatable, so passing the macro's Liberty "
+                f"as a second --liberty is not available.")
+            return 1, err_report
+        if connected_inout:
+            # A CONNECTED bidirectional port cannot be stripped losslessly and
+            # `fault chain` cannot represent it — name it, do not hide it.
+            err_report["connected_inout_ports_unhandled"] = connected_inout
+            err_report["error"] += (
+                f" — netlist has CONNECTED inout port(s) {connected_inout} that "
+                f"`fault chain` cannot classify and this program cannot strip "
+                f"losslessly (they carry real nets). Scan insertion on a design "
+                f"with a driven bidirectional top-level port is an open backlog "
+                f"item (bidirectional boundary-scan cell).")
+        return 1, err_report
 
     chained_text = produced.read_text(encoding="utf-8", errors="replace")
+    if stripped_inout:
+        # Restore the stripped inout port(s) into fault's published netlist, at
+        # their original position, with their exact original declaration.
+        chained_text = restore_inout_ports(chained_text, stripped_inout,
+                                           stripped_successors)
+        missing = [n for n in stripped_inout
+                   if n not in find_inout_ports(chained_text)]
+        if missing:
+            # A published netlist MUST carry every original design port — never
+            # ship one silently missing a pin.
+            return 1, {"stage": "restore", "exit": ec, "netlist": netlist_rel,
+                       "inout_ports_stripped": list(stripped_inout),
+                       "error": f"failed to restore inout port(s) {missing} "
+                                f"into the scan netlist — refusing to publish a "
+                                f"netlist missing a design port"}
+        produced.write_text(chained_text, encoding="utf-8")
     meta = parse_chain_metadata(chained_text)
     verdict = assess(parse_chain_log(log), meta, count_flops(netlist_text))
 
@@ -381,7 +827,21 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         "dff_cells": dff_cells,
         "clock": clock,
         "reset": reset,
+        # Whether the top-level boundary-scan register was inserted, and WHY.
+        # `--skip-boundary` is the deterministic choice for a fixed-pinout
+        # wrapper (ports are a parent interface, not chip pads) — it removes
+        # the SS-corner setup violation (#604) and the +707% area blow-up while
+        # the internal scan chain is preserved.
+        "skip_boundary": skip_boundary_flag,
+        "skip_boundary_mode": skip_boundary,
+        "skip_boundary_evidence": skip_boundary_evidence,
         "chain_exit": ec,
+        # `inout` port handling (see find_inout_ports): which bidirectional
+        # ports were stripped for `fault chain` and restored into its output,
+        # and which connected ones could not be handled.
+        "inout_ports_stripped_and_restored": list(stripped_inout),
+        "inout_ports_connected_unhandled": connected_inout,
+        "fault_input_netlist": fault_input_rel,
         # The five ports `fault chain` adds.  KNOWN because they are the
         # option names this program passes, not sniffed from the netlist.
         "dft_ports": list(DFT_PORTS),
@@ -431,6 +891,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--liberty", default=None,
                    help="Container-absolute .lib path.  Wins over SCAN_LIBERTY.")
     p.add_argument("--dff-cells", default=None)
+    p.add_argument("--skip-boundary", choices=("auto", "on", "off"),
+                   default="auto",
+                   help="Insert a top-level boundary-scan register? "
+                        "'auto' (default) skips it iff the design is a "
+                        "fixed-pinout wrapper (FP_DEF_TEMPLATE) — its ports "
+                        "are a parent interface, not chip pads; 'on' always "
+                        "skips; 'off' always inserts (legacy default).")
+    p.add_argument("--top-module", default=None,
+                   help="Top module name — used by 'auto' skip-boundary "
+                        "detection to match the fixed-pinout DEF template to "
+                        "THIS top.")
     p.add_argument("--pdk-dir", default=None)
     p.add_argument("--json", default=SCAN_JSON_REL,
                    help=f"Report JSON path relative to project "
@@ -449,6 +920,7 @@ def main(argv: list[str] | None = None) -> int:
         reset=args.reset, reset_active_low=args.reset_active_low,
         liberty_override=args.liberty, dff_cells_override=args.dff_cells,
         pdk_dir=Path(args.pdk_dir).resolve() if args.pdk_dir else None,
+        skip_boundary=args.skip_boundary, top_module=args.top_module,
         timeout=args.timeout)
 
     out = project / args.json
@@ -461,6 +933,8 @@ def main(argv: list[str] | None = None) -> int:
               f"{report['boundary_chain_length']} boundary; input flops="
               f"{report['input_flop_count']}; "
               f"matches={report['chain_length_matches_flop_count']}; "
+              f"skip_boundary={report['skip_boundary']} "
+              f"(mode={report['skip_boundary_mode']}); "
               f"area {report['area_instances_before']} -> "
               f"{report['area_instances_after']} instances "
               f"({report['area_instances_delta_pct']}%)")

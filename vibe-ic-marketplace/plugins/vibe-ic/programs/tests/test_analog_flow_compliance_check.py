@@ -50,7 +50,18 @@ def test_pass_all_steps(tmp_path):
     (ad / "spec.json").write_text("{}")
     (ad / "topology.md").write_text("# LDO Topology\n")
     (ad / "ldo.sp").write_text(".title LDO\n.end\n")
-    (ad / "corner_results.json").write_text("{}")
+    # WAS `{}`. This test asserts every A1-A9 cell reads PASS, and with an
+    # empty object in it the A4 cell was reading PASS off a corner artefact
+    # that declares no corners, no provenance and no statement of what circuit
+    # it measured — a presence probe wearing a verdict's clothes. The A4 cell
+    # is delegated to the A4 gate's own certification predicates, so the
+    # fixture supplies what a signed-off A4 actually looks like.
+    (ad / "corner_results.json").write_text(json.dumps({
+        "netlist_provenance": "a3_netlist",
+        "design_content": "structure_and_geometry",
+        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
+        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
+    }))
     (ad / "layout.mag").write_text("magic\n")
     # A6 per-block PV markers (DRC clean + LVS match).
     (ad / "drc_clean.flag").write_text("violations: 0\n")

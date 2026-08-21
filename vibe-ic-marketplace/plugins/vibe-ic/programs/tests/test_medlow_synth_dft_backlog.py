@@ -505,6 +505,13 @@ def _step11_happy_path(tmp_path: Path) -> Path:
     rep.mkdir(parents=True)
     (dft / "scan_netlist.v").write_text("module scan; endmodule\n")
     (dft / "atpg_coverage.rpt").write_text("Stuck-at %    : 96.00\n")
+    # The ENGINE's own machine-readable coverage metadata. `fault atpg` writes
+    # `coverage.yml` beside its report (dft_atpg_coverage_check._ENGINE_COVERAGE_META),
+    # and bcd444425 added it to step 11's required_outputs. A run that measured and
+    # left no coverage.yml is a shape the engine does not produce, so omitting it made
+    # this "happy path" report 5 of 6 declared outputs present.
+    (dft / "coverage.yml").write_text(
+        "ratio: 9.6e-1\nfaultPoints:\n  - {node: n0, sa0: true, sa1: true}\n")
     (dft / "tv.json").write_text('{"vectors": []}')
     (dft / "cell_model_combined.v").write_text("// combined\n")
     (dft / "transition_atpg_plan.md").write_text("# plan\n")
@@ -597,47 +604,96 @@ def test_step11_tv_json_is_not_implied_by_the_declared_artefacts(tmp_path,
     assert n_present == 1 and n_total == 2, (n_present, n_total, ec, report)
 
 
-def test_step11_tv_json_population_is_zero_so_it_stays_undeclared():
-    """THE SECOND, INDEPENDENT REASON THE DECLARATION IS WITHDRAWN.
+def test_step11_tv_json_stays_undeclared_because_its_producer_can_fail_alone():
+    """THE SECOND, INDEPENDENT REASON THE DECLARATION IS WITHDRAWN — RE-DERIVED.
 
-    Denominator, stated: a project snapshot is any directory holding a tracked
-    file under `{reports,phase1,phase2,phase3,steps}/`. Across the repo's
-    tracked benchmark data there are 17 of them, over 9 designs. NONE carries
-    tv.json, scan_netlist.v or atpg_coverage.rpt, so the proposed declaration
-    had no evidence base at all — this repo does not build for a population of
-    one (vibe-ic#439), let alone zero. If a snapshot ever does carry tv.json
-    this test goes red and the declaration gets re-derived on real data."""
-    top = subprocess.run(["git", "-C", str(PLUGIN_ROOT), "rev-parse",
-                          "--show-toplevel"], capture_output=True, text=True)
-    if top.returncode != 0 or not top.stdout.strip():
-        pytest.skip("plugin is not inside a git checkout")
-    repo = top.stdout.strip()
-    ls = subprocess.run(["git", "-C", repo, "ls-files", "benchmark-data/ic"],
-                        capture_output=True, text=True)
-    if ls.returncode != 0 or not ls.stdout.strip():
-        pytest.skip("benchmark-data/ic not tracked in this checkout")
-    files = [ln for ln in ls.stdout.splitlines() if ln.strip()]
+    The earlier form of this test asserted the reason by PROXY: "no snapshot in
+    benchmark-data/ic carries tv.json, so the proposal has no evidence base."
+    That proxy has now been retired by data — caravel_user_project x sky130A
+    landed carrying tv.json, scan_netlist.v and atpg_coverage.rpt together — and
+    the test fired exactly as its own docstring promised it would. This is the
+    re-derivation it demanded.
 
-    import re as _re
-    snap_re = _re.compile(r"^(.*?)/(reports|phase1|phase2|phase3|steps)/")
-    snapshots = {m.group(1) for f in files for m in [snap_re.match(f)] if m}
-    designs = {f.split("/")[2] for f in files if len(f.split("/")) >= 4}
-    assert snapshots, "denominator must not be empty"
+    THE CO-OCCURRENCE IS NOT EVIDENCE FOR THE DECLARATION. That snapshot is a
+    SUCCESSFUL run, and the withdrawal never rested on success; it rests on the
+    failure path, which no passing artefact can speak to. A sample where all
+    three exist cannot show whether two can exist without the third.
 
-    carriers = sorted(s for s in snapshots
-                      if any(f.startswith(s + "/") and
-                             ("/tv.json" in f or "/scan_netlist.v" in f or
-                              "/atpg_coverage.rpt" in f)
-                             for f in files))
-    assert not carriers, (
-        f"{len(carriers)}/{len(snapshots)} snapshots ({len(designs)} designs) "
-        f"now carry step-11 ATPG artefacts: {carriers}. Re-derive whether "
-        f"phase2/stage2/dft/tv.json should be declared, on THAT data.")
+    So the reason is re-asserted where it actually lives — in the producer.
+    `fault atpg -o <tv>` writes tv.json inside the ENGINE, so it exists only if
+    that subprocess succeeded. `atpg_coverage.rpt` is written afterwards in
+    PYTHON, deliberately unguarded (the module says so at length: "emitted at the
+    point in its lifecycle where the real data first exists", so a completed
+    stuck-at measurement cannot be lost to a later timeout). On the cut-ok /
+    atpg-failed shape the two DECLARED entries land and tv.json does not — the
+    new red the original proposal's basis denied.
+
+    Declaring tv.json therefore still needs the producer handled first: write the
+    Python-side artefacts only when the engine ran, or declare all three
+    together. When someone does that, the guard below appears, this test goes
+    red, and the declaration gets re-derived — that time in FAVOUR."""
+    import ast as _ast
+    path = PLUGIN_ROOT / "programs/fault_atpg_run.py"
+    src = path.read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "run_fault")
+
+    # The stuck-at ATPG invocation and the emit of the DECLARED artefact, by
+    # line, so the window is the producer's own control flow rather than a text
+    # offset that any edit above would shift.
+    run_ln = min(n.lineno for n in _ast.walk(fn)
+                 if isinstance(n, _ast.Call) and "atpg_shell" in _ast.dump(n)
+                 and getattr(n.func, "id", "") == "_run_docker")
+    emit_ln = min(n.lineno for n in _ast.walk(fn)
+                  if isinstance(n, _ast.Call)
+                  and getattr(n.func, "id", "") == "_write_coverage_rpt")
+    assert run_ln < emit_ln, (run_ln, emit_ln)
+
+    # Returns belonging to run_fault ITSELF — walking the whole subtree would
+    # also collect the returns of `_assemble_report`, the closure defined in
+    # between, and report a guard that is not one. Measured while writing this:
+    # the first version scanned raw text for a 4-space `return`, so it missed
+    # the 8-space return inside `if ec != 0:` — the exact guard it exists to
+    # catch — and passed while a sibling test did the work.
+    inner = {id(n) for f in _ast.walk(fn)
+             if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda))
+             and f is not fn
+             for n in _ast.walk(f)}
+    guards = [n.lineno for n in _ast.walk(fn)
+              if isinstance(n, _ast.Return) and id(n) not in inner
+              and run_ln < n.lineno < emit_ln]
+    assert not guards, (
+        "fault_atpg_run.run_fault now returns early between the ATPG run "
+        f"(line {run_ln}) and the emit of atpg_coverage.rpt (line {emit_ln}): "
+        f"lines {guards}. If the declared artefacts are now written only when "
+        "the engine ran, re-derive whether phase2/stage2/dft/tv.json should be "
+        "declared alongside them.")
 
     decl = _flow_steps()["11"].get("required_outputs") or []
     assert not any("tv.json" in d for d in decl), (
-        f"tv.json is declared while its population is 0/{len(snapshots)}: "
-        f"{decl}")
+        "tv.json is declared while its producer can still fail alone: " + str(decl))
+
+
+def test_step11_the_retired_population_argument_is_recorded_as_retired():
+    """A withdrawal that keeps citing a reason the data has since falsified is a
+    stale record — this repo has been bitten by suppressions that outlived their
+    truth. Ground (b), "the population is ZERO", was true when written and is
+    now false: caravel_user_project x sky130A carries all three artefacts. The
+    flow file must say so, and must still carry ground (a), which stands.
+
+    Reads the YAML TEXT, not the parsed document: the whole argument lives in
+    comments, which `yaml.safe_load` discards — a parsed-document check here
+    would inspect nothing and pass forever."""
+    raw = FLOW_YAML.read_text(encoding="utf-8")
+    i = raw.index('phase2/stage2/dft/tv.json — the ATPG test vectors')
+    j = raw.index('- "phase2/stage2/dft/transition_atpg_plan.md"', i)
+    block = raw[i:j]
+    assert "The population is ZERO" not in block, (
+        "the flow file still withdraws tv.json on a population argument the "
+        "benchmark data has since falsified")
+    assert "written by\n" in block or "ENGINE" in block, (
+        "ground (a) — the producer can fail alone — must remain stated")
 
 
 def test_step11_declaration_is_satisfiable_by_a_successful_run(tmp_path):

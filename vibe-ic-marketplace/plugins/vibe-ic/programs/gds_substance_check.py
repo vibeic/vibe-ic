@@ -105,6 +105,9 @@ RT_SREF = 0x0A00
 RT_AREF = 0x0B00
 RT_TEXT = 0x0C00
 RT_LAYER = 0x0D02
+RT_SNAME = 0x1206
+RT_STRING = 0x1906
+RT_TEXTTYPE = 0x1602
 RT_BOX = 0x2D00
 
 # Elements that constitute actual layout content.
@@ -283,6 +286,102 @@ def parse_gds(data: bytes) -> Tuple[List[Finding], GdsStats]:
                 f"Mandatory library record {name} (0x{rt:04x}) is absent"))
 
     return findings, st
+
+
+# ---------------------------------------------------------------------------
+# A2. Per-structure content census (vibe-ic#613)
+# ---------------------------------------------------------------------------
+def iter_records(data: bytes):
+    """Yield ``(offset, record_type, payload)`` over a GDSII record stream.
+
+    THE CONTENT reader, and deliberately not the same walk as `parse_gds`:
+    that one is the VALIDITY authority and must keep its own byte-exact pass so
+    it can say WHERE a stream is malformed and return findings from the middle
+    of it. This one assumes validity and stops silently at the first impossible
+    record or at ENDLIB.
+
+    A caller must establish validity with `parse_gds` FIRST — counting labels
+    in a truncated file counts an artefact of the truncation, and reporting
+    "0 labels" for a file that is not a GDS at all is a statement about the
+    wrong thing.
+    """
+    pos, n = 0, len(data)
+    while pos + 4 <= n:
+        rec_len, rec_type = struct.unpack_from('>HH', data, pos)
+        if rec_len < 4 or rec_len % 2 or pos + rec_len > n:
+            return
+        yield pos, rec_type, data[pos + 4:pos + rec_len]
+        if rec_type == RT_ENDLIB:
+            return
+        pos += rec_len
+
+
+@dataclass
+class StructureCensus:
+    """What each structure in a GDS library CONTAINS, and which are referenced.
+
+    `text_per_structure` is per-STRUCTURE on purpose. A library GDS carries the
+    std cells' own pin texts, so a GLOBAL text count is non-zero for a chip
+    whose TOP cell has no label at all — the exact defect #613 measures.
+    """
+    structures: List[str] = field(default_factory=list)
+    text_per_structure: Dict[str, int] = field(default_factory=dict)
+    labels_per_structure: Dict[str, List[str]] = field(default_factory=dict)
+    #: (gds_layer, texttype) per TEXT, in the same order as the strings.
+    #: vibe-ic#631 — a label's LAYER decides whether an extractor can read it,
+    #: and the string alone cannot say.
+    label_layers_per_structure: Dict[str, List] = field(default_factory=dict)
+    referenced: List[str] = field(default_factory=list)
+
+    def top_structures(self) -> List[str]:
+        """Structures no SREF/AREF references — the library's top cells."""
+        refd = set(self.referenced)
+        return [s for s in self.structures if s not in refd]
+
+
+def structure_text_census(data: bytes) -> StructureCensus:
+    """Count TEXT records per structure, capture their STRINGs, and collect
+    SREF/AREF targets.
+
+    The STRINGs are what make an answer actionable: a COUNT can only say how
+    many labels are missing, and the names say WHICH port has nothing to name
+    it. A STRING record occurs only inside a TEXT element, so collecting them
+    per structure needs no element-state machine.
+    """
+    cen = StructureCensus()
+    cur: Optional[str] = None
+    _pend = None          # (layer, texttype) accumulating for the open TEXT
+    for _off, rt, payload in iter_records(data):
+        if rt == RT_STRNAME:
+            cur = payload.rstrip(b'\x00').decode('ascii', 'replace')
+            if cur not in cen.text_per_structure:
+                cen.structures.append(cur)
+                cen.text_per_structure[cur] = 0
+                cen.labels_per_structure[cur] = []
+                cen.label_layers_per_structure[cur] = []
+        elif rt == RT_TEXT and cur is not None:
+            cen.text_per_structure[cur] = cen.text_per_structure.get(cur, 0) + 1
+            _pend = [None, 0]
+        elif rt == RT_LAYER and cur is not None and _pend is not None:
+            if len(payload) >= 2:
+                _pend[0] = struct.unpack_from('>h', payload, 0)[0]
+        elif rt == RT_TEXTTYPE and cur is not None and _pend is not None:
+            if len(payload) >= 2:
+                _pend[1] = struct.unpack_from('>h', payload, 0)[0]
+        elif rt == RT_STRING and cur is not None:
+            cen.labels_per_structure.setdefault(cur, []).append(
+                payload.rstrip(b'\x00').decode('ascii', 'replace'))
+            if _pend is not None and _pend[0] is not None:
+                cen.label_layers_per_structure.setdefault(cur, []).append(
+                    (int(_pend[0]), int(_pend[1])))
+            _pend = None
+        elif rt == RT_SNAME:
+            nm = payload.rstrip(b'\x00').decode('ascii', 'replace')
+            if nm not in cen.referenced:
+                cen.referenced.append(nm)
+        elif rt == RT_ENDSTR:
+            cur = None
+    return cen
 
 
 # ---------------------------------------------------------------------------

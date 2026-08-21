@@ -77,6 +77,12 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
 
+_PROGRAMS_DIR = str(Path(__file__).resolve().parent)
+if _PROGRAMS_DIR not in sys.path:
+    sys.path.insert(0, _PROGRAMS_DIR)
+
+import _signoff_drc_format as _sdf  # noqa: E402  (path bootstrap above)
+
 # #651 — dedicated, documented exit code for the PASS_WITH_WAIVERS verdict
 # tier. Distinct from 0 (bare PASS) and 1 (FAIL); also distinct from the
 # flow-runner's rc=2 "VACUOUS/SKIP input-missing" convention so a waived
@@ -467,6 +473,47 @@ def _rank_signoff_first(paths: List[Path], project_dir: Path, ranker) -> List[Pa
                                         p.is_symlink(), str(p)))
 
 
+#: How much of a report's head decides which deck produced it. The markers
+#: below are header lines; nothing past this bound has ever been consulted.
+_DRC_RANK_HEAD_CHARS = 2000
+
+
+def _drc_rank(p: Path) -> int:
+    """Sign-off-first rank for a DRC report: 0 named sign-off, 1 KLayout
+    sign-off database, 2 router projection / unknown, 3 unreadable.
+
+    READS AT MOST ``_DRC_RANK_HEAD_CHARS`` (#797). This was
+    ``p.read_text(errors="replace")[:2000]`` — decode the WHOLE file, then
+    discard all but the first 2000 characters — and it is the `key=` of a
+    `sorted()` over every `*drc*.rpt|log` an rglob of the project finds. A
+    router report is the largest artefact a run produces: measured 2026-08-04
+    at 2.48 GB / 94.9M lines on one cell, against 11.7 MB for the largest
+    report tracked in this repo. So the cost was unbounded in the one input
+    that is unbounded, to inspect a header.
+
+    The failure mode is the reason this is a correctness bug and not a
+    performance note: a checker that cannot finish is killed, and downstream a
+    killed checker is indistinguishable from a checker that ran and found
+    nothing. The step's timeout arrives as the step's verdict.
+    """
+    n = p.name.lower()
+    if "signoff" in n:
+        return 0
+    try:
+        # `open(...).read(N)` and not `read_text()[:N]`: the bound has to be
+        # applied by the READ, not after it. Same decoding and same
+        # `errors="replace"`, so the head compared is byte-identical.
+        with p.open("r", errors="replace") as fh:
+            head = fh.read(_DRC_RANK_HEAD_CHARS)
+    except OSError:
+        return 3
+    if "<report-database>" in head:   # KLayout signoff database
+        return 1
+    if "detailed_route" in head or "openroad" in head.lower():
+        return 2                       # router projection — last
+    return 2
+
+
 def _has_dir(project_dir: Path, name: str) -> bool:
     """Check if a stage directory exists (case-insensitive search). Looks
     at the top level and inside the canonical phase2/<stage>/ and
@@ -585,6 +632,18 @@ _TAPEOUT_STEP_ID = 36
 # carrying `si_vacuity_accepted`::
 #
 #     {"growth_rationale": "<why this release carries one more waiver>",
+#      "growth_rationale_covers": <the root-waiver population that rationale was
+#                                  written against; vibe-ic#922 — a rationale
+#                                  with no recorded population authorises
+#                                  unlimited growth forever, so
+#                                  `waiver_growth_check` requires either the
+#                                  COUNT (an integer equal to the current root
+#                                  count) or the POPULATION (a list naming each
+#                                  root waiver by a value it publishes under
+#                                  ticket/id/step). The list is the stronger
+#                                  spelling: a count says how many the reason
+#                                  was written about, never which, so a count
+#                                  survives a swap that the reason does not>,
 #      "waived_steps": [
 #       {"id": 36,
 #        "reason": "<>=20 chars saying why this vacuity is acceptable>",
@@ -1373,19 +1432,6 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
                                           "*DRC*.rpt", "*DRC*.log"])
     # signoff-first ordering: a report whose NAME or CONTENT marks it as
     # the signoff deck outranks router/projection reports.
-    def _drc_rank(p: Path) -> int:
-        n = p.name.lower()
-        if "signoff" in n:
-            return 0
-        try:
-            head = p.read_text(errors="replace")[:2000]
-        except OSError:
-            return 3
-        if "<report-database>" in head:   # KLayout signoff database
-            return 1
-        if "detailed_route" in head or "openroad" in head.lower():
-            return 2                       # router projection — last
-        return 2
     drc_files = sorted(drc_files, key=_drc_rank)
 
     def _drc_violation_count(p: Path):
@@ -1405,14 +1451,30 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
         # mis-read as UNPARSED and hard-FAIL the tapeout slot). Detected by the
         # svrfdrc header OR the presence of the deck's PASS/FAIL result grammar.
         # Chip-AGNOSTIC: keys off report FORMAT, never a design/PDK name.
-        head = txt[:4000]
-        _svrf_line = re.compile(r"(?m)^(FAIL|PASS|SKIP)\s+\S+\s+\S+.*->\s*\d+\s*$")
-        if ("SVRF-native DRC" in head or "svrfdrc" in head.lower()
-                or _svrf_line.search(txt)):
-            fails = len(re.findall(r"(?m)^FAIL\s+\S+", txt))
-            passes = len(re.findall(r"(?m)^PASS\s+\S+", txt))
-            if fails or passes:            # a real per-rule tally was present
-                return fails
+        #
+        # The grammar itself now lives in `_signoff_drc_format` — this file is
+        # where it was first written, and two other programs needed it (the
+        # step-31 substance gate could not read a clean foundry-deck sign-off at
+        # all, measuring `determined_files:0`). It is imported rather than
+        # copied a fourth time; the behaviour is byte-identical.
+        _svrf = _sdf.svrf_fail_count(txt)
+        if _svrf is not None:
+            return _svrf
+        # A router detailed-route DRC report is ITERATIVE — one count per repair
+        # iteration, and possibly across more than one route pass — so the
+        # sequence is non-monotone and only the LAST count is the geometry that
+        # ships. The generic `re.search` below returns the FIRST match, i.e. the
+        # pre-repair state, which can be larger than the final count (over-report
+        # → false FAIL on a clean design) or smaller (under-report → false PASS
+        # on a design that never converged). Read the final count through the
+        # SAME shared helper `phase3_one_shot_runner._drt_final_violations` uses,
+        # so the two readers of this grammar cannot drift apart (they used to:
+        # re.search-first here vs findall-last there). Returns None when the
+        # report has no router-iteration grammar, so a genuine summary-only
+        # report still falls through to the text fallback below.
+        _drt = _sdf.router_iter_last_count(txt)
+        if _drt is not None:
+            return _drt
         m = (re.search(r"(?i)\btotal\s+(?:errors|violations)\s*[:=]?\s*(\d+)", txt)
              or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
         return int(m.group(1)) if m else None

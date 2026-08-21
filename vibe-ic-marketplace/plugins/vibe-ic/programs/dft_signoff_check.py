@@ -6,7 +6,14 @@ Rolls the three DFT-depth checks into ONE tapeout-facing verdict:
   1. STUCK-AT   : measured stuck-at coverage >= foundry floor
                   (delegated to dft_atpg_coverage_check — recomputed, never
                   a trusted self-asserted boolean; foundry floor clamps a
-                  lenient written target UP).
+                  lenient written target UP). The delegate ALSO applies L20
+                  applicability: a design whose OWN L20 declares no DFT has its
+                  below-floor FAIL downgraded to INFORMATIONAL. This gate
+                  re-derives none of that; it accepts exactly the dispositions
+                  the delegate's own rc mapping treats as non-blocking, via the
+                  SHARED predicate dft_atpg_coverage_check.stuck_at_signoff_passes
+                  ({PASS, INFORMATIONAL}). One predicate, two gates — so the two
+                  cannot reach opposite verdicts about the same tree (#603).
   2. TRANSITION : at-speed (launch-off-capture) transition coverage
                   >= target, OR a DOCUMENTED OSS engine limitation
                   (transition.engine_limited == true WITH a reason). A
@@ -42,11 +49,21 @@ code enforces is that absence alone never suffices — the skip must be
 explicitly disclosed by the producer.
 
 Overall PASS iff:
-  stuck_at == PASS
+  stuck_at is non-blocking — stuck_at_signoff_passes(status) is True, i.e. a
+                             measured PASS or the L20-applicability INFORMATIONAL
+                             disposition (design's own L20 declares no DFT). A
+                             real below-floor FAIL still blocks.
   AND transition ∈ {PASS, ENGINE_LIMITED(documented)}   (--strict-transition
                                                           demotes ENGINE_LIMITED
                                                           to FAIL)
   AND bsdl ∈ {PASS, SKIP}
+
+BLOCKING GATE: a FAIL verdict returns rc=1 and is meant to STOP tapeout sign-off;
+PASS returns rc=0, and a disclosed step-11 self-skip returns rc=2 (scored as a
+VACUOUS_PASS tier by flow_compliance_check). The INFORMATIONAL stuck-at
+disposition is non-blocking but is always reported in the record (see the
+`stuck_at` block's `floor_enforced` / `l20_applicability` fields) — degrade
+loudly, never silently.
 
 Usage:
     python3 dft_signoff_check.py <project_dir> [--json <out>]
@@ -355,12 +372,20 @@ def audit(project: Path,
     bsdl_plan = _load_json(plan_path) if plan_path else None
 
     # 1) stuck-at (delegated recompute + foundry floor)
+    #    The coverage gate ALSO applies L20 applicability: a design whose own
+    #    L20 declares no DFT has its below-floor FAIL downgraded to
+    #    INFORMATIONAL (see dft_atpg_coverage_check.l20_dft_applicability). We
+    #    re-derive NONE of that here — we consume the recorded disposition and
+    #    carry `floor_enforced` + `l20_applicability` through so this aggregate
+    #    discloses WHY it accepted a non-PASS stuck-at (degrade loudly).
     sa = _sa.audit(project, coverage_json_override, foundry_floor=foundry_floor)
     stuck_at = {
         "status": sa.get("verdict"),
         "measured_pct": sa.get("measured_coverage_pct"),
         "effective_target_pct": sa.get("effective_target_pct"),
         "foundry_floor_pct": sa.get("foundry_floor_pct"),
+        "floor_enforced": sa.get("floor_enforced"),
+        "l20_applicability": sa.get("l20_applicability"),
         "reasons": sa.get("reasons", []),
     }
 
@@ -372,7 +397,13 @@ def audit(project: Path,
     # 3) BSDL
     bsdl = evaluate_bsdl(bsdl_plan)
 
-    stuck_ok = stuck_at["status"] == "PASS"
+    # The stuck-at dimension is non-blocking for exactly the dispositions the
+    # coverage gate's OWN rc mapping treats as rc=0 — read from the SINGLE
+    # shared predicate, never re-listed here. This is what makes the two gates
+    # agree by construction: an INFORMATIONAL disposition the coverage gate
+    # emitted (design's L20 declares no DFT) is accepted here for the SAME
+    # reason it was rc=0 there, and a real below-floor FAIL still blocks.
+    stuck_ok = _sa.stuck_at_signoff_passes(stuck_at["status"])
     trans_ok = transition["status"] in ("PASS", "ENGINE_LIMITED")
     bsdl_ok = bsdl["status"] in ("PASS", "SKIP")
 

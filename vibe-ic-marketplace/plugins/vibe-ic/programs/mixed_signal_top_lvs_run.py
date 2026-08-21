@@ -18,9 +18,29 @@ What it does (chip-AGNOSTIC; PDK paths derived from --pdk):
      M4 rollup artifact) with verdict from the LVS result, plus
      `reports/analog/mixed_signal/top_lvs.json` + the netgen report.
 
-Honesty rules: missing tool/tech → SKIP rc 2 with the named gap (the
-M1 gate then reports the merge as NOT LVS-verified — it never PASSes
-on presence again); a real netgen mismatch → FAIL rc 1.
+Honesty rules: missing tool/tech/unreachable-project → SKIP rc 2 with
+the named gap (the M1 gate then reports the merge as NOT LVS-verified
+— it never PASSes on presence again); a real netgen mismatch → FAIL
+rc 1.
+
+FRESHNESS, NOT PRESENCE (2026-08-01). Every step's success test used to
+be "does the output file exist on the HOST". Those files survive a
+`cp -a` from another run in another directory, so an invocation in
+which NO tool executed emitted, verbatim:
+
+    "verdict": "FAIL", "compared": true,
+    "reason": "netgen top-level LVS did not match — real compare ran
+               on the merged GDS; design/extraction defect"
+
+while `ext2spice_merged.log` and `top_lvs.rpt` kept mtimes from two
+runs earlier. `mixed_signal_merge_check` — M1's BLOCKING gate — reads
+that file. Here the stale verdict happened to be FAIL, so the cost was
+a wasted round; a stale PASS carried the same way is a false clean by
+the identical mechanism. Each tool step now requires its OWN log to
+have been (re)written by THIS invocation and to carry the completion
+marker the tool prints on success, and `compared` is set from that
+rather than assumed. A reused `top_merged.gds` is reported by name in
+`merge_provenance` instead of passing as this run's own work.
 
 ENFORCEMENT: advisory
   This is a PRODUCER, not a verdict. It is invoked in M1's
@@ -53,18 +73,333 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import lvs_verdict_tokens as _lvt  # noqa: E402  — #524 shared verdict tokens
+# #626 — the ONE rule for "which DEF describes this layout", shared with
+# `gds_port_label_check` so the two halves cannot pair to different DEFs.
+from def_gds_port_power_restore import (  # noqa: E402
+    def_design_name,
+    def_rank,
+)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
+#: DECIDE PER MACRO, never append (vibe-ic#597).
+#:
+#: `Layout.read` APPENDS into a cell that already exists under the same name.
+#: Once OpenROAD's stream-out has been handed the hardmacro GDS, the digital
+#: GDS already carries a REAL body for that macro — so reading the macro file
+#: on top of it put every polygon in twice. Measured: `delta_sigma` 45678 ->
+#: 91356 own shapes, `ldo` 36887 -> 73774. Exactly double, both blocks.
+#:
+#: Magic then extracts the duplicated geometry as duplicated devices, so the
+#: layout-side device count is 2x the schematic's and LVS can never match — a
+#: failure whose report reads like a design defect.
+#:
+#: PRESENCE OF THE CELL NAME IS NOT EVIDENCE THAT IT IS AN ABSTRACT, and the
+#: old merge assumed it was. The branch is now taken on whether the cell
+#: actually holds geometry, and BOTH branches are recorded per macro in
+#: merge.json with the before/after shape count, so a doubled body can be seen
+#: in the artefact rather than inferred from an LVS mismatch.
+#: `- u_ds3 delta_sigma + PLACED ( 123000 456000 ) N ;` — DEF COMPONENTS.
+_DEF_COMPONENT_RE = re.compile(
+    r"^\s*-\s+(?P<inst>\S+)\s+(?P<cell>\S+)\s+\+\s*"
+    r"(?:FIXED|PLACED|COVER)\s*\(\s*(?P<x>-?\d+)\s+(?P<y>-?\d+)\s*\)\s*"
+    r"(?P<orient>[A-Z]+)", re.MULTILINE)
+_DEF_UNITS_RE = re.compile(r"^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)",
+                           re.MULTILINE)
+
+#: DEF orientation -> KLayout `Trans(rot, mirrx)`. Only the four unflipped
+#: orientations and the two flips this can back are mapped; `FE` / `FW` are
+#: DELIBERATELY absent. vibe-ic#612 asks for macros to be placed where the
+#: floorplan says, and a placement at the wrong orientation is worse than none:
+#: it looks integrated and is not. An unmapped orientation refuses, by name.
+_DEF_ORIENT_TO_KLAYOUT = {
+    "N": (0, False), "W": (1, False), "S": (2, False), "E": (3, False),
+    "FS": (0, True),           # mirror at the x-axis
+    "FN": (2, True),           # mirror at the y-axis
+}
+
+
+def def_macro_placements(def_text: str, macro_cells):
+    """``({cell: [placement, ...]}, [refusal, ...])`` read from a DEF.
+
+    vibe-ic#612 — M1 read each macro GDS into the layout and never INSTANTIATED
+    it, so the design top carried `child_insts = 0`, both macros sat as their
+    own top cells at the origin, and `Layout.top_cell()` raised "multiple top
+    cells". Reading a GDS adds STRUCTURES to the library; it does not place
+    anything. The step is named "... + macro placement" and the placement half
+    did not happen.
+
+    The positions are not invented: they are the design's own DEF COMPONENTS
+    entries. A macro the DEF does not place, or places at an orientation this
+    cannot back, is REFUSED by name rather than dropped at the origin.
+    """
+    want = {c for c in macro_cells if c}
+    um = _DEF_UNITS_RE.search(def_text)
+    per_um = float(um.group(1)) if um else None
+    out, refusals = {}, []
+    if per_um is None or per_um <= 0:
+        return {}, ["DEF states no `UNITS DISTANCE MICRONS`, so no placement "
+                    "coordinate can be converted"]
+    for m in _DEF_COMPONENT_RE.finditer(def_text):
+        cell = m.group("cell")
+        if cell not in want:
+            continue
+        orient = m.group("orient")
+        if orient not in _DEF_ORIENT_TO_KLAYOUT:
+            refusals.append(
+                f"{m.group('inst')} ({cell}) is placed {orient}, an "
+                f"orientation this merge does not map; placing it at a guessed "
+                f"transform would look integrated and be wrong")
+            continue
+        rot, mirr = _DEF_ORIENT_TO_KLAYOUT[orient]
+        out.setdefault(cell, []).append({
+            "inst": m.group("inst"), "orient": orient,
+            "rot": rot, "mirror": mirr,
+            "x_um": int(m.group("x")) / per_um,
+            "y_um": int(m.group("y")) / per_um})
+    for c in sorted(want - set(out)):
+        refusals.append(f"{c} is not placed by any DEF COMPONENTS entry")
+    return out, refusals
+
+
+def _placement_signature(placements):
+    """A comparable, order-free statement of WHERE a DEF puts the macros.
+
+    Instance names are deliberately in the key: two DEFs that place the same
+    cell the same number of times but attach the positions to different
+    instances have not agreed.
+    """
+    return sorted(
+        (p.get("inst"), cell, p.get("orient"),
+         round(float(p["x_um"]), 6), round(float(p["y_um"]), 6))
+        for cell, pl in placements.items() for p in pl)
+
+
+def resolve_macro_placements_detailed(project, macro_cells, design_top=None):
+    """Where the design's own DEF puts each analog macro, and WHICH DEF said so.
+
+    Returns a dict: ``placements``, ``refusals``, ``def_source`` (the basename
+    the placements were read from, or None), ``defs_considered`` and
+    ``defs_disagreeing`` (basenames that place the same macros somewhere else).
+
+    vibe-ic#626 — WHICH DEF IS NOT A FREE CHOICE, AND IT WAS BEING MADE BY
+    ALPHABETICAL ORDER. This used to walk ``sorted(pnr_dir.glob("*.def"))`` and
+    take the first entry that placed anything. A PnR directory holds one DEF per
+    stage — floorplan, macro_placed, placed, post_cts, post_hold, routed,
+    routed_preantenna, filled, and the design's own — and they do NOT all agree:
+    an earlier iteration's DEF is still on disk with the macros somewhere else.
+    Measured on a real run (IHP SG13G2 `u_hawaii_adc`), eight of nine DEFs
+    agreed and the alphabetical glob returned the ninth:
+
+        u_hawaii_adc.def   u_ds1 delta_sigma + FIXED ( 30080 439350 ) N     <- the
+                           DEF the sign-off GDS was streamed from
+                           (`stream_tail: file=u_hawaii_adc.def`)
+        filled.def         u_ds1 delta_sigma + FIXED ( 15080 760610 ) FS    <- taken,
+                           because "f" sorts before everything else
+
+    so M1 instantiated the analog macros 15.0 x 321.3 um from where the digital
+    layout they were merged INTO carries them, one of them mirrored, and the
+    merged GDS reported one clean top cell while being wrong. `merge.json`
+    recorded the coordinates but not the FILE, so nothing in the artefact could
+    be audited for it.
+
+    Two things change. The DEF is chosen with `def_rank` — the SAME rule
+    `gds_port_label_check` uses to decide which DEF describes a layout, so the
+    flow cannot hold two answers — and every OTHER DEF that places these macros
+    is still parsed and DISCLOSED when it disagrees. That disagreement is a real
+    fact about the project (a stale DEF next to a live one) and it now travels
+    in `macro_placements.json` instead of being silently resolved.
+    """
+    defs = list(_pl.pnr_dir(project).glob("*.def"))
+    heads = {}
+    for d in defs:
+        try:
+            with open(d, "r", errors="replace") as fh:
+                # HEAD ONLY — `DESIGN <name> ;` is in the first few lines and a
+                # routed DEF runs to hundreds of megabytes.
+                heads[d] = def_design_name(fh.read(8192))
+        except OSError:
+            heads[d] = None
+    if not design_top:
+        # The caller did not say, so ASK THE ARTEFACTS. A ranking that depends
+        # on an argument the caller may forget to pass is a defect waiting to
+        # come back: without a design name `def_rank` falls through to the
+        # preference order and puts `filled.def` first again — the exact file
+        # this issue is about. When every DEF here names ONE design, that name
+        # IS the design top and nothing has to be guessed; when they name
+        # several, the directory holds more than one design and the caller's
+        # silence cannot be resolved, so the preference order stands.
+        named = {n for n in heads.values() if n}
+        design_top = next(iter(named)) if len(named) == 1 else None
+    parsed = []                          # [(path, placements, refusals)]
+    fallback_refusals = ["no DEF under the PnR directory places any macro"]
+    for d in sorted(defs, key=lambda p: def_rank(p, design_top)):
+        try:
+            txt = d.read_text(errors="replace")
+        except OSError:
+            continue
+        # The design's own statement of its top cell. A PnR directory can hold
+        # DEFs for MORE THAN ONE design; a DEF describing a different design
+        # says nothing about where THIS design's macros go.
+        if design_top and (heads.get(d) or design_top) != design_top:
+            continue
+        got, ref = def_macro_placements(txt, macro_cells)
+        if got:
+            parsed.append((d, got, ref))
+        else:
+            fallback_refusals = ref
+    if not parsed:
+        return {"placements": {}, "refusals": fallback_refusals,
+                "disclosures": [], "def_source": None,
+                "defs_considered": [], "defs_disagreeing": []}
+    chosen_path, chosen, chosen_ref = parsed[0]
+    sig = _placement_signature(chosen)
+    disagreeing = [p.name for p, got, _r in parsed[1:]
+                   if _placement_signature(got) != sig]
+    # DISCLOSURE, NOT REFUSAL — kept in its own list because a refusal means a
+    # macro was NOT placed, and reporting "n other DEFs disagree" under that
+    # heading would describe a merge that did happen as one that did not.
+    disclosures = []
+    if disagreeing:
+        disclosures.append(
+            f"placements read from {chosen_path.name}; "
+            f"{len(disagreeing)} other DEF(s) under the same PnR directory "
+            f"place these macros somewhere else "
+            f"({', '.join(sorted(disagreeing))}) — one of them is stale, and "
+            f"which one is a fact about the project, not about this merge")
+    return {"placements": chosen, "refusals": list(chosen_ref),
+            "disclosures": disclosures,
+            "def_source": chosen_path.name,
+            "defs_considered": [p.name for p, _g, _r in parsed],
+            "defs_disagreeing": sorted(disagreeing)}
+
+
+def resolve_macro_placements(project, macro_cells, design_top=None):
+    """``({cell: [placement, ...]}, [refusal, ...])`` from the project's DEF.
+
+    Split out of the M1 caller so it can be DRIVEN. The first version of this
+    lived inline, and the test that was supposed to pin it asserted the string
+    `def_macro_placements(` appeared in the source — which a mutation that
+    short-circuits the call (`({}, []) or def_macro_placements(...)`) satisfies
+    while placing nothing. A property that can only be asserted by looking at
+    source text is not being measured.
+
+    The two-value shape is kept for callers that only want the map; the DEF this
+    came from is in `resolve_macro_placements_detailed` (vibe-ic#626).
+    """
+    r = resolve_macro_placements_detailed(project, macro_cells, design_top)
+    return r["placements"], r["refusals"]
+
+
 _KLAYOUT_MERGE_PY = """\
-import pya, os
+import pya, os, json
+
+def own_shapes(ly, name):
+    # `has_cell` / `cell_by_name`, not `cell_name_to_index` — the latter is not
+    # on this KLayout's Layout binding and raised AttributeError when this was
+    # first run against the real tool.
+    if not ly.has_cell(name):
+        return None
+    # `cell_by_name` returns an INDEX; `cell()` turns it into the object.
+    # Both corrections came from running this against the real KLayout, not
+    # from reading the API.
+    c = ly.cell(ly.cell_by_name(name))
+    return sum(c.shapes(li).size() for li in ly.layer_indexes())
+
 ly = pya.Layout()
 ly.read(os.environ["DIGITAL_GDS"])
+
+record = []
 for g in os.environ["MACRO_GDS"].split(";"):
-    if g.strip():
-        ly.read(g.strip())
+    g = g.strip()
+    if not g:
+        continue
+    probe = pya.Layout()
+    probe.read(g)
+    tops = [probe.cell(i).name for i in probe.each_top_cell()]
+    for name in tops:
+        before = own_shapes(ly, name)
+        if before is None:
+            action = "added"          # not in the digital GDS at all
+        elif before == 0:
+            action = "filled"         # an abstract placeholder — today's intent
+        else:
+            action = "kept_digital"   # already a real body: reading would double it
+        record.append({"macro": name, "file": g, "action": action,
+                       "shapes_before": before})
+    if all(r["action"] != "kept_digital"
+           for r in record if r["file"] == g):
+        ly.read(g)
+    for r in record:
+        if r["file"] == g:
+            r["shapes_after"] = own_shapes(ly, r["macro"])
+
+# vibe-ic#612 — READING A GDS ADDS STRUCTURES; IT DOES NOT PLACE ANYTHING.
+# Until now the loop above ended here, so the design top carried child_insts=0,
+# each macro sat as its OWN top cell at the origin, and `Layout.top_cell()`
+# raised "multiple top cells". A merged GDS with more than one top cell is on
+# its face not an integrated design: top-level extraction sees no macro devices
+# at all, and no overlap / halo / track check means anything about a cell that
+# is nowhere.
+#
+# Positions are the design's OWN DEF COMPONENTS entries, passed in by the
+# caller. Nothing is placed at a guessed transform.
+placements = {}
+pj = os.environ.get("PLACEMENTS_JSON")
+if pj and os.path.isfile(pj):
+    with open(pj) as f:
+        _pj = json.load(f)
+    # The caller writes {"placements": {...}, "refusals": [...]} so the
+    # refusals travel with the map rather than only to stdout.
+    placements = _pj.get("placements", _pj) if isinstance(_pj, dict) else {}
+
+placed = []
+design_top = os.environ.get("DESIGN_TOP", "").strip()
+if design_top and ly.has_cell(design_top):
+    top = ly.cell(ly.cell_by_name(design_top))
+    for r in record:
+        for pl in placements.get(r["macro"], []):
+            if not ly.has_cell(r["macro"]):
+                continue
+            ci = ly.cell_by_name(r["macro"])
+            t = pya.Trans(int(pl["rot"]), bool(pl["mirror"]),
+                          int(round(pl["x_um"] / ly.dbu)),
+                          int(round(pl["y_um"] / ly.dbu)))
+            top.insert(pya.CellInstArray(ci, t))
+            placed.append({"macro": r["macro"], "inst": pl.get("inst"),
+                           "orient": pl.get("orient"),
+                           "x_um": pl["x_um"], "y_um": pl["y_um"]})
+    for r in record:
+        r["instances_placed"] = sum(1 for q in placed if q["macro"] == r["macro"])
+
+tops_after = [ly.cell(i).name for i in ly.each_top_cell()]
+
 ly.write(os.environ["MERGED_OUT"])
+mj = os.environ.get("MERGE_JSON")
+if mj:
+    with open(mj, "w") as f:
+        json.dump({"merged_out": os.environ["MERGED_OUT"],
+                   "digital_gds": os.environ["DIGITAL_GDS"],
+                   "design_top": design_top,
+                   "placed": placed,
+                   "top_cells_after": tops_after,
+                   "single_top": len(tops_after) == 1,
+                   "macros": record}, f, indent=2)
+for r in record:
+    print("KLAYOUT_MERGE_MACRO", r["macro"], r["action"],
+          r["shapes_before"], "->", r.get("shapes_after"))
+for q in placed:
+    print("KLAYOUT_MERGE_PLACED", q["macro"], q["inst"], q["orient"],
+          q["x_um"], q["y_um"])
+print("KLAYOUT_MERGE_TOPS", ",".join(tops_after))
+if len(tops_after) != 1:
+    # LOUD, not silent. Emitting the file and reporting DONE would let a
+    # multi-top GDS travel downstream as an "integrated" design.
+    print("KLAYOUT_MERGE_MULTITOP " + ",".join(tops_after))
+    raise SystemExit(3)
 print("KLAYOUT_MERGE_DONE", os.environ["MERGED_OUT"])
 """
 
@@ -122,6 +457,60 @@ def _docker_exec(container, cmd, timeout=600, *, marker=None, log_path=None):
 
 def _to_container_path(p, container):
     return str(p)
+
+
+def _project_reachable(container, project):
+    """True when `project` resolves to a directory INSIDE the container.
+
+    `_to_container_path` hands the tool the HOST path verbatim. When the run
+    root is outside the container's mounted tree every `docker exec` below
+    fails to find its inputs — and, because each step's success test was
+    "does the output file exist on the HOST", a run in which no tool executed
+    was indistinguishable from one in which they all did (see the
+    `_ran_fresh` note). Ask once, up front, and SKIP by name instead."""
+    if container in ("", "host"):
+        return True
+    rc, _, _ = _docker_exec(
+        container, f"test -d {shlex.quote(str(project))}", timeout=15)
+    return rc == 0
+
+
+def _ran_fresh(log_path, marker, before):
+    """True when `log_path` was (re)written by THIS invocation AND carries the
+    tool's own completion marker.
+
+    MEASURED DEFECT (2026-08-01). One invocation rewrote its own TCL scripts at
+    04:37:16 and emitted `"compared": true, "reason": "... real compare ran on
+    the merged GDS"`, while `ext2spice_merged.log` kept its 01:53:56 mtime and
+    `top_lvs.rpt` its 00:21:37 — magic and netgen never executed. The success
+    test was `spice_out.is_file()`, and those files had been carried forward by
+    `cp -a` from a run in a DIFFERENT directory. Presence of an output is
+    evidence that A run once happened, never that THIS run happened.
+
+    `before` is the mtime captured before the call (None when absent). A log
+    that did not advance, or that advanced without the marker the tool prints
+    on success, means the tool did not complete here."""
+    try:
+        st = log_path.stat()
+    except OSError:
+        return False
+    if before is not None and st.st_mtime <= before:
+        return False
+    if st.st_size == 0:
+        return False
+    if not marker:
+        return True
+    try:
+        return marker in log_path.read_text(errors="replace")
+    except OSError:  # pragma: no cover - unreadable right after writing it
+        return False
+
+
+def _mtime_or_none(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _tool_ok(container, tool):
@@ -326,6 +715,14 @@ def run(project: Path, top: str, container: str, pdk: str,
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("tools missing in container: "
                            + ", ".join(missing_tools))}
+    # A tool that exists but cannot see the design is not a tool that ran.
+    if not _project_reachable(container, project):
+        return {"verdict": "SKIP", "rc": 2,
+                "reason": (f"project dir is not reachable inside container "
+                           f"'{container}': {project} — the tools would run "
+                           f"against paths that do not exist there and every "
+                           f"output would be a carried-forward file, not a "
+                           f"result of this run")}
     # ── C5: the tech rung. An unresolved top/PDK SKIPs HERE, naming which one
     # and why — it never falls back to some other design's PDK or cell name.
     # This is the rung "PDK tech missing" already occupies, so the SKIP ladder
@@ -357,12 +754,46 @@ def run(project: Path, top: str, container: str, pdk: str,
     rpt_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) merge ------------------------------------------------------------
+    # A pre-existing top_merged.gds is REUSED, not re-derived — that is
+    # deliberate (the merge is expensive) but it must be SAID, because a merged
+    # GDS produced by something other than this program, in another directory,
+    # is exactly what two rounds of M1 were judged on.
+    merge_log = ms_dir / "merge.log"
+    merge_provenance = "reused: top_merged.gds already present, merge not re-run"
     if not merged.is_file():
+        merge_log_before = _mtime_or_none(merge_log)
         merge_py = ms_dir / "klayout_merge.py"
         merge_py.write_text(_KLAYOUT_MERGE_PY)
-        env = (f"export DIGITAL_GDS={_to_container_path(digital_gds, container)} "
+        # vibe-ic#612 — the placement half of "A+D GDS merge + macro placement".
+        # Read from the design's OWN DEF; a macro the DEF does not place, or
+        # places at an orientation the merge cannot back, is refused by name and
+        # the merge then fails on the multi-top check rather than shipping a
+        # file whose design top has no children.
+        # #626 — `top` is passed so the DEF is picked by the DESIGN'S OWN NAME
+        # and not by alphabetical glob position, and the artefact records WHICH
+        # DEF was read plus any sibling DEF that disagrees with it.
+        _pl_res = resolve_macro_placements_detailed(
+            project, [g.stem for g in macro_gds], top)
+        _pl_map, _pl_refusals = _pl_res["placements"], _pl_res["refusals"]
+        _pl_json = ms_dir / "macro_placements.json"
+        _pl_json.write_text(json.dumps(_pl_res, indent=2) + "\n")
+        for _r in _pl_refusals:
+            print(f"      M1 placement REFUSED: {_r}")
+        for _d in _pl_res.get("disclosures", []):
+            print(f"      M1 placement DISCLOSED: {_d}")
+        if _pl_res.get("def_source"):
+            print(f"      M1 placements read from {_pl_res['def_source']} "
+                  f"(of {len(_pl_res['defs_considered'])} DEF(s) that place "
+                  f"these macros)")
+        env = (f"export DESIGN_TOP={top} "
+               f"PLACEMENTS_JSON={_to_container_path(_pl_json, container)} "
+               f"DIGITAL_GDS={_to_container_path(digital_gds, container)} "
                f"MACRO_GDS=\"{';'.join(_to_container_path(g, container) for g in macro_gds)}\" "
-               f"MERGED_OUT={_to_container_path(merged, container)} && ")
+               f"MERGED_OUT={_to_container_path(merged, container)} "
+               # Per-macro branch record (#597). Written by the merge itself,
+               # so a doubled body is visible in an artefact rather than
+               # inferred from an LVS device-count mismatch two steps later.
+               f"MERGE_JSON={_to_container_path(ms_dir / 'merge.json', container)} && ")
         # C5 pipefail — see the note at the Magic site below. Without it the rc
         # this branch reports is `tee`'s, so a KLayout that died mid-merge is
         # indistinguishable from one that merged nothing.
@@ -371,11 +802,14 @@ def run(project: Path, top: str, container: str, pdk: str,
                f"tee {_to_container_path(ms_dir, container)}/merge.log")
         rc, out, err = _docker_exec(
             container, cmd, marker=_to_container_path(merge_py, container))
-        if not merged.is_file() or merged.stat().st_size == 0:
+        if not merged.is_file() or merged.stat().st_size == 0 \
+                or not _ran_fresh(merge_log, "KLAYOUT_MERGE_DONE",
+                                  merge_log_before):
             return {"verdict": "FAIL", "rc": 1,
-                    "reason": (f"KLayout merge produced no top_merged.gds "
+                    "reason": (f"KLayout merge did not complete in THIS run "
                                f"(rc={rc}); see phase3/mixed_signal/merge.log"),
                     "transcript_tail": (out + err)[-600:]}
+        merge_provenance = "produced by this invocation"
 
     # 2) extract ----------------------------------------------------------
     spice_out = ms_dir / f"{top}_merged_extracted.sp"
@@ -396,12 +830,22 @@ def run(project: Path, top: str, container: str, pdk: str,
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
            f"{_to_container_path(tcl, container)} 2>&1 | "
            f"tee {_to_container_path(ms_dir, container)}/ext2spice_merged.log")
+    ext_log = ms_dir / "ext2spice_merged.log"
+    ext_log_before = _mtime_or_none(ext_log)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(tcl, container))
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
         return {"verdict": "FAIL", "rc": 1,
                 "reason": (f"Magic ext2spice on the MERGED GDS produced no "
                            f"netlist (rc={rc})"),
+                "transcript_tail": (out + err)[-600:]}
+    if not _ran_fresh(ext_log, "MAGIC_EXT2SPICE_DONE", ext_log_before):
+        return {"verdict": "FAIL", "rc": 1,
+                "reason": (f"Magic ext2spice did not complete in THIS run "
+                           f"(rc={rc}): {ext_log.name} carries no "
+                           f"MAGIC_EXT2SPICE_DONE from this invocation. The "
+                           f"extracted netlist on disk is a carried-forward "
+                           f"file and is NOT evidence about this run"),
                 "transcript_tail": (out + err)[-600:]}
     lay_top = top
     sub_txt = spice_out.read_text(errors="replace")
@@ -438,8 +882,19 @@ def run(project: Path, top: str, container: str, pdk: str,
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"netgen -batch source {_to_container_path(lvs_tcl, container)}")
+    lvs_rpt_before = _mtime_or_none(lvs_rpt)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(spice_out, container))
+    # netgen prints no completion token of its own; the report IT writes is the
+    # marker, so freshness alone carries the claim here.
+    if not _ran_fresh(lvs_rpt, "", lvs_rpt_before):
+        return {"verdict": "FAIL", "rc": 1, "compared": False,
+                "reason": (f"netgen did not write a top-level LVS report in "
+                           f"THIS run (rc={rc}): {lvs_rpt.name} was not "
+                           f"(re)written by this invocation. Nothing was "
+                           f"compared — this is NOT an LVS mismatch"),
+                "merge_provenance": merge_provenance,
+                "transcript_tail": ((out or "") + (err or ""))[-600:]}
     blob = (out or "") + "\n" + (err or "") + "\n" + (
         lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else "")
     # #524 — shared verdict classifier (adds 'failed pin matching', the netgen
@@ -459,10 +914,11 @@ def run(project: Path, top: str, container: str, pdk: str,
         "extracted_netlist": str(spice_out.relative_to(project)),
         "lvs_report": str(lvs_rpt.relative_to(project)),
         "tool": "magic ext2spice + netgen (PDK setup)",
+        "merge_provenance": merge_provenance,
     }
     (rpt_dir / "top_lvs.json").write_text(
         json.dumps(top_lvs, indent=2) + "\n")
-    (rpt_dir / "merge.json").write_text(json.dumps({
+    _aa.write_text(rpt_dir / "merge.json", json.dumps({
         "gate": "mixed_signal_merge",
         "verdict": "PASS" if lvs_pass else "FAIL",
         "merged_gds": str(merged.relative_to(project)),
@@ -524,9 +980,38 @@ def main(argv=None) -> int:
     if rep.get("verdict") == "SKIP":
         _ev = project / "reports" / "analog" / "mixed_signal" / "top_lvs.json"
         _ev.parent.mkdir(parents=True, exist_ok=True)
-        _ev.write_text(json.dumps(
-            {k: v for k, v in rep.items() if k != "rc"},
-            indent=2, ensure_ascii=False) + "\n")
+        # vibe-ic#614 — C5's reason above is right (a SKIP must leave verdict
+        # evidence) and the write was UNCONDITIONAL, so a run that could not
+        # compare REPLACED one that did. `flow_compliance_check` invokes this
+        # producer with the DEFAULT container, so on any host where the run
+        # root is not bind-mounted under that name the audit overwrote a
+        # computed FAIL with a capability-gap SKIP — and the gate then
+        # published that SKIP as a design mismatch.
+        #
+        # A NON-RESULT MUST NOT DISPLACE A RESULT. The skip still leaves
+        # evidence, beside the comparison rather than on top of it.
+        _prior = None
+        if _ev.is_file():
+            try:
+                _prior = json.loads(_ev.read_text(errors="replace"))
+            except (OSError, ValueError):
+                _prior = None
+        _compared = isinstance(_prior, dict) and bool(_prior.get("lvs_report"))
+        _payload = {k: v for k, v in rep.items() if k != "rc"}
+        if _compared:
+            _alt = _ev.with_name("top_lvs_skipped.json")
+            _payload["preserved"] = (
+                f"an existing {_ev.name} records a COMPLETED comparison "
+                f"(verdict {_prior.get('verdict')!r}, report "
+                f"{_prior.get('lvs_report')!r}); this skip is recorded here "
+                f"instead of replacing it")
+            _alt.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
+            rep["skip_evidence"] = str(_alt.relative_to(project))
+            rep["did_not_overwrite"] = str(_ev.relative_to(project))
+        else:
+            _ev.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
     rep.setdefault("top", top)
     rep.setdefault("top_source", top_src)
     rep.setdefault("pdk", pdk)

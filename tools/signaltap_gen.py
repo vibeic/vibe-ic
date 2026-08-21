@@ -334,9 +334,30 @@ def main():
     print(f"  Depth: {args.depth} samples")
     print(f"  Clock: {args.clock}")
     print(f"  Total signals: {len(ports) + (len(BIST_SIGNALS) if not args.no_bist else 0)}")
+    # The recompile instruction block. It MUST name all four stages.
+    #
+    # This block used to print `quartus_stp` and nothing else. `quartus_stp`
+    # only ATTACHES the .stp to the project database — it does not re-map,
+    # re-fit or re-assemble, so following the instruction as written produced
+    # the previous SOF, unchanged, with no logic analyzer in it. You then
+    # program the board, run the BIST, and SignalTap shows nothing: the exact
+    # ~30-minute-round-trip defect that
+    # programs/signaltap_recompile_sequence_check.py exists to catch, emitted
+    # by this repo's own generator. Piping this program's real stdout into that
+    # gate returned rc=1 with 3 x STAGE_MISSING (map, fit, asm).
+    #
+    # skills/fpga-signaltap/SKILL.md lines 65-68 already declared the full
+    # sequence; only this block disagreed with it.
+    proj = f"{args.module}_fpga"
     print(f"\nUsage in Quartus:")
     print(f"  1. Open {output_path} in SignalTap II Logic Analyzer")
-    print(f"  2. Re-compile with: quartus_stp {args.module}_fpga --stp_file={output_path}")
+    print(f"  2. Re-compile — ALL FOUR stages, in this order. `quartus_stp`")
+    print(f"     alone only attaches the .stp; without map/fit/asm the SOF is")
+    print(f"     unchanged and contains NO logic analyzer:")
+    print(f"       quartus_stp {proj} --stp_file={output_path}")
+    print(f"       quartus_map {proj}")
+    print(f"       quartus_fit {proj}")
+    print(f"       quartus_asm {proj}")
     print(f"  3. Program FPGA and run BIST")
 
 

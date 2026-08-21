@@ -74,11 +74,34 @@ def test_skip_no_analog_blocks(tmp_path):
     assert rpt["summary"]["reason"] == "no_analog_blocks"
 
 
+#: What the packaged circuit contains. Nothing writes `design_content` into a
+#: LEF, a Liberty, a GDS or a behavioural Verilog, so the whole answer is the
+#: corner artefact's — the A4 gate of record's own subject. Every PASSING
+#: fixture below now carries it, because this gate stopped signing off a macro
+#: digital PnR will instantiate and integration STA will close on when nothing
+#: on the tree names the circuit it models; a fixture that omitted it would be
+#: asserting that silence still signs off. The FAILING fixtures are untouched:
+#: each fails for its own deliverable reason and the question is asked LAST.
+DESIGN_BOUND = "structure_and_geometry"
+
+
+def _seed_corner(tmp_path: Path, block: str,
+                 design_content=DESIGN_BOUND) -> None:
+    ad = tmp_path / "phase3" / "analog" / block
+    ad.mkdir(parents=True, exist_ok=True)
+    doc = {"block": block, "_provenance": "real_ngspice",
+           "corners": [{"name": "tt_27c_1v8", "simulator_run": True}]}
+    if design_content is not None:
+        doc["design_content"] = design_content
+    (ad / "corner_results.json").write_text(json.dumps(doc))
+
+
 def _seed_hardmacro(tmp_path: Path, block: str, gds_bytes: bytes,
-                    stub: bool = False) -> Path:
+                    stub: bool = False, design_content=DESIGN_BOUND) -> Path:
     ad = tmp_path / "phase3" / "analog" / block
     ad.mkdir(parents=True, exist_ok=True)
     (ad / "spec.json").write_text("{}")
+    _seed_corner(tmp_path, block, design_content)
     hm = tmp_path / "phase3" / "analog" / "hardmacro" / block
     hm.mkdir(parents=True, exist_ok=True)
     if gds_bytes is not None:
@@ -102,6 +125,60 @@ def test_pass_complete_hardmacro(tmp_path):
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["complete"] == 1
+    assert rpt["summary"]["design_bound_blocks"] == ["ldo"]
+
+
+# ── the step's DECLARED gate answers the same question as its siblings ─────
+# `flow/phase1_phase2_phase3.yaml` declares THIS program for A8;
+# `analog_liberty_nonzero_delay_check`, which reads the record and grades the
+# `.lib` INSIDE the package this gate signs off, appears nowhere in that YAML.
+# Measured, before these three: over one complete package on three trees
+# differing only in the recorded `design_content`, this gate and
+# `analog_a8_hardmacro_gen_check` both answered PASS / PASS / PASS while the
+# Liberty gate answered PASS / PASS_STRUCTURE_ONLY / FAIL. The cross-gate
+# agreement lives in `test_two_gates_over_one_artefact_cannot_disagree`; these
+# are this gate's own three answers.
+
+def test_a_package_that_names_no_circuit_does_not_sign_off(tmp_path):
+    """Every deliverable is present and real — including a GDS with genuine
+    geometry — so the only thing this can fail on is the certification."""
+    _seed_hardmacro(tmp_path, "ldo", build_real_gds(), design_content=None)
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = _load_report(tmp_path)
+    assert "HARDMACRO_SUBJECT_UNDECLARED" in {f["rule"]
+                                              for f in rpt["findings"]}
+    assert rpt["summary"]["undisclosed_blocks"] == ["ldo"]
+
+
+def test_a_disclosed_library_default_signs_off_in_its_own_tier(tmp_path):
+    """Only silence costs. A package whose corner artefact records a library
+    default still signs off — in the structure-only tier, never as a
+    design-bound pass — because failing an honest ceiling teaches the next run
+    to stop being honest."""
+    _seed_hardmacro(tmp_path, "ldo", build_real_gds(),
+                    design_content="structure_only")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"]["verdict_tier"] == "PASS_STRUCTURE_ONLY"
+    assert rpt["summary"]["structure_only_blocks"] == ["ldo"]
+    assert rpt["summary"]["design_bound_blocks"] == []
+    assert any(l.lstrip().startswith("STRUCTURE_ONLY:")
+               for l in (r.stdout + r.stderr).splitlines()), r.stdout + r.stderr
+
+
+def test_an_incomplete_package_is_still_incomplete(tmp_path):
+    """ORDERING CONTROL. A package with no behavioural view is diagnosed as
+    that, even on a tree that also says nothing about its subject."""
+    hm = _seed_hardmacro(tmp_path, "ldo", build_real_gds(),
+                         design_content=None)
+    (hm / "ldo.v").unlink()
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rules = {f["rule"] for f in _load_report(tmp_path)["findings"]}
+    assert "HARDMACRO_INCOMPLETE" in rules, rules
+    assert "HARDMACRO_SUBJECT_UNDECLARED" not in rules, rules
 
 
 def test_fail_gds_without_geometry(tmp_path):
@@ -222,6 +299,7 @@ def _seed_with(tmp_path: Path, block: str, verilog: str, liberty: str) -> None:
     ad = tmp_path / "phase3" / "analog" / block
     ad.mkdir(parents=True, exist_ok=True)
     (ad / "spec.json").write_text("{}")
+    _seed_corner(tmp_path, block)
     hm = tmp_path / "phase3" / "analog" / "hardmacro" / block
     hm.mkdir(parents=True, exist_ok=True)
     (hm / f"{block}.gds").write_bytes(build_real_gds())

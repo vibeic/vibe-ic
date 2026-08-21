@@ -23,34 +23,84 @@ the corpus.
 
 CHECKS (only on in-scope DE10-Lite QSFs)
 ----------------------------------------
-  1. external-io-budget — count the DISTINCT physical pins assigned to the
-     GPIO_0 2x20 header OR the Arduino Uno R3 header. The skill ceiling is
-     36 GPIO + 10 Arduino = 46. FAIL if the count exceeds 46. Uses only the
-     GPIO_0 + Arduino pin tables (verbatim from the manual), so it is exact
-     and does not depend on an exhaustive board catalogue.
-  2. pin-double-assignment — no two distinct signals on the same physical pin
+  1. pin-double-assignment — no two distinct signals on the same physical pin
      (a board short). Structural and board-agnostic.
+  2. no-pin-assignments — the TARGET as a whole contains at least one
+     `set_location_assignment` across its in-scope DE10-Lite QSFs. A DE10-Lite
+     testbench top with no pin map anywhere is not a PASS. Evaluated at target
+     level, not per file: a settings-only .qsf beside a pin-map .qsf is a
+     normal Quartus project split, and firing per-file turned that split into
+     a project-wide FAIL (measured).
 
-NOTE on dropped check: an "every PIN_ must exist on the board" check was
-deliberately NOT implemented, because the DE10-Lite has ~180 physical pins
-(CLOCK/KEY/SW/LEDR + 36 GPIO + 16 Arduino + 48 HEX + VGA + SDRAM + G-sensor +
-analog) and the manual tables for HEX/VGA/SDRAM are not embedded here. Firing
-on an "unknown" pin with a partial catalogue would false-fire on legitimate
-HEX/VGA/SDRAM assignments — so that clause is left to the agent / a future
-program that ingests the full manual pin-out table.
+The external-I/O count is MEASURED AND DISCLOSED (`external_io_pins_used` in
+the JSON report, and on the PASS line) but is NOT a verdict — see below.
+
+WITHDRAWN CHECK: external-io-budget, and why
+--------------------------------------------
+This program shipped a third rule: FAIL when the distinct physical pins landing
+on the GPIO_0 header or the Arduino header exceed 46 ("36 GPIO + 10 Arduino",
+the literal prose ceiling in skills/analog-hw-testbench-gen/SKILL.md). It is
+withdrawn, for a reason that is a property of its construction, not a
+preference:
+
+  * Its DENOMINATOR and its CEILING come from the same table. The rule counts
+    only pins that are IN this file's catalogue, and that catalogue holds 53
+    pins (36 GPIO + 16 Arduino digital I/O + ARDUINO_RESET_N — all enumerated
+    below, all physically present on the board). So the count can never exceed
+    53 no matter how over-budget a design is: a design that genuinely needs
+    more external I/O than the board offers must assign the surplus to pins
+    OUTSIDE the catalogue, which the rule does not count.
+  * Below 53 the ceiling of 46 only fires on legal pin maps. MEASURED: a
+    physically valid map using all 36 GPIO_0 pins plus 11 of the board's 16
+    Arduino digital I/Os -> `47 distinct external-I/O pins assigned, exceeds
+    DE10-Lite budget of 46`. Those 47 pins all exist on the board and none is
+    assigned twice. The "10" is a prose bullet that this file's own §3.6 table
+    (17 entries) contradicts.
+
+So the rule could only produce false positives, and could never produce the
+true positive it was named for. It is removed rather than re-thresholded:
+setting the ceiling to the catalogue's own 53 would leave a rule that is
+arithmetically incapable of firing, which is a worse kind of check than none.
+A real external-I/O budget needs the FULL manual pin-out table (so that
+off-catalogue pins can be attributed to a header rather than ignored); that is
+a separate piece of work, tracked in the PR that withdrew this rule.
+
+NOTE on a check that was never implemented, and still is not: "every PIN_ must
+exist on the board". The DE10-Lite has ~180 physical pins (CLOCK/KEY/SW/LEDR +
+36 GPIO + 16 Arduino + 48 HEX + VGA + SDRAM + G-sensor + analog) and the manual
+tables for HEX/VGA/SDRAM are not embedded here. Firing on an "unknown" pin with
+a partial catalogue would false-fire on legitimate HEX/VGA/SDRAM assignments.
 
 Pin tables sourced verbatim from "DE10-Lite User Manual v1.2" §3.5 (2x20 GPIO,
-GPIO_0..35) and §3.6 (Arduino Uno R3 header). No invented values; the budget
-46 = 36 + 10 is the literal skill ceiling, not an invented threshold.
+GPIO_0..35) and §3.6 (Arduino Uno R3 header). No invented values.
+
+RELATIONSHIP TO fpga_qsf_lint
+-----------------------------
+`pin-double-assignment` duplicates `fpga_qsf_lint`'s `pin-conflict` rule —
+byte-for-byte the same defect, measured on the same fixture. It is kept because
+`fpga_qsf_lint` requires `--qsf-file --rtl-dir` and is listed in
+`flow_compliance_check.KNOWN_NOT_INVOCABLE` ("driven from the FPGA-compile step
+that emits the .qsf" — a step that does not name it), so on a real project the
+duplicate is the only copy that runs. The UNIQUE rule here is
+`no-pin-assignments`: measured, `fpga_qsf_lint` on a DE10-Lite QSF with zero
+pin assignments returns `PASS: QSF lint clean (… 0 pin assignment(s) …)` — a
+clean bill of health over an empty denominator.
 
 Honesty:
   - QSF file/dir missing or unreadable          -> exit 2 (cannot judge).
   - QSF does not target DE10-Lite (other board) -> exit 2 NO_DATA (out of scope).
-  - An in-scope DE10-Lite QSF with ZERO pin
-    assignments                                 -> FAIL (vacuous-pass guard).
+  - No in-scope DE10-Lite QSF anywhere in the
+    target has a pin assignment                 -> FAIL (vacuous-pass guard).
 
 CLI:
-  python3 analog_hw_tb_de10lite_budget_check.py <qsf_file_or_dir> [--json]
+  python3 analog_hw_tb_de10lite_budget_check.py <qsf_file_or_dir> [--json [PATH]]
+
+  `--json` with no value prints the report to stdout (unchanged). `--json PATH`
+  WRITES the report to PATH — the house style every flow-YAML gate command uses.
+  Before this, `--json` was `action="store_true"`, so the house-style invocation
+  `... . --json reports/…/de10.json` died in argparse with exit 2, and exit 2 is
+  this repo's disclosed cannot-judge tier: a one-token typo bought a permanent,
+  undisclosed pass.
 
 Exit codes:
   0  PASS (all checks clean)
@@ -65,6 +115,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 # ---------------------------------------------------------------------------
 # DE10-Lite (Terasic, MAX10 10M50DAF484C7G) external-I/O pin catalogue.
@@ -98,11 +149,11 @@ _ARDUINO_PINS: Dict[str, str] = {
     "Arduino_IO15": "PIN_AA20", "ARDUINO_RESET_N": "PIN_F16",
 }
 
-# Physical pins that count toward the external-I/O budget (GPIO header + Arduino).
+# Physical external-I/O pins the board offers on the two user headers
+# (36 GPIO_0 + 16 Arduino digital I/O + ARDUINO_RESET_N = 53). MEASURED AND
+# DISCLOSED per target; deliberately NOT a threshold — see the module docstring
+# section "WITHDRAWN CHECK: external-io-budget, and why".
 _EXTERNAL_IO_PINS = set(_GPIO0_PINS.values()) | set(_ARDUINO_PINS.values())
-
-# Skill budget: 36 GPIO + 10 Arduino header = 46 external-I/O pins.
-_EXTERNAL_IO_BUDGET = 46
 
 # DE10-Lite identity: MAX10 10M50DAF484C7G.
 _DE10LITE_DEVICE_RE = re.compile(r"10M50DAF484C7G", re.IGNORECASE)
@@ -188,26 +239,18 @@ def check_pin_double_assignment(
     return findings
 
 
-def check_external_io_budget(
+def external_io_pins_used(
     assignments: List[Tuple[str, str]]
-) -> List[dict]:
-    findings = []
-    external_pins = sorted({
-        pin for _, pin in assignments if pin in _EXTERNAL_IO_PINS
-    })
-    if len(external_pins) > _EXTERNAL_IO_BUDGET:
-        findings.append({
-            "rule": "external-io-budget",
-            "severity": "ERROR",
-            "message": (
-                f"{len(external_pins)} distinct external-I/O pins assigned "
-                f"(GPIO header + Arduino), exceeds DE10-Lite budget of "
-                f"{_EXTERNAL_IO_BUDGET} (36 GPIO + 10 Arduino)"
-            ),
-            "external_io_pins_used": len(external_pins),
-            "budget": _EXTERNAL_IO_BUDGET,
-        })
-    return findings
+) -> List[str]:
+    """DISCLOSURE ONLY — the distinct header pins this QSF consumes.
+
+    Returns the sorted list; produces NO finding. The withdrawn
+    `external-io-budget` rule turned this same number into a verdict against a
+    ceiling below the catalogue it was drawn from; see the module docstring for
+    the measurement. Reporting the number without judging it keeps the
+    observation and drops the false positive.
+    """
+    return sorted({pin for _, pin in assignments if pin in _EXTERNAL_IO_PINS})
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +281,8 @@ def run_check(target: Path) -> dict:
     files_report = []
     total_assignments = 0
     in_scope_files = 0
+    in_scope_paths: List[Path] = []
+    external_pins_all: set = set()
 
     for qsf in qsf_files:
         try:
@@ -260,22 +305,13 @@ def run_check(target: Path) -> dict:
             continue
 
         in_scope_files += 1
+        in_scope_paths.append(qsf)
         assignments = parse_pin_assignments(text)
         total_assignments += len(assignments)
-        f: List[dict] = []
-        if not assignments:
-            f.append({
-                "rule": "no-pin-assignments",
-                "severity": "ERROR",
-                "message": (
-                    f"{qsf.name}: DE10-Lite QSF with no set_location_assignment "
-                    f"— a testbench top with no pin map is not a PASS"
-                ),
-                "file": str(qsf),
-            })
-        else:
-            f.extend(check_pin_double_assignment(assignments))
-            f.extend(check_external_io_budget(assignments))
+        ext = external_io_pins_used(assignments)
+        external_pins_all.update(ext)
+        # Per-file rules. `no-pin-assignments` is NOT one of them: see below.
+        f: List[dict] = list(check_pin_double_assignment(assignments))
         for item in f:
             item.setdefault("file", str(qsf))
         all_findings.extend(f)
@@ -283,6 +319,7 @@ def run_check(target: Path) -> dict:
             "file": str(qsf),
             "in_scope": True,
             "pin_assignments": len(assignments),
+            "external_io_pins_used": len(ext),
             "findings": len(f),
         })
 
@@ -300,11 +337,33 @@ def run_check(target: Path) -> dict:
             "findings": [],
         }
 
+    # `no-pin-assignments` is a TARGET-level rule, not a per-file one. A
+    # settings-only .qsf beside a pin-map .qsf is a normal Quartus project
+    # split; firing per-file made that split a project-wide FAIL (measured:
+    # one valid 2-pin map + one settings-only DE10 QSF -> FAIL). The defect
+    # this guards is "a DE10-Lite target with no pin map at all", which is
+    # exactly `total_assignments == 0`.
+    if total_assignments == 0:
+        all_findings.append({
+            "rule": "no-pin-assignments",
+            "severity": "ERROR",
+            "message": (
+                f"no set_location_assignment in any of the "
+                f"{in_scope_files} in-scope DE10-Lite QSF(s) "
+                f"({', '.join(p.name for p in in_scope_paths)}) "
+                f"— a testbench top with no pin map is not a PASS"
+            ),
+            "file": str(in_scope_paths[0]),
+        })
+
     return {
         "tool": "analog_hw_tb_de10lite_budget_check",
         "target": str(target),
         "board": "DE10-Lite (MAX10 10M50DAF484C7G)",
-        "external_io_budget": _EXTERNAL_IO_BUDGET,
+        # Disclosure, not a threshold — see the module docstring section
+        # "WITHDRAWN CHECK: external-io-budget, and why".
+        "external_io_pins_available": len(_EXTERNAL_IO_PINS),
+        "external_io_pins_used": len(external_pins_all),
         "in_scope_files": in_scope_files,
         "files": files_report,
         "total_assignments": total_assignments,
@@ -322,24 +381,40 @@ def main(argv: list | None = None) -> int:
         "target",
         help="QSF file, or a directory to recursively scan for *.qsf",
     )
-    parser.add_argument("--json", action="store_true", help="emit JSON report")
+    # `nargs="?"` keeps the documented bare `--json` (report to stdout) working
+    # AND accepts the flow-YAML house style `--json <path>`. It used to be
+    # `action="store_true"`, so the house-style form died in argparse with
+    # exit 2 — this repo's disclosed cannot-judge tier, which
+    # `flow_compliance_check` records as a pass. A gate must not be one token
+    # away from a permanent silent pass.
+    parser.add_argument(
+        "--json", nargs="?", const="-", default=None, metavar="PATH",
+        help="write the JSON report to PATH (bare --json prints to stdout)",
+    )
     args = parser.parse_args(argv)
 
     target = Path(args.target)
     report = run_check(target)
 
-    if args.json:
+    if args.json == "-":
         print(json.dumps(report, indent=2))
-    else:
+    elif args.json:
+        out = Path(args.json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(out, json.dumps(report, indent=2) + "\n")
+
+    if args.json != "-":
         status = report["status"]
         if status == "NO_DATA":
             print(f"NO_DATA: {report['message']}")
         elif status == "PASS":
             print(
-                f"PASS: DE10-Lite budget clean "
+                f"PASS: DE10-Lite QSF pin map clean "
                 f"({report['total_assignments']} pin assignment(s) across "
-                f"{report['in_scope_files']} in-scope QSF, "
-                f"budget {report['external_io_budget']})"
+                f"{report['in_scope_files']} in-scope QSF; "
+                f"{report['external_io_pins_used']} of "
+                f"{report['external_io_pins_available']} header external-I/O "
+                f"pins used — DISCLOSED, not judged)"
             )
         else:
             print(f"FAIL: {report['total_findings']} finding(s)")

@@ -81,8 +81,52 @@ is a separate defect with its own blast radius and is reported separately.
 STDOUT IS THE AUDIT JSON AND NOTHING ELSE. Every disclosure goes to stderr,
 which ``_check_program_exit_zero`` also captures into its evidence snippet.
 
+``--signoff`` — THE SIGN-OFF SCOPE (this is a TIGHTENING; read the numbers)
+--------------------------------------------------------------------------
+Step 31 is the PHYSICAL-VERIFICATION sign-off. Step 21 is the router's own DRC.
+They share this program and they must not share this policy, because the
+producer that is exactly right for one is disqualifying for the other.
+
+MEASURED on ``origin/main``, on a project containing ZERO GDS files, whose
+``reports/phase3/drc_signoff.rpt`` is a 19,162-byte OpenROAD ``detailed_route``
+projection re-staged by the runner's own alias writer::
+
+    drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt
+        -> rc=0   passed:true  tool_authentic:true
+                  determined_files:1  real_violation_total:0
+
+That is a sign-off DRC certificate issued by the router over a layout that was
+never streamed. ``--signoff`` refuses it, on two independent grounds:
+
+* THE PRODUCER. A sign-off DRC verdict is a RULE DECK applied to a LAYOUT.
+  Accepted: a KLayout report database that names its deck in ``<generator>``;
+  an SVRF-native per-rule tally (the foundry's own deck); a Magic DRC
+  transcript. Refused: the router's detailed-route projection
+  (``DRC_SIGNOFF_PRODUCER_NOT_A_SIGNOFF_DECK``) and anything with no
+  recognised producer signature (``DRC_SIGNOFF_PRODUCER_UNRECOGNISED``).
+* THE LAYOUT. ``summary.layout_evidence_tier`` is one of ``invocation`` (a
+  measured tool run naming the streamout), ``declared`` (a provenance
+  declaration of it), ``on_disk``, or ``none``. ``none`` is
+  ``DRC_SIGNOFF_NO_LAYOUT_EVIDENCE`` and rc 1. The tier is DISCLOSED even when
+  it passes, because "declared" and "measured" are very different claims and a
+  reader is entitled to know which one this run earned.
+
+``--signoff`` is consumed by THIS WRAPPER and never forwarded: ``eda_report_
+audit`` has no such option and would ``SystemExit(2)`` on it — measured, the
+wrapper then reports NOT CHECKED and the gate goes red on every project. The
+anti-drift test that derives ``VALUE_FLAGS`` from that program's real parser
+(``value_taking <= set(VALUE_FLAGS)``) is a SUBSET assertion and cannot catch a
+wrapper-only flag, so the strip is explicit here and pinned by its own test.
+
+BLAST RADIUS, measured over every published run carrying the Step-31 artefact
+(13 project roots; the extraction reads git objects, never a working tree):
+**0**. The 6 runs green on this gate today stay green — each is a KLayout
+report database naming a PDK deck, and each reaches layout tier ``invocation``
+or ``declared``. The one run at tier ``none`` is already rc 1 today.
+
 WIRING — Steps 21 and 31 invoke this program in ``gate.all_of`` and a non-zero
-exit fails the step. No ``ENFORCEMENT:`` intent line is declared, and that is
+exit fails the step. Only Step 31 passes ``--signoff``. No ``ENFORCEMENT:``
+intent line is declared, and that is
 deliberate rather than an oversight: ``flow_gate_enforcement_audit`` classifies
 a gate as ENFORCED only when a one-shot runner invokes it INLINE, and
 ``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES`` carries ``sta_report_check``
@@ -102,10 +146,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import _signoff_drc_format as _sdf  # noqa: E402
 from _report_check_argv import json_target, split_and_pin  # noqa: E402
 from eda_report_audit import main as _audit_main  # noqa: E402
 
 MODE = "drc"
+
+#: Options this WRAPPER owns. They are stripped from the passthrough before the
+#: audit sees them: `_report_check_argv._split` forwards every unrecognised
+#: option verbatim, and `eda_report_audit`'s parser rejects an unknown one with
+#: `SystemExit(2)`, which this wrapper maps to "NOT CHECKED", rc 1 — an outage
+#: on every project rather than a policy. Boolean only; a value-taking wrapper
+#: option would additionally need `_report_check_argv.VALUE_FLAGS`.
+WRAPPER_FLAGS = ("--signoff",)
 
 #: rc contract of this wrapper. 2 is deliberately absent — see the module
 #: docstring (``_check_program_exit_zero`` credits rc 2 as a vacuous PASS).
@@ -157,6 +210,121 @@ def _not_checked_payload(rule: str, message: str, project_dir: str) -> dict:
     }
 
 
+def take_wrapper_flags(passthrough) -> tuple:
+    """``(flags_present, passthrough_without_them)``.
+
+    Explicit, because the shared splitter forwards every unrecognised option
+    verbatim and the wrapped program rejects it with ``SystemExit(2)``. See
+    ``WRAPPER_FLAGS``.
+    """
+    present = {t for t in passthrough if t in WRAPPER_FLAGS}
+    return present, [t for t in passthrough if t not in WRAPPER_FLAGS]
+
+
+def signoff_verdict(payload: object, project_dir: str) -> tuple:
+    """``(findings, summary_additions)`` for the sign-off scope.
+
+    Judges TWO claims the base audit does not and must not judge, because the
+    same audit serves the router-DRC gate where the answers are different:
+
+      1. the PRODUCER is a rule deck applied to a layout, not the router
+         reporting on its own routing database;
+      2. a streamed design LAYOUT is evidenced at all.
+
+    Findings at ERROR severity are the caller's rc-1 reasons. Everything else
+    is disclosure and never gates.
+    """
+    findings = []
+    summary = {}
+    if isinstance(payload, dict) and isinstance(payload.get("summary"), dict):
+        summary = payload["summary"]
+    producers = summary.get("producers")
+    add: dict = {"signoff_scope": True}
+
+    if not isinstance(producers, list) or not producers:
+        findings.append({
+            "rule": "DRC_SIGNOFF_PRODUCER_UNRECOGNISED", "severity": "ERROR",
+            "file": "",
+            "message": ("the audit disclosed no producer for any scoped report, "
+                        "so nothing establishes that a sign-off rule deck ran; "
+                        "a sign-off gate must not pass on an unattributed "
+                        "report")})
+        add["signoff_producers"] = []
+        add["layout_evidence_tier"] = _sdf.TIER_NONE
+        add["layout_topcell_match"] = None
+        add["layout_evidence_witness"] = ""
+        return findings, add
+
+    add["signoff_producers"] = [
+        {k: p.get(k) for k in ("file", "producer", "deck", "is_signoff_deck")}
+        for p in producers]
+
+    top_cell = next((p.get("top_cell") for p in producers if p.get("top_cell")),
+                    None)
+    for p in producers:
+        kind, rel = p.get("producer"), p.get("file", "")
+        if kind == _sdf.OPENROAD:
+            findings.append({
+                "rule": "DRC_SIGNOFF_PRODUCER_NOT_A_SIGNOFF_DECK",
+                "severity": "ERROR", "file": rel,
+                "message": (
+                    f"{rel!r} is the ROUTER's own detailed-route DRC "
+                    f"({p.get('evidence')}), not a sign-off rule deck applied "
+                    f"to a layout. The router's DRC is a routability "
+                    f"measurement over its own database — it is what step 21 "
+                    f"gates on, and it cannot certify physical verification. "
+                    f"Produce the sign-off report from the PDK/foundry deck, "
+                    f"or declare the gap through waivers.json so the waiver "
+                    f"gates can see it.")})
+        elif kind is None:
+            findings.append({
+                "rule": "DRC_SIGNOFF_PRODUCER_UNRECOGNISED",
+                "severity": "ERROR", "file": rel,
+                "message": (
+                    f"{rel!r} carries no recognised sign-off DRC producer "
+                    f"signature ({p.get('evidence')}) — neither a KLayout "
+                    f"report database, an SVRF-native per-rule tally, nor a "
+                    f"Magic DRC transcript. Nothing is certified.")})
+        elif kind == _sdf.KLAYOUT and not p.get("deck"):
+            findings.append({
+                "rule": "DRC_SIGNOFF_PRODUCER_DECK_UNNAMED",
+                "severity": "ERROR", "file": rel,
+                "message": (
+                    f"{rel!r} is a KLayout report database that declares no "
+                    f"<generator> deck script, so it does not say WHICH rules "
+                    f"produced it — and which rules ran is the whole content "
+                    f"of a sign-off claim.")})
+        if p.get("attribution_disagreement"):
+            findings.append({
+                "rule": "DRC_SIGNOFF_ATTRIBUTION_DISAGREEMENT",
+                "severity": "WARNING", "file": rel,
+                "message": (
+                    f"{rel!r} declares '# Tool: {p.get('header_tool')}' but its "
+                    f"content reads as {kind!r}; the CONTENT decides. The "
+                    f"header is written by the same code path that re-stages "
+                    f"the report, so it is a claim about the file, not "
+                    f"evidence from it.")})
+
+    ev = _sdf.layout_evidence(Path(project_dir), top_cell)
+    add["layout_evidence_tier"] = ev["tier"]
+    add["layout_topcell_match"] = ev["topcell_match"]
+    add["layout_evidence_witness"] = ev["witness"]
+    add["layout_topcell"] = top_cell
+    if ev["tier"] == _sdf.TIER_NONE:
+        findings.append({
+            "rule": "DRC_SIGNOFF_NO_LAYOUT_EVIDENCE", "severity": "ERROR",
+            "file": "",
+            "message": (
+                "nothing in this project evidences a streamed design layout "
+                "for the deck to have read: no measured tool invocation naming "
+                "the streamout, no provenance declaration of it, and no "
+                "streamout on disk at phase3/stage3/pnr/ or phase3/stage4/gds/"
+                + (f" with stem {top_cell!r}" if top_cell else "")
+                + ". A DRC certificate over a layout that was never streamed "
+                  "certifies nothing.")})
+    return findings, add
+
+
 def _write_json(target: str, text: str) -> bool:
     try:
         path = Path(target)
@@ -176,6 +344,8 @@ def run(caller_argv, _audit=None) -> int:
     """
     audit = _audit or _audit_main
     project_dir, passthrough, refusal = split_and_pin(caller_argv, mode=MODE)
+    wrapper_flags, passthrough = take_wrapper_flags(passthrough)
+    signoff = "--signoff" in wrapper_flags
     target = json_target(passthrough)
 
     if refusal:
@@ -222,24 +392,66 @@ def run(caller_argv, _audit=None) -> int:
         return RC_FAIL
 
     payload_text = buf.getvalue()
+    try:
+        payload = json.loads(payload_text)
+    except ValueError:
+        payload = None
+
+    # --- the sign-off scope ------------------------------------------------
+    # Applied BEFORE stdout and BEFORE the artefact is persisted, so the audit
+    # JSON a reviewer reads carries the sign-off verdict rather than the base
+    # audit's verdict plus a stderr line contradicting it. Only a would-be PASS
+    # is re-judged: a FAIL is already a FAIL, and re-deciding it here would
+    # relabel someone else's finding.
+    signoff_refused = False
+    if signoff and rc == RC_PASS:
+        sf, sadd = signoff_verdict(payload, project_dir)
+        errors = [f for f in sf if f.get("severity") == "ERROR"]
+        if isinstance(payload, dict):
+            payload.setdefault("findings", []).extend(sf)
+            if isinstance(payload.get("summary"), dict):
+                payload["summary"].update(sadd)
+            else:
+                payload["summary"] = sadd
+            if errors:
+                payload["passed"] = False
+                payload["summary"]["terminal_verdict"] = "SIGNOFF_REFUSED"
+            payload_text = json.dumps(payload, indent=2,
+                                      ensure_ascii=False) + "\n"
+        signoff_refused = bool(errors)
+        for f in sf:
+            print(f"drc_report_check: [{f['severity']}] {f['rule']}: "
+                  f"{f['message']}", file=sys.stderr)
+        print(f"drc_report_check: signoff layout evidence tier="
+              f"{sadd.get('layout_evidence_tier')!r} "
+              f"topcell_match={sadd.get('layout_topcell_match')!r} "
+              f"witness={sadd.get('layout_evidence_witness')!r}",
+              file=sys.stderr)
+
     sys.stdout.write(payload_text)          # stdout stays pure audit JSON
 
-    if target and not Path(target).is_file():
+    # `eda_report_audit` writes `--json` itself, so the artefact on disk holds
+    # the BASE payload. Under `--signoff` it must be overwritten with the
+    # enriched one, or the persisted audit and the exit code disagree.
+    if target and (signoff or not Path(target).is_file()):
         if _write_json(target, payload_text.strip() + "\n"):
-            print(f"drc_report_check: audit re-emitted to {target} by the "
-                  f"wrapper (eda_report_audit left it absent).",
-                  file=sys.stderr)
+            if not signoff:
+                print(f"drc_report_check: audit re-emitted to {target} by the "
+                      f"wrapper (eda_report_audit left it absent).",
+                      file=sys.stderr)
         else:
             print(f"drc_report_check: NO AUDIT WRITTEN to {target} — the "
                   f"verdict below was produced but could not be persisted.",
                   file=sys.stderr)
             return RC_FAIL
 
+    if signoff_refused:
+        print("drc_report_check: REFUSED a sign-off PASS — see the "
+              "DRC_SIGNOFF_* finding(s) above. NOTHING was certified for "
+              "step 31.", file=sys.stderr)
+        return RC_FAIL
+
     if rc == RC_PASS:
-        try:
-            payload = json.loads(payload_text)
-        except ValueError:
-            payload = None
         ok, files_found, determined, real_total = denominator_of(payload)
         if not ok:
             print(f"drc_report_check: REFUSED a PASS that cannot name its "
@@ -247,10 +459,20 @@ def run(caller_argv, _audit=None) -> int:
                   f"sign-off gate must disclose how much it read.",
                   file=sys.stderr)
             return RC_FAIL
+        # A PASS states how much it looked at — and, since #997-D9, how much of
+        # that it was able to CHECK AGAINST THE TOOL rather than against the
+        # runner's summary of the tool. `tool_corroborated` is the second
+        # denominator: a report with no tool transcript beneath its summary is
+        # passed on the summary alone, and a reader is entitled to see that
+        # said out loud instead of inferring it from a single count.
+        summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
         print(f"drc_report_check: PASS over files_found={files_found} "
               f"determined_files={determined} "
-              f"real_violation_total={real_total} project={project_dir}",
-              file=sys.stderr)
+              f"real_violation_total={real_total} "
+              f"tool_corroborated_files={summary.get('tool_corroborated_files')} "
+              f"tool_uncorroborated_files="
+              f"{summary.get('tool_uncorroborated_files')} "
+              f"project={project_dir}", file=sys.stderr)
     return rc
 
 

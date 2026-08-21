@@ -105,6 +105,15 @@ except Exception:  # pragma: no cover - path fallback
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import dft_signoff_common  # type: ignore
 
+try:
+    import l_doc_consumer_contract as _l20c
+except Exception:  # pragma: no cover - path fallback
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import l_doc_consumer_contract as _l20c  # type: ignore
+    except Exception:
+        _l20c = None
+
 
 _PROGRAM = "dft_atpg_coverage_check"
 _VERSION = "1.1.0"
@@ -113,11 +122,61 @@ _VERSION = "1.1.0"
 # a lenient self-chosen target cannot pass a sub-foundry coverage number.
 FOUNDRY_FLOOR_DEFAULT = 95.0
 
+# ── The SINGLE non-blocking-verdict contract, shared with dft_signoff_check ──
+# The stuck-at verdicts `audit()` can emit that DO NOT block DFT sign-off. This
+# is the ONE definition of "non-blocking stuck-at disposition"; it is consulted
+# by BOTH this program's own rc mapping (`main`) AND the aggregate
+# `dft_signoff_check`, so the two gates cannot classify the same recorded verdict
+# differently — the whole point of vibe-ic#603 was that two gates keyed on the
+# same L20 applicability and disagreed, and that can only recur if one of them
+# re-invents this list instead of reading it.
+#
+#   PASS          — measured stuck-at coverage met the foundry floor.
+#   INFORMATIONAL — `audit()` downgraded a floor FAIL because the design's OWN
+#                   L20 declares no DFT (see `l20_dft_applicability`). This is
+#                   NEVER a blanket pass: a design that DECLARES DFT still yields
+#                   PASS/FAIL against the floor, and a real below-floor coverage
+#                   on a DFT-declaring design still FAILs. INFORMATIONAL is non-
+#                   blocking ONLY because the applicability-guarded downgrade
+#                   already decided the floor does not govern this design.
+#
+# SKIPPED-CONDITION is deliberately absent: `audit()` never emits it (the
+# disclosed-skip short-circuits in `main()` before `audit()` is reached), so a
+# stuck-at status of SKIPPED-CONDITION reaching this predicate would be an
+# unexpected state and must NOT vacuously pass.
+NON_BLOCKING_STUCK_AT_VERDICTS = frozenset({"PASS", "INFORMATIONAL"})
+
+
+def stuck_at_signoff_passes(verdict: Optional[str]) -> bool:
+    """True iff a stuck-at verdict (as emitted by `audit()`) is non-blocking for
+    DFT sign-off.
+
+    ONE predicate, shared by this program's `main()` rc mapping and by
+    `dft_signoff_check`'s aggregate, so a design's recorded stuck-at disposition
+    is judged identically wherever it is read. This is the invariant that keeps
+    the coverage gate and the sign-off gate from drifting into opposite verdicts
+    about the same tree (vibe-ic#603). chip-AGNOSTIC — a pure string check."""
+    return str(verdict).strip().upper() in NON_BLOCKING_STUCK_AT_VERDICTS
+
 # Field names that may hold the REAL measured stuck-at coverage (%) — in
-# priority order. fault_atpg_run writes `coverage_pct`; the runner/skill
-# JSON writes `stuck_at_coverage_percent`. We never read
-# `stuck_at_ge_target` for the number.
+# priority order. vibe-ic#603: `test_coverage_pct` (detected / (total −
+# ATPG-untestable)) is the sign-off number and is preferred when present; a
+# design wrapped in an unused pad frame whose TESTABLE logic is covered would
+# otherwise FAIL on the raw ratio alone. fault_atpg_run writes `coverage_pct`
+# (raw) + `test_coverage_pct`; the runner/skill JSON writes
+# `stuck_at_coverage_percent`. We never read `stuck_at_ge_target` for the number.
 _MEASURED_FIELDS = (
+    "test_coverage_pct",
+    "coverage_pct",
+    "stuck_at_coverage_percent",
+    "stuck_at_coverage_pct",
+    "coverage_percent",
+    "stuck_at_pct",
+)
+
+# The RAW fault-coverage field(s), reported ALONGSIDE the (possibly test-based)
+# measured number so the two never collapse into one — the core of #603.
+_RAW_FIELDS = (
     "coverage_pct",
     "stuck_at_coverage_percent",
     "stuck_at_coverage_pct",
@@ -227,9 +286,12 @@ def evaluate(coverage_json: Optional[dict],
     target: Optional[float] = None
     target_src: Optional[str] = None
 
+    raw_measured: Optional[float] = None
+    raw_src: Optional[str] = None
     if coverage_json is not None:
         measured, measured_src = _extract_number(coverage_json, _MEASURED_FIELDS)
         target, target_src = _extract_number(coverage_json, _TARGET_FIELDS)
+        raw_measured, raw_src = _extract_number(coverage_json, _RAW_FIELDS)
 
     # Fall back to the human-readable report for whatever is still missing.
     if rpt_text and (measured is None or target is None):
@@ -301,6 +363,13 @@ def evaluate(coverage_json: Optional[dict],
         "measured_coverage_pct": (round(measured, 4)
                                   if measured is not None else None),
         "measured_source": measured_src,
+        # RAW fault coverage, reported alongside so the sign-off (test) number
+        # never silently stands in for it — vibe-ic#603. `measured_is_test`
+        # tells a reader which number the verdict was computed on.
+        "raw_coverage_pct": (round(raw_measured, 4)
+                             if raw_measured is not None else None),
+        "raw_source": raw_src,
+        "measured_is_test_coverage": measured_src == "test_coverage_pct",
         "target_pct": round(target, 4) if target is not None else None,
         "target_source": target_src,
         "foundry_floor_pct": round(foundry_floor, 4),
@@ -314,6 +383,129 @@ def evaluate(coverage_json: Optional[dict],
         "status": verdict,
         "reasons": reasons,
     }
+
+
+# ── L20 gate applicability (vibe-ic#603 item 3) ────────────────────────
+# The 95 % foundry floor is a SIGN-OFF requirement for a design that DECLARES a
+# DFT topology. A design whose own inputs DECLARE no DFT requirement — L20
+# applicability NOT_APPLICABLE, or an EXTRACTED L20 carrying no chains / tap /
+# compression / bist — should have
+# its ATPG coverage reported as INFORMATIONAL, not FAILed against the floor —
+# otherwise the flow's auto-inserted scan chain produces a coverage number that
+# a design that never asked for DFT is then punished by. This reads the design's
+# OWN L20; a design that DOES declare DFT keeps the floor (this only ever
+# downgrades a FAIL to informational, never the reverse — §4.05).
+_L20_PRESENT_KEYS = ("dft_present", "dft_required", "scan_required",
+                     "standard_scan_chain_present")
+_L20_CHAIN_KEYS = ("scan_chains", "scan_chain", "chains", "scan_chain_topology")
+_L20_TAP_KEYS = ("jtag_tap", "tap", "jtag", "test_access_port")
+_L20_COMPRESSION_KEYS = ("test_compression", "compression", "edt")
+_L20_BIST_KEYS = ("bist_mbist", "bist", "mbist")
+
+
+def _truthy(v: Any) -> bool:
+    if v is None or v is False:
+        return False
+    if isinstance(v, (list, dict, str)):
+        return len(v) > 0
+    return bool(v)
+
+
+def l20_dft_applicability(project: Path) -> dict:
+    """Read the design's OWN L20 and report whether it DECLARES DFT.
+
+    Returns ``{l20_present, applicable, asserts_dft, reason}``. When L20 is
+    absent or unparseable the floor stands (``asserts_dft`` conservatively True-
+    equivalent: we return asserts_dft=None and the caller keeps the floor).
+
+    An L20 that is PRESENT but has never claimed extraction is the SAME
+    uninformative state and gets the SAME conservative answer — its
+    ``dft_present: false`` is the emitter's field default, not a decision. Only
+    ``asserts_dft is False`` licenses disabling the foundry floor, and after
+    this change exactly ONE state produces it: ``applicability:
+    NOT_APPLICABLE`` — an explicit, human-authored declaration.
+
+    KNOWN AND DELIBERATELY UNTOUCHED, opposite direction: a layer that DOES
+    claim extraction and records no DFT is currently folded into
+    ``asserts_dft=True`` by the ``is_extraction_claimed`` term, so it keeps the
+    floor even though it is the one state that would legitimately earn the
+    downgrade. Correcting that LOOSENS the gate for some designs and is a
+    separate decision; it is not bundled here, where every change tightens."""
+    out = {"l20_present": False, "applicable": None, "asserts_dft": None,
+           "reason": None}
+    if _l20c is None:
+        out["reason"] = "l_doc_consumer_contract unavailable — floor stands"
+        return out
+    try:
+        path, doc = _l20c.load_l_doc(project, "L20")
+    except Exception:
+        path, doc = None, None
+    if path is None:
+        out["reason"] = "no L20 doc — floor stands"
+        return out
+    out["l20_present"] = True
+    if doc is None:
+        out["reason"] = "L20 unparseable — floor stands"
+        return out
+    applic = _l20c.applicability_of(doc)
+    out["applicable"] = applic
+    if applic in ("NOT_APPLICABLE", "N/A", "NA"):
+        out["reason"] = f"L20 applicability={applic}"
+        out["asserts_dft"] = False
+        return out
+    fields = _l20c.l_doc_fields(doc)
+
+    def _get(keys):
+        for k in keys:
+            if k in fields:
+                return fields[k]
+        return None
+    declares_topology = (
+        _truthy(_get(_L20_PRESENT_KEYS))
+        or _truthy(_get(_L20_TAP_KEYS))
+        or _truthy(_get(_L20_COMPRESSION_KEYS))
+        or _truthy(_get(_L20_BIST_KEYS))
+        or _truthy(_get(_L20_CHAIN_KEYS))
+    )
+    if declares_topology or _l20c.is_extraction_claimed(doc):
+        out["asserts_dft"] = True
+        out["reason"] = "L20 declares a DFT topology"
+        return out
+
+    # NOT-RUN IS NOT RAN-AND-EMPTY. What is left here is a layer that is
+    # present, asserts no DFT topology, AND has never claimed extraction — the
+    # emitter's untouched skeleton, whose `dft_present: false` is a FIELD
+    # DEFAULT, not a decision. `l_doc_consumer_contract.is_extraction_claimed`
+    # names this trap in its own docstring: the producer state is THREE-valued
+    # (NOT-RUN / RAN-AND-EMPTY / RAN-AND-FOUND) and only RAN-AND-EMPTY is a
+    # design saying "I need no DFT". Reading NOT-RUN as RAN-AND-EMPTY turns the
+    # ABSENCE of a stated requirement into a DECLARATION that the requirement is
+    # absent, and silently switches off a foundry sign-off floor on that basis.
+    #
+    # This function already fails safe for its other two uninformative states —
+    # see the docstring: "When L20 is absent or unparseable the floor stands".
+    # An un-extracted skeleton carries no more information than an absent file,
+    # so it must not buy a LOOSER verdict than deleting the file would. Before
+    # this change the gate was NON-MONOTONIC IN EVIDENCE: `rm L20_*.json` made
+    # it STRICTER than leaving the empty skeleton in place.
+    #
+    # asserts_dft=None is the value the caller already treats as "keep the
+    # floor" (`l20.get("asserts_dft") is False` gates the downgrade), so the
+    # unknown state now lands on the conservative side by construction. The two
+    # genuine downgrade paths are untouched: `applicability: NOT_APPLICABLE`
+    # (early return above) and a layer that claims extraction. chip-AGNOSTIC —
+    # no design, PDK, vendor or part literal is involved.
+    out["asserts_dft"] = None
+    out["reason"] = (
+        f"L20 is present but UN-EXTRACTED (extraction_status="
+        f"{str(doc.get('extraction_status') or 'unset')!r}, no chains/tap/"
+        f"compression/bist and no extraction_evidence), so whether this design "
+        f"requires DFT is UNKNOWN, not declared-absent. The foundry floor "
+        f"STANDS — an un-extracted layer must not buy a looser verdict than "
+        f"having no layer at all. To report ATPG coverage as informational, "
+        f"the design must actually declare it: set L20 applicability to "
+        f"NOT_APPLICABLE, or extract L20 and record the no-DFT decision.")
+    return out
 
 
 def _resolve_paths(project: Path,
@@ -375,6 +567,101 @@ def _has_measurable_coverage(project: Path,
     return False
 
 
+# The stuck-at engine's OWN machine-readable coverage metadata, and the
+# disclosed-aside name `_dft_retain_unmeasured` moves it to. Paths and one YAML
+# key only — no design, PDK or vendor literal.
+_ENGINE_COVERAGE_META = (
+    "phase2/stage2/dft/coverage.yml",
+    "phase2/stage2/dft/coverage.unmeasured.yml",
+)
+_ATPG_NOT_RUN_RECORD = "phase2/stage2/dft/dft_atpg_not_run.json"
+_RATIO_RE = re.compile(r"^\s*ratio:\s*([0-9.eE+-]+)\s*$", re.MULTILINE)
+
+
+def _engine_metadata_left_behind(project: Path) -> Optional[dict]:
+    """Return the engine's unread coverage metadata, or None.
+
+    WHY THIS EXISTS. `fault_atpg_run._run_docker` starts the engine with
+    `docker run --rm` under a client-side `subprocess.run(..., timeout=)`.
+    A timeout kills the docker CLIENT; the container is untouched, keeps
+    running, completes, writes its coverage metadata into the mounted project
+    and only then `--rm`s itself. The flow, meanwhile, has already recorded
+    "no measurement" and moved on. Nothing ever looks again.
+
+    MEASURED — the same design on two rounds, two plugin versions and two
+    images, entirely from artefact mtimes:
+
+      v1.9.27 / image 0.2.51   dft_atpg_not_run.json 18:58:49
+                               coverage.yml          19:04:20   (+331 s)
+      v1.9.8  / image 0.2.48   dft_atpg_not_run.json 06:28:45
+                               coverage.yml          06:33:57   (+312 s)
+
+    Both files carry a BYTE-IDENTICAL `ratio: 9.16633307933807e-1` — 91.67 %
+    stuck-at coverage over a full `faultPoints:` enumeration, produced by the
+    engine from the run's own netlist. Both runs nonetheless reported "no
+    DFT/ATPG coverage evidence found ... Step 11 cannot pass without a real
+    stuck-at coverage measurement".
+
+    THIS FUNCTION DOES NOT CHANGE ANY VERDICT. The branch that calls it
+    returns FAIL before and after. It replaces a false sentence ("nothing was
+    measured") with a true and actionable one ("the measurement is here, it
+    landed N seconds late, and here is the mechanism"). Recovering the number
+    into the canonical reports is a producer-side change and is deliberately
+    NOT done here — a gate must not manufacture the evidence it grades.
+
+    chip-AGNOSTIC / PDK-AGNOSTIC: file paths and one YAML key.
+    """
+    not_run = project / _ATPG_NOT_RUN_RECORD
+    for rel in _ENGINE_COVERAGE_META:
+        p = project / rel
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = _RATIO_RE.search(text)
+        if not m:
+            continue
+        # THE PRODUCER'S OWN PARSER, NOT A SECOND ONE. A gate that re-derives
+        # a number the producer already knows how to derive will eventually
+        # disagree with it, and the disagreement will be read as a finding.
+        # `_count_yaml_block_items`' docstring is explicit that Fault writes
+        # SIBLING top-level sequences (`sa0Covered:`, `sa1Uncovered:`, ...)
+        # after `faultPoints:`, so a naive count sums all of them — 138 698
+        # instead of 44 934 on the tree measured below.
+        try:
+            import fault_atpg_run as _fatpg   # sibling program, same dir
+            parsed = _fatpg.parse_atpg_coverage(text, "", 0)
+        except Exception:
+            continue
+        pct = parsed.get("coverage_pct") or 0.0
+        if not (0.0 < pct <= 100.0):
+            continue
+        points = parsed.get("faults_total") or 0
+        covered = parsed.get("faults_covered") or 0
+        delta = None
+        if not_run.is_file():
+            try:
+                delta = int(round(p.stat().st_mtime - not_run.stat().st_mtime))
+            except OSError:
+                delta = None
+        return {
+            "path": rel,
+            "ratio": m.group(1),
+            "coverage_pct": pct,
+            "fault_points": points,
+            "faults_covered": covered,
+            "parsed_by": "fault_atpg_run.parse_atpg_coverage",
+            "coverage_source": parsed.get("coverage_source"),
+            "faults_total_source": parsed.get("faults_total_source"),
+            "not_run_record": (_ATPG_NOT_RUN_RECORD if not_run.is_file()
+                               else None),
+            "landed_after_not_run_s": delta,
+        }
+    return None
+
+
 def audit(project: Path,
           coverage_json_override: Optional[str] = None,
           foundry_floor: float = FOUNDRY_FLOOR_DEFAULT) -> dict:
@@ -393,20 +680,60 @@ def audit(project: Path,
 
     if cov_path is None and rpt_path is None:
         # No evidence at all → honest FAIL (NOT a vacuous pass on absence).
+        #
+        # ... but "the canonical reports are absent" and "the engine produced
+        # no measurement" are two different statements, and this branch used to
+        # print the second while only having established the first.
+        orphan = _engine_metadata_left_behind(project)
+        reasons = [
+            "no DFT/ATPG coverage evidence found: neither "
+            f"coverage.json ({cov_candidates[0]}) nor "
+            f"atpg_coverage.rpt ({rpt_candidates[0]}) exists — "
+            "Step 11 cannot pass without a real stuck-at coverage "
+            "measurement"
+        ]
+        if orphan is not None:
+            # Only CLAIM the ordering when the mtimes actually show it. A tree
+            # that has been copied or hand-edited can carry a delta that is
+            # zero or negative, and asserting "written N s AFTER" off that
+            # would be the same kind of unbacked sentence this reason exists
+            # to remove.
+            _d = orphan["landed_after_not_run_s"]
+            if isinstance(_d, int) and _d > 0:
+                _when = (f"It was written {_d}s AFTER "
+                         f"{orphan['not_run_record']} declared the "
+                         f"measurement absent. ")
+            elif orphan["not_run_record"] is None:
+                _when = "No not-run record sits beside it. "
+            else:
+                _when = (f"Its mtime does not post-date "
+                         f"{orphan['not_run_record']} "
+                         f"(delta={_d}s), so the ordering is NOT established "
+                         f"on this tree — the metadata's presence is. ")
+            reasons.append(
+                "BUT THE ENGINE'S OWN COVERAGE METADATA IS IN THE TREE AND "
+                "WAS NEVER READ: "
+                f"{orphan['path']} holds ratio={orphan['ratio']!r} "
+                f"(= {orphan['coverage_pct']:.2f}%) over "
+                f"{orphan['fault_points']} enumerated fault points. "
+                + _when +
+                "The producer runs the engine with `docker run --rm` and a "
+                "client-side `subprocess` timeout, which kills the docker "
+                "CLIENT and not the container — so on a wall-budget expiry "
+                "the engine keeps running, completes, and lands its metadata "
+                "after the flow has stopped listening. This step is still "
+                "FAIL (the canonical reports really are absent); what is "
+                "corrected here is the CLAIM that nothing was measured."
+            )
         base.update({
             "measured_coverage_pct": None,
             "target_pct": None,
             "recomputed_ge_target": None,
             "foundry_floor_pct": round(foundry_floor, 4),
+            "engine_metadata_left_behind": orphan,
             "verdict": "FAIL",
             "status": "FAIL",
-            "reasons": [
-                "no DFT/ATPG coverage evidence found: neither "
-                f"coverage.json ({cov_candidates[0]}) nor "
-                f"atpg_coverage.rpt ({rpt_candidates[0]}) exists — "
-                "Step 11 cannot pass without a real stuck-at coverage "
-                "measurement"
-            ],
+            "reasons": reasons,
         })
         return base
 
@@ -426,6 +753,27 @@ def audit(project: Path,
     if base.get("reasons_prefix"):
         result["reasons"] = base.pop("reasons_prefix") + result.get("reasons", [])
     result.update(base)
+
+    # ── L20 gate applicability (vibe-ic#603 item 3) ───────────────────────
+    # Only ever DOWNGRADES a FAIL to INFORMATIONAL, and only when the design's
+    # OWN L20 declares no DFT requirement. A design that declares DFT keeps the
+    # floor; a real MEASUREMENT is still reported either way (degrade loudly).
+    l20 = l20_dft_applicability(project)
+    result["l20_applicability"] = l20
+    if result.get("verdict") == "FAIL" and l20.get("asserts_dft") is False:
+        result["verdict"] = "INFORMATIONAL"
+        result["status"] = "INFORMATIONAL"
+        result["floor_enforced"] = False
+        result.setdefault("reasons", []).insert(
+            0,
+            f"{l20.get('reason')}, so ATPG coverage is INFORMATIONAL, not "
+            f"gated at the {foundry_floor:.0f}% foundry floor. Measured test "
+            f"coverage {result.get('measured_coverage_pct')}% "
+            f"(raw fault coverage {result.get('raw_coverage_pct')}%) is "
+            f"reported for the record; a design that DECLARES DFT would be "
+            f"held to the floor.")
+    else:
+        result["floor_enforced"] = True
     return result
 
 
@@ -495,11 +843,16 @@ def main(argv: Optional[list] = None) -> int:
 
     verdict = report.get("verdict")
     meas = report.get("measured_coverage_pct")
+    raw = report.get("raw_coverage_pct")
     tgt = report.get("target_pct")
     eff = report.get("effective_target_pct")
-    print(f"{_PROGRAM}: measured={meas} written_target={tgt} "
+    print(f"{_PROGRAM}: measured={meas} raw={raw} written_target={tgt} "
           f"effective_target={eff} verdict={verdict}", file=sys.stderr)
-    return 0 if verdict == "PASS" else 1
+    # PASS and the L20-INFORMATIONAL downgrade (design declares no DFT) both
+    # resolve to rc=0; only a floor-enforced FAIL is rc=1. Routed through the
+    # SHARED predicate so this rc mapping and dft_signoff_check's stuck-at
+    # acceptance read the SAME non-blocking set — they cannot drift.
+    return 0 if stuck_at_signoff_passes(verdict) else 1
 
 
 if __name__ == "__main__":

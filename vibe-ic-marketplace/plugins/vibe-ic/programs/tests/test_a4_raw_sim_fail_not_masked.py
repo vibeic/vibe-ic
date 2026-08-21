@@ -51,6 +51,19 @@ def _corner(name, value, sim_run=True):
             "_provenance": "real_ngspice"}
 
 
+# A4's declared upstream input: A3's per-block netlist. A project that has A4
+# results also has this file — the sweep cannot have measured a design whose
+# netlist was never produced, and the gate's A4_NETLIST_ABSENT rule says so.
+# These fixtures are about the raw_sim_verdict rule, so they carry the netlist
+# a complete run would have and let that rule be the one under test.
+_A3_NETLIST = (
+    "* {block} — synthetic block netlist (A4's declared upstream input)\n"
+    ".subckt {block} vdd vss vin vout\n"
+    "xm1 vout vin vss vss nch w=8 l=1\n"
+    "r1 vout vss 100k\n"
+    ".ends {block}\n")
+
+
 def _write_project(tmp, blocks):
     """Build a minimal synthetic project the gate can read."""
     proj = Path(tmp)
@@ -63,6 +76,8 @@ def _write_project(tmp, blocks):
         d.mkdir()
         (d / "corner_results.json").write_text(json.dumps(payload),
                                                encoding="utf-8")
+        (d / f"{name}.sp").write_text(_A3_NETLIST.format(block=name),
+                                      encoding="utf-8")
     return proj
 
 
@@ -70,6 +85,16 @@ def _base(block, spec, corners=None):
     return {
         "block": block, "block_type": block,
         "_provenance": "real_ngspice",
+        # The four NEGATIVE controls below assert that a record just inside the
+        # raw_sim_verdict exemption is NOT newly failed. Without this field
+        # they were passing for a second reason as well — an artefact that
+        # declares simulated corners and will not say what circuit produced
+        # them does not certify — and a negative control that would hold for a
+        # reason other than the one it names is not a control. The record says
+        # what it contains so the raw_sim_verdict rule is the only thing under
+        # test; `test_disclosure_is_what_makes_these_negative_controls_negative`
+        # pins that the field is doing that job and not papering over one.
+        "design_content": "structure_and_geometry",
         "total_corners": 3, "results_found": 3,
         "corners": corners or [_corner("tt_27c", 1.0),
                                _corner("ss_27c", 1.0),
@@ -184,6 +209,32 @@ class TestRawSimFailNotMasked(unittest.TestCase):
                  "target_source": "static_default", "tolerance_pct": 0.1})})
             rc, out = _run_gate(proj)
             self.assertEqual(rc, 0, out)
+
+    def test_disclosure_is_what_makes_these_negative_controls_negative(self):
+        """The control ON the controls.
+
+        Take the negative control that is furthest inside the exemption, remove
+        the ONE field `_base` gained and change nothing else. If it still
+        certified, that field would be decoration and the four controls above
+        would be passing partly by accident.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = _base(
+                "synth_iota",
+                {"name": "metric_i", "status": "PASS_INFORMATIONAL",
+                 "raw_sim_verdict": "PASS_INFORMATIONAL", "value": 0.03,
+                 "target": None, "target_source": "static_default",
+                 "tolerance_pct": None})
+            self.assertEqual(payload.pop("design_content"),
+                             "structure_and_geometry")
+            proj = _write_project(tmp, {"synth_iota": payload})
+            rc, out = _run_gate(proj)
+            self.assertEqual(
+                rc, 1,
+                "an artefact declaring simulated corners, whose netlist is on "
+                "disk, that will not say what circuit produced the numbers, "
+                "was certified\n---\n%s" % out)
+            self.assertIn("A4_DESIGN_CONTENT_UNDECLARED", out)
 
     def test_an_already_explicit_fail_is_left_to_the_existing_rule(self):
         """A record that already says FAIL is the pre-existing branch's job.
