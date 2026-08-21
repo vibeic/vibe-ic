@@ -155,6 +155,194 @@ def test_a_docstring_narrative_is_not_a_pin(tmp_path):
         "a docstring recounting an old number was read as a pin:\n" + r.stdout
 
 
+# ── POLARITY: a statement that DENIES a member is not a member (vibe-ic#712) ─
+#
+# `counters` read the RAW FILE and matched `incr <name>` and `$<name> >= <D>`
+# wherever they appeared, so a sentence DENYING a member counted as one. The
+# gate `prose_polarity_consulted_check` named this function on the tree that
+# added it (census 214 against a baseline of 213) and was right.
+#
+# Each fixture below is a TRUTHFUL emitter -- its own site count and its own
+# printed denominator agree -- carrying one denial. A reader that cannot tell an
+# assertion from a denial refuses it. Every one of these is RED without the fix.
+
+PIN_2 = '''\
+from thing_emit import script
+
+
+def test_the_partial_line_states_the_population():
+    assert "of 2 repairs refused" in script()
+'''
+
+#: A DENIAL inside the emitted script itself. Removing prose about the code does
+#: not remove prose: a script carries comments and `puts` messages, and English
+#: there denies as readily as it declares.
+EMITTER_DENIED_SITE = '''\
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  # the retry path does not incr _n; it re-issues the command\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"
+        "  if {$_n >= 2} {{ puts ALL }}\\n"
+    )
+'''
+
+#: A RETIRED threshold. `_prose_polarity` keeps "removed" / "no longer" in a tier
+#: of its own because they retire a value the document still prints in full --
+#: which is exactly how a stale denominator survives in a comment.
+EMITTER_RETIRED_DENOMINATOR = '''\
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  # $_n >= 4 is no longer the threshold, the fourth repair was removed\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  if {[catch {c}]} {{ incr _n }}\\n"
+        "  puts \\"PARTIAL: $_n of 3 repairs refused\\"\\n"
+        "  if {$_n >= 3} {{ puts ALL }}\\n"
+    )
+'''
+
+#: Prose ABOUT the code -- a docstring and a `#` comment, neither of which the
+#: emitted script contains. Both deny the member they name.
+EMITTER_PROSE_ABOUT_CODE = '''\
+"""History: an earlier revision had a third repair with its own `incr _n`."""
+
+
+# The third repair was removed, so there is no `incr _n` in the fallback branch.
+def script() -> str:
+    return (
+        "  set _n 0\\n"
+        "  if {[catch {a}]} {{ incr _n }}\\n"
+        "  if {[catch {b}]} {{ incr _n }}\\n"
+        "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"
+        "  if {$_n >= 2} {{ puts ALL }}\\n"
+    )
+'''
+
+#: ONE multi-line literal, so the records inside it are separated by a bare
+#: newline and nothing else. This is the fixture that makes the record break
+#: load-bearing -- see `test_a_denial_is_bounded_by_the_line_it_is_written_on`.
+EMITTER_MULTILINE_BLOCK = (
+    'def script() -> str:\n'
+    '    return """\n'
+    '  set _n 0\n'
+    '  puts "no repair could be applied"\n'
+    '  if {[catch {a}]} { incr _n }\n'
+    '  if {[catch {b}]} { incr _n }\n'
+    '  puts "PARTIAL: $_n of 2 repairs refused"\n'
+    '  if {$_n >= 2} { puts ALL }\n'
+    '"""\n')
+
+
+def test_a_denied_increment_in_the_script_is_not_a_member(tmp_path):
+    """THE DENIAL, FED TO THE EXTRACTOR. `does not incr _n` is a statement that
+    there is no third member. Counting it produces a population of 3 for an
+    emitter with two sites and a printed denominator of 2, so a BLOCKING gate
+    refuses a correct emitter over a number nobody stated -- #706 in the
+    counting direction."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_SITE, PIN_2)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, (
+        "a sentence DENYING a member was counted as one:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
+    assert [(d["what"], d["denial"]) for d in doc["denied_by_polarity"]] == [
+        ("increment", "not")], doc
+
+
+def test_a_retired_denominator_in_the_script_is_not_read_as_live(tmp_path):
+    """The other half of the same blindness. `$_n >= 4 is no longer the
+    threshold` prints the retired number in full; read as a live denominator it
+    disagrees with the three sites that do exist."""
+    progs, tests = _tree(tmp_path, EMITTER_RETIRED_DENOMINATOR,
+                         PIN_2.replace("of 2", "of 3"))
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, (
+        "a threshold a sentence RETIRED was read as live:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert [(d["what"], d["matched"]) for d in doc["denied_by_polarity"]] == [
+        ("comparison denominator", "$_n >= 4")], doc
+
+
+def test_prose_about_the_code_is_not_the_emitted_script(tmp_path):
+    """The subject half. A docstring and a `#` comment are prose ABOUT the code;
+    the script contains neither. `phrases` already excluded docstrings on this
+    exact argument and `counters` did not, so one file answered one question two
+    ways."""
+    progs, tests = _tree(tmp_path, EMITTER_PROSE_ABOUT_CODE, PIN_2)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, (
+        "a docstring and a comment contributed members to the script's "
+        "population:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
+
+
+def test_a_denial_is_bounded_by_the_line_it_is_written_on(tmp_path):
+    """THE RECORD BREAK, PINNED, and it is the quiet direction that needs it.
+
+    A script is line-structured: `puts "no repair could be applied"` is its own
+    statement and does not reach the `incr` on the next line. Drop
+    `extra_breaks=("\\n",)` and the reach runs 240 characters through unrelated
+    commands -- every increment and every denominator in this fixture is inside
+    that budget with no sentence terminator between them, so all four are
+    retracted, the guard compares NOTHING, and it still prints PASS. Asserting
+    on the return code alone would not see that, so the reach is asserted.
+
+    The fixture is ONE triple-quoted block on purpose. Separate adjacent string
+    literals are joined by `emitted_script` into a blank line, which is already
+    a `SENTENCE_BREAK`; only inside a multi-line literal is the declared record
+    break the thing doing the work."""
+    progs, tests = _tree(tmp_path, EMITTER_MULTILINE_BLOCK, PIN_2)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["denied_by_polarity"] == [], (
+        "a denial retracted members it does not govern -- the reach crossed a "
+        "record boundary:\n" + json.dumps(doc, indent=2))
+    assert doc["counters_examined"] == 2, doc
+
+
+def test_polarity_did_not_switch_the_population_check_off(tmp_path):
+    """THE NEGATIVE CONTROL, and the reason the four tests above are not enough:
+    a `counters` that returned nothing at all would pass every one of them.
+
+    Same fixture as the first test -- one denied member -- with a THIRD member
+    that nothing denies. The denominator still says 2, so the disagreement is
+    real and must still be refused, at the right number."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_SITE, PIN_2)
+    assert _run(progs, tests).returncode == RC_PASS, "control arm is not green"
+
+    src = (progs / "thing_emit.py").read_text()
+    (progs / "thing_emit.py").write_text(
+        src.replace('"  if {[catch {b}]} {{ incr _n }}\\n"',
+                    '"  if {[catch {b}]} {{ incr _n }}\\n"\n'
+                    '        "  if {[catch {c}]} {{ incr _n }}\\n"'),
+        encoding="utf-8")
+    r = _run(progs, tests)
+    assert r.returncode == RC_FAIL, (
+        "an undenied member arrived and the guard stayed green -- polarity is "
+        "suppressing more than the denial:\n" + r.stdout)
+    assert "incremented at 3 site(s)" in r.stdout, r.stdout
+    assert "says 2" in r.stdout, r.stdout
+
+
+def test_what_polarity_refused_is_printed_not_quietly_dropped(tmp_path):
+    """THE REACH IS PRINTED, ALWAYS -- this guard's own rule, and it now governs
+    the matches polarity removed too. A reach that shrank because a denial was
+    believed is part of the reach; a guard that silently counts less than it
+    read is the defect it exists to catch one level up."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_SITE, PIN_2)
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    assert "[POLARITY]" in r.stdout, "the suppression is invisible:\n" + r.stdout
+    assert "incr _n" in r.stdout and "DENIES it" in r.stdout, r.stdout
+    assert "1 match(es) not counted" in r.stdout, r.stdout
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
