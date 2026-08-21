@@ -3305,6 +3305,53 @@ plausibility is the one to instrument first**, and I have now had that lesson fr
 a shell heredoc, a `git stash`, a `tail`, a `repr`, and an ID diff.
 
 
+## M58 — M56's CONCLUSION holds, its MECHANISM was wrong, and the real one is measured
+
+M56 said the two `slot_pad_budget_check` sites look already-correct and guessed
+the analyser lost the stripped status at the `:257` reassignment, flagging that
+as unverified. **Running the analyser settles it — and my mechanism was wrong.**
+
+Feeding `stripped_locals` minimal cases directly:
+
+```
+A: strip only                     -> ['src']
+B: strip, then a NON-comment re.sub reassignment
+                                  -> ['src']        # reassignment does NOT break it
+C: strip -> subscript             -> ['rest','src']
+D: strip -> subscript -> for decl in rest.split(",")
+                                  -> ['rest','src']  # `decl` NOT tracked
+E: strip -> for line in nc.splitlines(): s = line.strip()
+                                  -> ['nc']          # `line` and `s` NOT tracked
+```
+
+**The def-use walk does not propagate stripped status through FOR-LOOP TARGETS.**
+Reassignment (my guess) is handled fine. Subscripting is handled fine. Iteration
+is where it stops.
+
+**And both flagged sites reach the scan through exactly that shape:**
+
+* `for decl in rest[open_i+1:close_i].split(","):` → `_DIR_RE.match(decl)`
+* `for line in raw_no_comment.splitlines(): s = line.strip()` → `_DIR_RE.match(s)`
+
+**So M56's CONCLUSION was right — the code is correct and the gate is reporting a
+false positive — and M56's MECHANISM was wrong.** Right answer, wrong reason, for
+the second time tonight (M43 was the first). I would have shipped the wrong reason
+as a finding if I had not measured the analyser.
+
+**This is larger than two sites.** Any HDL scan that strips comments and then
+ITERATES — over lines, over comma-split declarations — is invisible to this walk.
+That pattern is close to universal in text parsing, so it plausibly accounts for a
+substantial share of the 175 flagged scans, not just these 2. **Which makes the
+baseline of 170 a count of an analyser limitation as much as of a defect class.**
+
+**The fix belongs in `stripped_locals`** — propagate through `ast.For` targets when
+the iterable is (or derives from) a stripped local. **I have not written it:** it
+is a change to a hygiene gate's analysis, it would move a baseline that 170 other
+sites are measured against, and *"a false positive is closed by fixing the
+ANALYSER"* is a sentence much easier to write than to land safely. **Named,
+measured, and handed over.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3396,7 +3443,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | the ratios this document claims to record and does not (M36). Deliberately not re-measured — load-sensitive, shared host. | **an honest gap** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
-| **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M56: the 2 `slot_pad_budget_check` sites appear ALREADY CORRECT** — both trace to inline `re.sub` comment strips; the likely cause is a non-stripper `re.sub` reassignment at `:257` breaking the analyser's def-use chain. **Do not rename a local or re-strip to satisfy it.** Check the analyser before the subjects. | **possible gate false positive** |
+| **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
 ## D. Corrections to my own earlier reports — the complete list
