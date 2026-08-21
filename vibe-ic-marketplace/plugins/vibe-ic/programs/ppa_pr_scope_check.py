@@ -67,6 +67,26 @@ This is hard rule 9 of this repository, applied to the detector itself: "I could
 not read it" and "I read it and it was empty" must never produce the same
 verdict.
 
+ENFORCEMENT: blocking
+=====================
+rc 1 is a finding about the PR and it REFUSES the merge. `gatekeeper_review`
+spawns this program and maps its exit status to a GateResult whose `green` is
+false, which lands the gate in `Verdict.blocking` and turns MERGE_OK into
+REQUEST_CHANGES. That is proved by a run, not by reading the aggregation:
+`test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES` drives
+the real `review()` twice over one synthetic repository whose only difference
+is the presence of the answers document, and asserts the verdict moves while
+no other gate blocks.
+
+ONE ARM IS NOT BLOCKING YET, AND IT IS A CLAIM WITH AN EXPIRY. When NO answers
+document exists at `.github/ppa_pr_answers.json`, every applicable question is
+necessarily unbacked, and blocking on that today would refuse every open PR in
+the repository at once -- measured: no answers document exists anywhere in this
+tree, and 6 questions already apply to a two-commit branch. That arm therefore
+REPORTS, naming how many questions apply, on every review. The moment an
+answers-document convention is required repo-wide it becomes blocking, and
+nothing in this program changes: it already returns rc 1 for that case.
+
 EXIT CODES — and the one place this program had to choose a reading
 ===================================================================
     0  the merge condition is met
