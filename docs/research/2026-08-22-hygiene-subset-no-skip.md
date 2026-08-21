@@ -334,8 +334,19 @@ origin, so an env-derived value has nowhere to be passed.
 **The budget number, which is the one place this branch departs from a literal
 owner instruction.** The ruling said four minutes. This ships 1800 s, and the
 departure is stated here rather than left to be discovered: with the flag gone
-the review runs the set, the set alone costs ~550 s on this host, so a 240 s
-budget could only ever expire. A gate that always returns rc 2 does not block
+the review runs the set, and the set is the cost. **CORRECTED on the audit
+pass**: this section first said "the set alone costs ~550 s on this host",
+taking the one figure available when it was written. Later sections in this
+same document measure the same set at **193 s** (§7, review-driven, load ~54)
+and **188 s** (§16, driven directly, quiet). 551 s was the CONTENDED case, and
+quoting it as the host's cost overstated the argument by nearly 3x.
+
+The budget conclusion survives the correction but on a NARROWER margin, and
+the narrower margin is the honest one: the review that ran the set in 193 s
+took **247.5 s end to end**, which still exceeds 240 s — by 3%, not by the
+2.3x the 551 s figure implied. A 240 s budget therefore still expires on a
+quiet host, which is what the argument needs; it simply is not the landslide
+the original wording claimed. A gate that always returns rc 2 does not block
 harder — it stops deciding, and a check that never decides is the failure mode
 this repo distrusts most. 1800 s is not a chosen number either: it is
 `repo_hygiene_gate._HYGIENE_STALL_GRACE_S` (`gatekeeper_review.py:996`), below
