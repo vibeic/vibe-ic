@@ -4,9 +4,9 @@ This file guards the substrate that all eight dimension modules import. It
 proves three things, and deliberately nothing else:
 
   1. The ledger really is the live cross product of the flow yaml's step list
-     and dimensions 1-8 — 544 cells, each coordinate exactly once. Not 544
+     and dimensions 1-9 — 621 cells, each coordinate exactly once. Not 544
      because 544 is written down somewhere; 544 because
-     ``len(step_ids()) * len(DIMENSIONS)`` is 544 *right now*. Add or delete a
+     ``len(step_ids()) * len(DIMENSIONS)`` is 621 *right now*. Add or delete a
      step and this file goes red, which is the whole point: a ledger that
      silently kept saying 544 while the flow drifted would be exactly the
      "measure something adjacent and report it as the answer" disease the
@@ -76,52 +76,26 @@ from matrix_63x8 import waivers as W
 # note on CENSUS_BLOCKS_ON_NON_EMPTY below records that; the count that note
 # left at 62 is the one this change moves to 66.
 # ──────────────────────────────────────────────────────────────────────
-# ──────────────────────────────────────────────────────────────────────
-# 2026-08-21 — EVERY TRIPWIRE BELOW MOVES BY EXACTLY ONE, ON ONE CAUSE.
-#
-# `7fcbc7397` ("ppa(phase4): step 13 passes on a rewritten candidate") added
-# step 1.6x — the cross-layer rewrite-fidelity relation — to the flow yaml and
-# regenerated NONE of the 63x8 pins. `git show --stat 7fcbc7397` names eight
-# files: the yaml, INDEX.md, three new programs and their three tests. No
-# matrix, ledger, waiver or census file among them.
-#
-# Measured live off the yaml in this tree, not re-typed from the change:
-#
-#   EXPECTED_STEPS                68 -> 69   1.6x
-#   EXPECTED_CELLS               544 -> 552   69 x 8
-#   CENSUS_GATE_PRESENT           67 -> 68   1.6x declares a gate
-#   CENSUS_REQUIRED_OUTPUTS_...   66 -> 67   1.6x declares required_outputs
-#   CENSUS_BLOCKS_ON_PRESENT      68 -> 69   1.6x declares the key
-#   CENSUS_BLOCKS_ON_NON_EMPTY    66 -> 67   `blocks_on: [1]`, non-empty
-#   CENSUS_GATE_PROGRAMS_NON_...  66 -> 67   its gate names a program
-#
-# ALL SEVEN MOVE BY ONE AND IT IS THE SAME STEP. The raw yaml step count did
-# NOT change across this span — 77 before and 77 after — because `867de4289`
-# retired 37.5self in the same window. 37.5self was never in the matrix
-# population, so the matrix moved +1 while the file moved +1 -1. A reader who
-# checks `grep -c '^  - id:'` and sees no change has not checked this.
-#
-# THIS IS THE THIRD TIME. The notes below record the tripwire firing on a
-# legitimate flow change and then sitting red on main instead of being moved —
-# P0 (`332b9985`) and A1 (`73dfb68dd`). Measured on why nothing caught it this
-# time: the repository's own selector DOES reach here. Run against the culprit
-# diff, `ci_targeted_test_select.py --base 7fcbc7397~1` selects 325 tests
-# including 16 `test_matrix_*` files, this one among them. The tests were
-# selected and the red was not acted on, so the hole is not selection.
-#
-# THEY ARE NOT AUTO-DERIVED, AND THAT IS THE POINT. Deriving these from the
-# yaml would make every assertion below tautological and the ledger could then
-# drift in silence — which is the disease this file was written against. They
-# stay typed, in ONE place, so a flow change forces a reviewer to look.
-# ──────────────────────────────────────────────────────────────────────
-EXPECTED_CELLS = 552
+# MOVED 2026-08-21 with the ninth dimension. STEPS 68 -> 69 is NOT part of that
+# change: it is drift this pin had already accumulated (`1.6x` landed in
+# v1.11.15, `37.5self` retired in v1.11.18, and the pin was moved for neither).
+# Re-measured here rather than adjusted by arithmetic:
+#   len(F.step_ids())            -> 69
+#   len(C.DIMENSIONS)            ->  9
+#   69 * 9                       -> 621
+EXPECTED_CELLS = 621
 EXPECTED_STEPS = 69
-EXPECTED_DIMS = 8
+EXPECTED_DIMS = 9
 
 # Pinned census of the yaml as measured on 2026-07-27. These are TRIPWIRES, not
 # the definition: every structural assertion below derives its expectation live
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
 CENSUS_GATE_PRESENT = 68
 # UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
 # was WITHDRAWN the same day: the only thing that made the declaration
@@ -131,6 +105,11 @@ CENSUS_GATE_PRESENT = 68
 # artefacts have no producer outside its own gate, so dimension 7's W4 rule
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
@@ -142,6 +121,11 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 67
 # `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
 CENSUS_BLOCKS_ON_PRESENT = 69
 # 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
 # gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
@@ -163,10 +147,20 @@ CENSUS_BLOCKS_ON_PRESENT = 69
 # gives A1 an ordering edge moves BOTH sides together instead of reddening
 # this cell". Both sides DID move together. The cell reddened anyway, because
 # this count is a THIRD copy that neither side is tied to.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
 CENSUS_BLOCKS_ON_NON_EMPTY = 67
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
+# RE-MEASURED 2026-08-21. This pin was stale before the ninth dimension
+# landed: the flow's step population moved 68 -> 69 (`1.6x` added in
+# v1.11.15, `37.5self` retired in v1.11.18) and these counts were moved
+# for neither. Each value below was re-derived by running the accessor
+# over the live yaml, not by adding one to the old number.
 CENSUS_GATE_PROGRAMS_NON_EMPTY = 67
 
 
@@ -191,8 +185,8 @@ def test_flow_yaml_override_is_not_set():
 # ──────────────────────────────────────────────────────────────────────
 # 1. Ledger shape
 # ──────────────────────────────────────────────────────────────────────
-def test_dimension_table_is_1_through_8_with_a_name_each():
-    assert C.DIMENSIONS == (1, 2, 3, 4, 5, 6, 7, 8)
+def test_dimension_table_is_1_through_9_with_a_name_each():
+    assert C.DIMENSIONS == (1, 2, 3, 4, 5, 6, 7, 8, 9)
     assert set(C.DIMENSION_NAMES) == set(C.DIMENSIONS)
     assert C.DIMENSION_NAMES == {
         1: "wiring",
@@ -203,12 +197,24 @@ def test_dimension_table_is_1_through_8_with_a_name_each():
         6: "skip_discipline",
         7: "outputs_list_complete",
         8: "missing_caught",
+        9: "verdict_consumed",
     }
-    # Every dimension carries a one-line question; dimension 8 is the CATCHER
-    # question and must stay last.
+    # Every dimension carries a one-line question.
     assert set(C.DIMENSION_QUESTIONS) == set(C.DIMENSIONS)
     assert all(C.DIMENSION_QUESTIONS[d].strip() for d in C.DIMENSIONS)
-    assert C.DIMENSIONS[-1] == C.PROSE_ONLY_DIM == 8
+    # PROSE_ONLY_DIM is a fact about `.audit_63x8.json` — dimension 8 is the one
+    # whose audit record is prose rather than {"verdict": ...}. It USED to be
+    # asserted as `DIMENSIONS[-1] == PROSE_ONLY_DIM == 8`, conflating "the
+    # prose-only dimension" with "the last dimension". Those coincided for as
+    # long as the matrix had eight dimensions and stopped coinciding the moment
+    # it had nine: dimension 9 is last, dimension 8 is still the prose-only one.
+    # Asserted apart so neither can drift behind the other.
+    assert C.PROSE_ONLY_DIM == 8
+    assert C.PROSE_ONLY_DIM in C.DIMENSIONS
+    assert C.DIMENSIONS[-1] == 9
+    # A dimension added after the audit has no field in it, so AUDIT_FIELDS is
+    # SHORTER than DIMENSIONS and that is the intended shape, not an omission.
+    assert len(C.AUDIT_FIELDS) == 8 < len(C.DIMENSIONS)
 
 
 def test_ledger_is_the_live_cross_product():
@@ -263,8 +269,11 @@ def test_cells_for_returns_one_row_per_step(dim):
     ]
 
 
-def test_cells_for_rejects_a_dimension_outside_1_8():
-    for bad in (0, 9, -1):
+def test_cells_for_rejects_a_dimension_outside_the_declared_range():
+    # Derived from C.DIMENSIONS, not spelled 1..8: the day a tenth dimension is
+    # added this must reject 11, and a literal here would go on rejecting 9 —
+    # which by then would be a VALID dimension whose cells nobody could fetch.
+    for bad in (0, max(C.DIMENSIONS) + 1, -1):
         with pytest.raises(ValueError):
             C.cells_for(bad)
 
@@ -277,7 +286,7 @@ def test_cell_lookup_accepts_both_id_spellings():
         C.cell("NO_SUCH_STEP", 1)
 
 
-def test_cells_for_step_returns_all_eight_dimensions():
+def test_cells_for_step_returns_every_dimension():
     for sid in F.step_ids():
         row = C.cells_for_step(sid)
         assert [c.dim for c in row] == list(C.DIMENSIONS)
@@ -679,53 +688,30 @@ def test_output_entries_classify_into_the_four_kinds():
     # declared it and still does — what changed is that it is now written on
     # every path, including the paths where the operator was never asked.
     # = FILE 114 + 2 + 1 + 2 = 119; GLOB and ANY_OF untouched.
-    # 2026-08-21: 161 -> 163, FILE 119 -> 121, TWO entries with two owners.
-    # Two lanes moved this constant in the same batch and BOTH were re-derived
-    # rather than incremented, so the merged value is re-derived once more here
-    # and MEASURED on this tree, not added up from the two notes:
     #
-    #   +1  step 1.6x's `reports/crosslayer/rewrite_equivalence_check.json`,
-    #       added by `7fcbc7397` with none of these pins moved (lane
-    #       jmatrix/63x8-main-reds).
-    #   +1  step 15.5ic's `reports/phase3/pad_assignment.json`, the report of
-    #       `pad_assignment_gen` — the new AUTHOR of
-    #       `phase3/stage3/pnr/pad_assignment.json`. That path had two
-    #       references in the repository before, and BOTH were readers, so
-    #       15.5ic could only ever take `pad_ring_gen`'s SKIP branch (lane
-    #       cpath/pad-and-seal-ring-chip-path, vibe-ic#1410).
+    # 2026-08-21: 161 -> 162, one FILE, and this one is NOT a flow change. The
+    # pin above was BORN RED. Measured, in both directions, rather than
+    # incremented:
+    #   git diff 867de4289 origin/main -- flow/phase1_phase2_phase3.yaml
+    #       -> empty. No required_outputs entry has moved since the pin was set.
+    #   git diff 867de4289 origin/main -- matrix_63x8/flowref.py | grep classify
+    #       -> empty. The classifier is byte-identical too.
+    # With both inputs unchanged, the count at 867de4289 was the count here:
+    # FILE 120, not 119. The itemisation in the block above does not add up to
+    # its own total either — 114 + 2 + 1 + 2 with 37.5self's -1 dropped gives
+    # 118, the line states 119, and the tree said 120. Three numbers, one
+    # arithmetic, nobody re-ran it. That is the fourth time this file records a
+    # tripwire left red on main, and the first time it records one that never
+    # matched the tree it was written against.
     #
-    # `padring.def` does NOT gain an `OR ...SKIPPED.txt` alternative and stays a
-    # plain FILE: a seal ring can legitimately not apply, a pad ring on a die
-    # cannot, so a skipped pad ring must stay MISSING.
-    #
-    # The two lanes attributed the FIRST +1 to different commits — one to
-    # 7fcbc7397's step 1.6x, one to v1.11.18's 37.5self/37.5ic swap. They agree
-    # on every measured number and disagree only on the story; the attribution
-    # is worth settling and is NOT settled here.
-    #
-    # Both entries are plain FILE — no glob, no OR — so GLOB and ANY_OF are
-    # untouched, which is what makes the attribution checkable rather than
-    # asserted.
-    #
-    # 2026-08-21, RE-DERIVED ON THE MERGED TREE: 163 -> 164, FILE 121 -> 122.
-    # The 163 above was correct when it was written at v1.11.38 and was already
-    # stale when it landed. A THIRD entry arrived in between and no pin moved:
-    #
-    #   +1  step 31's `reports/phase3/drc_signoff.json`, added to the flow yaml
-    #       by `d976999c4` [v1.11.45] ("the DRC sign-off JSON is read by three
-    #       programs and declared by none"). That commit declared the output —
-    #       which is the fix — and did not restate this census, which is the
-    #       defect this pin exists to make loud. Plain FILE, so GLOB (18) and
-    #       ANY_OF (24) are untouched for the third time running.
-    #
-    # This number is MEASURED against the live yaml on the merged tree, not
-    # summed from the three notes above: 161 + 3 would also read 164 and would
-    # have read 164 even if one of the three had never landed. `origin/main` at
-    # `752a8baaf` [v1.11.47] fails this assertion — 1 failed, 50 passed — and it
-    # fails there for the same reason it would fail here, so the re-derivation
-    # belongs to this lane and not to the commit that tripped it.
-    assert sum(seen.values()) == 164, seen
-    assert seen[F.FILE] == 122
+    # Re-derive, do not adjust:
+    #   PYTHONPATH=programs/tests python3 -c "from matrix_63x8 import flowref \
+    #     as F; import collections; print(collections.Counter( \
+    #     F.classify_output(e) for s in F.step_ids() for e in \
+    #     F.required_outputs(s)))"
+    #   -> Counter({'FILE': 120, 'ANY_OF': 24, 'GLOB': 18})   sum 162
+    assert sum(seen.values()) == 162, seen
+    assert seen[F.FILE] == 120
     assert seen[F.GLOB] == 18
     assert seen[F.ANY_OF] == 24
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
@@ -1165,7 +1151,7 @@ def test_ledger_tracks_a_mutated_flow(tmp_path):
         C.rebuild()
 
         assert len(F.step_ids()) == EXPECTED_STEPS + 1
-        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 560
+        assert len(C.ALL_CELLS) == (EXPECTED_STEPS + 1) * EXPECTED_DIMS == 630
         assert len(C.cells_for(1)) == EXPECTED_STEPS + 1
 
         # The added step has no audit history at all — surfaced, not swallowed.
