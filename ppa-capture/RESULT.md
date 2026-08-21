@@ -1,12 +1,20 @@
-# The PPA cluster, DISTILLED — 14 records, and the fifteen rules that were already programs
+# The PPA cluster, DISTILLED — 14 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
 gated by, and it is honest about the largest single finding: **eleven of the
 eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
-tree.** Those eleven produced no record. Duplicating them would be worse than
-skipping them.
+tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
+four more classes drawn from the six lane records, and the count is
+**11 + 1 + 4 = 16**. Those sixteen produced no record; duplicating them would be
+worse than skipping them.
+
+Two of the sixteen are marked *conditional* rather than clean. The brief's test
+for a landed fix — can the class recur in a module nobody has touched? — is
+really a question about whether the guard's population is DISCOVERED or
+DECLARED, and theirs is declared. Both are flagged in the table and folded into
+**A-3**.
 
 Tree distilled against: `origin/main` @ `a00f53f20`, plugin **v1.11.66**.
 Sources: `ppa-e2e/FINDINGS.md` (F-1..F-18), `ppa-e2e/RESULT.md` (13 requests),
