@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.agent_policy.v1",
+  "title": "PPA agent policy",
+  "description": "What an agent is allowed to do. The autonomy_level enum lists every level the system can NAME; which of them are ACTIVATED is a separate question answered by _ppa/agent_policy.ACTIVATED_LEVEL, because a schema that only allowed the activated level would have to be edited to raise autonomy, and editing a schema is a smaller act than editing the gate. A document may therefore be schema-valid and still refused by validate_policy, and that is the intended split: the schema says what is well-formed, the program says what is permitted.",
+  "type": "object",
+  "required": ["schema", "autonomy_level"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.agent_policy.v1"},
+    "autonomy_level": {
+      "enum": ["B0", "A0", "A1", "A2", "A3"],
+      "description": "B0 replay-only; A0 explain-only; A1 preview; A2 bounded action; A3 closed-loop with rollback. Staged activation order, spec 4.9.1."
+    },
+    "allow_list": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Named capabilities the agent may use. Empty at A0, where there is nothing to use."
+    },
+    "blast_radius": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_files": {"type": "integer", "minimum": 0},
+        "max_actions": {"type": "integer", "minimum": 0},
+        "paths": {"type": "array", "items": {"type": "string"}}
+      },
+      "description": "At A0 every field here must be zero or empty. Not because the fields are unused, but because a document describing a capability the level does not have is the document somebody later reads as permission."
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0},
+      "description": "Budget accounting is never delegated (spec 4.6); these are the numbers a program enforces, not ones an agent reasons about."
+    },
+    "never_delegated": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Questions no agent decides at any level. A document listing FEWER than the closed set is refused: the narrowing is the interesting edit."
+    }
+  }
+}

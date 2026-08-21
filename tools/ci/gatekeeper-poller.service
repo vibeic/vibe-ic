@@ -1,0 +1,35 @@
+[Unit]
+# One tick of the required-status poller. Paired with gatekeeper-poller.timer.
+# See tools/ci/gatekeeper_status_poller.py for why this exists.
+Description=vibe-ic gatekeeper required-status poller (one tick)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=reyerchu
+WorkingDirectory=/home/reyerchu/vibe-ic
+
+# The pin is load-bearing. A bare `python3 -m pytest` autoloads every installed
+# pytest11 entry point, and one broken third-party plugin (web3's
+# pytest_ethereum) kills the session AT COLLECTION — zero tests run, which
+# reads as an error but really means "you measured nothing". The poller
+# classifies that as `error` rather than `failure` precisely so it cannot be
+# mistaken for a red gate, but the right fix is to not trip over it at all.
+Environment=PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+Environment=GATEKEEPER_REPO=vibeic/vibe-ic
+Environment=GATEKEEPER_REPO_ROOT=/home/reyerchu/vibe-ic
+Environment=GATEKEEPER_STATE_DIR=/home/reyerchu/.gatekeeper-poller
+
+ExecStart=/usr/bin/python3 /home/reyerchu/vibe-ic/tools/ci/gatekeeper_status_poller.py
+
+# The gate is minutes per commit and there can be several open PRs. This bounds
+# one tick; the timer's Persistent= will pick up where it left off.
+TimeoutStartSec=5400
+
+# A tick that fails is NOT a reason to stop gating. Every non-success verdict
+# already reached GitHub as a status before the process exited non-zero.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

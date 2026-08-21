@@ -1,9 +1,0 @@
-{
-  "signoff_dimension": "dynamic_transient_ir_drop",
-  "analysis_mode": "vcd_vectored_psm",
-  "status": "SKIPPED_MISSING_INPUTS",
-  "dynamic_ir_report_emitted": false,
-  "reason": "cannot run: missing required input(s) --liberty",
-  "disclosure": "\u00a74.05: no design VCD/SAIF was available, so NO vectored dynamic-IR number is fabricated. The static IR sign-off (reports/phase3/ir_drop.json) stands; the dynamic-IR tier is a conditional SKIP. Produce a switching VCD ($dumpvars over the gate netlist, or a functional sim) to enable the VCD-vectored PSM droop.",
-  "what_would_enable_it": "any non-empty *.vcd under phase2/stage1/sim*/ (or pass --vcd); the emitter feeds it to OpenROAD read_vcd \u2192 analyze_power_grid."
-}

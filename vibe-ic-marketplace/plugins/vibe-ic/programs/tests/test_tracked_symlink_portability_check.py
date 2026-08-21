@@ -10,6 +10,7 @@ land attempts were refuted by CI before the cause was found.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,8 +33,15 @@ def _repo(p: Path) -> Path:
 
 
 def _run(root: Path, out: Path):
+    # `VIBE_IC_BENCHMARK_DATA` is POPPED, not merely ignored. Since #1710's
+    # treatment landed on this gate the pointer OVERRIDES the path, so a
+    # developer who has it exported would have every fixture below silently
+    # replaced by their corpus clone — the tests would still pass or fail, about
+    # a tree they never built.
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
     return subprocess.run([sys.executable, str(_PROG), str(root),
-                           "--json", str(out)],
+                           "--json", str(out)], env=env,
                           capture_output=True, text=True, timeout=60)
 
 
@@ -101,8 +109,10 @@ def test_371_enumeration_comes_from_the_index_not_a_walk(tmp_path):
 
 def test_371_shipped_tree_is_clean():
     """The gate must be GREEN on main as landed."""
-    r = subprocess.run([sys.executable, str(_PROG)], capture_output=True,
-                       text=True, timeout=60)
+    env = dict(os.environ)
+    env.pop("VIBE_IC_BENCHMARK_DATA", None)
+    r = subprocess.run([sys.executable, str(_PROG)], env=env,
+                       capture_output=True, text=True, timeout=60)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr

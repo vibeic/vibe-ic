@@ -1,0 +1,4 @@
+  (see: reports/phase2/dft/coverage_scanned.json)
+fault_atpg_run: stuck-at coverage=0.00%  target=95.00%  stuck_at_ge_target=False
+fault_atpg_run: transition=ENGINE-LIMITED (target=90.0%) — `fault atpg --help` exposes only single-pattern combinational stuck-at ATPG (no transition / at-speed / launch-off-capture / delay-fault / two-pattern flag) — the Fault engine cannot generate at-speed patterns
+ATPG_RC=1
