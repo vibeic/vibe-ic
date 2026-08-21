@@ -364,17 +364,52 @@ _REGISTRY_REL = f"{TESTS_REL}/{_MATRIX_PKG}/waivers.py"
 _IMPORTS_MATRIX = re.compile(rf"^[ \t]*(?:from|import)[ \t]+{_MATRIX_PKG}\b", re.M)
 
 
+#: A test file may reach the registry through a HELPER in `programs/tests/`
+#: rather than importing the package itself — `matrix_d7_artifact_graph.py`
+#: carries `from matrix_63x8 import flowref` at its own line 207, so a test that
+#: imports only that helper is a genuine consumer and the selector is right to
+#: pick it. Matching direct imports alone made this oracle NARROWER than the
+#: truth, and the first test file to consume a helper without also importing the
+#: package itself read as over-selection.
+#:
+#: ONE HOP, NOT A GRAPH WALK. The point of this oracle is that it shares no code
+#: with the selector's `ast` implementation, so the two can disagree; following
+#: the chain to its end would re-implement the selector and the disagreement
+#: would stop being possible. One hop is what the tree actually contains, and a
+#: second hop appearing should FAIL here and be widened deliberately rather than
+#: be absorbed silently.
+_HELPER_GLOB = "*.py"
+
+
+def _matrix_helper_modules() -> set[str]:
+    """Helper module names under `tests/` whose own source imports the package."""
+    out = set()
+    for hf in (PLUGIN_ROOT / TESTS_REL).glob(_HELPER_GLOB):
+        if hf.name.startswith("test_"):
+            continue
+        if _IMPORTS_MATRIX.search(hf.read_text(encoding="utf-8", errors="replace")):
+            out.add(hf.stem)
+    return out
+
+
 def _matrix_consumers_by_independent_scan() -> set[str]:
-    """Every test file whose SOURCE imports the matrix package.
+    """Every test file whose SOURCE reaches the matrix package.
 
     Independent oracle: a line-anchored regex over the import statements, not
     the selector's ast walk. Line-anchored so a mention inside a string literal
     (`"from _hostpaths import require_repo\\n"`, a real pattern in this tree)
     is not counted as an import.
+
+    Reaches = imports the package, OR imports a `tests/` helper that does.
     """
+    helpers = _matrix_helper_modules()
+    via_helper = (re.compile(r"^[ \t]*(?:from|import)[ \t]+(?:" +
+                             "|".join(sorted(map(re.escape, helpers))) + r")\b", re.M)
+                  if helpers else None)
     out = set()
     for tf in (PLUGIN_ROOT / TESTS_REL).glob("test_*.py"):
-        if _IMPORTS_MATRIX.search(tf.read_text(encoding="utf-8", errors="replace")):
+        src = tf.read_text(encoding="utf-8", errors="replace")
+        if _IMPORTS_MATRIX.search(src) or (via_helper and via_helper.search(src)):
             out.add(f"{TESTS_REL}/{tf.name}")
     return out
 
@@ -434,6 +469,20 @@ def test_helper_rule_does_not_widen_unrelated_selections():
     still fails if rule 4 leaks. The now-covered artefact is asserted positively
     in `test_a_read_artefact_selects_the_tests_that_read_it` instead — the
     coverage is kept, not dropped.
+
+    vibe-ic#1387 broke the LAST assertion the same way, one rule further on, and
+    the remedy is the same shape: subtract the newly-legitimate contributor by
+    NAME instead of relaxing the bound. Rule 8 routes a changed `programs/*.py`
+    to every tests-tree file that globs `*.py`, and three of those are matrix
+    consumers (`test_matrix_d1_wiring`, `test_matrix_d7_outputs_list_complete`,
+    `test_selector_second_hop_helpers`). They walk every program in the tree, so
+    a change to any one of them really can break them — that selection is rule
+    8 working, not rule 4 leaking, and it is the whole point of #1387.
+
+    So the bound is taken against `select_tests - _dir_consumers`, which still
+    fails the moment rule 4 pulls in a matrix consumer of its own. Asserting
+    `not (src & matrix_consumers)` outright would now be asserting that #1387
+    did not land.
     """
     for changed, label in (
         ([], "empty diff"),
@@ -444,11 +493,19 @@ def test_helper_rule_does_not_widen_unrelated_selections():
         assert out == sel._smoke_set(PLUGIN_ROOT), (
             f"{label}: rule 4 leaked {sorted(out - sel._smoke_set(PLUGIN_ROOT))}")
 
-    src = set(sel.select_tests(["programs/flow_compliance_check.py"],
-                               PLUGIN_ROOT, plugin_prefix=""))
+    changed = ["programs/flow_compliance_check.py"]
+    src = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix=""))
     assert f"{TESTS_REL}/test_flow_compliance_check.py" in src
-    assert not (src & _matrix_consumers_by_independent_scan()), (
-        "a plain source-module change pulled in the matrix consumers")
+
+    # Rule 8's own contribution, recomputed from the selector rather than listed
+    # here: a hand-written exemption list would rot the first time a test gains
+    # or drops a glob, and would then silence rule 4 for whatever moved into it.
+    by_glob = sel._dir_consumers(PLUGIN_ROOT, changed,
+                                 sel._source_stems(PLUGIN_ROOT))
+    leaked = (src - by_glob) & _matrix_consumers_by_independent_scan()
+    assert not leaked, (
+        f"a plain source-module change pulled in matrix consumers that rule 8's "
+        f"glob edges do not explain: {sorted(leaked)}")
 
 
 # ---- the mapping is DERIVED, proven on a synthetic tree --------------------
@@ -598,16 +655,42 @@ def test_package_init_maps_to_the_package_not_to_a_module_named_init(tmp_path):
 
 
 def test_helper_index_not_built_when_no_helper_changed(monkeypatch):
-    """Cost guard: rule 4 must be lazy, exactly like the reference index."""
-    calls = []
+    """Cost guard: rule 4 must be lazy, exactly like the reference index.
+
+    vibe-ic#1387 made "was `_helper_consumers` called at all?" the wrong
+    question. Rule 8 (`_dir_consumers`) resolves its glob-matched HELPERS
+    through rule 4 by design — that is the documented path from
+    `programs/eda_report_audit.py` to `test_matrix_d7_outputs_list_complete.py`
+    — so the function now has two legitimate callers and a bare call-count
+    cannot tell rule 4 firing from rule 8 composing. Counting calls made this
+    test red on clean main from the moment #1387 landed.
+
+    The PROPERTY is unchanged and still worth guarding, so it is measured at the
+    thing that actually distinguishes the two callers: the ARGUMENT. Rule 4
+    passes the helpers that are IN THE DIFF; rule 8 passes helpers it found by
+    globbing the tests tree. A diff carrying no helper can therefore produce
+    calls, but none of them may name a path from that diff — and if rule 4 ever
+    stops being lazy, its call does name one, and this reddens.
+    """
+    calls: list[tuple] = []
+    real = sel._helper_consumers
     monkeypatch.setattr(
         sel, "_helper_consumers",
-        lambda *a, **k: calls.append(a) or set())
-    sel.select_tests(["programs/flow_compliance_check.py"], PLUGIN_ROOT,
-                     plugin_prefix="")
-    assert not calls, "helper index built for a diff with no tests-dir helper"
+        lambda plugin_root, helpers, stems, *a, **k:
+            calls.append(tuple(helpers)) or real(plugin_root, helpers, stems, *a, **k))
+
+    no_helper = ["programs/flow_compliance_check.py"]
+    sel.select_tests(no_helper, PLUGIN_ROOT, plugin_prefix="")
+    from_diff = {h for c in calls for h in c} & set(no_helper)
+    assert not from_diff, (
+        f"rule 4 ran for a diff with no tests-dir helper: it was handed "
+        f"{sorted(from_diff)}, which came from the diff itself")
+
+    calls.clear()
     sel.select_tests([_REGISTRY_REL], PLUGIN_ROOT, plugin_prefix="")
-    assert calls, "helper index NOT built for a changed tests-dir helper"
+    assert _REGISTRY_REL in {h for c in calls for h in c}, (
+        f"rule 4 did NOT run for a changed tests-dir helper ({_REGISTRY_REL}); "
+        f"calls seen: {calls}")
 
 
 def test_unparseable_helper_or_test_does_not_silence_the_selector(tmp_path):

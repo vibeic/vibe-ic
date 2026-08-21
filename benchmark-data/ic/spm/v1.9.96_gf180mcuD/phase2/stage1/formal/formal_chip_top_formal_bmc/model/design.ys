@@ -1,8 +1,0 @@
-# running in formal_chip_top_formal_bmc/src/
-read_verilog -formal -DSPM_RESET_AT_T0 formal_chip_top.sv chip_top.v
-prep -top formal_chip_top
-
-hierarchy -smtcheck
-rename -witness
-write_jny -no-connections ../model/design.json
-write_rtlil ../model/design.il

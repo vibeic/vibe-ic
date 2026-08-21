@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "USB 2.0 is a wire-level + framework spec; no PDK / SDC / floorplan constraints at the protocol layer. Per-USB-controller integration constraints (PHY characterization, clock-tree budget, ESD protection) live in the SoC integration spec, not in USB 2.0 itself. USB-IF compliance program tests are described in chapter 7 (electrical) and chapter 11 (hub)."
-  }
-}

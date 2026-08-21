@@ -1,5 +1,0 @@
-{
-  "ic_name": "USB Power Delivery (USB-PD)",
-  "otp_content": "N/A — USB-PD is a negotiation protocol, no one-time-programmable fuse content defined.",
-  "applicable": false
-}

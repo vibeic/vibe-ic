@@ -60,6 +60,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import waivers_schema_check as wsc  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 FCC = PROGRAMS / "flow_compliance_check.py"
 WSC = PROGRAMS / "waivers_schema_check.py"
@@ -471,6 +472,21 @@ def test_cascades_to_still_reports_a_child_that_names_nothing(tmp_path):
 # 8. the corpus measurement — is this latent, or is a project reportless?
 # ----------------------------------------------------------------------
 
+def _corpus_root() -> Path:
+    """Where the PUBLISHED corpus actually is.
+
+    It used to be `REPO_ROOT / "benchmark-data"`. The results now live in
+    `vibeic/benchmark-data`; what keeps that name in this repo is the design
+    INPUT the flow reads, which carries no waiver at all. Both tests in this
+    section are guarded by `@needs_corpus`, so reaching here means a cell IS
+    readable and `corpus_root()` cannot be None.
+    """
+    root = corpus_root()
+    assert root is not None, "@needs_corpus should have skipped before this point"
+    return root
+
+
+@needs_corpus
 def test_no_tracked_corpus_waiver_sits_above_the_stale_ceiling():
     """#526 asks whether any corpus waiver is in 41-44. MEASURED: none is.
 
@@ -480,9 +496,18 @@ def test_no_tracked_corpus_waiver_sits_above_the_stale_ceiling():
     is what turns "latent" from an assertion into a measurement — if a future
     corpus file lands a 41-44 id, this fails and the reviewer learns that a
     project's report is at stake.
+
+    `@needs_corpus` because the sweep now has to reach `vibeic/benchmark-data`.
+    Without it this test was the more dangerous half of the pair: a glob over a
+    corpus that is no longer here finds no offender and `offenders == {}` is
+    GREEN — "no waiver sits above the ceiling" asserted about a population of
+    zero. A skip naming the corpus says the true thing instead, which is that
+    nobody looked.
     """
     offenders = {}
-    for path in sorted(REPO_ROOT.glob("benchmark-data/**/waivers.json")):
+    swept = 0
+    for path in sorted(_corpus_root().glob("**/waivers.json")):
+        swept += 1
         doc = json.loads(path.read_text())
         for key in ("waived_steps", "waivers"):
             for e in doc.get(key) or []:
@@ -491,23 +516,104 @@ def test_no_tracked_corpus_waiver_sits_above_the_stale_ceiling():
                 sid = e.get("id")
                 if isinstance(sid, int) and STALE_CEILING < sid:
                     offenders[str(path)] = sid
+    # A sweep of no file has found no offender, and that is not the same
+    # sentence as "no project waives above the ceiling". Said out loud so the
+    # verdict below can only be reached over a real population.
+    assert swept, (
+        "the corpus is readable but carries no waivers.json — this test "
+        "certifies the corpus and has certified nothing")
     assert offenders == {}, (
         f"a tracked project waives a step above the old ceiling {offenders} "
         f"— before #526 that project produced NO compliance report at all")
 
 
+def _tracked_corpus_waivers():
+    """The git-TRACKED `waivers.json` set INSIDE THE PUBLISHED CORPUS, or None
+    when git cannot answer.
+
+    It used to ask `git -C REPO_ROOT ls-files benchmark-data`. That question
+    moved with the data: the corpus is its own repository now, so the tracked
+    set has to be read from ITS checkout, which is also the only way the
+    `VIBE_IC_BENCHMARK_DATA` pointer can mean anything. Asking this repo would
+    answer about the design inputs — a different tree, carrying no waiver.
+
+    This test's NAME says "tracked", and a filesystem glob is not that. Two
+    consequences, both real:
+
+    * an UNTRACKED local `waivers.json` — one a benchmark run just wrote — was
+      validated and counted, so the verdict depended on what happened to be
+      lying in the author's tree. That is the same false certificate
+      `evidence_citation_resolves_check.tracked_files()` was written to remove:
+      the question is what the REPO ships, not what this machine has.
+    * the population could only be guarded by a hand-typed floor, and that
+      floor rotted. `assert seen >= 11` went RED at 9 because the corpus
+      legitimately shrank; the number said nothing about whether the scan was
+      correct, only about when it was written.
+
+    Asking git is strictly stronger than the floor: it catches a broken glob
+    (zero or missing entries) AND untracked contamination, neither of which a
+    `>=` count can distinguish, and it cannot rot when the corpus changes size
+    for a legitimate reason.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(_corpus_root()), "ls-files", "-z"],
+        # 10s, not the 120s this first carried. These tests run under a 180s
+        # pytest-timeout harness, so an inner bound is a slice of THAT budget --
+        # 120s was two thirds of it for a call measured at 0.00s (the whole item
+        # is 0.23s). An over-wide inner bound is the #1241 session-killer shape:
+        # enough of them and the harness dies without emitting a verdict at all,
+        # which greps as zero failures. 10s is ~43x the measured item.
+        capture_output=True, timeout=10)
+    if r.returncode != 0:
+        return None
+    out = r.stdout.decode("utf-8", "replace")
+    return sorted(p for p in out.split("\0")
+                  if p and p.split("/")[-1] == "waivers.json")
+
+
+@needs_corpus
 def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
     """The consumer-scoped half: run the REAL validator over every tracked
-    waivers.json and assert none of them trips an id finding."""
-    seen = 0
-    for path in sorted(REPO_ROOT.glob("benchmark-data/**/waivers.json")):
-        seen += 1
+    waivers.json and assert none of them trips an id finding.
+
+    `@needs_corpus` because the files it validates are PUBLISHED CELLS and are
+    no longer in this checkout. The non-vacuity guard below is right and stays:
+    a scan of nothing has validated nothing. What was wrong is what it reported
+    when it fired — an empty corpus was rendered as a RED test, i.e. as a defect
+    in the tree, when the true sentence is that the data moved. It is still able
+    to fail, and now for the one reason it should: a corpus IS readable and does
+    not carry a single waiver.
+    """
+    tracked = _tracked_corpus_waivers()
+    if tracked is None:
+        pytest.skip("the corpus is present but is not a git checkout / git is "
+                    "unavailable — 'tracked' is undecidable here, and a "
+                    "filesystem glob is not a substitute (see "
+                    "_tracked_corpus_waivers)")
+
+    # Non-vacuity that cannot rot: the corpus may shrink, but a scan of NOTHING
+    # has not validated anything.
+    assert tracked, ("the corpus is readable but tracks no waivers.json — this "
+                     "test certifies the corpus and cannot do so over an empty "
+                     "one")
+
+    scanned = []
+    for rel in tracked:
+        path = _corpus_root() / rel
+        assert path.is_file(), (
+            f"{rel} is tracked but absent from this checkout; the corpus scan "
+            f"must not silently skip a tracked member")
+        scanned.append(rel)
         findings, _ = wsc.validate(path.parent)
         bad = [f.rule for f in findings
                if f.rule in ("id-range", "id-missing",
                              "id-noncanonical-spelling")]
         assert bad == [], f"{path}: {bad}"
-    assert seen >= 11, f"corpus shrank to {seen} waiver files — re-measure"
+
+    assert scanned == tracked, (
+        f"scanned {len(scanned)} of {len(tracked)} tracked waiver files; every "
+        f"tracked member must be validated (missing: "
+        f"{sorted(set(tracked) - set(scanned))})")
 
 
 # ----------------------------------------------------------------------
