@@ -394,6 +394,26 @@ The parse is `_ppa/feasibility.eco_requirement_state`, imported. There is
 deliberately **not** a second parser: the space and the gate must not drift
 apart about what "this design requires spares" means.
 
+### And the file the brief named
+
+`crosslayer_search_space.py` does not own this knob — it withholds the
+place-and-route levers and delegates them to `ppa_pnr_search_space.py`, reading
+that owner's **own** lever table at the moment it writes the handoff so the two
+cannot drift. That part was already right.
+
+What it did not say is that delegation now has a **condition**. Listing
+`spare_cell_density` beside ten unconditional knobs reads as "freely
+searchable, elsewhere", and a reader who follows that clean-looking record into
+the owner without `--eco-declaration` or `--project` gets exactly the unbounded
+lever this campaign closed. So the handoff row gains
+`pnr_levers_delegated_with_a_precondition` and a reason that states the stake —
+metal-only ECO versus a base-layer respin — and, like the owner's name and the
+lever names beside it, **the list is measured from the owner's `eco_bounded`
+flag, never re-typed here**. `test_M_the_precondition_list_is_MEASURED_not_typed_here`
+drives that in both directions: strip the flag from the owner and this file must
+stop claiming a precondition; move it to a different lever and this file must
+follow it there.
+
 **And `--eco-declaration` is no longer optional where it matters.** With
 `--project`, the route decides: a design the flow put anywhere other than the
 `37.5ip` terminal, with no ECO declaration, is rc=2 and **no space is
@@ -597,6 +617,18 @@ published records, verbatim.
    quietly asserts around its broken `--help` is hiding something. Two lines in
    two files whenever you want it; `ppa_pareto_check.py` has the identical bug.
 
-8. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
+8. **`crosslayer_search_space.py` exits 2 on an unrecognised flag**, and 2 is
+   its own NOT_MEASURED code — so a caller that treats 2 as "nothing to check
+   here, carry on" reads a typo'd flag as a step that measured nothing. That is
+   the confusion `_ppa/cli_exit.py` was written to end, and its docstring
+   measured 12 of 14 shipped `ppa_*` programs with it. The one-line fix
+   (`cli_exit.parse_or_refuse`) is already in the tree. I did not apply it: this
+   program is not a `ppa_*` CLI so the layer sweep never reaches it, no strict
+   pin covers it, and its own docstring declares a three-code contract with no
+   `3` in it — introducing one changes a published interface. Recorded as a
+   strict xfail in `test_crosslayer_search_space.py`. Say the word and it is
+   two lines.
+
+9. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
    reproduced in a clean detached worktree at `6dfe15a32`. Not mine, not fixed
    here, and they will show up in any CI run of this branch.
