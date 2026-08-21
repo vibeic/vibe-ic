@@ -1100,6 +1100,14 @@
           "alternative": "reports/phase3/lvs_verdict.json",
           "path": "reports/phase3/lvs_verdict.json",
           "size_bytes": 1131
+        },
+        "reports/phase3/drc_signoff.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "declared 2026-08-21 by the step-31 dimension-7 change that moved flow/phase1_phase2_phase3.yaml WITHOUT this manifest -- the co-change d3_manifest_declaration_parity_check exists to catch, and the only one of 164 declared paths it found uncovered. The producer is step 31's OWN gate clause `drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json`, so this is the same class as reports/phase3/lvs.json and reports/phase2/gates/erc_density.json above: a gate `--json` artefact whose readers live outside its writer. EVIDENCED, and NOT the magic_illegal_overlap.json case the declaring commit predicted it would be. That commit reasoned the entry would land UNPROVEN, but it measured `find` over an UNTRACKED working tree, which _admissibility excludes by name. Measured instead the way every other record here is -- tracked at HEAD in the published corpus at 146d665 -- the artefact IS carried, at 1919 B, in a run root this manifest already registers; ic/spm/v1.10.18_sky130A carries it too at 2142 B. UNPROVEN would therefore have been a FALSE record, and the UNPROVEN branch would have reddened on it the moment any host resolved the root. The ref is the one this manifest's other records are measured against: lvs_verdict.json's three recorded sizes (1131 / 1117 / 944 B) reproduce there exactly, which is the cross-check that fixed the ref before this size was read off it. The recorded copy is `eda_report_audit:drc` output -- step 31's own gate -- same provenance class as the two entries just named.",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/drc_signoff.json",
+          "path": "reports/phase3/drc_signoff.json",
+          "size_bytes": 1919
         }
       }
     },

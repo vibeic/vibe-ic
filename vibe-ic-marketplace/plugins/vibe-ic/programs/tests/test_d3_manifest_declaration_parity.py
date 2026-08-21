@@ -42,17 +42,24 @@ def _gate():
 G = _gate()
 
 
-def _tree(root: Path, declared: dict, measured: dict) -> Path:
-    """A minimal plugin root: {step_id: [paths]} declared, {step_id: [paths]} measured."""
+def _tree(root: Path, declared: dict, measured: dict, body=None) -> Path:
+    """A minimal plugin root: {step_id: [paths]} declared, {step_id: [paths]} measured.
+
+    *body* is the JSON value recorded UNDER each measured path. It defaults to a
+    record dimension 3 can decide from, because every test that predates the
+    hollow-entry finding is about WHICH PATHS are covered and would otherwise be
+    asserting two properties at once.
+    """
     (root / "flow").mkdir(parents=True, exist_ok=True)
     (root / "programs" / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
     steps = [{"id": sid, "required_outputs": list(paths)}
              for sid, paths in declared.items()]
     (root / "flow" / "phase1_phase2_phase3.yaml").write_text(
         yaml.safe_dump({"steps": steps}), encoding="utf-8")
+    if body is None:
+        body = {"status": "PRODUCED_BY_RUN"}
     manifest = {"steps": {sid: {"verdict": "ENFORCED",
-                                "entries": {p: {"status": "PRODUCED_BY_RUN"}
-                                            for p in paths}}
+                                "entries": {p: body for p in paths}}
                           for sid, paths in measured.items()}}
     (root / "programs" / "tests" / "fixtures"
      / "matrix_d3_output_manifest.json").write_text(
@@ -161,11 +168,17 @@ def test_the_three_outcomes_are_distinct(rc_name):
 # alone — the check that never fires also clears every tree — so it exists only
 # next to the _FAILS half that proves the refusal fires on the real shape.
 # ══════════════════════════════════════════════════════════════════════
+#: The status here is a REAL one (`UNPROVEN`) and not the arbitrary "X" it used
+#: to be. The property these two tests are named for is the DUPLICATE KEY, and
+#: an unrecognised status is now a finding in its own right — so the placeholder
+#: would have made `..._PASSES` below fail for a reason that has nothing to do
+#: with duplicate keys, and the control would have stopped controlling anything.
 _DUP_MANIFEST = """{
   "steps": {
-    "S1": {"verdict": "ENFORCED", "entries": {"out/a.json": {"status": "X"}}},
+    "S1": {"verdict": "ENFORCED",
+           "entries": {"out/a.json": {"status": "UNPROVEN"}}},
     "S1": {"verdict": "NA_DORMANT_CONDITION",
-           "entries": {"out/a.json": {"status": "X"}}}
+           "entries": {"out/a.json": {"status": "UNPROVEN"}}}
   }
 }"""
 
@@ -206,7 +219,8 @@ def test_the_same_tree_with_one_record_PASSES(tmp_path):
     manifest, which is the failure mode the module docstring names.
     """
     single = _DUP_MANIFEST.replace(
-        '    "S1": {"verdict": "ENFORCED", "entries": {"out/a.json": {"status": "X"}}},\n',
+        '    "S1": {"verdict": "ENFORCED",\n'
+        '           "entries": {"out/a.json": {"status": "UNPROVEN"}}},\n',
         "")
     root = _tree_with_raw_manifest(tmp_path, {"S1": ["out/a.json"]}, single)
     assert G.main([str(root)]) == G.RC_OK
@@ -217,3 +231,102 @@ def test_the_real_manifest_carries_no_duplicate_key():
     path = (_PLUGIN / "programs" / "tests" / "fixtures"
             / "matrix_d3_output_manifest.json")
     G._load_manifest_no_duplicate_keys(path)      # raises if any key repeats
+
+
+# ──────────────────────────────────────────────────────────────────────
+# THE KEY IS NOT THE PROPERTY
+# ──────────────────────────────────────────────────────────────────────
+# Found while closing the ONE finding this gate reported on main, 2026-08-21:
+# step 31's `reports/phase3/drc_signoff.json`. The cheapest edit that turns that
+# report green is to paste the path back into the manifest with an empty body —
+# the gate asked `path in entries` and an entry was whatever sat under the key.
+#
+# MEASURED against the gate as it stood, on synthesized one-step trees: `{}`,
+# `{"status": null}` and `{"status": "LOOKS_FINE"}` ALL returned rc 0. Each one
+# clears the finding while recording that nothing was ever looked for, and each
+# leaves dimension 3 to decide the cell through its `unrecognised manifest
+# status` fall-through. A green bought that way is worth less than the red it
+# replaces, because the red at least named the path that had never been
+# measured.
+#
+# The FAILS/PASSES pairing of this module applies here too: the PASSES case is
+# vacuous alone, so it is parametrized over the three statuses the dimension
+# really implements, and it is what proves the new refusal is not simply
+# refusing everything.
+_UNDECIDABLE_BODIES = [
+    pytest.param({}, "records no `status`", id="empty-object"),
+    pytest.param({"status": None}, "records no `status`", id="null-status"),
+    pytest.param({"status": "LOOKS_FINE"}, "cannot decide from", id="made-up-status"),
+    pytest.param({"run": "somewhere", "size_bytes": 12}, "records no `status`",
+                 id="evidence-shaped-but-statusless"),
+]
+
+
+@pytest.mark.parametrize("body,expected", _UNDECIDABLE_BODIES)
+def test_an_entry_the_dimension_cannot_decide_from_does_NOT_close_it(
+        tmp_path, capsys, body, expected):
+    """Covering a declared path with an unusable record must still FAIL."""
+    root = _tree(tmp_path,
+                 declared={"S1": ["out/alpha.json"]},
+                 measured={"S1": ["out/alpha.json"]},
+                 body=body)
+    assert G.main([str(root)]) == G.RC_FAIL
+    err = capsys.readouterr().err
+    assert "out/alpha.json" in err, "the gate must NAME the offending path"
+    assert expected in err, err
+
+
+def test_a_non_object_entry_does_NOT_close_it(tmp_path, capsys):
+    """`"out/alpha.json": "measured"` — a key with prose under it, not a record."""
+    root = _tree(tmp_path,
+                 declared={"S1": ["out/alpha.json"]},
+                 measured={"S1": ["out/alpha.json"]},
+                 body="measured")
+    assert G.main([str(root)]) == G.RC_FAIL
+    assert "not an object" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status", ["PRODUCED_BY_RUN", "PRODUCED_LIVE", "UNPROVEN"])
+def test_each_status_the_dimension_CAN_decide_from_PASSES(tmp_path, status):
+    """The control for the four refusals above.
+
+    Without this the new check would also "pass" its own tests by refusing every
+    entry ever written, which is the failure mode this module's docstring names.
+    Parametrized over the real vocabulary so a status quietly dropped from
+    `_RECOGNISED_STATUSES` reddens here rather than in the shipped manifest.
+    """
+    root = _tree(tmp_path,
+                 declared={"S1": ["out/alpha.json"]},
+                 measured={"S1": ["out/alpha.json"]},
+                 body={"status": status})
+    assert G.main([str(root)]) == G.RC_OK
+
+
+def test_the_recognised_vocabulary_is_exactly_what_the_dimension_implements():
+    """`_RECOGNISED_STATUSES` must not drift from dimension 3's own branches.
+
+    The gate's list is a COPY of the statuses `check_entry` implements in
+    `test_matrix_d3_outputs_produced.py`; a status added there and not here
+    would be refused in the manifest that ships, and one removed there and left
+    here would be waved through into the fall-through this check exists to stop.
+    Read out of that module's source rather than restated, so the two cannot
+    disagree silently.
+    """
+    src = (_PLUGIN / "programs" / "tests"
+           / "test_matrix_d3_outputs_produced.py").read_text(encoding="utf-8")
+    implemented = {s for s in ("PRODUCED_BY_RUN", "PRODUCED_LIVE", "UNPROVEN")
+                   if f'status == "{s}"' in src}
+    assert implemented == set(G._RECOGNISED_STATUSES), (
+        f"dimension 3 branches on {sorted(implemented)} but this gate accepts "
+        f"{sorted(G._RECOGNISED_STATUSES)}")
+
+
+def test_the_real_manifest_records_a_decidable_status_for_EVERY_declared_entry():
+    """The shipped pair — the reason the refusal above is affordable.
+
+    Measured 2026-08-21: 122 PRODUCED_BY_RUN, 40 UNPROVEN, 2 PRODUCED_LIVE and
+    no entry without a status, so this costs the tree that ships nothing.
+    """
+    _declared, uncovered, hollow, _per_step = G.audit(_PLUGIN)
+    assert not hollow, hollow
+    assert not uncovered, uncovered
