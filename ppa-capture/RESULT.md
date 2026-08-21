@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 22 records, and the sixteen rules that were already programs
+# The PPA cluster, DISTILLED — 23 records, and the sixteen rules that were already programs
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -31,7 +31,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 19 | deterministic rules — the default, and every one names its predicate |
+| **A** | 20 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -806,6 +806,31 @@ declaration is wrong.
 **(o)** yes. **(d)** yes — it is per declared artefact, so it covers every one
 the flow gains.
 
+### A-21 · which stream carries the summary is contract, and must be driven to a real verdict · `ppa.cli_contract`
+
+The originating lane spotted one program on the wrong stream and **declined to
+sweep the layer**, saying so: *"asserting it could redden other lanes' files on a
+clause I have not measured everywhere."* That restraint was right, and the reason
+the clause is unmeasured is itself the finding.
+
+Driven to **real verdicts**, two-sided:
+
+    comparison command, vacuous corpus    summary -> stdout    marker -> stderr   OK
+    contract command, 16 findings         summary -> stderr    stdout EMPTY       not OK
+
+One conformant, one not. **The other seventeen are NOT MEASURED and are not
+claimed** — driving each to a known verdict needs valid inputs per program, which
+is exactly the work the originating lane declined.
+
+**The screen warning, earned here.** My first probe ran every command with no
+arguments and compared stream byte counts. It reported 18 of 19 "on stderr" and
+is worthless: that is the argument-parser path, which is on the refusal stream
+for every command by construction. It measures argparse, not the contract — the
+seventh time in this lane a screen has measured something adjacent to its
+subject.
+**(o)** yes. **(d)** yes — a known-verdict invocation per command covers every
+command the layer gains.
+
 ### C-1 · a generated report header must be derived from the inputs the session opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -992,6 +1017,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
+| A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
 | A-2 | — | n/a | FP-free by construction, same reason |

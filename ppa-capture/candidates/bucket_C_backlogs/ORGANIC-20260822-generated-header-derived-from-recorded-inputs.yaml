@@ -13,6 +13,6 @@ suggested_fix: |
   Give every emitter a recorded list of the inputs it opened, and derive every self-describing line of the header from that list rather than from a literal. Then a single gate can assert, for any generated document, that each basis claim in its header is entailed by its own input list — and an emitter that claims a basis it cannot support fails at emission rather than at review. The degradation rule comes with it: when the intended input is missing, the emitter falls back AND the header, the stamp and the provenance envelope all name what was actually linked. MEASURED on the instance that motivated it: the shipped figure was 1.873x low and one whole group of the breakdown read exactly 0.000, because the session linked an input from before the stage the header claimed. The stronger evidence needs no reference at all — across a 60-configuration sweep the report was byte-identical 60 times while all 60 of the inputs it claimed to describe differed.
 
 id: "ORGANIC-20260822-generated-header-derived-from-recorded-inputs"
-submitted_at: "2026-08-22T01:05:05+08:00"
+submitted_at: "2026-08-22T01:09:01+08:00"
 session_context: >-
   Raised while distilling an end-to-end drive of the measurement layer over one routed core. The instance that produced it has since been fixed in its own emitter by exactly this technique, which is what makes the general form worth building: the technique is known to work and is applied in one place out of many.

@@ -254,6 +254,10 @@
     "ppa.pareto": {
       "bucket_A_program": "programs/ppa_pareto_check.py",
       "bucket_B_skill_file": "skills/design-for-eco/SKILL.md"
+    },
+    "ppa.cli_contract": {
+      "bucket_A_program": "programs/_ppa/cli_exit.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     }
   },
   "default_routing": {
