@@ -558,3 +558,68 @@ def test_the_runners_four_tiers_are_four_distinct_readings():
     assert (fits, red, skip, usage) == ("PASS", "FAIL", "SKIP", "FAIL")
     # the two FAILs are the same verdict but must be distinguishable by rc
     assert skip != usage, "a skip and a rejected command line share a reading"
+
+
+# --------------------------------------------------------------------------- #
+# the wiring goes red on REAL published silicon, not only on fixtures
+# --------------------------------------------------------------------------- #
+# Everything above drives synthetic Verilog. The brief's requirement was "prove
+# each wiring can go RED", and a fixture I wrote proves the logic, never the
+# artefacts — which is the exact wording of the gate this branch exists to
+# close. The published corpus carries the ICs this program's docstring cites as
+# its measured evidence, so the refusal can be driven on them.
+#
+# MEASURED through `design_one_shot_runner.step_slot_pad_budget`, real RTL plus
+# an ingested 52-signal-pad slot:
+#
+#     opentitan_aes           DOES_NOT_FIT   515 bits   9.90x   (docstring: 515, 9.9x)
+#     ibex                    DOES_NOT_FIT   262 bits   5.04x   (docstring: 262, 5.0x)
+#     edge_llm_matmul_accel   DOES_NOT_FIT   109 bits   2.10x   (docstring: 107, 2.1x)
+#     sha256                  FITS_AFTER_FOLD 75 bits           (docstring: 75, fits)
+#
+# `edge_llm_matmul_accel` reads 109 where the table says 107. Measured
+# old-parser and new-parser alike at 109, so it is not this branch's doing —
+# the table was taken against a different revision of that RTL. Recorded rather
+# than quietly rounded to agree.
+
+import shutil as _shutil  # noqa: E402
+import _hostpaths  # noqa: E402
+
+_SLOT_PADS = 52
+
+
+def _real_ic_project(ic: str) -> Path:
+    """A real published IC's RTL, COPIED, with a slot ingested beside it.
+
+    Copied because the step writes a report and the corpus is not ours to
+    write into.
+    """
+    rtl = _hostpaths.require_corpus("ic", ic, "phase2", "stage1", "rtl")
+    d = Path(tempfile.mkdtemp(prefix=f"realic_{ic[:8]}_"))
+    (d / "phase2" / "stage1").mkdir(parents=True)
+    _shutil.copytree(rtl, d / "phase2" / "stage1" / "rtl",
+                     symlinks=True, ignore_dangling_symlinks=True)
+    s = d / "input" / "submission_template" / "slots"
+    s.mkdir(parents=True)
+    (s / "slot_1x1.json").write_text(json.dumps(T._slot_ingested()))
+    return d
+
+
+@pytest.mark.parametrize("ic,bits", [("opentitan_aes", 515), ("ibex", 262)])
+def test_a_real_IC_that_cannot_be_bonded_out_turns_the_step_RED(ic, bits):
+    R = _runner()
+    sr = R.step_slot_pad_budget(_real_ic_project(ic), "chip_top")
+    assert sr.status == "FAIL", f"{ic} was not refused: {sr.detail[:120]}"
+    assert sr.extras["exit_code"] == 1
+    assert str(bits) in sr.detail, (
+        f"{ic}: the declared bit count is not in the operator-visible line")
+
+
+def test_the_real_sha256_fits_only_after_a_fold_and_says_so():
+    """The other direction, and the one arithmetic alone gets wrong: 75 bits
+    against 52 pads LOOKS unbuildable and is not, because two same-width buses
+    share one bidirectional group. The gate must not refuse it."""
+    R = _runner()
+    sr = R.step_slot_pad_budget(_real_ic_project("sha256"), "chip_top")
+    assert sr.status == "PASS", f"a fittable design was refused: {sr.detail[:120]}"
+    assert "FITS_AFTER_FOLD" in sr.detail
