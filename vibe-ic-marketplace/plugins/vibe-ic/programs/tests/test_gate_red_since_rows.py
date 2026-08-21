@@ -316,3 +316,107 @@ def test_without_a_base_the_checker_is_not_told_a_ref(tmp_path, monkeypatch):
     rec.write_text("{}", encoding="utf-8")
     R.gate_red_since_gate(tmp_path, rec)
     assert "--head-ref" not in seen["argv"], seen["argv"]
+
+
+# --------------------------------------------------------------------------
+# NOR MAY THE CANDIDATE RENEW ITS OWN OVERDUE ROW.
+# --------------------------------------------------------------------------
+
+def _repo_with_ledger(tmp_path, base_rows, head_rows):
+    """A history whose ledger differs between the base commit and HEAD."""
+    r = tmp_path / "lr"
+    (r / "tools" / "ci").mkdir(parents=True)
+    def git(*a):
+        return subprocess.run(["git", "-C", str(r), *a], capture_output=True,
+                              text=True, check=False)
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (r / "seed").write_text("x", encoding="utf-8")
+    git("add", "-A"); git("commit", "-q", "-m", "seed")
+    since = git("rev-parse", "HEAD").stdout.strip()
+
+    # Commits BETWEEN `since` and the base, so a row bounded at 1 is genuinely
+    # past its bound at the base rather than exactly on it — `adjudicate` fails
+    # on `behind > bound`, and a fixture sitting on the boundary would prove
+    # nothing about which ledger was read.
+    for i in range(3):
+        (r / f"b{i}").write_text("x", encoding="utf-8")
+        git("add", "-A"); git("commit", "-q", "-m", f"base{i}")
+
+    led = r / G.LEDGER_REL
+    def write(rows):
+        led.write_text(json.dumps({"acknowledged": rows}), encoding="utf-8")
+    write([dict(row, since=since) for row in base_rows])
+    git("add", "-A"); git("commit", "-q", "-m", "base ledger")
+    base = git("rev-parse", "HEAD").stdout.strip()
+
+    for i in range(4):                      # the candidate's own commits
+        (r / f"c{i}").write_text("x", encoding="utf-8")
+        git("add", "-A"); git("commit", "-q", "-m", f"cand{i}")
+    write([dict(row, since=git("rev-parse", "HEAD").stdout.strip())
+           for row in head_rows])
+    git("add", "-A"); git("commit", "-q", "-m", "candidate renews the row")
+    return r, since, base
+
+
+def test_the_ledger_comes_from_the_ref_not_the_working_tree(tmp_path):
+    r, since, base = _repo_with_ledger(
+        tmp_path, [{"gate": "g", "max_commits": 1}],
+        [{"gate": "g", "max_commits": 1}])
+    at_base = G.load_ledger_from_ref(r, base)
+    assert [row["since"] for row in at_base] == [since], at_base
+    on_disk = G.load_ledger(r / G.LEDGER_REL)
+    assert on_disk[0]["since"] != since, (
+        "the fixture did not actually move `since`, so this proves nothing")
+
+
+def test_a_candidate_cannot_renew_its_own_overdue_row(tmp_path):
+    """THE ATTACK. The row is overdue against the base. The candidate moves
+    `since` forward to HEAD in its own tree, which WOULD silence it — and does
+    not, because the landing reads the rows at the base."""
+    r, since, base = _repo_with_ledger(
+        tmp_path, [{"gate": "g", "max_commits": 1}],
+        [{"gate": "g", "max_commits": 1}])
+    red = _record({"g": "FAIL"})
+
+    silenced, _, _ = G.adjudicate(
+        red, G.load_ledger(r / G.LEDGER_REL), G.git_age(r, base))
+    assert not any(f.kind == "expired" for f in silenced), (
+        "the candidate's own ledger must be the one that WOULD silence it, or "
+        "this test is not exercising the attack")
+
+    held, _, _ = G.adjudicate(
+        red, G.load_ledger_from_ref(r, base), G.git_age(r, base))
+    assert any(f.kind == "expired" for f in held), (
+        "reading the rows at the base did not keep the row overdue")
+
+
+def test_a_ref_that_predates_the_ledger_is_empty_not_an_error(tmp_path):
+    r, since, base = _repo_with_ledger(
+        tmp_path, [{"gate": "g", "max_commits": 1}], [])
+    assert G.load_ledger_from_ref(r, since) == []
+
+
+def test_a_ref_that_does_not_exist_is_an_error(tmp_path):
+    """A caller that names a ref and is wrong about it must not be handed an
+    empty ledger, which would read as `nothing is acknowledged`."""
+    r, since, base = _repo_with_ledger(
+        tmp_path, [{"gate": "g", "max_commits": 1}], [])
+    with pytest.raises(ValueError):
+        G.load_ledger_from_ref(r, "no-such-ref-9f3a")
+
+
+def test_the_review_passes_both_halves_from_the_base(tmp_path, monkeypatch):
+    import gatekeeper_review as R
+    seen = {}
+    monkeypatch.setattr(R, "_run_program",
+                        lambda prog, argv: (seen.setdefault("argv", argv), 0,
+                                            "[PASS] ok", "")[1:])
+    rec = tmp_path / "rec.json"
+    rec.write_text("{}", encoding="utf-8")
+    R.gate_red_since_gate(tmp_path, rec, base="origin/main")
+    argv = seen["argv"]
+    for flag in ("--head-ref", "--ledger-ref"):
+        assert flag in argv, argv
+        assert argv[argv.index(flag) + 1] == "origin/main"

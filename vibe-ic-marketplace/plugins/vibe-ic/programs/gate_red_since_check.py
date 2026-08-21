@@ -152,6 +152,42 @@ def load_ledger(path: Path) -> List[Dict[str, Any]]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
+    """The ledger as it exists at `ref`, read with `git show`.
+
+    WHY A REF AND NOT A PATH (2026-08-22). A landing adjudicates the CANDIDATE's
+    reds against the BASE's ledger. Reading the candidate's own file lets a
+    branch renew a row — move `since` forward — in the same commit that needs
+    the renewal, which is authoring its own amnesty. `landing_merge_verdict`
+    already states that rule for its copy of this ledger; this is the same rule
+    on the path `gatekeeper_review` takes, which had it only for the clock
+    (`--head-ref`) and not for the rows.
+
+    A ref is used rather than a second worktree because the caller has a base
+    REF and need not have a base checkout.
+
+    A ledger that cannot be read AT THE REF IS AN ERROR, unlike an absent
+    ledger at a path: the caller named a ref and was wrong about it, which is
+    the `$VIBE_IC_BENCHMARK_DATA set + unreadable` shape — never excused.
+    An empty `acknowledged` at a valid ref is still the normal starting state.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{ref}:{LEDGER_REL}"],
+        capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        if "does not exist" in proc.stderr or "exists on disk" in proc.stderr:
+            return []          # the ref predates the ledger: no acknowledgements
+        raise ValueError(f"cannot read {LEDGER_REL} at {ref}: "
+                         f"{proc.stderr.strip()[:200]}")
+    doc = json.loads(proc.stdout)
+    rows = doc.get("acknowledged")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise ValueError(f"{ref}:{LEDGER_REL}: 'acknowledged' must be a list")
+    return [r for r in rows if isinstance(r, dict)]
+
+
 def _states(record: Dict[str, Any]) -> Dict[str, str]:
     """Map gate label -> state, from the dispatcher's own record."""
     out: Dict[str, str] = {}
@@ -400,6 +436,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help=f"acknowledgement ledger (default: <repo>/{LEDGER_REL})")
     ap.add_argument("--repo", type=Path, default=Path.cwd(),
                     help="repository whose history dates the acknowledgements")
+    ap.add_argument("--ledger-ref",
+                    help=("read the ledger from this git ref instead of the "
+                          "working tree. A landing passes its BASE: the "
+                          "candidate's own ledger would let a branch renew a "
+                          "row in the same commit that needs the renewal"))
     ap.add_argument("--head-ref", default="HEAD",
                     help=("the ref the clock counts TO (default HEAD). A "
                           "landing passes its BASE: counting to a candidate's "
@@ -413,10 +454,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[FAIL] gate_red_since: unreadable dispatch record: {exc}")
         return _vx.RC_FAIL
 
-    ledger_path = args.ledger or (args.repo / LEDGER_REL)
+    if args.ledger and args.ledger_ref:
+        print("[FAIL] gate_red_since: --ledger and --ledger-ref name two "
+              "different ledgers; pick one")
+        return _vx.RC_FAIL
     try:
-        ledger = load_ledger(ledger_path)
-    except (OSError, ValueError) as exc:
+        if args.ledger_ref:
+            ledger = load_ledger_from_ref(args.repo, args.ledger_ref)
+        else:
+            ledger = load_ledger(args.ledger or (args.repo / LEDGER_REL))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"[FAIL] gate_red_since: unreadable ledger: {exc}")
         return _vx.RC_FAIL
 
