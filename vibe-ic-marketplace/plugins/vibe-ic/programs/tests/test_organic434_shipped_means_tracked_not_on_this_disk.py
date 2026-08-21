@@ -83,8 +83,19 @@ def _cell(tmp_path: Path, *, in_repo: bool, track_ledger: bool,
     return root
 
 
+#: Severity order for the failure MESSAGE. The verdict already knows which
+#: finding drove it; the message did not. `audit_counted` returns findings in
+#: entry order, and DISCLOSED rows outnumber ERRORs heavily on a real cell —
+#: `ic/spm/v1.10.18_sky130A` reports 33 DISCLOSED to 1 ERROR — so a caller that
+#: truncates the list prints four rules NONE of which is the cause. The single
+#: ERROR there (`PROVENANCE_PRUNE_CONTRADICTED`) never appeared at all.
+_SEVERITY_FIRST = {"ERROR": 0, "WARN": 1, "DISCLOSED": 2}
+
+
 def _rules(findings) -> list[str]:
-    return [f.rule for f in findings]
+    """Rule names, ERRORs first — a truncated message must not hide the cause."""
+    return [f.rule for f in sorted(
+        findings, key=lambda f: _SEVERITY_FIRST.get(f.severity, 3))]
 
 
 def test_an_untracked_leftover_does_not_falsify_a_not_shipped_disclosure(

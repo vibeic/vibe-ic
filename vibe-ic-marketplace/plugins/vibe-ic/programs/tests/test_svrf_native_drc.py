@@ -180,10 +180,16 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial PDK sha256 floor): the stall
+# v1.4.38 — DRC wall-clock budget (commercial-PDK sign-off floor): the stall
 # watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread
-# derived-layer build ran 4.4h unbounded. A non-completing DRC is an HONEST
-# SKIPPED-CONDITION (perf ceiling), never a FAIL or a silent multi-hour hang.
+# derived-layer build ran 4.4h unbounded.
+#
+# vibe-ic#925 — the BUDGET was right and the TIER was not. This block used to
+# assert the kill returned `SKIPPED-CONDITION`, i.e. it pinned the defect: that
+# word is EXCUSED, so the step left the denominator, and it is foreign to this
+# runner's vocabulary, so `_aggregate_verdict` let it fall through its catch-all
+# to a green `"PASS"`. The claim is corrected here; the behaviour it now pins is
+# proven two-armed in `test_issue925_drc_timeout_is_not_excused.py`.
 # --------------------------------------------------------------------------
 def test_drc_wall_budget_default_and_env(monkeypatch):
     monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
@@ -196,9 +202,13 @@ def test_drc_wall_budget_default_and_env(monkeypatch):
     assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
 
 
-def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch):
-    # rc 124 (wall-clock ceiling) -> SKIPPED-CONDITION + SVRFDRC_PERF_CEILING,
-    # and the DRC step passes a BOUNDED hard_ceiling_s (not the 24h default).
+def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
+                                                            monkeypatch):
+    # rc 124 (wall-clock ceiling) -> BLOCKED + SVRFDRC_PERF_CEILING, and the DRC
+    # step passes a BOUNDED hard_ceiling_s (not the 24h default). BLOCKED is
+    # this runner's own word for "the check could not be completed, so NOTHING
+    # is known about the design", and `_aggregate_verdict` names it explicitly
+    # in the non-green bucket.
     monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
     monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
     monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
@@ -217,7 +227,7 @@ def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch)
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
         "vibeic-eda")
-    assert res.status == "SKIPPED-CONDITION"
+    assert res.status == "BLOCKED"
     assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
     assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
 

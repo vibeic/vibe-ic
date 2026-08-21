@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "qspi_ospi_spec.txt": [
-    {
-      "literal": "0x50444653",
-      "label": "auto-discovered (hex_const)"
-    }
-  ]
-}

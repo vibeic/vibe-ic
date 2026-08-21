@@ -908,13 +908,67 @@ def parse_equiv_output(text: str) -> Dict:
                 "the wall-clock budget killed yosys mid-proof, before "
                 "equiv_induct ran — the unproven remainder was never "
                 "attempted, not refuted")
-        if _noconv and not _has_ctrex and (unproven or 0) > 0:
+        # NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A).
+        # A miter WAS built — `not parse_error`, so `total` is known — but
+        # NEITHER a proven NOR an unproven count was ever recorded: equiv_make
+        # ran and then NO equiv_simple / equiv_induct / equiv_status verdict
+        # reached the log, and NO counterexample was seen. A COMPLETED equiv
+        # pass ALWAYS emits at least one count — equiv_status' "N proven / M
+        # unproven" (_FINAL_RE), equiv_simple's "Proved N previously unproven"
+        # (_PROVED_SIMPLE_RE, N may be 0), or equiv_induct's "Found N unproven
+        # … in module equiv" (_INDUCT_FOUND_RE) — so `proven is None AND
+        # unproven is None` means the proof was CUT OFF before any point was
+        # decided: an external kill / crash / container interruption that did
+        # NOT route through the wall-budget marker path (_TIMEOUT_RE absent, so
+        # _budget_killed above did not fire). Zero decided points + zero
+        # counterexamples = no equivalence evidence in EITHER direction — the
+        # exact no-evidence state this module's docstring exists to keep OUT of
+        # a false NOT_EQUIVALENT ("a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch"). §4.05 NO-LEAK:
+        # a real mismatch carries a counterexample (_has_ctrex) OR a completed
+        # status with unproven>0 (proven parsed), so it can NEVER reach here —
+        # this softens ONLY a run that decided nothing. INCONCLUSIVE, never
+        # FAIL, never PASS. MEASURED WITNESS: opentitan_aes's Step-13 lec.rpt
+        # ended mid-`equiv_simple` (only ~1720/31850 cells attempted, no
+        # equiv_status, no "Proved N", no marker) and was booked FAIL "may
+        # genuinely differ" — a fabricated non-equivalence that blocked 24
+        # downstream steps.
+        _no_completed_comparison = (proven is None and unproven is None)
+        if _no_completed_comparison and not _has_ctrex and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "equiv_make built the miter but NO equiv_simple/induct/status "
+                "verdict was ever recorded (no proven and no unproven count) "
+                "and no counterexample was seen — the proof was cut off before "
+                "any point was decided (an interrupted/killed/crashed run "
+                "outside the wall-budget marker path)")
+        if _no_completed_comparison and _noconv and not _has_ctrex:
+            # The miter was built but the proof was cut off before ANY point was
+            # decided. Distinct wording from the convergence-wall case below:
+            # equiv_induct never even ran here, so "did NOT converge" would be
+            # inaccurate — the run recorded NO verdict at all.
+            equivalent = False
+            verdict = "INCONCLUSIVE"
+            verdict_explanation = (
+                f"A {total if total is not None else '?'}-point equivalence "
+                "miter was built, but the proof recorded NO decided points "
+                f"({_noconv_ev}) and NO counterexample "
+                "(non_equivalent_points=0). A run that decided nothing is NOT "
+                "evidence of non-equivalence: a real difference produces a "
+                "counterexample or a completed equiv_status with unproven>0. "
+                "→ INCONCLUSIVE (a killed/interrupted run outside the "
+                "wall-budget marker path), never a false NOT_EQUIVALENT. Re-run "
+                "uninterrupted (raise --timeout) or close with sign-off LEC "
+                "(Conformal/VC LEC). Visible non-PASS (equivalent:false) — "
+                "never a vacuous PASS a regression could hide behind.")
+        elif _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
             verdict_explanation = (
                 f"{proven if proven is not None else 0}/"
                 f"{total if total is not None else '?'} proven, "
-                f"{unproven} unproven — but equiv_induct did NOT converge "
+                f"{unproven if unproven is not None else '?'} unproven — but "
+                "equiv_induct did NOT converge "
                 f"({_noconv_ev}) and NO counterexample was recorded "
                 "(non_equivalent_points=0). Non-convergence is NOT "
                 "non-equivalence: a real difference produces a counterexample. "
@@ -1375,6 +1429,20 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -copy-from gate -as gate {top}\n"
         f"equiv_make gold gate equiv\n"
         f"hierarchy -top equiv\n"
+        # SAT-FREE structural pre-reduction BEFORE any SAT is spent. equiv_struct
+        # merges the $equiv key-points whose driving cones are structurally
+        # identical across gold and gate (the majority of a name-mapped
+        # RTL-vs-synth miter) by structural hashing alone — no solver call. This
+        # is SOUND: it only collapses provably-identical structure, so it can
+        # NEVER launder a real mismatch into a proof (a genuinely different cone
+        # survives to equiv_simple/equiv_induct below). Without it, equiv_simple
+        # SAT-hammers EVERY key-point including the trivially-identical ones, so a
+        # large design (measured: a 31 850-point AES miter) exhausts the wall
+        # clock mid-equiv_simple and yields a false INCONCLUSIVE. equiv_struct
+        # AUGMENTS, never REPLACES, the SAT stages that follow — it only shrinks
+        # the set they must decide (measured 31 850 -> 3 333, a 10x cut). This is
+        # the same pre-pass yosys's own `equiv_opt` runs. chip/PDK-AGNOSTIC.
+        f"equiv_struct\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
         f"equiv_induct -seq 16\n"

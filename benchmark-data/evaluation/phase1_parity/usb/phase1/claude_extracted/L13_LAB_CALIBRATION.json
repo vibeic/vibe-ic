@@ -1,5 +1,0 @@
-{
-  "ic_name": "Universal Serial Bus (USB 2.0)",
-  "lab_calibration_present": false,
-  "notes": "USB 2.0 is a digital protocol; no analog reference / trim / calibration loop. The HS PHY transceiver IP may include PLL trim and impedance calibration for line-driver characteristics, but these are per-device-design choices, not protocol-defined. Eye-pattern tests in chapter 7 provide a compliance target, not a calibration loop."
-}

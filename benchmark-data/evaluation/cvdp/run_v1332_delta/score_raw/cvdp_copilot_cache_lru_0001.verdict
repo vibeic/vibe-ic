@@ -1,3 +1,0 @@
-FAIL  cvdp_copilot_cache_lru_0001  (scored via cvdp-sim-pinned:latest)
-  LOG: /home/reyerchu/vibe-ic/benchmark-data/evaluation/cvdp/run_v1332_delta/score_raw/cvdp_copilot_cache_lru_0001/score/cvdp_copilot_cache_lru/reports/1.txt
-RC=1
