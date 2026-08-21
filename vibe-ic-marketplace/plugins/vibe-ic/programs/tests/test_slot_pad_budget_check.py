@@ -246,3 +246,98 @@ def test_cli_without_ingested_slots_is_UNDECIDED(tmp_path):
     rtl.write_text(_RTL_FITS)
     rc = S.main([str(tmp_path), "--rtl", str(rtl), "--top", "chip_top"])
     assert rc == 2
+
+
+# --------------------------------------------------------------------------- #
+# comments must never mint or destroy a port  (vibe-ic#731)
+# --------------------------------------------------------------------------- #
+# `parse_top_ports` stripped comments with TWO independent substitutions --
+# `//` first, then `/* */`. Verilog has one rule instead: whichever introducer
+# opens FIRST owns what follows. The `//` pass runs blind to an open block
+# comment, so a `*/` sitting behind a `//` is deleted with its line, and the
+# block comment it terminated survives into the text `_DIR_RE` scans.
+#
+# Both directions below are the SAME orphaned block; which one fires depends
+# only on where the commas fall. The dropping direction is the dangerous one:
+# a smaller interface is how a design that cannot be bonded out reads as FITS.
+
+# Real ports are exactly clk and done. `phantom` is inside the block comment.
+_RTL_COMMENT_MINTS = """
+module chip_top (
+    input wire clk,   /* disabled,
+    output wire phantom,
+    // end of the disabled block */
+    output wire done
+);
+endmodule
+"""
+
+# Real ports are clk, done and io -- the block comment holds no port at all.
+_RTL_COMMENT_DROPS = """
+module chip_top (
+    input wire clk,
+    /* legacy block
+    // was here */
+    output wire done,
+    inout wire [7:0] io
+);
+endmodule
+"""
+
+
+def test_a_comment_does_not_mint_a_port_that_does_not_exist():
+    ports = S.parse_top_ports(_RTL_COMMENT_MINTS, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done"]
+
+
+def test_a_comment_does_not_swallow_the_real_port_that_follows_it():
+    ports = S.parse_top_ports(_RTL_COMMENT_DROPS, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done", "io"]
+
+
+def test_the_founding_case_a_comment_sentence_naming_a_direction():
+    """The shape the gate exists for: prose that matches the declaration
+    pattern. Neither commented port is real."""
+    rtl = ("module chip_top (\n"
+           "    input  wire clk,     // output wire commented_out,\n"
+           "    output wire done     /* inout wire also_not_real, */\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["clk", "done"]
+
+
+def test_stripping_preserves_line_geometry_so_ifdef_nesting_still_counts():
+    """A block comment is replaced by the newlines it spanned. The
+    conditional-compilation scan is line-oriented and counts `ifdef`/`endif`
+    nesting by line, so collapsing those lines would mis-attribute which
+    ports were conditional."""
+    rtl = ("module chip_top (\n"
+           "`ifdef USE_PWR\n"
+           "    /* a power-only pad,\n"
+           "       spanning lines */\n"
+           "    inout wire vdda1,\n"
+           "`endif\n"
+           "    input wire clk,\n"
+           "    output wire done\n"
+           ");\nendmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [p["name"] for p in ports] == ["vdda1", "clk", "done"]
+    assert [p["name"] for p in ports if p["conditional"]] == ["vdda1"]
+
+
+def test_a_phantom_port_does_not_reach_the_budget_verdict():
+    """The defect is only interesting because it lands on the number the
+    verdict is computed from. `_RTL_FITS` plus a commented-out 256-bit bus
+    must still be the same interface it was without the comment."""
+    clean = S.evaluate({"slot_1x1": _slot_ingested()},
+                       S.parse_top_ports(_RTL_FITS, "chip_top"))
+    commented = _RTL_FITS.replace(
+        "    output wire [7:0] status, output wire error\n",
+        "    output wire [7:0] status, output wire error\n"
+        "    /* removed for this tape-out,\n"
+        "    , input wire [255:0] wide_key\n"
+        "    // end */\n")
+    rep = S.evaluate({"slot_1x1": _slot_ingested()},
+                     S.parse_top_ports(commented, "chip_top"))
+    assert rep["declared_signal_bits"] == clean["declared_signal_bits"]
+    assert (rep["verdict"], rep["rc"]) == ("FITS", 0)
