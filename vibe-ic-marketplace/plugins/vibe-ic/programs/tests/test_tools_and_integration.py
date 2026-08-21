@@ -21,7 +21,9 @@ GEN_TESTS = PLUGIN / "_shared" / "gen_compliance_tests.py"
 ADD_GATE = PLUGIN / "_shared" / "add_compliance_gate.py"
 
 sys.path.insert(0, str(PLUGIN / "_shared"))
+sys.path.insert(0, str(PLUGIN / "programs"))
 import skill_compliance_check as scc  # noqa: E402
+import suite_write_guard as _swg  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
 
 
@@ -108,10 +110,37 @@ def _skill_count(skills_root):
                 if d.is_dir() and (d / "SKILL.md").exists()])
 
 
+#: REGENERABLE, not shipped, and the reason this gate cried wolf.
+#:
+#: `skills/` carries importable `.py` files, so merely COLLECTING one makes
+#: CPython write `__pycache__/*.pyc` beside it — with no tool run and no test
+#: having written any CONTENT. Measured: `pytest --collect-only` on a single
+#: `skills/**/test_*.py`, executing nothing, takes the tree from 0 `.pyc` to 1.
+#: Those bytes are git-ignored, so `git status skills/` stays EMPTY while the
+#: digest moves, which is why the failure reads as a phantom.
+#:
+#: THE PREDICATE IS THE SIBLING GATE'S OWN, not a copy of it. This assertion
+#: calls itself the test-side of `suite_write_guard`, whose contract is TRACKED
+#: blocking / UNTRACKED blocking / IGNORED advisory-never-blocking. Re-deriving
+#: the ignore set here would make the alignment "nearly true": a first draft of
+#: this change listed `__pycache__` and `.pytest_cache` only, and would have
+#: kept tripping on `.mypy_cache`, `.ruff_cache` and `.hypothesis` — which
+#: anyone running ruff or mypy from a root containing the plugin creates — while
+#: the gate it mirrors treated them as advisory. Importing the predicate makes
+#: the two sets the same set by construction, and picks up `.pyo` as well.
+#:
+#: Nothing else is excluded: a real shippable file planted in the tree still
+#: fails the assertion.
+_is_regenerable = _swg._is_cache_noise
+
+
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every SHIPPABLE file under `root`."""
     h = hashlib.md5()
     for p in sorted(q for q in root.rglob("*") if q.is_file()):
+        rel = p.relative_to(root)
+        if _is_regenerable(str(rel)):
+            continue
         h.update(str(p.relative_to(root)).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
@@ -483,12 +512,24 @@ class TestCoreSkillSchema:
 # ---------------------------------------------------------------------------
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
-def test_shipped_skills_tree_is_untouched_by_this_module():
-    """No test in this file may leave a byte of `skills/` different.
+def test_shipped_skills_tree_is_untouched_by_this_session():
+    """No test in this SESSION may leave a byte of `skills/` different.
 
-    pytest runs a module's tests in definition order, so this runs after every
-    test above. Against the pre-fix file it goes RED: the maintenance-tool
-    tests ran `add_compliance_gate.py` as shipped and it appended a section to
+    SCOPE — the name used to say "by this module", which was module-scoped
+    prose over a session-scoped mechanism, and it cost a bisection to find
+    that out. `_SHIPPED_SKILLS_MD5_AT_IMPORT` is captured when THIS FILE IS
+    IMPORTED, and pytest imports every selected module during collection
+    before running anything. So the window this assertion covers is:
+
+        every test in the session that runs before this one,
+        PLUS every module collected after this one, at import time.
+
+    A module collected later that writes at import time is inside the window
+    even though not one of its tests has run. That is not a quirk to work
+    around — it is why this catches things `-k` and single-file runs cannot.
+
+    Against the pre-fix file it goes RED: the maintenance-tool tests ran
+    `add_compliance_gate.py` as shipped and it appended a section to
     `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
     `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
 
@@ -496,8 +537,14 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "a test in this SESSION — not necessarily in this module — wrote into "
+        "the SHIPPED skills/ tree. Run the tool against a copy; see "
+        "_seed_plugin_copy(). If the diff is a `__pycache__/*.pyc`, the writer "
+        "is an IMPORT of a shipped `skills/**/programs/*.py`, not a tool: set "
+        "`sys.dont_write_bytecode` around the `exec_module` call. That case is "
+        "invisible to git, `git add -A` and suite_write_guard (all of which "
+        "skip it as regenerable), so this digest is the only thing that sees "
+        "it — which is why it presents with no obvious author.")
 
 
 if __name__ == "__main__":

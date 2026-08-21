@@ -81,8 +81,11 @@ def test_the_removal_path_uses_it_too():
     # matching it made this test pass while asserting nothing about the stamp.
     rms = [l for l in body.splitlines()
            if "rm -f" in l and "gatekeeper-stamp" in l]
-    assert len(rms) == 1, rms
-    assert _EXPR in rms[0]
+    # Failure removes a stale stamp, and composite merge verification also
+    # removes one on its successful NO_STAMP path.  Both paths must resolve the
+    # same per-worktree location the writer and hook use.
+    assert len(rms) == 2, rms
+    assert all(_EXPR in line for line in rms)
 
 
 def test_it_resolves_to_a_real_directory_here(tmp_path):

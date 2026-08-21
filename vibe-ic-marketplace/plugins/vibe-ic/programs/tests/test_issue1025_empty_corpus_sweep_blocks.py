@@ -78,7 +78,16 @@ def _corpus(root, ic="an_ic", run="clean_run_v0000_20200101", reports=None):
 
 
 def _baseline(path, n):
-    path.write_text(json.dumps({"findings_total": n}) + "\n")
+    # `previous_findings_total: None` spells FIRST WRITE — the register states
+    # that it moved from nothing, which is what `--write-baseline` records the
+    # first time it runs. The key being ABSENT is a different fact (vibe-ic#1704:
+    # a register no writer that records provenance ever touched), and the gate
+    # answers NOT DETERMINED to it. These fixtures are about the sweep, so they
+    # declare the honest first-write form rather than the undecidable one.
+    path.write_text(json.dumps({"findings_total": n,
+                                "previous_findings_total": None,
+                                "previous_runs_swept": None,
+                                "previous_runs_with_reports": None}) + "\n")
     return path
 
 
@@ -155,9 +164,34 @@ def _suite(tmp_path, wrapper, rc):
     stub.write_text(f"#!/usr/bin/env bash\nexit {rc}\n")
     stub.chmod(0o755)
     harness = tmp_path / f"harness_{wrapper}_{rc}.sh"
+    # vibe-ic#584 — a tolerating wrapper must BUY the tolerance with a dated,
+    # reasoned `uncheckable_until`; wired without one it is a WIRING ERROR
+    # (rc 2) rather than a NOT_CHECKED. Emitted ONLY for the tolerating
+    # spelling, so this helper still builds the two harnesses that differ in
+    # exactly the way the pair below is about. Both assertions are unchanged:
+    # `run` still reddens rc 2, the tolerating wrapper still passes it. Without
+    # the line the control would be measuring the missing exemption instead of
+    # the wrapper, which is not what it was written to pin.
+    buy = ('uncheckable_until 2999-01-01 "fixture: the stub stands in for a '
+           'gate that cannot look"\n'
+           if wrapper in _TOLERATES_RC2 else "")
+    # vibe-ic#1025 follow-up — a SECOND gate that DECIDES, and it is the
+    # fixture that needed it, not the assertions. `gate_dispatch_finish` now
+    # refuses a run in which NO gate reached a verdict (rc 2), so a sweep whose
+    # ONLY gate is the tolerated refusal is vacuous BY CONSTRUCTION: both
+    # spellings would come back non-zero and the pair below would be comparing
+    # two vacuous sweeps instead of two wrappers. With a deciding gate present
+    # the aggregate rc is once again a fact about the WRAPPER, which is the
+    # only thing this pair was ever written to pin — and it is also the shape
+    # the real sweep has, where this gate is one of 63.
+    decides = tmp_path / "decides.sh"
+    decides.write_text("#!/usr/bin/env bash\necho 'PASS (1 item examined)'\n")
+    decides.chmod(0o755)
     harness.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         f"source {DISPATCH}\n"
+        f'run "a gate that decided" "{tmp_path}" bash "{decides}"\n'
+        f"{buy}"
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
     return subprocess.run(["bash", str(harness)], capture_output=True,
