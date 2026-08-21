@@ -478,7 +478,7 @@ at all. `plugin_full_audit.py` D1 + D2 pass, and `source_chip_agnostic_check.py`
 passes over 1546 files.
 
 Wider PPA surface, `pytest -k "ppa or spare or feasib or agnostic or
-path_step"`: **2519 passed, 13 failed**. All thirteen fail **identically, by
+path_step"`: **2530 passed, 13 failed, 19 xfailed**. All thirteen fail **identically, by
 test id**, on `origin/main` at `a00f53f20` (v1.11.66) in a clean detached
 worktree — `test_ppa_layer_exit_contract`,
 `test_ppa_layer_internal_error_is_not_a_finding`,
