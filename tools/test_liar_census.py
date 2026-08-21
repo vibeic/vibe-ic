@@ -2132,8 +2132,246 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # a transitive dispatch closure seeded only by the flow definition, added
     # in this same change. Before it, that audit reported both of them
     # `ORPHANED`, i.e. "reachable from nothing at all", which was false.
-    assert pop["swept"] == pop["declared"] == 179, pop
+    #
+    # 179 -> 181, AND THE 179 NEVER MATCHED A TREE. RE-DERIVED with
+    # `population_delta` -- added in this change, and added BECAUSE of what the
+    # re-derivation found -- over the flow blob at each commit, CLAUSE SETS
+    # diffed rather than counts compared:
+    #
+    #   053eecd27 (the base the block above measured)   180
+    #   7fcbc7397 ppa(phase4): step 13 ... second relation
+    #   867de4289^ (the parent 867de4289 LANDED ON)     181
+    #   867de4289 (the commit that last moved this literal, set it to 179)  180
+    #   790224904 flow(chip path): a pad ring and a seal ring too
+    #   HEAD                                            181
+    #
+    # THE BLOCK ABOVE IS ARITHMETICALLY RIGHT AND WAS MEASURED AGAINST A BASE
+    # THAT MOVED. `180 + 1 - 2 = 179` is exact against `053eecd27`, which is
+    # where that branch started. `7fcbc7397` landed one clause while the branch
+    # was open, so the parent it actually merged onto measured 181, and the
+    # landed tree was `181 + 1 - 2 = 180` against a literal of 179. IT WAS RED
+    # ON ARRIVAL -- not lagging, wrong on the day -- and `790224904` then added
+    #   + 15.5ic  program_exit_zero  pad_assignment_gen . --json
+    #                                reports/phase3/pad_assignment.json
+    # which is the whole of the delta from `867de4289` to HEAD. The REMOVED set
+    # against that commit is EMPTY, so this is a GROW and no shrink is being
+    # authorised here. `by_kind` moves 114 -> 115 `program_exit_zero` with
+    # `advisory` 37 and `optional` 29 unchanged; `unswept` and `unrecognised`
+    # are empty on both trees, so the SWEEP was never what was broken -- the
+    # census reads every clause the flow declares and this literal is the only
+    # thing in this test that was ever wrong.
+    #
+    # FIFTH ROUND, AND THE FIRST ONE THE PROSE ITSELF LOST. Four rounds above
+    # record the literal LAGGING; this one records the derivation being CORRECT
+    # AGAINST THE WRONG TREE, which no amount of care in a comment block can
+    # prevent, because the fact it depends on -- what the parent measures at the
+    # moment of landing -- is not knowable when the comment is written. So the
+    # protocol every one of those rounds describes in prose ("MEASURED ... the
+    # CLAUSE SET diffed rather than the count compared") is now a function,
+    # `liar_census.population_delta`, with its own controls below. It reports
+    # `added` and `removed` SEPARATELY, so a GROW, a SHRINK and a CHURN are
+    # three different answers rather than one number that cannot tell them
+    # apart. It still decides nothing: the open question the block above states
+    # -- how a DELIBERATE shrink is authorised -- is still the flow owner's to
+    # answer, and is deliberately NOT answered here. What is fixed is that the
+    # next author can MEASURE the delta against the tree they are landing on
+    # instead of reconstructing it by hand from a base that may have moved.
+    assert pop["swept"] == pop["declared"] == 181, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
+
+
+# --------------------------------------------------------------------------
+# THE SHRINK PIN'S OWN PROTOCOL, EXECUTABLE
+#
+# The literal above is moved by hand, and the block that authorises each move
+# derives it by DIFFING CLAUSE SETS between two flow blobs -- because a count
+# cannot tell a grow from a churn, and "which clause left" is the only answer
+# worth having. That derivation was prose for five rounds and on the fifth it
+# failed exactly as prose fails: computed against a base that moved, never
+# re-run, landed red. `population_delta` is that protocol as a function. These
+# controls pin that it can DECIDE the three directions apart -- if it answered
+# the same way for a grow, a shrink and a churn it would be a vacuous green and
+# strictly worse than the hand-diff it replaces.
+# --------------------------------------------------------------------------
+
+def _delta_flow(where: Path, yaml_text: str) -> Path:
+    """`_flow` writes a fixed filename, so two blobs need two directories."""
+    where.mkdir(parents=True, exist_ok=True)
+    return _flow(where, yaml_text)
+
+
+_DELTA_BEFORE = """
+    steps:
+      - id: 9
+        name: planted
+        gate:
+          all_of:
+            - program_exit_zero: "alpha ."
+            - program_exit_zero: "beta ."
+    """
+
+_DELTA_GROW = """
+    steps:
+      - id: 9
+        name: planted
+        gate:
+          all_of:
+            - program_exit_zero: "alpha ."
+            - program_exit_zero: "beta ."
+            - program_exit_zero: "gamma ."
+    """
+
+_DELTA_SHRINK = """
+    steps:
+      - id: 9
+        name: planted
+        gate:
+          all_of:
+            - program_exit_zero: "alpha ."
+    """
+
+_DELTA_CHURN = """
+    steps:
+      - id: 9
+        name: planted
+        gate:
+          all_of:
+            - program_exit_zero: "alpha ."
+            - program_exit_zero: "gamma ."
+    """
+
+
+def test_a_grow_is_named_clause_by_clause(tmp_path):
+    """The direction the literal has moved in four of its five rounds."""
+    d = lc.population_delta(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                            _delta_flow(tmp_path / "b", _DELTA_GROW))
+    assert d["before"] == 2 and d["after"] == 3, d
+    assert [c["cmd"] for c in d["added"]] == ["gamma ."], d["added"]
+    assert d["removed"] == [], d["removed"]
+    assert d["shrank"] is False, d
+
+
+def test_a_shrink_NAMES_the_clause_that_left(tmp_path):
+    """The direction the literal exists for. `shrank` is not enough on its own
+    -- a reader asked to authorise a removal needs to be told WHAT was removed,
+    which is the question a count can never answer."""
+    d = lc.population_delta(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                            _delta_flow(tmp_path / "b", _DELTA_SHRINK))
+    assert d["before"] == 2 and d["after"] == 1, d
+    assert [c["cmd"] for c in d["removed"]] == ["beta ."], d["removed"]
+    assert d["added"] == [], d["added"]
+    assert d["shrank"] is True, d
+
+
+def test_a_CHURN_is_not_invisible_the_way_it_is_to_a_count(tmp_path):
+    """THE REASON THIS IS NOT THE LITERAL. `before == after == 2`, so the pin
+    above would be green in both directions and report nothing at all, while a
+    BLOCKING clause has silently left the flow and a different one has taken its
+    slot. Every round's comment block says it diffed the SETS rather than
+    comparing the counts; this is what that sentence is protecting against."""
+    d = lc.population_delta(_delta_flow(tmp_path / "a", _DELTA_BEFORE),
+                            _delta_flow(tmp_path / "b", _DELTA_CHURN))
+    assert d["before"] == d["after"] == 2, d
+    assert [c["cmd"] for c in d["added"]] == ["gamma ."], d["added"]
+    assert [c["cmd"] for c in d["removed"]] == ["beta ."], d["removed"]
+    assert d["shrank"] is True, d
+
+
+def test_the_identity_keeps_the_cmd_and_not_just_the_program(tmp_path):
+    """The flow really does declare `provenance_check` twice inside step 31 --
+    once for the DRC sign-off report, once for the LVS one. They differ ONLY in
+    `cmd`, so an identity projected onto `(step, kind, program)` folds them into
+    one and a delta that removes either reports NO CHANGE: a blocking clause
+    leaves the flow and the instrument says nothing."""
+    dupes = [c for c in lc.discover_clauses(lc.FLOW_YAML)
+             if (c.step, c.program) == ("31", "provenance_check")]
+    assert len(dupes) == 2, dupes
+    assert len({c.cmd for c in dupes}) == 2, dupes
+
+    kept = _delta_flow(tmp_path / "a", """
+        steps:
+          - id: 31
+            name: planted
+            gate:
+              all_of:
+                - program_exit_zero: "provenance_check . --output drc.rpt"
+                - program_exit_zero: "provenance_check . --output lvs.rpt"
+        """)
+    one_left = _delta_flow(tmp_path / "b", """
+        steps:
+          - id: 31
+            name: planted
+            gate:
+              all_of:
+                - program_exit_zero: "provenance_check . --output drc.rpt"
+        """)
+    d = lc.population_delta(kept, one_left)
+    assert d["before"] == 2 and d["after"] == 1, d
+    assert [c["cmd"] for c in d["removed"]] == [
+        "provenance_check . --output lvs.rpt"], d["removed"]
+    assert d["shrank"] is True, d
+
+
+def test_two_clauses_that_are_IDENTICAL_are_two_and_not_one(tmp_path):
+    """Why the comparison is a MULTISET and not a set.
+
+    HONESTY NOTE, because the first version of this control was vacuous: the
+    flow as it stands declares NO two clauses with the same `(step, kind, cmd)`
+    -- 181 clauses, 181 distinct triples -- so nothing in the real flow can tell
+    a set from a multiset today, and a control that only looked at the real flow
+    would pass against either and pin nothing. It is pinned HERE, on a planted
+    duplicate, because the shape is one line of copy-paste away in a 6300-line
+    YAML: declare a clause twice, delete one copy, and a set-based diff reports
+    the flow unchanged while the gate's redundancy is gone."""
+    twice = _delta_flow(tmp_path / "a", """
+        steps:
+          - id: 9
+            name: planted
+            gate:
+              all_of:
+                - program_exit_zero: "alpha ."
+                - program_exit_zero: "alpha ."
+        """)
+    once = _delta_flow(tmp_path / "b", """
+        steps:
+          - id: 9
+            name: planted
+            gate:
+              all_of:
+                - program_exit_zero: "alpha ."
+        """)
+    d = lc.population_delta(twice, once)
+    assert d["before"] == 2 and d["after"] == 1, d
+    assert [c["cmd"] for c in d["removed"]] == ["alpha ."], d["removed"]
+    assert d["shrank"] is True, d
+
+
+def test_the_flow_has_NOT_shrunk_since_the_literal_was_last_moved(tmp_path):
+    """The pin above is a count and this is its other half: that the move from
+    179 to 181 was a GROW and not a churn. Measured against the flow blob at
+    `867de4289`, the commit that last moved the literal, read out of git rather
+    than copied into this file -- a fixture copy would rot into the prose the
+    delta function exists to replace. SKIPS rather than lies where the history
+    is not available (a shallow clone, an exported tarball)."""
+    blob = subprocess.run(
+        ["git", "show", "867de4289:vibe-ic-marketplace/plugins/vibe-ic/flow/"
+         "phase1_phase2_phase3.yaml"],
+        cwd=Path(lc.__file__).resolve().parent.parent,
+        capture_output=True, text=True)
+    if blob.returncode != 0:
+        pytest.skip("flow blob at 867de4289 is not in this checkout's history")
+    pinned = tmp_path / "pinned.yaml"
+    pinned.write_text(blob.stdout)
+
+    d = lc.population_delta(pinned, lc.FLOW_YAML)
+    assert d["removed"] == [], d["removed"]
+    assert d["shrank"] is False, d
+    # The tree at the pin measures 180, NOT the 179 the literal was set to in
+    # that same commit -- see the block above. That is the red this control
+    # would have named on the day, and it is left visible here rather than
+    # smoothed over.
+    assert d["before"] == 180, d
+    assert d["after"] == 181, d
 
 
 def test_an_optional_clause_is_BLOCKING_not_advisory(tmp_path):
