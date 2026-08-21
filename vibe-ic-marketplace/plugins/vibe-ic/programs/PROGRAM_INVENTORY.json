@@ -5,48 +5,48 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1204,
-      "sha256_of_sorted_paths": "f10e8c558b8d5b2762461b402a816d8ccb8d2b831063a79761255861e497fc0d"
+      "count": 1238,
+      "sha256_of_sorted_paths": "f3ebd60566cd29c5dfe8872d75e598ab65fe2a7936c945eca13a81372332242e"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
-      "count": 1132,
-      "sha256_of_sorted_paths": "2561e6d2e8009f54c6333c704d4b7e4806f37518e17de747452771141e856c61"
+      "count": 1164,
+      "sha256_of_sorted_paths": "9f44c1b52ca88c9cb33b62301c4941cc75d5455e07dda088b02d8aab553e384b"
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 3874,
-      "sha256_of_sorted_paths": "18a7a86d6a676ee8183825cfa010072aff779166f5e7955531cc9f2ac1d18a28"
+      "count": 4030,
+      "sha256_of_sorted_paths": "b1c8a7aa9d416046344194231be3fb9fffcc5ea44ef7e01a1a04abd920fcc267"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
-      "count": 2637,
-      "sha256_of_sorted_paths": "64005fb5e6e865b5b415c3e3bec5f8a74bec1c9e30dfcea8827ea9cf2c471bc8"
+      "count": 2727,
+      "sha256_of_sorted_paths": "4ca2b3f29af86f30b7521755af0d808945fa9caf2f098e7c2eed3b958b07ef77"
     },
     "mcp_eda_test_files": {
       "definition": "Every test_*.py directly under plugins/vibe-ic/mcp-eda/test/.",
-      "count": 32,
-      "sha256_of_sorted_paths": "9ae6acced13d40f0797dae1f1f6732ba90a4e2cf6d05cbcbe4a6d5ae7a636221"
+      "count": 31,
+      "sha256_of_sorted_paths": "7a5936189fc48b6ef40fe8fe51c90b250828383e138b797d43986df9a800ab80"
     },
     "programs_helpers_and_shims": {
       "definition": "programs_top_level minus programs_catalogued: the helper modules and deprecation shims that INDEX.md deliberately omits. Stated in the plugin README so the gap between the two program counts is accounted for rather than left as an unexplained discrepancy.",
-      "count": 72,
-      "sha256_of_sorted_paths": "5a6db05540ac8d9dbab07102d646aae18f88488012f8fc77db6ba04986594d6d"
+      "count": 74,
+      "sha256_of_sorted_paths": "16967605b0e42e8913ef9039b5a0a3a0c32bfd7367a5c94e25a9f587528a1408"
     },
     "skill_compliance_test_files": {
       "definition": "Every test_*.py under plugins/vibe-ic/skills/*/tests/ \u2014 the per-skill compliance regressions. A DIFFERENT corpus from test_files, which is programs/tests/ only.",
-      "count": 68,
-      "sha256_of_sorted_paths": "837259d9b8f47d464ed2a0b4e9001d35dded18cc6bb7fa091d29a918fe472e57"
+      "count": 81,
+      "sha256_of_sorted_paths": "d343f0374a14583454071e79fe01fcbfb69173eee70af98b1125964babc93e25"
     },
     "gate_programs_check_suffix": {
       "definition": "Top-level programs whose filename ends in _check.py. A SUBSET of gate_programs_check_audit_lint \u2014 quoting one where the other is meant is a different measurement, not a correction.",
-      "count": 552,
-      "sha256_of_sorted_paths": "868750d276d7026cf75a96fcc07dfa3c738b04a09f1c75d63a73ad540b1dd18d"
+      "count": 570,
+      "sha256_of_sorted_paths": "8f1056eab69bded8f5026b4d969ba76d9af685a4e163bf249f14849ae9ec2e1e"
     },
     "gate_programs_check_audit_lint": {
       "definition": "Top-level programs whose filename ends in _check.py, _audit.py or _lint.py.",
-      "count": 585,
-      "sha256_of_sorted_paths": "9214f565275fb17087c7367786acac93f48f5bb8abbf1ae37cdf0d43781b97a9"
+      "count": 603,
+      "sha256_of_sorted_paths": "dd3de9ffb4285f6566e57b3c5f579490f33d68ecdfd64ac42dbc6b89562b6865"
     }
   }
 }

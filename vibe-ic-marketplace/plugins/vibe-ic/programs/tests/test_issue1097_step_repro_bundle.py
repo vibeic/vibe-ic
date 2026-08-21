@@ -119,7 +119,10 @@ def test_an_oversized_input_is_NAMED_not_silently_dropped(tmp_path):
 def test_the_environment_snapshot_records_absence_as_null_not_omission(tmp_path):
     """A reader must tell "we looked and there was none" from "no such field"."""
     env = B.environment(_project(tmp_path))
-    for k in ("plugin_commit", "eda_image_anchor", "env_PDK_ROOT",
+    for k in ("plugin_commit", "eda_image", "eda_image_digest",
+              "eda_image_digest_kind", "eda_image_source",
+              "eda_image_version", "eda_image_version_source",
+              "eda_image_unavailable", "env_PDK_ROOT",
               "project_commit", "python", "platform"):
         assert k in env, (k, env)
 
