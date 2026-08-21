@@ -5,7 +5,10 @@
 # REFUSES TO RUN on an empty authority: the previous ad-hoc version of this check read an empty
 # live-refs file and reported 21 findings, every one of them an artefact of the empty file.
 set -uo pipefail
-R=/home/reyerchu/vibe-ic
+# The repository to ask must be overridable: this checker was run on four hosts against a
+# hardcoded /home/reyerchu/vibe-ic while the anchors had been fetched into a DIFFERENT hub clone,
+# and it reported covered=0 uncovered=163 — a total failure that reads exactly like a total loss.
+R="${R:-/home/reyerchu/vibe-ic}"
 LIVE="${LIVE:?}"; PULLS="${PULLS:?}"
 [ -s "$LIVE" ]  || { echo "REFUSING: live-refs authority is empty" >&2; exit 2; }
 [ -s "$PULLS" ] || { echo "REFUSING: pull-refs authority is empty" >&2; exit 2; }

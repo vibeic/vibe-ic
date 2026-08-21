@@ -422,3 +422,41 @@ jharv3's framing is kept because it is the honest one: **most of these are almos
 intermediate states of work that later landed** — a branch rebased twenty times leaves twenty old
 tips, each "differing from main", all superseded. This is a bulk safety net against silent loss at
 the 90-day default, not a claim that each holds unique work.
+
+## The general question, finally: is there ANY ref origin does not have?
+
+Every sweep so far took one route — worktree HEADs, worktree reflogs, branch reflogs, stashes,
+pruned files — and each was found because someone noticed a route the other had not taken. So:
+**every local ref in every clone, all namespaces**, plus the in-progress states that hold commits
+on no ref by construction (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`).
+
+| host | clones | refs origin lacks | distinct commits |
+|---|---|---|---|
+| .105 | 23 | 194 | 118 |
+| .114 | 3 | 193 | 163 |
+| .112 | 3 | 195 | 156 |
+| .121 | 6 | 207 | 154 |
+| .102 | 81 | 553 | 233 |
+| **total** | **116** | **1342** | **824** |
+
+Not just branches: `refs/tags`, `refs/tags/rescued`, `refs/tmp`, and other namespaces nobody
+would think to sweep. In-progress operations: **0** across all five hosts.
+
+**824 of 824 covered**, verified on the host that holds the objects. Zero in-progress states found.
+
+### Three defects in the checking, all silent, all found by a number that could not be true
+
+**Annotated tags killed whole anchors.** `%(objectname)` on an annotated tag is the *tag* object.
+`git rev-parse -q --verify "$h^{commit}"` **dereferences** and passes — but `commit-tree -p <tag>`
+fails and takes the entire anchor with it. **The check dereferenced and the action did not.** One
+200-parent anchor and five others were never created; the loop moved on without a word. Fixed by
+using the dereferenced commit for both.
+
+**The coverage checker had a hardcoded repo.** Run on four hosts against
+`/home/reyerchu/vibe-ic` while the anchors had been fetched into a *different* hub clone, it
+reported `covered=0 uncovered=163` — a total failure that reads exactly like a total loss. Now
+`R` is overridable and the checker says which repo it asked.
+
+**Coverage must be verified where the objects are.** Checking `.102`'s commits from `.105` said
+316 uncovered; the same check on `.102` said 0. My clone simply did not have the objects, and
+"absent here" was being reported as "unpreserved".

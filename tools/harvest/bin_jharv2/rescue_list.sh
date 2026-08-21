@@ -10,8 +10,14 @@ declare -a P=(); declare -A SEEN=()
 while read -r h; do
   [ -n "$h" ] || continue
   [ -n "${SEEN[$h]:-}" ] && continue
-  git -C "$R" rev-parse -q --verify "$h^{commit}" >/dev/null 2>&1 || continue
-  SEEN[$h]=1; P+=("-p" "$h")
+  # An annotated TAG's objectname is the tag object, not a commit. `rev-parse --verify h^{commit}`
+  # DEREFERENCES and passes, but `commit-tree -p <tag>` fails and takes the whole anchor with it --
+  # silently, because the loop moved on. The check dereferenced and the action did not. Use the
+  # dereferenced commit for both.
+  cm=$(git -C "$R" rev-parse -q --verify "$h^{commit}" 2>/dev/null) || continue
+  [ -n "$cm" ] || continue
+  [ -n "${SEEN[$cm]:-}" ] && continue
+  SEEN[$cm]=1; P+=("-p" "$cm")
 done
 n=$(( ${#P[@]} / 2 ))
 [ "$n" -gt 0 ] || { echo "NOTHING $R"; exit 0; }
