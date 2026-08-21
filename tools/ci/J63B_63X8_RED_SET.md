@@ -160,6 +160,52 @@ exist **nowhere** in the corpus, in any cell, at any version. The classification
 "needs evidence this repository does not hold" is confirmed by search, not
 inherited.
 
+## The structural question, answered properly — and the answer is inverted
+
+The brief's premise was "seven are stuck behind ONE d8 red; if that d8 is a
+stale pin, seven close at once". The d8 half is false (dimension 8 is 347/347).
+The *shape* of the question is the right one to ask, though, so it was asked of
+the thing that actually sits behind most of this family: the corpus.
+
+MEASURED, this branch, host load 1.74, the same files run with the pointer UNSET
+and then BOUND to a pre-withdrawal `benchmark-data` clone (`146d665`, the commit
+before `bcf2f94` withdrew all four cells) — i.e. exactly the counterfactual
+"what would publishing a run tree buy":
+
+```
+corpus UNBOUND   11 red
+corpus BOUND     33 red
+
+closed by binding the corpus    0
+revealed by binding the corpus  22
+```
+
+**Nothing closes. Publishing evidence does not retire a single one of these
+reds — it uncovers twenty-two more.** The 22 are 11 further d3 step cells
+(`0.5ic`, `1.6x`, 10, 16, 18, 21, 23, 29, 31, 34, 38, A9), 8 d3 guard tests
+including `test_d3_run_root_discovery_is_live` and
+`test_d3_unevidenced_cells_are_named_cell_by_cell`, and 2 coverage tests
+including `test_the_enforcement_census_is_reported_for_humans`. How many of the
+22 are real defects versus the known corpus-pointer precedence issue is NOT
+claimed here; the direction and the count are what was measured.
+
+Two things follow, and they matter more than the number:
+
+1. **The corpus-absent skip is a blindfold, not a blocker.** Every figure this
+   family publishes with the pointer unset is computed over a population where
+   61 of 69 d3 cells declined to look. The census already says so — that is what
+   its 49 NOT MEASURED cells are for — and this is the size of what they cover.
+2. **Reds 7-9 are identical bound and unbound** (`3 failed, 123 passed` bound;
+   `3 failed, 121 passed` unbound). The mutation-ledger reds do not move when
+   the evidence arrives, which PROVES rather than argues the NOT_MEASURED
+   classification above: they are waiting on the fourth-state ruling, not on a
+   corpus. Anyone tempted to close them by publishing a run tree can stop.
+
+Reds 1-6 also stay red with the corpus bound, which is the behaviour their own
+module documents: an inadmissible `kind` is "decided without opening a file,
+which is what makes the answer identical on a host that has a corpus and on one
+that does not".
+
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
 The brief said to split with `jfindings-63x8` and not duplicate it. That was
