@@ -1891,13 +1891,31 @@ malformed backlog its sanitiser control requires — is created and removed insi
 a temporary directory. A verifier that fails from the wrong directory, or leaves
 a file behind, would be an instance of two of the records it is verifying.
 
-**Next: implement the 13 Bucket-A rules** — a separate lane, per the brief. Take
-`pattern` and `fix_action` from `ppa-capture/recoveries.json`; the emitted
-sketches in `ppa-capture/candidates/` are already filed beside the program that
-owns each fix. Start with **A-13** (it names a live seam nobody has looked at)
-and **A-1** (one axis is unanswerable today, so no candidate can be promoted).
+### The work, in order
 
-Then **proceed to** the two items this lane could not close: F-16's
-tool-versus-invocation question, which needs one reproduction retaining the
-tool's stderr; and the Bucket-C provenance plumbing, which is the precondition
-for the header rule.
+Work through it in sequence. Step 1 gates the rest.
+
+1. **Run the verifier** (above). Read the exit code.
+2. **Implement the 26 Bucket-A rules** — a separate lane, per the brief. Take
+   `pattern` and `fix_action` from `ppa-capture/recoveries.json`; the sketches in
+   `ppa-capture/candidates/` are already filed beside the program that owns each
+   fix, and each `fix_action` names the specific way its own screen goes wrong.
+   **Start with A-13** (it names a live seam nobody has looked at) and **A-1**
+   (one axis is unanswerable today, so no candidate can ever be promoted).
+   **Build the five test-population rules as one piece of work**, per the
+   contention list above.
+3. **Sweep before building each of the eight unswept rules.** Thirteen sweeps
+   changed ten rules and demoted one out of its bucket; the base rate says expect
+   change.
+4. **Wire the verifier** — one line in the pinned hygiene gates, which this lane
+   could not touch.
+5. **File the Bucket-T roadmap entry** in `benchmark-data/`, the repository this
+   branch cannot reach.
+6. Then **proceed to** the **Bucket-C provenance plumbing**, which is the precondition for the
+   header rule and the reason that record is C rather than A.
+
+**Nothing else is outstanding.** F-16 was open for most of this lane and is
+*settled*: the post-layout equivalence failure is the step's own setup, not the
+forked tool — the runner's helper documents the abort and calls it a false
+tool-error. It is listed here only because an earlier version of this section
+sent readers to reopen it.
