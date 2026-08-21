@@ -1,12 +1,12 @@
-# Checking the check — six ways a verification step lied tonight
+# Checking the check — seven ways a verification step lied tonight
 
 Companion to `HARVEST_RULE.md`. That file says how to judge a worktree. This one is about
 the step *after* judging: the check that says the judgement is sound. Between `jharv2` and
-`jharv3`, six separate checks reported success while doing nothing, or the wrong thing.
+`jharv3`, seven separate checks reported success while doing nothing, or the wrong thing.
 **Every one was silent, and every one looked exactly like a pass.**
 
 Written from shard C (`jharv3`, .108) with shard B's findings (`jharv2`, .105) folded in.
-Neither of us found all six alone; each found the other's by re-running our own audit
+Neither of us found all seven alone; each found the other's by re-running our own audit
 against the other's description.
 
 ---
@@ -62,15 +62,36 @@ that host's memory of the remote:
 
 Both from one root; only the second loses work, and it is the one that looks *safer*.
 
-> Resolve the split **once, on one machine, against a clone holding every origin ref**, from
-> heads collected host-side. Treat `git ls-remote --heads origin` as the authority: a
-> tracking ref is a memory of origin, not origin.
+> The rule is not "measure from one machine". It is **measure against the authority, and name
+> what the authority is.** Resolving on one machine fixes *which cache* you read; it does not
+> make a cache into the authority. `git ls-remote --heads origin` is the authority; a tracking
+> ref is a memory of origin, and it outlives the branch it tracked.
+>
+> Measured: one clone held **678** tracking refs against **143** live branches — **537 stale**,
+> because the fetch had no `--prune`. Another held 143 against 144 live and **0 stale** — and
+> that clone had no `--prune` either. It simply had not outlived a branch yet. **A clean result
+> from an unsound method is luck, and it should be recorded as luck.**
+
+## 7. A fix applied to the artifact, not to the producer
+
+17 rows named `origin/HEAD` as the ref anchoring their commit. `HEAD` is a **local symbolic
+ref** — not a branch on origin, absent from `ls-remote`, and ambiguous to anyone following the
+name. This had already been found and fixed once tonight, for 4 rows, **by editing the output
+file**. Then main moved, the file was rebuilt from its generator, and the generator put it
+straight back — for 17 rows this time.
+
+Nothing errored. No count changed suspiciously. The file simply regressed to the bug it had
+already been cured of.
+
+> Fix the **producer**. A fix applied to the artifact survives exactly until the next rebuild,
+> and rebuilds are silent. If you must patch output, add the assertion that would catch the
+> regression — here, "no row may name a ref absent from `ls-remote`".
 
 ---
 
 ## The shape they share
 
-In all six the failing check **printed the same thing as a passing one**. None threw, none
+In all seven the failing check **printed the same thing as a passing one**. None threw, none
 exited non-zero, none looked wrong in a log.
 
 - A check that examined nothing and a check that found nothing are indistinguishable
@@ -79,6 +100,12 @@ exited non-zero, none looked wrong in a log.
   measurement *cannot* name a ref that does not contain its sha. One from a table can, and did.
 - Re-run every audit **after** any wording change, not once at the end.
 - Ask which *machine* answered, and whether it was entitled to.
+- **Compare sets by name, never by count.** 144 live against 143 tracked looks like a single
+  missing ref. The same two numbers are equally consistent with 143 tracked refs that are ALL
+  stale and 144 live ones ALL missing. Only a set difference by name tells them apart — the
+  same set-vs-name error as #2, one level up.
+- **A tool that warns and answers anyway is a tool that lied.** `comm` printed "file is not in
+  sorted order" and still produced a clean-looking answer. Treat a warning as a refusal.
 
 ## Two operational notes
 
