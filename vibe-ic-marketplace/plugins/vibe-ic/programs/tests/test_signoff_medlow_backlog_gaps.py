@@ -761,6 +761,28 @@ def test_declared_gate_commands_names_programs_only(fcc):
     assert fcc._declared_gate_commands({"files_exist": ["x"]}) == []
 
 
+def _a_files_exist_only_step():
+    """``(step_id, gate)`` for a live flow step whose gate declares NO program.
+
+    DERIVED, NOT NAMED. This test used to hardcode step 12 as its example, and
+    step 12's gate later gained `dft_post_optimization_scan_survival_check` —
+    so the precondition ("this step declares no program") became false and the
+    test failed while the property it is about was never in question. The
+    exemplar was pinned, the rule was not.
+
+    Returns ``(None, None)`` when the flow has no such step at all, which is a
+    real state and is reported by the caller rather than skipped past.
+    """
+    for st in _flow_steps():
+        sid = st.get("id")
+        gate = st.get("gate")
+        if sid is None or not gate:
+            continue
+        if not _program_commands(gate):
+            return sid, gate
+    return None, None
+
+
 def test_a_files_exist_only_step_is_not_gateless(fcc):
     """The distinction the ADVISORY turns on.
 
@@ -770,6 +792,7 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     for. The summary names the gate that did not run; only a step with NO gate
     at all summarises to nothing.
 
+<<<<<<< HEAD
     THE EXEMPLAR IS DERIVED, NOT NAMED. This used to read `_step(12)` — step 12
     was, when the test was written, a step whose gate was `files_exist:
     [phase2/stage2/synth/post_dft_netlist.v]` and nothing else. v1.10.0
@@ -781,10 +804,17 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     the property is the claim. So the exemplar is now SELECTED from the shipped
     flow by the property itself, and the selection is asserted non-empty, which
     is what keeps the test from passing by finding nothing to look at.
+=======
+    The PROPERTY is asserted against a gate this test OWNS, so it holds whatever
+    the flow does. The live half below then asks the separate question of
+    whether the shape still occurs in the flow at all — those are two claims and
+    conflating them is what made this test stale.
+>>>>>>> _p1486
     """
     assert fcc._declared_gate_summary(None) == ""
     assert fcc._declared_gate_summary({}) == ""
 
+<<<<<<< HEAD
     predicate_only = [st for st in _flow_steps()
                       if st.get("gate")
                       and fcc._declared_gate_commands(st["gate"]) == []]
@@ -804,6 +834,40 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
         # reader nothing about which gate did not run.
         for operand in (gate.get("files_exist") or []):
             assert operand in summary, (st["id"], operand, summary)
+=======
+    # ---- the property, on a fixture this test owns -------------------
+    owned = {"files_exist": ["phase2/stage2/dft/post_dft_netlist.v"],
+             "any_of": True}
+    assert fcc._declared_gate_commands(owned) == [], (
+        "a files_exist-only gate must yield no PROGRAM names — that is the "
+        "input condition the disclosure was keyed off, wrongly")
+    summary = fcc._declared_gate_summary(owned)
+    assert summary, (
+        "a files_exist-only gate summarised to nothing, so a step with a real "
+        "gate would be reported as gateless — the exact reading that silenced "
+        "the disclosure")
+    assert "post_dft_netlist.v" in summary, summary
+
+
+def test_the_files_exist_only_shape_still_occurs_in_the_flow(fcc):
+    """The live half, kept SEPARATE from the property above.
+
+    The disclosure exists for a population; if that population empties, the
+    honest report is that it emptied — not a green test whose subject is gone.
+    Derived from the flow rather than naming a step, so a gate gaining a program
+    moves the exemplar instead of breaking the test.
+    """
+    sid, gate = _a_files_exist_only_step()
+    assert sid is not None, (
+        "no step in the flow declares a gate with no program any more. The "
+        "#675-strict self-skip disclosure resolves ONLY on that shape, so it "
+        "now fires on an empty population and the advisory it feeds measures "
+        "nothing. Re-measure before deleting it — this is a real change of "
+        "state, not a stale test.")
+    assert fcc._declared_gate_summary(gate), (
+        f"step {sid} declares a gate with no program and summarises to "
+        f"nothing, so it would be reported as gateless: {gate!r}")
+>>>>>>> _p1486
 
 
 def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
@@ -979,6 +1043,7 @@ def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
     assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
+<<<<<<< HEAD
 def _gate_commands_verbatim(gate):
     """Every `*program_exit_zero` command string in a gate, nesting included.
 
@@ -1037,6 +1102,79 @@ def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
                 f"step 33 gate arm points --json at its own declared "
                 f"required_output {out!r}, which the checker would overwrite "
                 f"with a different schema: {cmd}")
+=======
+def _program_commands(gate) -> list:
+    """Every program command string in a gate, whatever shape it is declared in.
+
+    WHY THIS IS NOT `gate["program_exit_zero"]` ANY MORE. It was, and that read
+    is what made this test stale: step 33's gate grew from a single flat clause
+    to `all_of:` with two, and a flat subscript raises `KeyError` on the new
+    shape rather than reporting anything about the property under test. A test
+    that cannot survive its subject gaining a second clause is pinned to the
+    spelling, not to the rule.
+
+    Walks `all_of` / `any_of` nesting and returns every command, so the
+    assertion below applies to ALL of step 33's program clauses instead of
+    whichever one happened to be first.
+    """
+    out = []
+    if isinstance(gate, str):
+        return [gate]
+    if isinstance(gate, list):
+        for item in gate:
+            out.extend(_program_commands(item))
+        return out
+    if isinstance(gate, dict):
+        for key, val in gate.items():
+            if key in ("program_exit_zero", "advisory_program_exit_zero"):
+                if isinstance(val, str):
+                    out.append(val)
+                elif isinstance(val, dict) and isinstance(val.get("command"), str):
+                    out.append(val["command"])
+            elif key in ("all_of", "any_of", "optional_program_exit_zero"):
+                out.extend(_program_commands(val))
+    return out
+
+
+def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
+    """Step 33's gate must not point --json at reports/phase3/power.json.
+
+    That path is the step's declared required_output and holds the runner's
+    power summary; the checker writes a different schema, so honouring the flag
+    (which the wrapper now does) would overwrite the power data with an audit
+    of it.
+
+    Asserted over EVERY program clause of the step, not just the first: the
+    hazard is "some clause aims its --json at the step's own deliverable", and
+    which clause does it is not part of the property.
+    """
+    step = _step(33)
+    cmds = _program_commands(step["gate"])
+    assert cmds, f"step 33 declares no program clause; gate = {step['gate']!r}"
+
+    power_check = [c for c in cmds if "power_report_check" in c]
+    assert power_check, (
+        f"step 33's gate no longer runs power_report_check — the clause this "
+        f"test is about is gone. Commands: {cmds}")
+
+    for cmd in power_check:
+        assert "--json" in cmd, (
+            f"power_report_check is invoked without --json, so the wrapper "
+            f"picks the destination and this test can no longer see where the "
+            f"audit lands: {cmd!r}")
+
+    for cmd in cmds:
+        assert "reports/phase3/power.json" not in cmd, (
+            f"a step 33 gate clause aims at reports/phase3/power.json, which "
+            f"is this step's OWN declared required_output holding the runner's "
+            f"power summary. The checker writes a different schema, so the "
+            f"audit would overwrite the data it audits: {cmd!r}")
+
+    assert "reports/phase3/power.json" in step["required_outputs"], (
+        "the premise is gone: reports/phase3/power.json is no longer a step 33 "
+        "required_output, so 'do not write over its own input' is about "
+        "nothing here any more")
+>>>>>>> _p1486
 
 
 def _all_missing_results(fcc, waived=(), failed=()):

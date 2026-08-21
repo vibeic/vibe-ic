@@ -169,6 +169,7 @@
           "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "size_bytes": 3207
         },
+<<<<<<< HEAD
         "phase1/generated_docs/L21_POWER_INTENT.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/caravel_user_project",
@@ -176,6 +177,8 @@
           "path": "phase1/generated_docs/L21_POWER_INTENT.json",
           "size_bytes": 531
         },
+=======
+>>>>>>> _p1486
         "reports/phase1/extraction_coverage_report.md": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",

@@ -119,14 +119,23 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
+<<<<<<< HEAD
     program_exit_zero          103<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+=======
+    program_exit_zero          104<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    advisory_program_exit_zero 36<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+>>>>>>> _p1486
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
     total                     201<!--figure:gate_clauses_total-->, of which
+<<<<<<< HEAD
                               164<!--figure:blocking_clauses--> block
+=======
+                              165<!--figure:blocking_clauses--> block
+>>>>>>> _p1486
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
