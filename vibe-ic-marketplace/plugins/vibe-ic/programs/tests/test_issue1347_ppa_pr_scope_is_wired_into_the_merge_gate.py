@@ -350,13 +350,32 @@ def test_the_four_exit_codes_map_to_four_distinct_gate_readings(monkeypatch):
 # unanchored pattern read each of those as a declaration.
 
 def test_the_checker_declares_its_enforcement_intent_on_its_own_line():
-    import re
-    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
-    m = re.search(r"^ENFORCEMENT:\s*(blocking|advisory)\s*$", doc, re.M)
-    assert m, ("ppa_pr_scope_check declares no ENFORCEMENT intent. Silence is "
-               "not neutral: an unstated default of advisory is how 62 of 72 "
-               "gates ended up unable to stop anything.")
-    assert m.group(1) == "blocking"
+    """Asked through the AUDIT'S OWN READER, not a regex re-typed here.
+
+    The first version of this test re-implemented the pattern, and a test that
+    re-implements the rule it checks cannot see the rule's real limits. One of
+    those limits is a 4000-byte window (`declared_intent` searches only
+    `text[:4000]`), which a re-typed regex does not have — so prose added above
+    the line would un-declare the gate while this test stayed green. That
+    exact failure happened to the sibling gate on this branch.
+    """
+    import flow_gate_enforcement_audit as A
+    assert A.declared_intent(PROG, "ppa_pr_scope_check") == "blocking", (
+        "the audit's own reader does not see this gate's declaration. Silence "
+        "is not neutral: an unstated default of advisory is how 62 of 72 gates "
+        "ended up unable to stop anything.")
+
+
+def test_the_declaration_stays_inside_the_readers_window():
+    """The bound is invisible from inside the docstring, so it needs a test
+    that names it. Measured on the sibling gate: two paragraphs of prose moved
+    the line to byte 4371 and the gate silently went UNDECLARED."""
+    src = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    idx = src.find("ENFORCEMENT:")
+    assert 0 <= idx < 4000, (
+        f"the ENFORCEMENT declaration sits at byte {idx}; `declared_intent` "
+        f"reads only the first 4000. Present and unread reports as UNDECLARED "
+        f"— move it above the prose.")
 
 
 def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
