@@ -433,3 +433,64 @@ def test_the_io_delay_does_not_fire_without_a_period(tmp_path):
     _docs(tmp_path, L9_IO)
     io_ns, note = runner._declared_io_delay_ns(tmp_path, 0)
     assert io_ns is None and note == ""
+
+
+# ── vibe-ic#712 — the scan must not read a COMMENTED-OUT statement ──────────
+_IO_STMT = ("- `set_input_delay` / `set_output_delay`: use **20% of the clock "
+            "period** as the default")
+
+
+def test_a_commented_out_io_delay_statement_is_not_a_declaration(tmp_path):
+    """`<!-- ... -->` is the comment form these documents have.
+
+    The commented paragraph carries an I/O token, a period token and exactly
+    one percentage inside one window, so before the strip it read as a live
+    20 % mandate — and that value lands in the emitted SDC. This is #706/#711
+    in the document lane.
+    """
+    txt = L9.replace("- some prose that mentions a period but keys nothing",
+                     "<!--\n" + _IO_STMT + "\n-->")
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] is None, rep
+    assert not rep["denied"], (
+        "a COMMENTED-OUT statement is not a DENIED statement — it was never "
+        "made, so it must not be counted as a retraction either")
+
+
+def test_the_strip_does_not_eat_a_line_that_merely_contains_a_url(tmp_path):
+    """THE REGRESSION GUARD FOR THE STRIPPER CHOICE.
+
+    `_design_module_set.strip_comments` — the HDL stripper this repo uses
+    elsewhere — removes `//[^\\n]*`. Applied to a DESIGN DOCUMENT it would take
+    everything after the `//` of a URL, so a real declaration sharing that line
+    would be silently dropped. Under-reading a declaration is the same defect
+    as over-reading one, pointed the other way. This pins that the document
+    lane uses `<!-- -->` and NOT the HDL stripper.
+    """
+    txt = L9.replace(
+        "- some prose that mentions a period but keys nothing",
+        "- see https://spec.example/timing#io — " + _IO_STMT)
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2), (
+        "the declaration after a URL was lost — the stripper is eating `//`")
+
+
+def test_stripping_preserves_line_numbers_and_citations(tmp_path):
+    """Offsets are replaced one-for-one, so the reported line still points at
+    the statement. A stripper that DELETED the comment would move every line
+    after it and the citation would name the wrong one."""
+    txt = L9.replace("- some prose that mentions a period but keys nothing",
+                     "<!-- retired note\nspanning two lines -->\n" + _IO_STMT)
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2), rep
+    # The citation is the line of the I/O TOKEN, which this document puts on the
+    # `### 9.1.3 I/O delay` heading — the file's own comment records that the
+    # heading is the match site and the bullet supplies the percentage. What
+    # this test pins is that the line still points at a line carrying the token
+    # in the UNSTRIPPED text: a stripper that DELETED the two comment lines
+    # would shift every line after them and the citation would name the wrong
+    # one.
+    lines = txt.split("\n")
+    cited = lines[rep["line"] - 1]
+    assert "I/O delay" in cited, (
+        f"line {rep['line']} is {cited!r} — the strip shifted the offsets")

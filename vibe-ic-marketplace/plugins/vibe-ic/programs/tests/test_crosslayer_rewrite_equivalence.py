@@ -286,3 +286,43 @@ class TestArtefactNamingIsPerReport:
         assert (tmp_path / "reports" / "cand_0007_delay_wrapper.v").is_file()
         assert not (tmp_path / "reports" /
                     f"{mod.PROGRAM}_delay_wrapper.v").exists()
+
+
+# ── vibe-ic#712 — the declaration scan must not read a COMMENT ──────────────
+_COMMENTED_HEADER_RTL = """\
+// The wrapper this file replaced was:
+//   module chip_top #(parameter WIDTH = 8) (input clk, output [7:0] q);
+/* An older revision, kept for the reviewer:
+   module chip_top #(parameter WIDTH = 99) (input a, input b, output c);
+*/
+module chip_top (input wire clk, input wire rst, output wire [3:0] y);
+endmodule
+"""
+
+
+def test_module_params_does_not_read_a_commented_out_header():
+    """A `//` or `/* */` header must not supply the parameter text.
+
+    Both commented headers above declare `module chip_top` with a parameter
+    list; the REAL one has none. Without the strip, `_MODULE_RE.finditer` hits
+    the line comment first and `module_params` returns `parameter WIDTH = 8`,
+    so the delay wrapper is built carrying a parameter the design does not
+    have.
+    """
+    assert mod.module_params(_COMMENTED_HEADER_RTL, "chip_top") == ""
+
+
+def test_module_ports_does_not_read_a_commented_out_header():
+    """Same defect on the port list, which is compared against the design."""
+    ports = mod.module_ports(_COMMENTED_HEADER_RTL, "chip_top")
+    names = [n for _d, _r, n in ports]
+    assert names == ["clk", "rst", "y"], ports
+    assert "q" not in names, "a port that exists only in a comment was read"
+
+
+def test_a_module_that_exists_ONLY_in_a_comment_is_not_minted():
+    """The gate's own sentence: a comment sentence matching `module\\s+(\\w+)`
+    must not mint a module that does not exist."""
+    only_comment = "// module ghost_top (input a);\nmodule real_top (input b);\nendmodule\n"
+    assert mod.module_ports(only_comment, "ghost_top") == []
+    assert [n for _d, _r, n in mod.module_ports(only_comment, "real_top")] == ["b"]
