@@ -54,6 +54,10 @@ Findings:
                                    RTL toggles direction the instant it hits the
                                    extreme with NO hold/dwell state. An explicit
                                    no-hold / plain-sawtooth spec disarms it.
+    ordered-phase-monitoring-early: spec explicitly says to assert an output for
+                                   one cycle and THEN monitor an input, but the
+                                   RTL reads that input in the output-owning FSM
+                                   state, collapsing the two ordered phases.
   WARN:
     reset-not-found              : spec declares a reset but no reset block found
     pipelined-width-not-parameterized : spec says "pipelined N-bit adder/mul" but
@@ -113,6 +117,7 @@ EMIT_BLOCKING_CONFORMANCE_RULES = frozenset({
     "waveform-peak-hold-dropped",
     "fsm-onehot-missing-transition",
     "sync-reset-next-state-redundant-gate",
+    "ordered-phase-monitoring-early",
 })
 
 
@@ -1387,6 +1392,85 @@ def _rtl_drops_peak_hold(rtl_body: str) -> Optional[str]:
     return sorted(toggles)[0]
 
 
+# ---------------------------------------------------------------------------
+# ERROR: the prose explicitly orders two FSM phases — assert an output for one
+# cycle, THEN begin monitoring an input — while the output-owning state reads
+# that later-phase input in its next-state arm.
+#
+# This is intentionally narrower than general temporal-language synthesis.  It
+# fires only when all three independent anchors are present:
+#   (a) prompt: an explicit one-cycle output assertion followed by THEN/AFTER and
+#       an explicit monitor/sample/watch verb naming an input;
+#   (b) RTL: a direct Moore decode `assign out = (state == PULSE_STATE)`;
+#   (c) RTL: the case arm for that exact PULSE_STATE references the named input.
+# Ambiguous prose, indirect output decode, multiple-state decode, and non-case
+# FSM styles all SKIP.  This preserves the fail-closed/zero-false-positive
+# contract while covering the recurring phase-collapse defect.
+# ---------------------------------------------------------------------------
+def _ordered_phase_monitoring_early(spec_text: str, rtl_body: str):
+    """Return ``[(output, input, state, arm, cited_clause), ...]``.
+
+    The implementation is chip/problem agnostic: only prompt grammar and RTL
+    identifiers bind the three anchors; no benchmark or state-name literals are
+    embedded.
+    """
+    import re as _re
+
+    phase_re = _re.compile(
+        r'\b(?:set|assert|drive|raise)\s+(?:the\s+)?(?:output\s+)?'
+        r'(?P<out>[A-Za-z_]\w*)\s+(?:to\s+)?(?:1|high|asserted)\s+'
+        r'for\s+(?:one|1|a\s+single)\s+(?:clock\s+)?cycle\b'
+        r'\s*[.;,:-]?\s*'
+        r'(?:then|after\s+(?:that|this|the\s+(?:pulse|one[- ]cycle)))\b'
+        r'(?P<later>.{0,220}?)\b'
+        r'(?:monitor|sample|observe|watch)\s+(?:the\s+)?'
+        r'(?P<inp>[A-Za-z_]\w*)\s*(?:input|signal)?\b',
+        _re.IGNORECASE | _re.DOTALL)
+
+    out = []
+    seen = set()
+    for pm in phase_re.finditer(spec_text or ''):
+        output, monitored = pm.group('out'), pm.group('inp')
+        # Direct single-state Moore decode only.  Parentheses around the
+        # equality are allowed, but extra boolean terms are deliberately not.
+        oe, ie = _re.escape(output), r'([A-Za-z_]\w*)'
+        decode_res = (
+            _re.compile(r'\bassign\s+' + oe + r'\s*=\s*\(*\s*' + ie +
+                        r'\s*==\s*([A-Za-z_]\w*)\s*\)*\s*;', _re.I),
+            _re.compile(r'\bassign\s+' + oe + r'\s*=\s*\(*\s*'
+                        r'([A-Za-z_]\w*)\s*==\s*' + ie +
+                        r'\s*\)*\s*;', _re.I),
+        )
+        decodes = []
+        for idx, dr in enumerate(decode_res):
+            for dm in dr.finditer(rtl_body or ''):
+                # normal: state_var == state_value; reversed: state_value == state_var
+                state_var, owner = ((dm.group(1), dm.group(2)) if idx == 0
+                                    else (dm.group(2), dm.group(1)))
+                decodes.append((state_var, owner))
+
+        for state_var, owner in decodes:
+            for cm in _re.finditer(
+                    r'\bcase[zx]?\s*\(\s*' + _re.escape(state_var) +
+                    r'\s*\)(.*?)\bendcase\b', rtl_body or '',
+                    _re.IGNORECASE | _re.DOTALL):
+                arm_re = _re.compile(
+                    r'^[ \t]*' + _re.escape(owner) + r'\s*:\s*(.*?)'
+                    r'(?=^[ \t]*(?:[A-Za-z_]\w*|default)\s*:|\Z)',
+                    _re.IGNORECASE | _re.MULTILINE | _re.DOTALL)
+                am = arm_re.search(cm.group(1))
+                if not am or not _re.search(
+                        r'\b' + _re.escape(monitored) + r'\b', am.group(1)):
+                    continue
+                arm = ' '.join(am.group(1).split())[:240]
+                clause = ' '.join(pm.group(0).split())[:360]
+                key = (output.lower(), monitored.lower(), owner.lower())
+                if key not in seen:
+                    seen.add(key)
+                    out.append((output, monitored, owner, arm, clause))
+    return out
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
@@ -1591,6 +1675,27 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 f"transition UNCONDITIONALLY (`{rstate}: next = <launch>;`); the "
                 f"sync reset in the sequential block holds '{rstate}' on its own."))
             break  # one finding per module is enough to block emit
+
+    # ---- ordered one-cycle phase samples its later input early (ERROR) ------
+    # Prompt says OUTPUT for one cycle, THEN monitor INPUT.  If the Moore state
+    # that owns OUTPUT already reads INPUT, the first monitored value is consumed
+    # during the pulse and every later recognition window is shifted by a cycle.
+    if spec_text and rtl_body:
+        in_names = {p.name for p in rtl_ports if p.direction == 'input'}
+        out_names = {p.name for p in rtl_ports if p.direction == 'output'}
+        for output, monitored, owner, arm, clause in \
+                _ordered_phase_monitoring_early(spec_text, rtl_body):
+            if output not in out_names or monitored not in in_names:
+                continue
+            f.append(Finding(path, 'ERROR',
+                'ordered-phase-monitoring-early', owner,
+                f"spec explicitly orders `{clause}`: monitoring '{monitored}' "
+                f"starts AFTER the one-cycle '{output}' phase, but the RTL "
+                f"decodes '{output}' from state '{owner}' and that same state's "
+                f"next-state arm already reads '{monitored}' (`{arm}`). Make "
+                f"the '{owner}' transition unconditional into a separate "
+                f"monitoring state; consume '{monitored}' only there."))
+            break  # one phase-collapse finding per module is enough
 
     # ---- SHIFTER spec implemented as a ROTATE (ERROR; lesson→program) ------
     # Spec describes a shifter and is NOT explicitly rotate-only, but the RTL

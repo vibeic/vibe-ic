@@ -40,6 +40,29 @@ from typing import Dict, List, Optional, Tuple
 
 _REGISTRY_PATH = Path(__file__).resolve().parent / "pdk_registry.json"
 
+# What a served window means depends on the SCOPE the PDK defines it at, and the
+# scope is not derivable from the numbers. MEASURED across the PDKs in this
+# registry, both scopes are real and they are not interchangeable:
+#   * two state a WHOLE-DIE ratio (one merged-area / die-area comparison);
+#   * two state a TILED window (a size and a step), and one of those refuses to
+#     produce any verdict at all below a minimum die size — its own script exits
+#     rather than measure a die smaller than one window.
+# A whole-die ratio is the area-weighted MEAN of the tiled windows, so it can sit
+# inside a window while individual windows sit outside it, and a design can be
+# failed on a bound its PDK never evaluates at that scope. One entry here already
+# recorded its scope and used it to decide which of its PDK's two rule sets to
+# serve; the entries that did not record one were being read as though their
+# numbers were scope-free. So scope is now disclosed STRUCTURALLY: wherever a
+# bound is SERVED the provenance carries a scope key, and a PDK whose scope has
+# not been read says exactly that rather than being silently indistinguishable
+# from one that has.
+_SCOPE_UNRECORDED = (
+    "scope NOT recorded for this PDK — the bounds are served, but the "
+    "measurement scope they are defined at (a whole-die ratio vs a tiled "
+    "window+step, and any minimum die size below which that PDK declines to "
+    "measure) has not been read out of this PDK's own deck. A consumer MUST NOT "
+    "assume its own measurement scope is the one these numbers were written for")
+
 # A per-layer window as served to the gate. Either bound may be None, meaning
 # "the PDK states no bound here" (NOT "no rule" and NOT "unbounded").
 Window = Tuple[Optional[float], Optional[float]]
@@ -139,6 +162,14 @@ def windows_for_pdk(name: str,
     for k, v in block.items():
         if k.startswith("_"):
             prov[k.lstrip("_")] = v
+    # Disclose the scope by construction, never by omission — see
+    # `_SCOPE_UNRECORDED`. Only where a bound is actually SERVED: a PDK that
+    # states no density rule has nothing to scope, and labelling its measured
+    # absence "scope not recorded" would report it as unlooked-at, which is the
+    # same class of misreading this disclosure exists to stop. An entry that
+    # records its own scope keeps it verbatim; only a silent one is labelled.
+    if layers and not str(prov.get("scope", "")).strip():
+        prov["scope"] = _SCOPE_UNRECORDED
     return layers, prov
 
 

@@ -289,7 +289,9 @@ endmodule
 def test_absent_sim_tree_is_not_applicable(tmp_path):
     res = G.check(tmp_path)
     assert res["verdict"] == "NOT_APPLICABLE"
-    assert G.main([str(tmp_path)]) == 0  # never a false FAIL
+    # rc 2 is the flow's disclosed-skip tier (VACUOUS_PASS), never a false
+    # FAIL and never an ordinary rc-0 PASS over a zero denominator.
+    assert G.main([str(tmp_path)]) == 2
 
 
 def test_sim_tree_without_testbenches_is_not_applicable(tmp_path):
@@ -297,7 +299,7 @@ def test_sim_tree_without_testbenches_is_not_applicable(tmp_path):
     sim.mkdir(parents=True)
     (sim / "results.xml").write_text("<testsuite/>")
     assert G.check(tmp_path)["verdict"] == "NOT_APPLICABLE"
-    assert G.main([str(tmp_path)]) == 0
+    assert G.main([str(tmp_path)]) == 2
 
 
 def test_json_report_is_written(tmp_path):
