@@ -449,6 +449,15 @@ Every canonical step identifier is dotted; the branch's suffix admits word
 characters and hyphens. The branch names the flow's own step vocabulary and can
 express no member of it. Zero in-tree records use it — which is exactly what a
 dead branch and an unused branch have in common, and why nothing caught it.
+
+**Three independent confirmations, and the third was unprompted.** The 0-of-42
+scan; my Bucket-T record's component; and then, filing C-2 in this same batch, I
+reached for it a third time — the natural component for a host-independence item
+is the flow step that owns it — and was refused again. **An author who KNOWS the
+branch is dead still reaches for it**, because it is the correct-looking answer
+and the error message lists it among the supported forms. A dead branch is not
+merely unused; it costs every author who trusts the help text.
+
 **(o)** yes. **(d)** yes — it is a census of a vocabulary against a pattern, so
 it also catches the harder direction: a branch that works today and dies when
 the vocabulary gains a separator.
