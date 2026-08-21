@@ -1655,8 +1655,8 @@ Each mutation was reverted immediately and the working tree confirmed
 byte-identical afterwards (`git diff --exit-code`, zero dirty entries, three
 times).
 
-**Extended to eleven, and one of the runs disproved a claim.** The same
-procedure was applied to eight more of the sixteen:
+**Extended to twelve, and one of the runs disproved a claim.** The same
+procedure was applied to nine more of the sixteen:
 
     F-10  de-duplicate by CONTENT, not by path
           -> 3 failed   test_one_measurement_is_not_counted_twice
@@ -1671,6 +1671,9 @@ procedure was applied to eight more of the sixteen:
 
 Two more were driven the same way:
 
+    (lane) a present-but-empty population is never a pass
+          -> 2 failed   test_a_present_but_empty_population_is_never_a_pass
+                        test_mutation_metric_extract_empty_bundle
     F-1   an excluded lever's owner must RESOLVE, or it is unowned
           -> 1 failed   test_with_the_owner_absent_the_reason_says_unowned_not_delegated
     F-14  absolute host paths in an emitted deck are detected
@@ -1678,13 +1681,20 @@ Two more were driven the same way:
     (lane) a bad invocation is 3, not the could-not-check code
           -> 20 failed  test_unknown_flag_is_bad_invocation_not_undetermined
 
-So **eleven of the sixteen ALREADY-PROGRAM claims have now been driven: ten fire
-and one cannot.** The five not driven are named rather than left to look covered:
-the bundled-schema entry was not attempted; F-13 is enforced by a
-document and a naming convention, which a mutation cannot address; and the
-vacuous-population census plus the two denominator gates resisted an honest
-probe — the probe I built pointed each gate at a synthetic directory, and
-neither gate's population is the directory it is handed. The disclosure gate went
+So **twelve of the sixteen ALREADY-PROGRAM claims have now been driven: eleven
+fire and one cannot.** The four not driven are named rather than left to look
+covered: the bundled-schema entry was not attempted; F-13 is enforced by a
+document and a naming convention, which a mutation cannot address; and the two
+denominator gates resisted an honest probe — the probe I built pointed each gate
+at a synthetic directory, and neither gate's population is the directory it is
+handed.
+
+*An earlier version of this paragraph put the vacuous-population census in that
+last group. It did not belong there: I never probed it, and the sentence
+attributed to it a failure that happened to two other things. Probed properly, it
+fires — and one of the two tests that go red is already called
+`test_mutation_metric_extract_empty_bundle`, so the repository was doing this
+before I was.* The disclosure gate went
 on probing all 90 declared CI gates, and the zero-denominator gate's population is
 gates that *state* a zero population, which my stub never did. Both returned PASS
 for reasons unrelated to my input, so **neither is evidence and neither is
