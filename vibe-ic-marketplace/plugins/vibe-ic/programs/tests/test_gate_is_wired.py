@@ -333,3 +333,113 @@ def test_the_shipped_register_still_refuses_to_GROW(tmp_path):
     assert "GREW" in r2.stdout + r2.stderr
     # the refusal left the register it was pointed at untouched
     assert json.loads(short.read_text())["unwired"] == sorted(now)[1:]
+
+
+# ------------- the corpus the verdict depends on, and saying so (#1467) ------
+
+def _nested(tmp_path: Path, *, marketplace_is_a_checkout: bool,
+            repo_tools: bool = True, extra_gates=()):
+    """The REAL shape: repo root, plugin three levels down inside it.
+
+    `_tree` puts `tools/ci/` under the plugin, which is the one layout where
+    the repo-root walk cannot go wrong. This repo's actual layout is
+    `<repo>/vibe-ic-marketplace/plugins/vibe-ic`, with the wiring corpus three
+    levels ABOVE the plugin — so the walk is load-bearing, and only a nested
+    fixture exercises it.
+    """
+    repo = tmp_path / "repo"
+    plugin = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    (plugin / "programs").mkdir(parents=True)
+    for g in ("a_check",) + tuple(extra_gates):
+        (plugin / "programs" / f"{g}.py").write_text("# a gate\n")
+    (plugin / "flow").mkdir()
+    (plugin / "flow" / "phase1_phase2_phase3.yaml").write_text("steps: []\n")
+    (repo / ".git").mkdir(parents=True)
+    if repo_tools:
+        (repo / "tools" / "ci").mkdir(parents=True)
+        (repo / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+            'run "a" "$ROOT" python3 "$PG/a_check.py"\n')
+    if marketplace_is_a_checkout:
+        (repo / "vibe-ic-marketplace" / ".git").write_text(
+            "gitdir: /elsewhere/.git/worktrees/mkt\n")
+    (plugin / "programs" / "gate_is_wired_baseline.json").write_text(
+        json.dumps({"unwired": []}))
+    return repo, plugin
+
+
+def test_an_intermediate_dot_git_does_not_capture_the_repo_root(tmp_path):
+    """MEASURED on this repo's own bytes, `programs/` and `tools/` HARDLINKED
+    into both arms so the two runs read the same inodes, one `.git` at the
+    `vibe-ic-marketplace/` level the only difference:
+
+        without it   wiring sources 1147 + 66   unwired 59   [PASS]  rc 0
+        with it      wiring sources 1147 +  0   unwired 110  [FAIL] 50   rc 1
+
+    Fifty accusations over an unchanged tree, because the walk tested `.git`
+    BEFORE `tools/ci` and stopped at whichever came first.
+    `container_login_banner_parse_check` — one of the three names vibe-ic#1467
+    could not account for — is in those fifty. The marketplace is published
+    separately, so a `.git` there is a layout somebody will have. `tools/ci` is
+    the marker now; `.git` is only the fallback."""
+    repo, plugin = _nested(tmp_path, marketplace_is_a_checkout=True)
+    assert giw.repo_root(plugin) == repo, (
+        f"anchored on {giw.repo_root(plugin)}, which carries no tools/ci")
+    assert giw.unwired(plugin, giw.repo_root(plugin))[0] == []
+    rc, out = _run(plugin)
+    assert rc == 0, out
+    assert "a_check" not in out.split("newly consulted")[-1]
+
+
+def test_an_EMPTY_repo_corpus_is_CANNOT_DETERMINE_not_a_list_of_names(tmp_path):
+    """An empty result is not a zero.
+
+    Four of the wiring globs are anchored on the repo root, and for several
+    gates `tools/ci/repo_hygiene_gates.sh` is the only caller there is. Read
+    nothing from there and the honest answer is "I could not look", not a
+    confident FAIL naming every gate whose caller lives where the tool did not
+    reach. rc 2 still BLOCKS — `repo_hygiene_gates.sh` dispatches this gate
+    with plain `run`, which forgives nothing."""
+    _, plugin = _nested(tmp_path, marketplace_is_a_checkout=False,
+                        repo_tools=False)
+    rc, out = _run(plugin)
+    assert rc == 2, out
+    assert "CANNOT DETERMINE" in out and "NOT a pass" in out
+    assert "newly consulted by no automatic verdict" not in out, (
+        "a failed look was reported as a finding")
+
+
+def test_an_empty_corpus_with_NO_root_at_all_says_which_it_was(tmp_path):
+    """The two ways to end up with nothing read differently to whoever has to
+    fix it: a root that was found and is bare, versus no root found at all."""
+    repo, plugin = _nested(tmp_path, marketplace_is_a_checkout=False,
+                           repo_tools=False)
+    (repo / ".git").rmdir()
+    assert giw.repo_root(plugin) is None
+    rc, out = _run(plugin)
+    assert rc == 2, out
+    assert "NO REPO ROOT FOUND" in out and "tools/ci" in out
+
+
+def test_the_run_discloses_both_corpora_it_read(tmp_path):
+    """vibe-ic#1467 collected contradictory red lists from three hosts at one
+    commit and could not settle which corpus each run had read, because no line
+    of the output said. Both counts are printed on every run, pass or fail, so
+    two runs that disagree can be compared from their output alone."""
+    repo, plugin = _nested(tmp_path, marketplace_is_a_checkout=False)
+    rc, out = _run(plugin)
+    assert rc == 0, out
+    assert "wiring sources:" in out
+    assert str(plugin) in out and str(repo) in out
+    assert "+ 1 under" in out, out          # the one hygiene script at the root
+
+
+def test_a_readable_corpus_still_FAILS_a_genuinely_unwired_gate(tmp_path):
+    """The other direction, and the one that matters: rc 2 must not have become
+    a way out. With the corpus present and readable, a gate nothing invokes is
+    still a blocking finding, named."""
+    _, plugin = _nested(tmp_path, marketplace_is_a_checkout=False,
+                        extra_gates=("b_check",))
+    rc, out = _run(plugin)
+    assert rc == 1, out
+    assert "b_check" in out
+    assert "CANNOT DETERMINE" not in out

@@ -40,6 +40,8 @@ import sys
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 PROG = _PROGRAMS / "drv_promotion_corroboration_check.py"
 
@@ -115,12 +117,24 @@ def test_the_counter_function_sees_them():
 
 # ── the corpus, which is what makes "it works" mean something ────────────────
 def _corpus():
-    root = _PROGRAMS.parents[3] / "benchmark-data"
-    if not root.is_dir():
-        pytest.skip("benchmark-data not present in this checkout")
+    """The PUBLISHED corpus, wherever it actually is.
+
+    It used to be `<repo>/benchmark-data` and is now its own repository,
+    `vibeic/benchmark-data`. The directory of that name still exists here — it
+    holds the design INPUTS the flow reads — so `root.is_dir()` stopped being
+    the question: it is true while carrying not one STA report, and the two
+    sweeps below then measured nothing and said so as `0 > 0`, i.e. as a defect
+    in the pattern. `corpus_root()` asks the question that is actually being
+    asked (is a published cell readable here?) and `@needs_corpus` renders a
+    "no" as a skip naming the corpus rather than as a finding about the regex.
+    """
+    root = corpus_root()
+    assert root is not None, (
+        "@needs_corpus should have skipped before this point")
     return root
 
 
+@needs_corpus
 def test_the_pattern_matches_real_reports_at_all():
     """Guards the regression that opened this issue: a pattern that matches
     nothing passes every unit test written against synthetic strings if those
@@ -137,6 +151,7 @@ def test_the_pattern_matches_real_reports_at_all():
         "is the state this issue was opened for")
 
 
+@needs_corpus
 def test_the_pattern_agrees_with_an_independently_written_one():
     """Cross-check against a pattern derived from the report FORMAT rather than
     from the shipped one, so a shared mistake cannot pass both.
@@ -145,9 +160,18 @@ def test_the_pattern_agrees_with_an_independently_written_one():
     """
     independent = re.compile(
         r"^\s*\S+\s+-?[\d.]+\s+-?[\d.]+\s+-[\d.]+\s*(?:\([A-Z]+\))?\s*$", re.M)
+    compared = 0
     for p in _corpus().rglob("sta*.rpt"):
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        compared += 1
         assert len(M._DRV_ROW_RE.findall(text)) == len(independent.findall(text)), p
+    # A loop over nothing agrees with everything. This test read zero reports for
+    # as long as the corpus was absent and still reported PASS — the exact shape
+    # #579 is about, one level up. It is the corpus that must be missing loudly,
+    # never the comparison that must be silently empty.
+    assert compared > 0, (
+        "no STA report under the published corpus — the cross-check compared "
+        "nothing and a PASS here would mean 'I could not look'")

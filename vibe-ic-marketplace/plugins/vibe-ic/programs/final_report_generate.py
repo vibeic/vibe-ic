@@ -119,9 +119,27 @@ VERDICT_SYM = {
 # Canonical roll-up print order. Any bucket the audit produces that is
 # NOT listed here is still printed (appended, sorted) — the roll-up must
 # never silently drop a bucket, or its rows stop summing to its own Total.
+# A bucket with no slot here is NOT RENDERED — see the print loop, which walks
+# ROLLUP_ORDER and never the roll-up's own keys. Four tiers were missing, so a
+# populated STRUCTURE-ONLY / INCOMPLETE / PASS-VOIDED-BY-DEPENDENCY / WAIVED
+# count had nowhere to appear.
+#
+# TWO HAND-TYPED LISTS HID EACH OTHER'S GAP.
+# test_rollup_order_covers_every_bucket_the_checker_can_emit was already written
+# to catch exactly this — but it derives `emitted` from
+# _TALLY_LABEL_TO_BUCKET.values(), and that map was missing the same tiers. The
+# guard could not fire while both copies were wrong in the same way, and it went
+# red the moment the map was derived from the shared vocabulary. Ordering is a
+# presentation choice and cannot be derived, so the list stays written out; the
+# existing test is what keeps it total.
+#
+# Order: full pass, then qualified done-claims, then excused, then non-green.
 ROLLUP_ORDER = (
-    "PASS", "VACUOUS-PASS", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
-    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED", "FAIL", "MISSING",
+    "PASS",
+    "VACUOUS-PASS", "STRUCTURE-ONLY", "INCOMPLETE",
+    "WAIVED", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
+    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED",
+    "PASS-VOIDED-BY-DEPENDENCY", "FAIL", "MISSING",
     NO_VERDICT,
 )
 STAGE_TITLE = [
@@ -649,7 +667,14 @@ def _run_audit(project: Path,
 # digits), so a step id added to the flow tomorrow is read, not silently
 # reclassified. chip-AGNOSTIC: step ids are flow structure, never chip,
 # vendor or SKU names.
-STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+"
+# vibe-ic#1744 — the "generic" shape above was still too narrow, and it failed
+# in exactly the way the paragraph above predicts. The half-steps introduced
+# with the chip/IP split (`0.5ic`, `15.5ic`, `26.5ic`, `37.5ip`, `37.5ic`) carry
+# a FRACTION and a trailing path SUFFIX, neither of which "short alpha prefix +
+# digits" can spell. All five matched nothing, so `.get(sid, "MISSING")` booked
+# every one of them as MISSING and the roll-up table would have disagreed with
+# the tally printed beside it by five steps — #428's defect, in new ids.
+STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+(?:\.[0-9]+)?[A-Za-z]{0,4}"
 _VERDICT_LINE_RE = re.compile(
     r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+(" + STEP_ID_RE + r")\s*:"
 )
@@ -665,17 +690,50 @@ def _parse_verdicts(audit_text: str) -> Dict[str, str]:
 # MISSING may carry a "(N blocked-by-upstream of step X)" parenthetical.
 _TALLY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z-]*[A-Z])=(\d+)")
 # The tally prints SKIPPED-CONDITION under the short label `SKIPPED`.
-_TALLY_LABEL_TO_BUCKET = {
-    "PASS": "PASS",
-    "FAIL": "FAIL",
-    "MISSING": "MISSING",
-    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
-    "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
+#: Hand-written ALIASES only: report-side spellings that differ from the
+#: producer's own word. Everything else is derived below.
+_TALLY_LABEL_ALIASES = {
     "SKIPPED": "SKIPPED-CONDITION",
-    "SKIPPED-CONDITION": "SKIPPED-CONDITION",
-    "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
-    "VACUOUS-PASS": "VACUOUS-PASS",
+    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
 }
+
+
+def _build_tally_label_map() -> dict:
+    """Every producer status gets a bucket, BY CONSTRUCTION.
+
+    THE DRIFT THIS CLOSES. This map used to be a hand-typed list of nine
+    labels, and the producer's vocabulary moved on without it. Three tiers had
+    no key -- STRUCTURE-ONLY, INCOMPLETE and PASS-VOIDED-BY-DEPENDENCY -- and
+    the blindness is two-sided:
+
+      * ``_parse_audit_tally`` keeps a label only when the map resolves it
+        (``if bucket is not None``), so those three were dropped on the way in;
+      * ``_reconcile_rollup``'s second loop admits a bucket only when it is
+        ``in _TALLY_LABEL_TO_BUCKET.values()``, so a bucket the roll-up
+        populated and the tally never named was filtered right back out.
+
+    So a disagreement in those tiers was reported as AGREEMENT and the
+    "Roll-up reconciliation FAILED" banner could not render -- in either
+    direction. PASS-VOIDED-BY-DEPENDENCY is the sharpest of the three: it is
+    the word #671 introduced precisely to say "this is NOT a pass".
+
+    ``_flow_verdict_tiers.PRODUCER_STATUSES`` is the authoritative vocabulary
+    and already carries an anti-drift test ("a word added there without a home
+    below is a test failure, not a silent escape"). That protection never
+    reached this copy because this copy was a copy. Deriving from it means the
+    next tier is covered without anyone remembering this file exists.
+    """
+    try:
+        from _flow_verdict_tiers import PRODUCER_STATUSES
+    except ImportError:  # pragma: no cover — shared module always ships
+        PRODUCER_STATUSES = set()
+    out = {s: s for s in PRODUCER_STATUSES}
+    # Aliases win: they encode a deliberate report-side renaming.
+    out.update(_TALLY_LABEL_ALIASES)
+    return out
+
+
+_TALLY_LABEL_TO_BUCKET = _build_tally_label_map()
 # The buckets `flow_compliance_check.py` prints UNCONDITIONALLY on its
 # tally line. A line missing any of them is not the tally.
 TALLY_MANDATORY_BUCKETS = frozenset(
@@ -1231,7 +1289,25 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     # violation falls in std-cell-library layer rules, and substitutes the
     # Magic count when a re-stream is authoritative. A report that
     # contradicts the run it summarises is worse than one that under-reports.
-    if pv.get("drc_signoff") == "(report missing)":
+    # ORGANIC-20260808 — the premise above ("nothing in this tree writes
+    # `drc_signoff.json`") STOPPED BEING TRUE. `eda_report_audit:drc` now
+    # stages one, and its schema is the same one ORGANIC-20260726 had to teach
+    # this function for LVS: it records `passed` / `summary` and carries
+    # NEITHER `verdict` NOR `status`. So the loop above resolves "?" — not
+    # "(report missing)" — and this echo, keyed on the old sentinel alone,
+    # stopped firing for exactly the runs that gained a report.
+    #
+    # MEASURED on a38902d16: 3 committed cells carry `drc_signoff.json` and
+    # all 3 lack both fields, so all 3 read "?" while their runner record says
+    # PASS. `test_organic399_drc_signoff_verdict_echoes_the_runner` catches it
+    # on `spm/v1.9.96_gf180mcuD` — runner "PASS", summary "?".
+    #
+    # UNRESOLVED IS THE SAME STATE AS ABSENT for this purpose: in both cases
+    # the JSON gave no verdict, so the runner's record is what the summary has
+    # to echo. #399's rule is untouched — the verdict still comes from the
+    # runner and is still never re-derived from the raw `.rpt`, which is the
+    # prototype #399 measured and rejected for contradicting five WAIVED runs.
+    if pv.get("drc_signoff") in ("(report missing)", "?"):
         _st, _ex = _runner_step_record(project, "drc")
         if _st:
             _bits = [f"{k}={_ex[k]}" for k in
@@ -1915,8 +1991,20 @@ def _render(project: Path, run_audit: bool = True,
     if tp_ev.get("vectors_csv"):
         md.append(f"- **Vector CSV**: `{tp_ev['vectors_csv']}`")
     md.append("")
-    md.append("_Per-opcode / per-mode coverage detail belongs in_ "
-              "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    # Spell the addendum as a CITATION only when this run actually ships it.
+    # Unconditionally backticking the path made every generated final_summary.md
+    # point at a file most runs do not ship — 14 of the 38 pre-existing
+    # unresolved citations counted in #1168. The guidance is unchanged either
+    # way; only the "this artefact is in the tree" claim is dropped when it is
+    # not true.
+    if chip_addendum:
+        md.append("_Per-opcode / per-mode coverage detail belongs in_ "
+                  "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    else:
+        md.append("_Per-opcode / per-mode coverage detail belongs in the "
+                  "chip-specific addendum (reports/chip_specific_summary.md), which "
+                  "this run does not ship — author it per chip. This section stays "
+                  "chip-agnostic._")
     md.append("")
 
     md.append("## Output #4 — Analog convergence (tuning loops)")
@@ -2222,7 +2310,12 @@ def _render(project: Path, run_audit: bool = True,
                   "for IC-specific opcode coverage, tester fixture semantics, "
                   "analog tuning targets, and any chip-known issues.")
     else:
-        md.append("_No `reports/chip_specific_summary.md` present. Author it by hand "
+        # Same reason as the Output-#3 note above (#1168): this branch exists
+        # BECAUSE the file is absent, so its path must not be spelled as a
+        # citation of a shipped artefact. It stays readable as the file to
+        # author.
+        md.append("_No chip-specific addendum present; expected at "
+                  "reports/chip_specific_summary.md. Author it by hand "
                   "(or via a chip-specific Phase 1 skill) to document IC-specific "
                   "test interpretations, opcode tables, tuning-target values, etc. "
                   "This generator deliberately keeps the canonical summary "

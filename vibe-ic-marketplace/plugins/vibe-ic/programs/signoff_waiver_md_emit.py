@@ -42,6 +42,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 @dataclass
@@ -174,7 +175,8 @@ def emit_markdown(
         "references the machine-readable JSON waiver under `signoff/waivers/` "
         "and the pilot writeups under `benchmark_clean/.../caravel_integration/`.")
     out.append("")
-    out.append(f"_Emitted by `signoff_waiver_md_emit.py` (Vibe-IC plugin v0.1.49). "
+    out.append(f"_Emitted by `signoff_waiver_md_emit.py` (Vibe-IC plugin "
+               f"v{_pmd.running_plugin_version()}). "
                f"Do not edit by hand — regenerate from sources._")
     out.append("")
 

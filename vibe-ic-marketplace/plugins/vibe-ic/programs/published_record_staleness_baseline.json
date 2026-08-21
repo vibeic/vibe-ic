@@ -1,7 +1,8 @@
 {
-  "_comment": "Published gate records carrying a verdict their gate's CURRENT rules would not issue (vibe-ic#510). MAY ONLY SHRINK. Correcting one is the benchmark-agent's commit under NO-MIX — results and plugin fixes never share a commit — so they are recorded here, not silently fixed by the plugin that found them. 2026-07-31 (#562): the dfm_screen_check rule landed and immediately found three edge_llm_accel records carrying a plain PASS alongside VIA_DEFS_NOT_FOUND — the via screen never examined a via. Correcting them is the benchmark-agent's commit under NO-MIX, so they are recorded here rather than edited: a new rule that fails the tree on pre-existing records would be reverted, and the rule is what stops the NEXT one being written.",
+  "_comment": "Published gate records carrying a verdict their gate's CURRENT rules would not issue (vibe-ic#510). MAY ONLY SHRINK. Correcting one is the benchmark-agent's commit under NO-MIX — results and plugin fixes never share a commit — so they are recorded here, not silently fixed by the plugin that found them.",
   "previous_size": 2,
-  "scope_expanded": null,
+  "size": 5,
+  "scope_expanded": "The dfm_screen_check re-adjudication rule was registered for the first time in v1.8.75, so published dfm_screen records that no rule had ever reached are adjudicated here for the first time: three carry a plain PASS beside VIA_DEFS_NOT_FOUND, i.e. a via screen that never examined a via. That is newly-adjudicated SCOPE, not the corpus getting worse. Correcting a published record is the benchmark-agent commit under NO-MIX, so they are recorded rather than edited. The growth itself landed in 501294fd, which recorded previous_size 2 -> 5 but left this reason in prose the program cannot read; vibe-ic#922 transcribes it into the field the ratchet reads.",
   "known": [
     "dfm_screen_check::ic/edge_llm_accel/reports/phase2/gates/dfm_screen.json::PASS->VACUOUS_PASS::dfm_screen_check.via-screen-did-not-run",
     "dfm_screen_check::ic/edge_llm_accel/reports/phase3/dfm_screen.json::PASS->VACUOUS_PASS::dfm_screen_check.via-screen-did-not-run",
