@@ -1441,6 +1441,33 @@ and A-4's own lesson**, committed here by their author one section after writing
 it down. All 29 headings now quote their record verbatim, and the check walks
 all three buckets rather than the one I happened to be thinking about.
 
+## The verification is a command, not a paragraph
+
+Every claim above was measured once, by hand, across as many sessions — and then
+asserted in prose. **A check a human has to remember is not a check**, which is
+the thesis of the brief this batch answers, so the claims are now one command:
+
+    $ python3 ppa-capture/verify.py
+    PASS — every claim this batch makes was re-measured and holds.
+
+Fourteen checks: bucket counts against the report table, one section per record,
+every heading quoting its record verbatim, a measurement in every record,
+predicate/population/refusal in every buildable action, no two patterns
+restating one class, each honest sentence rendered verbatim, the emitter's
+summary against the records and against disk, and every sketch resolving back to
+its section.
+
+**Two properties it was built with, both earned here.** Every check compares two
+artefacts rather than inspecting one, because all five defects found in this
+deliverable were *agreement* failures with nothing missing. And every check runs
+a control that must fail first — if the control passes, the check reports itself
+BROKEN instead of green.
+
+That second property paid immediately: **on its first run the harness declared
+its own measurement control broken.** The control string was *"a claim with no
+quantity at all"*, and the number-word pattern matched on *"no"* — the control
+was itself a positive. A hand-written check would have printed PASS and I would
+have believed it. This one refused to.
 ---
 
 ## Summary

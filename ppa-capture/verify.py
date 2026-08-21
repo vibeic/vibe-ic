@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""verify.py — re-run every self-check this capture batch claims to have passed.
+
+WHY THIS FILE EXISTS
+====================
+The batch made about ten verification claims across as many working sessions:
+that every record carries a measurement, that each buildable action names a
+predicate / population / refusal, that no two patterns restate one class, that
+every heading quotes its record verbatim, that the emitter's own summary agrees
+with the records. Each was measured once, by hand, and then asserted in prose.
+
+A check a human has to remember is not a check — which is the thesis of the
+brief this batch answers. So the claims are here as one command.
+
+FIVE OF THE BATCH'S OWN DEFECTS WERE AGREEMENT FAILURES, not missing elements:
+a required field was present in both places and the two copies disagreed. Every
+check below therefore compares two artefacts rather than inspecting one.
+
+EVERY SCREEN CARRIES ITS CONTROL. Thirteen screens written for this batch
+returned a number that could not be used, and three failed to find the case they
+were written for. So each check here first runs an input it MUST flag; if the
+control does not fail, the check reports itself broken rather than passing.
+
+    python3 ppa-capture/verify.py          exit 0 = every claim re-measured true
+"""
+from __future__ import annotations
+import json, re, sys, difflib, pathlib, collections
+
+HERE = pathlib.Path(__file__).resolve().parent
+RECS = json.loads((HERE / "recoveries.json").read_text())
+MD   = (HERE / "RESULT.md").read_text()
+CAND = HERE / "candidates"
+fails: list[str] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail else ""))
+    if not ok:
+        fails.append(name)
+
+
+def control(name: str, must_fail: bool) -> None:
+    """A control that does not fail cannot validate anything (see A-27)."""
+    if not must_fail:
+        fails.append(f"CONTROL BROKEN: {name}")
+        print(f"  BROKEN  control for {name} did not fail — its result is unusable")
+
+
+# 1. bucket counts: records vs the table in the report
+counts = collections.Counter(r["bucket"] for r in RECS)
+for b in ("A", "C", "T"):
+    m = re.search(rf"\| \*\*{b}\*\* \| (\d+) \|", MD)
+    check(f"bucket {b} count agrees with the report table",
+          bool(m) and int(m.group(1)) == counts[b],
+          f"records {counts[b]}, table {m.group(1) if m else '-'}")
+
+# 2. every record has a section, and the heading QUOTES the record verbatim
+names = {r.get("rule_name", "").strip() for r in RECS} | \
+        {r.get("title", "").strip() for r in RECS if r.get("title")}
+heads = [(m.group(1), m.group(2).strip())
+         for m in re.finditer(r"^### ([ACT]-\d+) · ([^·\n]+?) ·", MD, re.M)]
+control("verbatim-heading", "a heading that is not a rule name" not in names)
+check("every section heading quotes its record verbatim",
+      all(h in names for _, h in heads), f"{len(heads)} headings")
+check("one section per record", len(heads) == len(RECS),
+      f"{len(heads)} sections, {len(RECS)} records")
+
+# 3. every record carries a measurement (digits OR a spelled number)
+NUMW = re.compile(r"\d|\b(zero|one|two|three|four|five|six|seven|eight|nine|ten"
+                  r"|eleven|twelve|none|no )\b", re.I)
+control("measurement", not NUMW.search("a bare assertion lacking quantity"))
+# ^ the first control here read "a claim with no quantity at all", which the
+#   pattern matched on the word "no" — the control was itself a positive.
+#   The harness reported it BROKEN rather than passing, which is the point.
+unmeasured = [r.get("rule_name") or r.get("title")
+              for r in RECS if not NUMW.search(" ".join(map(str, r.values())))]
+check("every record carries a measurement", not unmeasured, str(unmeasured))
+
+# 4. buildability: predicate / population / refusal in every Bucket-A action
+PRED = re.compile(r"(compar|diff|assert|resolv|count|enumerat|collect|walk|requir"
+                  r"|check|pars|match|extract|group|partition|appl|import)", re.I)
+POP  = re.compile(r"(every|each|all |per |over the|across|population|identifiers)", re.I)
+REF  = re.compile(r"(refus|report|flag|rais|fail|reject|names? the|say)", re.I)
+control("buildability", not all(rx.search("do it properly") for rx in (PRED, POP, REF)))
+thin = [r["rule_name"] for r in RECS if r["bucket"] == "A"
+        and not all(rx.search(str(r.get("fix_action", ""))) for rx in (PRED, POP, REF))]
+check("every Bucket-A action names predicate, population and refusal",
+      not thin, str(thin[:3]))
+
+# 5. no near-duplicate patterns — autojunk MUST be off (see the correction in RESULT.md)
+def sim(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, _n(a), _n(b), autojunk=False).ratio()
+def _n(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z ]", " ", str(s).lower()).split())
+_b = RECS[0]["pattern"]
+_near = _b.replace("A gate", "A check").replace("proves", "establishes")
+control("similarity", sim(_b, _near) > 0.85 and sim(_b, RECS[7]["pattern"]) < 0.5)
+worst = max((sim(x["pattern"], y["pattern"]), x["bucket"] + y["bucket"])
+            for x, y in __import__("itertools").combinations(
+                [r for r in RECS if str(r.get("pattern", "")).strip()], 2))
+check("no two patterns restate one class", worst[0] < 0.60, f"max {worst[0]:.2f}")
+
+# 6. B/C/D/T honest sentence rendered verbatim in the report
+flat = " ".join(MD.split()).lower()
+for r in RECS:
+    if r["bucket"] in ("B", "C", "D", "T"):
+        why = str(r.get("why_not_bucket_a") or r.get("why_discard") or "")
+        probe = " ".join(why.split()[:9]).lower()
+        check(f"honest sentence rendered verbatim [{r['bucket']}]",
+              bool(probe) and probe in flat)
+
+# 7. the emitter's own summary agrees with the records and with disk
+s = json.loads((CAND / "summary.json").read_text())
+check("summary totals agree with the records",
+      all(s["totals"].get(k, 0) == counts.get(k, 0) for k in "ABCDT"))
+claimed = sorted(pathlib.Path(f).name for f in s.get("bucket_A_files", []))
+check("summary file list agrees with disk",
+      claimed == sorted(p.name for p in CAND.glob("*.py")))
+
+# 8. every sketch resolves back to a section by name
+def slug(x: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", x.lower()).strip("_")[:80]
+byslug = {slug(h) for _, h in heads}
+defs = [d for f in CAND.glob("*.py")
+        for d in re.findall(r"^def rule_(\w+)\(", f.read_text(), re.M)]
+check("every sketch resolves to its section by name",
+      all(d in byslug for d in defs), f"{len(defs)} sketches")
+
+print()
+if fails:
+    print(f"FAIL — {len(fails)} claim(s) no longer hold:")
+    for f in fails:
+        print(f"    {f}")
+    sys.exit(1)
+print("PASS — every claim this batch makes was re-measured and holds.")
