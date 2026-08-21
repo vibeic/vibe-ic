@@ -1854,6 +1854,56 @@ set. `git grep` for the module name took one command and should have been part o
 the first verification, not the last.
 
 
+## M29 — escalation 1 was MIS-STATED by me, and it is smaller than I said
+
+I escalated the flow-gate enforcement audit as "two bad options unless the wiring
+changes", on the premise that the flow's `program_exit_zero:` clauses mean those
+gates' exit status matters, so declaring `advisory` would contradict the flow.
+**That premise is false, and my own notes already said so.**
+
+`flow_gate_enforcement_audit.py`, its own docstring:
+
+> the step runners execute the flow's `program_exit_zero` gates **NOWHERE**. The
+> gates are evaluated only by `flow_compliance_check`, which the runner invokes
+> as `final_audit` — the LAST step, after every artefact has already been
+> written. So a gate cannot block the step it guards; it can only describe,
+> afterwards, a run that already happened.
+
+A `program_exit_zero:` clause in the flow is therefore a statement of INTENT that
+no runner executes. It does not make a gate blocking, and `ENFORCEMENT: advisory`
+contradicts nothing.
+
+**So the options are not two bad ones. They are:**
+
+* **`ENFORCEMENT: advisory`** — TRUTHFUL about what these two gates are today
+  (the audit measures them AUDIT_ONLY), available immediately, one line in each
+  docstring, and it closes **three BOTH reds plus one blocking hygiene FAIL**.
+  It is not a relaxation: the audit exists precisely because "66 of 72 gates
+  ended up de-facto advisory **without anyone deciding that**", and declaring
+  advisory IS someone deciding.
+* **`ENFORCEMENT: blocking`** — a LIE unless someone also wires them, because it
+  moves them into the audit's other failing shape, "declares blocking, wired
+  AUDIT_ONLY".
+
+**The real policy question, stated properly:** should an area-budget overrun, or
+a missing tapeout document, be able to STOP a step? If yes, the work is wiring
+them into a runner where the exit status reaches a control-flow decision, and the
+declaration follows. If no, `advisory` is the honest declaration and the audit is
+satisfied today.
+
+That is a much smaller and better-posed question than the one I escalated. **I
+still do not answer it** — whether a gate should be able to stop a tapeout is a
+product decision with real blast radius, and the audit's own docstring says so
+("turning gates into blocking ones is a deliberate product decision"). But the
+decider no longer has to untangle a false constraint I invented.
+
+**Note the shape of my error, because it is this document's own subject:** I
+inferred that a declaration in a config file had force, without checking whether
+anything executed it. That is the same mistake as a test whose name promises what
+its body does not assert, and the same mistake as the six guards whose knobs
+never arrived. A clause that describes an intention is not a mechanism.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Four files:** this document, a design
