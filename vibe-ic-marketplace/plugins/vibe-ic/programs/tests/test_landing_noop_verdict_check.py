@@ -193,6 +193,33 @@ def test_an_unknown_flag_is_rc3_not_argparse_2(tmp_path):
     assert "USAGE_ERROR:" in r.stderr, r.stderr
 
 
+def test_a_gitlink_the_target_does_not_carry_is_not_read_as_identical(tmp_path):
+    """A submodule pointer is a real content change at a real path. Indexing
+    only `blob` entries drops it from BOTH trees, and `classify` reads a path
+    absent from both as "both deleted it" — IDENTICAL, a false pass.
+
+    This repository carries no submodule today, which is exactly why the case is
+    pinned: a rule that is right only while a fact happens to hold is the shape
+    this whole batch is about.
+    """
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-q", "lane")
+    pointer = _git(repo, "rev-parse", "fork").stdout.strip()
+    _git(repo, "update-index", "--add", "--cacheinfo",
+         f"160000,{pointer},vendor")
+    _git(repo, "commit", "-qm", "the lane adds a submodule pointer")
+    _git(repo, "checkout", "-q", "trunk")
+    _write(repo, "a.txt", "two\n")
+    _write(repo, "gen/INDEX.md", "generated v2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "squash without the pointer")
+
+    r = _run("--repo", repo, "--branch", "lane", "--target", "trunk")
+    assert r.returncode == RC_FAIL, \
+        "a gitlink the target does not carry passed as landed:\n" + r.stdout
+    assert "vendor" in r.stdout, "the gitlink path is not named:\n" + r.stdout
+
+
 # ── the same measurement, the opposite claim ─────────────────────────────────
 
 def test_claim_work_passes_when_the_lane_really_carries_something(tmp_path):

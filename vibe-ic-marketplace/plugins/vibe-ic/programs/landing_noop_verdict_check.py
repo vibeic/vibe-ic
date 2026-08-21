@@ -147,11 +147,18 @@ def touched_paths(repo: Path, base: str, branch: str) -> List[str]:
 
 
 def blob_index(repo: Path, commit: str) -> Dict[str, str]:
-    """``{path: blob object name}`` for one commit, in a single git call.
+    """``{path: "<type>:<object name>"}`` for one commit, in a single git call.
 
     A blob's object name is the hash of its content, so equality of two names is
     equality of two files. Read with ``-z`` because a path may legitimately
     contain anything but NUL.
+
+    THE TYPE IS PART OF THE KEY, and filtering to ``blob`` would be a false pass.
+    A gitlink (``160000 commit``) is a real content change at a real path; drop
+    it here and the path is absent from BOTH indexes, which :func:`classify`
+    reads as "both trees deleted it" — IDENTICAL. This repository carries no
+    submodule today, so nothing exercises it; a rule that is wrong only while a
+    fact happens to hold is the shape this whole batch is about.
     """
     r = _git(repo, "ls-tree", "-r", "-z", commit)
     if r.returncode != 0:
@@ -162,8 +169,8 @@ def blob_index(repo: Path, commit: str) -> Dict[str, str]:
             continue
         meta, _, path = rec.partition("\t")
         parts = meta.split()
-        if len(parts) >= 3 and parts[1] == "blob":
-            out[path] = parts[2]
+        if len(parts) >= 3:
+            out[path] = f"{parts[1]}:{parts[2]}"
     return out
 
 
