@@ -74,7 +74,10 @@ chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU, process or PDK.
 """
 from __future__ import annotations
 
+import importlib
+import pathlib
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -186,8 +189,84 @@ class FeasibilityVerdict:
                 "terms": dict(self.terms)}
 
 
+#: The module the stub stands in for. Named ONCE, because two places naming it
+#: is how one of them goes stale -- which is exactly the defect below.
+FEASIBILITY_MODULE_REL = "_ppa/feasibility.py"
+
+#: The phrase a stub uses to name a condition it claims about the tree. It is a
+#: constant so `audit_manifest` can look for the same words the stub writes,
+#: rather than two lanes agreeing by eye.
+UNLANDED_CLAIM_PHRASE = "has not landed"
+
+#: Manifest audit code for a published reason that names a condition the tree
+#: contradicts. See `unlanded_claims_contradicted_by_tree`.
+AUDIT_STUB_REASON_FALSE = "STUB_REASON_CONTRADICTED_BY_TREE"
+
+#: Every `<path>.py has not landed` claim, as it appears in a published string.
+_UNLANDED_CLAIM_RE = re.compile(
+    r"(?P<path>[A-Za-z0-9_][A-Za-z0-9_./-]*\.py)\s+" + UNLANDED_CLAIM_PHRASE)
+
+
+def _programs_dir() -> pathlib.Path:
+    """The `programs/` directory this module ships in. Not the launch cwd.
+
+    Resolved from `__file__` so the answer describes the TREE, which is what a
+    claim about a module having landed is about.
+    """
+    return pathlib.Path(__file__).resolve().parent.parent
+
+
+def feasibility_module_has_landed() -> bool:
+    """Is `_ppa/feasibility.py` present and importable ON THIS TREE, right now?
+
+    MEASURED, not remembered. This is the whole of the F-12 fix: the stub used
+    to state, as a hard-coded sentence published into every manifest, that this
+    module "has not landed". It landed at v1.11.26 and the sentence went on
+    being published for every candidate of every run. A hard-wired excuse that
+    outlives its cause is a false record, and the way to make that impossible
+    is to require the excuse to CHECK its own condition at the moment it speaks.
+
+    Both halves are asked because they can disagree: a file can be present and
+    unimportable (a syntax error in a half-landed edit), and a module can be
+    importable from somewhere other than this tree. A claim about "landed"
+    means both, so both are required.
+    """
+    if not (_programs_dir() / FEASIBILITY_MODULE_REL).is_file():
+        return False
+    try:
+        importlib.import_module(".feasibility", __package__ or "_ppa")
+    except Exception:                                   # pragma: no cover
+        return False
+    return True
+
+
+def unlanded_claims_contradicted_by_tree(text: Any) -> List[str]:
+    """Every `<path>.py has not landed` claim in `text` that this tree refutes.
+
+    The generator side of F-12 is fixed by `stub_feasibility` below, which can
+    no longer produce a false one. This is the AUDIT side, and it is the half
+    that applies to a manifest somebody else published: a record asserting that
+    a module of this plugin has not landed is checkable against the plugin, and
+    a reader holding the plugin should not have to check it by hand.
+
+    CONSERVATIVE ON PURPOSE. A path that does not resolve to a file here yields
+    NOTHING -- not a finding, and not a pass either; it simply is not evidence.
+    Only a claim the tree positively CONTRADICTS -- the named file is right
+    there -- is returned. That way this can never redden an honest manifest
+    published against a tree where the claim was true.
+    """
+    if not isinstance(text, str):
+        return []
+    out: List[str] = []
+    for m in _UNLANDED_CLAIM_RE.finditer(text):
+        rel = m.group("path")
+        if (_programs_dir() / rel).is_file():
+            out.append(rel)
+    return list(dict.fromkeys(out))
+
+
 def stub_feasibility(candidate: "Candidate") -> FeasibilityVerdict:
-    """The stand-in until `_ppa/feasibility.py` lands. It answers UNDETERMINED.
+    """The stand-in when no feasibility function is supplied. UNDETERMINED.
 
     It answers UNDETERMINED for every candidate, including a candidate that
     completed a full place-and-route with beautiful numbers, and that is the
@@ -198,12 +277,40 @@ def stub_feasibility(candidate: "Candidate") -> FeasibilityVerdict:
 
     Every term is explicitly NOT_CHECKED rather than absent, so a reader can
     see there are nine of them and that none was answered.
+
+    THE REASON IS COMPUTED, NEVER REMEMBERED (F-12)
+    ==============================================
+    A stub that names a condition -- "X has not landed" -- must CHECK that
+    condition at the moment it speaks, or it must not name one. The previous
+    text was a literal, and it was published verbatim into sixty manifests
+    three commits after the module it named had landed. So the two possible
+    worlds are distinguished HERE, on every call:
+
+        module absent    the stub is standing in for something that is
+                         genuinely not there, and says so
+        module present   the stub is standing in for a lane this RUN did not
+                         consult, which is a fact about the invocation and not
+                         about the tree, and it says THAT instead
+
+    Both sentences are true when they are written. Neither can rot, because
+    neither is stored.
     """
+    if feasibility_module_has_landed():
+        reason = (
+            "no feasibility function was supplied to this search: "
+            f"{FEASIBILITY_MODULE_REL} IS present on this tree but this run "
+            "did not consult it, so no setup/hold/DRV/DRC/LVS/antenna/IR/EM/"
+            "equivalence evidence was read for this candidate. Re-run with "
+            "the feasibility lane wired to adjudicate it.")
+    else:
+        reason = (
+            f"feasibility lane not wired: {FEASIBILITY_MODULE_REL} "
+            f"{UNLANDED_CLAIM_PHRASE} on the tree that produced this record, "
+            "so no setup/hold/DRV/DRC/LVS/antenna/IR/EM/equivalence evidence "
+            "was read for this candidate")
     return FeasibilityVerdict(
         verdict=FEAS_UNDETERMINED,
-        reason=("feasibility lane not wired: _ppa/feasibility.py has not "
-                "landed, so no setup/hold/DRV/DRC/LVS/antenna/IR/EM/"
-                "equivalence evidence was read for this candidate"),
+        reason=reason,
         terms={t: "NOT_CHECKED" for t in FEASIBILITY_TERMS},
     )
 
@@ -957,4 +1064,51 @@ def audit_manifest(man: Dict[str, Any]) -> List[Dict[str, str]]:
             "trials were cache hits; without it the published CPU-hours "
             "describe a different amount of work than a reader will assume")
 
+    # F-12. A manifest may carry a REASON that names a condition about this
+    # plugin -- "X has not landed". That is a checkable sentence, and a reader
+    # holding the plugin should not have to check it by hand. Sixty published
+    # manifests carried this exact sentence about a module that had landed
+    # three commits earlier.
+    #
+    # It is a finding (rc=1), not UNDETERMINED, and the distinction is the
+    # point: the audit LOOKED, the named file is right there, and the record
+    # says it is not. That is a statement about the record, which is what this
+    # audit adjudicates.
+    for where, text in _published_reasons(man):
+        for rel in unlanded_claims_contradicted_by_tree(text):
+            bad(AUDIT_STUB_REASON_FALSE,
+                f"{where} publishes as fact that {rel} {UNLANDED_CLAIM_PHRASE}"
+                f", and {rel} is present on the tree auditing this manifest "
+                f"({_programs_dir() / rel}). A stub reason that names a "
+                "condition must check that condition at the moment it speaks; "
+                "this one outlived its cause and was published as a fact.")
+
     return out
+
+
+def _published_reasons(man: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    """(where, text) for every free-text reason a manifest publishes.
+
+    Enumerated EXPLICITLY rather than by walking every string in the document,
+    because a blanket walk would also read the design's own notes and turn a
+    quotation into a finding. These are the fields this module writes.
+    """
+    rows: List[Tuple[str, Any]] = []
+    tc = man.get("toolchain")
+    if isinstance(tc, dict):
+        for key, val in sorted(tc.items()):
+            rows.append((f"toolchain.{key}", val))
+    for i, c in enumerate(man.get("candidates") or []):
+        if not isinstance(c, dict):
+            continue
+        feas = c.get("feasibility")
+        if isinstance(feas, dict):
+            rows.append((f"candidates[{i}].feasibility.reason",
+                         feas.get("reason")))
+    fi = man.get("frontier_input")
+    if isinstance(fi, dict):
+        for j, x in enumerate(fi.get("excluded") or []):
+            if isinstance(x, dict):
+                rows.append((f"frontier_input.excluded[{j}].detail",
+                             x.get("detail")))
+    return rows
