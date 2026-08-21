@@ -623,6 +623,34 @@ check("the quoted near-duplicate figures are the live ones",
       f"live {_np} pairs / {_mx:.2f} max; quoted "
       f"{_qp.group(1) if _qp else '-'} / {_qm.group(1) if _qm else '-'}")
 
+# 42. the one ALREADY-PROGRAM claim that cannot be driven by a mutation, because
+# it is enforced by a document and a finding-code convention rather than by code.
+# It can still ROT -- silently, since no test reads prose -- so both halves of the
+# citation are pinned: the section, the rule stated in bold, and the code that
+# names the case.
+_iface = PLUG / "docs" / "PPA_INTERFACES.md"
+_itxt = _iface.read_text() if _iface.is_file() else ""
+control("f13-citation", bool(_itxt) and "PPA-C-999" not in _itxt)
+_f13 = {"section 3 heading": bool(re.search(r"^##\s*3\.\s*Identity", _itxt, re.M)),
+        "the rule, in bold": "**AN ARTEFACT THAT VARIES WITH THE IMPLEMENTATION "
+                             "MAY NOT SIT IN `analysis`.**" in _itxt,
+        "PPA-C-016 names the case": "`PPA-C-016` now names this case" in _itxt}
+check("F-13's document citation still holds, both halves",
+      all(_f13.values()), ", ".join(f"{k}={v}" for k, v in _f13.items()))
+
+# 43. the sketches are claimed to be buildable. The weakest form of that claim --
+# that they are valid Python -- was never checked, and an emitter template can
+# break it without breaking anything the emitter itself validates.
+_bad = []
+for _f in sorted(CAND.glob("*.py")):
+    try:
+        __import__("ast").parse(_f.read_text())
+    except SyntaxError as _e:
+        _bad.append(f"{_f.name}:{_e.lineno}")
+control("sketches-parse", bool(list(CAND.glob("*.py"))))
+check("every emitted sketch parses as Python", not _bad,
+      f"{len(list(CAND.glob('*.py')))} file(s)" + (f"; broken: {_bad}" if _bad else ""))
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

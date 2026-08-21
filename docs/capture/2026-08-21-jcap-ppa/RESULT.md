@@ -1687,8 +1687,19 @@ So **fifteen of the sixteen ALREADY-PROGRAM claims have now been driven:
 fourteen fire and one cannot.** The bundled validator was probed by letting a
 boolean validate as an integer — the JSON Schema subtlety a hand-written
 validator is likeliest to get wrong — and `test_the_bundled_semantics` catches
-it. Only **F-13** is undriven, and it is enforced by a document and a naming
-convention, which a mutation cannot address.
+it. Only **F-13** is undriven, and it is enforced by a document and a
+finding-code convention, which a mutation cannot address — so it was VERIFIED
+instead, both halves of the citation and not just the file's existence:
+
+    §3 "Identity" heading present                                    yes
+    the rule stated in bold: an artefact that varies with the
+      implementation may not sit in the analysis identity            yes
+    `PPA-C-016` present, and naming this case                        yes
+
+A prose-enforced claim is the one kind that rots with nothing going red, so all
+three are now pinned by check 42. **Sixteen of sixteen are therefore accounted
+for: fifteen driven, fourteen of those firing, one disproven, and one verified
+against the document that enforces it.**
 
 *Two paragraphs here were wrong before they were right, and both errors were
 mine rather than the guards'.* The first put the vacuous-population census among
@@ -2104,7 +2115,7 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (41 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (43 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2283,7 +2294,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            41 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            43 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2303,7 +2314,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     41 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     43 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
