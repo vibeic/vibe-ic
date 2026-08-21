@@ -780,14 +780,38 @@ corpus" hypothesis is disproven at file scale as well as for the single test.
 
 ## FINAL ATTRIBUTION OF THE ORIGINAL 22
 
-| group | n | cause | settled? |
-|---|--:|---|---|
-| G1 | 13 | subject under `$HOME`; `hermetic_candidate_runner.py:426` refuses it | **SETTLED — mine** |
-| G2 | image lane | no Docker CLI in the pinned image | **SETTLED — environment** |
-| G3 | 5 | host git 2.34.1 < 2.38, verifier drops to its degraded tier and refuses with a different rc | **SETTLED — environment; the verifier behaved correctly** |
-| G4 | 2 | the injected TERM-ignoring arm never runs: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not in the hermetic arm's reviewed env allowlist | **SETTLED (M8)** — 8/8 deterministic. Diagnosis fixed; re-founding the guard is a policy call |
-| G5 | 1 | `GATEKEEPER_STUB_ROUTED_TRANSITION` never reaches the arm, so the stub's transition block never runs | **CLOSED (M13)** — same defect as G4/G6 |
-| G6 | 1 | the `.started` markers are arm-side writes through `GATEKEEPER_CONCURRENCY_PROBE_DIR`, which is not on the arm allowlist | **CLOSED (M13)** — same defect as G4/G5 |
+The ruling asked, for each group, whether it is ONE defect or SEVERAL. That
+column is the point of the table, so it is the last one.
+
+| group | n | cause | settled? | one defect or several? |
+|---|--:|---|---|---|
+| G1 | 13 | subject under `$HOME`; `hermetic_candidate_runner.py:426` refuses it | **SETTLED — mine** | **ZERO defects.** One operator mistake, mine, counted thirteen times. The refusal is the runner working exactly as designed. |
+| G2 | image lane | no Docker CLI in the pinned image | **SETTLED — environment** | **ZERO defects in main**, but see the note below — it is not harmless. |
+| G3 | 5 | host git 2.34.1 < 2.38, verifier drops to its degraded tier and refuses with a different rc | **SETTLED — environment; the verifier behaved correctly** | **ZERO defects.** One host property, five reds. The verifier disclosed the degradation rather than hiding it, which is the behaviour we want. |
+| G4 | 2 | the injected TERM-ignoring arm never runs: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not in the hermetic arm's reviewed env allowlist | **SETTLED (M8)** — 8/8 deterministic | **ONE defect**, shared with G5 and G6 (M13). |
+| G5 | 1 | `GATEKEEPER_STUB_ROUTED_TRANSITION` never reaches the arm, so the stub's transition block never runs | **CLOSED (M13)** | same ONE defect as G4/G6 — not a separate finding. |
+| G6 | 1 | the `.started` markers are arm-side writes through `GATEKEEPER_CONCURRENCY_PROBE_DIR`, which is not on the arm allowlist | **CLOSED (M13)** | same ONE defect as G4/G5 — not a separate finding. |
+
+### THE ANSWER IN ONE LINE
+
+**Twenty-two reds. ONE defect.** Three environmental causes account for the
+other eighteen — and one of those three, my own `$HOME` mistake, accounts for
+thirteen on its own. Counting reds was never going to find this; only grouping
+them did.
+
+### The G2 note: zero defects is not the same as harmless
+
+G2 is not a defect in main, but it is not benign either. **No test in
+`test_landing_merge_verdict.py` can run in the pinned image at all** — they all
+die at the absent Docker CLI. That is the CI lane. So the landing verdict's own
+guard is not being exercised by CI; it is exercised only where someone runs it
+by hand, on a host that (here) also lacks git >= 2.38. Combined with M13 — six
+of the ten end-to-end guards in that file cannot reach the paths they name, and
+two more pass without being able to fail — the honest summary is that **this
+file guards considerably less than its green count suggests**, and the reason is
+split across three unrelated causes, none of which is a bug in the code under
+test. Whether the pinned image should carry a Docker CLI is a lane decision I do
+not own, but it belongs on the same list as the other three escalations.
 
 **REVISED BY M13.** Of the 22, four (G4 x2, G5, G6) ARE a demonstrated defect in
 main — one defect, not four: six test-only env knobs that cannot cross the
