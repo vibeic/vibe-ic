@@ -239,3 +239,42 @@ def test_the_documented_schema_string_is_the_one_the_checker_accepts():
     assert "vibeic.ppa.pr_answers.v1" in body
     checker = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
     assert "vibeic.ppa.pr_answers.v1" in checker
+
+
+# --------------------------------------------------------------------------- #
+# the gate this branch exists to close, asked locally
+# --------------------------------------------------------------------------- #
+# Same reasoning as the flow half: `machine_runners`, not absence from
+# `test_only`, because a SKILL mention would empty the latter and satisfy
+# nothing. This program's venue is PROG — `gatekeeper_review` spawns it — and
+# NOT the flow, because a change-set is not a design.
+
+def _wiring_audit_report() -> dict:
+    import subprocess
+    import tempfile as _tf
+    out = Path(_tf.mkdtemp(prefix="cewppa_")) / "cew.json"
+    subprocess.run([sys.executable,
+                    str(PROG / "checker_execution_wiring_audit.py"),
+                    "--json", str(out)],
+                   capture_output=True, text=True, timeout=600)
+    return json.loads(out.read_text())
+
+
+def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("ppa_pr_scope_check.py")
+    assert runners, (
+        "checker_execution_wiring_audit credits NO machine runner for "
+        "ppa_pr_scope_check — a skill mention does not count")
+    assert "PROG" in runners, f"gatekeeper_review is not credited: {runners}"
+
+
+def test_the_pr_scope_check_is_not_wired_into_the_design_flow():
+    """It answers a question about a CHANGE-SET. The flow reviews a DESIGN and
+    has no notion of one, so crediting FLOW here would mean it had been wired
+    somewhere it cannot be evaluated."""
+    rep = _wiring_audit_report()
+    runners = rep["machine_runners"].get("ppa_pr_scope_check.py") or []
+    assert "FLOW" not in runners, (
+        f"the PR-scope check is wired into the design flow: {runners}")
+    assert "ppa_pr_scope_check.py" not in (rep.get("test_only") or [])
