@@ -1194,6 +1194,27 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # "the corpus is empty" — the same distinction `NOT_CHECKED` draws for a gate.
 # Its stderr is deliberately NOT swallowed: a producer that failed should say
 # why, in the log, on the line above the disclosure that it produced nothing.
+#
+# AND "THERE WAS NO CORPUS TO OPEN" IS A THIRD THING (vibe-ic#1764). rc 0 with
+# no items says a population was MEASURED and it is 0; a producer that never
+# resolved a corpus measured nothing at all, and until this code existed both
+# arrived here as `rc 0, 0 items` and got the one EMPTY row between them. A
+# figure presented as enforcement that quietly includes the second is claiming
+# a measurement nobody took — the same class of defect as calling rc 2 a pass.
+#
+# So a producer may exit `GATE_DISPATCH_ABSENT_RC` to say "I found no corpus;
+# nothing was opened", and it gets its own row, its own sentence and its own
+# expansion state. IT IS NOT A PASS AND IT IS NOT LESS BLOCKING: like EMPTY and
+# like PRODUCER FAILED it is an unexempted, process-attested NOT_CHECKED that
+# `gate_dispatch_finish` refuses on. The only thing that changes is which true
+# sentence the reader gets. A producer that exits it AND prints items is
+# self-contradictory and is read as PRODUCER FAILED instead — the branch below
+# requires 0 items, so a partial population can never wear the quiet row.
+#
+# Spelled `NO_CORPUS_RC` on the producer side (`tools/ci/routed_def_corpus.py`)
+# and pinned equal there, because two numbers that must agree and live in two
+# languages are exactly what drifts.
+GATE_DISPATCH_ABSENT_RC=3
 _gate_dispatch_population_refusal() {
   # The producer argv remains in "$@" after the four evidence fields.  It is
   # intentionally not executed twice; `_gate_execute` passes the complete argv
@@ -1205,6 +1226,13 @@ _gate_dispatch_population_refusal() {
       echo "[NOT_CHECKED] EMPTY CORPUS \"$corpus\": producer rc" \
            "$producer_rc yielded $item_count item(s); the per-item gates had" \
            "nothing to examine."
+      ;;
+    absent)
+      echo "[NOT_CHECKED] CORPUS NOT FOUND \"$corpus\": the producer exited" \
+           "$producer_rc — no corpus was resolved, so NOTHING WAS OPENED and" \
+           "$item_count item(s) is the ABSENCE of a measurement rather than a" \
+           "measurement of zero. The producer's own diagnostic above names" \
+           "what it looked for and how to point it at a corpus."
       ;;
     producer_failed)
       echo "[NOT_CHECKED] CORPUS PRODUCER FAILED for \"$corpus\":" \
@@ -1239,7 +1267,11 @@ gate_dispatch_over() {
     items+=("$line")
   done <<<"$out"
   local n=${#items[@]} before=${#GATE_LABELS[@]}
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ] && [ "$n" -eq 0 ]; then
+    _gate_dispatch_say_err "   ^^ NO CORPUS FOUND (rc $rc) for \
+\"$corpus\": the producer resolved no corpus, so nothing was opened. This is \
+NOT the empty-corpus row — nobody looked, so there is no population to report"
+  elif [ "$rc" -ne 0 ]; then
     _gate_dispatch_say_err "   ^^ CORPUS PRODUCER FAILED (rc $rc) for \
 \"$corpus\": the $n item(s) below are what it managed to print and NOT the \
 corpus — read every verdict from this loop as covering an unknown fraction of it"
@@ -1273,17 +1305,40 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
       "corpus \"$corpus\" is EMPTY — nothing was checked over it" \
       "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
       empty "$corpus" "$rc" "$n" "$@"
+  elif [ "$attest_population" -eq 1 ] \
+       && [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ] && [ "$n" -eq 0 ]; then
+    GATE_DISPATCH_ITEM_NOTE="[population: producer rc $rc — NO CORPUS RESOLVED, nothing was opened, over $corpus]"
+    _dispatch 2 0 \
+      "corpus \"$corpus\" was NOT FOUND — nothing was opened to check" \
+      "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
+      absent "$corpus" "$rc" "$n" "$@"
   elif [ "$attest_population" -eq 1 ] && [ "$rc" -ne 0 ]; then
     GATE_DISPATCH_ITEM_NOTE="[population: producer rc $rc, $n partial item(s) over $corpus]"
     _dispatch 2 0 \
       "corpus \"$corpus\" producer FAILED — denominator unknown" \
       "${ROOT:-$PWD}" _gate_dispatch_population_refusal \
       producer_failed "$corpus" "$rc" "$n" "$@"
-  elif [ "$rc" -eq 0 ] && [ "$n" -eq 0 ]; then
+  elif { [ "$rc" -eq 0 ] || [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ]; } \
+       && [ "$n" -eq 0 ]; then
     # Exact legacy bootstrap record: one structural row, no process execution
     # and therefore no process attestation.  This branch can be deleted only
     # after the trusted transition judge has observed the phase-2 expansion.
+    #
+    # The rc-0 spelling is byte-for-byte what it was, because the trusted
+    # transition judge compares the base arm's row literally. The absent rc
+    # gets the SAME shape with its own sentence rather than no row at all:
+    # an un-attested call site that loses its corpus must still carry a
+    # verdict for it, and it must not be the EMPTY one (vibe-ic#1764).
     local legacy_label="corpus \"$corpus\" is EMPTY — nothing was checked over it"
+    local legacy_note="   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so \
+the gates it would have dispatched did not run. Recorded NOT_CHECKED so the run \
+carries a verdict for it instead of no verdict at all."
+    if [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ]; then
+      legacy_label="corpus \"$corpus\" was NOT FOUND — nothing was opened to check"
+      legacy_note="   ^^ CORPUS NOT FOUND \"$corpus\": the producer exited \
+$rc without resolving a corpus, so nothing was opened and 0 item(s) is the \
+ABSENCE of a measurement, not a measurement of zero. Recorded NOT_CHECKED."
+    fi
     GATE_LABELS+=("$legacy_label")
     # Preserve the legacy no-process record while repairing its shard
     # ownership: only the deterministically assigned shard may carry the
@@ -1301,9 +1356,7 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
-    _gate_dispatch_say_err "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so \
-the gates it would have dispatched did not run. Recorded NOT_CHECKED so the run \
-carries a verdict for it instead of no verdict at all."
+    _gate_dispatch_say_err "$legacy_note"
   fi
   GATE_DISPATCH_ITEM_NOTE=""
   GATE_DISPATCH_CORPUS_CUR=""
@@ -1314,6 +1367,10 @@ carries a verdict for it instead of no verdict at all."
   GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
   if [ "$rc" -eq 0 ]; then
     GATE_CORPUS_STATE+=("EXPANDED")
+  elif [ "$rc" -eq "$GATE_DISPATCH_ABSENT_RC" ] && [ "$n" -eq 0 ]; then
+    # NOT "EXPANDED with 0 items": a consumer reading `items: 0` off an
+    # EXPANDED row is reading a measured population, and there was none.
+    GATE_CORPUS_STATE+=("NO_CORPUS")
   else
     GATE_CORPUS_STATE+=("PRODUCER_FAILED")
   fi
@@ -1332,7 +1389,13 @@ _gate_dispatch_corpora_rollup() {
     name="${GATE_CORPUS_NAMES[$i]}"
     items="${GATE_CORPUS_ITEMS[$i]}"
     gates="${GATE_CORPUS_GATES[$i]}"
-    if [ "${GATE_CORPUS_STATE[$i]}" = "PRODUCER_FAILED" ]; then
+    if [ "${GATE_CORPUS_STATE[$i]}" = "NO_CORPUS" ]; then
+      echo "repo_hygiene_gates: loop corpus \"$name\" was NOT FOUND — its" \
+           "producer resolved no corpus, so NOTHING WAS OPENED and there is" \
+           "no population to report; $gates blocking population gate(s)" \
+           "report that absence. This is not the same state as a corpus that" \
+           "was read and holds 0 item(s)"
+    elif [ "${GATE_CORPUS_STATE[$i]}" = "PRODUCER_FAILED" ]; then
       echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED" \
            "after $items partial item(s), so the denominator is UNKNOWN;" \
            "$gates gate(s), including the blocking population verdict, were" \
