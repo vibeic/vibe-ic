@@ -1174,7 +1174,7 @@ read `_skip`'s docstring the first time instead of the fifth.
 | 2 | `test_flow_manifest_declaration_parity` | **needs evidence this host does not hold** — see below |
 | 2 | `test_v0_2_96_issue460_coverage_bridge` | Step 4 prints VACUOUS-PASS where the test wants WAIVED-DEFERRED |
 | 1 | `test_pytest_per_file_junit::test_nested_collect_progress…` | the 0.8 s forward-progress lease family, characterised in run 2 as load-fragile; image `stage=collecting`, host `stage=running` |
-| 1 | `test_flow_compliance_check_gate` | `the finding itself is missing from the evidence snippet` |
+| ~~1~~ **0** | ~~`test_flow_compliance_check_gate`~~ | **CLOSED — 36 passed (M47).** Re-ran it; the red is gone. It was also the only detail row with no summary disposition. |
 | 1 | `test_digital_hardmacro_gen` | the known `magic` flake |
 
 ## `flow_manifest_declaration_parity` — ATTEMPTED, and it needs evidence this host lacks
@@ -2812,6 +2812,40 @@ between the two fixes is the owner's. **What I can usefully hand over is that
 the cheap fix destroys the test**, which is not obvious from the failure message
 and is exactly the trap this branch has spent its length documenting: a green
 bought by removing the thing that could fail.
+
+
+## M47 — a direction I never audited: reds that have since CLOSED
+
+I audited this document for stale blockers, stale summaries and stale counts, and
+never once asked the simplest question: **are the reds still red?** The table was
+written against v1.11.66 and I have been treating every entry as current for the
+whole engagement.
+
+**Swept the three entries I had never run.** One of them is green:
+
+| entry | now |
+|---|---|
+| `test_flow_compliance_check_gate` — *"the finding itself is missing from the evidence snippet"* | **36 passed — CLOSED** |
+| `test_digital_hardmacro_gen` — "the known `magic` flake" | 1 failed, 23 passed **in 1.31 s** |
+| `test_pytest_per_file_junit::…` — the 0.8 s lease family | 1 failed, 87 passed |
+
+**`test_flow_compliance_check_gate` was also the one red in the detail table with
+NO summary disposition row** — I found it while reconciling "2 magic/lease" against
+the rows beneath it. An entry nobody had classified turned out to be an entry
+nobody needed to: it is green.
+
+**And the `magic` label deserves a second look, though I am NOT re-measuring it.**
+A flake attributed to the `magic` tool failing in **1.31 s** is odd — a timing
+flake generally has to reach the tool to be flaky. That is one observation, not a
+ratio, and M36 already records why I am not producing ratios for load-sensitive
+tests on a shared host tonight. But *"the known `magic` flake"* is an
+attribution, and this document has a long record of attributions that did not
+survive being checked. **Flagged as suspect, not corrected.**
+
+**The general lesson, and it is the last one:** a red inventory is a measurement
+with a timestamp, and I never re-took it. Every audit I ran asked whether my
+REASONING about the reds was current. None asked whether the REDS were. **The
+freshest-looking part of a stale report is the part nobody thought to date.**
 
 
 # ===== REQUESTS TO THE LANDER =====
