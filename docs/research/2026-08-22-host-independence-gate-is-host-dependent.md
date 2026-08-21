@@ -75,3 +75,50 @@ Either would change what main reports, so both are the owner's:
 (1) makes the problem visible; (2) removes it. They are not alternatives —
 (1) without (2) reddens main, and (2) without (1) leaves the detector blind to
 the next program that walks.
+
+---
+
+## MEASURED: ANCHORING ALONE IS NOT A FIX — IT MAKES THE GATES VACUOUS
+
+Remedy (2) above said "anchor the corpus walk on the repository … removes it".
+That was reasoned, not measured. Measured now, in a throwaway checkout of
+`81cd5321b` with the walk replaced by the repo-relative default — which is
+exactly what `benchmark_evidence_index` does — same host, `$HOME` still holding
+a `benchmark-data` clone, environment unset:
+
+    walk intact (climbs into $HOME)   l_doc rc 2 UNDETERMINED
+                                      evidence rc 1 FAIL, scanning
+                                      /home/reyerchu/benchmark-data/ic
+    anchored on the repository        l_doc rc 0 NO_CORPUS
+                                      evidence rc 0 NO_CORPUS
+
+Both become **rc 0 — a PASS that scanned nothing**. So anchoring makes the
+verdict host-independent by making it constant: the corpus is never inside this
+repository any more, so a repo-anchored gate finds nothing on every host.
+
+**That is the vacuous direction, and it is worse than the defect it removes.**
+A gate that is red on one host and green on another is at least red somewhere; a
+gate that is green everywhere without looking is the shape this repo removes one
+gate at a time.
+
+### SO THE OPTIONS ARE THREE PARTS, NOT TWO ALTERNATIVES
+
+1. **Anchor the walk** — so the verdict does not depend on what sits above the
+   checkout. Necessary, not sufficient.
+2. **Bind the corpus on the landing path** (`VIBE_IC_BENCHMARK_DATA`), so an
+   anchored gate has something to scan. Without this, (1) is a silence.
+3. **Decide what an unbound corpus means.** `--corpus-may-be-absent` is what
+   turns "nothing anywhere" into rc 0; without the flag the same state is rc 2
+   UNDETERMINED. Today every one of these gates carries the flag AND is
+   dispatched with a plain blocking `run` — so an absent corpus is a PASS and a
+   present-but-unreadable one is a FAIL, which is the two halves the wrong way
+   round.
+
+And (4), from the addendum above: `L-doc field producer` currently returns rc 2
+UNDETERMINED and is recorded FAIL because its dispatch is a plain `run`. It wants
+`run_tolerating_uncheckable` with a dated `uncheckable_until`.
+
+None of the four is made here. Two touch `repo_hygiene_gates.sh`, a PROTECTED
+path; all four change what main reports; and (3) in particular is a policy
+decision about whether a landing host must carry a corpus at all — which is the
+owner's, with the measurements now in front of them rather than an assertion.
