@@ -23,11 +23,17 @@ _emit_or_split):
   problem ALWAYS emits the {"code":[…]} envelope (never a bare blob), falling
   back to a LOSSLESS all-in-first-file emit so each module appears EXACTLY once.
 
-chip-AGNOSTIC; no iverilog needed (pure string structure).
+chip-AGNOSTIC. Thirteen of these are pure string structure and need no EDA
+tool; `test_flat_multifile_emit_carries_hygiene_fix` drives the FULL
+`gate_record` verdict and therefore needs a real iverilog AND yosys — it is
+guarded, because "the toolchain is absent" is not evidence about the emit.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -176,6 +182,15 @@ def test_pure_package_interface_map_recovered():
         {"explanation": "the module foo and package bar are described"})) is None
 
 
+_HAS_TOOLCHAIN = (shutil.which("iverilog") is not None
+                  and shutil.which("yosys") is not None)
+
+
+@pytest.mark.skipif(not _HAS_TOOLCHAIN,
+                    reason="drives the full gate_record verdict: needs a real "
+                           "iverilog AND yosys. Without them the gate honestly "
+                           "reports CANNOT ENFORCE, which is not evidence "
+                           "about the emitted bytes this test is asserting on.")
 def test_flat_multifile_emit_carries_hygiene_fix(tmp_path):
     # Step-2.7 re-review HIGH: a FLAT file-map multi-file completion whose bodies
     # hygiene --fix changed must emit the FIXED bytes (compile-equals-emit), not

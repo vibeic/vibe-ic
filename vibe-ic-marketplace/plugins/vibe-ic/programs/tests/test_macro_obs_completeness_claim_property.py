@@ -61,6 +61,7 @@ and names both files instead of arbitrating between them.
 chip-AGNOSTIC and PDK-AGNOSTIC: pure LEF/DEF grammar, invented master and layer
 names, no vendor, process or part number anywhere.
 """
+import os
 import importlib.util
 import re
 import sys
@@ -213,41 +214,6 @@ def _run(capsys, proj, *extra):
     rc = M.main([str(proj), *extra])
     cap = capsys.readouterr()
     return rc, cap.out + cap.err
-
-
-# ===========================================================================
-# SECTION A — the defect. Behavioural: exit codes and printed text.
-# ===========================================================================
-
-def test_obs_less_declaration_winning_the_merge_is_not_a_pass(tmp_path, capsys):
-    """THE MEASURED CASE. A crossing is right there; a second LEF declaring the
-    same master WITHOUT an OBS is read later and wins the merge, so the macro
-    leaves the comparison entirely. Pre-fix this prints `[PASS] ... All 2
-    placed master(s) resolved to a LEF` and returns 0."""
-    proj = _project(tmp_path, _def(_CROSSED), [
-        ("input/pdk/full.lef", _WITH_OBS + _DECOY),
-        ("ip/abstract.lef", _NO_OBS),
-    ])
-    rc, out = _run(capsys, proj)
-    assert rc != 0, (
-        "a run whose obstruction evidence was discarded by the LEF merge must "
-        f"not exit 0.\n{out}")
-    assert rc == 2, f"expected CANNOT DETERMINE, got rc={rc}.\n{out}"
-
-
-def test_the_refusal_names_the_master_and_both_files(tmp_path, capsys):
-    """A refusal a reader cannot act on is only marginally better than a wrong
-    pass: it must say WHICH master and WHICH files disagreed."""
-    proj = _project(tmp_path, _def(_CROSSED), [
-        ("input/pdk/full.lef", _WITH_OBS + _DECOY),
-        ("ip/abstract.lef", _NO_OBS),
-    ])
-    rc, out = _run(capsys, proj)
-    assert rc == 2
-    assert "ip_block" in out, f"the affected master is not named.\n{out}"
-    assert "full.lef" in out and "abstract.lef" in out, (
-        f"both disagreeing declarations must be named.\n{out}")
-
 
 def test_pass_line_carries_no_universal_claim_wider_than_the_evidence(
         tmp_path, capsys):
@@ -445,20 +411,89 @@ def test_audit_still_accepts_the_two_argument_call(tmp_path):
     assert rep["findings"][0]["master"] == "ip_block"
 
 
-def test_last_write_wins_geometry_is_unchanged(tmp_path):
-    """The merge still resolves a master to its LAST declaration, so the
-    findings are byte-identical to the previous behaviour. Only the discarded
-    declarations, which used to be unrecoverable, are now retained."""
-    # An abstract read last still silences the macro's obstruction in the
-    # GEOMETRY — the verdict is what changed, not the intersection.
-    rep = M.audit(_def(_CROSSED), [_WITH_OBS + _DECOY, _NO_OBS])
-    assert rep["findings"] == [], (
-        "the merge must still be last-write-wins; promoting the richer "
-        "declaration would let an obsolete LEF fabricate a crossing")
-    rep2 = M.audit(_def(_CROSSED), [_NO_OBS, _WITH_OBS + _DECOY])
-    assert len(rep2["findings"]) == 1, (
-        "and the OBS-bearing declaration read LAST still wins")
+# --------------------------------------------------------------------------
+# SUPERSEDED, and recorded rather than deleted silently.
+#
+# Three tests here asserted that the merge keeps LAST-WRITE-WINS geometry and
+# answers rc=2 CANNOT DETERMINE when an OBS-less abstract is read last. That was
+# this change's original design, and it was the right call against the main it
+# was written on.
+#
+# `merge_macro_obs` then landed and went further: an empty declaration can no
+# longer WIN, so the geometry is corrected and the gate ANSWERS — rc=1 with the
+# crossings named — instead of refusing. Refusing is strictly weaker than
+# answering: on the measured project the refusal reports nothing while the
+# answer reports 28 supply segments spanning a declared obstruction.
+#
+# What survives from the original design, and is kept below, is its real
+# contribution: a conflict a reader cannot act on is barely better than a wrong
+# pass, so the record must name WHICH master and WHICH files disagreed.
+# --------------------------------------------------------------------------
+def test_an_obs_less_declaration_cannot_win_and_the_gate_answers(tmp_path):
+    """The composed behaviour: not a pass, and not a refusal either."""
+    import importlib.util, sys as _s
+    sp = importlib.util.spec_from_file_location(
+        "_mo", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "macro_obs_geometry_intersect_check.py"))
+    g = importlib.util.module_from_spec(sp); _s.modules["_mo"] = g
+    sp.loader.exec_module(g)
+    full = """
+MACRO ip_block
+  SIZE 100.0 BY 60.0 ;
+  OBS
+    LAYER MET1 ;
+      RECT 0 0 100.0 60.0 ;
+  END
+END ip_block
+"""
+    abstract = """
+MACRO ip_block
+  SIZE 100.0 BY 60.0 ;
+END ip_block
+"""
+    merged, conflicts = g.merge_macro_obs(
+        [g.parse_macro_obs(full), g.parse_macro_obs(abstract)],
+        ["full.lef", "abstract.lef"])
+    assert len(merged["ip_block"]["obs"]) == 1, (
+        "the OBS-less abstract was read LAST and must not have won")
+    assert conflicts == [], "an empty declaration is not a disagreement"
 
 
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))
+def test_a_real_disagreement_names_the_master_and_both_files(tmp_path):
+    """The surviving contribution of the original design. Two files that BOTH
+    describe obstructions, differently, is a real ambiguity — and a record a
+    reader cannot act on is barely better than a wrong pass."""
+    import importlib.util, sys as _s
+    sp = importlib.util.spec_from_file_location(
+        "_mo2", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "macro_obs_geometry_intersect_check.py"))
+    g = importlib.util.module_from_spec(sp); _s.modules["_mo2"] = g
+    sp.loader.exec_module(g)
+    one = """
+MACRO ip_block
+  SIZE 100.0 BY 60.0 ;
+  OBS
+    LAYER MET1 ;
+      RECT 0 0 100.0 60.0 ;
+  END
+END ip_block
+"""
+    two = """
+MACRO ip_block
+  SIZE 100.0 BY 60.0 ;
+  OBS
+    LAYER MET1 ;
+      RECT 0 0 100.0 60.0 ;
+    LAYER MET2 ;
+      RECT 0 0 100.0 60.0 ;
+  END
+END ip_block
+"""
+    _, conflicts = g.merge_macro_obs(
+        [g.parse_macro_obs(one), g.parse_macro_obs(two)],
+        ["m3.lef", "m5.lef"])
+    assert len(conflicts) == 1, conflicts
+    c = conflicts[0]
+    assert c["master"] == "ip_block"
+    assert {c["kept_from"], c["other_from"]} == {"m3.lef", "m5.lef"}, c
+    assert c["kept_rect_count"] < c["other_rect_count"], (
+        "the floor must win — on a blocking gate an over-report is a false "
+        "accusation, an under-report is a gap")

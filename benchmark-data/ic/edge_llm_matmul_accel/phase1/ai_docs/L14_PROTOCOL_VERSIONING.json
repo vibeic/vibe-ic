@@ -1,7 +1,0 @@
-{
-  "doc_class": "protocol_versioning",
-  "bus": "Wishbone B4 classic",
-  "version": "1.0",
-  "schema_version": 2,
-  "ic_name": "edge_llm_matmul_accel"
-}
