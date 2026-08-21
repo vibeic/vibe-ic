@@ -46,9 +46,9 @@ cell that should RUN lands on MISSING/FAIL on a bare tree — never on a skip.
 """
 from __future__ import annotations
 
+import functools
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -788,3 +788,205 @@ def test_an_IP_does_not_owe_the_foundry_handoff_kit(tmp_path):
         "a macro is delivered, not fabricated; step 38 is the chip path's "
         "foundry deliverable and an IP should not be measured against it",
         result.status, result.reasons)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 6. THE PRODUCER SIDE — a gate that is wired over a program that is not
+# ══════════════════════════════════════════════════════════════════════════
+# Dimension 1 of the 63x8 matrix asks "is the GATE wired in" and answers it by
+# running `_evaluate_gate` for real. All five path steps pass it, because all
+# five declare a gate that dispatches a resolvable program.
+#
+# Nobody asks the other half. A step also declares `programs:` — the things
+# that PRODUCE its required_outputs — and a step whose producer is invoked by
+# nothing can never satisfy its own outputs. It reports MISSING forever, which
+# every reader charges to the design rather than to the flow.
+#
+# This section asks that half, through the same AST discipline D1 uses: string
+# constants and imports in the shipped programs, docstrings excluded, plus the
+# flow's own gate clauses as a second channel (a program can legitimately be
+# both its step's producer and its step's gate).
+def _gate_program_names() -> set:
+    import shlex
+    out = set()
+    for step in _steps():
+        for command in _gate_commands_of(step):
+            out.add(shlex.split(command)[0])
+    return out
+
+
+def _gate_commands_of(step: dict) -> list:
+    out = []
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            if isinstance(sub, (list, dict)):
+                walk(sub)
+        for key in FCC._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if isinstance(spec, str):
+                out.append(spec)
+    walk(step.get("gate"))
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _dispatch_index() -> dict:
+    """One parse of every shipped program, into {module_name: {targets it
+    could execute}}.
+
+    Built once because the naive form — re-walking the whole `programs/`
+    tree per producer — costs minutes on a 13000-line module and turns a
+    guard into something nobody runs.
+
+    A target is a `"<name>.py"` string constant (how every runner in this tree
+    spells a subprocess target) or an imported module name. DOCSTRINGS ARE
+    EXCLUDED and that exclusion is load-bearing: `pad_assignment_gen`'s
+    docstring contains the line `programs/pad_ring_gen.py    reader`, and a
+    text scan counts that as an invocation of the one producer in this list
+    that has none.
+    """
+    import ast
+    index = {}
+    for f in sorted(PROGRAMS.glob("*.py")):
+        try:
+            tree = ast.parse(f.read_text())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        docstrings = set()
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)) and body:
+                first = body[0]
+                if (isinstance(first, ast.Expr)
+                        and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)):
+                    docstrings.add(id(first.value))
+        targets = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docstrings
+                    and node.value.endswith(".py")):
+                targets.add(node.value.rsplit("/", 1)[-1][:-3])
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    targets.add(a.name)
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    targets.add(node.module)
+        index[f.stem] = targets
+    return index
+
+
+def _executable_references(name: str) -> list:
+    """Shipped programs that could EXECUTE `programs/<name>.py`."""
+    return sorted(caller for caller, targets in _dispatch_index().items()
+                  if caller != name and name in targets)
+
+
+def _producer_channels() -> dict:
+    """(step, program) -> the channels that can invoke it. Measured, not read."""
+    gates = _gate_program_names()
+    out = {}
+    for sid, step in _path_steps().items():
+        for prog in (step.get("programs") or []):
+            chans = []
+            refs = _executable_references(prog)
+            if refs:
+                chans.append("invoked by " + ", ".join(refs))
+            if prog in gates:
+                chans.append("is a gate clause of its own step")
+            out[(sid, prog)] = chans
+    return out
+
+
+#: MEASURED on origin/main 8a9c5ad9e (v1.11.51). Kept as data so a change in
+#: EITHER direction — a producer wired up, or a wired one lost — arrives as a
+#: red cell naming which.
+WIRED_PRODUCERS = {
+    ("15.5ic", "pad_assignment_gen"),
+    ("26.5ic", "die_finishing_gen"),
+    ("37.5ic", "tapeout_docs_gen"),
+    ("37.5ip", "digital_hardmacro_gen"),
+}
+UNWIRED_PRODUCERS = {
+    ("0.5ic", "submission_template_ingest"),
+    ("0.5ic", "tapeout_declaration_gen"),
+    ("15.5ic", "pad_ring_gen"),
+}
+
+
+def test_the_producer_wiring_of_every_path_step_is_what_it_was_measured_to_be():
+    channels = _producer_channels()
+    assert set(channels) == WIRED_PRODUCERS | UNWIRED_PRODUCERS, (
+        "the set of programs the path steps declare has changed", sorted(channels))
+    wired = {k for k, v in channels.items() if v}
+    assert wired == WIRED_PRODUCERS, (
+        "a path step's producer wiring changed. If a producer was WIRED UP, "
+        "move it into WIRED_PRODUCERS and delete the matching xfail below — "
+        "that is the fix landing. If a wired one went dark, that is a "
+        "regression and the step it belongs to can no longer produce its own "
+        "outputs.",
+        {"now wired": sorted(wired), "was": sorted(WIRED_PRODUCERS)})
+
+
+def test_the_two_producers_of_the_router_file_are_the_unwired_ones(tmp_path):
+    """WHY THE THREE MATTER, and why one of them matters most.
+
+    Step 0.5ic's two programs are the ONLY things in this flow that write a
+    router file: `tapeout_declaration_gen` writes `SELF_TAPEOUT.txt` and
+    `submission_template_ingest` writes `NO_TEMPLATE.txt` or ingests
+    `slots/*.yaml`. Every other path step conditions on one of those files.
+
+    Both are unwired. So no run of this flow reaches a router file by running
+    it, which puts every design in the `no_router_file` class of this matrix —
+    the row where 15.5ic, 26.5ic, 37.5ic and 37.5ip ALL report
+    SKIPPED-CONDITION. That is the same silent skip the chip-path work landed
+    to close, one layer up: the condition was repaired and the thing that
+    satisfies it was never dispatched.
+
+    This test PASSES. It is the evidence for the expectation below, and it
+    goes red the moment either producer acquires an invoker — which is the
+    moment somebody should re-read the xfail.
+    """
+    unwired = {p for (_s, p), v in _producer_channels().items() if not v}
+    assert {"submission_template_ingest", "tapeout_declaration_gen"} <= unwired
+
+    # And the consequence, driven rather than argued: a project that ran
+    # everything this flow can dispatch still has no router file.
+    proj = _no_router(tmp_path / "proj", PDK_WITH_SHUTTLE)
+    for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip"):
+        assert _state(proj, sid) == SKIPPED, sid
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "MEASURED GAP. Three programs a path step DECLARES under `programs:` are "
+    "invoked by nothing in the shipped tree: `submission_template_ingest` and "
+    "`tapeout_declaration_gen` (step 0.5ic) and `pad_ring_gen` (step 15.5ic). "
+    "Measured by AST over every `programs/*.py` — string constants and "
+    "imports, docstrings excluded — plus the flow's own gate clauses as the "
+    "second channel. The other four producers are invoked: two by "
+    "`phase3_one_shot_runner` and two as their own step's gate clause. "
+    "Dimension 1 of the 63x8 matrix does not cover this: it asks whether the "
+    "GATE is wired and answers by running `_evaluate_gate`, and all five path "
+    "steps pass it. NOT FIXED HERE ON PURPOSE: wiring a producer into a "
+    "one-shot runner changes what a real run does and blocks on, which the "
+    "repo's own gates call the flow owner's call, and the "
+    "`flow-change-acceptance` standard for it (bidirectional negative "
+    "control, corpus sweep, BLOCKING-vs-ADVISORY declaration) is more than a "
+    "test branch should decide. See RESULT.md, REQUESTS TO THE LANDER."))
+def test_no_path_step_declares_a_producer_that_nothing_can_invoke():
+    unwired = {k for k, v in _producer_channels().items() if not v}
+    assert not unwired, (
+        "a step whose producer nothing dispatches cannot satisfy its own "
+        "required_outputs; it reports MISSING for every design forever, and "
+        "every reader charges that to the design", sorted(unwired))
