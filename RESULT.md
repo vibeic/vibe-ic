@@ -1,534 +1,488 @@
-# PPA layer — a test suite for the LAYER, run, and what it found
+# RESULT — the feasibility gate can answer
 
-**Base:** `e36d81c0a` (v1.11.33), cut from `origin/main` at 2026-08-21 10:34 UTC+8.
-**Branch:** `agent/jppa-tests`. **Worktree:** `/home/reyerchu/_jppatests`.
-**Version:** not bumped, per the brief. **Protected paths:** none touched (proof below).
+**Branch** `agent/jppafeas-feasibility-producers`
+**Base** `origin/main` @ `e36d81c0a` — *v1.11.33*, cut fresh, worktree clean at cut.
+**Commit** `925ecd555` — 16 files, +2492 / −49.
 
-Every number here traces to a command in this file. Where I did not measure
-something I have written `NOT_MEASURED` rather than a default.
-
----
-
-## 0. One thing I could not get
-
-`ppa-e2e/FINDINGS.md` **does not exist** anywhere I can reach. Searched:
-
-```
-$ git ls-tree -r --name-only origin/main | grep -i 'ppa-e2e\|FINDINGS'   # nothing
-$ git log --all --oneline --diff-filter=A -- '*ppa-e2e*'                 # nothing
-$ find /home/reyerchu -maxdepth 6 -type d -name 'ppa-e2e'                # nothing
-$ grep -rl "required_views" /home/reyerchu --include=*.md                # nothing
-$ cd ~/benchmark-data && git ls-tree -r --name-only origin/main | grep -i ppa   # nothing
-```
-
-So I have the **five findings your brief names** (F-2, F-4, F-5, F-10, F-11) and
-**not the other thirteen**. All five are reproduced below with a command. For the
-thirteen I do not have, I drove the layer myself and found **six more defects**,
-which are in §2 — but I cannot tell you which of them are your F-1/F-3/F-6…, and
-I have not written tests for findings I have never read. **Send me the file and
-I will finish that half.**
+> **Note on the base.** The brief said `v1.11.19..v1.11.47` landed this morning.
+> `git fetch origin main` (twice, verified against `git ls-remote`) puts
+> `origin/main` at `e36d81c0a`, **v1.11.33**. I cut from what the remote actually
+> points at and re-fetched before pushing. If v1.11.47 exists somewhere I could
+> not see it, this branch needs a rebase and the A/B below needs re-measuring —
+> an A/B is only as current as its base.
 
 ---
 
-## 1. The A/B, by TEST ID
+## The headline, as one measurement
 
-Counts are given because you asked for them, but the sets are what matter — and
-the sets are disjoint in the right direction.
-
-| | base `e36d81c0a` | branch | delta |
-|---|---:|---:|---|
-| `test_*ppa*` files | 46 | 53 | +7 |
-| collected | 1219 | 1362 | +143 |
-| **FAILED** | **33** | **0** | −33 |
-| passed | 1185 | 1324 | |
-| skipped | 1 | 14 | +13, all declared (§4) |
-| xfailed | 0 | 24 | +24, all `strict=True` pins (§3) |
+Same candidate document, same records, two gates:
 
 ```
-$ python3 -m pytest $(ls programs/tests/test_*ppa* ) -q -p no:randomly --tb=no -rf
-  base   33 failed, 1185 passed, 1 skipped in 56.96s
-  branch 1324 passed, 14 skipped, 24 xfailed in 62.47s
+$ python3 ppa_feasibility_check.py --candidates cand_full.json
+BASE  rc=2   baseline: UNDETERMINED
+             setup:FEAS_METRIC_ABSENT  hold:FEAS_METRIC_ABSENT  drv:FEAS_METRIC_ABSENT
+             drc/lvs/antenna/ir/em/equivalence: FEAS_VIEWS_NOT_DECLARED, FEAS_METRIC_ABSENT
+
+MINE  rc=0   baseline: FEASIBLE
 ```
 
-By test ID:
+A candidate can now be FEASIBLE, so the head-to-head's "both arms feasible"
+condition can hold, so a PPA comparison can be defended.
 
-```
-$ comm -23 ab_base.txt ab_mine.txt | wc -l     # red on base, green on branch:  33
-$ comm -13 ab_base.txt ab_mine.txt | wc -l     # green on base, red on branch:   0
-```
+**The timing records in that document are what `_ppa/timing.py` emits TODAY**
+(`worst_slack`, no `wns`) — this is reachable on run trees that already exist,
+not only on runs made after the emitter fix.
 
-**Every one of the 33 base failures is accounted for, and I introduced no new red.**
-Three were fixed by the `ppa_contract_check` repair in §2.5; the other 30 were one
-root cause, §4.
+**And the base cannot reach it under any view declaration.** I gave it its best
+shot, twice:
 
-Wider net — the 61 files that touch any patched program, run serially:
-
-```
-$ python3 -m pytest <61 files> -q -p no:randomly --tb=no -rf
-  1 failed, 1641 passed, 14 skipped, 24 xfailed in 107.32s
-```
-
-The one failure is `test_not_verified_tier.py::test_no_new_undeclared_infrastructure_skip_appears`
-and it is **red on pristine base with byte-identical output**, naming
-`test_trusted_pytest_entry.py` — not a file of mine. Not caused by this branch;
-not fixed by it either.
-
-### The same run on a fully-provisioned host
-
-The host ships `jsonschema 3.2.0`. I built a throwaway venv with `jsonschema
-4.26.0` + `pyyaml` (in the scratchpad; **nothing installed on your machine**) to
-find out whether the 30 base reds were hiding real defects:
-
-```
-$ <scratchpad>/venv/bin/python -m pytest <61 files> -q -p no:randomly --tb=no -rf
-  1 failed, 1672 passed, 5 skipped, 24 xfailed in 103.60s
-```
-
-**They were not.** With a real draft-2020-12 validator the schema layer is clean:
-`test_ppa_contract.py` + `test_ppa_contract_fixtures.py` +
-`test_ppa_metrics_schema_agreement.py` = **92 passed**. The 33 were a host
-condition reported as code failures.
-
----
-
-## 2. What I changed, and why, per item
-
-Seven fixes. Every one has a mutation arm in §5 that I **ran**.
-
-### 2.1 The bad-invocation arm — 12 of 14 CLIs, measured
-
-```
-$ for f in programs/ppa_*.py; do out=$(python3 "$f" --this-flag-does-not-exist 2>&1); echo "$? $f"; done
-  12 of 14 exited 2;  ppa_feasibility_check and ppa_pareto_check exited 3
-```
-
-`PPA_INTERFACES.md` §1 gives 3 to a bad invocation. `argparse` exits **2**, which
-here means UNDETERMINED. That is not pedantry: §1 also says rc=2 must never be
-mapped to PASS, and the way a flow gate honours that is to treat 2 as "nothing to
-check here" — so a misspelled flag reads as a step with nothing to do and the run
-carries on green having measured nothing.
-
-### 2.2 …and the trap its obvious fix walks into
-
-The two programs that had already fixed 2.1 did it with a bare
-`except SystemExit: return RC_BAD_INVOCATION`. `--help` is also `SystemExit`, with
-code 0:
-
-```
-$ for f in programs/ppa_*.py; do python3 "$f" --help >/dev/null 2>&1; rc=$?; echo "$rc $f"; done
-  ppa_feasibility_check.py  rc=3
-  ppa_pareto_check.py       rc=3
-```
-
-Asking a program what its flags are is not a bad invocation. **These two are the
-same defect from opposite sides, which is why fixing either alone produces the
-other** — so both are fixed in one place.
-
-**New file `programs/_ppa/cli_exit.py`** (sha256 `52bc4f47…`, 4.0 KB) — reads
-`exc.code` rather than catching the type: 0/None → rc 0, anything else → rc 3.
-Applied to the **11 programs this branch owns**. Also `cli_exit.refuse()` for a
-usage error found *after* parsing (`ap.error(...)` exits 2 as well) — 5 sites.
-
-### 2.3 `ppa_predict_aggregate.py --cell-count 0` → rc **0**, publishing zeroes
-
-```
-$ python3 programs/ppa_predict_aggregate.py --cell-count 0 ; echo rc=$?
-  - **Estimated area**: 0.0 um² (0.0000 mm²)
-  - **Estimated power**: 0.00 uW
-  rc=0
-```
-
-§2: "No numeric sentinels. `0`, `-1` and `""` never mean 'not measured'." A cell
-count of zero is not a design with no cells; on every path that reaches this CLI
-it is a count that was never taken. **Now rc=2 `[CANNOT CHECK]`, and no estimate
-is printed at all** — a refusal that still prints the number gets the number
-picked up downstream.
-
-### 2.4 `ppa_metric_extract.py` → rc **0** over an empty record set
-
-```
-$ echo '{"schema":"vibeic.ppa.metric_bundle.v1","records":[]}' > b.json
-$ python3 programs/ppa_metric_extract.py --records b.json ; echo rc=$?
-  ppa_metric_extract: 1 document(s) named, 1 read, 0 unreadable, 0 record(s) indexed, 0 refused
-  rc=0
-```
-
-The program **already** guarded `n_docs == 0`, with the comment *"An empty bundle
-would read as a clean run."* A document that WAS read and holds zero records
-produces the identical empty bundle. Same sentence, one level in, unguarded.
-Now rc=2 with `code: EMPTY_RECORD_SET`.
-
-### 2.5 `ppa_contract_check.py` → an internal error reported as **rc=1**
-
-```
-$ python3 programs/ppa_contract_check.py --contract c.json ; echo rc=$?
-  AttributeError: module 'jsonschema' has no attribute 'Draft202012Validator'
-  rc=1
-```
-
-The program guards `ImportError` on jsonschema, honestly, with *"This is not the
-schema passing."* It does not guard **jsonschema present but older than 4.0**, so
-the `AttributeError` escapes `raise SystemExit(main())` and the process exits
-**1** — which §1 reserves for *a finding about the design*. **A missing library was
-indistinguishable from a broken contract**, and unlike a 2 (which a caller may
-skip) a 1 stops a sign-off with a finding nobody can act on.
-
-Fixed two ways: the `hasattr` guard now returns an UNDETERMINED `PPA-C-010`
-finding naming the version, and `__main__` catches any unexpected exception and
-returns 3. This alone turned **3** of the 33 base reds green.
-
-### 2.6 `ppa_head_to_head_check.py` — an honest refusal with the wrong marker
-
-Printed `VACUOUS: … This is NOT a pass … rc=2.` — correct in English, but §1
-requires `[CANNOT CHECK]` / `[REFUSE]` **so that a 2 can be found by grep**. Marker
-added. (See §5, arm 6: my first version of this arm **could not go red**.)
-
-### 2.7 `ppa_area_threshold_check.py` — bare `ERROR:` on four refusals
-
-Three "artefact not found" cases printed `ERROR: …` and returned 2 with no marker.
-Marker added. The fourth, *"provide `--threshold-pct` or `--prompt`"*, is a
-statement about **argv**, not about an artefact — moved from rc=2 to rc=3.
-
-### 2.8 Three tests that were wrong, fixed as tests
-
-Not relaxed — tightened to the contract. Each is a case where the test pinned a
-*mechanism* instead of the *behaviour*, and its own docstring already stated the
-right intent.
-
-| test | pinned | now |
+| candidate document | BASE | MINE |
 |---|---|---|
-| `test_ppa_page_claim_check::test_bad_invocation_is_not_a_design_finding` | `SystemExit.code == 2  # argparse's own; never 1` | `main([]) == 3` |
-| `test_ppa_report_gen::test_bad_invocation_is_not_a_design_finding` | same | same |
-| `test_v1_0_85_issue768…::test_acceptance_reference_flag_in_help` | `pytest.raises(SystemExit)` | `main(["--help"]) == 0` **and** the `--reference` grep |
+| `required_views_by_axis` per axis | rc=2 UNDETERMINED | **rc=0 FEASIBLE** |
+| one global `required_views` = the two timing corners | rc=2 | rc=2 |
+| one global `required_views` = `{stage}` only | rc=2 | rc=2 |
 
-The first two say *"rc=1 is a claim about silicon (§1). Arg errors must not borrow
-it"* and then assert **2**, which is argparse's default and §1's UNDETERMINED. The
-intent was right; the value was the wrong one of the two remaining codes. The
-third asserted that `main(["--help"])` *raises*, which is a fact about argparse's
-internals — the issue's acceptance command greps the help text, and that is now
-asserted directly, plus the exit code, which is strictly more than before.
+The last two rows matter as much as the first. **Per-axis views are load-bearing,
+and nothing here made UNDETERMINED disappear by widening what counts as
+satisfied** — under a global view declaration my gate still refuses, exactly as
+the base does.
 
 ---
 
-## 3. The new suite — 7 files, 165 tests
+## Per item
 
-Named `test_ppa_layer_*` so they are addressable as a set. **Every arm is
-parametrized by program or metric name**, so a red names the thing, not an index.
+### F-3 / R3 — seven axes had no producer
 
-| file | tests | green | pinned |
-|---|---:|---:|---:|
-| `test_ppa_layer_exit_contract.py` | 72 | 69 | 3 |
-| `test_ppa_layer_producer_consumer.py` | 36 | 24 (+2 skip) | 10 |
-| `test_ppa_layer_backend_seam.py` | 17 | 12 | 5 |
-| `test_ppa_layer_internal_error_is_not_a_finding.py` | 17 | 17 | 0 |
-| `test_ppa_layer_vacuous_population.py` | 13 | 12 | 1 |
-| `test_ppa_layer_feasibility_view_scope.py` | 6 | 3 | 3 |
-| `test_ppa_layer_timing_view_dedup.py` | 4 | 2 | 2 |
+**New:** `_ppa/signoff.py` (library) + `ppa_signoff_records.py` (CLI, rc 0/2/3).
 
-Two structural choices, both because the alternative is how coverage rots:
+It reads the run's own sign-off artefacts and emits `vibeic.ppa.metric.v1`
+records with real provenance (path + sha256 + parser + parser sha256). **Six of
+the seven now have a producer.** DRV does not — see "what I could not settle".
 
-* **Populations are DISCOVERED, not listed.** `ppa_*.py`, `_ppa/backends/*.py`,
-  `area.AREA_METRICS`, `feasibility.DEFAULT_AXES` — a fifteenth program or a
-  sixth backend is covered the day it lands.
-* **Every discovered population has its size ASSERTED FIRST.** A glob that finds
-  nothing makes every parametrized arm below vacuously green, which is this
-  suite's own subject matter turned on itself.
-
-### 3.1 The five E2E findings — reproduced, then pinned
-
-Each is `xfail(strict=True)`: when the owning lane lands its fix the test
-**XPASSes and the file goes red**, forcing the pin out. A pin that survives its bug
-is a second bug, and it is the one that hides the first. §5 proves this fires.
-
-**F-2 — `--backend` drives no backend, including the ones that exist.**
-All 5 shipped backends and a misspelling return the same rc=2. The refusal is
-*honest* (the module comment says an empty bundle for an undriven tool is exactly
-the defect the contract removes), so I pinned only the "actually extracts"
-arm — and added two arms that must stay green, because the wrong fix here is
-"return 0 and write an empty bundle".
-*Why no per-module test saw it: the flag was never invoked at all.*
-
-**F-4 — three producers emit envelopes the canonical consumer REFUSES.**
-Measured, driving each producer from its **own shipped fixtures**:
-
-| producer | result |
+| metric | artefact it is read from |
 |---|---|
-| `power.metric_records` | **48 of 48 records refused** — `SCOPE_SENTINEL: scope.liberty is None` |
-| `timing.timing_rows` | every row refused; **`MetricIndex.add` raises** `scope.stage is required` + 4× SCOPE_SENTINEL |
-| `area.area_record` | 3 of 14 metrics refused (that is F-5) |
+| `physical.drc.violations` | `reports/phase3/drc_signoff.json` + `reports/phase3/drc_vacuous.json` |
+| `physical.lvs.verdict` | `reports/phase3/lvs_verdict.json` |
+| `physical.antenna.violations` | `reports/phase3/antenna.json` |
+| `power.ir.violations`, `power.ir.worst_drop_v` | `reports/phase3/ir_drop.json` |
+| `reliability.em.violations`, `reliability.em.worst_ratio` | the current-density screen's report |
+| `equivalence.verdict` | `reports/lec.json` |
 
-*Why no per-module test saw it:* `test_ppa_power.py` checks power's rules against
-power's records; `test_ppa_metrics.py` checks metrics' rules against records built
-by `metrics.measured()`. **Not one test ever hands a producer's output to
-`metrics.validate`** — so the only property that makes the shared `schema` string
-mean anything was tested by nobody.
+On a closed run: **6 axes SATISFIED** where the base had `FEAS_METRIC_ABSENT` on
+all seven.
 
-The tests deliberately do **not** assert which side is right. Whether `liberty:
-None` should be dropped or `validate` should accept a declared-absent scope field
-is the record lane's call, and either makes them green.
+**It invents nothing.** Every reader answers one of exactly two ways — the
+artefact states the fact, or `NOT_MEASURED` with a reason naming what is missing.
+There is no third branch. Measured refusals, each one a shipped test:
 
-**F-5 — the area lane's declared unit and the metrics lane's required unit disagree.**
+* **DRC** applies the three-way discriminator from
+  `fixtures/ppa/drc/zero_three_ways/expected.json` — as *that decision table*,
+  driven in the tests by the fixture's own `expected.json` rather than by numbers
+  I wrote. The report carries two of the three facts; the third (did the deck run
+  over geometry) is not in the report and never can be, so it comes from
+  `drc_vacuous_pass_check`'s artefact. A run with no vacuity artefact is
+  NOT_MEASURED, not a clean.
+* **Antenna** over an incompletely routed design → NOT_MEASURED. Null counts are
+  not read as zero.
+* **IR** with no declared `budget_pct_vdd` → no violation count exists (there is
+  no line to be over). The drop itself is still MEASURED, for the axis's
+  contract-limit proof.
+* **Equivalence** proving RTL against a netlist that names no post-layout netlist
+  → NOT_MEASURED with the gate netlist quoted. A *failed* LEC is MEASURED, not
+  NOT_MEASURED: reporting a real finding as "could not check" hides it.
+* **LVS** verdicts are reported verbatim. `INCOMPLETE` and `WARN` are not mapped
+  to failures — they are verdicts the axis does not accept, which is a different
+  sentence and a different fix.
+
+**Corner-independent facts are emitted ONCE.** The reference bridge had to emit
+each physical fact once per required timing view — N records carrying one source
+hash, into an index whose entire job is to notice when two numbers claim to be
+the same fact — purely because `required_views` was global. F-11 removed the
+need; a test asserts the duplication does not come back.
+
+**`scope.stage`** is required by `_ppa/metrics.py` and no artefact states one. It
+is not guessed: each source declares its stage together with a `stage_basis`
+sentence naming the input that makes it that stage, and both travel into the
+record's `provenance`. A reader can check the claim instead of discovering later
+that it was a guess.
+
+### F-17 — the EM report supports no violation count
+
+The finding is right about `reports/phase3/em.json`: segment count and peak
+current, **no violation count and no declared limit**. But the fact is not
+missing from the flow — **`em_current_density_check.py` already computes it**,
+screening every segment against the PDK's Jmax and listing offenders. Its
+`offender_count` is `reliability.em.violations`, and its `summary.worst_utilization`
+(J/Jmax) is *exactly* `reliability.em.worst_ratio`, unit `1`.
+
+So the honest answer is better than "the artefact does not carry the fact": the
+artefact that carries it is a different one, and it ships. `em.json` **alone**
+still yields NOT_MEASURED, and the screen's own `SKIPPED` verdict (report
+present, Jmax present, nothing mapped) is carried through as NOT_MEASURED with
+the screen's message — never as a clean.
+
+### F-8 / R9 — power records cannot satisfy their own REQUIRED_SCOPE
+
+`_ppa/power.py` now fills `process`, `voltage_v` and `temperature_c` from
+`opensta.parse_liberty_pvt(report["liberty"])` — the parser the same lane already
+ships, against the file name the record already carries.
+
+**The half that matters is what it must not do.** `check_scope_parity` tests
+required keys for *presence*, so `process: None` would satisfy the key check and
+then compare equal to another `None` — two records that say nothing about their
+corner, passing as the same corner. Worse than the refusal it replaces. So **only
+what the parser resolved is emitted**; an unresolvable or *ambiguous* stem leaves
+the key out and records the parser's own gap reason in `provenance`. And
+`check_scope_parity` now refuses a present-but-null required key outright
+(`SCOPE_SENTINEL`).
+
+`mode` is still not emitted — no power artefact states an operating mode. The
+refusal is correct and it stays; the caller supplies it through the existing
+`extra_scope` hook. See requests to the lander.
+
+### F-11 — `required_views` is global
+
+**The decision, since the brief asked for one rather than a patch:**
+
+**Yes, an unmeasured required view should sink the axis, and that is unchanged.**
+A corner nobody ran is a corner nobody ran. What was wrong was not the strictness
+— it was that one list was applied to nine axes measured in *different scope
+namespaces*. Setup and hold sign off across process corners; DRC, LVS, antenna,
+IR, EM and equivalence are single measurements over one database and have no
+process corner at all. A contract declaring its timing corners therefore also
+demanded them of DRC, leaving DRC permanently uncovered unless its producer
+faked N scopes.
+
+So: `FeasibilityPolicy.required_views_by_axis`, falling back to the global
+`required_views` for any axis it does not name — a contract written before this
+field adjudicates *identically* (tested). There is no spelling that means "any
+view will do": an axis named with an **empty** list is UNDETERMINED, exactly as
+an undeclared global list is (tested). A key naming no known axis is dropped
+rather than silently honoured (tested).
+
+**And the record now SAYS which views were measured**, so a reader can re-decide.
+Every `AxisResult` publishes `coverage`, one row per declared view:
+
+| state | meaning | the fix it points at |
+|---|---|---|
+| `MEASURED` | a record covers the view and the proof was evaluated | — |
+| `NOT_MEASURED` | a record covers the view and could not support the metric — **with the artefact's own reason and the source path** | a better artefact |
+| `NO_RECORD` | nothing covering this view names the metric | a run |
+
+Those last two used to be one sentence with no view named at all. The coverage is
+published on SATISFIED axes too, so questioning the view set does not require
+making the axis fail first. `ppa_feasibility_check.py` also publishes
+`views_used_by_axis` — what the gate *resolved*, not only what the contract wrote.
+
+### F-15 — no STA artefact prints a hold `wns`
+
+The brief predicted the honest answer and it was right, and it turned out to be
+**both** halves.
+
+**The emitter.** `phase3_one_shot_runner.py`'s two multi-corner sign-off stanzas
+— the ones that decide setup at the slow corner and hold at the fast one — emit
+`report_worst_slack` and `report_tns` and **never `report_wns` at all**. So
+`timing.hold.wns_ns` was NOT_MEASURED on every view of every run, for every
+design: the hold axis was structurally unprovable, and that is a property of the
+flow, not of any chip. Both stanzas now ask, through `_report_wns_tcl(rpt_c, flag)`
+(`-max` for setup, `-min` for hold), guarded by `catch` in the runner's own
+established idiom so a build that rejects the flag cannot abort a sign-off script
+that has already written its setup half. On failure the reason is *written into
+the report* and no marker appears, so an absent wns stays visible as a refusal
+rather than becoming a silent skip.
+
+`_ppa/timing.py` will not derive the wns from the worst slack, and **it is right
+not to** — §3 says hash the value you parsed. I did not touch that.
+
+**The axis.** The emitter fix only helps runs made after it. The tool already
+prints the fact under its other name, on every run that exists — so
+`timing.{setup,hold}.worst_slack_ns` is admitted as a proof group. This is **not
+a relaxation** and I did not take that on trust:
 
 ```
-area.proxy.cell_count       area says 'cells'      metrics requires 'count'
-area.proxy.wire_count       area says 'wires'      metrics requires 'count'
-area.proxy.wire_bit_count   area says 'wire_bits'  metrics requires 'count'
-```
-3 of 14. Each module is self-consistent; the pair is not.
+wns = min(0, worst_slack)          (_ppa/timing.py's own header;
+                                    measured in tests/test_ppa_timing.py, where
+                                    one view reports worst slack 0.19 beside wns 0.00)
 
-*A correction to my own first probe:* I initially reported power as worse still,
-`power.total_mw` carrying `unit="W"`. That metric name is mine, not the
-producer's — power really emits `power.total_w`, and all four of its names agree
-with their unit. The real power defect is the scope sentinel above.
-
-**F-10 — every timing row emitted twice from byte-identical files.**
-`timing.discover_reports` de-duplicates by **resolved path**, and a Phase-3 tree
-carries the same sign-off report under `phase3/stage3/sta/` and
-`reports/phase3/sta/`. Measured on two copies with one sha256:
-
-```
-rows: 8      distinct row_digest: 8      distinct (metric, scope): 4
-metrics.record_key collisions: 4 of 4
+wns >= 0  <=>  min(0, worst_slack) >= 0  <=>  worst_slack >= 0
 ```
 
-*Why no per-module test saw it, and this is the interesting half:* the obvious
-assertion **does not fire**. `row_digest` covers `source.path`, so the two copies
-hash differently and `len(set(digests)) == len(rows)` passes **with the bug
-present**. The duplication is visible only at `metrics.record_key` — the key the
-timing lane never tested and the metrics lane never fed timing rows to. I left a
-green test asserting that `row_digest` cannot see this, so the next author does
-not reach for the instrument that already failed.
+Same predicate, so it admits no candidate the wns proof would refuse. A test
+sweeps both signs and the boundary over both checks and requires the two verdicts
+to agree. Three more tests hold the line: a negative worst slack still VIOLATES;
+a no-paths view (worst_slack left at INF, which `_ppa/timing.py` already emits as
+NOT_MEASURED) is **not** rescued; and a violation in one group is not outvoted by
+a satisfied other group.
 
-**F-11 — `required_views` is global, so one view poisons every axis.**
-The widest blast radius of the five. One tuple is applied to all nine axes; six of
-them (drc, lvs, antenna, ir, em, equivalence) are not per-corner facts at all.
-Measured on a candidate **clean on all nine axes and measured at both declared
-corners**:
+### F-18 / R12 — `derive_feasibility` requires a count, and LVS is not a count
 
-| `required_views` | verdict | axes SATISFIED |
-|---|---|---:|
-| `()` | UNDETERMINED | 0/9 |
-| one stage-only view | **FEASIBLE** | **9/9** |
-| the two real STA corner views | UNDETERMINED | **0/9** |
+**I changed the shape rather than encoding "matched" as 0.** A check now states
+its result as `violations` (a count), `status` (`CLEAN`/`VIOLATIONS`/`NOT_CHECKED`)
+or `verdict` (a literal). The `comparison.v2` schema documents all three, with an
+`anyOf` requiring at least one, plus `top_cell` — because a match between two
+circuits nobody named is not a fact about this design.
 
-The hard promotion gate returns FEASIBLE **only** when `required_views` holds a
-single view so weak every axis satisfies it. Declare what a sign-off actually
-declares and it can pass nothing — a gate that cannot be satisfied, which is the
-mirror of a gate that cannot fail and just as useless. Even setup and hold poison
-each other: a setup record can never cover the hold view.
+The verdict accept-sets are **sourced from the accept sets `_ppa/feasibility.py`
+declares on the matching axis**, so there is one statement in the repository of
+what an LVS pass looks like — and a test asserts the two agree rather than
+trusting me to keep them in step.
 
-*Why no per-module test saw it:* the feasibility suites exercise one axis at a
-time with `required_views` matched to that axis. The defect is a property of the
-**cross product**, and no test ever put a timing view and a DRC record in one
-policy.
+Consequences, each tested:
+* `status: CLEAN` everywhere → FEASIBLE (was NOT_CHECKED, on a record valid
+  against the shipped schema).
+* `lvs: {verdict: MATCH, top_cell: core}` → FEASIBLE, with no count written about
+  a verdict.
+* `lvs: {verdict: MISMATCH}` → INFEASIBLE, not merely unchecked.
+* `status: NOT_CHECKED` **outranks** a leftover count — an explicit "I did not
+  check this" must not be resurrected.
+* A `verdict` on a check with no verdict spelling (`drc: {verdict: "looks fine"}`)
+  → NOT_CHECKED. Free text does not buy a pass.
+* **Contradiction:** `status: CLEAN` beside `violations: 3` → INFEASIBLE, and the
+  contradiction is named in `contradicting`. The measured count decides, because
+  this module's own stance is that an assertion beside its own evidence is where
+  a record has room to be dishonest cheaply.
+* Every count-shaped record written before this change derives identically.
 
-I also added a green test that empty `required_views` stays UNDETERMINED, so a
-fix for F-11 cannot quietly take out the rule it was built to enforce.
+### F-18, one layer down — the canonical shape could not express a verdict
 
-### 3.2 The four arms, over the whole layer
+Found while building F-3, and it was blocking it. `_ppa/metrics.validate()`
+hard-required a numeric value, so `physical.lvs.verdict` and
+`equivalence.verdict` — **two of the nine axes the gate proves** — were refused
+`VALUE_NOT_A_NUMBER` by the very shape the gate reads. That is not a rule about
+LVS; it is the record shape and the gate disagreeing about what a metric is.
 
-`POSITIVE / NEGATIVE / VACUOUS / BAD INVOKE` for all 14 CLIs, discovered by glob.
-The vacuous arm is split in two on purpose, because only the easy half was
-reachable before:
-
-* **absent** input — one shape for every program. Green across the layer.
-* **present, well-formed, and EMPTY** — a different document per program: a bundle
-  with `records: []`, a space with no lever, `candidates: []`, an empty corpus dir.
-  This is where §2.3, §2.4 and the pinned `ppa_search_run` finding live. The file
-  opens, the parse succeeds, the population is zero, and
-  `for x in population: check(x)` falls straight through to 0.
+`is_verdict_metric()` derives it from the name (last segment `verdict`), in the
+same style as `metric_domain`, so a new verdict metric needs no edit. A verdict
+record is held to everything else — a value is required, the empty string is not
+one (two empties compare EQUAL, so two circuits nobody compared would read as
+agreeing), and `unit` must be `"verdict"`. What it is exempt from is arithmetic,
+and `compare()` returns `NOT_NUMERIC` with **no `delta_b_minus_a` key** rather
+than `float()`-ing two strings: a delta of 0 printed for two verdicts reads as
+"no regression" on a pair that were never numbers. A *number* declaring
+`unit: "verdict"` is refused too.
 
 ---
 
-## 4. The 30 remaining base reds — one cause, and it is the same shape again
+## A/B, by TEST ID
 
-All 30 were `jsonschema 3.2.0` lacking `Draft202012Validator`.
-`test_ppa_metrics_schema_agreement.py` opens with an `importorskip` whose reason
-says, correctly:
-
-> *"This is a SKIP and not a pass: nothing here looked."*
-
-and covers exactly one of the two ways the validator can be unavailable. **That is
-the fourth time this layer guards one level too shallow** — with §2.4
-(`n_docs == 0`), §2.5 (`ImportError`), and `ppa_predict_aggregate` citing §2 on
-sentinels in its docstring while estimating from zero. That family is what
-`test_ppa_layer_internal_error_is_not_a_finding.py` is about.
-
-**New file `programs/tests/_ppa_jsonschema.py`** (sha256 `5eb6dbec…`): one
-capability check, `HAVE_DRAFT_2020_12`, plus a `needs_draft_2020_12` marker.
-Applied to the 9 affected tests in `test_ppa_contract.py`, the 1 in
-`test_ppa_contract_fixtures.py`, and as a module guard on the agreement file.
-
-**It routes through `not_verified_tier`, not through a bare `pytest.skip`.** A
-plain skip is the same lie one level up — `test_not_verified_tier.py` exists
-because an infrastructure-shaped skip that bypasses the tier is invisible to the
-roll-up (vibe-ic#1128). So the run now says:
+Same 33 files both sides, run **serially** (`-p no:randomly`, no `-n`), on
+`e36d81c0a` vs `925ecd555`:
 
 ```
-[NOT VERIFIED] 2 test(s) did NOT run their verification because what they verify
-WITH was out of reach. These are NOT passes …
-  2 x NOT_VERIFIED: jsonschema 3.2.0 has no Draft202012Validator (it arrived in
-  4.0) … — remedy: python3 -m pip install 'jsonschema>=4'
+BASE   6 failed, 774 passed, 11 skipped
+MINE   6 failed, 774 passed, 11 skipped      + 89 new tests, all green
+diff of the sorted FAILED test-ID lists: EMPTY
 ```
 
-An unanswered question with the command that answers it, instead of 30 reds that
-say nothing true or 30 quiet green ticks. And §1 confirms the questions are
-answerable: **92 passed** under the venv.
+The 6 reds are **identical test IDs on both sides** and are pre-existing:
+
+```
+tests/test_ppa_contract.py::test_a_clean_contract_passes_both_schemas
+tests/test_ppa_contract.py::test_a_clean_declaration_builds_and_validates
+tests/test_ppa_contract.py::test_a_clean_verdict_discloses_what_it_examined
+tests/test_ppa_contract.py::test_the_disclosure_moves_with_the_document
+tests/test_ppa_contract.py::test_the_embedded_run_manifest_is_validated_against_its_own_schema
+tests/test_ppa_contract.py::test_the_json_report_is_written_when_it_is_asked_for
+```
+
+Cause, measured on the pristine base:
+
+```
+[UNDETERMINED] PPA-C-010: jsonschema is not importable here, so the contract's
+               shape was NOT validated. This is not the schema passing
+$ python3 -c "import jsonschema"  ->  ModuleNotFoundError
+```
+
+That is the undeclared dependency the e2e lane also recorded. The refusal is
+correctly worded; the missing dependency is not mine and I did not paper over it.
+
+**New tests: 89, all green.**
+
+| file | tests | covers |
+|---|---|---|
+| `test_ppa_signoff_records.py` | 32 | F-3, F-17 — positive / negative / vacuous |
+| `test_ppa_feasibility_views_and_slack.py` | 29 | F-11, F-15 |
+| `test_ppa_verdict_and_scope_shapes.py` | 28 | F-18, F-8 |
+
+`tests/test_ppa_feasibility_separation.py::test_the_gate_has_no_numeric_margin_of_its_own`
+is an **exact** enumeration of `FeasibilityPolicy`'s fields, so adding
+`required_views_by_axis` required updating it. I extended the enumeration and the
+docstring (arguing why a per-axis view list is a view declaration and not a knob)
+rather than loosening the assertion to a filter — the exactness is the guard, and
+it still fails on any field added later.
+
+### Positive / negative / VACUOUS for the new checker
+
+```
+rc=0  a run that measured something              8 records, 5+ MEASURED
+rc=2  an empty run directory                     [CANNOT CHECK] + 8 NOT_MEASURED rows
+rc=3  a path that is not a directory / no args
+rc=1  NEVER returned — this program reports evidence; the gate makes findings
+```
+
+The rc=2 artefact is checked too, not only the exit code: it holds eight
+well-formed NOT_MEASURED records. A `--json` file that looked clean beside an
+honest exit code is a defect this repository has shipped before.
 
 ---
 
-## 5. Mutation arms — every fix, reverted, named test confirmed red
+## Mutation arms — 15 of 15
 
-Each was run: revert, run the named test, restore. `MUTATION APPLIED` was asserted
-by the mutating script itself, because a replacement that silently does not match
-proves nothing.
+Revert the fix → the named test goes RED → restore → GREEN. Script:
+`scratchpad/mutate.py`. Every row verified green-before *and* green-after, so a
+test that was already failing cannot be mistaken for a working arm.
 
-| # | fix reverted | named test | result |
-|---|---|---|---|
-| 1 | `cli_exit` returns argparse's 2 again | `…exit_contract::test_unknown_flag_is_bad_invocation_not_undetermined` | **11 failed** |
-| 2 | `cli_exit` back to bare `except SystemExit` | `…::test_help_is_not_a_bad_invocation` + `…::test_cli_exit_helper_tells_help_from_usage_error_by_code` | **12 failed** |
-| 3 | drop `report["records"] == 0` | `…vacuous_population::test_mutation_metric_extract_empty_bundle` | **1 failed** |
-| 4 | drop the `cell_count <= 0` guard | `…vacuous_population::test_mutation_predict_aggregate_zero_cells` | **1 failed** |
-| 5 | drop the `Draft202012Validator` guard | `…internal_error…::test_contract_check_never_exits_one_because_of_the_validator` + `…::test_contract_check_says_the_schema_was_not_applied` | **2 failed** |
-| 6 | drop the `[CANNOT CHECK]` marker | `…vacuous_population::test_a_present_but_empty_population_is_never_a_pass[7]` | **1 failed** |
-| 7 | revert markers to bare `ERROR:` | `…exit_contract::test_vacuous_refusal_is_marked[ppa_area_threshold_check.py]` | **1 failed** |
+| # | reverted | test that goes red |
+|---|---|---|
+| 1 | DRC: trust the report's bare zero | `test_the_drc_discriminator_is_the_fixture_s_table[ran_on_empty_layout]` |
+| 2 | EM: read `em.json`'s `MEASURED` as a clean | `test_the_em_measurement_artefact_alone_supports_no_count` |
+| 3 | LEC: accept a proof over any gate netlist | `test_a_pre_layout_lec_proof_is_not_post_route_equivalence` |
+| 4 | Antenna: read an unrouted check's zero as a zero | `test_an_antenna_check_over_an_unrouted_design_is_not_a_zero` |
+| 5 | Per-axis views: always fall back to the global list | `test_a_corner_independent_axis_no_longer_needs_the_timing_corners` |
+| 6 | Coverage: publish no rows | `test_the_coverage_separates_a_view_nobody_ran_from_one_that_could_not_be_read` |
+| 7 | Drop the hold `worst_slack` proof group | `test_the_hold_axis_is_provable_from_a_report_that_prints_only_worst_slack` |
+| 8 | Emitter: stop asking one stanza for the wns | `test_both_multi_corner_signoff_stanzas_ask_the_tool_for_the_wns` |
+| 9 | Deriver: require an integer count on every floor check | `test_status_clean_everywhere_derives_feasible` |
+| 10 | Deriver: let an assertion outvote a measured count | `test_a_self_contradicting_check_is_decided_by_the_measured_count` |
+| 11 | Record shape: a verdict is not a metric | `test_a_verdict_record_is_a_valid_canonical_record` |
+| 12 | Record shape: subtract two verdicts | `test_two_verdicts_are_never_subtracted` |
+| 13 | Power: do not fill the PVT | `test_the_pvt_the_liberty_names_reaches_the_scope` |
+| 14 | Power: emit the PVT keys as **null** when unresolved | `test_an_unreadable_liberty_stem_leaves_the_keys_OUT_and_says_why` |
+| 15 | Parity: accept a present-but-null required scope key | `test_a_present_but_null_required_scope_key_is_refused` |
 
-Each restored cleanly (`69 passed, 3 xfailed`; `12 passed, 1 xfailed`).
-
-### Arm 6 failed to fail, and that is the useful part
-
-The first time I ran it, the mutation applied (asserted), the marker verifiably
-vanished from the program's output, and **the suite stayed green: 14 passed.** My
-vacuous table reached `ppa_head_to_head_check` by the *absent-record* path, which
-is a different branch from the *empty-corpus* path where the marker lives. A guard
-that cannot go red is not a guard. I added the empty-corpus case (now case 7 of 8)
-and re-ran; it goes red. Both fixes for the two positive-control fixes
-(`test_mutation_metric_extract_still_passes_on_a_real_record`,
-`…_still_estimates_a_real_count`) exist for the mirror reason: an unconditional
-`return 2` would also have made the arms green.
-
-### The strict pins fire too
-
-Not asserted from pytest semantics — **run**. I simulated the record lane landing
-F-5 (`'cells' → 'count'` in `_ppa/area.py`):
-
-```
-6 failed, 24 passed, 2 skipped, 4 xfailed
-    …test_area_declared_unit_matches_the_unit_the_name_requires[area.proxy.cell_count]  … ×3
-    …test_area_record_is_accepted_by_the_canonical_consumer[area.proxy.cell_count]      … ×3
-```
-
-Exactly the six pins, red on the fix, forcing their own removal. Restored.
+Arms **14** and **15** are the ones I care most about: they are the arms against
+*my own fix* becoming the next defect.
 
 ---
 
-## 6. What I could NOT settle
+## Other gates
 
-* **13 of the 18 E2E findings.** §0. Not guessed at, not invented.
-* **Whether F-4 is the producers' bug or the consumer's.** Deliberate: both
-  resolutions make the tests green and the choice is the record lane's.
-* **The six defects in §2 that I found myself are not mapped to your finding
-  numbers.** Some are probably among the thirteen; I cannot tell which.
-* **`ppa_search_run.py` on a real trials document.** I exercised the plan path and
-  the empty-space path. Driving a full search was out of scope for a test lane and
-  is `NOT_MEASURED`.
-* **§1 stream discipline.** `ppa_contract_check` puts its human summary on
-  **stderr**; §1 says stdout, refusals on stderr. I noticed this while debugging
-  one of my own wrong assertions and did **not** sweep the layer for it — asserting
-  it could redden other lanes' files on a clause I have not measured everywhere.
-  `NOT_MEASURED` across the other 13 programs. Worth a follow-up.
-* **`test_ppa_actuator_registry.py` and `test_ppa_closure_state_machine.py`
-  `import yaml` at module scope with no guard** — a COLLECTION ERROR, not a skip,
-  on a host without pyyaml. Same family as §4. Not fixed: not my lane's files and
-  the host has pyyaml, so it is a latent condition rather than a live red.
-* **`test_not_verified_tier::test_no_new_undeclared_infrastructure_skip_appears`**
-  is red on base and on this branch with identical output, naming
-  `test_trusted_pytest_entry.py`. Not mine, not touched.
+* `source_chip_agnostic_check` — **PASS**, 1503 files, NDA panel 4588/4588. No
+  foundry name, node, SKU or codename anywhere in the new source or this file.
+* `programs/INDEX.md` and `PROGRAM_INVENTORY.json` — **regenerated**, not
+  hand-edited. The inventory diff is exactly my additions (+1 top-level, +1
+  catalogued, +5 tree `.py`, +3 test files); no other lane's drift absorbed.
+  (`gen_program_inventory.py` counts TRACKED files, so it had to run *after* the
+  commit — worth knowing.)
+* `test_program_inventory_no_drift.py` — back to the base's exact 4 reds; the
+  fifth (`test_catalogued_agrees_with_the_shipped_index`) was mine and is fixed.
+* `tools/ci/protected_landing_transition.json` — **no protected path touched**,
+  verified mechanically against the manifest. Nothing for the lander to re-render.
+* No plugin version bump. Nothing pushed to `main`. No `--write-baseline` on any
+  gate. No GDS, geometry, pin or rule deck touched — nothing in this branch
+  changes what a tool measures, only what is done with what it measured.
+* `tools/ci/repo_hygiene_gates.sh` — **identical to base**, A/B'd on a clean
+  committed tree:
+
+  ```
+  BASE   76 of 86 decided — 67 passed, 9 failed; 10 NOT CHECKED
+  MINE   76 of 86 decided — 67 passed, 9 failed; 10 NOT CHECKED
+  diff of the sorted "^^ FAILED" gate lists: EMPTY
+  ```
+
+  Worth recording how nearly I mis-read this. Run against a **dirty** worktree it
+  reported one extra failure (`an argued direction is pinned`) and one extra
+  NOT CHECKED (`gates are host-independent`), because both gates create isolated
+  workers from `HEAD` and said so:
+
+  ```
+  DIRTY_CHECKOUT: host-independence was NOT checked — tracked files are modified,
+  so the worktree at HEAD does not carry them and every one would read as a
+  difference about the edit rather than about the gate. This is not a pass.
+  ```
+
+  Committing first made both go away. Neither was a finding about this change,
+  and the gates were explicit about that rather than leaving me to guess.
+
+---
+
+## What I could NOT settle
+
+**1 — DRV has no producer, and the reason is granularity, not absence.**
+This is the seventh axis and the one I did not close. The extractor exists and is
+shipped: `sta_corner_record_completeness_check.extract_drv(text)` returns
+per-kind `max_slew` / `max_capacitance` / `max_fanout` counts *and* a `queried`
+flag that distinguishes "the limit was met" from "the tool was never asked" —
+which is exactly the distinction the DRV axis needs. **But it is report-scoped,
+not view-scoped**: it accumulates counts across every section of a report and
+returns one answer per file, while `timing.drv.*` must be matched against a
+`required_view`. Two ways forward, and both belong to lanes that own the code:
+
+  * `extract_drv` gains per-section attribution — it already tracks the section
+    banner regex, so the state is there; or
+  * DRV is emitted at *report* scope with the stage the report's `STA_BASIS`
+    stamp declares, and the contract declares `drv: [{stage: …}]`. Per-axis
+    required views (F-11) make this reachable now, where it was not before.
+
+I did not write a second STA-report reader in `_ppa/signoff.py` to do it:
+`_ppa/timing.py` already owns STA parsing and already derives the per-view scope,
+and a second reader is the drift the backend/domain split exists to prevent.
+
+**2 — `mode` is still absent from the power scope.**
+Three of the four keys `REQUIRED_SCOPE["power_mw"]` wants now come from the
+liberty stem. The fourth is an *operating* mode and no power artefact states one.
+`activity.declared_mode` is the activity basis, not an operating mode, and using
+it would be exactly the fabricated scope field the module refuses. The refusal
+stands and the caller must supply it.
+
+**3 — I could not verify `report_wns -min` against a real OpenSTA build.**
+The evidence that it is accepted is strong and in-repo (`tests/test_ppa_timing.py`
+carries a real report body containing `wns min 0.00`, so the tool does emit the
+min-side label), but I did not run the pinned image to confirm the *flag* spelling
+on the build the flow uses. That is precisely why the emitter change is wrapped
+in `catch` with a written `SIGNOFF_WNS_UNAVAILABLE reason=$_wnserr` line: if the
+flag is wrong, the sign-off script still completes and the report says so out
+loud. It would still be worth one real run to confirm.
+
+**4 — the six pre-existing `test_ppa_contract.py` reds** are the undeclared
+`jsonschema`. Not mine, not fixed here, reported above with the measurement.
+
+**5 — the `EM_SCREEN_RELS` path list is a convention, not a contract.**
+`em_current_density_check.py` writes wherever `--json` points, and no flow step
+pins that path. I look under three names and the record states which one it
+found; if the flow never runs the screen, EM is NOT_MEASURED, which is honest but
+means the axis is only as reachable as the step that is not yet wired.
 
 ---
 
 ## REQUESTS TO THE LANDER
 
-### A. Fixes in other lanes' files that I wrote the test for but did not make
+**R-A — wire `ppa_signoff_records.py` into the flow, and pin the EM screen's
+output path.** The producer is shipped and tested but nothing calls it. Two
+steps: run it after sign-off to emit the bundle, and give
+`em_current_density_check.py --json` a fixed destination
+(`reports/phase3/em_current_density.json` is the first name I look under). Until
+the screen runs, `reliability.em.violations` is NOT_MEASURED — correctly, and
+uselessly.
 
-Each is currently `xfail(strict=True)`; landing the fix turns the pin red and it
-must then be deleted. Ordered by blast radius.
+**R-B — contracts must declare `required_views_by_axis`.** The A/B above shows
+this is load-bearing: with only a global `required_views`, my gate refuses
+exactly as the base does. `ppa_contract_build.py` should emit a per-axis block,
+and the stages my producer declares (`signed_off_gds` for DRC,
+`post_route_extracted` for LVS, `post_route` for antenna/IR/EM/equivalence) are
+in `_ppa/signoff.SOURCES` with the basis for each.
 
-1. **F-11 — feasibility lane, `_ppa/feasibility.py`.** `required_views` must be
-   scoped per axis (or per proof, or a view must declare which axes it binds).
-   Today the hard promotion gate cannot return FEASIBLE for any candidate whose
-   contract declares more than one view class. **9 of 9 axes UNDETERMINED** on a
-   clean, fully-measured candidate. Test:
-   `test_ppa_layer_feasibility_view_scope.py` (3 pins).
+**R-C — DRV, per item 1 above.** Either `extract_drv` gains per-section
+attribution, or DRV is emitted at report scope. This is the last of the seven and
+the only one still `FEAS_METRIC_ABSENT` on a closed run.
 
-2. **F-4 — record-envelope lane, `_ppa/power.py` + `_ppa/timing.py` +
-   `_ppa/metrics.py`.** Producers and the canonical consumer disagree about the
-   shared shape. **48/48 power records** and **every timing row** are refused;
-   `MetricIndex.add` raises on a real STA row. Either producers stop writing
-   `None` scope fields (or record them as declared absences) or `validate`
-   accepts one — your call, either turns the tests green. Test:
-   `test_ppa_layer_producer_consumer.py` (10 pins).
+**R-D — declare or bundle `jsonschema`.** Six shipped tests are red on a stock
+`python3`, and every contract a downloaded plugin builds gets rc=2. Also on the
+e2e lane's list (their #11); repeating it because it cost me a base A/B to
+diagnose.
 
-3. **F-5 — record-envelope lane, `_ppa/area.py`.** Three metrics declare a unit
-   the metric name refuses: `cells`/`wires`/`wire_bits` vs `count`. Included in
-   the 10 pins above.
+**R-E — `power.py` needs an operating `mode` from somewhere.** Per item 2. Either
+the flow declares one (`pvt_matrix.json` when it names exactly one) and the
+caller passes it through the existing `extra_scope` hook, or `REQUIRED_SCOPE`
+should say why power needs a mode that nothing produces.
 
-4. **F-10 — `_ppa/timing.py`.** `discover_reports` must de-duplicate by artefact
-   **content** (`source.sha256`), not by resolved path. Test:
-   `test_ppa_layer_timing_view_dedup.py` (2 pins).
+**R-F — the STA_BASIS stamps (the e2e lane's request #1) are still the highest-
+value unfixed thing in this area, and they are not mine.** I fixed the missing
+`report_wns`; the missing `STA_BASIS` stamp on the same two multi-corner emitters
+is a separate three-line change and it is what makes 48 of 56 timing rows
+unstageable. My worst-slack proof group makes hold provable *despite* it, but
+setup and hold both still need those rows to carry a stage before they can be
+adjudicated per corner.
 
-5. **F-2 — whichever lane owns the extractor seam.** `ppa_metric_extract
-   --backend` must drive the five modules in `_ppa/backends/`. Test:
-   `test_ppa_layer_backend_seam.py` (5 pins). Two arms that must stay green are
-   included, because the tempting wrong fix is "return 0 and write an empty
-   bundle".
-
-6. **Search lane, `ppa_search_run.py` — two, both one-liners.**
-   * `--this-flag-does-not-exist` exits **2**; §1 says 3. `_ppa/cli_exit.py` ships
-     in this branch and is the drop-in.
-   * a space document declaring **no lever** returns **rc=0** with an invented
-     `budget 1 trial(s) / 1 full-PnR: proposed 1`. Should be rc=2 `[CANNOT
-     CHECK]`. Note the module docstring's *"`Budget()` with no arguments is
-     `max_trials=1`"* is a defensible **module** decision; this is the **CLI**
-     reporting PASS over an empty population.
-   Tests: `…exit_contract` (1 pin), `…vacuous_population` (1 pin).
-
-7. **Feasibility lane, `ppa_feasibility_check.py` + `ppa_pareto_check.py`.**
-   `--help` exits **3**. Their `except SystemExit: return RC_BAD_INVOCATION` needs
-   to read `exc.code`; `_ppa/cli_exit.parse_or_refuse` is exactly that.
-   Test: `…exit_contract` (2 pins).
-
-### B. Generated files — NOT regenerated, per §6 and your constraint
-
-`PROGRAM_INVENTORY.json` is stale on this branch: **`test_files` 2685 → 2692**
-(7 new test files; `programs_top_level` is unchanged at 1223 because
-`_ppa/cli_exit.py` is not top-level and `_ppa_jsonschema.py` is under `tests/`).
-
-`gen_program_inventory.py --check` is **already rc=1 on pristine base with 30
-problems**, and its output is **byte-identical on base and on this branch**:
-
-```
-$ diff <(base: gen_program_inventory.py --check | sort) <(branch: … | sort)
-  (no output)
-```
-
-so this branch adds nothing to that gate. Please regenerate on the merged tree
-and take the generator's output rather than merging either side.
-
-### C. Protected paths — none touched
-
-```
-$ python3 -c "<intersect git status --porcelain with protected_landing_transition.json>"
-  protected paths in manifest: 48
-  files I changed: 26
-  INTERSECTION (protected paths I touched): NONE
-```
-
-`tools/ci/repo_hygiene_gates.sh` is untouched, so **no manifest re-render is
-needed** and I have no sha256 to hand you.
-
-### D. Two things worth a follow-up lane
-
-* the §1 **stream discipline** sweep (§6) — human summary on stdout, refusals on
-  stderr, across all 14 programs. I measured one violation and did not sweep.
-* an **unguarded `import yaml`** in two PPA test files (§6).
+**R-G — nothing to re-render.** No pinned protected path is touched by this
+branch, verified against `tools/ci/protected_landing_transition.json`.

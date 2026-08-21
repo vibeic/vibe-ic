@@ -33997,6 +33997,50 @@ def _report_worst_paths_tcl(rpt_c: str, flag: str) -> str:
     )
 
 
+#: Marker the WNS emitter writes when the tool ACCEPTED the query. Its presence
+#: is what tells a reader that a missing `wns` line means "no paths", and its
+#: absence that the tool was never asked -- the two states this whole lane
+#: exists to keep apart.
+_SIGNOFF_WNS_MARKER = "SIGNOFF_WNS_REPORTED"
+
+
+def _report_wns_tcl(rpt_c: str, flag: str) -> str:
+    """Emit `report_wns <-max|-min>` guarded by a catch, with a marker.
+
+    THE MEASURED DEFECT. Both multi-corner sign-off stanzas asked for
+    `report_worst_slack` and `report_tns` and NEVER for `report_wns`. Measured
+    across all six STA artefacts of a real sign-off run: `timing.hold.wns_ns` is
+    NOT_MEASURED on every view with the reason "the artefact carries no wns line
+    for this view", and the same for setup on the two multi-corner reports. The
+    feasibility gate's hold axis proves from `timing.hold.wns_ns`, so the hold
+    axis was structurally unprovable from this flow's own evidence -- not for a
+    design, but for every design, on every run.
+
+    `_ppa/timing.py` will not compute the wns from the worst slack, and it is
+    right not to: OpenSTA's wns is `min(0, worst_slack)`, and a derived number
+    presented as a measured one is §3's failure. The fix therefore belongs
+    HERE -- the emitter has to ask the tool for the fact.
+
+    Guarded because a build that rejects the min/max flag must not abort a
+    sign-off script that has already written its setup half. On failure the
+    reason is written into the report and no marker appears, so the absence
+    remains visible rather than becoming a silent skip.
+
+    chip/PDK-AGNOSTIC: a stock OpenSTA command, no literal.
+    """
+    return (
+        f"if {{[catch {{report_wns {flag} >> {rpt_c}}} _wnserr]}} {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "SIGNOFF_WNS_UNAVAILABLE query={flag} reason=$_wnserr"\n'
+        f"  close $_wf\n"
+        f"}} else {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "{_SIGNOFF_WNS_MARKER} query={flag}"\n'
+        f"  close $_wf\n"
+        f"}}\n"
+    )
+
+
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
     -max_capacitance -max_fanout -violators` guarded by a catch; on SUCCESS
@@ -35487,6 +35531,9 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump (ORGANIC #540). `flag` is report_worst_slack's
             # spelling (-max/-min); report_checks needs `-path_delay max|min`,
             # and passing the raw flag raised Error 514 into the swallowing
@@ -35743,6 +35790,9 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
+            # WNS, the name the feasibility gate's setup/hold axes prove from.
+            # Never asked for by this stanza before; see _report_wns_tcl.
+            f"{_report_wns_tcl(rpt_c, flag)}"
             # Worst-PATH dump + the path SLEWS, so the slew explosion and the
             # cone that carries it are both visible (ORGANIC #540: this is the
             # SS sign-off report, and passing report_worst_slack's `-max`/`-min`
