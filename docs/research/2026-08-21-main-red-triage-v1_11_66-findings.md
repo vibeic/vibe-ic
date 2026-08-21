@@ -3594,6 +3594,51 @@ existed because I had asserted something repeatedly enough that it had stopped
 looking like a claim.
 
 
+## M66 — the "acquisition" is a documented public clone, and the command is already written
+
+I called fetching the shuttle operator's template *"the highest-value single
+action named anywhere in this document"* and left it as "an acquisition, not an
+engineering task". **That undersold how tractable it is, and I only found out by
+looking for where the artefact comes from.**
+
+`docs/research/template_ingest_run.md` is a record of **the first real run of step
+`0.5ic`** — the ingest has been done before, and the record pins its source:
+
+```
+source   https://github.com/wafer-space/<PDK>-project-template   (Apache-2.0)
+commit   0de7e394337a1f7f5303ac7a3681bf2481b58176
+on disk  $HOME/_ext/<PDK>-project-template   — OUTSIDE this repository
+```
+
+with an exact reproduce recipe (clone, then `checkout 0de7e394337a1f`). The `<PDK>`
+elision is that record's own NDA convention and I am keeping it; the unelided URL
+is in that file.
+
+**Measured on this host: the template is NOT present** — nothing at
+`$HOME/_ext/*project-template*`, and no `input/submission_template/` output
+anywhere. So `0.5ic` skips and `slot_pad_budget_check` has nothing to read, which
+is exactly M52's confirmed single artefact.
+
+**So the item is not "obtain a thing from an operator".** It is:
+
+* a **public, Apache-2.0** repository,
+* at a **pinned commit** that a previous run already validated,
+* with the **clone command already written down** in this repo,
+* **absent from this host**, and nothing else blocking it.
+
+**I did not clone it.** The recorded location is `$HOME/_ext/…` — the operator's
+own space, not my scratch — and an agent writing into `$HOME` is a hazard this
+document already carries a rule about. Cloning it elsewhere would produce an
+ingest at a path nothing else expects.
+
+**What this changes for the handover.** "Fetch the operator's template" sounded
+like procurement. It is two commands against a public repo, and it unblocks a
+flow step, a checker that measured **five of nine designs unbondable**, two
+census reds, and one of the three unwired checkers. **The most valuable item on
+the list was also the cheapest, and it read as expensive because I never asked
+where the artefact lived.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3681,7 +3726,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Re-founding B and D** (2 + 2 reds) | B: specified, both channels confirmed, safety bound documented — unbuilt on sequencing, not hazard. D: mechanism fully described; needs a real published cell, and authoring one to turn a test green is the move this campaign forbids. **A and C are DONE** (4 reds closed). | **decision + evidence** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. **Fix the FIXTURE** so Step 4 has no vacuous members, making the waiver branch reachable. Owner's call. | **answered + a fix to avoid** |
 | **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
-| **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — an acquisition, not engineering.** | **external artefact** |
+| **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | the shuttle operator's published project template — `from: external, check: none`, *"data we never went and got"* (M36). **CONFIRMED one artefact, two symptoms (M52):** `slot_pad_budget_check` reads what `0.5ic`'s `submission_template_ingest` writes, and that checker already measured **5 of 9 designs unbondable** while reporting to nobody. **Highest-value single action in this document — and M66 measured it as CHEAP:** a public Apache-2.0 repo at a pinned commit, clone command already written in `docs/research/template_ingest_run.md`, simply absent from this host. | **external artefact** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
