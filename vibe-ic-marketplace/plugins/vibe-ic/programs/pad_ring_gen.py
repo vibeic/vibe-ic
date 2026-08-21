@@ -98,8 +98,13 @@ UPSTREAM_DECLARATION_REQUIRED: Tuple[str, ...] = (
     "already INSTANTIATE the IO cells. This flow's synthesis emits a bare "
     "core; no step instantiates one.",
     "(2) PAD_SITE_NAME / PAD_CORNER_SITE_NAME must name PAD-class SITEs the "
-    "PDK's IO library declares. Measured: only half the IO libraries in the "
-    "pinned image ship any.",
+    "PDK declares — in EITHER of the two views a distribution uses: a "
+    "top-level SITE record in the IO library's LEFs, or a PAD_FAKE_SITES "
+    "entry in the IO library's tech-view config, which is upstream's own PDK "
+    "variable for `the LEF does not include the site definitions for the IO "
+    "pads`. Measured: only half the IO libraries in the pinned image ship a "
+    "LEF SITE record, and the ones that do not declare their sites the other "
+    "way. A name declared by neither view is still refused.",
     "(3) PAD_EDGE_SPACING, PAD_ROTATION_HORIZONTAL / _VERTICAL / _CORNER, "
     "PAD_CORNER and PAD_FILLERS complete the geometry. Without a filler the "
     "ring cannot abut, and abutment is what carries its supply.",
@@ -394,7 +399,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     asg_path = project / PR.ASSIGNMENT_REL
     lefs = ([Path(p) for p in args.io_lef] if args.io_lef
             else PR.discover_io_lefs(args.pdk_root, args.pdk))
-    lib = PR.IoLibrary(lefs)
+    # The PDK's TECH view, which is where a distribution whose IO LEFs carry
+    # no top-level SITE record declares its pad sites. Discovered from the PDK
+    # regardless of `--io-lef`: a caller may hand this step the LEFs it wants
+    # the masters read out of, but only the PDK may declare a site.
+    site_decls = PR.discover_io_site_declarations(args.pdk_root, args.pdk)
+    lib = PR.IoLibrary(lefs, site_decls)
 
     # ── the SKIP branch: name the absent variables one by one ──────────────
     missing: List[Dict[str, Any]] = []
@@ -517,20 +527,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pads_per_side": {PR.SIDE_VAR[s]: len(cfg["sides"][s])
                           for s in PR.SIDES},
     }
+    # Filled by the site lookups below, so the artefact says which PDK view
+    # each of the two sites was resolved from rather than leaving a reader to
+    # go and look.
+    cfg_rec["site_source"] = {}
 
     # upstream: the two site lookups, and their two class checks, first.
+    #
+    # Both PDK views are consulted — see `_pad_ring`'s header. Two IO
+    # libraries in one tree declaring one site name at two sizes is refused
+    # before either lookup, because the site width is what every gap in the
+    # ring is rounded to and picking it by file order would put the ring's
+    # abutment on a directory listing.
+    if lib.site_declaration_conflicts:
+        names = sorted(lib.site_declaration_conflicts)
+        return _fail(
+            "PAD_SITE_DECLARATION_AMBIGUOUS",
+            f"{len(names)} pad site(s) are declared at more than one size by "
+            f"the PDK tech views this run resolved: "
+            f"{lib.as_dict()['site_declaration_conflicts']} — the site width "
+            f"is what the ring's spacing arithmetic rounds to, so this step "
+            f"refuses rather than resolve it by the order the files were "
+            f"read",
+            die=die_rec, config=cfg_rec)
     site_wh: Dict[str, Tuple[int, int]] = {}
+    site_src: Dict[str, str] = {}
     for key, name, var in (("pad", cfg["site"], "PAD_SITE_NAME"),
                            ("corner", cfg["corner_site"],
                             "PAD_CORNER_SITE_NAME")):
-        site = lib.sites.get(name)
+        site = lib.resolve_site(name)
         if site is None:
             return _fail(
                 "PAD_SITE_NOT_FOUND",
-                f"{var}={name!r} is not a SITE in the IO cell library this "
-                f"run resolved ({len(lib.sites)} site(s) from {len(lefs)} "
-                f"LEF(s); PAD-class: {lib.as_dict()['pad_class_sites']})",
+                f"{var}={name!r} is declared by neither PDK view this run "
+                f"resolved: {len(lib.sites)} LEF SITE record(s) from "
+                f"{len(lefs)} LEF(s) and {len(lib.declared_sites)} tech-view "
+                f"declaration(s) from {len(lib.site_declarations)} config "
+                f"file(s). PAD-class sites available: "
+                f"{lib.pad_class_site_names()}",
                 die=die_rec, config=cfg_rec)
+        site_src[var] = str(site["source"])
+        cfg_rec["site_source"] = site_src
         if site["class"] != "PAD":
             return _fail(
                 "PAD_SITE_CLASS_NOT_PAD",
@@ -545,6 +582,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 die=die_rec, config=cfg_rec)
         site_wh[key] = (int(round(site["size"][0] * die.units)),
                         int(round(site["size"][1] * die.units)))
+        if "declared_in" in site:
+            site_src[var] += f" ({site['declared_in']})"
     if site_wh["pad"][0] <= 0:
         return _fail("PAD_SITE_NOT_FOUND",
                      f"PAD_SITE_NAME={cfg['site']!r} has width 0, and the "

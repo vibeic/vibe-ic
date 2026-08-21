@@ -926,3 +926,205 @@ def test_the_skip_disclosure_guard_is_load_bearing(tmp_path):
     r = _run(mut, root)
     assert real == 1 and r.returncode == 2, (
         f"real={real} mutant={r.returncode}\n{r.stdout}")
+
+
+# --------------------------------------------------------------------------- #
+# WHERE A PAD SITE IS DECLARED — the second PDK view
+#
+# MEASURED 2026-08-22 in the pinned image, on the open PDK whose IO library was
+# read exhaustively: all 15 of its IO cell LEFs carry the `SITE <name> ;`
+# REFERENCE form inside a MACRO and NOT ONE top-level SITE declaration. The
+# distribution declares those sites in its tech view instead —
+#
+#     libs.tech/<flow>/<io library>/config.tcl
+#         # Note: This is needed if site definition are not in LEF
+#         dict set ::env(PAD_FAKE_SITES) "<site>" "<width_um>, <height_um>"
+#
+# — which is upstream's own PDK-scoped variable, consumed by upstream's placer
+# before its two site lookups. Reading only the LEF view refused a real PDK
+# with PAD_SITE_NOT_FOUND, which is our own tool blocking a verdict the chip
+# had earned. Every fixture below is the SAME synthetic library as above with
+# its two SITE declarations moved from the LEF to the tech view, so what the
+# tests vary is the view and nothing else.
+# --------------------------------------------------------------------------- #
+def _io_lef_sites_not_in_lef(site_w: float = 1.0) -> str:
+    """The same IO library, with its SITE records where this PDK puts them:
+    not in the LEF. The `SITE <name> ;` lines are the REFERENCE form every
+    such distribution's macros carry, and they declare nothing."""
+    body = _io_lef(site_w)
+    keep = []
+    drop = False
+    for ln in body.splitlines():
+        if ln.startswith("SITE "):
+            drop = True
+        if not drop:
+            keep.append(ln)
+        if drop and ln.startswith("END ") and ln.split()[1].endswith("site"):
+            drop = False
+    text = "\n".join(keep) + "\n"
+    assert "CLASS PAD ;\n    SYMMETRY" not in text
+    # the reference form, inside each macro, exactly as the distribution ships
+    text = text.replace("MACRO pad_bidir\n  CLASS PAD ;",
+                        "MACRO pad_bidir\n  CLASS PAD ;\n  SITE io_site ;")
+    text = text.replace("MACRO pad_corner\n  CLASS PAD ;",
+                        "MACRO pad_corner\n  CLASS PAD ;\n"
+                        "  SITE io_corner_site ;")
+    return text
+
+
+def _site_declaration(*entries: tuple) -> str:
+    """A PDK tech-view config in the form the distributions write it."""
+    lines = ["set current_folder [file dirname [file normalize [info script]]]",
+             'set ::env(PAD_SITE_NAME) "io_site"',
+             'set ::env(PAD_CORNER_SITE_NAME) "io_corner_site"',
+             "# Create fake pad sites",
+             "# Note: This is needed if site definition are not in LEF",
+             "set ::env(PAD_FAKE_SITES) [dict create]"]
+    lines += [f'dict set ::env(PAD_FAKE_SITES) "{n}" "{w}, {h}"'
+              for n, w, h in entries]
+    return "\n".join(lines) + "\n"
+
+
+def _project_sites_in_tech_view(tmp_path: Path, *, site_w: float = 1.0,
+                                declare: bool = True,
+                                second_lib: tuple = None,
+                                config=...) -> Path:
+    root = _project(tmp_path, config=config, site_w=site_w)
+    (root / "pdk/proc/libs.ref/proc_io/lef/io.lef").write_text(
+        _io_lef_sites_not_in_lef(site_w))
+    if declare:
+        d = root / "pdk/proc/libs.tech/someflow/proc_io"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.tcl").write_text(_site_declaration(
+            ("io_site", f"{site_w:.2f}", "350"),
+            ("io_corner_site", "350", "350")))
+    if second_lib is not None:
+        d = root / "pdk/proc/libs.tech/someflow/proc_other_io"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.tcl").write_text(_site_declaration(*second_lib))
+    return root
+
+
+def test_a_pdk_that_declares_its_sites_in_the_tech_view_is_not_refused(
+        tmp_path):
+    """THE DEFECT. The IO LEFs carry no SITE declaration — which is what a
+    real distribution ships — and the PDK declares both sites in its tech
+    view. Before this was read, step 15.5ic answered PAD_SITE_NOT_FOUND about
+    a PDK that had declared the site, and the run could not reach a verdict
+    for a reason the flow itself owned."""
+    root = _project_sites_in_tech_view(tmp_path)
+    # the premise: the LEF view really is empty of SITE declarations
+    lefs = PR.discover_io_lefs(str(root / "pdk"), "proc")
+    assert PR.IoLibrary(lefs).sites == {}
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["verdict"] == "PASS"
+    assert len(rep["pads"]) == len(ALL_SIGNALS)
+    assert rep["abutment"]["abuts"] is True
+    assert _chk(root) == 0
+
+
+def test_the_tech_view_site_is_the_same_ring_as_the_lef_site(tmp_path):
+    """A site is a site. Reading the second view must place the SAME ring,
+    to the DEF unit — otherwise the fix changed the geometry rather than
+    where the geometry was read from."""
+    lef_root = _project(tmp_path / "a")
+    tech_root = _project_sites_in_tech_view(tmp_path / "b")
+    assert _gen(lef_root) == 0 and _gen(tech_root) == 0
+    a, _ = CHK._unwrap(_report(lef_root))
+    b, _ = CHK._unwrap(_report(tech_root))
+    assert a["pads"] == b["pads"]
+    assert a["corners"] == b["corners"]
+    assert a["spacing"] == b["spacing"]
+    assert a["abutment"]["gaps"] == b["abutment"]["gaps"]
+
+
+def test_the_artefact_says_which_pdk_view_each_site_came_from(tmp_path):
+    """A resolved site is not enough; the report has to say WHERE from, or a
+    reader cannot tell a site that was read from one that was declared."""
+    tech_root = _project_sites_in_tech_view(tmp_path / "b")
+    assert _gen(tech_root) == 0
+    b, _ = CHK._unwrap(_report(tech_root))
+    src = b["config"]["site_source"]
+    assert src["PAD_SITE_NAME"].startswith(PR.SITE_SOURCE_DECLARED)
+    assert src["PAD_CORNER_SITE_NAME"].startswith(PR.SITE_SOURCE_DECLARED)
+    assert "config.tcl" in src["PAD_SITE_NAME"]
+    lef_root = _project(tmp_path / "a")
+    assert _gen(lef_root) == 0
+    a, _ = CHK._unwrap(_report(lef_root))
+    assert a["config"]["site_source"]["PAD_SITE_NAME"] == PR.SITE_SOURCE_LEF
+
+
+def test_a_site_declared_by_neither_pdk_view_is_still_refused(tmp_path):
+    """The refusal has to stay reachable. Reading a second view widens WHERE
+    a site may be declared; it does not let a name nobody declared through."""
+    root = _project_sites_in_tech_view(
+        tmp_path, config=_config(PAD_SITE_NAME="no_such_site"))
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_a_pdk_that_declares_no_site_anywhere_is_still_refused(tmp_path):
+    """The LEF view is empty and there is no tech view either. Nothing was
+    invented to fill the hole."""
+    root = _project_sites_in_tech_view(tmp_path, declare=False)
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_a_site_declared_at_two_sizes_is_refused_not_ordered(tmp_path):
+    """A tree may ship more than one IO library. Upstream reads one config and
+    never sees a second; this step discovers them, so it can. The site width
+    is what every gap in the ring is rounded to, and picking it out of a
+    directory listing would put the ring's abutment on file order."""
+    root = _project_sites_in_tech_view(
+        tmp_path, second_lib=(("io_site", "2.00", "350"),
+                              ("io_corner_site", "350", "350")))
+    assert _gen(root) == 1
+    assert "PAD_SITE_DECLARATION_AMBIGUOUS" in _rules(root)
+    assert "io_site" in _report(root)["reason"]
+
+
+def test_two_libraries_that_agree_are_not_an_ambiguity(tmp_path):
+    """Every distribution measured ships the same site twice, identically —
+    once per IO library. Agreement is not a conflict."""
+    root = _project_sites_in_tech_view(
+        tmp_path, second_lib=(("io_site", "1.00", "350"),
+                              ("io_corner_site", "350", "350")))
+    assert _gen(root) == 0, _report(root)["reason"]
+
+
+def test_only_the_pdk_may_declare_a_site_never_the_project(tmp_path):
+    """The config contract carries no site GEOMETRY and this fix does not add
+    any. A project that writes PAD_FAKE_SITES into its own pad_assignment.json
+    gets nothing from it — the site is still looked up in the PDK."""
+    root = _project_sites_in_tech_view(
+        tmp_path, declare=False,
+        config=dict(_config(PAD_SITE_NAME="project_invented_site"),
+                    PAD_FAKE_SITES={"project_invented_site": [1.0, 350.0]}))
+    assert _gen(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_the_gate_reads_the_same_two_views_as_the_producer(tmp_path):
+    """An auditor that consulted only the LEF would call a correctly placed
+    ring PAD_SITE_NOT_FOUND — a gate contradicting its own producer over which
+    file it opened."""
+    root = _project_sites_in_tech_view(tmp_path)
+    assert _gen(root) == 0
+    assert _chk(root) == 0
+    _rewrite_producer(root,
+                      lambda r: r["config"].update(PAD_SITE_NAME="gone"))
+    assert _chk(root) == 1
+    assert "PAD_SITE_NOT_FOUND" in _rules(root)
+
+
+def test_the_declaration_parser_reads_upstreams_form_verbatim():
+    """The one form the distributions write, and nothing else. A file that
+    declares no site contributes none."""
+    got = PR.parse_pad_site_declarations(_site_declaration(
+        ("a_site", "0.1", "355"), ("a_corner_site", "355", "355")))
+    assert got == {"a_site": (0.1, 355.0), "a_corner_site": (355.0, 355.0)}
+    assert PR.parse_pad_site_declarations("set ::env(PAD_SITE_NAME) \"x\"\n") \
+        == {}
+    assert PR.parse_pad_site_declarations("") == {}
