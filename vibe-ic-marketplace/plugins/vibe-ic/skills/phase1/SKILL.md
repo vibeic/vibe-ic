@@ -1,6 +1,6 @@
 ---
 name: phase1
-description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs PM Agent + IC Expert Agent dialogue, produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
+description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register and owns silicon depth), produces both (a) machine-readable L1-L27 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L27 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
 ---
 
 # Phase 1 — prompt / dialogue entry point
@@ -9,13 +9,13 @@ This is **one of two entry points** to the Vibe-IC platform. See "Two
 entry points" below for the complete picture.
 
 ```
-   Phase 1 (this skill):  Prompt / Dialogue ──► L1-L23 JSON     ──┐
+   Phase 1 (this skill):  Prompt / Dialogue ──► L1-L27 JSON     ──┐
                                               + Human Readable .md │
                                                                    ▼
                                                             Phase 2 → Phase 3
 ```
 
-Phase 1 emits the L1-L23 JSON directly — **Phase 1 is NOT in this
+Phase 1 emits the L1-L27 JSON directly — **Phase 1 is NOT in this
 path**. The JSON files are the universal handoff format consumed by
 Phase 2. The Markdown views are for human review only and have no
 load-bearing downstream consumer.
@@ -27,14 +27,14 @@ load-bearing downstream consumer.
 | **A. Prompt / Dialogue** | this `phase1` skill (`+ spec-review` for final confirm) | User has only an idea, wants AI to author the spec via dialogue |
 | **B. Existing Design Documents** | Phase 1's 17 doc-gen skills (`datasheet-gen`, `frs-gen`, `cmd-protocol-gen`, `regmap-gen`, `adi-spec-gen`, `control-logic-gen`, `test-debug-gen`, `timing-waveform-gen`, `rtl-constants-gen`, `integration-spec-gen`, `test-cases-gen`, `calibration-gen`, `behavioral-sequences-gen`, `lab-calibration-gen`, `doc-consistency-check`, `schematic-gen`, `otp-content-gen`) | User already has vendor PDFs / hand-authored markdown spec, wants per-layer extraction |
 
-Both entry points converge at L1-L23 JSON, then enter Phase 2 → Phase 3.
+Both entry points converge at L1-L27 JSON, then enter Phase 2 → Phase 3.
 
 ## What Phase 1 (this skill) does
 
 1. Ingest a prompt (NL) or structured YAML into a `facts.yaml` (UUID-tagged, provenance-tracked fact graph)
 2. Detect gaps against the IC class template
-3. Run PM Agent dialogue (asks user about gaps in plain language)
-4. IC Expert Agent fills residual gaps from K3 industry defaults / class reference / retrieved-neighbour ICs
+3. Run the IC Expert Agent dialogue (the merged front-door role asks the user about gaps in its plain-language register)
+4. The same IC Expert Agent fills residual gaps from K3 industry defaults / class reference / retrieved-neighbour ICs
 5. **Render**:
    - `generated_docs/L*.json` — the canonical machine-readable form (fed to Phase 2)
    - `human_docs/L*.md` — Markdown views of the same content (for stakeholder review; added v0.60)
@@ -82,7 +82,7 @@ are just views over it.
 
 | User gives you … | How Phase 1 runs |
 |---|---|
-| A paragraph in plain language | **NL mode** — PM Agent calls `nl-ingest`, runs gap dialogue, then renders |
+| A paragraph in plain language | **NL mode** — IC Expert Agent (plain-language register) calls `nl-ingest`, runs gap dialogue, then renders |
 | A structured `spec.yaml` | **Fast-path** — one `run-all` call, no dialogue, renders |
 | A pin-table CSV (v0.74) | `ingest-pins` → L1.pinout.* facts (optionally `--merge-into` an existing facts.yaml) |
 | A register-map CSV (v0.74) | `ingest-regmap-csv` → L4.registers.* facts |
@@ -101,7 +101,7 @@ There is no default model — the skill does not prefer any specific one.
 
 ### NL mode (common / medium user — "design a chip in natural language")
 
-Invoked by PM Agent (see `../../agents/pm-agent.md`). Minimal end-to-end:
+Invoked by the IC Expert Agent (see `../../agents/ic-expert-agent.md`). Minimal end-to-end:
 
 ```bash
 # 1. NL → seed facts (calls Anthropic API if ANTHROPIC_API_KEY set)
@@ -113,7 +113,7 @@ python3 -m tools.phase1_engine.cli nl-ingest \
 # 2. detect gaps
 python3 -m tools.phase1_engine.cli gaps facts.yaml --out-json gaps.json
 
-# 3. PM Agent iterates: for each gap, pick K2 qbank variant, ask user, then:
+# 3. IC Expert Agent iterates: for each gap, pick K2 qbank variant, ask user, then:
 python3 -m tools.phase1_engine.cli set-fact facts.yaml \
     --path "L3.frame_format.crc.poly" --value "0x31" --source user_stated
 
@@ -197,21 +197,22 @@ with this new register added") without re-running the whole pipeline.
 
 The v0.51 `prompt-intake` and `phase1-orchestrate` skills are NOT
 restored — their function is fully subsumed by this `phase1` skill's
-ingest + PM-Agent dialogue + render pipeline. They remain archived at
+ingest + IC Expert Agent dialogue + render pipeline. They remain archived at
 `legacy/skills_phase1_v051/` for reference.
 
 ### Dialogue-driven (common / medium user)
 
-The PM Agent (see `../../agents/pm-agent.md`) drives an interactive
-session, calling `tools/phase1_engine/cli.py` internally:
+The IC Expert Agent (see `../../agents/ic-expert-agent.md`) drives an
+interactive session in its plain-language register,
+calling `tools/phase1_engine/cli.py` internally:
 
 1. `prompt-intake` gathers initial free-text.
 2. Whatever facts can be parsed from the text become the seed fact graph.
 3. `gaps` reports remaining required-but-missing facts.
-4. PM Agent asks the user about each gap (using the Q-bank, K2).
+4. IC Expert Agent asks the user about each gap in its plain-language register (using the Q-bank, K2).
 5. Unanswered gaps → IC Expert fills from K3 / class_reference / retrieved
    neighbour with `source=defaulted` or `source=retrieved`.
-6. `render` emits the **14 layer JSONs** — 10 core (L1-L23 + L8R) plus
+6. `render` emits the **14 layer JSONs** — 10 core (L1-L9 + L8R) plus
    4 extension (L10-L13). The extension layers are skipped silently when
    no facts under their prefix exist (e.g. an IC with no L12 sequences
    simply doesn't get an `L12_BEHAVIORAL_SEQUENCES.json`).
@@ -253,16 +254,16 @@ absent skip cleanly.
 
 ## Agents
 
-Two agents still collaborate — but on the fact graph, not on layer docs:
+ONE agent operates in two registers on the fact graph (not on layer docs):
 
-- **PM Agent** translates user intent into fact-level updates (one fact
-  per dialogue turn). Never asks a technical question the user cannot
-  answer at their level.
-- **IC Expert Agent** reviews the fact graph for consistency, fills gaps
+- **External register** translates user intent into fact-level updates (one
+  fact per dialogue turn). Never asks a technical question the user cannot
+  answer at their level — plain product language only, no silicon jargon.
+- **Internal register** reviews the fact graph for consistency, fills gaps
   from K3 / retrieved neighbours, flags high-impact conflicts for user
-  confirmation.
+  confirmation (surfaced back through the external register).
 
-See `../../agents/pm-agent.md` and `../../agents/ic-expert-agent.md`.
+See `../../agents/ic-expert-agent.md`.
 
 ## Where Things Live
 
@@ -288,7 +289,7 @@ function is subsumed by this `phase1` skill.
 
 The 10 v0.51 doc-gen skills (`datasheet-gen` through `integration-spec-gen`)
 were briefly archived in v0.58 but **restored to active in v0.60** as
-the Phase 1 Entry B path (existing-Design-Documents → L1-L23). They
+the Phase 1 Entry B path (existing-Design-Documents → L1-L27). They
 were never legacy in spirit — only in v0.58 placement.
 
 ## Compliance gate (mandatory)

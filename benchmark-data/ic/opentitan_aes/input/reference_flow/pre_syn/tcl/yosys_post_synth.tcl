@@ -1,1 +1,0 @@
-../../../../../hw/vendor/lowrisc_ibex/syn/tcl/yosys_post_synth.tcl

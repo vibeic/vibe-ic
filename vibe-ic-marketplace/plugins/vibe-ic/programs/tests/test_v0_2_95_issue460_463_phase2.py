@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v0.2.95 — ORGANIC-20260606 #460 + #463 (phase2_one_shot_runner).
+"""v0.2.95 — ORGANIC-20260606 #460 + #463 (design_one_shot_runner).
 
 #460 — genuine oracle-TB PASS earns nothing at Step 4.
   The oracle run writes phase2/stage1/sim_full_stack/oracle_run/oracle.log
@@ -32,7 +32,7 @@ import pytest
 
 PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 import _path_layout as PL  # noqa: E402
 
 

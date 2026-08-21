@@ -48,6 +48,16 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Directory targets
+# route through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the per-line alias/mask scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -174,8 +184,11 @@ def audit(rtl_target: Path,
     if rtl_target.is_file():
         files = [rtl_target]
     else:
-        files = sorted(list(rtl_target.rglob("*.v"))
-                       + list(rtl_target.rglob("*.sv")))
+        # Kimi-scale fix: shared authored-RTL collector (canonical
+        # phase2/stage1/rtl preferred; generated outputs excluded on
+        # fallback). The v0.119.27/28 testbench filter below still applies —
+        # tb-named files can live INSIDE the canonical rtl dir too.
+        files = rtl_source_files(rtl_target)
         # v0.119.27: exclude testbench files. The agent often invokes
         # this gate against the project root rather than rtl/, which
         # pulls in `tb/tb_*.v` / `*_tb.sv` — and any `*_drive_low`
