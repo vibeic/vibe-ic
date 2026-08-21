@@ -252,6 +252,45 @@ def _strip_hdl_comments(text: str) -> str:
     return "".join(out)
 
 
+def _strip_hdl_attributes(text: str) -> str:
+    """Verilog ATTRIBUTE instances `(* ... *)` removed.
+
+    NOT A COMMENT, and that is exactly why it needed its own repair. An
+    attribute is live source that a synthesiser reads, but it is not part of a
+    port DECLARATION, and `_DIR_RE` anchors with `^`. So a perfectly ordinary
+    port carrying one:
+
+        (* keep = "true" *) input wire clk,
+
+    reaches the scan as a chunk beginning `(*`, matches no direction keyword,
+    and is discarded as an unparsable continuation. MEASURED on the two-port
+    module above: `clk` vanishes and the interface reads as one port.
+
+    That is the DROPPING direction again -- a smaller interface than the design
+    really has -- and it is the one that produces a false FITS. It predates the
+    comment repair (identical on the commit before it) and is fixed here
+    because it lands on the same number by the same mechanism: text nobody
+    stripped reaching a declaration scan.
+
+    `(*` begins an attribute unambiguously in Verilog, and removing the region
+    leaves the parenthesis DEPTH of the port list unchanged because the `*)`
+    that balanced it goes with it. Newlines are preserved for the same reason
+    as in `_strip_hdl_comments`: the conditional scan counts by line.
+    """
+    out: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i:i + 2] == "(*" and text[i:i + 3] != "(*)":
+            j = text.find("*)", i + 2)
+            if j < 0:
+                out.append(text[i]); i += 1; continue
+            out.append("\n" * text.count("\n", i, j + 2))
+            i = j + 2
+        else:
+            out.append(text[i]); i += 1
+    return "".join(out)
+
+
 _DIR_RE = re.compile(r"^(input|output|inout)\b(.*)$", re.S)
 _RANGE_RE = re.compile(r"\[\s*([^\]:]+?)\s*:\s*([^\]]+?)\s*\]")
 
@@ -307,7 +346,7 @@ def parse_top_ports(text: str, top: str,
     Handles the ANSI header form every generated `chip_top` in this repo uses,
     with or without a parameter block.
     """
-    stripped = _strip_hdl_comments(text)
+    stripped = _strip_hdl_attributes(_strip_hdl_comments(text))
     src = stripped
     # CONDITIONAL COMPILATION. A port list may be bracketed by `ifdef/`endif.
     # Leaving the directive lines in place GLUES them to the neighbouring
@@ -367,7 +406,7 @@ def parse_top_ports(text: str, top: str,
         # that true LOCALLY, so a later change to where `raw_no_comment` comes
         # from cannot quietly re-open the hole. `_DIR_RE` must never see a
         # character a stripper has not looked at.
-        s = _strip_hdl_comments(line).strip()
+        s = _strip_hdl_attributes(_strip_hdl_comments(line)).strip()
         if re.match(r"^`(?:ifdef|ifndef)\b", s):
             depth_cond += 1
             continue
@@ -386,7 +425,7 @@ def parse_top_ports(text: str, top: str,
     for decl in rest[open_i + 1:close_i].split(","):
         # Same rule as the conditional scan above: the chunk that reaches
         # `_DIR_RE` is stripped on its own account, not on a sibling's.
-        decl = _strip_hdl_comments(decl).strip()
+        decl = _strip_hdl_attributes(_strip_hdl_comments(decl)).strip()
         if not decl:
             continue
         dm = _DIR_RE.match(decl)
