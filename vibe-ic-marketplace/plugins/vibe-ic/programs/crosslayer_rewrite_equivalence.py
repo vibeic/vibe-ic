@@ -101,6 +101,9 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _design_module_set import (  # noqa: E402 — vibe-ic#712 comment strip
+    strip_comments as _strip_hdl_comments,
+)
 from lec_run import (  # noqa: E402 — the ONE mature equiv recipe + parser
     parse_equiv_output as _parse_equiv_output,
     run_yosys_equiv as _run_yosys_equiv,
@@ -167,7 +170,14 @@ def module_params(rtl_text: str, top: str) -> str:
     the parameter is rejected by the frontend with `Non-constant range in
     declaration` — measured on a parameterised multiplier before this was
     added, where it turned the whole latency-offset mode into a silent
-    0-points-compared NOT_MEASURED."""
+    0-points-compared NOT_MEASURED.
+
+    COMMENTS ARE STRIPPED FIRST. `_MODULE_RE` matches `module\s+(\w+)`, and a
+    commented-out or merely DESCRIBED module — `// module mul_pipelined(...)` in
+    a header block, or a `/* ... */` note quoting an older header — mints a
+    module that does not exist. The strip is applied to the value that REACHES
+    the scan, not to a sibling."""
+    rtl_text = _strip_hdl_comments(rtl_text)
     for m in _MODULE_RE.finditer(rtl_text):
         if m.group("name") == top:
             return (m.group("params") or "").strip()
@@ -187,7 +197,12 @@ def module_ports(rtl_text: str, top: str) -> List[Tuple[str, str, str]]:
     Handles both the ANSI header form (`module m(input wire [7:0] a, ...)`)
     and the non-ANSI form (`module m(a, b); input [7:0] a;`). Returns [] when
     the module is not found — the caller turns that into NOT_MEASURED, never
-    into an empty-but-fine wrapper."""
+    into an empty-but-fine wrapper.
+
+    COMMENTS ARE STRIPPED FIRST, for the same reason as `module_params`: a
+    commented-out header would otherwise supply this function's port list, and
+    the wrapper it builds is compared against the real design."""
+    rtl_text = _strip_hdl_comments(rtl_text)
     for m in _MODULE_RE.finditer(rtl_text):
         if m.group("name") != top:
             continue
