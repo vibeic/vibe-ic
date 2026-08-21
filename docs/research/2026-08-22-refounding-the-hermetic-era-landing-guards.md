@@ -279,19 +279,22 @@ checked before the item is ranked. A survived that check only after being
 rewritten. B's channel is confirmed (the container label, from source). C's is
 confirmed (M15, implemented and passing in both lanes). **D's is not.**
 
-## What this costs, honestly
+## What this costs — CURRENT, after A and C landed
 
-* Thirteen tests rewritten, in a file inside the protected closure. Not small.
-* **B and D need a fixture that can supply two corpora and a sentinel commit.**
-  That is new test scaffolding, not a one-line change.
-* **B's operational risk is BOUNDABLE — my first statement of it was
-  overcautious, and the corrected reason is different. See the tail of this
-  document.**
-* C partially exists already (M15).
-* A is the cheapest and closes ONE test (corrected above).
+**Four of the thirteen are done.** A (1 test) and C (3 tests) are implemented and
+verified in both lanes, with dependants checked. **Nine remain**, and the earlier
+"thirteen tests rewritten, not small" is no longer the estimate.
 
-**Suggested order: A, then C, then D, then B** — cheapest and most independent
-first, and each is separately landable.
+| item | state | what it still costs |
+|---|---|---|
+| **A** | **DONE** — 1 test, RED→GREEN, full-file verified | — |
+| **C** | **DONE** — 3 tests, RED→GREEN, specification verified against a live run BEFORE editing | — |
+| **D** | designed, mechanism fully traced | a REAL published cell in the fixture's benchmark-data. ~~a fixture supplying two corpora~~ — **that model was wrong twice** (the arms enumerate for themselves; the verifier audits). Authoring a cell to turn a test green is the move this campaign forbids. |
+| **B** | designed, both channels confirmed, safety bound documented | a sentinel-commit fixture plus a rewiring of the stub's hang guard, inside the protected closure. Hazard is BOUNDABLE; the reason it is unbuilt is sequencing and my measured error rate, not danger. |
+
+**Revised order for what REMAINS: D before B.** D is blocked on evidence somebody
+else can supply; B is blocked on a decision plus the largest edit of the four. The
+original "A, C, D, B" is spent for its first two entries.
 
 ## What I did NOT verify
 
