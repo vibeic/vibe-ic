@@ -281,8 +281,10 @@ reds — it uncovers twenty-two more.** The 22 are 11 further d3 step cells
 including `test_d3_run_root_discovery_is_live` and
 `test_d3_unevidenced_cells_are_named_cell_by_cell`, and 2 coverage tests
 including `test_the_enforcement_census_is_reported_for_humans`. How many of the
-22 are real defects versus the known corpus-pointer precedence issue is NOT
-claimed here; the direction and the count are what was measured.
+22 are real defects versus the known corpus-pointer precedence issue was left
+unclaimed in an earlier revision of this file. It is claimed now, below, and it
+matters — because "22 reds revealed" reads as "22 hidden defects", and that is
+not what they are.
 
 Two things follow, and they matter more than the number:
 
@@ -338,6 +340,36 @@ The one that mattered most was invisible from the outside:
 over the same manifest, distinct from `test_flow_manifest_declaration_parity`,
 and the step-31 entry has to satisfy both. It was not on any list this work had
 built by hand; the selector produced it.
+
+### What the 22 actually ARE — triaged, and most are not defects
+
+Every one was read for its own reason rather than counted. Six classes:
+
+| n | class | evidence |
+|---|-------|----------|
+| 12 | **UNEVIDENCED against the clone that was bound** | the recorded run root is not in it — `benchmark-data/ic/sha256/clean_run_v1427_20260715` (step 10), `benchmark-data/ic/subservient` (step 21). Not "the flow fails to produce"; the evidence lives in run roots this clone lacks |
+| 4 | **PINS that moved** | `the cost of closing the unevidenced class moved: measured 453282 B over 23 entries, pinned 386857 B`, plus three population/set pins that re-derive once the population is visible |
+| 2 | **host-dependent counts** | `141 of 164 declared entries verified live … and that number is host`-dependent by its own words; `run_root_discovery_is_live` |
+| 2 | **coverage, downstream** | census/live-outcome reporting moving because d3's state moved |
+| 1 | **a REAL finding** | `21 manifest record(s) cite a run root no checkout carries while THIS COMMIT answers the entry` — a genuine stale-manifest defect |
+| 1 | **the known precedence defect** | the self-certification probe drives `benchmark-data/ic/u_hawaii_adc`, "which lives in this repository and must resolve" — the bound pointer overrides the in-repo root |
+
+So the blindfold is not covering twenty-two defects. It is covering **four pins
+that need re-deriving, one real stale-manifest finding, one precedence defect,
+and twelve cells whose evidence sits in run roots nobody staged** — the last of
+which depend entirely on WHICH roots a publisher would stage, not on whether the
+flow produces the artefacts.
+
+That sharpens the headline rather than softening it. Publishing a run tree still
+closes zero of the seventeen. What it additionally does is force four pins to be
+re-derived and surface one genuine defect — a smaller and much more specific
+bill than "22 more reds", and one somebody can actually plan.
+
+**Caveat, stated because it bounds everything above:** this was measured against
+a clone at `146d665`, one commit before the withdrawal. No CI host can reproduce
+it today. It is the counterfactual "what the corpus showed the day before it was
+withdrawn", which is the right question for deciding whether to re-publish, and
+is not a claim about any host's current state.
 
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
