@@ -1,0 +1,99 @@
+{
+  "allow_waivers": false,
+  "eco_readiness": {
+    "declared_by": "the re-adjudication author, for a design whose own L2 names a primary tape-out target",
+    "declared_in": "ppa-crosslayer/eco-readjudication/declaration/tapeout_bound.json",
+    "min_distinct_positions": 3,
+    "min_spare_cells": 10,
+    "min_spare_cells_by_kind": {
+      "aoi": 1,
+      "dff": 1,
+      "inverter": 3,
+      "mux2": 1,
+      "nand2": 2,
+      "nor2": 2
+    },
+    "require_tie_off": true,
+    "required": true
+  },
+  "limits": {
+    "power.ir.worst_drop_v": {
+      "max": 0.18
+    },
+    "reliability.em.worst_ratio": {
+      "max": 1.0
+    }
+  },
+  "required_views": [
+    {
+      "process": "ss",
+      "stage": "post_route_extracted"
+    },
+    {
+      "process": "tt",
+      "stage": "post_route_extracted"
+    }
+  ],
+  "required_views_by_axis": {
+    "antenna": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "drc": [
+      {
+        "stage": "signed_off_gds"
+      }
+    ],
+    "drv": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "eco_readiness": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "em": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "equivalence": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "hold": [
+      {
+        "process": "tt",
+        "stage": "post_route_extracted"
+      },
+      {
+        "process": "ff",
+        "stage": "post_route_extracted"
+      }
+    ],
+    "ir": [
+      {
+        "stage": "post_route"
+      }
+    ],
+    "lvs": [
+      {
+        "stage": "post_route_extracted"
+      }
+    ],
+    "setup": [
+      {
+        "process": "ss",
+        "stage": "post_route_extracted"
+      },
+      {
+        "process": "tt",
+        "stage": "post_route_extracted"
+      }
+    ]
+  }
+}

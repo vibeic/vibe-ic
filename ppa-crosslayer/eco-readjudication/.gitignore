@@ -1,0 +1,7 @@
+# The adjudicated document is the published `inputs/<trial>/candidates.json`
+# with this run's ECO records appended. It is deterministic from `inputs/` (all
+# digest-pinned in MANIFEST.json) plus `ppa_eco_spare_records.py`, and
+# committing it would put a 168 KB near-duplicate of an already-published
+# record in the tree five times over. `readjudicate.py` rewrites it on every
+# run; the VERDICTS computed from it are what is committed.
+out/*/candidates_with_eco.json
