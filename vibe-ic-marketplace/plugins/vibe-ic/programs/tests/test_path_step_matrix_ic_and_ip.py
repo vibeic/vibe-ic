@@ -80,6 +80,15 @@ def _steps():
     return yaml.safe_load(FLOW.read_text())["steps"]
 
 
+#: The three router artefacts, read off the modules that define them so this
+#: file cannot drift from them.
+ROUTER_ARTEFACTS = (ST.SLOTS_DIR_REL, ST.NO_TEMPLATE_REL, TD.SELF_TAPEOUT_REL)
+
+
+def _all_steps() -> dict:
+    return {str(s["id"]): s for s in _steps()}
+
+
 def _path_steps() -> dict:
     """Every path-specific step the flow declares, keyed by id.
 
@@ -89,9 +98,23 @@ def _path_steps() -> dict:
     being covered by a hardcoded list of five that silently stops describing
     the flow. That failure mode is the same one this whole file is about, one
     level up.
+
+    TWO DISCRIMINATORS, NOT ONE, AND THE SECOND IS THE REAL ONE. Deriving by
+    the `ic`/`ip` id suffix alone was measured against its own mutation and
+    failed it: re-adding the retired `37.5self` as a step — the exact
+    three-route defect this campaign closed — changed NOTHING, because
+    `37.5self` does not end in `ic` or `ip` and the derivation could not see
+    it. A step is on a path because its CONDITION reads a router artefact;
+    the suffix is a naming convention, and a convention cannot be the thing a
+    guard depends on.
     """
-    return {str(s["id"]): s for s in _steps()
-            if str(s["id"]).endswith(("ic", "ip"))}
+    out = {}
+    for step in _steps():
+        sid = str(step["id"])
+        cond = repr(step.get("condition") or {})
+        if sid.endswith(("ic", "ip")) or any(r in cond for r in ROUTER_ARTEFACTS):
+            out[sid] = step
+    return out
 
 
 #: The five the brief names, and the ones the matrix carries expectations for.
@@ -243,7 +266,7 @@ def _state(project: Path, sid: str) -> str:
     nobody wired and a step legitimately skipped are the two facts this whole
     file exists to keep apart.
     """
-    step = _path_steps().get(sid)
+    step = _all_steps().get(sid)
     if step is None:
         return MISSING
     cond = step.get("condition")
@@ -286,7 +309,7 @@ def test_a_step_the_flow_does_not_carry_reads_MISSING_and_never_a_skip(trees):
     correct behaviour.
     """
     proj = trees["self_tapeout_pdk_ships_no_shuttle"]
-    assert "37.5self" not in _path_steps(), (
+    assert "37.5self" not in _all_steps(), (
         "37.5self was retired into 37.5ic as an ARM; if it is back as a step, "
         "the three-route defect it caused is back with it")
     assert _state(proj, "37.5self") == MISSING
