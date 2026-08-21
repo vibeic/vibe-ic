@@ -337,8 +337,8 @@ changes on this branch:
 | PPA measurement coverage | `trials/b000/records_flat.json`, 148 rows | denominator absent | 2 |
 | PPA promotion feasibility (cross-layer campaign) | `ppa-crosslayer` | 21 candidate sets | 2 |
 | PPA frontier recomputes | `trials/z23/candidates.json` | no objective declared | 2 |
-| PPA arms solved one problem (cross-layer campaign) | `b000` vs `z23` | 1 pair | **0** |
-| PPA arms solved one problem (end-to-end campaign) | `baseline` vs `t028` | 1 pair | **0** |
+| PPA arms solved one problem (cross-layer campaign) | `b000` vs `ppa-crosslayer` | 20 pairs | **0** |
+| PPA arms solved one problem (end-to-end campaign) | `baseline` vs `ppa-e2e` | 60 pairs | **0** |
 
 Six zero-second rows examining nothing became eleven rows examining 15 + 2 + 21 +
 61 + 148 + 21 + 2 real documents, plus three rows that still cannot look and now
@@ -679,3 +679,67 @@ wearing a wording change's clothes.
       (none)
 
 Identical to the third run. The seam change disturbed nothing.
+
+---
+
+# Part 7 — a gate under-aimed by its own argument, and rc 1 worn by a crash
+
+## 2 of 80
+
+Gate 6 was first re-aimed at the comparison each campaign quotes: cross-layer
+`b000` vs `z23`, end-to-end `baseline` vs `t028`. That decided something — and it
+decided about **two** pairs while **eighty** sit committed here. A gate examining
+2 of 80 available comparisons is under-aimed by exactly the argument that
+re-aimed it: a contract that drifts in trial 37 is a comparison nobody may quote,
+and with two rows nothing would have said so.
+
+    --corpus ppa-crosslayer   20 pair(s), 0 refused, 0 undetermined -> rc=0
+    --corpus ppa-e2e          60 pair(s), 0 refused, 0 undetermined -> rc=0
+
+**The baseline is never paired with itself**, and that is tested rather than
+assumed. A contract compared against itself matches on every identity by
+construction; counting it would be the gate writing its own evidence, and would
+make a corpus holding a single document read as checked.
+
+## An internal error was exiting 1, which is reserved for a finding
+
+Found by a test fixture of mine that was malformed: an identity written as a bare
+digest string instead of a record raises `AttributeError` out of
+`identity.compare`. With no guard the traceback exits **1** — and §1 reserves 1
+for a finding about the design. The roll-up would have read a crash as *"these
+two runs were not solving the same problem"*, a verdict nothing reached.
+
+This was a local accident while the gate compared one hand-named pair. With
+`--corpus` sweeping a whole campaign, one badly shaped document decides the
+entire row. `ppa_contract_check` has carried exactly this guard from the start;
+`ppa_problem_integrity_check` now carries the same one, and an internal error is
+rc 3.
+
+Negative control against the pre-fix program and the two-pair wiring:
+**9 failed, 10 passed** — every assertion in the new file, including
+`test_an_internal_error_is_rc_3_and_never_rc_1`.
+
+## Fifth hygiene run — the eleven PPA rows, final
+
+    declared 90  decided 80  passed 73  failed 7  NOT CHECKED 10   (300s)
+
+    NOT_CHECKED  PPA head-to-head records                        published corpus, other repo
+    FAIL         PPA head-to-head records (cross-layer campaign)  15 records, 1 refused
+    NOT_CHECKED  PPA head-to-head records (end-to-end campaign)    2 records, both undecidable
+    PASS         PPA measurement contract (cross-layer campaign)  21 contracts
+    PASS         PPA measurement contract (end-to-end campaign)   61 contracts
+    NOT_CHECKED  PPA measurement contract                        published corpus, other repo
+    NOT_CHECKED  PPA measurement coverage                        148 rows, no denominator
+    NOT_CHECKED  PPA promotion feasibility (cross-layer campaign) 21 candidate sets
+    NOT_CHECKED  PPA frontier recomputes                         no objective declared
+    PASS         PPA arms solved one problem (cross-layer campaign) 20 pairs
+    PASS         PPA arms solved one problem (end-to-end campaign)  60 pairs
+
+    failures on the branch and not the pristine baseline:
+      PPA head-to-head records (cross-layer campaign)
+    failures on the baseline and not the branch:
+      (none)
+
+Six rows that opened nothing became eleven rows that open 15 + 2 + 21 + 61 + 148
++ 21 + 1 + 20 + 60 documents, one real refusal, and three rows that still cannot
+look and now say precisely what they are missing.
