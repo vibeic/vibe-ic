@@ -329,6 +329,144 @@ degraded rebase-replay tier. Their failure has nothing to do with the absent
 docker CLI or git 2.34.1. The unrunnable count is at most 7, and the docker/git
 explanation does not cover G4.
 
+## M13 — G4, G5 AND G6 ARE ONE DEFECT, and it has a false-green half
+
+Chasing G4 to ground gave a mechanism, and the mechanism turned out to be
+general. `tools/ci/hermetic_candidate_runner.py` validates each land arm's
+environment against a CLOSED allowlist:
+
+```
+_LAND_REVIEWED_ENV_NAMES = frozenset({
+    "GATEKEEPER_BASE", "GATEKEEPER_BENCHMARK_DATA_SHA",
+    "GATEKEEPER_HYGIENE_PROGRESS", "GATEKEEPER_HYGIENE_REPORT",
+    "GATEKEEPER_VERIFY_ARM", "GATEKEEPER_VERSION_BY_GATEKEEPER",
+    "VIBEIC_LANDING_PROGRESS_NONCE",
+})
+```
+
+checked per arm at `hermetic_candidate_runner.py:285`. **The runner is correct.**
+This is a deliberate isolation boundary and nothing below asks for it to be
+weakened.
+
+The stub `gatekeeper-land.sh` that these end-to-end tests plant reads **six
+test-only control knobs that are not on that list and have no producer anywhere
+in the runtime**:
+
+```
+GATEKEEPER_CONCURRENCY_PROBE_DIR     GATEKEEPER_RELINK_SELECTION
+GATEKEEPER_MUTATE_BENCHMARK_ARM      GATEKEEPER_STUB_BASE_EXPANDED
+GATEKEEPER_PREWRITE_BASE_ARTIFACTS   GATEKEEPER_STUB_ROUTED_TRANSITION
+```
+
+Every one is set by a test on the PARENT verifier and consumed only inside the
+ARM. None can arrive. The tests were written for a pre-hermetic world in which
+the arm inherited the parent's environment.
+
+**THE NATURAL EXPERIMENT that proves it.** G6
+(`test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave`) hands
+one probe directory to the run and asserts `A2.started`, `B1.started`,
+`B2.started` appear in it. After the run that directory contains **exactly**:
+
+```
+cleanup.done   cleanup.reaped   cleanup.started
+```
+
+Three markers, all written by the VERIFIER on the host
+(`gatekeeper-verify-merge.sh:851-856`). Zero written by any arm. Same directory,
+same run, same variable — host writes land, arm writes do not. It is not an
+unwritable path, not a missing stub, not load. And `returncode == 0` and
+`verdict == LAND_OK` both passed: the verifier is healthy and the arms ran.
+
+**G5 is the same defect.** Its control is `GATEKEEPER_STUB_ROUTED_TRANSITION`,
+consumed only at stub line 1745, absent from the allowlist. The stub's
+transition block never runs, no transition is produced, and
+`delta["corpus_transitions"]` is therefore absent — the `KeyError`. This is why
+all three of my earlier corpus hypotheses were disproven: the corpus was never
+the variable. **G5 is closed, and it is not a defect in the corpus, the
+producer, or the consumer.**
+
+### The blast radius, measured by test ID
+
+Ten tests depend on a knob that cannot arrive. Measured individually, serially,
+outside `$HOME`:
+
+| test | knob | result |
+|---|---|---|
+| `..._interruption_kills_a_term_ignoring_parallel_arm...` (G4) | PROBE_DIR | RED |
+| `..._pid_only_term_kills_a_term_ignoring_b2...` (G4) | PROBE_DIR | RED |
+| `..._candidate_wave_precedes_parallel_isolated_base_wave` (G6) | PROBE_DIR | RED |
+| `..._trusted_verifier_supplies_the_one_bootstrap_evidence` (G5) | STUB_ROUTED_TRANSITION | RED |
+| `..._b2_corpus_mutation_is_post_attested_and_norecord` | MUTATE_BENCHMARK_ARM | RED |
+| `..._relinked_parent_selection_is_norecord` | RELINK_SELECTION | RED |
+| `..._candidate_cannot_prewrite_base_wave_artifacts` | PREWRITE_BASE_ARTIFACTS | **GREEN — vacuity RISK** |
+| `..._post_bootstrap_equal_corpus_uses_ordinary_delta` | STUB_BASE_EXPANDED, STUB_ROUTED_TRANSITION | **GREEN — vacuity RISK** |
+| `..._the_caller_checkout_is_never_touched` | PROBE_DIR | GREEN — genuine |
+| `..._the_version_deferral_still_refuses_a_backwards_version` | PROBE_DIR | GREEN — genuine |
+
+The last two are genuine: their assertions (sandbox HEAD/status/worktree
+unchanged; `rc != 0`) do not depend on the knob at all.
+
+**The two above them are the serious half, and they are GREEN.** Each asserts a
+NEGATIVE whose precondition is delivered by a knob that cannot arrive:
+
+* `..._cannot_prewrite_base_wave_artifacts` asserts `"candidate planted this
+  base log" not in r.stdout`. The prewrite never happens, so the string is
+  trivially absent.
+* `..._post_bootstrap_equal_corpus_uses_ordinary_delta` asserts
+  `corpus_transitions == []`. The corpus is never expanded, so "no transition"
+  is trivially true. **It is the exact mirror of G5**: same knob, the
+  presence-assertion fails and the absence-assertion passes.
+
+A red that cannot fire is visible. A green that cannot fail is not. These two
+are the reason this group matters more than its count.
+
+**THE POSITIVE CONTROL I RAN, AND WHY IT WAS INCONCLUSIVE.** The prewrite block
+is guarded on the unreachable knob AND on `GATEKEEPER_VERIFY_ARM`, which IS
+forwarded — so I hard-enabled it in the stub, which travels via the tree
+(runtime snapshot from base) rather than the environment. **The test still
+passed.** I am NOT reporting that as "the guard discriminates", because the
+attack still did not reach its target: the block writes to
+`$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")`, and that variable is
+**absent from `hermetic_candidate_runner.py` entirely**, so it is unset in the
+arm, `dirname ""` resolves to `.`, and the forged files landed in the
+container's own working directory. I could not deliver the attack, which is not
+the same as the attack being blocked. **Those two guards remain UNPROVEN in
+either direction**, and saying so is the whole point of rule 9.
+
+### One defect or several
+
+**ONE defect, six unreachable knobs, ten affected tests.** G4, G5 and G6 in the
+table below collapse into this single entry; they are not three findings. The
+cause is one architectural change — arms became hermetic — that the end-to-end
+tests in this file were never migrated across. Both previously OPEN items are
+now closed by it.
+
+It is not a live regression: these have been broken since the arms became
+hermetic, and no landing behaviour changed. But it is a property of main rather
+than of this host, and its consequence is that **a block of landing-guard
+end-to-end tests is not exercising the paths it names** — six loudly, two
+silently.
+
+### What a fix must do, and why I did not make it
+
+Not a channel patch, for three independent reasons:
+
+1. G4 asserts `os.kill(arm_pid, 0)` in the HOST namespace about a process that
+   now lives in a container PID namespace. Forwarding the knob would not make
+   that assertion meaningful.
+2. The knobs deliver to host paths (`PROBE_DIR`) that are not mounted into the
+   arm, so both an env entry AND a mount would be required.
+3. Adding six test-only names to `_LAND_REVIEWED_ENV_NAMES` plus a writable host
+   mount punches a hole through the exact isolation boundary the allowlist
+   exists to enforce — in the landing gate, on PROTECTED AUTHORITY/RUNTIME paths.
+
+The honest alternative is to re-found these guards on channels that already
+cross legitimately — the published `/evidence` output dir, the arm receipts, and
+`tools/ci/landing_completion_record.py`, which already exists to be *"the exact
+machine completion record for one hermetic landing arm"*. That is a redesign of
+ten tests against the hermetic contract, and it is the same policy call as the
+flow-gate ENFORCEMENT decision. **Escalated, not guessed.**
+
 ## M9 — the corpus-bound re-run, and one limitation of it
 
 Corpus staged OUTSIDE `$HOME` (the hermetic runner refuses a corpus under HOME
@@ -426,12 +564,15 @@ corpus" hypothesis is disproven at file scale as well as for the single test.
 | G2 | image lane | no Docker CLI in the pinned image | **SETTLED — environment** |
 | G3 | 5 | host git 2.34.1 < 2.38, verifier drops to its degraded tier and refuses with a different rc | **SETTLED — environment; the verifier behaved correctly** |
 | G4 | 2 | the injected TERM-ignoring arm never runs: `GATEKEEPER_CONCURRENCY_PROBE_DIR` is not in the hermetic arm's reviewed env allowlist | **SETTLED (M8)** — 8/8 deterministic. Diagnosis fixed; re-founding the guard is a policy call |
-| G5 | 1 | no corpus transition computed under a stub that forces one | **OPEN**, three of my own hypotheses eliminated |
-| G6 | 1 | probe records only `cleanup.*`, no `A2/B1/B2.started` | **OPEN**, corpus eliminated as a cause |
+| G5 | 1 | `GATEKEEPER_STUB_ROUTED_TRANSITION` never reaches the arm, so the stub's transition block never runs | **CLOSED (M13)** — same defect as G4/G6 |
+| G6 | 1 | the `.started` markers are arm-side writes through `GATEKEEPER_CONCURRENCY_PROBE_DIR`, which is not on the arm allowlist | **CLOSED (M13)** — same defect as G4/G5 |
 
-**Not one of the 22 is a demonstrated defect in main.** Two remain open with
-their obvious causes eliminated, two are unsettleable on this host, and
-eighteen are environment — thirteen of those mine.
+**REVISED BY M13.** Of the 22, four (G4 x2, G5, G6) ARE a demonstrated defect in
+main — one defect, not four: six test-only env knobs that cannot cross the
+hermetic arm boundary. Nothing remains OPEN. The other eighteen are environment,
+thirteen of those mine. The defect's most serious consequence is not among the
+22 at all: two landing-guard tests OUTSIDE this red set are GREEN while unable to
+exercise the path they name.
 
 # ===== ITEM 1, THE REMAINING DEBT: the paragraph for G5 and G6 =====
 
