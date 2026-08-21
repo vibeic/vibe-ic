@@ -1411,6 +1411,64 @@ question than the `pytest-timeout` one I settled at the top of this engagement,
 and not one to decide unilaterally. It joins the escalation list.
 
 
+## M20 — what MY OWN changes did, measured; and a broken control I nearly believed
+
+Two claims in this document were reasoned to, not measured: that the M8 G4
+diagnosis fix changes no verdict, and that M14 turns exactly one green red. Both
+are about my own work, which is the last place I should be accepting an
+inference. Full file, host lane, pristine vs mine:
+
+| | result |
+|---|---|
+| pristine `6d06ba664` | **9 failed, 125 passed** |
+| with my changes | **10 failed, 124 passed** |
+
+```
+reds ADDED    test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta
+reds REMOVED  (none)
+unchanged     9
+```
+
+**Both claims hold exactly.** The one added red is the M14 conversion, named and
+intended. M8 changed no verdict — the two G4 tests are among the unchanged nine.
+Nothing was silently fixed or silently broken.
+
+### The broken control, which is the more useful half
+
+My first attempt at this reverted the file with:
+
+```sh
+git stash -q -- <file> || git checkout 6d06ba664 -- <file>
+```
+
+My changes are **committed**, so there was nothing to stash. `git stash`
+returned success anyway, `||` short-circuited, and the checkout never ran. **The
+"pristine baseline" was re-running my own modified file.**
+
+It would have reported `0 added, 0 removed, 10 unchanged` — a clean, plausible,
+entirely circular confirmation of the two claims it was supposed to test. **A
+broken control that answers in the shape you hoped for is worse than one that
+errors.**
+
+It is the same shape as everything else this document records: the seal-ring
+fixture reading an ambient PDK, the prewrite attack that never landed, the
+defaulted `.get`, the 0-byte file that still `exists()`. I then did it to myself
+with a shell operator.
+
+What caught it was checking the control rather than trusting it — the working
+tree read CLEAN when a real revert would have shown the file modified.
+
+The rerun asserts the control instead of assuming it: extract with
+`git show 6d06ba664:<path>` (2861 lines vs my 2901), swap by explicit `cp`, and
+**refuse to measure** unless both edit markers are verifiably absent, restoring
+the file and exiting non-zero if the swap did not take. Logged:
+`control VERIFIED in place: file is pristine (2861 lines)` before the run, and
+`restored: markers back = 1` after.
+
+**The rule this earns:** a control arm must PROVE it is in place before it is
+allowed to answer. "I reverted it" is not evidence that it reverted.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. Three files: this document, plus two test
