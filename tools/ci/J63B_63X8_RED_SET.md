@@ -31,7 +31,7 @@ is what surfaced them.
 | 10 | `63x8_coverage::..._relays_finite_semantic_progress_past_old_bound` | **REAL FINDING — FIXED** | thin margin (2.1x); killed BETWEEN collections, not at startup — see below |
 | 11 | `63x8_coverage::..._chatty_import_without_events_fails_closed` | NOT_MEASURED (quiet host) | PASSES at load 3.45. It is also the test that PINS the fail-closed-fast choice — see 10, 11, 13 below |
 | 12 | `63x8_coverage::..._nested_outcome_run_outlives_old_fixed_bound...` | **REAL FINDING — FIXED** | zero margin by construction; fixed + negative control added |
-| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED (quiet host) | `1 passed in 163.79s` alone |
+| 13 | `63x8_census_freshness::test_the_census_block_is_fresh` | NOT_MEASURED — cause NAMED | one d3 item is 18.95 s against a 60 s window; no intra-item heartbeat exists — see below |
 | 14 | `63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | REAL FINDING | already fixed on `jfindings-63x8`'s branch; not duplicated |
 | 15 | `63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | THE RULING | 55 of 621 cells: 6 measured red, 49 not measured |
 | 16 | `flow_manifest_declaration_parity::test_every_declared_path_has_a_manifest_entry` | **STALE PIN — FIXED** | re-derived on the current tree |
@@ -189,7 +189,45 @@ full-file runs genuinely starve the nested outcome run, which is the exact
 condition that test detects — the harness catching an abusive measurement
 configuration this work created, not a defect and not caused by this change.
 
-## 11 and 13 — the host, proved rather than asserted
+## 13 — not "the host". One item, 18.95 s, against a 60 s window
+
+Red 10 taught this report to read the failure text before classifying, so red 13
+got the same treatment. Its message is the same shape as 10's —
+`terminal event missing (stage=running)` — the child had started and was
+emitting, then stopped for over 60 s. So: which item?
+
+```
+slowest durations, test_matrix_d3_outputs_produced.py, load 5.60
+  18.95s  test_d3_the_producer_oracle_answers_both_ways
+   1.03s  test_d3_the_write_ledger_can_only_subtract_evidence
+   1.00s  test_d3_the_write_ledger_binds_production_to_the_step
+   0.92s  ... and everything else below a second
+```
+
+**One item is 18× its nearest neighbour**, and it is a THIRD of the 60 s
+no-progress window on an almost idle box. Under the three-way contention that
+produced the red, 3x is not a stretch.
+
+And it is not a slow test anybody should speed up. `producer_evidence` is
+already `@lru_cache(maxsize=None)`, and its docstring already says what the time
+is: `writers_of` builds an AST index over the tree, deferred so that "only a run
+that reaches an UNEVIDENCED verdict should pay for it". The cost is one-time,
+cached, and deliberately lazy. There is nothing to optimise away.
+
+**The finding is structural, and it is the same root as red 11's.** pytest emits
+lifecycle transitions at item BOUNDARIES, never during an item, so the driver
+has no way to tell "one long item making progress" from "hung". Any item whose
+runtime is a material fraction of the stall window is indistinguishable from a
+hang, and this one is a third of it before the box is even busy.
+
+That makes the honest remedy an intra-item heartbeat in the progress protocol —
+the same driver change scoped and declined under 11 above, for the same reason.
+What is NOT the remedy is widening the 60 s window until an 19 s item fits under
+a contended one; that is the relaxation this campaign exists to refuse. Red 13
+stays open, but it is now a named mechanism with numbers rather than a shrug at
+the machine.
+
+## 11 — the host, proved rather than asserted
 
 All three pass without any change to the repository once the box is not being
 saturated by this file's own nested pytest children: 10 and 11 in the full-file
