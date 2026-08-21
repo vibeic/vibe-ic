@@ -133,7 +133,55 @@ avoided: `test_M_PATH_2_a_gds_and_a_real_pdk_do_not_make_a_design_tapeout_bound`
 builds a tree with a streamed GDS and a real PDK and no router artefact, and
 asserts `NOT_DETERMINED`.
 
-### 1.6 Absent is not zero
+### 1.6 The axis proves from the flow's own artefacts
+
+An axis nothing produces evidence for reads UNDETERMINED on every real run
+however good the design is. That is not a hypothetical: it is the state seven of
+the nine physical axes were in before `ppa_signoff_records.py`, in that
+program's own words — *"a run that measured DRC, LVS, antenna, IR, EM and LEC
+and passed every one of them still adjudicated UNDETERMINED; the evidence
+existed and nothing could reach it."*
+
+`eco_readiness` arrived in exactly that state, and it is fixed in the same
+place. `ppa_signoff_records.py` — what the flow runs, and what produces the
+bundle the gate reads — now also emits the design-for-ECO rows from
+`phase3/stage3/pnr/spare_cells.json` and, when the run carries one,
+`reports/spare_preservation.json`.
+
+**It does not re-read those artefacts.** `ppa_eco_spare_records.py` already
+does, and it holds rules that took measurement to get right: a plan whose
+`count` disagrees with its own `instances` list is INVALID *and so is every row
+derived from that list*; a missing plan is NOT_MEASURED and never a zero; a
+`NO_WITNESS` preservation report vouches for nothing. A second reader would be a
+second copy of those rules, and the first time the two disagreed a design would
+pass one gate and fail the other with nobody able to say which was right. So the
+signoff program owns **where the flow writes them** and the producer owns **what
+they say** — and `test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan`
+measures that split over the signoff program's AST, with docstrings excluded
+(the file's own prose names the keys it refuses to parse, which is how it
+explains the rule) and with the detector shown to fire against the reader that
+*does* name them.
+
+Measured end to end on a run tree carrying only a spare plan:
+
+```
+$ ppa_signoff_records.py <run> --json bundle.json
+ppa_signoff_records: 20 record(s), 11 MEASURED, 9 NOT_MEASURED
+  MEASURED     design_for_eco.spares.count
+  MEASURED     design_for_eco.spares.kind.dff.count        (and six more kinds)
+  MEASURED     design_for_eco.spares.distinct_positions.count
+  MEASURED     design_for_eco.spares.tie_off.verdict
+  MEASURED     design_for_eco.spare_pads.count
+  NOT_MEASURED design_for_eco.spares.surviving.count
+
+$ ppa_feasibility_check.py --candidates <bundle + declaration>
+  eco_readiness: SATISFIED
+```
+
+and the same tree with `--spare-density 0` gives VIOLATED, while a tree with no
+plan at all gives UNDETERMINED with every row present and value-less.
+
+### 1.7 Absent is not zero
 
 The producer, `ppa_eco_spare_records.py`, turns the flow's own
 `phase3/stage3/pnr/spare_cells.json` into canonical `vibeic.ppa.metric.v1`
@@ -373,8 +421,8 @@ insufficient — `--eco-declaration` is opt-in, which is §5's first request.
 ## 5. Verification
 
 ```
-tests/test_ppa_eco_readiness_axis.py    34 passed
-tests/test_ppa_eco_delivery_path.py     19 passed
+tests/test_ppa_eco_readiness_axis.py    41 passed
+tests/test_ppa_eco_delivery_path.py     23 passed, 1 xfailed
 ```
 
 Arms, per the brief: **positive** (a met requirement is FEASIBLE; the row states
@@ -405,6 +453,24 @@ and declaration held identical, the forbidden GDS/PDK inference, the both-router
 tree, the three findings never sharing a verdict, the two path vocabularies
 agreeing, a declaration still winning on either path, and the control that the
 space still publishes for a proven IP delivery.
+
+Seven more cover the **wiring** (§1.6): the bundle carries the ECO evidence, a
+real run tree satisfies the axis, a run that deleted its spares violates it, a
+run with no plan is UNDETERMINED with every row present and value-less,
+preservation is read when the report exists (ten inserted and nine shipped is
+VIOLATED against a floor of ten), the one-reader split is measured over the
+AST, and an ECO-only tree is still refused by the gate because nine axes have no
+evidence in it.
+
+The bad-invocation arm for `--project` found a **pre-existing defect**:
+`ppa_feasibility_check.py --help` exits 3 instead of 0 — asking a program what
+its flags are is not a bad invocation. It reproduces on `origin/main`, its
+one-line fix is `_ppa/cli_exit.parse_or_refuse`, and
+`test_ppa_layer_exit_contract._XFAIL_HELP` already pins it `strict=True` under a
+stated contract: *the fix and the pin's removal land together, by the lane that
+owns them*. Fixing it here would turn that file red and leave someone else's pin
+to clean up, so this branch **records** it as its own strict xfail rather than
+asserting around it, and REQUESTS names it.
 
 Two source-level guards: the gate's ECO section carries no numeric literal
 outside `{0, 1}` (measured over its AST), and the producer names no requirement
@@ -520,6 +586,17 @@ published records, verbatim.
    actually bears on a post-tape-out repair, and it is the one this
    re-adjudication could not test.
 
-7. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
+7. **`ppa_feasibility_check.py --help` exits 3, and I did not fix it.** It is
+   pre-existing, it reproduces on `origin/main`, and the one-line fix is to use
+   `_ppa/cli_exit.parse_or_refuse` for its own parse the way every other `ppa_*`
+   CLI does. I left it because `test_ppa_layer_exit_contract._XFAIL_HELP` pins
+   it `xfail(strict=True)` with an explicit contract — *"This pin is strict: it
+   goes red the moment the fix lands"* — so the fix and the pin's removal are
+   one change belonging to that lane. This branch adds a strict xfail of its own
+   naming the defect, because a suite that adds a flag to that CLI and then
+   quietly asserts around its broken `--help` is hiding something. Two lines in
+   two files whenever you want it; `ppa_pareto_check.py` has the identical bug.
+
+8. **Thirteen pre-existing red tests on `origin/main`.** Listed in §5,
    reproduced in a clean detached worktree at `6dfe15a32`. Not mine, not fixed
    here, and they will show up in any CI run of this branch.

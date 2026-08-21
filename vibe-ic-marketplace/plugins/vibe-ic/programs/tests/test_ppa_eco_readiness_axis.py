@@ -663,3 +663,172 @@ def test_an_obligation_with_no_proof_does_not_become_a_vacuous_pass():
         F.eco_proofs_and_limits = saved
     assert a.status == F.AXIS_UNDETERMINED
     assert a.codes == (F.C_ECO_REQUIREMENT_EMPTY,)
+
+
+# ---------------------------------------------------------------------------
+# WIRED -- the axis proves from the flow's OWN artefacts, not only from a fixture
+# ---------------------------------------------------------------------------
+#: An axis nothing produces evidence for is an axis that reads UNDETERMINED on
+#: every real run however good the design is. That was the state the other seven
+#: physical axes were in before `ppa_signoff_records.py`, and it was the state
+#: `eco_readiness` arrived in. These tests are the statement that it is not any
+#: more, and they drive the SHIPPED bundle rather than a hand-built record list.
+SIGNOFF = _PROGRAMS / "ppa_signoff_records.py"
+
+
+def _run_tree(root, plan=PLAN_TEN, preservation=None):
+    pnr = root / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True, exist_ok=True)
+    if plan is not None:
+        (pnr / "spare_cells.json").write_text(json.dumps(plan),
+                                              encoding="utf-8")
+    if preservation is not None:
+        rep = root / "reports"
+        rep.mkdir(parents=True, exist_ok=True)
+        (rep / "spare_preservation.json").write_text(
+            json.dumps(preservation), encoding="utf-8")
+    return root
+
+
+def _bundle(root, tmp_path, name="bundle.json"):
+    out = tmp_path / name
+    r = subprocess.run([sys.executable, str(SIGNOFF), str(root), "--quiet",
+                        "--json", str(out)], capture_output=True, text=True)
+    return r, json.loads(out.read_text(encoding="utf-8"))
+
+
+def _adjudicate(bundle, declaration, tmp_path, name="c.json"):
+    doc = {"required_views": [dict(VIEW)],
+           "required_views_by_axis": {"eco_readiness": [dict(VIEW)]},
+           "candidates": [{"candidate_id": "wired",
+                           "metrics": bundle["records"]}]}
+    if declaration is not None:
+        doc["eco_readiness"] = declaration
+    p = tmp_path / name
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    out = tmp_path / ("feas_" + name)
+    subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
+                    "--json", str(out)], capture_output=True, text=True)
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    return [a for a in rep["candidates"][0]["axes"]
+            if a["axis"] == "eco_readiness"][0]
+
+
+def test_wired_the_signoff_bundle_carries_the_eco_evidence(tmp_path):
+    """The join. `ppa_signoff_records.py` is what the flow runs and what the
+    gate reads; before this it emitted nothing the ECO axis could prove from."""
+    r, bundle = _bundle(_run_tree(tmp_path / "run"), tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    names = {rec["metric"] for rec in bundle["records"]}
+    assert F.ECO_M_COUNT in names
+    assert F.ECO_M_TIE_OFF in names
+    assert F.eco_metric_for_kind("dff") in names
+    assert bundle["eco_readiness_reader"]["program"] == "ppa_eco_spare_records"
+
+
+def test_wired_a_real_run_tree_satisfies_the_axis(tmp_path):
+    axis = _adjudicate(_bundle(_run_tree(tmp_path / "run"), tmp_path)[1],
+                       DECL, tmp_path)
+    assert axis["status"] == "SATISFIED", axis["codes"]
+
+
+def test_wired_a_run_that_deleted_its_spares_violates_the_axis(tmp_path):
+    bundle = _bundle(_run_tree(tmp_path / "run", plan=PLAN_NONE), tmp_path)[1]
+    axis = _adjudicate(bundle, DECL, tmp_path)
+    assert axis["status"] == "VIOLATED"
+
+
+def test_wired_a_run_with_no_spare_plan_is_undetermined_not_zero(tmp_path):
+    """The vacuous arm at the JOIN, which is where it would be lost. A run tree
+    with no plan must not reach the gate as a measured zero."""
+    bundle = _bundle(_run_tree(tmp_path / "run", plan=None), tmp_path)[1]
+    eco_rows = [rec for rec in bundle["records"]
+                if rec["metric"].startswith("design_for_eco.")]
+    assert eco_rows, "the rows must be PRESENT and NOT_MEASURED, never omitted"
+    assert all(rec["status"] != "MEASURED" for rec in eco_rows)
+    assert all("value" not in rec for rec in eco_rows)
+    axis = _adjudicate(bundle, DECL, tmp_path)
+    assert axis["status"] == "UNDETERMINED"
+
+
+def test_wired_preservation_is_read_when_the_run_carries_the_report(tmp_path):
+    root = _run_tree(tmp_path / "run",
+                     preservation={"inserted": 10, "survived": 9,
+                                   "verdict": "FAIL"})
+    bundle = _bundle(root, tmp_path)[1]
+    surviving = [rec for rec in bundle["records"]
+                 if rec["metric"] == F.ECO_M_SURVIVING][0]
+    assert surviving["status"] == "MEASURED"
+    assert surviving["value"] == 9
+    axis = _adjudicate(bundle, dict(DECL, require_preservation=True), tmp_path)
+    assert axis["status"] == "VIOLATED", (
+        "ten were inserted and nine reached the shipped artefacts; the design "
+        "has nine, and nine is below the declared floor of ten")
+
+
+def test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan():
+    """MUTATION ARM for the decision not to re-read the plan here.
+
+    `ppa_signoff_records.py` owns WHERE the flow writes the two artefacts;
+    `ppa_eco_spare_records.py` owns WHAT they say. A second parse in the
+    signoff program would be a second set of the rules that took measurement to
+    get right -- the count-vs-instances contradiction, the NO_WITNESS report,
+    the missing plan that is not a zero -- and the first time the two disagreed
+    a design would pass one gate and fail the other.
+    """
+    import ast
+    src = (_PROGRAMS / "ppa_signoff_records.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    # DOCSTRINGS ARE EXCLUDED ON PURPOSE. This file's own prose NAMES the keys
+    # it refuses to parse -- that is how it explains the rule -- so a plain
+    # substring scan would fail on the explanation and pass on the violation.
+    # The measurement is over the executable AST.
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            d = ast.get_docstring(node, clean=False)
+            if d is not None:
+                docstrings.add(d)
+    code_strings = {n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and n.value not in docstrings}
+    attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    reachable = code_strings | attrs
+
+    for key in ("instances", "tie_off", "cell_map", "spare_pads", "types",
+                "survived", "artefact_agreement", "count"):
+        assert key not in reachable, (
+            f"{key!r} is read in ppa_signoff_records.py's own code. The spare "
+            "plan has ONE reader in this tree and it is "
+            "ppa_eco_spare_records.py; a second parse here is a second set of "
+            "rules for the same artefact.")
+    assert "ppa_eco_spare_records" in src
+
+    # and the detector is shown to FIRE: the reader it delegates to really does
+    # name those keys, so an empty `reachable` set would have passed vacuously.
+    prod = ast.parse((_PROGRAMS / "ppa_eco_spare_records.py").read_text(
+        encoding="utf-8"))
+    prod_strings = {n.value for n in ast.walk(prod)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert {"instances", "tie_off", "cell_map"} <= prod_strings
+
+
+def test_wired_an_eco_only_tree_is_not_a_vacuous_pass(tmp_path):
+    """rc=0 from the signoff program means "at least one axis was MEASURED",
+    and an ECO measurement is one. But the GATE must still refuse: nine axes
+    have no evidence in this tree, and a candidate is promotable only when
+    every axis is."""
+    r, bundle = _bundle(_run_tree(tmp_path / "run"), tmp_path)
+    assert r.returncode == 0
+    doc = {"required_views": [dict(VIEW)],
+           "required_views_by_axis": {"eco_readiness": [dict(VIEW)]},
+           "eco_readiness": DECL,
+           "candidates": [{"candidate_id": "eco-only",
+                           "metrics": bundle["records"]}]}
+    p = tmp_path / "eco_only.json"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p)],
+                          capture_output=True, text=True)
+    assert proc.returncode == F.RC_UNDETERMINED

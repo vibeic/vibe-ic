@@ -366,3 +366,73 @@ def test_M_PATH_7_the_space_still_publishes_for_a_proven_ip_delivery(tmp_path):
     lever = [l for l in space["levers"]
              if l["lever"] == "spare_cell_density"][0]
     assert lever["eco_floor"]["bounds_this_lever"] is False
+
+
+# ---------------------------------------------------------------------------
+# BAD INVOCATION -- 3, and never 2, for both CLIs the route reached
+# ---------------------------------------------------------------------------
+#: §1 gives 2 to "I could not look" and 3 to "you asked wrongly", and the two
+#: are easy to confuse in exactly the way that matters: a caller that skips on 2
+#: reads a misspelled flag as a step with nothing to check. `--project` is a new
+#: flag on two programs, so it gets the arm both of them already have.
+def test_bad_invocation_project_with_no_value_is_3_not_2(tmp_path):
+    for prog, base in ((CHECK, ["--candidates", str(tmp_path / "x.json")]),
+                       (SPACE, [])):
+        r = subprocess.run([sys.executable, str(prog), *base, "--project"],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+        assert r.returncode == 3, (
+            f"{prog.name} exited {r.returncode} on `--project` with no value; "
+            f"§1 says a bad invocation is 3 and 2 would be read as "
+            f"'nothing to check'.\n{r.stderr[-300:]}")
+
+
+def test_bad_invocation_help_documents_project_on_both(tmp_path):
+    """A flag nobody can find is a flag nobody passes, and this one decides
+    what an ABSENT ECO declaration means. Asserted on the OUTPUT rather than
+    the exit code, because one of the two CLIs gets that code wrong -- see
+    below."""
+    for prog in (CHECK, SPACE):
+        r = subprocess.run([sys.executable, str(prog), "--help"],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+        assert "--project" in r.stdout, prog.name
+
+
+def test_bad_invocation_help_exits_0_on_the_search_space(tmp_path):
+    """The opposite mistake, and it is the one the obvious fix invites: asking
+    a program what its flags are is not a bad invocation."""
+    r = subprocess.run([sys.executable, str(SPACE), "--help"],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="PRE-EXISTING, and NOT this branch's to fix. "
+           "`ppa_feasibility_check.py --help` exits 3 instead of 0 -- asking a "
+           "program what its flags are is not a bad invocation. It is measured "
+           "on origin/main, its one-line fix is `_ppa/cli_exit.parse_or_refuse` "
+           "(which this CLI does not use for its own parse), and "
+           "`test_ppa_layer_exit_contract._XFAIL_HELP` already pins it "
+           "strict=True under a stated contract: the fix and the pin's removal "
+           "land together, by the lane that owns them. Fixing it here would "
+           "turn that file red and leave someone else's pin to clean up. This "
+           "arm exists so that a suite which ADDED a flag to that CLI says the "
+           "defect out loud instead of quietly asserting around it.")
+def test_bad_invocation_help_is_0_on_the_feasibility_cli_too(tmp_path):
+    r = subprocess.run([sys.executable, str(CHECK), "--help"],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 0
+
+
+def test_bad_invocation_a_project_that_is_a_file_is_2_not_3(tmp_path):
+    """And the distinction in the other direction. A `--project` that names a
+    FILE is a well-formed invocation pointing at something unusable: that is
+    [CANNOT CHECK], not a usage error, and the two must not swap."""
+    f = tmp_path / "not-a-dir"
+    f.write_text("x", encoding="utf-8")
+    out = tmp_path / "space.json"
+    r = subprocess.run([sys.executable, str(SPACE), "--json", str(out),
+                        "--project", str(f)],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "[CANNOT CHECK]" in r.stderr
