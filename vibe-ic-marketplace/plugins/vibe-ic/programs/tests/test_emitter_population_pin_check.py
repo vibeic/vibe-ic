@@ -860,6 +860,59 @@ def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
     assert doc["findings"] == [], doc
 
 
+#: The denial is WRAPPED: the words that deny sit on the line above the `incr`
+#: they govern. This is the cost `_RECORD_BREAKS` knowingly accepts.
+EMITTER_WRAPPED_DENIAL = (
+    'def script() -> str:\n'
+    '    return """\n'
+    '  # the third repair is deliberately absent: there is no\n'
+    '  # incr _n in the fallback branch\n'
+    '  if {[catch {a}]} { incr _n }\n'
+    '  if {[catch {b}]} { incr _n }\n'
+    '  puts "PARTIAL: $_n of 2 repairs refused"\n'
+    '  if {$_n >= 2} { puts ALL }\n'
+    '"""\n')
+
+
+def test_the_accepted_under_reach_fails_LOUDLY(tmp_path):
+    """THE COST OF `_RECORD_BREAKS`, DEMONSTRATED RATHER THAN ASSERTED.
+
+    That declaration says a script is line-structured, and it is chosen on an
+    argument about WHICH failure is silent: without it the reach runs 240
+    characters through unrelated commands and one `puts "no repair applied"`
+    quietly retracts every denominator near it; with it, a denial WRAPPED across
+    two emitted lines is missed and a phantom member is counted.
+
+    The whole justification is that the second failure is LOUD -- "a REFUSAL a
+    reader sees, and answers". A cost accepted on that ground has to be shown to
+    actually be loud, or the ground is just a sentence. MEASURED here: rc=1,
+    and BOTH numbers are printed --
+
+        counter $_n is incremented at 3 site(s) but its comparison denominator
+        says 2
+
+    -- so a reader has the mismatch and the counter name, and finds the wrapped
+    comment. Compare the silent direction, which would print PASS.
+
+    THIS IS NOT A TEST THAT THE BEHAVIOUR IS RIGHT. The count of 3 is WRONG;
+    there are two repairs. It pins that being wrong here is ANNOUNCED, which is
+    the property the design was chosen for. Its companion is
+    `test_a_denial_is_bounded_by_the_line_it_is_written_on`, which pins the same
+    declaration from the other side."""
+    progs, tests = _tree(tmp_path, EMITTER_WRAPPED_DENIAL, PIN_2)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "the miscount was not announced -- the accepted cost has become the "
+        "silent one, and `_RECORD_BREAKS` no longer has its argument:\n"
+        + r.stdout + r.stderr)
+    assert "incremented at 3 site(s)" in r.stdout, r.stdout
+    assert "says 2" in r.stdout, r.stdout
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["denied_by_polarity"] == [], (
+        "the wrapped denial was seen after all; if the reach now crosses a "
+        f"record boundary, both this and its companion need re-deciding: {doc}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
