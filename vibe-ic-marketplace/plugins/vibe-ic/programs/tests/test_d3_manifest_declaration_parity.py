@@ -145,3 +145,75 @@ def test_the_three_outcomes_are_distinct(rc_name):
     by the wrong outcome and this whole module stops measuring anything."""
     assert len({G.RC_OK, G.RC_FAIL, G.RC_REFUSE}) == 3
     assert isinstance(getattr(G, rc_name), int)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A DUPLICATED STEP ID IS NOT A PARSE DETAIL (measured on main, 2026-08-20)
+#
+# `json.loads` keeps the LAST of two same-named keys and reports nothing. The
+# shipped manifest carried `15.5ic`, `26.5ic`, `37.5ip` and `37.5ic` twice, and
+# the two copies of each disagreed: `"verdict": "ENFORCED"` in the first,
+# `"verdict": "NA_DORMANT_CONDITION"` in the second. Programs read the second.
+# A human reading the file top-down read the first. Both were reading the same
+# committed bytes, so there was no disagreement for anyone to notice.
+#
+# The pairing rule of this module applies: the _PASSES half below is worthless
+# alone — the check that never fires also clears every tree — so it exists only
+# next to the _FAILS half that proves the refusal fires on the real shape.
+# ══════════════════════════════════════════════════════════════════════
+_DUP_MANIFEST = """{
+  "steps": {
+    "S1": {"verdict": "ENFORCED", "entries": {"out/a.json": {"status": "X"}}},
+    "S1": {"verdict": "NA_DORMANT_CONDITION",
+           "entries": {"out/a.json": {"status": "X"}}}
+  }
+}"""
+
+
+def _tree_with_raw_manifest(root: Path, declared: dict, raw: str) -> Path:
+    (root / "flow").mkdir(parents=True, exist_ok=True)
+    (root / "programs" / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
+    steps = [{"id": sid, "required_outputs": list(paths)}
+             for sid, paths in declared.items()]
+    (root / "flow" / "phase1_phase2_phase3.yaml").write_text(
+        yaml.safe_dump({"steps": steps}), encoding="utf-8")
+    (root / "programs" / "tests" / "fixtures"
+     / "matrix_d3_output_manifest.json").write_text(raw, encoding="utf-8")
+    return root
+
+
+def test_a_step_id_recorded_twice_FAILS(tmp_path):
+    """Two records for one step -> REFUSE, and the message names the ids."""
+    root = _tree_with_raw_manifest(tmp_path, {"S1": ["out/a.json"]}, _DUP_MANIFEST)
+    import io
+    import contextlib
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = G.main([str(root)])
+    assert rc == G.RC_REFUSE, (
+        f"a manifest recording S1 twice returned rc={rc}. json.loads keeps the "
+        f"LAST copy silently, so anything short of a refusal lets two "
+        f"contradicting records ship as one.")
+    assert "S1" in err.getvalue(), (
+        f"the refusal must NAME the duplicated id so the fix is mechanical; "
+        f"it said: {err.getvalue()!r}")
+
+
+def test_the_same_tree_with_one_record_PASSES(tmp_path):
+    """The control: identical tree, the duplicate merged away -> rc 0.
+
+    Without this the test above would also pass if the gate refused every
+    manifest, which is the failure mode the module docstring names.
+    """
+    single = _DUP_MANIFEST.replace(
+        '    "S1": {"verdict": "ENFORCED", "entries": {"out/a.json": {"status": "X"}}},\n',
+        "")
+    root = _tree_with_raw_manifest(tmp_path, {"S1": ["out/a.json"]}, single)
+    assert G.main([str(root)]) == G.RC_OK
+
+
+def test_the_real_manifest_carries_no_duplicate_key():
+    """The shipped fixture itself — the reason this refusal exists."""
+    path = (_PLUGIN / "programs" / "tests" / "fixtures"
+            / "matrix_d3_output_manifest.json")
+    G._load_manifest_no_duplicate_keys(path)      # raises if any key repeats

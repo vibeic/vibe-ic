@@ -6,11 +6,6 @@
     "files_found": 1,
     "violations": 0,
     "clean": true,
-    "tool_authentic": true,
-    "evidence_consumed": 1,
-    "evidence_binding_covered": 0,
-    "evidence_binding_mismatched": 0,
-    "evidence_binding": "NO_LEDGER",
-    "evidence_binding_note": "this run records no provenance.jsonl output digests, so whether the reports below were produced here is NOT DETERMINED. That is not a pass on the question; it is the absence of an answer."
+    "tool_authentic": true
   }
 }

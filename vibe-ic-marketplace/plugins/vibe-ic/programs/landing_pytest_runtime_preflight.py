@@ -137,7 +137,23 @@ def isolated_import_lane(python: str) -> Tuple[bool, str]:
 
 
 def entry_probe(python: str, entry: Path) -> subprocess.CompletedProcess:
-    """Execute the real trusted entry on a synthetic one-test subject."""
+    """Execute the real trusted entry on a synthetic one-test subject.
+
+    `entry` is made ABSOLUTE first. The child runs with `cwd` set to the
+    synthetic subject directory, so a relative path that resolved for the caller
+    does not resolve for the child — and the failure arrives as
+    "the trusted entry could not execute and report one synthetic test", a cause
+    this program did not have. MEASURED on 8HD-d at 46db018669, the same tree
+    both ways::
+
+        --programs vibe-ic-marketplace/.../programs   probe_returncode 2  ok false
+        --programs $PWD/vibe-ic-marketplace/.../programs   probe_returncode 0  ok true
+
+    "I could not find the entry" and "the runtime cannot report" are different
+    findings with different remedies, and this gate exists precisely so a reader
+    is not left inferring which one they have.
+    """
+    entry = entry.absolute()
     with tempfile.TemporaryDirectory(prefix="vibeic-runtime-probe-") as raw:
         subject = Path(raw)
         (subject / _PROBE_NAME).write_text(_PROBE_TEST, encoding="utf-8")

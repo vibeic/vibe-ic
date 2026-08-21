@@ -5,12 +5,6 @@
   "note": "The gates that do not yet carry BOTH a can-pass and a can-fail fixture. THIS LIST MAY ONLY SHRINK. An entry is deleted by writing the two fixtures, never by deleting the gate's line from the declaration site. A gate that is not in this list and carries no fixtures FAILS gate_mutation_fixture_check, which is what makes a NEW gate arrive with both directions or not arrive.",
   "entries": [
     {
-      "gate": "PPA head-to-head records",
-      "slug": "ppa_head_to_head_records",
-      "declared_at": "tools/ci/repo_hygiene_gates.sh:104",
-      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/ppa_head_to_head_records.py."
-    },
-    {
       "gate": "plugin version stated in prose",
       "slug": "plugin_version_stated_in_prose",
       "declared_at": "tools/ci/repo_hygiene_gates.sh:107",
@@ -75,18 +69,6 @@
       "slug": "p0_disposition_backing",
       "declared_at": "tools/ci/repo_hygiene_gates.sh:219",
       "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/p0_disposition_backing.py."
-    },
-    {
-      "gate": "image-version pins are internally consistent",
-      "slug": "image_version_pins_are_internally_consistent",
-      "declared_at": "tools/ci/repo_hygiene_gates.sh:241",
-      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/image_version_pins_are_internally_consistent.py."
-    },
-    {
-      "gate": "upstream image currency (report-only)",
-      "slug": "upstream_image_currency_report_only",
-      "declared_at": "tools/ci/repo_hygiene_gates.sh:253",
-      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/upstream_image_currency_report_only.py."
     },
     {
       "gate": "no upstream forked twice",
