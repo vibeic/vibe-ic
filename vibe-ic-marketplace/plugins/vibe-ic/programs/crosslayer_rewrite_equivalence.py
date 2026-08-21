@@ -107,6 +107,7 @@ from lec_run import (  # noqa: E402 — the ONE mature equiv recipe + parser
     _container_available as _container_available,
     _resolve_gold_files as _resolve_rtl_files,
 )
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 PROGRAM = "crosslayer_rewrite_equivalence"
 
@@ -676,12 +677,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.json).stem + "_delay_wrapper.v"))
         Path(wrapper_v).parent.mkdir(parents=True, exist_ok=True)
         params_txt = module_params(merged, args.top)
-        Path(wrapper_v).write_text(
-            build_delay_wrapper(args.top, ports, args.top, wrapper_top,
+        atomic_write_text(Path(wrapper_v),
+                          build_delay_wrapper(args.top, ports, args.top, wrapper_top,
                                 offset, args.clock, params_txt,
                                 reset=args.reset,
                                 reset_active_low=args.reset_active_low),
-            encoding="utf-8")
+                          encoding="utf-8")
         # The CANDIDATE gets a 0-deep pass-through wrapper with the SAME inner
         # instance name. It changes nothing electrically and exists only so
         # that `flatten` stamps the same `u_inner.` prefix on both sides:
@@ -698,11 +699,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             cand_wrapper_top = f"{args.top}__align0"
             cand_wrapper_v = str((project / args.json).with_name(
                 Path(args.json).stem + "_align_wrapper.v"))
-            Path(cand_wrapper_v).write_text(
-                build_delay_wrapper(args.top, cand_ports, args.top,
+            atomic_write_text(Path(cand_wrapper_v),
+                              build_delay_wrapper(args.top, cand_ports, args.top,
                                     cand_wrapper_top, 0, args.clock,
                                     params_txt),
-                encoding="utf-8")
+                              encoding="utf-8")
 
     if not _container_available(args.container):
         return fail_not_measured(
@@ -717,7 +718,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                         cand_wrapper_top=cand_wrapper_top)
     ys_host = (project / args.json).with_name(Path(args.json).stem + ".ys")
     ys_host.parent.mkdir(parents=True, exist_ok=True)
-    ys_host.write_text(script, encoding="utf-8")
+    atomic_write_text(ys_host, script, encoding="utf-8")
 
     t0 = time.time()
     launched, raw = _run_yosys_equiv(args.container, str(ys_host.resolve()),
@@ -726,7 +727,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     elapsed = time.time() - t0
     rpt_host = (project / args.json).with_suffix(".rpt")
     rpt_host.parent.mkdir(parents=True, exist_ok=True)
-    rpt_host.write_text(raw or "", encoding="utf-8")
+    atomic_write_text(rpt_host, raw or "", encoding="utf-8")
 
     if not launched:
         return fail_not_measured(
@@ -748,13 +749,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                                              cand_wrapper_v=cand_wrapper_v,
                                              cand_wrapper_top=cand_wrapper_top)
         ref_ys = ys_host.with_name(Path(args.json).stem + "_refute.ys")
-        ref_ys.write_text(ref_script, encoding="utf-8")
+        atomic_write_text(ref_ys, ref_script, encoding="utf-8")
         _launched2, raw2 = _run_yosys_equiv(
             args.container, str(ref_ys.resolve()), timeout=args.timeout,
             workdir=str(Path(baseline_files[0]).parent))
-        (project / args.json).with_name(
-            Path(args.json).stem + "_refute.rpt").write_text(
-                raw2 or "", encoding="utf-8")
+        atomic_write_text((project / args.json).with_name(
+            Path(args.json).stem + "_refute.rpt"),
+                          raw2 or "",
+                          encoding="utf-8")
         refuted = parse_refutation(raw2) if _launched2 else None
 
     status, rc, explanation = classify(parsed, refuted)

@@ -11,7 +11,13 @@
 #            and the pre-push hook REFUSES a push whose commit has no matching
 #            stamp. That makes the expensive tier enforced rather than optional.
 #
-# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
+# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare] [--serial]
+#
+# --serial (or GATEKEEPER_LANDING_SERIAL=1) runs the full tier's independent
+# stages one after another instead of in four lanes. It is an OPT-OUT: there is
+# no variable that opts IN, because a fast path nobody switches on is a fast
+# path nobody has. See "THE FULL TIER'S INDEPENDENT STAGES RUN AT THE SAME
+# TIME" below for what is and is not in the concurrent window.
 #
 # --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
 # otherwise refuse a batch for, before the cheap tier runs, and let the gates
@@ -63,10 +69,49 @@ BASE="${GATEKEEPER_BASE:-origin/main}"
 RANGE="${BASE}..HEAD"
 CHEAP_ONLY=0
 PREPARE=0
+# THE FULL TIER'S INDEPENDENT STAGES RUN AT THE SAME TIME, BY DEFAULT.
+#
+# `LANE_WIDTH` is the number of full-tier lanes allowed to be live at once.
+# 1 is SERIAL and it is the SAME SCHEDULER, not a second implementation: at
+# width 1 the launch/join loop below executes each lane body in declaration
+# order on the main shell, through the same capture and the same emit, so the
+# journal it produces is asserted equal to the concurrent one
+# (`tools/test_gatekeeper_land_lanes.py`). There is deliberately NO variable
+# that opts IN — a fast path nobody switches on is a fast path nobody has.
+LANE_WIDTH=4
+[ "${GATEKEEPER_LANDING_SERIAL:-0}" = "1" ] && LANE_WIDTH=1
+# --differential (the LANDING GATE, as opposed to the LANDING ARM)
+# ===============================================================
+# Everything below this line judges ABSOLUTELY: "did anything fail", with no
+# reference to what the base tree already does. That is the RIGHT semantics for
+# one ARM of a differential and the WRONG semantics for the whole gate, and the
+# difference is not academic — measured 2026-08-17, `origin/main` (f6b0e77dd)
+# FAILS ITS OWN GATES here (`repo tools tests` 9 red, `repo hygiene gates` 1 of
+# 80), so no stamp is written for main's own tip and `pre-push` refuses it. A
+# commit that FIXES those reds is refused by the same rule. Five rounds, ~2.5
+# hours of gate wall clock, zero landings.
+#
+# REGRESSION means: did THIS change break something that used to work. Asking
+# that needs a second arm at the base, and the second arm is what
+# `tools/gatekeeper-land-differential.sh` adds — using this same script, twice,
+# and `landing_merge_verdict.py` as the single judge, which is exactly what
+# `tools/gatekeeper-verify-merge.sh` has done on the merge path since #1019.
+#
+# It is a separate file rather than a branch inside this one because the
+# differential RUNS this script (twice, concurrently, in throwaway worktrees);
+# a flag handled here would recurse.
 for _arg in "$@"; do
   case "$_arg" in
     --cheap-only) CHEAP_ONLY=1 ;;
     --prepare)    PREPARE=1 ;;
+    --serial)     LANE_WIDTH=1 ;;
+    --differential)
+      _diff="$(git rev-parse --show-toplevel)/tools/gatekeeper-land-differential.sh"
+      [ -f "$_diff" ] || { echo "gatekeeper-land: no $_diff" >&2; exit 2; }
+      _rest=()
+      for _a in "$@"; do [ "$_a" = "--differential" ] || _rest+=("$_a"); done
+      exec bash "$_diff" "${_rest[@]+"${_rest[@]}"}"
+      ;;
     *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
   esac
 done
@@ -142,10 +187,165 @@ report() {                           # report <unit> <label> <cmd…>
     | head -8 | sed 's/^/            /'
   landing_record "$unit" REPORT "$rc" "$out"
 }
-run() {                              # run <unit> <label> <cmd…>
-  local unit="$1" label="$2"; shift 2
-  local out rc state
+# ── run(), SPLIT INTO "EXECUTE" AND "EMIT" — ONE CODE PATH, NOT TWO ────────
+#
+# `run` did four things in one function: execute, buffer, print under a label,
+# and record. Only the first can move off the main shell; the last MUST NOT.
+# `landing_completion_record.append` is an UNLOCKED read-modify-write and
+# `:200` refuses any label that is not `LANDING_PROGRESS_UNITS[len(gates)]`, so
+# a lane that recorded from its own subshell would both append out of order and
+# lose the concurrent updates. Splitting the function is what lets the stages
+# run at the same time while the JOURNAL is still written by one shell, in one
+# order — the fixed-order refusal and the complete-population refusal at `:261`
+# are then satisfied by construction rather than by luck.
+#
+# NOTHING ABOUT BUFFERING CHANGES. `out="$("$@" 2>&1)"` already buffered every
+# stage's output before this split; the only difference is that the buffer now
+# has a name on disk so a stage that ran somewhere else can be printed here.
+#
+# `run` keeps its name, its signature and its output shape: it is capture
+# followed immediately by emit, so every serial stage outside the concurrent
+# window is byte-identical to what this script has always printed.
+LANE_DIR="$(mktemp -d -t gk_lanes.XXXXXX)"
+FP=""
+WG_BASE=""
+LANE_LIVE_PIDS=""
+# THIS SCRIPT HAD NO EXIT TRAP FOR PROCESSES BECAUSE IT HAD NO BACKGROUND WORK.
+# With lanes it must own them: a gate killed mid-tier would otherwise leave
+# pytest and hygiene children writing into the tree AFTER
+# `full:worktree-fingerprint-final` has already stamped it, which is precisely
+# the "the tree moved under the gates" failure the closing pair exists to
+# catch — except nobody would be left to catch it.
+#
+# Modelled on `tools/gatekeeper-verify-merge.sh:822-838`, including its
+# measured lesson: WAIT for each child rather than guessing an outer timeout.
+# Its comment records that a two-second guess killed the wrapper and left the
+# actual gate alive. Each lane is launched under `set -m` so it leads its own
+# process group and the negated PID reaches its whole descendant tree.
+gk_cleanup() {
+  local pid
+  for pid in $LANE_LIVE_PIDS; do
+    kill -TERM -- "-$pid" >/dev/null 2>&1 || kill -TERM "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in $LANE_LIVE_PIDS; do
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in $LANE_LIVE_PIDS; do
+    kill -KILL -- "-$pid" >/dev/null 2>&1 || true
+  done
+  [ -z "$FP" ] || rm -f "$FP"
+  [ -z "$WG_BASE" ] || rm -f "$WG_BASE"
+  # Same `case` safety pattern the verifier uses before every `rm -rf`: the
+  # variable must still name a path this script minted.
+  case "$LANE_DIR" in
+    */gk_lanes.??????) rm -rf "$LANE_DIR" ;;
+  esac
+}
+trap gk_cleanup EXIT
+lane_write() {                       # lane_write <unit> <output> <rc>
+  # THE RETURN CODE FILE IS WRITTEN ATOMICALLY AND LAST. A lane that is killed
+  # must be distinguishable from one that finished; if `.rc` could be observed
+  # half-written, or written before the output it summarises, "no verdict" and
+  # "verdict 0" would be the same state on disk.
+  local unit="$1" out="$2" rc="$3"
+  printf '%s\n' "$out" > "$LANE_DIR/$unit.out"
+  printf '%s' "$rc" > "$LANE_DIR/$unit.rc.tmp" \
+    && mv -f "$LANE_DIR/$unit.rc.tmp" "$LANE_DIR/$unit.rc"
+}
+lane_reported() {                    # lane_reported <unit>
+  # THE POSITIVE SIGNAL THAT A STAGE REACHED THE END OF ITS OWN REPORT.
+  #
+  # `.rc` alone cannot carry it. A capture subshell that is SIGKILLed exits
+  # 128+signal, and 137 is as parsable an integer as 0 or 1 — so for the three
+  # `fn_capture` stages, which report by PRINTING `  FAIL  <label>` rather than
+  # by exiting, a parsable `.rc` is not evidence that anything was reported.
+  # This file is written by the stage's own process AFTER that print, so its
+  # presence means exactly one thing and its absence means the other.
+  printf 'REPORTED' > "$LANE_DIR/$1.reported.tmp" \
+    && mv -f "$LANE_DIR/$1.reported.tmp" "$LANE_DIR/$1.reported"
+}
+run_capture() {                      # run_capture <unit> <cmd…>
+  # These stages report BY EXIT STATUS: `run_emit` prints their label from the
+  # return code, so the capture returning at all IS the report, and the marker
+  # belongs here in the lane shell.
+  local unit="$1"; shift
+  local out rc
   out="$("$@" 2>&1)"; rc=$?
+  lane_reported "$unit"
+  lane_write "$unit" "$out" "$rc"
+  return 0
+}
+fn_capture() {                       # fn_capture <unit> <fn…>
+  # For the three stages that print their own PASS/FAIL lines and signal
+  # through `FAILED` rather than through an exit status. `FAILED` is reset
+  # inside the subshell so the stage's verdict is its OWN, and the function's
+  # return code is folded in as well: a stage that returned non-zero without
+  # setting FAILED must not be read as a pass.
+  #
+  # `lane_reported` is INSIDE the subshell, after the stage function has
+  # returned and therefore after its own label was printed. A stage killed
+  # before that point leaves no marker, and `lane_resolve` then refuses to read
+  # its exit status as a verdict.
+  local unit="$1"; shift
+  local out rc
+  out="$( FAILED=0; "$@" 2>&1; _frc=$?; [ "$_frc" -eq 0 ] || FAILED=1
+          lane_reported "$unit"
+          exit "$FAILED" )"; rc=$?
+  lane_write "$unit" "$out" "$rc"
+  return 0
+}
+# LANE_WAIT_RC / LANE_BROKEN are set by `lane_join` for the group of units
+# being emitted next; `lane_resolve` reads them to decide what a missing
+# verdict means. EMIT_RC / EMIT_OUT are its outputs.
+LANE_WAIT_RC=0
+LANE_BROKEN=0
+EMIT_RC=0
+EMIT_OUT=""
+lane_resolve() {                     # lane_resolve <unit> [--last]
+  # A KILLED LANE REACHES THE VERDICT AS FAILED, NEVER ABSENT AND NEVER A PASS.
+  #
+  # Absence is NOT the signal, and assuming it was is the defect this replaces:
+  # a redirect creates the output file at fork time, so a killed lane leaves a
+  # PARTIAL file, not no file. Worse, `landing_merge_verdict.py:958` accepts
+  # rc=1 as an ordinary red and then subtracts BY PRINTED LABEL, so a lane that
+  # died contributing no label at all is absorbed as "no new failure".
+  #
+  # So a record is MANDATORY for every unit: the main shell pre-creates `.rc`
+  # holding the literal NORECORD, the lane overwrites it atomically with an
+  # integer as its last action, and anything else — NORECORD, missing,
+  # unparsable — is resolved HERE into a labelled FAIL. rc must be non-zero
+  # because `landing_completion_record.py:190-196` refuses FAIL with rc 0; 199
+  # is the value `pytest_per_file_junit` already uses for the same meaning.
+  local unit="$1" last="${2:-}" raw reported=0
+  EMIT_OUT="$(cat "$LANE_DIR/$unit.out" 2>/dev/null || true)"
+  raw="$(cat "$LANE_DIR/$unit.rc" 2>/dev/null || true)"
+  [ -f "$LANE_DIR/$unit.reported" ] && reported=1
+  if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -le 255 ] && [ "$reported" -eq 1 ] \
+     && { [ "$LANE_BROKEN" -eq 0 ] || [ "$last" != "--last" ]; }; then
+    EMIT_RC="$raw"
+    return 0
+  fi
+  EMIT_RC="$LANE_WAIT_RC"
+  [[ "$EMIT_RC" =~ ^[0-9]+$ ]] && [ "$EMIT_RC" -ne 0 ] && [ "$EMIT_RC" -le 255 ] \
+    || EMIT_RC=199
+  if [ "$reported" -eq 0 ] && [[ "$raw" =~ ^[0-9]+$ ]]; then
+    # THE STAGE DIED INSIDE A LANE THAT STAYED ALIVE. Named separately because
+    # the two events need different repairs from a reader: a dead lane loses
+    # every unit after the one it was on, a dead STAGE loses only this one and
+    # the lane's later units reported normally right underneath it.
+    EMIT_OUT="$EMIT_OUT
+NORECORD  stage $unit exited (rc $raw) but did not reach its own report — killed inside a lane that stayed alive. Its label was never printed, and an unprinted label is not a pass."
+  else
+    EMIT_OUT="$EMIT_OUT
+NORECORD  lane $unit left no verdict — killed, or it did not finish. This is not a pass."
+  fi
+  return 1
+}
+run_emit() {                         # run_emit <unit> <label>
+  local unit="$1" label="$2"
+  local out rc state
+  lane_resolve "$unit" "${3:-}" || true
+  out="$EMIT_OUT"; rc="$EMIT_RC"
   if [ "$rc" -eq 0 ]; then
     printf '  PASS  %s\n' "$label"
     state=PASS
@@ -170,6 +370,33 @@ run() {                              # run <unit> <label> <cmd…>
     state=FAIL
   fi
   landing_record "$unit" "$state" "$rc" "$out"
+}
+fn_emit() {                          # fn_emit <unit> <label> [--last]
+  # THE EMIT FOR A STAGE THAT PRINTS ITS OWN LABEL.
+  #
+  # `run_emit` prints `PASS`/`FAIL <label>` from the return code. The three
+  # `fn_capture` stages print it themselves, so this one normally only replays
+  # what they wrote — EXCEPT when they never got there. A stage killed inside a
+  # live lane leaves a parsable `.rc` and no report marker, and
+  # `landing_merge_verdict.py` subtracts the two arms' gate logs BY PRINTED
+  # LABEL: a stage that contributed no label at all is absorbed as "no new
+  # failure", which is the permissive direction and the one that lands.
+  #
+  # So the label is printed HERE when the stage could not print it. WITHOUT ITS
+  # DISCOVERY COUNT, because the count was never measured: the base arm's line
+  # carries one and this one does not, the two labels therefore do not match,
+  # and the differential reads the gate as failing on the candidate alone —
+  # which is exactly what an unmeasured stage is.
+  local unit="$1" label="$2" resolved=0
+  lane_resolve "$unit" "${3:-}" || resolved=1
+  printf '%s\n' "$EMIT_OUT"
+  [ "$resolved" -eq 0 ] || printf '  FAIL  %s\n' "$label"
+  return 0
+}
+run() {                              # run <unit> <label> <cmd…>
+  local unit="$1" label="$2"; shift 2
+  run_capture "$unit" "$@"
+  run_emit "$unit" "$label"
 }
 
 echo "=== gatekeeper landing gates — base=$BASE ==="
@@ -358,7 +585,6 @@ fi
 # stamped 9fd81bb45 — a tree that never existed. FP is per-run, so two gates in
 # one checkout do not read each other's.
 FP="$(mktemp -t gk_fingerprint.XXXXXX)"
-trap 'rm -f "$FP"' EXIT
 run "cheap:worktree-clean" "worktree carries no uncommitted change" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --emit-fingerprint "$FP"
@@ -462,9 +688,143 @@ fi
 # plugin's rootdir conftest) cannot see them. That gap is exactly the stage
 # whose family this repo already caught rewriting 77 tracked files.
 WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
-trap 'rm -f "$FP" "$WG_BASE"' EXIT
 run "full:write-guard-baseline" "write-guard baseline" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+
+# ── THE FULL TIER'S INDEPENDENT STAGES RUN AT THE SAME TIME ────────────────
+#
+# The concurrent window is exactly `LANDING_PROGRESS_UNITS[15..20]` — a
+# contiguous six-unit run inside a 24-unit FIXED sequence. Everything before it
+# (units 0-14 and the pytest runtime preflight) and everything after it (units
+# 21-23) stays serial, because both ends are producer/consumer brackets:
+# `cheap:worktree-clean` emits $FP which `full:worktree-fingerprint-final`
+# re-checks, and `full:write-guard-baseline` writes $WG_BASE which
+# `full:write-guard-final` compares. Four lanes:
+#
+#   L1  full:targeted-tests                                     (unit 15)
+#   L2  repo-tools -> unselectable -> unselectable-census       (units 16-18)
+#   L3  full:repo-hygiene                                       (unit 19)
+#   L4  full:plugin-audit                                       (unit 20)
+#
+# L2 IS ONE ORDERED LANE AND THAT IS NOT A CONVENIENCE. Its first two stages
+# each wrap their own WHOLE-REPO `suite_write_guard` snapshot/compare bracket;
+# two brackets spanning the same instant cannot separate a writer from a gate
+# that merely overlapped it, which is exactly what `tools/ci/_gate_dispatch.sh`
+# already measured ("JOBS=8 wrote_corpus 2 passed 0 — BOTH recorded
+# WROTE_CORPUS"). The third stage audits the very corpus the second one ran.
+# Ordering them costs nothing: 96.5 s of lane hides inside hygiene's 259 s.
+#
+# NO SHARED MUTABLE STATE, ASSERTED RATHER THAN ARGUED. The tier's own closing
+# gates certify it on EVERY round — "the full tier wrote nothing into the tree"
+# and "worktree unchanged since the gates started" — and both brackets are
+# taken on the MAIN shell, before any lane starts and after every lane is
+# joined, so the window they assert over is WIDER than before, not narrower.
+# In a verified arm it is enforced by the kernel instead:
+# `hermetic_candidate_runner.py:849-853` refuses unless the subject, runtime
+# and corpus binds are read-only. Every lane writes only to `$TMPDIR`, its own
+# `mktemp` files, and (L3 only) a git worktree registration under `.git` that
+# `git status` never reports. No lane reads another lane's output.
+#
+# THE PROCESS BUDGET IS CONSTANT — the fan-out RE-ALLOCATES the tier's existing
+# budget instead of adding to it. The one measured concurrency harm on record
+# is `gates are host-independent` going from 168 s to a 600 s per-worker budget
+# KILL, and an arm's 300 s aggregate progress lease turning a green session
+# into AGGREGATE_NORECORD, which in `--aggregate-only` mode refuses the whole
+# verification. Both are load-sensitive by construction, so the hygiene pool
+# gives back exactly what the other lanes take:
+#
+#     hygiene pool width = budget - (number of OTHER live lanes)
+#
+# COMPUTED from the lane set actually launched, not configured. Direct-push
+# (L1+L2+L4 live): 8-3 = 5. Arm shape, targeted skipped (L2+L4): 8-2 = 6.
+# Serial: 8, unchanged. Peak concurrent process count in the tier is 8 in every
+# shape, so a neighbouring B1/A1 arm sees the load it sees today.
+LANE_LAUNCHED=""                     # names, in declaration order
+HYGIENE_POOL=8
+lane_launch() {                      # lane_launch <name> <fn…>
+  local name="$1"; shift
+  eval "LANE_JOINED_$name="; eval "LANE_RC_$name=0"
+  eval "LANE_PID_$name=";    eval "LANE_BODY_$name="
+  if [ "$LANE_WIDTH" -le 1 ]; then
+    # WIDTH 1 IS THE SAME SCHEDULER, NOT A SECOND IMPLEMENTATION. The body is
+    # DEFERRED to the join so the serial order is the DECLARATION order —
+    # targeted, corpus, hygiene, audit — which is exactly the order this script
+    # ran these stages in before lanes existed.
+    eval "LANE_BODY_$name=\"\$*\""
+  else
+    # THE PID COMES BACK IN A VARIABLE, NOT ON STDOUT. `PID="$(lane_launch …)"`
+    # would start the job inside the command substitution's OWN subshell, so
+    # `wait "$PID"` in the main shell fails with "not a child of this shell" —
+    # the lane would be unwaited, unjoined, and its non-zero exit would never
+    # reach FAILED. A gate that cannot fail is worse than no gate.
+    #
+    # `set -m` gives the lane its own PROCESS GROUP so the EXIT trap's
+    # `kill -- -PID` reaches its whole descendant tree; without it, killing the
+    # lane shell leaves pytest and hygiene children running against a tree the
+    # closing gates have already stamped.
+    #
+    # stdin from /dev/null and BOTH output channels into a named lane log: the
+    # labelled stream on stdout belongs to the main shell alone. Anything a
+    # lane prints outside `lane_write` would otherwise land between two labels
+    # and be read as belonging to one of them.
+    set -m
+    ( "$@" ) </dev/null >"$LANE_DIR/$name.lane.log" 2>&1 &
+    eval "LANE_PID_$name=\$!"
+    set +m
+    eval "LANE_LIVE_PIDS=\"\$LANE_LIVE_PIDS \$LANE_PID_$name\""
+  fi
+  LANE_LAUNCHED="$LANE_LAUNCHED $name"
+}
+lane_join() {                        # lane_join <name>   → LANE_WAIT_RC/LANE_BROKEN
+  # IDEMPOTENT. The window is joined once as a whole (so the write-guard
+  # attribution question can be asked with every lane terminal) and then again,
+  # lane by lane, as the emits walk the units in order. A second `wait` on a
+  # reaped PID reports failure, so the first join's verdict is REMEMBERED
+  # rather than re-measured.
+  local name="$1" pid body rc=0 joined
+  eval "joined=\"\${LANE_JOINED_$name:-}\""
+  if [ -z "$joined" ]; then
+    eval "pid=\"\${LANE_PID_$name:-}\""
+    if [ -z "$pid" ]; then
+      eval "body=\"\${LANE_BODY_$name:-}\""
+      [ -z "$body" ] || { $body </dev/null >"$LANE_DIR/$name.lane.log" 2>&1 || rc=$?; }
+    else
+      wait "$pid" || rc=$?
+      # Drop it from the reaping set: the EXIT trap must not signal a PID the
+      # kernel may already have recycled onto somebody else's process.
+      LANE_LIVE_PIDS="$(printf '%s\n' ${LANE_LIVE_PIDS:-} \
+        | grep -vx "$pid" | tr '\n' ' ')"
+    fi
+    eval "LANE_RC_$name=\$rc"
+    eval "LANE_JOINED_$name=1"
+  fi
+  eval "LANE_WAIT_RC=\$LANE_RC_$name"
+  LANE_BROKEN=0
+  [ "$LANE_WAIT_RC" -eq 0 ] || LANE_BROKEN=1
+}
+# EVERY UNIT IN THE WINDOW GETS A RECORD SLOT BEFORE ANY LANE STARTS. The
+# literal `NORECORD` is what `lane_resolve` turns into a labelled FAIL, so a
+# unit whose lane never reached it is IMPOSSIBLE to read as a pass and
+# impossible to read as absent.
+LANE_WINDOW_UNITS=(
+  "full:targeted-tests"
+  "full:repo-tools-tests"
+  "full:unselectable-tests"
+  "full:unselectable-census"
+  "full:repo-hygiene"
+  "full:plugin-audit"
+)
+lane_window_reset() {
+  local unit
+  for unit in "${LANE_WINDOW_UNITS[@]}"; do
+    printf 'NORECORD' > "$LANE_DIR/$unit.rc"
+    : > "$LANE_DIR/$unit.out"
+    # The report marker is EVIDENCE FROM THIS ROUND. A stale one from the
+    # serial re-run's predecessor would vouch for a stage this round killed.
+    rm -f "$LANE_DIR/$unit.reported" "$LANE_DIR/$unit.reported.tmp"
+  done
+  rm -f "$LANE_DIR/targeted.norecord"
+}
 
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
@@ -611,7 +971,20 @@ run_pytest() {
   # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver.  It
   # intentionally carries no fixed timeout: only the driver's strict semantic
   # lifecycle lease may classify the run NORECORD.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+  # `PYTHONDONTWRITEBYTECODE=1` FREEZES THE HOST-INDEPENDENCE GATE'S STIMULUS.
+  # `gate_host_independence_check.py` takes the checkout's UNTRACKED + IGNORED
+  # paths AS ITS SUBJECT (:209 says `tracked` invalidates the comparison,
+  # `untracked` + `ignored` ARE the comparison; :407 collects them with
+  # `git status --ignored=traditional`). Bytecode churn from a neighbouring
+  # lane is written straight into that set, and losing the race does not fail
+  # louder — `run_tolerating_uncheckable` downgrades it to NOT CHECKED (rc 2,
+  # non-fatal), which is a check made WEAKER by parallelism and is forbidden.
+  # `python3 -I` does not imply `-B`, so the token is required and is not
+  # implied by the isolated entry. It does not make the gate check less: it
+  # makes the stimulus the checkout's PRE-EXISTING dirt, which is exactly what
+  # that gate's own docstring says its subject is, and it makes that stimulus
+  # IDENTICAL between the serial and the concurrent shape.
+  if out="$( cd "$PLUGIN" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
         --aggregate-check \
@@ -628,7 +1001,7 @@ run_pytest() {
     # the write guard from the session would be a false green, and it would look
     # exactly like this one. The guard reports on every session it is loaded into,
     # so its absence from the output means it did not run.
-    if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
+    if ! grep -qa 'suite_write_guard:' <<<"$out"; then
       echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
       echo "        write guard, so 'the suite wrote nothing' was never checked."
       FAILED=1
@@ -643,29 +1016,62 @@ run_pytest() {
     printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
-    [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
+    # THROUGH A FILE, because this stage now runs in a lane and a variable set
+    # in a subshell never reaches the main shell. The refusal below reads the
+    # file; a variable would have read 0 forever and silently disarmed the
+    # absolute NORECORD refusal.
+    [ "$rc" -eq 2 ] && { TARGETED_NORECORD=1; : > "$LANE_DIR/targeted.norecord"; }
   fi
+  # `grep -q … <<<"$out"`, NEVER `printf … | grep -q …`. THE PIPE FORM ANSWERS
+  # THE WRONG QUESTION, AND IT ANSWERS IT IN THE PERMISSIVE DIRECTION.
+  #
+  # This file runs under `set -o pipefail`. `grep -q` exits the instant it
+  # matches; if the buffer is bigger than a pipe can hold, `printf` is still
+  # writing, takes SIGPIPE, and the PIPELINE's status becomes 141 — so a MATCH
+  # is reported to the `if` as a NON-match. MEASURED, this shell, 1.75 MB
+  # buffer, `^AGGREGATE_NORECORD`:
+  #
+  #     match on the FIRST line   → 141 141 141 141 141 141 141 141 141 141 141 141
+  #     match on the LAST line    →   0   0   0   0   0   0
+  #
+  # The verdict therefore depended on WHERE in the driver's output the marker
+  # landed and on how the two processes were scheduled — not on the subject.
+  # Caught by exactly that: two rounds over one frozen tree whose targeted arms
+  # were byte-identical (same 18 files, same AGGREGATE_NORECORD text, same 382
+  # cases) printed DIFFERENT labels, `targeted aggregate session produced no
+  # status` and `… produced no complete record`.
+  #
+  # THE DIRECTION IS WHAT MAKES IT A DEFECT AND NOT A WART. For the NORECORD /
+  # NOTRUN / AGGREGATE_NORECORD probes a 141 MISSES A REAL REFUSAL — "I could
+  # not look" reaching the reader as "I looked and it was fine", which is the
+  # one direction this battery exists to make impossible. It also renames a
+  # gate between two arms that `landing_merge_verdict` subtracts BY PRINTED
+  # LABEL, so the differential reads one gate as two.
+  #
+  # A herestring has no pipe, no second process and no SIGPIPE, and asks the
+  # identical question of the identical bytes.
+  #
   # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
   # driver/subject stdout channel: pytest can print marker-looking text. It
   # derives completeness from exact process suites in the merged JUnit.
-  if printf '%s\n' "$out" | grep -qa '^=== pytest junit summary'; then
+  if grep -qa '^=== pytest junit summary' <<<"$out"; then
     printf '  REPORT  targeted test process verdicts embedded in junit\n'
   else
     printf '  FAIL  targeted test instrument produced no junit summary\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+  if grep -qa '^NORECORD' <<<"$out"; then
     printf '  FAIL  targeted per-file session produced no complete record\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+  if grep -qa '^NOTRUN' <<<"$out"; then
     printf '  FAIL  targeted per-file session was not run\n'
     FAILED=1
   fi
-  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+  if grep -qa '^AGGREGATE_NORECORD' <<<"$out"; then
     printf '  FAIL  targeted aggregate session produced no complete record\n'
     FAILED=1
-  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+  elif grep -qa '^AGGREGATE_COMPLETE' <<<"$out"; then
     printf '  REPORT  targeted aggregate session completed\n'
   else
     printf '  FAIL  targeted aggregate session produced no status\n'
@@ -674,25 +1080,7 @@ run_pytest() {
   rm -f "$sel"
   if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
-if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
-  echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
-  landing_skip "full:targeted-tests" "measured by the aggregate test arm"
-else
-  _landing_before="$FAILED"
-  run_pytest
-  landing_manual_stage "full:targeted-tests" "$_landing_before"
-fi
-
-# Merge verification already has enough evidence to refuse once the aggregate
-# session produced NO complete record.  Continuing through every remaining gate
-# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
-# tests do NOT take this branch because the differential still has to decide
-# whether they were pre-existing.
-if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
-   && [ "${TARGETED_NORECORD:-0}" = "1" ]; then
-  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; remaining gates were not run"
-  exit 2
-fi
+lane_targeted() { fn_capture "full:targeted-tests" run_pytest; }
 
 # ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
 # `run_pytest` above cannot reach them, and not by accident: the targeted
@@ -740,7 +1128,12 @@ run_repo_tools_pytest() {
   list="$(mktemp -t gk_tools_sel.XXXXXX)"
   merged="$(mktemp -t gk_tools_junit.XXXXXX)"
   printf '%s\n' "${files[@]}" > "$list"
-  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  # `PYTHONDONTWRITEBYTECODE=1` — see the note in `run_pytest`. This stage is
+  # the one that MEASURABLY writes bytecode into $ROOT on main today: it never
+  # set the token and `python3 -I` does not imply `-B`. That churn lands in
+  # `gate_host_independence_check`'s untracked+ignored stimulus set, which is
+  # the one ordering hazard concurrency here would otherwise create.
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
         python3 "$PROGRAMS/pytest_per_file_junit.py" \
         --selection "$list" --junit "$merged" --cwd "$ROOT" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
@@ -770,11 +1163,6 @@ run_repo_tools_pytest() {
   printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
   return 0
 }
-if run_repo_tools_pytest; then
-  landing_record "full:repo-tools-tests" PASS 0 "repo tools tests complete"
-else
-  landing_record "full:repo-tools-tests" FAIL 1 "repo tools tests failed"
-fi
 
 # ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
 # vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
@@ -907,18 +1295,22 @@ run_unselectable_pytest() {
   echo "  PASS  unselectable tests"
   return 0
 }
-if run_unselectable_pytest; then
-  landing_record "full:unselectable-tests" PASS 0 "unselectable tests complete"
-else
-  landing_record "full:unselectable-tests" FAIL 1 "unselectable tests failed"
-fi
-
-# The census that decides the stage above must itself be trustworthy: a
-# subtrahend whose stage no longer exists, or an exclusion whose reason no
-# longer describes anything, both shrink the corpus in the direction that still
-# prints PASS. rc=1 on either.
-run "full:unselectable-census" "unselectable-test census is not stale" \
-    python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+# ── L2: ONE ORDERED LANE ───────────────────────────────────────────────────
+# The two pytest stages must not overlap EACH OTHER — each wraps its own
+# whole-repo `suite_write_guard` snapshot/compare bracket, and two brackets
+# spanning one instant cannot tell a writer from a gate that merely overlapped
+# it. The census then audits the very corpus the second stage just ran. One
+# lane, in order, preserves both properties for free.
+lane_corpus() {
+  fn_capture "full:repo-tools-tests"   run_repo_tools_pytest
+  fn_capture "full:unselectable-tests" run_unselectable_pytest
+  # The census that decides the stage above must itself be trustworthy: a
+  # subtrahend whose stage no longer exists, or an exclusion whose reason no
+  # longer describes anything, both shrink the corpus in the direction that
+  # still prints PASS. rc=1 on either.
+  run_capture "full:unselectable-census" \
+      python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+}
 
 # THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
 #
@@ -952,11 +1344,152 @@ GK_HYG=()
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
-run "full:repo-hygiene" "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
-    env "VIBEIC_SUBJECT_ROOT=$ROOT" \
-    bash "$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh" \
-    "${GK_HYG[@]+"${GK_HYG[@]}"}"
-run "full:plugin-audit" "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+lane_hygiene() {
+  run_capture "full:repo-hygiene" "${GK_HYG_ENV[@]}" \
+      env "VIBEIC_SUBJECT_ROOT=$ROOT" \
+      "GATEKEEPER_HYGIENE_JOBS=$HYGIENE_POOL" \
+      bash "$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh" \
+      "${GK_HYG[@]+"${GK_HYG[@]}"}"
+}
+# `full:plugin-audit` IS KEPT, AND SO IS THE HYGIENE TIER'S OWN COPY.
+#
+# On the DIRECT-PUSH path these two are the same program over the same tree —
+# `plugin_full_audit.main` defaults `plugin_root` to the directory this call
+# site names explicitly, and `repo_hygiene_gates.sh:180` resolves the same
+# script — so it is tempting to call one a duplicate and delete it. Do not.
+#
+#   * The LABEL is `LANDING_PROGRESS_UNITS[20]`. Removing it refuses every
+#     landing driven with `VIBEIC_LANDING_PROGRESS` set, which is exactly how
+#     the B2/A2 arms are driven: `landing_completion_record.finish` refuses
+#     unless the emitted labels equal the complete 24-entry tuple.
+#   * In an ARM they are not the same subject at all. This one runs the
+#     TRUSTED `/runtime` copy of the program; the hygiene tier runs the copy
+#     resolved against the candidate-controlled `/subject`. Two different
+#     instruments asking the same question of the same tree is the point.
+#
+# Both are read-only readers, 20.2 s and 21 s, so they cost nothing beside a
+# 259 s hygiene lane.
+lane_audit() {
+  run_capture "full:plugin-audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+}
+
+# ── LAUNCH THE WINDOW, JOIN IT, THEN EMIT IN DECLARATION ORDER ─────────────
+#
+# `run_emit` is called ONLY from the MAIN shell and ONLY in
+# LANDING_PROGRESS_UNITS order. That one rule satisfies two requirements at
+# once: the labelled stream appears in declaration order, so a finding can
+# never be printed under the wrong label (the measured reason
+# `tools/ci/_gate_dispatch.sh` buffers and replays one level down), and
+# `landing_completion_record.py:200`'s fixed-order refusal and `:261`'s
+# complete-population refusal are met by construction.
+lane_run_window() {
+  local skipped="${GATEKEEPER_SKIP_TARGETED_TESTS:-0}"
+  local others=0
+  lane_window_reset
+  LANE_LAUNCHED=""
+  if [ "$LANE_WIDTH" -gt 1 ]; then
+    others=2                                    # L2 corpus + L4 audit
+    [ "$skipped" = "1" ] || others=3            # + L1 targeted
+  fi
+  local budget="${GATEKEEPER_HYGIENE_JOBS:-8}"
+  [[ "$budget" =~ ^[0-9]+$ ]] || budget=8
+  HYGIENE_POOL=$(( budget - others ))
+  [ "$HYGIENE_POOL" -ge 1 ] || HYGIENE_POOL=1
+  [ "$skipped" = "1" ] || lane_launch targeted lane_targeted
+  lane_launch corpus  lane_corpus
+  lane_launch hygiene lane_hygiene
+  lane_launch audit   lane_audit
+}
+lane_emit_window() {
+  local skipped="${GATEKEEPER_SKIP_TARGETED_TESTS:-0}"
+  if [ "$skipped" = "1" ]; then
+    echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+    landing_skip "full:targeted-tests" "measured by the aggregate test arm"
+  else
+    lane_join targeted
+    _landing_before="$FAILED"
+    fn_emit "full:targeted-tests" "targeted tests" --last
+    [ "$EMIT_RC" -eq 0 ] || FAILED=1
+    landing_manual_stage "full:targeted-tests" "$_landing_before"
+  fi
+
+  lane_join corpus
+  fn_emit "full:repo-tools-tests" "repo tools tests"
+  if [ "$EMIT_RC" -eq 0 ]; then
+    landing_record "full:repo-tools-tests" PASS 0 "repo tools tests complete"
+  else
+    FAILED=1
+    landing_record "full:repo-tools-tests" FAIL "$EMIT_RC" "repo tools tests failed"
+  fi
+  fn_emit "full:unselectable-tests" "unselectable tests"
+  if [ "$EMIT_RC" -eq 0 ]; then
+    landing_record "full:unselectable-tests" PASS 0 "unselectable tests complete"
+  else
+    FAILED=1
+    landing_record "full:unselectable-tests" FAIL "$EMIT_RC" "unselectable tests failed"
+  fi
+  run_emit "full:unselectable-census" "unselectable-test census is not stale" --last
+
+  lane_join hygiene
+  run_emit "full:repo-hygiene" "repo hygiene gates" --last
+
+  lane_join audit
+  run_emit "full:plugin-audit" "plugin full audit" --last
+}
+
+# ── WRITE-GUARD ATTRIBUTION: FAIL-SAFE, WITH A FAILURE-PATH RETRY ──────────
+#
+# L1's session-scoped guard and L2's two whole-repo brackets now span the other
+# lanes, so a write by any lane is charged to whichever bracket is open. The
+# direction is fail-safe and cache churn cannot trip it: `suite_write_guard.py`
+# classifies IGNORED (`!!`) as advisory and never blocking (:36) and counts
+# `__pycache__`/`.pytest_cache`/`*.pyc` as regenerable noise (:117-128), so
+# only an UNTRACKED non-ignored write could be misattributed — and the tier's
+# own closing gate asserts on every round that no such write happens.
+#
+# When it DOES happen, do not guess the author: re-run the whole window at
+# width 1 and report THAT run's attribution. Costs 0 s on a green round and one
+# window on a round that is already failing — the same principle as the
+# fallback pool, recovery adds nothing to the successful critical path.
+lane_window_saw_a_write() {
+  local unit
+  for unit in "${LANE_WINDOW_UNITS[@]}"; do
+    grep -qa 'wrote to the tree (write-guard rc=' "$LANE_DIR/$unit.out" \
+      2>/dev/null && return 0
+  done
+  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --compare "$WG_BASE" \
+    >/dev/null 2>&1 || return 0
+  return 1
+}
+lane_run_window
+if [ "$LANE_WIDTH" -gt 1 ]; then
+  for _lane in $LANE_LAUNCHED; do lane_join "$_lane"; done
+  if lane_window_saw_a_write; then
+    echo "  REPORT  a write-guard bracket reported a write inside the concurrent"
+    echo "          window — re-running that window SERIALLY so the write is"
+    echo "          attributed to a stage rather than to an overlap."
+    LANE_WIDTH=1
+    lane_run_window
+  fi
+fi
+lane_emit_window
+
+# Merge verification already has enough evidence to refuse once the aggregate
+# session produced NO complete record.  Continuing through every remaining gate
+# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
+# tests do NOT take this branch because the differential still has to decide
+# whether they were pre-existing.
+#
+# THE WINDOW ABOVE IS NOT "REMAINING GATES". Those lanes were launched beside
+# the targeted arm, so by the time this line is reached their verdicts already
+# exist and have already been printed; abandoning them here would discard
+# evidence that has already been paid for. What is still refused is everything
+# BELOW: the closing tree gates and the stamp.
+if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
+   && [ -e "$LANE_DIR/targeted.norecord" ]; then
+  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; the closing tree gates were not run"
+  exit 2
+fi
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
@@ -1007,5 +1540,15 @@ elif [ "$FAILED" -eq 0 ]; then
 else
   rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  # AND SAY WHICH QUESTION WAS ASKED. This tier is ABSOLUTE: it refuses on any
+  # red, including one the base tree already carries. On 2026-08-17 that made
+  # main's own tip unpushable to main, so a reader of this line needs to know
+  # that "did I break it" is a DIFFERENT question and that this repo can ask it.
+  if [ "${GATEKEEPER_VERIFY_ARM:-}" = "" ]; then
+    echo "    This run judged ABSOLUTELY — any red refuses, pre-existing or not."
+    echo "    For the REGRESSION question (did THIS change break something that"
+    echo "    used to work), which measures the base as well and reports what it"
+    echo "    inherits by name:  tools/gatekeeper-land.sh --differential"
+  fi
 fi
 exit "$FAILED"

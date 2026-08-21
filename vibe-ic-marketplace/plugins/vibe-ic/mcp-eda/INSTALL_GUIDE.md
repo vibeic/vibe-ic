@@ -161,7 +161,8 @@ docker run -d --name vibeic-eda \
   -p 5901:5901 \
   vibeic-eda:latest --skip sleep infinity
 # Tip: to swap an already-running container to a new tag WITHOUT retyping the mounts/ports,
-# use the config-preserving helper:  tools/vibeic-eda/restart-eda.sh 0.2.12
+# use the config-preserving helper:  tools/vibeic-eda/restart-eda.sh
+# (no argument = the newest vibeic-eda image this host holds, by digest; or pass a tag)
 ```
 
 ### Mount Point Explanation
