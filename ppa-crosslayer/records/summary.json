@@ -437,6 +437,166 @@
    "objective_reason": null,
    "synth_area_um2": 2601.2448
   },
+  "u01": {
+   "trial": "u01",
+   "rtl_variant": "csa_mux",
+   "synthesis_strategy": "hc",
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.00",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 392.36,
+    "cpu_seconds": 561.567,
+    "peak_rss_mb": 990.6
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 5941.0,
+   "objective_reason": null,
+   "feasibility_verdict": "UNDETERMINED",
+   "axes": {
+    "setup": "SATISFIED",
+    "hold": "SATISFIED",
+    "drv": "SATISFIED",
+    "drc": "SATISFIED",
+    "lvs": "SATISFIED",
+    "antenna": "SATISFIED",
+    "ir": "SATISFIED",
+    "em": "UNDETERMINED",
+    "equivalence": "UNDETERMINED"
+   },
+   "power_postroute_w": 0.000747,
+   "synth_area_um2": 2417.3184
+  },
+  "u02": {
+   "trial": "u02",
+   "rtl_variant": "csa_mux_hier",
+   "synthesis_strategy": "ks",
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.00",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 309.285,
+    "cpu_seconds": 368.255,
+    "peak_rss_mb": 594.9
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 5959.0,
+   "objective_reason": null,
+   "feasibility_verdict": "UNDETERMINED",
+   "axes": {
+    "setup": "SATISFIED",
+    "hold": "SATISFIED",
+    "drv": "SATISFIED",
+    "drc": "SATISFIED",
+    "lvs": "SATISFIED",
+    "antenna": "SATISFIED",
+    "ir": "SATISFIED",
+    "em": "UNDETERMINED",
+    "equivalence": "UNDETERMINED"
+   },
+   "power_postroute_w": 0.000756,
+   "synth_area_um2": 2416.0672
+  },
+  "u03": {
+   "trial": "u03",
+   "rtl_variant": "csa_alt_maj",
+   "synthesis_strategy": "ks",
+   "die_um": "auto",
+   "placement_density": "0.50",
+   "spare_cell_density": "0.00",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 226.747,
+    "cpu_seconds": 251.714,
+    "peak_rss_mb": 627.1
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 6052.0,
+   "objective_reason": null,
+   "synth_area_um2": 2533.68
+  },
+  "u04": {
+   "trial": "u04",
+   "rtl_variant": "csa_mux",
+   "synthesis_strategy": "ks",
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.02",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 257.408,
+    "cpu_seconds": 288.541,
+    "peak_rss_mb": 626.7
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 6050.0,
+   "objective_reason": null,
+   "feasibility_verdict": "UNDETERMINED",
+   "axes": {
+    "setup": "SATISFIED",
+    "hold": "SATISFIED",
+    "drv": "SATISFIED",
+    "drc": "SATISFIED",
+    "lvs": "SATISFIED",
+    "antenna": "SATISFIED",
+    "ir": "SATISFIED",
+    "em": "UNDETERMINED",
+    "equivalence": "UNDETERMINED"
+   },
+   "power_postroute_w": 0.000747,
+   "synth_area_um2": 2417.3184
+  },
+  "u05": {
+   "trial": "u05",
+   "rtl_variant": "csa_alt_hier",
+   "synthesis_strategy": "ks",
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.00",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 267.635,
+    "cpu_seconds": 299.002,
+    "peak_rss_mb": 589.7
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 6041.0,
+   "objective_reason": null,
+   "feasibility_verdict": "UNDETERMINED",
+   "axes": {
+    "setup": "SATISFIED",
+    "hold": "SATISFIED",
+    "drv": "SATISFIED",
+    "drc": "SATISFIED",
+    "lvs": "SATISFIED",
+    "antenna": "SATISFIED",
+    "ir": "SATISFIED",
+    "em": "UNDETERMINED",
+    "equivalence": "UNDETERMINED"
+   },
+   "power_postroute_w": 0.00055,
+   "synth_area_um2": 2532.4288
+  },
+  "u06": {
+   "trial": "u06",
+   "rtl_variant": "csa_add1",
+   "synthesis_strategy": "ks",
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.00",
+   "runner_rc": 1,
+   "cost": {
+    "wall_seconds": 404.166,
+    "cpu_seconds": 513.953,
+    "peak_rss_mb": 617.6
+   },
+   "objective_status": "MEASURED",
+   "objective_um2": 6182.0,
+   "objective_reason": null,
+   "synth_area_um2": 2533.68
+  },
   "v01": {
    "trial": "v01",
    "rtl_variant": "base",
@@ -2985,11 +3145,265 @@
      "supported": false
     }
    }
+  },
+  "h2h_N": {
+   "contract": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+   "declared_schema": "vibeic.ppa.comparison.v2",
+   "derived_verdict": {
+    "per_baseline": {
+     "vibe-ic-phase3-defaults": {
+      "area_um2": {
+       "baseline": 6594.0,
+       "better_is": "lower",
+       "delta": -653.0,
+       "delta_pct": -9.9029,
+       "scale": "ratio",
+       "subject": 5941.0,
+       "verdict": "SUBJECT_BETTER"
+      },
+      "pareto": "INCOMPARABLE",
+      "power_mw": {
+       "baseline": 0.5730000000000001,
+       "better_is": "lower",
+       "delta": 0.174,
+       "delta_pct": 30.3665,
+       "scale": "ratio",
+       "subject": 0.747,
+       "verdict": "BASELINE_BETTER"
+      },
+      "timing_wns_ns": {
+       "baseline": 0.0,
+       "better_is": "higher",
+       "delta": 0.0,
+       "delta_pct": null,
+       "delta_pct_reason": "timing_wns_ns is an interval-scale quantity: it crosses zero and its zero is a threshold, not an absence, so a ratio built on it would take its SIGN from the baseline's sign rather than from the direction of the change. The absolute delta is the honest figure here.",
+       "scale": "interval",
+       "subject": 0.0,
+       "verdict": "TIE"
+      }
+     }
+    },
+    "subject": "vibe-ic-crosslayer-objective-winner"
+   },
+   "feasibility": {
+    "vibe-ic-crosslayer-objective-winner": {
+     "checked": [
+      "antenna",
+      "drc",
+      "drv",
+      "hold",
+      "lvs",
+      "setup"
+     ],
+     "verdict": "FEASIBLE"
+    },
+    "vibe-ic-phase3-defaults": {
+     "checked": [
+      "antenna",
+      "drc",
+      "drv",
+      "hold",
+      "lvs",
+      "setup"
+     ],
+     "verdict": "FEASIBLE"
+    }
+   },
+   "measurement_bases": [
+    "post_route_sta",
+    "post_route_sta"
+   ],
+   "ok": true,
+   "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+     "ss",
+     "tt",
+     "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+   },
+   "roles": {
+    "baselines": [
+     "vibe-ic-phase3-defaults"
+    ],
+    "subject": "vibe-ic-crosslayer-objective-winner"
+   },
+   "scope": {
+    "area_um2": {
+     "fill": "post_fill",
+     "stage": "post_route",
+     "tool": "openroad"
+    },
+    "power_mw": {
+     "activity_basis": "VECTORLESS",
+     "group": "Total",
+     "liberty": null,
+     "mode": "functional",
+     "process": "tt",
+     "scenario": "diagnostic",
+     "stage": "post_route_extracted",
+     "temperature_c": 25.0,
+     "tool": "opensta",
+     "voltage_v": 1.8
+    },
+    "timing_wns_ns": {
+     "check": "setup",
+     "clock": null,
+     "mode": "functional",
+     "process": "tt",
+     "rc_corner": "max",
+     "stage": "post_route_extracted",
+     "temperature_c": 25.0,
+     "voltage_v": 1.8
+    }
+   },
+   "tuning": {
+    "_subject": {
+     "budget": {},
+     "performed": false,
+     "supported": false
+    },
+    "vibe-ic-phase3-defaults": {
+     "budget": {},
+     "performed": false,
+     "search_space_source": null,
+     "supported": false
+    }
+   }
+  },
+  "h2h_O": {
+   "contract": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+   "declared_schema": "vibeic.ppa.comparison.v2",
+   "derived_verdict": {
+    "per_baseline": {
+     "vibe-ic-phase3-defaults": {
+      "area_um2": {
+       "baseline": 6594.0,
+       "better_is": "lower",
+       "delta": -544.0,
+       "delta_pct": -8.2499,
+       "scale": "ratio",
+       "subject": 6050.0,
+       "verdict": "SUBJECT_BETTER"
+      },
+      "pareto": "INCOMPARABLE",
+      "power_mw": {
+       "baseline": 0.5730000000000001,
+       "better_is": "lower",
+       "delta": 0.174,
+       "delta_pct": 30.3665,
+       "scale": "ratio",
+       "subject": 0.747,
+       "verdict": "BASELINE_BETTER"
+      },
+      "timing_wns_ns": {
+       "baseline": 0.0,
+       "better_is": "higher",
+       "delta": 0.0,
+       "delta_pct": null,
+       "delta_pct_reason": "timing_wns_ns is an interval-scale quantity: it crosses zero and its zero is a threshold, not an absence, so a ratio built on it would take its SIGN from the baseline's sign rather than from the direction of the change. The absolute delta is the honest figure here.",
+       "scale": "interval",
+       "subject": 0.0,
+       "verdict": "TIE"
+      }
+     }
+    },
+    "subject": "vibe-ic-crosslayer-eco-preserving-objective"
+   },
+   "feasibility": {
+    "vibe-ic-crosslayer-eco-preserving-objective": {
+     "checked": [
+      "antenna",
+      "drc",
+      "drv",
+      "hold",
+      "lvs",
+      "setup"
+     ],
+     "verdict": "FEASIBLE"
+    },
+    "vibe-ic-phase3-defaults": {
+     "checked": [
+      "antenna",
+      "drc",
+      "drv",
+      "hold",
+      "lvs",
+      "setup"
+     ],
+     "verdict": "FEASIBLE"
+    }
+   },
+   "measurement_bases": [
+    "post_route_sta",
+    "post_route_sta"
+   ],
+   "ok": true,
+   "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+     "ss",
+     "tt",
+     "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+   },
+   "roles": {
+    "baselines": [
+     "vibe-ic-phase3-defaults"
+    ],
+    "subject": "vibe-ic-crosslayer-eco-preserving-objective"
+   },
+   "scope": {
+    "area_um2": {
+     "fill": "post_fill",
+     "stage": "post_route",
+     "tool": "openroad"
+    },
+    "power_mw": {
+     "activity_basis": "VECTORLESS",
+     "group": "Total",
+     "liberty": null,
+     "mode": "functional",
+     "process": "tt",
+     "scenario": "diagnostic",
+     "stage": "post_route_extracted",
+     "temperature_c": 25.0,
+     "tool": "opensta",
+     "voltage_v": 1.8
+    },
+    "timing_wns_ns": {
+     "check": "setup",
+     "clock": null,
+     "mode": "functional",
+     "process": "tt",
+     "rc_corner": "max",
+     "stage": "post_route_extracted",
+     "temperature_c": 25.0,
+     "voltage_v": 1.8
+    }
+   },
+   "tuning": {
+    "_subject": {
+     "budget": {},
+     "performed": false,
+     "supported": false
+    },
+    "vibe-ic-phase3-defaults": {
+     "budget": {},
+     "performed": false,
+     "search_space_source": null,
+     "supported": false
+    }
+   }
   }
  },
  "counts": {
-  "total": 70,
-  "measured": 58,
+  "total": 76,
+  "measured": 64,
   "not_measured": 12
  }
 }

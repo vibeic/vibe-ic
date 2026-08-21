@@ -22,13 +22,13 @@ report names.
 |---|---:|---:|---|
 | shipped default run | 6594 µm² | 0.000573 W | 10 |
 | **PnR-only winner** (published `t028`, re-run here as `p04`) | **6136 µm²** (−6.95 %) | 0.000559 W | **0 — all ten deleted** |
-| **cross-layer, objective winner** (`w02`) | **5942 µm²** (−9.89 %) | 0.000747 W (**+30 %**) | 0 |
+| **cross-layer, objective winner** (`u01`) | **5941 µm²** (−9.90 %) | 0.000747 W (**+30 %**) | 0 |
 | **cross-layer, Pareto winner** (`z21`) | **6011 µm²** (−8.84 %) | 0.000545 W (−4.89 %) | 0 |
 | **cross-layer, ECO-preserving winner** (`z23`) | **6106 µm²** (−7.40 %) | 0.000541 W (−5.58 %) | **10 — all kept** |
 
 Read across the middle three rows, because that is where the claim lives:
 
-* **`w02` beats the PnR-only winner by −3.16 % on the declared objective and it
+* **`u01` beats the PnR-only winner by −3.18 % on the declared objective and it
   is a TRADE, not an improvement** — it buys that area with **+33.6 % more
   post-route power** than `p04`. The shipped head-to-head gate says so itself:
   `pareto INCOMPARABLE`. It is the winner on the objective this search declared,
@@ -220,9 +220,11 @@ Not the winner. All of them, including the twelve that produced no number.
 
 | trial | arm | rtl_variant | synth strategy | density | spare | objective µm² | Δ vs default | synth area µm² | post-route power W | rewrite-equivalence |
 |---|---|---|---|---|---|---:|---:|---:|---:|---|
+| `u01` | cross-layer | `csa_mux` | `hc` | 0.60 | 0.00 | **5941** | -9.90% | 2417.3 | 0.000747 | PASS (165/165) |
 | `v04` | cross-layer | `csa_mux` | `ks` | 0.60 | 0.00 | **5942** | -9.89% | 2417.3 | — | PASS (165/165) |
 | `w02` | cross-layer | `csa_mux` | `ks` | 0.60 | 0.00 | **5942** | -9.89% | 2417.3 | 0.000747 | PASS (165/165) |
 | `w07` | cross-layer | `csa_mux` | `sk` | 0.60 | 0.00 | **5942** | -9.89% | 2417.3 | — | PASS (165/165) |
+| `u02` | cross-layer | `csa_mux_hier` | `ks` | 0.60 | 0.00 | **5959** | -9.63% | 2416.1 | 0.000756 | PASS (165/165) |
 | `v02` | cross-layer | `csa_mux` | `none` | 0.60 | 0.00 | **5961** | -9.60% | 2427.3 | — | PASS (165/165) |
 | `z11` | cross-layer | `csa_mux` | `none` | 0.60 | 0.00 | **5961** | -9.60% | 2427.3 | 0.000698 | PASS (165/165) |
 | `w05` | cross-layer | `csa_mux_hier` | `none` | 0.60 | 0.00 | **5966** | -9.52% | 2521.2 | 0.000596 | PASS (165/165) |
@@ -233,7 +235,10 @@ Not the winner. All of them, including the twelve that produced no number.
 | `w08` | cross-layer | `csa_mux` | `none` | 0.40 | 0.00 | **6037** | -8.45% | 2427.3 | — | PASS (165/165) |
 | `z14` | cross-layer | `csa_alt_hier` | `none` | 0.60 | 0.00 | **6037** | -8.45% | 2532.4 | 0.000592 | PASS (165/165) |
 | `c02` | cross-layer | `csa_alt_maj` | `none` | 0.60 | 0.00 | **6040** | -8.40% | 2532.4 | 0.000540 | PASS (165/165) |
+| `u05` | cross-layer | `csa_alt_hier` | `ks` | 0.60 | 0.00 | **6041** | -8.39% | 2532.4 | 0.000550 | PASS (165/165) |
 | `c03` | cross-layer | `nr_csel16` | `none` | 0.60 | 0.00 | **6043** | -8.36% | 2047.0 | — | NOT_PROVEN_EQUIVALENT (36/37) |
+| `u04` | cross-layer | `csa_mux` | `ks` | 0.60 | 0.02 | **6050** | -8.25% | 2417.3 | 0.000747 | PASS (165/165) |
+| `u03` | cross-layer | `csa_alt_maj` | `ks` | 0.50 | 0.00 | **6052** | -8.22% | 2533.7 | — | PASS (165/165) |
 | `c04` | cross-layer | `hier_split` | `none` | 0.60 | 0.00 | **6072** | -7.92% | 2602.5 | — | PASS (165/165) |
 | `w01` | cross-layer | `csa_mux` | `none` | 0.60 | 0.02 | **6075** | -7.87% | 2427.3 | 0.000700 | PASS (165/165) |
 | `z12` | cross-layer | `csa_add1` | `none` | 0.60 | 0.00 | **6095** | -7.57% | 2533.7 | — | PASS (165/165) |
@@ -243,6 +248,7 @@ Not the winner. All of them, including the twelve that produced no number.
 | `v01` | PnR-only | `base` | `none` | 0.60 | 0.00 | **6136** | -6.95% | 2601.2 | — | n/a (baseline RTL) |
 | `c05` | cross-layer | `csa_alt_maj` | `none` | 0.60 | 0.02 | **6148** | -6.76% | 2532.4 | 0.000541 | PASS (165/165) |
 | `p03` | PnR-only | `base` | `none` | 0.50 | 0.00 | **6160** | -6.58% | 2601.2 | — | n/a (baseline RTL) |
+| `u06` | cross-layer | `csa_add1` | `ks` | 0.60 | 0.00 | **6182** | -6.25% | 2533.7 | — | PASS (165/165) |
 | `y02` | cross-layer | `nr_csel16` | `sk` | 0.30 | 0.02 | **6198** | -6.01% | 1923.1 | — | NOT_PROVEN_EQUIVALENT (36/37) |
 | `z13` | cross-layer | `csa_aoi` | `none` | 0.60 | 0.00 | **6205** | -5.90% | 2681.3 | — | PASS (165/165) |
 | `c06` | cross-layer | `nr_csel16` | `none` | 0.60 | 0.02 | **6259** | -5.08% | 2047.0 | — | NOT_PROVEN_EQUIVALENT (36/37) |
@@ -291,11 +297,11 @@ Not the winner. All of them, including the twelve that produced no number.
 | `z24` | cross-layer | `nr_csel16` | `sk` | 0.60 | 0.00 | NOT_MEASURED | — | 1923.1 | — | NOT_PROVEN_EQUIVALENT (36/37) |
 | `z25` | cross-layer | `nr_csel16` | `sk` | 0.60 | 0.02 | NOT_MEASURED | — | 1923.1 | — | NOT_PROVEN_EQUIVALENT (36/37) |
 
-58 of 70 candidates produced a MEASURED objective; 12 did not and every one is in the table with its reason.
+64 of 76 candidates produced a MEASURED objective; 12 did not and every one is in the table with its reason.
 
-The objective took **44 distinct values over 70 candidates**, from **5942** to
-**6994 µm² — a 17.7 % spread**. Cost: **7.70 h wall / 9.473 CPU-hours**, median
-300 s wall and 375 CPU-s per trial, median peak RSS 619 MB. Every CPU and RSS
+The objective took **50 distinct values over 76 candidates**, from **5941** to
+**6994 µm² — a 17.7 % spread**. Cost: **8.21 h wall / 10.107 CPU-hours**, median
+300 s wall and 371 CPU-s per trial, median peak RSS 619 MB. Every CPU and RSS
 figure is that trial's own container cgroup.
 
 Machine-readable: [`records/summary.json`](records/summary.json) carries every
@@ -309,8 +315,8 @@ post-route power diagnostic.
 
 ### 5.1 The objective winner is a TRADE and the gate says so
 
-`w02` — mux-form majority RTL + Kogge-Stone `$lcu` techmap, at density 0.60 /
-spare 0.00 — is **5942 µm², −9.89 % against the default and −3.16 % against the
+`u01` — mux-form majority RTL + Han-Carlson `$lcu` techmap, at density 0.60 /
+spare 0.00 — is **5941 µm², −9.90 % against the default and −3.18 % against the
 PnR-only winner.** Its post-route power is **0.000747 W against the default's
 0.000573 W: +30.4 %**, and against the PnR-only winner's 0.000559 W: **+33.6 %**.
 
@@ -319,9 +325,14 @@ better on the declared objective and worse on an axis published beside it. That
 is a trade, and calling it an improvement would be the exact failure this
 report is supposed not to commit.
 
-The whole `csa_mux` family behaves this way — five arms, all smaller, all
-higher-power — so it is a property of the mux-form majority and not one lucky
-placement.
+The whole `csa_mux` family behaves this way. Sixteen of its arms produced a
+number; nine of those carry a post-route power measurement, and **every one of
+the nine is above the shipped default's 0.000573 W** — 0.000596, 0.000675,
+0.000682, 0.000698, 0.000700, 0.000747 ×3, 0.000756. It is a property of the
+mux-form majority and not one lucky placement. The three
+prefix-adder maps land on the same number to within 1 µm² (`hc` 5941, `ks` 5942,
+`sk` 5942) and the mux form without any of them is 5961, so the RTL lever
+carries this result and the synthesis lever trims it.
 
 ### 5.2 The Pareto winner beats the tuner on both axes
 
@@ -582,7 +593,7 @@ was produced before its successor rather than assembled backwards.
 |---|---|---|---|
 | `h2h_A` | shipped numbers, setup at the governing `ss` corner | rc=2 `SCOPE_SENTINEL` | *same corner* — **producer defect**, §8.2 |
 | `h2h_B` | setup at `tt`, shipped power | rc=2 `SCOPE_INCOMPLETE` | *same activity basis* — **producer defect**, §8.3 |
-| `h2h_C` … `h2h_M` | setup at `tt`, power from the labelled post-route diagnostic | **rc=0 PASS** | none |
+| `h2h_C` … `h2h_O` | setup at `tt`, power from the labelled post-route diagnostic | **rc=0 PASS** | none |
 
 Full machine reports: `records/h2h_*_report.json`; the records themselves are
 `records/h2h_*.json`.
@@ -712,7 +723,9 @@ post-route diagnostic; setup at `tt`; identical scope on every axis in every arm
 | `h2h_C` | cross-layer `c02` | 6040 | −8.40 % | 0.000540 | −5.76 % | SUBJECT_DOMINATES | 0 |
 | `h2h_I` | **cross-layer Pareto winner `z21`** | **6011** | **−8.84 %** | **0.000545** | **−4.89 %** | **SUBJECT_DOMINATES** | 0 |
 | `h2h_L` | **cross-layer, ECO-preserving `z23`** | **6106** | **−7.40 %** | **0.000541** | **−5.58 %** | **SUBJECT_DOMINATES** | 0 |
+| `h2h_N` | cross-layer objective winner `u01` | 5941 | −9.90 % | 0.000747 | +30.37 % | **INCOMPARABLE** | 0 |
 | `h2h_K` | cross-layer objective winner `w02` | 5942 | −9.89 % | 0.000747 | +30.37 % | **INCOMPARABLE** | 0 |
+| `h2h_O` | cross-layer, ECO-preserving objective `u04` | 6050 | −8.25 % | 0.000747 | +30.37 % | **INCOMPARABLE** | 0 |
 | `h2h_E` | cross-layer, ECO-preserving `c05` | 6148 | −6.76 % | 0.000541 | −5.58 % | SUBJECT_DOMINATES | 0 |
 | `h2h_H` | cross-layer `z11` | 5961 | −9.60 % | 0.000698 | +21.82 % | **INCOMPARABLE** | 0 |
 
@@ -730,9 +743,10 @@ document too:
 
 ## 9. Did the cross-layer search beat the PnR-only winner? Yes, three ways, and one of them is not a win
 
-* **On the declared objective**: `w02` 5942 vs `p04` 6136 — **−3.16 %**. But
+* **On the declared objective**: `u01` 5941 vs `p04` 6136 — **−3.18 %**. But
   +33.6 % power. **A trade.** The gate calls it `INCOMPARABLE` and so does this
-  report.
+  report. The same trade is available with the ECO spares kept: `u04` at
+  6050 µm² (−1.40 % against `p04`) with all ten present.
 * **On the Pareto front**: `z21` 6011 / 0.000545 W vs `p04` 6136 / 0.000559 W —
   **−2.04 % area and −2.5 % power at once.** An improvement, not a trade.
 * **On the Pareto front with ECO readiness intact**: `z23` 6106 / 0.000541 W
@@ -897,7 +911,7 @@ is not the broadest one that can be written down.
 ```
 ppa-crosslayer/
   RESULT.md
-  search/     space.json  trials.txt trials2..5.txt
+  search/     space.json  trials.txt trials2..6.txt
   rtl/        base/ csa_alt_maj/ csa_mux/ csa_aoi/ csa_add1/ hier_split/
               csa_alt_hier/ csa_mux_hier/ nr_rca/ nr_rca_hier/ nr_csel16/
               nr_csel8/ pipe1/            one spm.v each, header = lever + citation
