@@ -35474,6 +35474,16 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             # degraded run passed for a multi-corner one.
             f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
             f"liberty={lib_c}) ===\"\n"
+            # BASIS STAMP. This stanza reads the routed netlist and a SPEF
+            # extracted from the post-route DEF, so it discloses the same basis
+            # the single-corner emitter does — in the same two words, because a
+            # second spelling of one fact is a fact two readers disagree about.
+            # Unstamped, this MULTI-CORNER SIGN-OFF report was the one carrying
+            # the real corners and the one that said nothing about its own
+            # stage, so `_ppa/timing.py` had to record `stage: null` for every
+            # row it produced while the single-corner report kept its stage.
+            f"puts $_f \"STA_BASIS: POST_ROUTE_SPEF\"\n"
+            f"puts $_f \"STA_BASIS_LIBERTY: {lib_c}\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
@@ -35652,12 +35662,17 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     Best-effort: returns False if it cannot run. chip/PDK-AGNOSTIC."""
     pnr_out = _pl.pnr_dir(project)
     netlist = pnr_out / f"{top}_pnr.v"
+    # Which side of PnR the netlist below comes from. The stanza basis stamp is
+    # derived from it: falling back to the SYNTH netlist with no SPEF is a
+    # PRE-LAYOUT estimate and must never stamp POST_ROUTE.
+    _routed_netlist = netlist.is_file()
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     # ECO auto-trigger post-ECO re-measure passes the ECO netlist here (§4.05:
     # only when it genuinely exists — else the routed/synth netlist stands).
     if netlist_override is not None and Path(netlist_override).is_file():
         netlist = Path(netlist_override)
+        _routed_netlist = True
     sdc = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc.is_file()):
         notes.append("multi-corner OCV STA skipped: routed netlist or SDC missing")
@@ -35694,6 +35709,9 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         if spef_host and Path(spef_host).is_file():
             spef_tcl = f"read_spef {_to_container_path(str(spef_host), container)}\n"
             spef_disc = Path(spef_host).name
+        basis = ("POST_ROUTE_SPEF" if spef_tcl
+                 else "POST_ROUTE_NO_SPEF" if _routed_netlist
+                 else "PRE_LAYOUT_ESTIMATE")
         return (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
@@ -35712,6 +35730,14 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # looked identical to one that resolved it to a real slow lib.
             f'puts $_f "=== {kind} corner: process={label} liberty={lib_c}, '
             f'SPEF={spef_disc} ==="\n'
+            # BASIS STAMP, read off what THIS stanza reads rather than copied
+            # from the single-corner emitter: the SPEF is per-corner here and
+            # may be absent, and `POST_ROUTE_NO_SPEF` is a different stage from
+            # `POST_ROUTE_SPEF` to every consumer that keeps extracted and
+            # unextracted timing apart, so it is never rounded up to the
+            # flattering one. Both values are already in `_sta_basis`.
+            f'puts $_f "STA_BASIS: {basis}"\n'
+            f'puts $_f "STA_BASIS_LIBERTY: {lib_c}"\n'
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
             f"close $_f\n"
