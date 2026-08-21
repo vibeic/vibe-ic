@@ -28,6 +28,10 @@
     "  owner        the issue or PR that will close it.",
     "  why          why it is red, in one sentence, for the reader who finds",
     "               this file six weeks from now.",
+    "  adjudicated  present when a ruling has been written down for this row: the",
+    "               verdict and where to read it. A row carrying one is NOT to be",
+    "               renewed by moving `since` forward -- the ruling replaced the",
+    "               question the deadline was asking.",
     "  bound_because why max_commits is THAT number and not a larger one. Not read",
     "               by the adjudicator -- read by the reviewer, who is the only",
     "               defence against a bound chosen for comfort. A bound whose",
@@ -49,7 +53,8 @@
       "max_commits": 210,
       "owner": "repo-gatekeeper",
       "why": "floorplan_hints, power_budget_uw and sdc_constraints_path are read by a checker and populated in 0 of the 4 documents that carry them, so the consumer cannot tell empty from clean.",
-      "bound_because": "The fix is in vibeic/benchmark-data, not in this repo: either the L-docs populate the three fields or the checker declares them optional, and a cross-repository change needs a round trip. 210 commits is three days at the measured rate. It is the longest bound here and it is still 290 short of the ceiling."
+      "bound_because": "The fix is in vibeic/benchmark-data, not in this repo: either the L-docs populate the three fields or the checker declares them optional, and a cross-repository change needs a round trip. 210 commits is three days at the measured rate. It is the longest bound here and it is still 290 short of the ceiling.",
+      "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
     },
     {
       "gate": "evidence citation resolves",
@@ -57,7 +62,8 @@
       "max_commits": 140,
       "owner": "repo-gatekeeper",
       "why": "113 baseline entries now resolve and must be shrunk out of the baseline before it becomes a standing waiver, and 4 documents cite proofs they do not ship.",
-      "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today."
+      "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today.",
+      "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
     },
     {
       "gate": "checker execution wiring",

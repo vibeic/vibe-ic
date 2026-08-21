@@ -1350,6 +1350,105 @@ def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
     return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
 
 
+def _declared_labels(repo: Path, script: Optional[Path] = None) -> Optional[list]:
+    """The labels THIS tree declares, from a `--list` run. 0.12 s, measured."""
+    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if not path.is_file():
+        return None
+    with tempfile.TemporaryDirectory(prefix="hygiene_list_") as td:
+        out = Path(td) / "list.json"
+        try:
+            subprocess.run(["bash", str(path), "--list",
+                            "--summary-json", str(out)],
+                           cwd=str(repo), capture_output=True, timeout=120)
+            doc = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return [str(g.get("label")) for g in (doc.get("gates") or [])]
+
+
+def hygiene_gate_from_record(repo: Path, record: Path,
+                             record_rc: Optional[int],
+                             script: Optional[Path] = None) -> GateResult:
+    """Adjudicate a hygiene record the CALLER already produced.
+
+    WHY THIS IS NOT THE SKIP BUTTON `repo_hygiene_gate` REFUSES TO GROW.
+    That function's docstring says there is deliberately no CLI flag for
+    `script`, because a command-line way to point the gate at a cheap fixture
+    would be a skip button on the gate whose whole purpose is that it cannot be
+    forgotten. That reasoning is right and it is why this is a different thing:
+    `--hygiene-script` substitutes a CHEAPER SUBJECT, while this substitutes
+    the RUNNER of the same subject. The set still runs, in full, over this
+    tree — it runs in the lander's own hygiene lane, which refuses the landing
+    on its own account, and this reads that run's record instead of paying for
+    a second one.
+
+    MEASURED, which is why it exists: the owner's ruling gives a landing four
+    minutes for this review. With the published corpus bound the review's own
+    hygiene run exceeds that on its own, so wiring the program as-is would make
+    every landing time out — the check would be unavoidable and would never
+    once decide, which is the opposite of the ruling's intent. With the corpus
+    UNBOUND it takes 45 s, because the hygiene gate refuses early and
+    `gate_red_since` then reports `skipped — 0 gate state(s) examined`. Both
+    ends of that range are a deadline that never adjudicates.
+
+    THE RECORD IS CHECKED, NOT TRUSTED. A caller could hand over anything, so:
+    the record must exist and parse; it must carry the exit status of the run
+    that produced it, supplied separately by the caller that watched it; and
+    the gates it names must be exactly the set this tree declares, obtained
+    from a `--list` run costing 0.12 s. A record forged to be green must
+    therefore also be forged to name all 85 declared labels, which is no longer
+    "a flag that skips the gate" but a fabricated measurement — a different act
+    with a different name, and one the landing record and this gate's own
+    output both preserve the evidence of.
+
+    Every failure to establish those is rc 2 UNDETERMINED and BLOCKING. Never
+    rc 0: "I could not check the record" must not reach a verdict as "the
+    record was clean", which is this repo's `_vacuous_exit` convention applied
+    to the handover itself.
+    """
+    name = "repo_hygiene_gates"
+    record = Path(record)
+    if not record.is_file():
+        return GateResult(name, 2,
+                          f"UNDETERMINED — no hygiene record at {record}: the "
+                          f"caller named a record it did not produce, so 0 "
+                          f"gate state(s) could be adjudicated")
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the hygiene record at {record} does "
+                          f"not parse: {exc}")
+    if record_rc is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — a hygiene record was supplied with no "
+                          "exit status. The record says WHICH gates were red; "
+                          "only the run's rc says whether the set completed, "
+                          "and a killed run leaves a record that looks finished")
+    declared = _declared_labels(repo, script)
+    if declared is None:
+        return GateResult(name, 2,
+                          "UNDETERMINED — could not ask this tree which gates it "
+                          "declares, so a supplied record cannot be checked "
+                          "against it")
+    named = sorted(str(g.get("label")) for g in (doc.get("gates") or []))
+    if named != sorted(declared):
+        missing = sorted(set(declared) - set(named))
+        extra = sorted(set(named) - set(declared))
+        return GateResult(name, 2,
+                          f"UNDETERMINED — the supplied record names "
+                          f"{len(named)} gate(s) and this tree declares "
+                          f"{len(declared)}: {len(missing)} not in the record "
+                          f"({', '.join(missing[:4])}), {len(extra)} not "
+                          f"declared ({', '.join(extra[:4])})")
+    result = _hygiene_verdict(doc, int(record_rc))
+    return GateResult(result.name, result.rc,
+                      f"{result.summary} [adjudicated from the caller's record "
+                      f"of a run that exited {int(record_rc)}, "
+                      f"{len(declared)} declared gate(s) matched]")
+
+
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     """Turn the script's own coverage record into a gate result.
 
@@ -1586,7 +1685,9 @@ def review(base: str, head: str, *,
            batch: bool = False,
            hygiene_script: Optional[Path] = None,
            hygiene_report: Optional[Path] = None,
-           hygiene_progress: Optional[Path] = None) -> Verdict:
+           hygiene_progress: Optional[Path] = None,
+           hygiene_record_in: Optional[Path] = None,
+           hygiene_record_rc: Optional[int] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -1676,9 +1777,14 @@ def review(base: str, head: str, *,
         _record = (Path(hygiene_report).resolve() if hygiene_report is not None
                    else Path(_td) / "hygiene.json")
         _record.parent.mkdir(parents=True, exist_ok=True)
-        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
-                                       summary_out=_record,
-                                       progress_out=hygiene_progress))
+        if hygiene_record_in is not None:
+            _record = Path(hygiene_record_in).resolve()
+            gates.append(hygiene_gate_from_record(
+                repo, _record, hygiene_record_rc, script=hygiene_script))
+        else:
+            gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                           summary_out=_record,
+                                           progress_out=hygiene_progress))
         gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
@@ -1773,6 +1879,18 @@ def main(argv: Optional[List[str]] = None) -> int:
               "this path instead of keeping it only for the in-process "
               "gate-red-since adjudication"))
     ap.add_argument(
+        "--hygiene-record-in", dest="hygiene_record_in", default=None,
+        help=("adjudicate a repo-hygiene summary JSON the CALLER already "
+              "produced instead of running the set a second time. Requires "
+              "--hygiene-record-rc. The record is checked against this tree's "
+              "declared gate set, not trusted; anything unestablished is rc 2 "
+              "UNDETERMINED and blocking"))
+    ap.add_argument(
+        "--hygiene-record-rc", dest="hygiene_record_rc", type=int, default=None,
+        help=("the exit status of the run that produced --hygiene-record-in. "
+              "Separate because the record says WHICH gates were red and only "
+              "the rc says whether the set completed"))
+    ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "
               "completed hygiene gate; intended for sparse monitoring of a "
@@ -1814,7 +1932,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    hygiene_report=(Path(args.hygiene_report)
                                    if args.hygiene_report else None),
                    hygiene_progress=(Path(args.hygiene_progress)
-                                     if args.hygiene_progress else None))
+                                     if args.hygiene_progress else None),
+                   hygiene_record_in=(Path(args.hygiene_record_in)
+                                      if args.hygiene_record_in else None),
+                   hygiene_record_rc=args.hygiene_record_rc)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

@@ -163,6 +163,28 @@ _REPO_GLOBS = ("tools/ci/*", "tools/*.py", "tools/*.sh", ".github/workflows/*")
 #: Recorded, never counted as wired.
 _SKILL_GLOBS = ("skills/**/*.md", "agents/**/*.md", "commands/**/*.md")
 
+#: A REGISTER OF RED GATES IS NOT A RUNNER (measured 2026-08-21).
+#:
+#: `executable_text` below already argues that a COMMENT naming a gate is not a
+#: caller, and gives the measured case where believing one would have shrunk the
+#: baseline and hidden a gate that runs nowhere. This is the same rule one level
+#: out, and it was found the same way — by tripping it.
+#:
+#: `tools/ci/*` sweeps in `gate_red_since.json`, the acknowledgement ledger,
+#: whose ENTIRE PURPOSE is to name gates that are red and say why. Writing the
+#: row for this very gate — "closed_loop_edge_check, ppa_pr_scope_check and
+#: slot_pad_budget_check are consulted by no automatic verdict" — made all three
+#: read as wired: `unwired` fell 61 -> 58 and the gate turned PASS. Isolated to
+#: that one file, on an otherwise clean tree at 6dfe15a32.
+#:
+#: The ledger's own `_doc` promises "there is nothing a row can silence and no
+#: green a row can buy". It was exactly wrong, and in the worst direction: the
+#: acknowledgement silenced the finding it acknowledged, so the more honestly a
+#: row described its red the more certainly it hid it.
+#:
+#: Named by the constant its owner exports, so a move renames it here too.
+_NOT_A_RUNNER = ("tools/ci/gate_red_since.json",)
+
 
 def gates(plugin: Path) -> Set[str]:
     return {p.stem for p in (plugin / "programs").glob("*.py")
@@ -234,10 +256,13 @@ def executable_text(path: Path, text: str) -> str:
 
 def _texts(plugin: Path, repo: Path, globs, repo_globs=()) -> List[Tuple[Path, str]]:
     out = []
+    excluded = {(repo / rel).resolve() for rel in _NOT_A_RUNNER}
     for base, pats in ((plugin, globs), (repo, repo_globs)):
         for pat in pats:
             for f in base.glob(pat):
                 if not f.is_file():
+                    continue
+                if f.resolve() in excluded:
                     continue
                 try:
                     out.append((f, executable_text(f, f.read_text(errors="replace"))))
