@@ -1,0 +1,164 @@
+"""An axis proves from a metric somebody actually emits.
+
+WHY
+===
+MEASURED, and recorded in the feasibility module's own source: across all six
+STA artefacts of a real sign-off run both `timing.setup.wns_ns` and
+`timing.hold.wns_ns` were NOT_MEASURED on every view, because the two
+multi-corner emitters call `report_worst_slack` and `report_tns` and never call
+`report_wns`. The hold axis was STRUCTURALLY UNPROVABLE — no run could produce
+the evidence it proved from, on any design, ever — and each run appeared to
+blame its own evidence rather than the wiring.
+
+WHY EMPIRICAL, ASSERTED AS A TEST
+=================================
+The first version cross-referenced metric-name LITERALS in producer source. It
+declared the whole `drv` axis unprovable and named four keys as unproduced. That
+was FALSE and false in the BLOCKING direction: those keys appear under `"metric":`
+in real records, because producers build names by format —
+`"timing.%s.%s_ns" % (check, kind)` — so no literal scan can see them.
+`test_a_format_built_metric_name_is_still_a_producer` pins that, because it is
+the failure that would make this gate stop a working flow.
+
+chip-AGNOSTIC: metric-name vocabulary and record shape.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+_PROGRAMS = Path(__file__).resolve().parents[1]
+_TOOL = _PROGRAMS / "every_required_metric_key_has_a_producer.py"
+_REPO = _PROGRAMS.parents[3]
+
+_spec = importlib.util.spec_from_file_location("erkhap", _TOOL)
+erkhap = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(erkhap)
+
+
+def _run(root):
+    cp = subprocess.run([sys.executable, str(_TOOL), str(root)],
+                        capture_output=True, text=True)
+    return cp.returncode, cp.stdout + cp.stderr
+
+
+def _axis_keys():
+    axes = erkhap.axis_table(_PROGRAMS)
+    return axes, {p.metric for ax in axes for g in ax.groups for p in g}
+
+
+def _corpus(tmp_path, keys):
+    """A tree whose records emit exactly `keys`, plus the programs the tool reads."""
+    root = tmp_path
+    (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic").mkdir(parents=True)
+    (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs").symlink_to(
+        _PROGRAMS, target_is_directory=True)
+    recs = root / "records"
+    recs.mkdir()
+    (recs / "records_flat.json").write_text(json.dumps(
+        [{"metric": k, "status": "MEASURED", "value": 0} for k in sorted(keys)]))
+    return root
+
+
+# ------------------------------------------------------------ red control
+
+def test_an_axis_with_no_producible_group_goes_red(tmp_path):
+    """THE NEGATIVE CONTROL: reintroduce the measured defect — drop every key
+    of one axis, so no group of it can be proved by anything emitted."""
+    axes, keys = _axis_keys()
+    hold = next(a for a in axes if a.name == "hold")
+    hold_keys = {p.metric for g in hold.groups for p in g}
+    root = _corpus(tmp_path, keys - hold_keys)
+    rc, out = _run(root)
+    assert rc == 1, f"the defect did not go red:\n{out}"
+    assert "'hold'" in out and "STRUCTURALLY UNPROVABLE" in out
+    assert "on any design, forever" in out
+
+
+def test_the_same_corpus_with_the_axis_restored_passes(tmp_path):
+    """BIDIRECTIONAL: put the axis's keys back and it goes green."""
+    _axes, keys = _axis_keys()
+    rc, out = _run(_corpus(tmp_path, keys))
+    assert rc == 0, out
+
+
+def test_one_group_is_enough(tmp_path):
+    """The table is an OR of ANDs: one fully-emitted group proves the axis, and
+    the other groups' keys are then DISCLOSED, not refused."""
+    axes, keys = _axis_keys()
+    hold = next(a for a in axes if a.name == "hold")
+    first = {p.metric for p in hold.groups[0]}
+    others = {p.metric for g in hold.groups[1:] for p in g} - first
+    root = _corpus(tmp_path, keys - others)
+    rc, out = _run(root)
+    assert rc == 0, out
+    assert "dead proof path" in out
+    assert "DISCLOSED" in out
+
+
+def test_a_partially_emitted_group_does_not_prove_an_axis(tmp_path):
+    """A group is an AND. Emitting some of its keys is not emitting the group."""
+    axes, keys = _axis_keys()
+    drv = next(a for a in axes if a.name == "drv")
+    multi = next(g for g in drv.groups if len(g) > 1)
+    drv_keys = {p.metric for g in drv.groups for p in g}
+    keep = {multi[0].metric}                      # only ONE key of the AND group
+    root = _corpus(tmp_path, (keys - drv_keys) | keep)
+    rc, out = _run(root)
+    assert rc == 1, out
+    assert "'drv'" in out
+
+
+# --------------------------------- the false positive that must never return
+
+def test_a_format_built_metric_name_is_still_a_producer():
+    """The producers build names by format, so a literal scan cannot see them.
+    Pinned because the static version blocked a WORKING flow on this."""
+    src = (_PROGRAMS / "_ppa" / "timing.py").read_text(encoding="utf-8")
+    assert '"timing.%s.%s_ns" % (check, kind)' in src, (
+        "the format-built producer this gate must not mis-read has moved")
+    _axes, keys = _axis_keys()
+    assert "timing.setup.wns_ns" in keys
+    # And the real tree must show it as EMITTED, not missing.
+    prod = erkhap.producers(_REPO, keys)
+    assert prod.get("timing.drv.violations"), (
+        "timing.drv.violations reads as unproduced — the static false positive "
+        "that declared the drv axis unprovable has returned")
+
+
+def test_the_repository_emits_every_axis_key():
+    _axes, keys = _axis_keys()
+    prod = erkhap.producers(_REPO, keys)
+    missing = sorted(k for k in keys if not prod.get(k))
+    assert not missing, missing
+
+
+# -------------------------------------------------------------- verdicts
+
+def test_no_records_is_not_checked(tmp_path):
+    root = _corpus(tmp_path, set())
+    (root / "records" / "records_flat.json").write_text("[]")
+    rc, out = _run(root)
+    assert rc == 2, out
+    assert "an absent corpus is not a clean one" in out
+
+
+def test_unparseable_json_is_skipped_not_fatal(tmp_path):
+    _axes, keys = _axis_keys()
+    root = _corpus(tmp_path, keys)
+    (root / "records" / "broken.json").write_text("{not json")
+    rc, out = _run(root)
+    assert rc == 0, out
+
+
+def test_absent_root_is_bad_invocation(tmp_path):
+    rc, out = _run(tmp_path / "nope")
+    assert rc == 3, out
+
+
+def test_repository_itself_is_clean():
+    rc, out = _run(_REPO)
+    assert rc == 0, out

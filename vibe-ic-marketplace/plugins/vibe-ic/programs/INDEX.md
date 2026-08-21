@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1173
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1173)
+- **Total programs (excluding helpers / shims):** 1175
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1175)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1164 |
+| `any` | 1166 |
 
 ## Alphabetical listing
 
@@ -347,6 +347,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
+| `every_required_metric_key_has_a_producer` | any | — | an axis proves from a metric somebody actually emits. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
 | `explicit_argument_outranks_the_environment_pointer` | any | — | whatever a gate scanned, it says so. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
@@ -666,6 +667,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
 | `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
 | `mealy_sequence_synth` | any | — | deterministic SOLVER for the MEALY FSM table / sequence-detector family (the Mealy twin of full_moore_fsm_synth). |
+| `measurement_only_artefact_is_not_a_verdict_source` | any | — | a measurement is not a verdict, and an unmeasured axis is not a zero. |
 | `memory_array_synth` | any | — | deterministic SOLVER for the register-array MEMORY family (RAM / ROM / LIFO stack / instruction register), spec prose -> RTL. |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must document their read latency, and consumers must match it. |
 | `memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY family of "code generation" problems: synchronous FIFO, LIFO / stack, single- an... |
@@ -1245,7 +1247,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1164 programs)
+### `any` (1166 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1564,6 +1566,7 @@ _(no programs in this group)_
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
+- `every_required_metric_key_has_a_producer` — an axis proves from a metric somebody actually emits.
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
 - `explicit_argument_outranks_the_environment_pointer` — whatever a gate scanned, it says so.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
@@ -1882,6 +1885,7 @@ _(no programs in this group)_
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
 - `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
 - `mealy_sequence_synth` — deterministic SOLVER for the MEALY FSM table / sequence-detector family (the Mealy twin of full_moore_fsm_synth).
+- `measurement_only_artefact_is_not_a_verdict_source` — a measurement is not a verdict, and an unmeasured axis is not a zero.
 - `memory_array_synth` — deterministic SOLVER for the register-array MEMORY family (RAM / ROM / LIFO stack / instruction register), spec prose -> RTL.
 - `memory_read_pipeline_check` — Registered-read memory modules must document their read latency, and consumers must match it.
 - `memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY family of "code generation" problems: synchronous FIFO, LIFO / stack, single- an...
