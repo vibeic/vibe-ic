@@ -463,3 +463,87 @@ in this repository can; that is a rule about people, and it is already written
 as one ("never `--no-verify`"). It is recorded here so the ruling's phrase "the
 one path every landing takes" is read as what it is: true of the three shipped
 landing routes, not a claim that the tool cannot be walked past.
+
+## 9. The batch took commit 1 of 11, and that is a NEW red
+
+Written after the deliverable, because the batch moved while this branch was
+being verified and the move is not safe as it stands.
+
+`origin/land/batch67-assembled` is no longer `546487a8a`. It is now
+`8c409aa5a`, "Merge fix/jland67-hygiene-subset-honoured into the batch
+assembly" — this branch has already been taken. Its second parent is
+`05732dd26`, which is the FIRST of this branch's eleven commits, not its head.
+
+Six of those eleven touch code. Five of the six are not in the batch:
+
+| commit | in the batch | what it carries |
+| --- | --- | --- |
+| `05732dd26` | **yes** | the CLI removal, the verbatim path, the budget |
+| `2ce40937c` | no | the two re-derived lander digests |
+| `d9322cdab` | no | the seam guard, and the `gatekeeper_review` comment that states the rule |
+| `3d9d98731` | no | lander + budget harness + ceiling check |
+| `bea866eb9` | no | lander + ceiling check |
+| `bda520272` | no | the guard hardened to capture EVERY parser `main()` builds |
+
+**Measured on the three heads.** `ci_harness_timeout_ceiling_check` pins the
+landing script by digest, `05732dd26` edits that script, and the commit that
+re-derives the pin was left behind:
+
+```
+OLD batch  546487a8a : rc 0  [PASS]
+NEW batch  8c409aa5a : rc 1  [FAIL] gatekeeper-land.sh is not the complete reviewed
+                             executable (sha256=29810dbb…, expected=dad5d0f1…)
+                             …execution prefix… (cfc5dabc…, expected=df1eba03…)
+this branch c71b023c4 : rc 0  [PASS]
+```
+
+The two target reds ARE fixed on `8c409aa5a` — 2 passed. So the partial take
+bought the two reds and sold a gate that was green: a landing on `8c409aa5a`
+refuses at `ci_harness_timeout_ceiling_check` instead. Note the observed prefix
+`cfc5dabc…` is exactly the value `2ce40937c` re-pins to, which is the arithmetic
+of the split stated in one line — the batch is carrying the edit and not its pin.
+
+**And `test_hygiene_handover_is_in_process_only.py` is absent from the batch.**
+That is the file that binds the ban to the SEAM rather than to three literal
+strings. Without it, spelling the flag `--gate-record-in` with
+`dest="hygiene_record_in"` restores the skip button with every assertion in the
+repo green — §4 is the hole, and the batch currently has the hole open.
+
+**The remedy, driven rather than proposed.** Trial merge of this branch at
+`c71b023c4` into `8c409aa5a` in a scratch worktree: merges clean, and on the
+result
+
+```
+ci_harness_timeout_ceiling_check : rc 0  [PASS]
+the two target tests + the seam guard : 9 passed
+```
+
+So: re-merge this branch at its HEAD. Nothing needs re-pinning, no digest needs
+recomputing, and no commit here needs dropping — the split is the whole defect.
+
+## 10. A blocker in the batch that is NOT this branch's
+
+Reported because it will stop the landing and it is easy to misattribute to the
+work above. `landing_collateral_revert_check`, run directly on the batch's own
+range:
+
+```
+origin/main..origin/land/batch67-assembled
+FAIL: COLLATERAL REVERT: 1 finding(s) in 30 commit(s).
+  7a9ccd0bb removes 81 of the 145 line(s) ddd7497a9 added to
+  ppa-crosslayer/eco-readjudication/MANIFEST.json (56%)
+  — and ddd7497a9 is being published by THIS SAME push.
+```
+
+Both commits are new in this batch and both are in `agent/jrows-eight-rows`;
+`ddd7497a9` comes first and `7a9ccd0bb` revises it four commits later, so this
+reads as a deliberate in-lane revision rather than a stale-branch clobber. The
+gate does not grade intent and should not: its complaint is that the batch
+publishes 145 lines and un-publishes 81 of them in one push, and its own remedy
+is to re-land the lane from its delta or drop the earlier commit. The net effect
+of the pair on that file is +131 lines, so the final state is not in dispute —
+only how it is published.
+
+`--batch` does not suppress this. `collateral_revert_gate` passes only
+`--repo` and `--rev-range`; no batch flag reaches it, which was checked before
+reporting it as a blocker.
