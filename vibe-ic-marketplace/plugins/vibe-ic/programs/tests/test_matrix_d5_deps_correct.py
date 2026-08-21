@@ -988,7 +988,7 @@ def test_d5_covers_every_cell_exactly_once():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(ids) == len(F.step_ids()) == 68, (
+    assert len(ids) == len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
         f"parametrized {len(ids)} cells over {len(F.step_ids())} flow steps"
     )
     assert ids == [F.normalize_id(s) for s in F.step_ids()], (
@@ -1047,7 +1047,7 @@ def test_d5_state_census_is_exhaustive():
     # different route. Re-stated by hand, as the census comments here require:
     # a step LEAVING must force a human to say the number just as loudly as one
     # arriving. RE-DERIVED from the live yaml, never decremented by hand.
-    assert len(F.step_ids()) == 68, (
+    assert len(F.step_ids()) == 69, (   # 68 -> 69: step 1.6x (7fcbc7397)
         f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
         f"63; the population moved and this census states a figure for a grid "
         f"it no longer describes"
