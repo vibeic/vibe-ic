@@ -36,13 +36,14 @@
           "items": {"type": "object"}
         },
         "limits": {
-          "description": "Contract-declared maxima for the limit-bearing axes. There is no built-in default: a limit invented by the checker would be a design-specific constant living in chip-agnostic source.",
+          "description": "Contract-declared thresholds for the limit-bearing axes. `max` is a ceiling (IR drop, EM ratio); `min` is a floor (a design-for-ECO spare population -- a violation there is a number that is too SMALL). At least one of the two is required: a limit row with neither states no threshold at all. There is no built-in default of either kind: a limit invented by the checker would be a design-specific constant living in chip-agnostic source.",
           "type": "object",
           "additionalProperties": {
             "type": "object",
-            "required": ["max"],
+            "anyOf": [{"required": ["max"]}, {"required": ["min"]}],
             "properties": {
               "max": {"type": "number"},
+              "min": {"type": "number"},
               "unit": {"type": "string"}
             }
           }
@@ -67,8 +68,8 @@
               "properties": {
                 "axis": {"type": "string"},
                 "status": {
-                  "description": "WAIVED is reachable only from VIOLATED. An axis that was never measured can never be waived: a waiver is a named owner accepting a KNOWN risk, and applying one to an unknown converts `nobody looked` into `it passed`.",
-                  "enum": ["SATISFIED", "VIOLATED", "WAIVED", "UNDETERMINED"]
+                  "description": "WAIVED is reachable only from VIOLATED. An axis that was never measured can never be waived: a waiver is a named owner accepting a KNOWN risk, and applying one to an unknown converts `nobody looked` into `it passed`. NOT_APPLICABLE is neither a pass nor a hole: it is produced only by an axis whose APPLICABILITY the design itself declares -- design-for-ECO readiness -- and only when that declaration says no requirement exists, or when no declaration exists at all. It contributes nothing to the candidate verdict in either direction, and the row still states which of those two it was in `applicability`.",
+                  "enum": ["SATISFIED", "VIOLATED", "WAIVED", "UNDETERMINED", "NOT_APPLICABLE"]
                 },
                 "codes": {"type": "array", "items": {"type": "string"}},
                 "waiver_ids": {"type": "array", "items": {"type": "string"}},
@@ -76,6 +77,33 @@
                   "description": "The metric records this status was read from, each with its scope and its source artefact hash, plus every record that was rejected and why.",
                   "type": "array",
                   "items": {"type": "object"}
+                },
+                "coverage": {
+                  "description": "Per declared view, whether a record covering it could support the proof. A SATISFIED axis states its coverage too: a reader checking whether the view set was the right one should not have to make the axis fail first.",
+                  "type": "array",
+                  "items": {"type": "object"}
+                },
+                "applicability": {
+                  "description": "Present only on an axis whose applicability the design declares. `state` is one of NOT_DECLARED (no requirement was stated), NOT_REQUIRED (a requirement was stated and it is none), UNREADABLE (a requirement was stated and could not be parsed -- refused, never waived) or REQUIRED. `not_proved` names every obligation this run did NOT establish and why, so an axis that proved a count is not read as having proved the whole property.",
+                  "type": "object",
+                  "required": ["state", "declaration_present", "not_proved"],
+                  "properties": {
+                    "state": {
+                      "description": "NOT_DECLARED means no requirement was stated AND no delivery path was supplied -- nobody asked. The three *_PATH states are what an absent declaration means once the route the flow took IS known: on the chip path (0.5ic -> 15.5ic -> 26.5ic -> 37.5ic) the design is tape-out-bound and an absent requirement is a [CANNOT CHECK]; at the 37.5ip hardmacro terminal it owes no spare population; and a route that could not be established is refused rather than guessed at, because a design that has not been shown to be an IP delivery must not be treated as one.",
+                      "enum": ["NOT_DECLARED", "NOT_REQUIRED", "UNREADABLE", "REQUIRED", "NOT_DECLARED_ON_CHIP_PATH", "NOT_APPLICABLE_ON_IP_PATH", "PATH_UNDETERMINED"]
+                    },
+                    "delivery_path": {
+                      "description": "The route the flow took, measured by driving flow_compliance_check._check_condition over steps 37.5ic and 37.5ip. Never inferred from a GDS (an IP delivery streams one too) or from the PDK.",
+                      "enum": ["CHIP", "IP", "BOTH", "NOT_DETERMINED", "UNREADABLE", "NOT_SUPPLIED"]
+                    },
+                    "delivery_path_reason": {"type": "string"},
+                    "delivery_path_evidence": {"type": "object"},
+                    "declaration_present": {"type": "boolean"},
+                    "not_proved": {"type": "array", "items": {"type": "object"}},
+                    "obligations": {"type": "object"},
+                    "proofs": {"type": "array", "items": {"type": "object"}},
+                    "reason": {"type": "string"}
+                  }
                 }
               }
             }
