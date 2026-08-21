@@ -71,18 +71,6 @@
       "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/p0_disposition_backing.py."
     },
     {
-      "gate": "image-version pins are internally consistent",
-      "slug": "image_version_pins_are_internally_consistent",
-      "declared_at": "tools/ci/repo_hygiene_gates.sh:241",
-      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/image_version_pins_are_internally_consistent.py."
-    },
-    {
-      "gate": "upstream image currency (report-only)",
-      "slug": "upstream_image_currency_report_only",
-      "declared_at": "tools/ci/repo_hygiene_gates.sh:253",
-      "why": "NOT_WRITTEN_YET \u2014 the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/upstream_image_currency_report_only.py."
-    },
-    {
       "gate": "no upstream forked twice",
       "slug": "no_upstream_forked_twice",
       "declared_at": "tools/ci/repo_hygiene_gates.sh:267",

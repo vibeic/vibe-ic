@@ -1,8 +1,0 @@
-# OpenROAD detailed_route DRC summary (SYNTHETIC FIXTURE - no PDK, no design)
-violation count summary: 0 violation(s) found
-drc source: final [INFO DRT-0199] count
-[INFO DRT-0199]   Number of violations = 865.
-[INFO DRT-0199]   Number of violations = 218.
-[INFO DRT-0199]   Number of violations = 149.
-[INFO DRT-0199]   Number of violations = 6.
-[INFO DRT-0199]   Number of violations = 0.

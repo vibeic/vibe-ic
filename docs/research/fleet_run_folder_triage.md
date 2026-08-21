@@ -404,6 +404,14 @@ These stay. The evidence column says what the measurement is and where it should
 
 409 folders, 135.8 GB.
 
+> **Evidence withheld for `.112 / _agent_scratch_sn`.** That folder's raw logs and
+> TCL were staged into `fleet_run_folder_triage_evidence/` with the rest, and the
+> tracked-tree NDA scan flagged eight of its ten files on CONTENT (the literal is
+> masked by the gate on purpose). The whole ten-file directory is therefore NOT
+> in this repository — splitting one run's evidence would be worse than dropping
+> it. The row's verdict below stands: it was reached from the same measurement,
+> and the folder itself is untouched on .112 where the layouts still live.
+> Nothing else under `fleet_run_folder_triage_evidence/` was flagged.
 | host | folder | MB | files | evidence | where it should go |
 |---|---|---:|---:|---|---|
 | .105 | `_c_o_edge_llm_matmul_accel_nangate45_run` | 9561 | 798 | run edge_llm_matmul_accel@nangate45 v1.9.84 2026-08-05T14:31:00 verdict=FAIL gates 158/0 of 246; 3 run roots; 26 file contents (1 MB) exist in no other folder and in no repo; 3 GDS | publishable candidate — `benchmark-data/ic/edge_llm_matmul_accel/v1.9.84_nangate45/` |
