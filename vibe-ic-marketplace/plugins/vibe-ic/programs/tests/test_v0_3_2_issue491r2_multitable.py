@@ -58,14 +58,14 @@ _RTL = Path("phase2") / "stage1" / "rtl"
 def _run_doc_runner(project: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(DOC_RUNNER), str(project)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=60,
     )
 
 
 def _run_gate(project: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(GATE_PROG), str(project)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=60,
     )
 
 

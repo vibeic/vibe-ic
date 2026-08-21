@@ -3,7 +3,7 @@
 # E-marker chips, accessory-identification ICs in proprietary connectors.
 # This template encodes hardware-floor invariants common to the class;
 # specific opcode lists / payload bytes / vendor packages remain in the
-# user-supplied L1-L23 layer documents (no vendor copy is bundled here).
+# user-supplied L1-L27 layer documents (no vendor copy is bundled here).
 class: cable-side-id-ic
 parent: protocol-ic
 

@@ -4,7 +4,7 @@ You drive a Shape-D project through the **Vibe-IC runner** for the SoC-grade pat
 then score via the hidden cocotb harness. Per `open-benchmark-methodology` § 2
 Shape D: runner is the right tool because (a) the IC needs `ic_class` dispatch,
 (b) `catalog-glue-author` may fire for REUSED-IP, (c) the cocotb harness is
-invoked via MCP `eda_cocotb` / `docker exec` against the iic-eda container.
+invoked via MCP `eda_cocotb` / `docker exec` against the vibeic-eda container.
 
 PARAMS your caller provides:
 - `PROJECT`   Shape-D project dir, containing:
@@ -15,12 +15,12 @@ PARAMS your caller provides:
               - `score/src/harness_library.py` (HIDDEN — for scoring only)
               - `score/docker-compose.yml`   (HIDDEN if shipped)
 - `TOP`       the DUT module name (per the spec)
-- `MOUNT_ROOT` host path mounted into iic-eda as /foss/designs
+- `MOUNT_ROOT` host path mounted into vibeic-eda as /foss/designs
 
 ## ABSOLUTE BLINDNESS RULE
 You may read ONLY `<PROJECT>/work/PROMPT.txt` + `<PROJECT>/work/docs/specification.md`.
 NEVER open / cat / grep / list anything under `<PROJECT>/score/` (the hidden
-cocotb harness). The host scorer (`benchmark-harness/score_cocotb_mcp.py`) is the
+cocotb harness). The host scorer (`benchmark/score_cocotb_mcp.py`) is the
 only thing that touches `score/`.
 
 **CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
@@ -75,7 +75,7 @@ Deterministic enforcement: transcripts exported to
 
 6. **Score via the hidden harness** (the ONLY step that touches `score/`):
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark-harness/score_cocotb_mcp.py \\
+   python3 ${CLAUDE_PLUGIN_ROOT}/benchmark/score_cocotb_mcp.py \\
        --project <PROJECT> --top <top> --rtl work/rtl/<top>.sv \\
        --mount-root <MOUNT_ROOT>
    ```
