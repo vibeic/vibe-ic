@@ -71,6 +71,12 @@ _WINDOW = (
     "full:plugin-audit",
 )
 
+#: Sequential, after the window and before the closing write-guard
+#: bracket. `full:gatekeeper-review` runs the review the landing path had
+#: no other caller for; it needs the hygiene record the window produced,
+#: so it cannot be inside the window.
+_AFTER_WINDOW = ("full:gatekeeper-review", "full:write-guard-final")
+
 
 def _extract(name: str, text: str) -> str:
     match = re.search(
@@ -393,12 +399,69 @@ def test_every_lane_pytest_invocation_freezes_the_bytecode_stimulus(land_text):
         f"`gates are host-independent` is reading it: {missing}")
 
 
+#: Every form in which the lander emits a unit. `report` is in the list because
+#: leaving it out is how this instrument was first wrong: it reproduced the
+#: tuple for 23 of 24 units and silently dropped `cheap:scratch-report`, which
+#: shifted every later index by one and would have reported a correct script as
+#: broken.
+_EMITTERS = ("run", "run_emit", "fn_emit", "landing_skip", "report")
+
+
+def _emission_order(land_text):
+    """The units the lander emits, in source order.
+
+    Comment lines are dropped first: this file's own prose names units, and a
+    unit named in a comment is not an emission — the same rule
+    `gate_is_wired_check.executable_text` applies to callers.
+    """
+    emit = re.compile(
+        r'^\s*(?:' + "|".join(_EMITTERS) + r')\s+"([a-z]+:[a-z0-9-]+)"')
+    rec = re.compile(r'^\s*landing_record\s+"([a-z]+:[a-z0-9-]+)"\s+PASS')
+    seen, order = set(), []
+    for line in land_text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = emit.match(line) or rec.match(line)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            order.append(m.group(1))
+    return order
+
+
+def test_the_script_emits_exactly_the_declared_units_in_declared_order(
+        land_text):
+    """THE CONTRACT NOTHING WAS CHECKING (added 2026-08-21).
+
+    `landing_completion_record.py:200` refuses any label that is not
+    `LANDING_PROGRESS_UNITS[len(gates)]` and `:261` refuses unless the emitted
+    labels equal the complete tuple — so a unit added to the script at the
+    wrong position, or added to the tuple and never emitted, refuses EVERY
+    landing with `[NORECORD] landing completion record is incomplete`. That is
+    the most expensive failure this file can prevent and it was checked only
+    indirectly, for the six units inside the concurrent window.
+
+    Discovered while adding `full:gatekeeper-review`: nothing compared the
+    script's own emission order against the tuple at all, so the risk was
+    carried by whoever last edited either.
+    """
+    record = _ROOT / "tools" / "ci" / "landing_completion_record.py"
+    block = re.search(r"LANDING_PROGRESS_UNITS = \(\n((?:.*?\n)*?)\)",
+                      record.read_text(encoding="utf-8"), re.MULTILINE).group(1)
+    declared = re.findall(r'"([^"]+)"', block)
+    emitted = _emission_order(land_text)
+    assert emitted == declared, (
+        "the lander's emission order and the declared tuple have diverged; "
+        f"first difference at index "
+        f"{next((i for i, (a, b) in enumerate(zip(emitted, declared)) if a != b), min(len(emitted), len(declared)))}"
+        f"\n  emitted:  {emitted}\n  declared: {declared}")
+
+
 def test_landing_record_is_never_called_from_a_lane_body(land_text):
     """`append` is an unlocked read-modify-write with a fixed-order refusal.
 
     `landing_completion_record.py:200` refuses any label that is not
     `LANDING_PROGRESS_UNITS[len(gates)]`, and `:261` refuses unless the emitted
-    labels equal the complete 24-entry tuple. A lane that recorded from its own
+    labels equal the complete 25-entry tuple. A lane that recorded from its own
     subshell would append out of order AND lose concurrent updates.
     """
     for name in ("lane_targeted", "lane_corpus", "lane_hygiene", "lane_audit",
@@ -426,7 +489,17 @@ def test_the_window_is_exactly_the_six_contiguous_units(land_text):
     assert tuple(order[start:start + len(_WINDOW)]) == _WINDOW
     # The brackets stay outside it, on both sides.
     assert order[start - 1] == "full:write-guard-baseline"
-    assert order[start + len(_WINDOW)] == "full:write-guard-final"
+    # AND the sequential tail between the window and the closing bracket is
+    # pinned exactly, rather than only asserting which unit comes next. The
+    # review was added at this position on 2026-08-21 — after the hygiene run
+    # whose record it adjudicates, and still INSIDE the write-guard brackets so
+    # its own writes are attributed to it rather than to an overlap. Naming the
+    # whole tail keeps what the single assertion caught (a unit inserted into
+    # the bracketed region without anybody deciding it belonged there) while
+    # saying which units are deliberately there.
+    assert tuple(order[start + len(_WINDOW):
+                       start + len(_WINDOW) + len(_AFTER_WINDOW)]) \
+        == _AFTER_WINDOW
 
 
 def test_no_marker_probe_asks_its_question_through_a_pipe(land_text):

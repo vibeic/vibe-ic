@@ -1338,9 +1338,23 @@ lane_corpus() {
 # The record is written by `gate_dispatch_finish` BEFORE every one of its exit
 # paths, so a FAILING run still yields one. A baseline that only existed when
 # the base was green would be useless precisely when it is needed.
-GK_HYG=()
-[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
-  && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+# THE RECORD IS NO LONGER OPTIONAL (owner ruling, 2026-08-21).
+#
+# It used to be written only when `GATEKEEPER_HYGIENE_REPORT` named a path, and
+# the paragraph above says that with the variable unset the command was
+# byte-for-byte the one this file had always issued. That is no longer true and
+# this is why: `full:gatekeeper-review` below adjudicates THIS run's record
+# against `tools/ci/gate_red_since.json`, and with no record it can only report
+# `skipped — 0 gate state(s) examined`, which is a deadline that never comes
+# due. Measured on an unbound corpus: the whole review returns in 45 s having
+# adjudicated nothing at all.
+#
+# It still changes no verdict here. `run_capture` below decides this line from
+# the script's exit status exactly as before; the extra flag only makes the
+# record land somewhere the next stage can read it, and when the caller named a
+# path that path is still the one used.
+GK_HYG_RECORD="${GATEKEEPER_HYGIENE_REPORT:-$LANE_DIR/repo-hygiene-summary.json}"
+GK_HYG=(--summary-json "$GK_HYG_RECORD")
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
@@ -1361,7 +1375,7 @@ lane_hygiene() {
 #   * The LABEL is `LANDING_PROGRESS_UNITS[20]`. Removing it refuses every
 #     landing driven with `VIBEIC_LANDING_PROGRESS` set, which is exactly how
 #     the B2/A2 arms are driven: `landing_completion_record.finish` refuses
-#     unless the emitted labels equal the complete 24-entry tuple.
+#     unless the emitted labels equal the complete 25-entry tuple.
 #   * In an ARM they are not the same subject at all. This one runs the
 #     TRUSTED `/runtime` copy of the program; the hygiene tier runs the copy
 #     resolved against the candidate-controlled `/subject`. Two different
@@ -1432,6 +1446,10 @@ lane_emit_window() {
 
   lane_join hygiene
   run_emit "full:repo-hygiene" "repo hygiene gates" --last
+  # KEPT FOR THE REVIEW BELOW, and kept SEPARATELY from the record. The record
+  # says which gates were red; only this says whether the set completed, and a
+  # run killed part-way leaves a record that looks finished.
+  GK_HYG_RC="$EMIT_RC"
 
   lane_join audit
   run_emit "full:plugin-audit" "plugin full audit" --last
@@ -1490,6 +1508,60 @@ if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
   echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; the closing tree gates were not run"
   exit 2
 fi
+
+# ── THE REVIEW, WIRED WHERE IT CANNOT BE STEPPED AROUND ────────────────────
+#
+# Owner ruling, 2026-08-21. `gatekeeper_review.py` — "the gate a maintainer runs
+# before every push", whose MERGE_OK reads as "this will land green" — was
+# executed by NOTHING. Measured at 6dfe15a32: no workflow names it, no git hook
+# names it, no script names it; every occurrence outside its own tests is a
+# comment or a line of SKILL.md prose. It was therefore the weakest runner class
+# there is, which is verbatim what one of the hygiene gates it runs fails other
+# programs for — "a skill mention runs it only if an agent remembers to".
+#
+# NOT the pre-push hook: `--no-verify` steps around it, and so does any push
+# that does not go through this machine. NOT a workflow: the direct-push
+# doctrine means no workflow runs before main moves. The lander is the one path
+# every landing actually takes.
+#
+# THE BUDGET IS FOUR MINUTES AND A TIMEOUT BLOCKS. `timeout` returns 124, which
+# is not 0 and not 1, so the case statement below maps it — with every other
+# unexpected status — to rc 2 UNDETERMINED. A review that could not decide must
+# never reach the stamp as a review that decided nothing was wrong.
+#
+# IT IS FED THIS RUN'S HYGIENE RECORD RATHER THAN RUNNING THE SET AGAIN.
+# Measured: with the published corpus bound, the review's own hygiene run
+# exceeds the whole budget by itself, so wiring it as-is would make every
+# landing time out — unavoidable and never once deciding. `--hygiene-record-in`
+# checks the record against this tree's declared gate set before believing it
+# (see `hygiene_gate_from_record`), so this is a change of RUNNER, not a
+# cheaper subject and not a skip.
+GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-240}"
+run_gatekeeper_review() {
+  local out rc
+  out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
+         python3 "$PROGRAMS/gatekeeper_review.py" \
+         --base "$BASE" --head HEAD --repo "$ROOT" \
+         --hygiene-record-in "$GK_HYG_RECORD" \
+         --hygiene-record-rc "${GK_HYG_RC:-2}" 2>&1)"; rc=$?
+  case "$rc" in
+    0|1) ;;
+    124|137)
+      out="$out
+UNDETERMINED: the review did not decide within ${GK_REVIEW_BUDGET_S}s and was \
+killed. A landing may not proceed on a review that did not finish."
+      rc=2 ;;
+    *)
+      out="$out
+UNDETERMINED: the review exited $rc, which is neither MERGE_OK nor \
+REQUEST_CHANGES. Treated as undecided."
+      rc=2 ;;
+  esac
+  printf '%s\n' "$out"
+  return "$rc"
+}
+run "full:gatekeeper-review" "gatekeeper review (deadline adjudicated)" \
+    run_gatekeeper_review
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
