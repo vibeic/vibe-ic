@@ -38,8 +38,6 @@ Ship a deterministic program (`programs/<func>.py`) when:
 - Output should be reproducible across runs
 - A gate / runner / generator role
 
-See `SKILL_VS_RUNNER_DECISION.md` for AI dispatch rules.
-
 ## Classification
 
 Add an entry to your partner plugin's `skills/_classification.json` indicating tier: `essential` / `analog_essential` / `fallback_when_runner_waives` / `rtl_track` / `backend_track`.

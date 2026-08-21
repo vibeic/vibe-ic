@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _hostpaths import repo_path_opt  # noqa: E402
 
 PROG = Path(__file__).resolve().parent.parent / "analog_netlist_pdk_check.py"
 
@@ -145,7 +146,7 @@ def test_fail_no_model_include(tmp_path):
 
 def test_skip_no_sp(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
@@ -238,10 +239,7 @@ def test_known_models_gf180_bare_pass(tmp_path):
 
 # -- MANDATORY corpus sweep: the REAL adc pilot must stay 0 UNKNOWN_PDK_MODEL --
 
-CORPUS = Path(
-    "/home/reyerchu/vibe-ic/.claude/worktrees/cap-crc/benchmark_clean/"
-    "u_hawaii_adc_v0125_fresh"
-)
+CORPUS = repo_path_opt(".claude/worktrees/cap-crc/benchmark_clean/u_hawaii_adc_v0125_fresh")
 
 
 @pytest.mark.skipif(not CORPUS.is_dir(), reason="real adc corpus not present")

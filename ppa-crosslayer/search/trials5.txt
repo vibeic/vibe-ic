@@ -1,0 +1,6 @@
+v01 base auto 0.60 0.00 none
+v02 csa_mux auto 0.60 0.00 none
+v03 csa_alt_maj auto 0.60 0.00 ks
+v04 csa_mux auto 0.60 0.00 ks
+v05 csa_alt_maj auto 0.60 0.00 sk
+v06 csa_mux_hier auto 0.60 0.02 none

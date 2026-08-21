@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """phase23_one_shot_runner.py — Phase 2 + Phase 3 chain.
 
-Thin orchestrator that calls phase2_one_shot_runner.py and then
+Thin orchestrator that calls design_one_shot_runner.py and then
 phase3_one_shot_runner.py, aggregating their results into a unified
 report.
 
 This file replaces the legacy monolithic phase23 runner — Phase 2 logic
-now lives in phase2_one_shot_runner.py, Phase 3 in phase3_one_shot_runner.py.
+now lives in design_one_shot_runner.py, Phase 3 in phase3_one_shot_runner.py.
 phase23 is just the chain.
 
 Usage:
     python3 phase23_one_shot_runner.py <project_dir>
                   [--top-name chip_top]
-                  [--container iic-eda]
+                  [--container vibeic-eda]
                   [--max-eco 3]
                   [--skip-hardware]                 # forwarded to phase 2
                   [--skip-phase3]                   # stop after Phase 2
@@ -63,9 +63,14 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
+    p.add_argument("--force-rtl-regen", action="store_true",
+                   help="Forwarded to Phase 2: let the deterministic "
+                        "generator overwrite RTL it did not produce. "
+                        "DESTRUCTIVE and off by default — without it "
+                        "hand-authored RTL is PRESERVED and rtl_gen WAIVEs.")
     p.add_argument("--skip-phase2", action="store_true",
                    help="Skip Phase 2 (only run Phase 3 — pre supposes "
                         "rtl/ + generated_docs/ already present)")
@@ -74,6 +79,13 @@ def main() -> int:
     p.add_argument("--die-um", default="1500x1500")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
+    p.add_argument("--allow-oss-pdk-fallback", action="store_true",
+                   help="Pass through to phase3: acknowledge an "
+                        "open-source in-container PDK fallback even "
+                        "though a commercial PDK is configured for "
+                        "this host. Without it a silent OSS fallback "
+                        "is REFUSED (it would emit VOID sign-off "
+                        "reports).")
     p.add_argument("--detect-stable", type=int, default=0, metavar="N",
                    help="If the runner has produced the same verdict on the "
                         "previous N consecutive runs, skip the heavy "
@@ -111,7 +123,7 @@ def main() -> int:
             return 0
 
     t0 = time.time()
-    p2_runner = PROGRAMS_DIR / "phase2_one_shot_runner.py"
+    p2_runner = PROGRAMS_DIR / "design_one_shot_runner.py"
     p3_runner = PROGRAMS_DIR / "phase3_one_shot_runner.py"
     if not p2_runner.is_file() or not p3_runner.is_file():
         print(f"ERROR: child runners missing — phase2={p2_runner.is_file()} "
@@ -128,6 +140,8 @@ def main() -> int:
                    "--max-eco", str(args.max_eco)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
+        if args.force_rtl_regen:
+            p2_args.append("--force-rtl-regen")
         p2_rc, _ = _run_phase("PHASE 2 (= 2a + 2b)", p2_runner, p2_args)
         p2_json = _pl.report_path(project, "phase2_one_shot.json")
         if p2_json.is_file():
@@ -154,6 +168,8 @@ def main() -> int:
                    "--die-um", args.die_um,
                    "--util", str(args.util),
                    "--pdk", args.pdk]
+        if getattr(args, "allow_oss_pdk_fallback", False):
+            p3_args.append("--allow-oss-pdk-fallback")
         p3_rc, _ = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                               p3_runner, p3_args)
         p3_json = _pl.report_path(project, "phase3_one_shot.json")
@@ -183,6 +199,13 @@ def main() -> int:
                                    if ran_p3 else None)},
         "verdict": verdict,
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # The chained phase2→phase3 entry is a real front door (the /vibe-ic-phase23
+    # command) and used to leave no steps tree unless the run happened to be
+    # started from vibe_ic_one_shot_runner. Best-effort, non-gating; the outcome
+    # lands in reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase23_one_shot_runner")
     out = _pl.report_path(project, "phase23_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
