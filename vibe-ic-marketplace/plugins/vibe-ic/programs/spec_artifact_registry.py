@@ -383,8 +383,9 @@ REGISTRY: Tuple[ArtifactType, ...] = (
     ArtifactType("behavioral_fsm", "Behavioral-Prose Moore FSM", ("L6", "L3"),
                  _rec_behavioral_fsm, _bfsm.synth,
                  "Mechanically-complete behavioral-prose Moore FSM: latched sequence "
-                 "detector (KMP, asserts forever until reset) or reset-pulse counter. "
-                 "Narrative FSMs (Lemmings, PS/2) stay an honest AI-floor SKIP."),
+                 "detector (KMP), reset-pulse counter, or a strict directional "
+                 "bump+fall walker whose transition/priority/memory facts are all "
+                 "explicit. Advanced narrative FSMs stay an honest AI-floor SKIP."),
     ArtifactType("comb_advanced", "Advanced Combinational (catch-all)", ("L4", "L15", "L6"),
                  _rec_comb_advanced, _cadvc.synth,
                  "case-map / min-max / neighbour-vector / dual-impl / OR-of-ANDs / "

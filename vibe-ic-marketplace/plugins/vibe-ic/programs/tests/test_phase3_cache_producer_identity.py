@@ -168,6 +168,18 @@ def _project(tmp_path: Path, *, stamp: bool) -> Path:
         d.mkdir(parents=True, exist_ok=True)
     (rtl / f"{TOP}.v").write_text(f"module {TOP}(); endmodule\n")
     (synth / f"{TOP}_synth.v").write_text("// cached netlist\n")
+    # The DECLARED input of the PnR step, owed by step 12 and read by step 15.
+    # Not decoration: `step_preflight` refuses to dispatch a step whose declared
+    # inputs are absent, and it landed AFTER this fixture was written. Without
+    # this file the runner never reaches the cache decision at all — the pnr row
+    # comes back BLOCKED/REFUSED TO RUN and the two tests below assert about a
+    # step that was never offered the chance to be cached or re-run.
+    #
+    # This is the fixture catching up with the flow, NOT a relaxation: preflight
+    # still refuses when the input is genuinely absent (that is its own suite's
+    # subject), and the tests below still fail if the producer key is removed
+    # from their call site, which is the mutation they exist to catch.
+    (synth / "post_dft_netlist.v").write_text("// cached post-DFT netlist\n")
     (pnr / f"{TOP}.def").write_text(
         "DIEAREA ( 0 0 ) ( 200000 200000 ) ;\nPINS 0 ;\nEND PINS\n")
     (pnr / f"{TOP}.gds").write_text("cached GDS\n")

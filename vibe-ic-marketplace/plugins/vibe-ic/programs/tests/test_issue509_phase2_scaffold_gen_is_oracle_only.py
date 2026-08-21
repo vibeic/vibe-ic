@@ -75,6 +75,58 @@ def _mentions_oracle(text: str) -> List[str]:
     return [t for t in ORACLE_TOKENS if t in text]
 
 
+def _flow_values(path: Path) -> List[str]:
+    """Every SCALAR the flow declares, comments excluded.
+
+    vibe-ic#1012 IN THIS FILE. `test_no_flow_step_names_the_scaffold_oracle`
+    read the yaml as raw TEXT and asked whether the token appeared anywhere in
+    it, so a program named in a `#` COMMENT counted as a flow step naming it.
+    Measured on `a38902d16`: the sole occurrence of `emit_fsm_v` in
+    `phase1_phase2_phase3.yaml` is line 317, inside a comment explaining why a
+    gate is NOT blocking —
+
+        # WHY NOT BLOCKING. Every one of the 41 is a TRUE finding — L6 declares
+        # states and zero transitions, and `emit_fsm_v()`'s body really is
+        # `// TODO — transition logic per L6.fsm_transitions`.
+
+    — and the flow wires it nowhere. The test was red on main for a mention in
+    prose about the oracle's own body, which is the one place the oracle is
+    SUPPOSED to be discussed.
+
+    The same file already knows the rule: `_subprocess_invocations_of_oracle`
+    is AST-based precisely "so a mention in a comment, a docstring or a string
+    constant is not counted". This gives the yaml reader the same standard.
+    `yaml.safe_load` drops comments by construction, so walking the parsed
+    document cannot see one — the fix is structural, not a smarter regex.
+
+    A file that is not yaml, or does not parse, falls back to the raw text: a
+    reader that silently skipped what it could not parse would turn a real
+    wiring into a pass, which is the opposite failure and the worse one.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+        doc = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:                                   # noqa: BLE001
+        return [path.read_text(encoding="utf-8", errors="replace")]
+    if doc is None:
+        return []
+    out: List[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                out.append(str(k))
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+        elif node is not None:
+            out.append(str(node))
+
+    walk(doc)
+    return out
+
+
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8", errors="replace"))
 
@@ -102,6 +154,54 @@ def _string_constants(node: ast.AST) -> Iterator[str]:
 # 1 — no runner references the oracle
 # ---------------------------------------------------------------------------
 
+def _wires_oracle(path: Path) -> List[Tuple[int, str]]:
+    """(lineno, what) for every place `path` actually WIRES the oracle.
+
+    Wiring is an import of the module, a call to something the module owns, or
+    a process spawn naming it. NAMING it is not wiring: a comment that explains
+    how the oracle ranks a field is documentation of the contract, which is the
+    oracle's whole job.
+
+    This is the standard `_subprocess_invocations_of_oracle` already states two
+    tests below — "AST-based, so a mention in a comment, a docstring or an
+    `import` is not confused with an invocation". This test was the one that
+    did not follow it: it read the file as bytes and reported "a runner now
+    references it" on any occurrence of the name. MEASURED on the shipped tree:
+    `phase1_doc_one_shot_runner.py:63104`, a comment reading
+    `# phase2_scaffold_gen.derive_top_module_name ranks L9.top_module above ...`
+    turned this guard red, so the suite failed while nothing was wired and the
+    counterfactual wording in the eight other files was still exactly true.
+
+    A guard that fires on its subject being DISCUSSED cannot be left armed, and
+    a green one that fires on nothing would be worse — so the population moves
+    to the syntax, not away from the question.
+    """
+    try:
+        tree = _parse(path)
+    except SyntaxError:
+        return []
+    out: List[Tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == ORACLE_STEM or a.name.endswith(f".{ORACLE_STEM}"):
+                    out.append((node.lineno, f"import {a.name}"))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and (node.module == ORACLE_STEM
+                                or node.module.endswith(f".{ORACLE_STEM}")):
+                out.append((node.lineno,
+                            f"from {node.module} import "
+                            + ", ".join(a.name for a in node.names)))
+        elif isinstance(node, ast.Call):
+            callee = _dotted(node.func)
+            if callee and any(tok in callee.split(".")
+                              for tok in ORACLE_TOKENS):
+                out.append((node.lineno, f"call {callee}()"))
+    out.extend((ln, f"spawn via {callee}")
+               for ln, callee in _subprocess_invocations_of_oracle(path))
+    return sorted(set(out))
+
+
 def test_no_runner_references_the_scaffold_oracle():
     """The measurement #509 turned on: `git log -S` over `programs/*runner*.py`
     across all refs returns nothing. Pinned here on the current tree."""
@@ -110,18 +210,45 @@ def test_no_runner_references_the_scaffold_oracle():
         f"no *runner*.py found under {PROGRAMS} — the glob that defines this "
         f"test's population is broken, so a PASS would be vacuous"
     )
-    offenders: Dict[str, List[str]] = {}
+    offenders: Dict[str, List[Tuple[int, str]]] = {}
     for r in runners:
-        hits = _mentions_oracle(r.read_text(encoding="utf-8", errors="replace"))
+        hits = _wires_oracle(r)
         if hits:
             offenders[r.name] = hits
     assert not offenders, (
-        f"{ORACLE_STEM} is ORACLE-ONLY (#509) and a runner now references it: "
+        f"{ORACLE_STEM} is ORACLE-ONLY (#509) and a runner now wires it: "
         f"{offenders}. Every gate that cites this module states its "
         f"requirement counterfactually ('a conforming phase 2 WOULD receive'). "
         f"Wiring it is a legitimate decision — but the gates' wording, this "
         f"module's docstring and INDEX.md all have to change with it."
     )
+
+
+def test_this_guard_still_catches_a_runner_that_really_wires_it(tmp_path):
+    """The reverse case. Moving from "the name appears" to "the syntax wires
+    it" narrows the guard, so the narrowing has to be shown not to have blinded
+    it — each of the three wiring shapes must still be caught, and a comment
+    that merely names the oracle must not be."""
+    shapes = {
+        "import": f"import {ORACLE_STEM}\n",
+        "from-import": f"from {ORACLE_STEM} import emit_fsm_v\n",
+        "call": f"import x\nx.{ORACLE_STEM}.emit_fsm_v(1)\n",
+        "spawn": ("import subprocess\n"
+                  f"subprocess.run(['python3', '{ORACLE_STEM}.py'])\n"),
+    }
+    for label, src in shapes.items():
+        p = tmp_path / f"{label}_runner.py"
+        p.write_text(src)
+        assert _wires_oracle(p), f"{label} wiring went undetected"
+
+    innocent = tmp_path / "comment_runner.py"
+    innocent.write_text(
+        f"# {ORACLE_STEM}.derive_top_module_name ranks L9.top_module above\n"
+        f'"""{ORACLE_STEM} is the contract oracle for phase 2."""\n'
+        f'NOTE = "see {ORACLE_STEM} for the conforming shape"\n')
+    assert not _wires_oracle(innocent), (
+        "a comment/docstring/string that names the oracle is documentation of "
+        "the contract, not wiring")
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +264,10 @@ def test_no_flow_step_names_the_scaffold_oracle():
     offenders: Dict[str, List[str]] = {}
     for s in specs:
         try:
-            text = s.read_text(encoding="utf-8", errors="replace")
+            values = _flow_values(s)
         except OSError:
             continue
-        hits = _mentions_oracle(text)
+        hits = sorted({t for v in values for t in _mentions_oracle(v)})
         if hits:
             offenders[str(s.relative_to(FLOW))] = hits
     assert not offenders, (
