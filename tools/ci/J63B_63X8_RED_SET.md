@@ -251,6 +251,34 @@ window, on an idle machine.** Four of the nine modules carry an item worth a
 quarter of the window or more, and pytest emits no transition during any of
 them.
 
+**Re-measured on a quieter box, and it is worse than that.** At load 0.57:
+
+```
+64.98s call  test_d6_skip_discipline[stepD1]
+ 0.48s call  test_d6_l3c_fires_when_the_numerator_folds...
+ 0.04s call  test_d6_every_tier_moving_hint_is_either_accepted...
+             every other d6 step: ~0.01s
+81 passed, 1 xfailed in 66.92s
+```
+
+**One item is 64.98 s — ABOVE the 60 s window — and it is 97% of its own file's
+total runtime.** Measured 46.06 s and 64.98 s on two idle runs, so it also
+varies by 40% run to run.
+
+What follows is INFERENCE and is marked as such, because the experiment that
+settles it was not run: a nested run in which this item is the only thing
+executing has nothing to renew the window with, and would be killed as hung at
+60 s on an idle machine. It survives today because the driver runs several files
+and progress from the OTHERS renews the shared window while d6's long item
+grinds. That would make the true rule **not** "item vs window" but "does anything
+else emit during this item" — and it explains red 13's `stage=running` stall
+exactly: three files concurrent, the short ones finish, the long one is left
+alone with nothing renewing.
+
+To settle it, drive `_run_outcome_reports` on `test_matrix_d6_skip_discipline.py`
+ALONE and see whether it is killed. That is a five-minute experiment and it is
+named here rather than guessed at.
+
 That reframes red 13. It is not a d3 curiosity, and it is not really about
 `test_the_census_block_is_fresh`: the census and coverage runs drive all nine
 modules through the same nested driver, so the margin they actually run on is set
