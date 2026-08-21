@@ -121,6 +121,34 @@ inside the window MUST still be killed. Three mutations were run and each
 reddened the arm it was aimed at. Whole file, idle host: `3 failed, 26 passed`
 -> `2 failed, 28 passed`, twice.
 
+## Red 12's fix measured against the standard that condemned it
+
+The prior session's rate for this exact node was **4/10 red on unmodified
+`origin/main`**, measured by running it alone ten times. The fix is measured the
+same way so the two numbers are comparable, and then again under contention
+harsher than the one that produced the red:
+
+```
+ARM 1  the pair alone, ten consecutive runs        10/10 green  (~6.1 s each)
+ARM 2  THREE concurrent full-file runs, load 53.18
+         conc1  2 failed, 28 passed   red 12 + control: green
+         conc2  2 failed, 28 passed   red 12 + control: green
+         conc3  2 failed, 28 passed   red 12 + control: green
+```
+
+Load 53.18 is above the 25-45 that produced the original red and far above the
+3.45 idle run where it still failed. The two failures in each concurrent run are
+the NA-skip contract and the fourth-state ruling — both owned elsewhere. 4/10
+red to 0/10 and 0/3, against a harder condition.
+
+**And an honest refinement to 10 and 11.** They did NOT reproduce in any of the
+three concurrent runs at load 53, having failed in the original sweep at load
+25-45. Load average alone does not predict them; the specific interleaving does.
+They are rarer and more intermittent than a single observation suggests, which
+strengthens rather than weakens the reading that they are not repository
+defects — and it is stated here so nobody quotes a rate this work never
+measured.
+
 ## 10, 11, 13 — the host, proved rather than asserted
 
 All three pass without any change to the repository once the box is not being
