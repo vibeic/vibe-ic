@@ -659,14 +659,196 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "its condition is unsatisfiable and the step is dead for every design")
 
 
+def _write_router(root: Path, suffix: str) -> None:
+    """Put ONE of step 0.5ic's router files on disk, by its suffix."""
+    import _tapeout_declaration as TD
+    if suffix == "*.yaml":
+        (root / ST.SLOTS_DIR_REL).mkdir(parents=True, exist_ok=True)
+        (root / ST.SLOTS_DIR_REL / "slot_a.yaml").write_text(
+            "DIE_AREA: [0, 0, 2000, 2000]\n"
+            "CORE_AREA: [100, 100, 1900, 1900]\nFP_SIZING: absolute\n")
+    elif suffix == "NO_TEMPLATE.txt":
+        (root / ST.NO_TEMPLATE_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / ST.NO_TEMPLATE_REL).write_text(
+            ST.NO_TEMPLATE_MARKER + "\nfixture\n")
+    elif suffix == "SELF_TAPEOUT.txt":
+        (root / TD.SELF_TAPEOUT_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / TD.SELF_TAPEOUT_REL).write_text(
+            TD.SELF_TAPEOUT_MARKER + "\nfixture\n")
+    else:                                                   # pragma: no cover
+        raise AssertionError(f"no writer for router file {suffix!r}")
+
+
+def test_two_routers_at_once_is_refused_by_a_PROGRAM_because_the_flow_cannot(
+        tmp_path):
+    """WHERE THE EXCLUSIVITY ACTUALLY LIVES — measured, not assumed.
+
+    This file used to assert "no step is selected by more than one router",
+    while the harm its comment named is TWO TERMINALS SELECTED AT ONCE. Those
+    are not the same statement, and the gap between them is the point. MEASURED
+    on the flow BEFORE `37.5self` was retired, on a tree carrying both chip
+    routers:
+
+        flow_compliance_check._check_condition
+            37.5ic    selected=True    |  TWO TERMINALS
+            37.5self  selected=True    |
+
+    and each of those steps named EXACTLY ONE router file — so the assertion
+    was satisfied by construction on the very tree that exhibited the defect it
+    existed to prevent, while failing on steps that are legitimately on more
+    than one route. It measured step-to-router MULTIPLICITY, adjacent to
+    terminal-to-terminal COLLISION, which is the claim.
+
+    Retiring `37.5self` (867de42892) removed THAT instance and nothing more.
+    Which pair collides is exactly what a route being added or retired changes,
+    so it is DERIVED from the flow below and named NOWHERE — including here: a
+    sentence in this docstring saying which pair collides today would be a
+    hand-written fact that goes stale silently while the test stays green,
+    because the test reads the mapping and the sentence does not.
+
+    And the flow cannot hold the property: `files_exist` has no "and not", so
+    two steps on different routers select together whenever both files are on
+    disk, whatever any test asserts about how many routers a step names. This
+    is not a gap in the grammar to be filled; it is a property the flow is the
+    wrong place for.
+
+    A PROGRAM holds it, wired into step 0.5ic's own gate, and this pins all
+    three halves — the harm is REACHABLE, the guard REFUSES it by a named rule,
+    and the guard IS WIRED, because one that exists and is not wired guards
+    nothing.
+
+    IT IS GUARDED TWICE, AND THIS PINS ONE OF THE TWO. Measured on a properly
+    ingested single-router project (both clauses rc 0) with a second router
+    added and nothing else changed, BOTH of 0.5ic's gate clauses refuse it, by
+    different named rules:
+
+        submission_template_check   TREE_SAYS_BOTH
+        tapeout_declaration_check   ROUTER_CONTRADICTION   <- what this pins
+
+    Said here because it changes how a red in this test should be read: the
+    property is not lost the moment this one assertion fails, and conversely a
+    green here is not evidence that the sibling clause still works. Note too
+    that `all_of` reports the FIRST failing clause, so at flow level the visible
+    rule is TREE_SAYS_BOTH and ROUTER_CONTRADICTION stops at 0.5ic's own report.
+    """
+    import itertools
+    import tapeout_declaration_check as TDC
+
+    by_file = _routes_by_router_file()
+    routers = sorted(by_file)
+
+    # 1. THE HARM IS REACHABLE — some pair of routers selects steps the other
+    #    does not, i.e. two different terminals at once.
+    harmful = [(a, b) for a, b in itertools.combinations(routers, 2)
+               if (by_file[a] - by_file[b]) and (by_file[b] - by_file[a])]
+    assert harmful, (
+        "no pair of router files selects two different sets of steps any more, "
+        f"so the guard below is guarding nothing. Routes: {by_file}")
+
+    # 2. EVERY pair is refused by the program, by a NAMED rule — not just the
+    #    harmful ones, because which pair is harmful moves with the flow.
+    for a, b in itertools.combinations(routers, 2):
+        root = tmp_path / f"{a}_{b}".replace("*", "star").replace(".", "_")
+        (root / "input/submission_template").mkdir(parents=True)
+        _write_router(root, a)
+        _write_router(root, b)
+        import _tapeout_declaration as TD
+        doc, _ig = TD.merge_answers(TD.blank_declaration(),
+                                    {"deliverable": "DIE"})
+        (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
+        rep = root / "reports/phase1/tapeout_declaration.json"
+        assert TDC.main([str(root), "--json", str(rep)]) != 0, (
+            f"a tree carrying {a} AND {b} selects more than one delivery path "
+            f"and must not pass")
+        assert "ROUTER_CONTRADICTION" in rep.read_text(), (
+            f"the refusal for {a}+{b} must be a named rule, not a bare "
+            f"non-zero exit")
+
+    # 3. ...and that program is a CLAUSE OF STEP 0.5ic'S OWN GATE.
+    import yaml
+    flow = yaml.safe_load(
+        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    step = next(s for s in flow["steps"] if str(s["id"]) == "0.5ic")
+    assert "tapeout_declaration_check" in json.dumps(step["gate"]), (
+        "step 0.5ic's gate no longer invokes `tapeout_declaration_check`, which "
+        "is the only thing that can hold router exclusivity — `files_exist` "
+        "cannot express \"and not\", so with this clause gone a tree carrying "
+        "two routers selects two terminals and nothing refuses it. The gate as "
+        f"it now stands: {json.dumps(step['gate'])}")
+
+
+def test_a_step_on_both_chip_routes_declares_any_of():
+    """Otherwise it is unreachable, and silently so.
+
+    `files_exist` defaults to ALL-of (`flow_compliance_check._check_condition`),
+    and the three router files are mutually exclusive on disk — so a step
+    listing two of them WITHOUT `any_of` demands a tree that cannot exist and
+    can never run for any design. That is indistinguishable from the step
+    having been deleted, and it is the failure this asserts against.
+    """
+    routed = _routed_conditions()
+    multi = {sid: c for sid, c in routed.items()
+             if len([x for x in (c.get("files_exist") or [])]) > 1}
+    # THE DENOMINATOR, because the loop below only fires for steps that list
+    # more than one router and would otherwise report GREEN having examined
+    # NOTHING. Measured: reverting 15.5ic and 26.5ic to `slots/*.yaml` alone —
+    # the regression that shipped dies with no pad ring and no seal ring — takes
+    # this population to a size the loop skips entirely, and the assertion below
+    # then passes silently. That revert IS caught, loudly, by
+    # test_pad_and_seal_ring_on_the_chip_path.py (6 reds, two of them named
+    # `..._conditioned_on_the_chip_path_and_not_on_the_operator`), so nothing is
+    # unguarded — but a test that goes quiet on the exact change it was written
+    # for should say so rather than look clean.
+    assert multi, (
+        "no routed step lists more than one router file, so the rule below "
+        f"examined nothing. Routed steps and their conditions: {routed}")
+    for sid, cond in multi.items():
+        pats = [str(x) for x in (cond.get("files_exist") or [])]
+        assert cond.get("any_of") is True, (
+            f"step {sid} lists {len(pats)} router files {pats} and does not "
+            f"declare `any_of`, so its condition is an AND over files that are "
+            f"mutually exclusive — it can never run")
+
+
 def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
     """THE ONE THIS STEP EXISTS FOR, now that the outputs are routers.
 
     MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
     chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
-    applicable, on `files_exist` and nothing else. Nothing blocks on this step
-    and nothing takes a required_input from it, so ITS OWN FAIL DOES NOT STOP
-    THE ROUTING — measured too, and it is why the file must not be written.
+    applicable, on `files_exist` and nothing else.
+
+    THE SENTENCE THAT USED TO SIT HERE IS NO LONGER TRUE, and it is corrected
+    rather than deleted because a reader who believes it reasons wrongly about
+    why this step matters. It said "Nothing blocks on this step and nothing
+    takes a required_input from it, so ITS OWN FAIL DOES NOT STOP THE ROUTING".
+    Both halves are now false — the 2026-08-20 D5-MISSING-EDGE change added the
+    edges.
+
+    NO LIST OF STEP IDS APPEARS HERE ON PURPOSE. Enumerating them is how the
+    sentence above rotted: a hand-written fact in prose is correct until the
+    flow moves and then silently is not. The PROPERTY, and how to re-derive it
+    in one read of the flow this file already parses:
+
+        every step whose `condition.files_exist` names a submission_template
+        router also declares `0.5ic` in its `blocks_on`; the chip-path ones
+        additionally take `input/submission_template/tapeout_declaration.json`
+        as a `required_input` from it.
+
+    So this step's FAIL now DOES stop the routing. That is not re-asserted
+    here, because a broader guard already holds it, in
+    `test_matrix_d5_deps_correct.py`:
+
+        test_d5_blocks_on_covers_the_real_dependency_graph
+
+    which derives the edge set from the real dependency graph and pins it for
+    every step in the flow. Measured, by dropping `0.5ic` from `26.5ic` and then
+    from `37.5ip` in a throwaway tree and watching D5 redden for each. A third
+    copy of an invariant a broader guard already holds is maintenance surface
+    pretending to be coverage.
+
+    THE CONCLUSION IS UNCHANGED, because it never rested on that clause: the
+    router file must not be written by a run that did not look, because the
+    routers select terminals by `files_exist` and nothing else.
 
     A run that searched and found nothing and SAID SO, and a run where nobody
     looked, produce the same empty directory. If both wrote the router, both
