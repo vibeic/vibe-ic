@@ -891,12 +891,14 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            22
-    distinct target programs    15
+    Bucket-A records            26     (22 when the rule was written)
+    distinct target programs    16
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
 until writing this rule, having routed twenty-odd records on ownership alone.
+It has since been **re-run as the batch grew**, which is the rule applying to
+itself: a check quoted once is a check that was true once.
 The check belongs at emit time, refusing the pairing and saying which half must
 change: wire the program, or route the rule somewhere that runs.
 **(o)** yes. **(d)** yes — it is per record per emit, so every future batch is
@@ -1254,7 +1256,7 @@ positives. **Four rules have been swept. Not one survived unchanged.**
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
-| A-23 | — | 0 of 21 | **this batch passes its own new check** |
+| A-23 | — | 0 of 26 | **re-run as the batch grew; still passes** |
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | A-25 | 29 types | **17 unschema'd** | upstream cause of A-15 and A-17 |
 | A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
