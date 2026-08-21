@@ -1,0 +1,44 @@
+BEFORE extra-clone worktrees: 222   {'RECOVER': 62, 'LANDED': 145, 'ABANDON': 15}
+AFTER  extra-clone worktrees: 202   {'RECOVER': 59, 'LANDED': 127, 'ABANDON': 16}
+matched 202 | not re-measured (clone or tree deleted) 20 | new 0
+VERDICT CHANGED: 8
+
+on the matched set only:
+  RECOVER    57 ->   59   (+2)
+  LANDED    130 ->  127   (-3)
+  ABANDON    15 ->   16   (+1)
+
+EVERY worktree whose verdict changed:
+
+host  worktree                                     before    after     nadd b->a      rule b->a   subject
+---------------------------------------------------------------------------------------------------------
+120   ~/vibe-ic-wt-progsupply-core                 RECOVER   ABANDON   2542->2597     R2->A6      #312 — wire the SECOND track into Phase 1, and give 
+120   ~/_rb_r808/mut_wt                            RECOVER   LANDED    295->54        R2->L1      fix(flow): a bare `no_analog: true` block list is a 
+120   ~/_gk_p855/base                              RECOVER   LANDED    246->4         R2->L1      fix(sta): do not merge per-corner slack across the p
+120   ~/vibe-ic-wt-caravel_user_project-fix-phase3-asic-top-resolution-caravel LANDED    RECOVER   989->1437      L1->R2      fix(phase3): resolve synthesizable ASIC top structur
+120   ~/_wt_r5_stasta                              LANDED    RECOVER   842->1249      L1->R2      fix(phase3): a sign-off report must describe the lay
+105   ~/vibe-ic-wt-opentitan_aes-lint-xor-fold-memberkey LANDED    RECOVER   4->62          L1->R2      fix(rtl-hygiene-lint): XOR shift-fold is edge-idiom 
+120   ~/vibe-ic-wt-caravel_user_project-fix-explicit-top-not-in-rtl LANDED    RECOVER   1->7           L1->R2      fix(orchestrator): don't forward an explicit --top-n
+120   ~/vibe-ic-wt-caravel_user_project-fix-def-progression LANDED    RECOVER   0->3           L0->R2      fix(def-progression): exempt a post_hold->routed byt
+
+not re-measured (20) -- clone or worktree deleted between rounds:
+  105  ~/_c_car10_scratch/wt_main                     was LANDED
+  114  ~/_c_cv_spm_scratch/fork                       was RECOVER
+  114  ~/_c_rt_spm_scratch/pr                         was LANDED
+  114  ~/_c_rt_spm_scratch/tree                       was LANDED
+  114  ~/_rtllm_gen_LIFObuffer_scratch/pr-worktree    was LANDED
+  114  ~/_salvage_rs_ctrl                             was LANDED
+  114  ~/_salvage_rs_wt                               was LANDED
+  120  ~/_agent_scratch_sha6/prefix_tree              was LANDED
+  120  ~/_agent_scratch_sha7/prefix_tree              was LANDED
+  120  ~/_agent_scratch_sha8/pristine                 was LANDED
+  120  ~/_c_sha5_scratch/pr_imagepin                  was RECOVER
+  120  ~/_c_sha5_scratch/pr_selfverify                was RECOVER
+  120  ~/_c_sha5_scratch/pr_step10                    was RECOVER
+  121  ~/_agent_scratch_edge4/queue                   was RECOVER
+  121  ~/_agent_scratch_subs6/wt_main                 was LANDED
+  121  ~/_agent_scratch_subs9/pristine                was LANDED
+  121  ~/_c_mm1_scratch/pristine                      was LANDED
+  121  ~/_capB_scratch/pristine                       was LANDED
+  121  ~/_gk_p856/base                                was LANDED
+  121  ~/_rb_r854/base                                was LANDED

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# rsh <host> <<<'script on stdin'  -- run a bash script on a fleet host.
+# .108 and .121 do not accept this host's key; .112 does, and .112's key is
+# authorized on both. So those two are reached by nesting ssh through .112.
+set -uo pipefail
+h="$1"; shift
+script=$(cat)
+b64=$(printf '%s' "$script" | base64 -w0)
+case "$h" in
+  192.168.1.108|192.168.1.121)
+    timeout "${RSH_TIMEOUT:-900}" ssh -o BatchMode=yes -o ConnectTimeout=10 \
+      reyerchu@192.168.1.112 \
+      "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 reyerchu@$h \"echo $b64 | base64 -d | bash -s\""
+    ;;
+  192.168.1.120|localhost)
+    printf '%s' "$script" | bash -s
+    ;;
+  *)
+    timeout "${RSH_TIMEOUT:-900}" ssh -o BatchMode=yes -o ConnectTimeout=10 \
+      reyerchu@"$h" "echo $b64 | base64 -d | bash -s"
+    ;;
+esac
