@@ -1703,15 +1703,24 @@ bucket. My 26 resolve as:
 | **EXTRACT-NEW** | 5 | A-3, A-4, A-13, A-22, A-25 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
-**Two conflict warnings for whoever applies these**, because the skill asks for
-augments to be reported rather than applied by N agents in parallel:
+**Contention warnings for whoever applies these**, because the skill asks for
+augments to be reported rather than applied by N agents in parallel. Derived from
+the routing rather than remembered — the first version of this list named three
+rules against one file and was already out of date by five:
 
-* **A-2, A-5 and A-11 all edit `ppa_head_to_head_check.py`.** Three rules, one
-  file. Apply them together or serialise them.
-* **A-3 and A-4 share a helper** — the relation-derived population is the input
-  both need, and computing it twice is how the two answers start to disagree.
-  A-13 wants the same test-population plumbing, so all three want one new
-  program, not three.
+    5 rules -> plugin_change_pytest_gate     A-3, A-4, A-13, A-22, A-26
+    3 rules -> ppa_head_to_head_check        A-2, A-5, A-11
+    3 rules -> ppa_search_run                A-7, A-8, A-18
+    3 rules -> enhancement_emit              A-9, A-22-adjacent, A-27
+
+* **The five test-population rules are one piece of work, not five.** A-3 and
+  A-4 share a helper — the relation-derived population is the input both need,
+  and computing it twice is how two answers start to disagree. A-13, A-22 and
+  A-26 all want the same plumbing: a walk over the test tree that knows which
+  file belongs to which layer. Build that once.
+* **The three-rule files each want one pass, not three.** Apply them together or
+  serialise them; three agents editing one file in parallel is the contention
+  the skill's reporting rule exists to prevent.
 
 ### Corpus sweep: these fire on the current repo, and that is CORRECT
 
