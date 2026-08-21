@@ -957,3 +957,59 @@ the artefact, the only objective in the tree is self-declared and says so, and
 the campaign's own frontier lane admitted zero candidates. None of the four
 findings above was produced by changing anything. They were read out of documents
 that were already committed.
+
+---
+
+# Part 10 — gate 3's denominator, answered by sweep instead of by grep
+
+Ask 2 of this job is *"find out whether that input can be produced from what this
+repository already holds."* Part 1 answered it for gate 3 with a targeted grep
+(`grep -rl '"expected"'` → nothing) and Part 9 added that no schema declares the
+document. Neither is the same as having looked.
+
+So both campaigns were swept: **every** JSON file under `ppa-e2e/` and
+`ppa-crosslayer/`, walked to every depth, looking for a list of
+requirement-shaped rows — entries that NAME a metric and carry no measured
+`value` or `status`. That is the shape a declared denominator has, whatever it is
+called and wherever it sits.
+
+    82 declaration.json                        metrics: []   all 82, no exceptions
+    82 contract.json                           metrics: []   all 82 (Part 1)
+    requirement-shaped metric lists elsewhere  exactly one family, below
+
+## The one family that turned up, and why it must not be used
+
+    ppa-crosslayer/records/trials/*/feasibility_report.json
+        .candidates[].axes[].coverage      6 rows per axis
+
+Those rows are genuinely denominator-shaped: `{metric, view, state}` naming what
+was looked for and whether a record existed. It would take an afternoon to
+reshape one into an `--expect` document and let gate 3 run.
+
+**It must not be**, for three reasons, and the third is decisive:
+
+  1. It is derived, not declared. `_ppa/feasibility.py`'s hard-coded
+     `DEFAULT_AXES` crossed with the candidate set's own `required_views_by_axis`
+     — nobody stated it as a requirement of the run.
+  2. It is post-hoc. The file is written *after* measurement, so coverage
+     computed against it can only report what the adjudicator already decided to
+     look for.
+  3. **It is a checker's own output being used as the specification that checker
+     is judged against.** That is not an analogy for a defect fixed tonight — it
+     is the identical defect, one gate over. `ppa_head_to_head_check`'s corpus
+     walk was matching its own `*_report.json` artefacts and refusing them as if
+     they were records (Part 1, §1b). Feeding `feasibility_report.json` to
+     `ppa_measurement_check` as its expectation would rebuild that same loop
+     deliberately, having just removed it by accident.
+
+## The answer, now exhaustive
+
+**No pre-declared measurement denominator exists anywhere in this repository.**
+Not in a contract, not in a declaration, not under another name, not at any depth
+of either campaign. The only requirement-shaped rows in the tree are a checker's
+own post-hoc output.
+
+Gate 3 stays **STILL-CANNOT**, and the sentence behind it is now a measurement
+rather than a search that stopped early. The missing artefact is a document
+declaring, *before the run*, which `(metric, scope)` pairs that run is required
+to produce — with a schema, which does not exist either (Part 9).
