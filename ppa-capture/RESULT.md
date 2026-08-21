@@ -1661,6 +1661,18 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+**`verify.py` is UNWIRED, which is A-23 applied to this batch's own tooling.**
+Nothing invokes it — measured, not assumed — so by the standard this batch
+records, it is a check that produces no verdict. I could not wire it:
+`tools/ci/repo_hygiene_gates.sh` is one of 47 pinned protected paths, and
+editing a protected path is the class **A-3**'s neighbouring record shows cannot
+be landed by re-pinning in place. So it is stated rather than quietly left:
+**whoever lands this adds one line to the hygiene gates**, and until they do,
+every claim in this document is re-measurable only by someone who remembers to
+run the command.
+
+    python3 ppa-capture/verify.py     21 checks, exit 0 = every claim holds
+
 **Next: implement the 13 Bucket-A rules** — a separate lane, per the brief. Take
 `pattern` and `fix_action` from `ppa-capture/recoveries.json`; the emitted
 sketches in `ppa-capture/candidates/` are already filed beside the program that
