@@ -176,6 +176,19 @@ def _read_verilog_arg(tcl: str) -> str:
     raise AssertionError(f"no read_verilog in emitted TCL:\n{tcl}")
 
 
+def _linked_file(tcl: str, project: Path) -> Path:
+    """The netlist the deck links, as a path on THIS filesystem.
+
+    The deck spells paths under the run root against `$RUN_ROOT`, which the
+    deck itself resolves from its own location at run time. That spelling is a
+    separate fix with its own tests; here the question is only WHICH FILE the
+    session reads, so resolve the variable the way the deck does."""
+    arg = _read_verilog_arg(tcl)
+    if arg.startswith("$RUN_ROOT/"):
+        return project / arg[len("$RUN_ROOT/"):]
+    return Path(arg)
+
+
 # ---------------------------------------------------------------- FORWARD ---
 def test_signoff_power_links_the_routed_netlist_and_the_spef(tmp_path):
     """FAILS pre-fix: the pre-fix body linked `<top>_synth.v` for both bases."""
@@ -242,8 +255,9 @@ def test_the_measurement_moves_when_the_routed_design_moves(tmp_path):
     _, tcl_a, _, _ = _emit(a, "post_pnr")
     _, tcl_b, _, _ = _emit(b, "post_pnr")
 
-    read_a = Path(_read_verilog_arg(tcl_a))
-    read_b = Path(_read_verilog_arg(tcl_b))
+    read_a = _linked_file(tcl_a, a)
+    read_b = _linked_file(tcl_b, b)
+    assert read_a.is_file() and read_b.is_file(), (read_a, read_b)
     assert read_a.read_text() != read_b.read_text(), (
         "two place-and-route configurations produced the same measurement "
         "input, so no PnR knob can move this number"
