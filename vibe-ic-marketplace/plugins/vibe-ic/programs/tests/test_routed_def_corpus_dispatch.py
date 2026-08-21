@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -20,6 +21,7 @@ DISPATCH = REPO / "tools" / "ci" / "_gate_dispatch.sh"
 ATTEST = PROGRAMS / "gate_process_attestation.py"
 HDF = PROGRAMS / "hygiene_finding_delta.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
+BOUND_SHA = "GATEKEEPER_BENCHMARK_DATA_SHA"
 
 # Completion evidence decides these tests.  An elapsed-time expiry would not
 # prove either that git's index was read or that the dispatcher finished.
@@ -49,14 +51,49 @@ def _routed(root: Path, design: str, version: str, *, tracked: bool) -> Path:
     return path.resolve()
 
 
-def _helper(pointer: str | None) -> subprocess.CompletedProcess[str]:
+def _helper(pointer: str | None, *, repo: Path = REPO,
+            extra: Sequence[str] = ()) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop(ENV, None)
+    env.pop(BOUND_SHA, None)
     if pointer is not None:
         env[ENV] = pointer
     return subprocess.run(
-        ["python3", str(HELPER), "--repo", str(REPO)],
-        cwd=str(REPO), env=env, capture_output=True, text=True)
+        ["python3", str(HELPER), "--repo", str(repo), *extra],
+        cwd=str(repo), env=env, capture_output=True, text=True)
+
+
+def _subject_repo(tmp_path: Path, name: str = "subject") -> Path:
+    """A `--repo` root that carries the resolver and NO `benchmark-data/`.
+
+    HERMETIC ON PURPOSE. Asking this of the real checkout would make "is the
+    corpus absent" a fact about whoever ran the tests: a developer with a
+    `benchmark-data/` in their tree, or with the pointer exported, measures a
+    different state under the same test name.
+    """
+    programs = tmp_path / name / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+    programs.mkdir(parents=True)
+    shutil.copy2(PROGRAMS / "_corpus_location.py",
+                 programs / "_corpus_location.py")
+    assert not (tmp_path / name / "benchmark-data").exists()
+    return tmp_path / name
+
+
+def _read_but_empty_corpus(tmp_path: Path, name: str = "read-empty") -> Path:
+    """A resolvable corpus CHECKOUT whose index carries no routed DEF.
+
+    Not a loose directory: that is the separate `not a git checkout` refusal,
+    and using it here would prove the two states differ for a reason other
+    than the one under test.
+    """
+    root = tmp_path / name
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "ic").mkdir()
+    (root / "ic" / "PUBLISHING.md").write_text("no cells\n", encoding="utf-8")
+    _git(root, "add", "ic/PUBLISHING.md")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c")
+    return root
 
 
 def test_external_population_is_read_only_from_the_git_index(tmp_path):
@@ -315,12 +352,61 @@ def test_a_broken_or_non_git_pointer_is_undetermined_not_empty(
         assert "not a git checkout" in proc.stderr
 
 
-def test_an_unconfigured_moved_corpus_is_explicit_no_corpus():
-    proc = _helper(None)
+def test_an_absent_corpus_is_undetermined_and_a_read_empty_one_is_not(tmp_path):
+    """vibe-ic#1764 — the two states must not share an exit status.
 
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert proc.stdout == ""
-    assert "NO_CORPUS" in proc.stderr and "NOTHING WAS SCANNED" in proc.stderr
+    This REPLACES `test_an_unconfigured_moved_corpus_is_explicit_no_corpus`,
+    which pinned rc 0 / NO_CORPUS for the absent row. That assertion was not
+    weakened; it was measured to be WRONG about what the producer's consumer
+    receives. `gate_dispatch_over` chooses between "the corpus is EMPTY" and
+    "the producer FAILED" from the exit status and the item count alone
+    (`tools/ci/_gate_dispatch.sh`), and NO_CORPUS is printed on stderr, which
+    that decision never reads. So rc 0 with an empty stdout said "I opened a
+    corpus and it holds none" about a tree nothing had opened, and the row a
+    reader saw was byte-identical to the honest one.
+
+    BOTH DIRECTIONS, because a producer that refused everything would satisfy
+    the first arm alone: the read-and-empty corpus must still be rc 0 / 0
+    items, or the fix would have bought the distinction by deleting the
+    measured empty population it exists to report.
+    """
+    absent = _helper(None, repo=_subject_repo(tmp_path))
+
+    assert absent.returncode == 2, absent.stdout + absent.stderr
+    assert absent.stdout == "", "producer diagnostics must not become items"
+    assert "UNDETERMINED" in absent.stderr
+    assert "NO_CORPUS" not in absent.stderr, (
+        "an unopened corpus still reports rc 0 NO_CORPUS, which reaches the "
+        "dispatcher as a corpus that WAS opened and holds none")
+
+    corpus = _read_but_empty_corpus(tmp_path)
+    read = _helper(str(corpus), repo=_subject_repo(tmp_path, "subject-b"))
+
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == "", read.stdout
+    assert absent.returncode != read.returncode, (
+        "a corpus nothing opened and a corpus that was read and holds none "
+        "still reach the dispatcher as the same rc and the same 0 items")
+
+
+def test_the_absent_refusal_names_no_flag_this_producer_would_reject(tmp_path):
+    """The stated remedy must be one the reader can actually type.
+
+    `_corpus_location.refuse`'s default sentence offers
+    `--corpus-may-be-absent`, which the gates that expose it accept. This
+    producer deliberately exposes none, so naming it would hand a reader a
+    remedy whose real answer is `unrecognized arguments` — the false-premise
+    shape `triage_note_answers_the_question_check` exists to refuse.
+    """
+    subject = _subject_repo(tmp_path)
+    refusal = _helper(None, repo=subject)
+    offered = _helper(None, repo=subject, extra=("--corpus-may-be-absent",))
+
+    assert offered.returncode != 0 and "corpus-may-be-absent" in offered.stderr, (
+        "this producer now ACCEPTS an absent-corpus opt-in; the assertion "
+        "below is about a flag it rejects and has stopped being true")
+    assert "--corpus-may-be-absent" not in refusal.stderr, (
+        "the refusal names a flag this producer rejects:\n" + refusal.stderr)
 
 
 def test_two_versions_of_one_design_refuse_before_duplicate_gate_owners(
@@ -431,6 +517,80 @@ def test_default_empty_population_preserves_legacy_no_process_shape(tmp_path):
     }]
     assert doc["not_checked_unexempted"] == [label]
     assert attestations == progress == []
+
+
+def _population_row(tmp_path: Path, name: str, pointer: Path | None):
+    """One activated hygiene micro-suite over the SHIPPED producer wiring."""
+    root = tmp_path / name
+    gate = _transition_subject(root, activate=True)
+    summary = tmp_path / f"{name}.summary.json"
+    attest = tmp_path / f"{name}.attest.jsonl"
+    env = os.environ.copy()
+    env.pop(ENV, None)
+    env.pop(BOUND_SHA, None)
+    if pointer is not None:
+        env[ENV] = str(pointer)
+    env.update({
+        "GATEKEEPER_HYGIENE_JOBS": "1",
+        "GATE_DISPATCH_ATTESTATION_HELPER": str(
+            root / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+            / "gate_process_attestation.py"),
+        "GATE_DISPATCH_ATTESTATION_FILE": str(attest),
+    })
+    proc = subprocess.run(
+        ["bash", str(gate), "--summary-json", str(summary)],
+        cwd=str(root), env=env, capture_output=True, text=True)
+    return proc, json.loads(summary.read_text(encoding="utf-8"))
+
+
+def test_the_dispatcher_row_distinguishes_an_absent_corpus_from_an_empty_one(
+        tmp_path):
+    """vibe-ic#1764, end to end through the SHIPPED wiring.
+
+    `_transition_subject(activate=True)` reproduces the exact call site
+    `repo_hygiene_gates.sh` uses — `GATE_DISPATCH_ATTEST_POPULATION=1` over
+    `routed_def_corpus.py --repo "$ROOT"` — so this is the sentence a reader
+    of a hygiene run is actually shown, not a restatement of the producer's
+    exit status.
+
+    MEASURED before the fix: both arms produced
+    `corpus "..." is EMPTY — nothing was checked over it`, one of them about a
+    corpus nothing had opened.
+
+    NEITHER ARM BECOMES A PASS. Both are rc 2, both are unexempted
+    NOT_CHECKED, and this test asserts that as well — the distinction is
+    between two true sentences, not between blocking and not blocking.
+    """
+    empty_label = ('corpus "published cells carrying a routed DEF" is EMPTY '
+                   '\u2014 nothing was checked over it')
+    failed_label = ('corpus "published cells carrying a routed DEF" producer '
+                    'FAILED \u2014 denominator unknown')
+
+    absent_proc, absent_doc = _population_row(tmp_path, "absent", None)
+    read_proc, read_doc = _population_row(
+        tmp_path, "read-empty", _read_but_empty_corpus(tmp_path))
+    absent_text = absent_proc.stdout + absent_proc.stderr
+    read_text = read_proc.stdout + read_proc.stderr
+
+    assert [row["label"] for row in absent_doc["gates"]] == [failed_label], (
+        "an ABSENT corpus is still declared as an EMPTY population:\n"
+        + absent_text)
+    assert absent_doc["corpora"][0]["expansion"] == "PRODUCER_FAILED"
+    assert "CORPUS PRODUCER FAILED" in absent_text
+    assert "EMPTY CORPUS" not in absent_text
+
+    assert [row["label"] for row in read_doc["gates"]] == [empty_label], (
+        "a corpus that WAS read and holds none stopped being reported as an "
+        "empty population:\n" + read_text)
+    assert read_doc["corpora"][0]["expansion"] == "EXPANDED"
+    assert "EMPTY CORPUS" in read_text
+    assert "CORPUS PRODUCER FAILED" not in read_text
+
+    # Not in scope for #1764 and asserted so it stays that way.
+    assert absent_proc.returncode == read_proc.returncode == 2, (
+        absent_text + read_text)
+    assert absent_doc["not_checked_unexempted"] == [failed_label]
+    assert read_doc["not_checked_unexempted"] == [empty_label]
 
 
 def test_failed_producer_is_a_distinct_blocking_attested_result(tmp_path):
