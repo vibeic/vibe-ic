@@ -436,9 +436,9 @@ subject is a NAMED TOOL rather than one of our own gates (77 raw hits narrow to
 | a synthesis techmap module | a declared cell map that silently does not bind |
 | a timing-diagnosis module | a delay target the mapper silently ignores |
 | two analog layout modules | a declared placement construct the stream-out does not honour |
-| the pad ring | the rotation arguments, crossed inside the tool |
+| ~~the pad ring~~ | ~~the rotation arguments~~ — **NOT A MEMBER**; see below |
 
-**Contract compliance across the four: 0 of 4.** None carries the non-honouring
+**Three distinct defects across four modules.** Contract compliance: **0 of 4.** None carries the non-honouring
 as a machine-readable record; all four wrote the lesson as prose in whichever
 module happened to find it.
 
@@ -637,11 +637,13 @@ Of the five rules proposed, measured honestly:
 | F1 | correct, single-site (population 1 of 10) |
 | F2 | does not generalise as detection; becomes *declare the correspondence, then check it* |
 | F3a | **WITHDRAWN** — the tool was behaving as documented; replaced by the convention-inversion record, which is ours |
-| F3b | a real class with **four** instances and zero absorbed — the most valuable rule |
+| F3b | a real class with **three** instances and zero absorbed — still the most valuable rule, but its motivating case is not a member |
 | F4 | correct, single instance (population 1 of 1232) |
 
-The item most worth someone's time is **F3b**, and it is the one I first
-dismissed as having no population.
+The item most worth someone's time is still **F3b** — the one I first dismissed
+as having no population, then over-counted, and whose motivating case turned out
+not to belong to it. It survives all three corrections because three unrelated
+modules independently hit it and none absorbed it.
 
 ---
 
@@ -698,6 +700,38 @@ The geometry it produces at the default is still right. The reason recorded for
 it is not, and the refusal is wrong. This **supersedes my own earlier claim**
 that the shipped fix merely guards the wrong one of the two variables; the
 premise underneath it is what is wrong.
+
+---
+
+## CORRECTION — F3b's motivating case is not a member of F3b's class
+
+The withdrawal above has a consequence for the rule I called the most valuable
+item in this capture, and it must be said rather than left for a reader to
+notice.
+
+F3b is the contract for *a config variable the tool underneath does not
+honour*. The case that produced it — the pad rotation — **is not an instance of
+that class.** The tool honours that variable exactly as it documents; what was
+wrong was our own mapping of it to the wrong pair of sides.
+
+So the honest provenance is: **the class was discovered from a false premise,
+and then validated by a sweep that found three genuine members which have
+nothing to do with pads** —
+
+| instance | the input the tool does not honour |
+|---|---|
+| a synthesis techmap module | a declared cell map that silently does not bind |
+| a timing-diagnosis module | a delay target the mapper silently ignores; produced a **byte-identical netlist** and cost 22 % of a timing path |
+| two analog layout modules | a declared placement construct the stream-out does not honour |
+
+Three distinct defects, four modules, **0 of 4 carrying the non-honouring as a
+machine-readable record.**
+
+The rule stands — on those three, not on the case that suggested it. Anyone
+weighing whether to build it should weigh it on them. Earlier text in this
+document counted the pad ring as a fourth instance; it is not one, and a rule
+whose population is padded by a refuted member is exactly the shape this
+document has spent nine corrections learning to distrust.
 
 ---
 
