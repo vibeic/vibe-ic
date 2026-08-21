@@ -408,6 +408,38 @@ this whole report opens by correcting: **a list written before main moved.**
 Worth re-deriving that branch's remaining findings against current main before
 spending review on them.
 
+### How much of that branch is still live — measured, and most of it is
+
+Saying "a branch predates main" is not a verdict on its content, so the content
+was checked commit by commit. Of its nine commits, **seven add a test function
+that does not exist on main** — genuinely new work, and the reason the split was
+worth making. Two add no test, and both of those are superseded:
+
+* **`matrix(d7)` step 31's extraction-feedback verdict** — main declares the
+  path and carries the manifest row already (`ff5071caa`). What remains is a
+  richer `provenance_note`: a text merge, not a finding.
+* **`matrix(figures)` the 11 anchored figures** — this one is worse than
+  superseded, it is a REGRESSION if taken. It re-derives the figures to
+  `142` entries and `166` blocking clauses. Main has since re-derived further:
+
+```
+main today            164<!--figure:required_output_entries-->
+                      177<!--figure:blocking_clauses-->
+that commit sets      142                166
+test_matrix_63x8_figure_coverage on main:  12 passed
+```
+
+Resolving that region toward theirs walks two published figures backwards and
+reddens a gate that is currently green.
+
+This is the strongest argument for the rebase: replayed one commit at a time
+against current main, the figures commit fails its own gate immediately and the
+d7 commit shows up as an empty or prose-only change. Merged as one six-region
+blob, both land silently.
+
+**Nothing here says that branch is stale work.** Seven ninths of it is new, and
+two of the reds this report leaves open are its to close.
+
 ## Reproduce
 
 ```
