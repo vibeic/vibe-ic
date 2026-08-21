@@ -602,6 +602,39 @@ with all seven wired the gate reports `unwired 58 (baseline 59)` and returns
 **rc 0** — the shrunk baseline does not make it red, so writing the baseline is
 a tidiness decision for the owner and not a landing prerequisite.
 
+### R8 — every push from a worktree is blocked by a gate that cannot look
+
+Not caused by this branch, and worth writing down because the dispatch doctrine
+tells every agent to work in an isolated worktree. `benchmark-data/` is **not
+tracked** (`git ls-files benchmark-data` → 0), so it exists only in the primary
+checkout. The pre-push hook runs
+
+```
+benchmark_evidence_structure_check.py --tree benchmark-data --changed-since $PUSH_BASE
+```
+
+which in any worktree reports `UNDETERMINED: --tree benchmark-data is not a
+directory` — and the hook correctly treats NOT CHECKED as not passed, so the
+push is refused. The gate is right; it genuinely could not look.
+
+The documented remedy works and is what I used — the pointer `_corpus_location`
+exists for:
+
+```
+$ VIBE_IC_BENCHMARK_DATA=<path to a benchmark-data clone> git push -u origin <branch>
+note: VIBE_IC_BENCHMARK_DATA overrides --tree benchmark-data -> <clone>
+benchmark_evidence_structure_check: no evidence folders changed since origin/main
+rc=0
+```
+
+Note the two are NOT the same verdict and must not be conflated: with the
+pointer set and **no** `--changed-since`, the same gate returns rc 1 over
+`5/60 conformant` — a real, pre-existing corpus condition that has nothing to do
+with this branch and that the hook's `--changed-since` correctly scopes out.
+Either document the pointer in the push instructions, or give the hook a stated
+NO_CORPUS opt-in the way the hygiene gates have one; the current state makes
+every worktree push look like a finding about the change being pushed.
+
 ### Not requests — checked and clean
 
 * `programs/INDEX.md` / `PROGRAM_INVENTORY.json` need **no** regeneration:
