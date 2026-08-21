@@ -553,3 +553,119 @@ is own=1, substituted=68. It asks a real question — when a step FAILs, does th
 verdict reach the exit code — and on this tree it answers it through a stand-in
 for 68 of 69 steps. Read it as a dimension that has started, not one that is
 done.
+
+---
+
+## THE d8 QUESTION, ANSWERED A THIRD TIME — SAME ANSWER, NOW ON v1.11.62
+
+Re-measured on bare `origin/main` `6dfe15a32`, not restated. The answer has been
+stable across three bases (v1.11.51, v1.11.57, v1.11.62).
+
+**(a) It was a real finding, and it is CLOSED.** The measurement that settled it:
+seeding step 1.6x's one declared output with wrong content and running its own
+gate gave sha256 `02998b14…` before, `22bad440…` after — the gate OVERWROTE it.
+`_gradable` was deciding "is there a content channel" from the filename SUFFIX,
+and a `.json` passed even when the gate's own `--json` destination was the only
+candidate. Four steps sit in that position (`1.6x`, `2`, `8`, `36`). The fix
+implemented the rule the file already stated. It landed at v1.11.44 and
+`test_a_readable_artefact_that_is_wrong_...` is **GREEN on main today**.
+
+**(b) NORECORD-while-any-red-sits-outside-the-join is the RIGHT rule, and it was
+not relaxed.** The census is a claim about the whole grid derived from ONE nested
+session's rc; a session red for a reason no cell represents makes that claim
+false. It is guarded in both directions by
+`test_a_red_non_cell_helper_cannot_represent_the_nested_session_rc`, which
+passes. The behavioural proof that it is not over-broad: fixing the eighth red
+RELEASED the others. An over-broad rule would have kept them blocked.
+
+**Measured on v1.11.62 — 5 of the 7 are GREEN, 2 red:**
+
+```
+test_the_census_block_is_fresh                                GREEN
+test_the_published_total_equals_the_live_census               GREEN
+test_every_cell_has_a_live_outcome_and_the_outcome_run_...    GREEN
+test_the_enforcement_census_is_reported_for_humans            GREEN
+test_a_readable_artefact_that_is_wrong_...                    GREEN   <- the d8
+test_every_na_cell_asserts_a_live_precondition                RED
+test_no_cell_is_counted_enforced_while_its_predicate_is_red   RED
+```
+
+The two remaining are **not NORECORD-blocked and are not one finding**. Nothing
+here is left blocked by the rule.
+
+## THE ELEVEN, OWNED — reason, owner, expiry
+
+`origin/main` v1.11.62 measures **11 of the original 54 red**, and they are three
+root causes, not eleven. Rows in the shape the persistent-red deadline asks for.
+
+### RED-63X8-1 — six d3 cells cite a run root no corpus can supply
+
+* **IDs (7):** `test_d3_required_outputs_are_produced[step15|17|19|20|30|32]`,
+  and `test_no_cell_is_counted_enforced_while_its_predicate_is_red`, which is
+  their AGGREGATE — it names exactly those six and nothing else
+  ("55 of 621 cells ... MEASURED RED: 15/d3, 17/d3, 19/d3, 20/d3, 30/d3, 32/d3").
+* **Reason:** the dimension-3 manifest cites a `home`-kind campaign run root.
+  The module searches `published` and `repo` roots on every host and this one on
+  none, so setting `VIBE_IC_BENCHMARK_DATA` does not help. The test refuses to
+  let the corpus-absent skip cover it, which is correct: it is NOT DETERMINED,
+  not clean.
+* **NOT INHERITED FROM MY WORK, measured:** the citation appears 7 times in the
+  manifest both before and after `7fcbc7397`, so it predates the 1.6x family
+  entirely.
+* **Owner:** unclaimed. I will take it as matrix-substrate owner if nobody
+  else does, but the closing move is not mine to make alone.
+* **Closes when** any ONE of: the six records are re-pointed at a root that
+  carries the artefact; a run tree carrying them is published; or the cells are
+  waived through the one registry with the disclosure. **Never by widening the
+  skip** — the test says so and it is right.
+* **Expiry: 2026-09-30.** Long because two of the three closures need a
+  published run, which is not on my side of the fence.
+
+### RED-63X8-2 — the state grid has four states and the NA contract enumerates three
+
+* **ID (1):** `test_every_na_cell_asserts_a_live_precondition`
+* **Reason, and this is a FINDING rather than a defect to patch:** it fails with
+  *"A cell test may not skip: the three states are ENFORCED, WAIVED (strict
+  xfail) and NA (asserted precondition)"*, naming `test_d3_required_outputs_are
+  _produced` (line 2309) and `test_d7_required_outputs_list_is_complete`
+  (line 375). Both skips are deliberate and well-argued: d3's fires only when
+  there is no run root AND no corpus, after REFUSING the unanswerable citations
+  by name; d7's only when a waived cell has nothing to show, the observed half
+  observed nothing, and there is no corpus. Both are the repository's own
+  doctrine — a check that cannot measure must not report that it measured.
+* **The conflict is real and it is in the CONTRACT, not the skips.** The census
+  beside this test publishes a FOURTH state — `NOT MEASURED`, 49 cells,
+  *"a predicate that declined to run, naming a resource it could not reach ...
+  read them as UNKNOWN, never as coverage"* — and these skips are how cells
+  enter it. So the grid has four states and this test's enumeration has three.
+* **What I did NOT do:** widen the test to accept the corpus skip. That would
+  close this red and two others, and it is a decision about what the state grid
+  IS. Making it to harvest greens is exactly the move this file refuses.
+* **Owner:** matrix substrate (me), pending the owner's ruling on whether
+  `NOT MEASURED` is a first-class cell state.
+* **Closes when** either the two skips become asserted NA preconditions, or the
+  contract admits `NOT MEASURED` as the fourth state with the same disclosure
+  discipline the census already applies to it.
+* **Expiry: 2026-09-05.** Short: it needs a ruling, not a run.
+
+### RED-63X8-3 — two ENFORCED cells whose mutation is ALREADY_RED at baseline
+
+* **IDs (3):** `test_every_enforced_cell_carries_a_named_mutation[step1.6x]`,
+  `[step0.5ic]`, and `test_the_coverage_is_complete_and_the_count_is_stated`,
+  which counts them.
+* **Reason:** `1.6x/d3` and `0.5ic/d3` are ENFORCED, so the ledger requires a
+  measured mutation. `--replay D3-UNDECLARED-ARTEFACT --step 1.6x` is
+  `NOT_REPLAYABLE` with no corpus (the witness skips) and `ALREADY_RED` with one
+  (`baseline_rc=1` — the step's declared output exists in no published run). A
+  mutation cannot be measured on a cell that is red before the edit, and the
+  ledger's own vocabulary says so.
+* **Coupled to RED-63X8-1:** both cells are d3, and the same missing published
+  evidence is why the baseline is red. Closing 1 very likely closes this.
+* **Owner:** matrix substrate (me).
+* **Closes when** the d3 baseline for those two steps is green — i.e. when
+  RED-63X8-1 closes — and the twelve-entry replay is extended to them.
+* **Expiry: 2026-09-30**, tracking RED-63X8-1.
+
+**None of the three is closed by relaxing anything, and none is blocked by the
+NORECORD rule.** Two need evidence this repository does not hold; one needs a
+ruling on how many states the grid has.
