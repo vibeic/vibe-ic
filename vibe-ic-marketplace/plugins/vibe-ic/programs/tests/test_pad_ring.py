@@ -1163,14 +1163,24 @@ def test_a_vertical_side_sums_the_master_width_not_its_height(tmp_path):
 
 def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
     """THE DEF MUST NOT CONTRADICT ITSELF. The orientation written is the one
-    the tool actually produces — measured MXR90 west, R90 east — so the
-    footprint a DEF reader derives matches the geometry this step recorded."""
+    the tool actually produces, ON ALL FOUR SIDES — measured at librelane's
+    default: SOUTH R0->N, NORTH MX->FS, WEST MXR90->FW, EAST R90->W — so the
+    footprint a DEF reader derives matches the geometry this step recorded.
+
+    NORTH IS HERE BECAUSE IT WAS WRONG. This step used to compute NORTH as
+    rotate_cw(PAD_ROTATION_HORIZONTAL, 2), which is S (R180) at the default,
+    where the placer produces MX (FS): the same bounding box, MIRRORED rather
+    than rotated, so pin positions differ. Part 3 of the ruling was applied to
+    the vertical sides and missed this one."""
     root = _project(tmp_path)
     assert _gen(root) == 0
     rep, _ = CHK._unwrap(_report(root))
     got = {p["side"]: p["orient"] for p in rep["pads"]}
-    assert got["W"] == PR.VERTICAL_SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
-    assert got["E"] == PR.VERTICAL_SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
+    assert got["S"] == PR.SIDE_ORIENT["S"] == PR.ORIENT_ALIASES["R0"]
+    assert got["N"] == PR.SIDE_ORIENT["N"] == PR.ORIENT_ALIASES["MX"], (
+        "NORTH must be the placer's MX (FS), not rotate_cw(..., 2) -> S")
+    assert got["W"] == PR.SIDE_ORIENT["W"] == PR.ORIENT_ALIASES["MXR90"]
+    assert got["E"] == PR.SIDE_ORIENT["E"] == PR.ORIENT_ALIASES["R90"]
     # and the DEF says the same thing the report does
     for pad in rep["pads"]:
         assert f"( {pad['x']} {pad['y']} ) {pad['orient']} ;" in \
@@ -1273,7 +1283,7 @@ def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
     root = _project(tmp_path)
     assert _gen(root) == 0
     declared = PR.normalise_orient(_config()["PAD_ROTATION_VERTICAL"])
-    assert declared != PR.VERTICAL_SIDE_ORIENT["W"], (
+    assert declared != PR.SIDE_ORIENT["W"], (
         "premise: the declared rotation and the placer's are different")
     victim = next(p["instance"] for p in CHK._unwrap(_report(root))[0]["pads"]
                   if p["side"] == "W")
