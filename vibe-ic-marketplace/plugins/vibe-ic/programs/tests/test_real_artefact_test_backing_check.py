@@ -136,3 +136,70 @@ def test_the_skill_no_longer_pushes_authors_to_a_synthetic_suite():
         or "cannot distinguish" in doc
     assert "require_repo" in doc
     assert "real_artefact_test_backing_check" in doc
+
+
+# --------------------------------------------------------------------------- #
+# The zero-backed NOTE asserted more than the program measured.
+#
+# MEASURED, on a real branch: a pad-ring suite of 90 tests scored `0 of 90`
+# and was told "every test in this change is a fixture authored alongside it".
+# Three of those tests iterate the host's INSTALLED PDK trees — naming no PDK,
+# foundry or library, and skipping honestly where none is present. That is not
+# a fixture authored alongside the change, and it is not a checked-in artefact
+# either; it is a third thing this program cannot see.
+#
+# The COUNT is not the defect and is not changed here: under-claiming is the
+# decided design choice (see _GIT_REPO_READS), because over-claiming "real" is
+# what lets a fixture-only change look backed. The defect is the sentence — a
+# conservative measurement licenses a question, not a conclusion.
+# --------------------------------------------------------------------------- #
+def _zero_backed_note(tmp_path, monkeypatch):
+    """Run the program's own reporting path over a module with 0 real tests."""
+    mod = _mod(tmp_path, ("def test_a(tmp_path):\n"
+                          "    (tmp_path / 'x.json').write_text('{}')\n"
+                          "    assert True\n"))
+    out = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "real_artefact_test_backing_check.py"),
+         str(mod)], capture_output=True, text=True, cwd=str(tmp_path))
+    return out.stdout
+
+
+def test_the_zero_backed_note_does_not_assert_every_test_is_a_fixture(
+        tmp_path, monkeypatch):
+    """The pre-fix text says it flatly. Reading the OUTPUT, not a constant, so
+    the old code answers this wrongly rather than failing to import."""
+    note = _zero_backed_note(tmp_path, monkeypatch)
+    assert "0 test(s)" in note or "0 of 1" in note, (
+        "expected the zero-backed path to run at all; got:\n" + note)
+    assert "every test in this change is a fixture" not in note, (
+        "the NOTE states as fact something the program did not measure: a test "
+        "driving an installed PDK or toolchain also scores 0 and is not a "
+        "fixture authored alongside the change.\nGot:\n" + note)
+
+
+def test_the_zero_backed_note_names_its_own_denominator(tmp_path, monkeypatch):
+    """Scoped to the NOTE, not the whole output.
+
+    The first draft of this test asserted on the full stdout and PASSED
+    pre-fix, because the HEADLINE line already contains "checked-in artefact".
+    It could not fail, so it measured nothing -- caught by running the control
+    rather than by reading the test.
+    """
+    out = _zero_backed_note(tmp_path, monkeypatch)
+    note = "\n".join(ln for ln in out.splitlines()
+                     if "NOTE:" in ln or ln.startswith("        "))
+    assert note.strip(), "no NOTE emitted at all:\n" + out
+    assert "CHECKED-IN" in note.upper(), (
+        "the NOTE itself must say what was counted, or a reader who reads only "
+        "the NOTE takes 0 for 'nothing real here'.\nNOTE was:\n" + note)
+
+
+def test_the_zero_backed_note_asks_which_case_it_is(tmp_path, monkeypatch):
+    """Not merely softened wording: the gate must still demand an answer, and
+    must demand a DIFFERENT answer for each of the two cases."""
+    note = _zero_backed_note(tmp_path, monkeypatch)
+    assert "mutation run" in note, (
+        "the hand-authored case must still be asked for a mutation run")
+    assert "name the subject" in note, (
+        "the external-subject case must be asked to name the subject and say "
+        "how the test behaves when it is absent")
