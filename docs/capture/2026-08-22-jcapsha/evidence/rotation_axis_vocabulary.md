@@ -104,3 +104,44 @@ refusing on a premise this measurement contradicts. The refusal may still be
 the right behaviour — a knob whose effect crosses to the other side-pair is
 arguably worse than an inert one — but the REASON printed with it would be
 false, and a reason is the part a reader acts on.
+
+---
+
+## Independently corroborated by a concurrent lane, on a different image
+
+Found after the fact, by listing the remote: a second lane
+(`origin/jcapsha/sha256-capture`) reached the same conclusion the same day,
+and its numbers agree with these cell for cell.
+
+    this lane      image 0.3.25, OpenROAD 26Q3-1655-g2b33daff56
+    the other lane image 0.3.24, OpenROAD 26Q3-1607-g27fd905b8a
+
+Different image, different tool build, and a different probe DESIGN — they ran
+a 2x2 with one process per cell rather than two one-at-a-time sweeps, and they
+used the site arguments as a positive control that needs no orientation
+reasoning at all. Their table:
+
+    ROTH  ROTV | IO_SOUTH  IO_NORTH | IO_WEST  IO_EAST
+    R0    R0   | R0        MX       | MXR90    R90
+    R0    R90  | R90       MYR90    | MXR90    R90
+    R90   R0   | R0        MX       | MX       R180
+    R90   R90  | R90       MYR90    | MX       R180
+
+Every cell that overlaps the two sweeps above is identical, including the
+`R90`/`MX` pair on the vertical rows that only the horizontal-flag sweep
+reaches. Their site control lands the same way round as the one here.
+
+HOW INDEPENDENT THIS ACTUALLY IS, stated rather than implied: two different
+images and two different probe designs is real independence of the
+MEASUREMENT. It is not independence of the QUESTION — both lanes were pointed
+at the same prior conclusion by the same brief, on the same host. So it
+corroborates that the crossing is not a probe artefact and not a build
+artefact; it does not corroborate that the crossing is the most important
+thing to ask about.
+
+AND THE SIGNAL WAS ALREADY IN THE ORIGINAL NOTES. That lane quotes a line the
+first lane wrote and set aside — "SEPARATE OpenROAD oddity, observed and NOT
+chased: the SOUTH pad's orientation tracked the `-rotation_vertical` argument
+even though `-rotation_horizontal` was held at R0 for every run". That is this
+finding, written down at the time, filed as an oddity next to the conclusion it
+contradicts.
