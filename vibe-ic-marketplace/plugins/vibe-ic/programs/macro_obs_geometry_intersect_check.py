@@ -404,10 +404,89 @@ def spans(seg: Dict[str, Any], box: Tuple[float, float, float, float]) -> bool:
             and bx1 <= seg["x1"] <= bx2)
 
 
+def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]]
+                    ) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    """Merge per-file `parse_macro_obs` results, and never let a file that
+    describes NO obstructions erase one that does.
+
+    A plain `dict.update` is last-wins, and discovery order is `sorted()`, so
+    the winner is decided by filename. That is fine while every declaration of
+    a master carries the same geometry. It is not fine when one of them carries
+    none — because "this file does not describe obstructions" and "this macro
+    has no obstructions" are different facts, and last-wins collapses the first
+    onto the second.
+
+    MEASURED on a real post-route project. Six LEFs in one IP directory declare
+    the same macro: five metal-stack variants carrying 61-65 OBS rects, and one
+    antenna-data file carrying zero. `sorted()` puts the antenna file LAST (the
+    byte `a` follows `M`), so it won:
+
+        LEF order                       merged OBS rects   crossings   verdict
+        sorted()      (antenna last)                   0           0   PASS
+        reversed      (antenna first)                 61          28   FAIL
+        antenna excluded                              65          45   FAIL
+
+    The gate reported `[PASS] ... All 79 placed master(s) resolved to a LEF` —
+    a completeness claim that is TRUE and does not mean what it reads as. The
+    master resolved; its obstructions did not load. 45 supply segments spanning
+    a declared obstruction went unreported because of alphabetical order.
+
+    So: an empty declaration never displaces a non-empty one.
+
+    When two NON-EMPTY declarations of one master disagree, that is a real
+    ambiguity — a vendor ships metal-stack variants of the same macro, and this
+    gate cannot know from LEF alone which one the run loaded. Keeping "the
+    first" would leave the answer decided by filename again, one layer down. So
+    the rule is stated rather than incidental: **keep the SMALLEST obstruction
+    set, and report the conflict.**
+
+    Smallest, because this gate BLOCKS and the two errors are not symmetric.
+    Under-reporting leaves a violation unfound — a gap. Over-reporting accuses
+    metal of crossing an obstruction the loaded variant never declared — a
+    fabricated finding that stops a clean design, which this program's own
+    header calls worse than none. Choosing the floor is the only choice that
+    cannot manufacture a finding out of an ambiguity.
+
+    That also makes the result independent of the order files are supplied in,
+    which is the property the caller actually needs. Reporting an ambiguity is
+    not resolving it; the conflict list says a choice existed, and says which
+    way it was taken.
+
+    Returns `(merged, conflicts)`."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    conflicts: List[Dict[str, Any]] = []
+    for d in per_file:
+        for master, entry in d.items():
+            rects = entry.get("obs") or []
+            prev = merged.get(master)
+            if prev is None:
+                merged[master] = entry
+                continue
+            prev_rects = prev.get("obs") or []
+            if not rects:
+                continue          # an empty declaration cannot displace anything
+            if not prev_rects:
+                merged[master] = entry        # first real geometry for it
+                continue
+            if sorted(map(repr, rects)) == sorted(map(repr, prev_rects)):
+                continue          # the same macro shipped twice; not a conflict
+            keep, drop = ((entry, prev) if len(rects) < len(prev_rects)
+                          else (prev, entry))
+            merged[master] = keep
+            conflicts.append({
+                "master": master,
+                "kept_rect_count": len(keep.get("obs") or []),
+                "other_rect_count": len(drop.get("obs") or []),
+                "rule": "smallest-obstruction-set: on a blocking gate an "
+                        "under-report is a gap, an over-report is a false "
+                        "accusation",
+            })
+    return merged, conflicts
+
+
 def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
-    obs_by_master: Dict[str, Dict[str, Any]] = {}
-    for t in macro_lef_texts:
-        obs_by_master.update(parse_macro_obs(t))
+    obs_by_master, obs_conflicts = merge_macro_obs(
+        [parse_macro_obs(t) for t in macro_lef_texts])
     with_obs = {m: e for m, e in obs_by_master.items() if e["obs"]}
     um = _UNITS_RE.search(def_text)
     units = int(um.group(1)) if um else 1000
@@ -453,6 +532,10 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
         "placed_masters": len(placed_masters),
         "masters_declared_by_lef": sorted(obs_by_master),
         "placed_masters_without_lef": without_lef,
+        # A master two supplied LEFs describe DIFFERENTLY. Not resolvable from
+        # LEF alone, so it is disclosed rather than decided: the reader can see
+        # that a choice existed, which a silent last-wins merge never showed.
+        "obs_declaration_conflicts": obs_conflicts,
     }
 
 
