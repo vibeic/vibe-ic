@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="9" skipped="0" tests="89" time="4.701" timestamp="2026-08-21T20:15:53.663847+02:00" hostname="63f9c1349759"><testcase classname="programs.tests.test_pad_ring" name="test_a_declared_config_is_placed_and_the_gate_agrees" time="0.103" /><testcase classname="programs.tests.test_pad_ring" name="test_the_spacing_is_upstreams_arithmetic" time="0.022" /><testcase classname="programs.tests.test_pad_ring" name="test_the_skip_names_every_absent_config_variable_one_by_one" time="0.021" /><testcase classname="programs.tests.test_pad_ring" name="test_the_skip_survives_the_gate_as_exit_two_and_never_zero" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_the_producer_skips_when_the_io_cell_library_is_not_resolved" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_upstream_refusals_are_data_and_not_a_line_on_stderr" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_SOUTH]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_EAST]" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_NORTH]" time="0.020" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_WEST]" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_SITE_NAME]" time="0.020" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_CORNER_SITE_NAME]" time="0.018" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_EDGE_SPACING]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_ROTATION_HORIZONTAL]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_ROTATION_VERTICAL]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_ROTATION_CORNER]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_CORNER]" time="0.018" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[PAD_FILLERS]" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_one_absent_config_variable_is_refused_never_defaulted[SIGNAL_MAP]" time="0.018" /><testcase classname="programs.tests.test_pad_ring" name="test_an_unresolvable_pad_site_is_refused" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_site_whose_class_is_not_pad_is_refused" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_an_instance_the_block_does_not_contain_is_refused" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_a_ring_wider_than_its_die_is_refused" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_a_corner_spacing_off_the_site_grid_is_refused" time="0.015" /><testcase classname="programs.tests.test_pad_ring" name="test_a_non_rectangular_die_is_refused_not_approximated" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_the_algorithm_publishes_its_own_numbers" time="0.015" /><testcase classname="programs.tests.test_pad_ring" name="test_a_master_the_io_library_does_not_carry_is_refused" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_a_ring_whose_gaps_no_filler_can_close_is_refused" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_an_unknown_rotation_is_refused_not_defaulted" time="0.013" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_ordered_on_two_sides_is_refused" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_a_bterm_that_reaches_no_pad_is_refused" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_what_this_step_does_not_do_is_in_the_artefact" time="0.022" /><testcase classname="programs.tests.test_pad_ring" name="test_declared_but_unperformed_optional_variables_are_echoed" time="0.022" /><testcase classname="programs.tests.test_pad_ring" name="test_an_absent_report_is_not_a_skip" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_an_unreadable_report_is_not_a_skip" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_report_of_an_unknown_schema_is_not_interpreted" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_verdict_outside_the_vocabulary_is_not_a_pass" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_producer_failure_is_propagated_not_absorbed" time="0.016" /><testcase classname="programs.tests.test_pad_ring" name="test_a_skip_that_names_no_absent_input_fails" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_a_skip_whose_reason_is_a_shrug_fails" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_skip_that_hides_one_of_its_absent_variables_fails" time="0.017" /><testcase classname="programs.tests.test_pad_ring" name="test_a_skip_contradicted_by_a_ring_on_disk_fails" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pass_with_no_layout_behind_it_fails" time="0.029" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pass_over_zero_pads_fails" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_the_def_does_not_instantiate_fails" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_an_unplaced_pad_fails" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_master_the_report_and_the_def_disagree_on_fails" time="0.022" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_on_the_wrong_side_of_the_die_fails" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_footprint_the_io_library_does_not_give_that_master_fails" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_with_no_declared_footprint_cannot_be_corroborated" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_master_outside_the_io_cell_library_fails" time="0.022" /><testcase classname="programs.tests.test_pad_ring" name="test_an_unresolved_io_library_is_not_a_pass" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_site_the_library_does_not_declare_fails_at_the_gate" time="0.030" /><testcase classname="programs.tests.test_pad_ring" name="test_a_site_whose_class_is_not_pad_fails_at_the_gate" time="0.029" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_off_the_die_fails" time="0.029" /><testcase classname="programs.tests.test_pad_ring" name="test_two_pads_in_the_same_place_fail" time="0.029" /><testcase classname="programs.tests.test_pad_ring" name="test_a_ring_with_an_unfilled_corner_fails" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_corner_cell_in_the_wrong_quadrant_fails" time="0.019" /><testcase classname="programs.tests.test_pad_ring" name="test_a_bterm_that_reaches_no_pad_fails_at_the_gate_too" time="0.018" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pad_the_block_does_not_instantiate_fails_at_the_gate" time="0.018" /><testcase classname="programs.tests.test_pad_ring" name="test_an_absent_floorplan_leaves_coverage_unchecked_and_that_is_not_clean" time="0.027" /><testcase classname="programs.tests.test_pad_ring" name="test_a_ring_that_places_perfectly_and_does_not_abut_fails" time="0.028" /><testcase classname="programs.tests.test_pad_ring" name="test_a_filler_the_library_does_not_carry_leaves_abutment_unverified" time="0.030" /><testcase classname="programs.tests.test_pad_ring" name="test_the_abutment_arithmetic_is_exact_not_a_divisibility_shortcut" time="0.008" /><testcase classname="programs.tests.test_pad_ring" name="test_the_gate_preserves_the_producers_claim_verbatim" time="0.030" /><testcase classname="programs.tests.test_pad_ring" name="test_re_running_the_gate_does_not_nest_or_change_the_verdict" time="0.031" /><testcase classname="programs.tests.test_pad_ring" name="test_the_flow_declares_this_step_with_this_producer_and_this_gate" time="0.420" /><testcase classname="programs.tests.test_pad_ring" name="test_the_step_runs_on_the_chip_path_and_not_on_the_shuttle_template" time="0.197" /><testcase classname="programs.tests.test_pad_ring" name="test_the_declaration_is_a_declared_input_of_this_step" time="0.212" /><testcase classname="programs.tests.test_pad_ring" name="test_the_gate_the_flow_names_resolves_to_a_program_that_exists" time="0.262" /><testcase classname="programs.tests.test_pad_ring" name="test_the_gate_runs_as_the_flow_spawns_it" time="0.262" /><testcase classname="programs.tests.test_pad_ring" name="test_no_process_node_shaped_literal_in_these_programs" time="0.013" /><testcase classname="programs.tests.test_pad_ring" name="test_no_installed_pdk_tree_name_appears_in_these_programs" time="0.010" /><testcase classname="programs.tests.test_pad_ring" name="test_the_empty_ring_guard_is_load_bearing" time="0.245" /><testcase classname="programs.tests.test_pad_ring" name="test_the_abutment_guard_is_load_bearing" time="0.222" /><testcase classname="programs.tests.test_pad_ring" name="test_the_skip_disclosure_guard_is_load_bearing" time="0.237" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pdk_that_declares_its_sites_in_the_tech_view_is_not_refused" time="0.014"><failure message="AssertionError: PAD_SITE_NOT_FOUND: PAD_SITE_NAME='io_site' is not a SITE in the IO cell library this run resolved (0 site(s) from 1 LEF(s); PAD-class: [])&#10;assert 1 == 0&#10; +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_pdk_that_declares_its_s0/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_pdk_that_declares_its_s0')
+
+    def test_a_pdk_that_declares_its_sites_in_the_tech_view_is_not_refused(
+            tmp_path):
+        """THE DEFECT. The IO LEFs carry no SITE declaration — which is what a
+        real distribution ships — and the PDK declares both sites in its tech
+        view. Before this was read, step 15.5ic answered PAD_SITE_NOT_FOUND about
+        a PDK that had declared the site, and the run could not reach a verdict
+        for a reason the flow itself owned."""
+        root = _project_sites_in_tech_view(tmp_path)
+        # the premise: the LEF view really is empty of SITE declarations
+        lefs = PR.discover_io_lefs(str(root / "pdk"), "proc")
+        assert PR.IoLibrary(lefs).sites == {}
+&gt;       assert _gen(root) == 0, _report(root)["reason"]
+E       AssertionError: PAD_SITE_NOT_FOUND: PAD_SITE_NAME='io_site' is not a SITE in the IO cell library this run resolved (0 site(s) from 1 LEF(s); PAD-class: [])
+E       assert 1 == 0
+E        +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_pdk_that_declares_its_s0/proj'))
+
+programs/tests/test_pad_ring.py:1020: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_the_tech_view_site_is_the_same_ring_as_the_lef_site" time="0.020"><failure message="AssertionError: assert (0 == 0 and 1 == 0)&#10; +  where 0 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_tech_view_site_is_the0/a/proj'))&#10; +  and   1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_tech_view_site_is_the0/b/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_tech_view_site_is_the0')
+
+    def test_the_tech_view_site_is_the_same_ring_as_the_lef_site(tmp_path):
+        """A site is a site. Reading the second view must place the SAME ring,
+        to the DEF unit — otherwise the fix changed the geometry rather than
+        where the geometry was read from."""
+        lef_root = _project(tmp_path / "a")
+        tech_root = _project_sites_in_tech_view(tmp_path / "b")
+&gt;       assert _gen(lef_root) == 0 and _gen(tech_root) == 0
+E       AssertionError: assert (0 == 0 and 1 == 0)
+E        +  where 0 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_tech_view_site_is_the0/a/proj'))
+E        +  and   1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_tech_view_site_is_the0/b/proj'))
+
+programs/tests/test_pad_ring.py:1034: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_the_artefact_says_which_pdk_view_each_site_came_from" time="0.014"><failure message="AssertionError: assert 1 == 0&#10; +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_artefact_says_which_p0/b/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_artefact_says_which_p0')
+
+    def test_the_artefact_says_which_pdk_view_each_site_came_from(tmp_path):
+        """A resolved site is not enough; the report has to say WHERE from, or a
+        reader cannot tell a site that was read from one that was declared."""
+        tech_root = _project_sites_in_tech_view(tmp_path / "b")
+&gt;       assert _gen(tech_root) == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_artefact_says_which_p0/b/proj'))
+
+programs/tests/test_pad_ring.py:1047: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_a_site_declared_by_neither_pdk_view_is_still_refused" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_a_pdk_that_declares_no_site_anywhere_is_still_refused" time="0.014" /><testcase classname="programs.tests.test_pad_ring" name="test_a_site_declared_at_two_sizes_is_refused_not_ordered" time="0.014"><failure message="AssertionError: assert 'PAD_SITE_DECLARATION_AMBIGUOUS' in {'PAD_SITE_NOT_FOUND'}&#10; +  where {'PAD_SITE_NOT_FOUND'} = _rules(PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_site_declared_at_two_si0/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_site_declared_at_two_si0')
+
+    def test_a_site_declared_at_two_sizes_is_refused_not_ordered(tmp_path):
+        """A tree may ship more than one IO library. Upstream reads one config and
+        never sees a second; this step discovers them, so it can. The site width
+        is what every gap in the ring is rounded to, and picking it out of a
+        directory listing would put the ring's abutment on file order."""
+        root = _project_sites_in_tech_view(
+            tmp_path, second_lib=(("io_site", "2.00", "350"),
+                                  ("io_corner_site", "350", "350")))
+        assert _gen(root) == 1
+&gt;       assert "PAD_SITE_DECLARATION_AMBIGUOUS" in _rules(root)
+E       AssertionError: assert 'PAD_SITE_DECLARATION_AMBIGUOUS' in {'PAD_SITE_NOT_FOUND'}
+E        +  where {'PAD_SITE_NOT_FOUND'} = _rules(PosixPath('/tmp/pytest-of-designer/pytest-0/test_a_site_declared_at_two_si0/proj'))
+
+programs/tests/test_pad_ring.py:1085: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_two_libraries_that_agree_are_not_an_ambiguity" time="0.014"><failure message="AssertionError: PAD_SITE_NOT_FOUND: PAD_SITE_NAME='io_site' is not a SITE in the IO cell library this run resolved (0 site(s) from 1 LEF(s); PAD-class: [])&#10;assert 1 == 0&#10; +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_two_libraries_that_agree_0/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_two_libraries_that_agree_0')
+
+    def test_two_libraries_that_agree_are_not_an_ambiguity(tmp_path):
+        """Every distribution measured ships the same site twice, identically —
+        once per IO library. Agreement is not a conflict."""
+        root = _project_sites_in_tech_view(
+            tmp_path, second_lib=(("io_site", "1.00", "350"),
+                                  ("io_corner_site", "350", "350")))
+&gt;       assert _gen(root) == 0, _report(root)["reason"]
+E       AssertionError: PAD_SITE_NOT_FOUND: PAD_SITE_NAME='io_site' is not a SITE in the IO cell library this run resolved (0 site(s) from 1 LEF(s); PAD-class: [])
+E       assert 1 == 0
+E        +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_two_libraries_that_agree_0/proj'))
+
+programs/tests/test_pad_ring.py:1095: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_only_the_pdk_may_declare_a_site_never_the_project" time="0.013" /><testcase classname="programs.tests.test_pad_ring" name="test_the_gate_reads_the_same_two_views_as_the_producer" time="0.014"><failure message="AssertionError: assert 1 == 0&#10; +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_gate_reads_the_same_t0/proj'))">tmp_path = PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_gate_reads_the_same_t0')
+
+    def test_the_gate_reads_the_same_two_views_as_the_producer(tmp_path):
+        """An auditor that consulted only the LEF would call a correctly placed
+        ring PAD_SITE_NOT_FOUND — a gate contradicting its own producer over which
+        file it opened."""
+        root = _project_sites_in_tech_view(tmp_path)
+&gt;       assert _gen(root) == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = _gen(PosixPath('/tmp/pytest-of-designer/pytest-0/test_the_gate_reads_the_same_t0/proj'))
+
+programs/tests/test_pad_ring.py:1115: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_the_declaration_parser_reads_upstreams_form_verbatim" time="0.009"><failure message="AttributeError: module '_pad_ring' has no attribute 'parse_pad_site_declarations'">def test_the_declaration_parser_reads_upstreams_form_verbatim():
+        """The one form the distributions write, and nothing else. A file that
+        declares no site contributes none."""
+&gt;       got = PR.parse_pad_site_declarations(_site_declaration(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            ("a_site", "0.1", "355"), ("a_corner_site", "355", "355")))
+E       AttributeError: module '_pad_ring' has no attribute 'parse_pad_site_declarations'
+
+programs/tests/test_pad_ring.py:1126: AttributeError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_no_real_pdk_that_ships_an_io_library_is_called_siteless" time="0.116"><failure message="AssertionError: a real PDK ships an IO cell library and this step resolved no PAD-class site for it: ['gf180mcuD: 15 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)', 'sky130A: 2 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)']&#10;assert not ['gf180mcuD: 15 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)', 'sky130A: 2 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)']">@pytest.mark.skipif(not _trees_with_an_io_library(),
+                        reason="no installed PDK here ships an IO cell library")
+    def test_no_real_pdk_that_ships_an_io_library_is_called_siteless():
+        """A PDK that ships IO cells declares the sites they sit on. If this step
+        cannot find them it is looking in the wrong place, and the refusal it
+        raises is about US.
+    
+        MEASURED on the pinned image: of the trees carrying an IO cell library,
+        half declare their sites as LEF SITE records and half declare them in the
+        tech view. Reading one view called the other half siteless.
+        """
+        siteless = []
+        for root, tree in _trees_with_an_io_library():
+            lib = _library_for(root, tree)
+            if not _pad_class_sites(lib):
+                siteless.append(
+                    f"{tree}: {len(lib.lefs)} IO LEF(s), "
+                    f"{len(lib.sites)} LEF SITE record(s), "
+                    f"{len(getattr(lib, 'declared_sites', {}))} tech-view "
+                    f"declaration(s)")
+&gt;       assert not siteless, (
+            "a real PDK ships an IO cell library and this step resolved no "
+            f"PAD-class site for it: {siteless}")
+E       AssertionError: a real PDK ships an IO cell library and this step resolved no PAD-class site for it: ['gf180mcuD: 15 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)', 'sky130A: 2 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)']
+E       assert not ['gf180mcuD: 15 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)', 'sky130A: 2 IO LEF(s), 0 LEF SITE record(s), 0 tech-view declaration(s)']
+
+programs/tests/test_pad_ring.py:1219: AssertionError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_every_real_pdk_site_resolves_with_a_class_and_a_size" time="0.018"><failure message="AttributeError: 'IoLibrary' object has no attribute 'resolve_site'">@pytest.mark.skipif(not _trees_with_an_io_library(),
+                        reason="no installed PDK here ships an IO cell library")
+    def test_every_real_pdk_site_resolves_with_a_class_and_a_size():
+        """Whichever view a site comes from, it has to arrive usable: CLASS PAD
+        and a SIZE, because the spacing arithmetic rounds to that width."""
+        for root, tree in _trees_with_an_io_library():
+            lib = _library_for(root, tree)
+            for name in _pad_class_sites(lib):
+&gt;               got = lib.resolve_site(name)
+                      ^^^^^^^^^^^^^^^^
+E               AttributeError: 'IoLibrary' object has no attribute 'resolve_site'
+
+programs/tests/test_pad_ring.py:1232: AttributeError</failure></testcase><testcase classname="programs.tests.test_pad_ring" name="test_no_real_pdk_declares_one_site_at_two_sizes" time="0.097" /></testsuite></testsuites>

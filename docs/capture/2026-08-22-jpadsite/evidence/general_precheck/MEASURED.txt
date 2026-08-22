@@ -1,0 +1,54 @@
+STEP 15.5ic — the flow's own declared gate, run verbatim on the real gf180mcuD
+
+SCOPE OF EVERY RUN BELOW: the pad assignment used is a BALANCED 20/19/19/19
+split, which this agent chose. The design DECLARES 40/33/2/2 (L3 "Physical Pad
+Placement", L9 9.2.1) and that grouping does NOT fit the die used here — it is
+PAD_RING_DOES_NOT_FIT at 2.262 mm and needs 3.762 mm on gf180mcuD or 3.612 mm on
+sky130A, both measured. See ../declared_grouping/MEASURED.txt. Nothing below is
+wrong; every figure is the measurement actually taken. What is scoped is the
+INPUT it was taken with, which none of these files stated until now.
+PDK with the real 77-pad sha256 ring. Two clauses, both `program_exit_zero`:
+
+    - program_exit_zero: "pad_assignment_gen . --json reports/phase3/pad_assignment.json"
+    - program_exit_zero: "pad_ring_check . --json reports/phase3/padring.json"
+
+CLAUSE 2 -- where PAD_SITE_NOT_FOUND fired. Same project, same command:
+
+    PRE-FIX   pad_ring_gen   rc=1  FAIL
+              "PAD_SITE_NOT_FOUND: PAD_SITE_NAME='GF_IO_Site' is not a SITE in
+               the IO cell library this run resolved (0 site(s) from 15
+               LEF(s); PAD-class: [])"
+              pad_ring_check rc=1   -> step 15.5ic REFUSED
+
+    POST-FIX  pad_ring_gen   rc=0  PASS  (77 pads + 4 corners, ring abuts)
+              pad_ring_check rc=0   -> clause 2 PASSES
+
+CLAUSE 1 -- unchanged by this work, and it is the reason that REMAINS:
+
+    pad_assignment_gen rc=2  NOT_ASKED
+      "no source answers any of the 8 questions of declaration section
+       2B_pad_ring and no operator slot file pins a per-side pad list, so
+       there is nothing to write down."
+
+That is the program's own disclosed-skip tier for "nobody was asked" -- an
+unanswered human question, explicitly not a defect, and not a reason this flow
+owns.
+
+GENERAL_PRECHECK on the sha256 project available on this host:
+
+    verdict         NOT_DETERMINED
+    reason          "no finished layout found under the project (searched 4
+                     layout location(s)); nothing was examined, so nothing was
+                     determined"
+    layouts_found   0
+    declaration     absent, 0 of 18 questions answered
+    ladder          all 11 steps NOT_DETERMINED for want of a layout
+
+CAVEAT, stated plainly: this is NOT the 8HD-d row re-run end to end. The only
+sha256 project on this host is an earlier shuttle-path run on a different open
+PDK that never produced a GDS and carries no tape-out declaration, and 8HD-d
+does not resolve from here. What is established end to end is the CAUSAL LINK
+the row turned on -- step 15.5ic sits before routing (`required_outputs:
+padring.def`), so its refusal stops the flow before any layout exists, and
+general_precheck with layouts_found=0 is NOT_DETERMINED -- plus the A/B above
+showing that the refusal at that step is gone.

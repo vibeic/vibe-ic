@@ -1,0 +1,94 @@
+STEP 15.5ic THROUGH flow_compliance_check.py — the real enforcement path.
+
+SCOPE OF EVERY RUN BELOW: the pad assignment used is a BALANCED 20/19/19/19
+split, which this agent chose. The design DECLARES 40/33/2/2 (L3 "Physical Pad
+Placement", L9 9.2.1) and that grouping does NOT fit the die used here — it is
+PAD_RING_DOES_NOT_FIT at 2.262 mm and needs 3.762 mm on gf180mcuD or 3.612 mm on
+sky130A, both measured. See ../declared_grouping/MEASURED.txt. Nothing below is
+wrong; every figure is the measurement actually taken. What is scoped is the
+INPUT it was taken with, which none of these files stated until now.
+
+Everything before this was measured by invoking pad_ring_gen / pad_ring_check
+DIRECTLY, with explicit --pdk-root/--pdk. That is not what the flow does. Run
+through the flow instead:
+
+1. WITHOUT the self-tape-out marker
+       status: SKIPPED-CONDITION
+   Step 15.5ic's condition is
+       any_of: files_exist [input/submission_template/slots/*.yaml,
+                            input/submission_template/SELF_TAPEOUT.txt]
+   and the constructed project had neither, so the STEP NEVER RAN and its gate
+   was never evaluated. A claim of "the gate passes" resting on a direct
+   invocation would have been a claim about a path the flow does not take.
+   Marker written (it DECLARES the route the brief already states: "on the
+   self-tape-out path the chip FITS"), content per _tapeout_declaration:
+       # tapeout_declaration: self tape-out, no operator
+
+2. WITH the marker, ambient PDK (the image default)
+       PDK=ihp-sg13g2   <- the container's own default, NOT gf180mcuD
+       pad_ring_check rc=1 FAIL
+       PAD_MASTER_NOT_IN_PDK_IO_LIBRARY: 'pad_address_2': master
+       'gf180mcu_fd_io__bi_t' is not in the IO cell library this run resolved (22 ...)
+   CORRECT BEHAVIOUR, not a defect: the environment named a different PDK and
+   the design's masters are genuinely not in that library. But note WHY it was
+   reachable — the flow's gate clause is `pad_ring_check . --json ...` with NO
+   --pdk-root and NO --pdk, so the verdict is decided by the ambient PDK
+   environment variable. Get that wrong and the check refuses the design's own
+   masters.
+
+3. WITH the marker and PDK=gf180mcuD (what a real gf180 run sets)
+       GATE_RAN pad_assignment_gen   rc=2   VACUOUS_PASS
+       GATE_RAN pad_ring_check       rc=0   PASS
+       Step 15.5ic status: VACUOUS_PASS
+   pad_ring_check PASSES through the flow's own invocation. The site fix is
+   therefore verified on the enforcement path, not only by direct call.
+
+THE STEP'S REAL LABEL IS VACUOUS_PASS — not PASS, not FAIL.
+`pad_assignment_gen` rc=2 is read by the flow as VACUOUS_PASS ("input not
+applicable"), and that is the label the step carries. It does NOT short-circuit:
+clause 2 still runs and still passes (verified — `grep -c "GATE_RAN
+pad_ring_check"` = 1). So an absent pin-out does not make this step refuse; it
+makes it VACUOUS_PASS, which in an aggregate reads as "nothing to worry about
+here". That is the same empty-denominator shape found twice already this
+session, this time at the FLOW level.
+
+NOT PATCHED. How the flow reads rc=2 is a verdict rule that every design passes
+through — a flow-owner decision, not one to take inside a brief about a
+different defect. Recorded, with the reproduction above.
+
+ALSO OBSERVED, and it is why VACUOUS_PASS is not silently benign here: the flow
+emits 15 lines of the form
+    [15.5ic] = VACUOUS-PASS marked done while dependency [N] ... = FAIL/MISSING
+because the constructed project has no Phase 1 or Phase 2 at all. The flow does
+notice; the label alone is what would mislead.
+
+WHOLE-FLOW REGRESSION DELTA — pre-fix vs post-fix, all 69 steps, by ID+STATUS.
+
+Measured the way the landing criterion requires (NAME SETS, not counts — equal
+counts hide a 2-in/2-out swap), same project, same PDK=gf180mcuD, only the
+plugin swapped:
+
+    pre : 69 steps; overall=FAIL
+    post: 69 steps; overall=FAIL
+    diff:
+        < 15.5ic FAIL
+        > 15.5ic VACUOUS_PASS
+
+EXACTLY ONE step verdict changes, it is the step the fix is about, and it moves
+in the intended direction. Every other step is byte-identical. Overall stays
+FAIL in both because the constructed project carries no Phase 1 or Phase 2 —
+that is a property of the harness input, not of the change.
+
+FIRST ATTEMPT AT THIS WAS WRONG AND IS RECORDED AS SUCH: my initial extractor
+scraped the pretty-printed console lines and captured only 3 of the 69 steps. A
+delta over 3 steps that reports "no regression" is the empty-denominator trap
+one more time — it would have been a green earned by comparing almost nothing.
+Caught it on the count: 3, against the 69 steps this very run evaluated —
+a number measured two lines above in this same file. (I first wrote
+"~44 main-track steps", a figure I had NOT measured and which matches
+nothing: the yaml declares 77 `- id:` steps, this run evaluated 69, and
+the tool's own --help says 40 main-track. The 44 came from prose. A
+one-true-value quantity, hedged, borrowed from text while the measured
+number sat in the same paragraph — the same defect as the stale 493.)
+and re-extracted from the --json `steps` list, which carries every step with its
+id and status. The denominator is stated above for exactly that reason.

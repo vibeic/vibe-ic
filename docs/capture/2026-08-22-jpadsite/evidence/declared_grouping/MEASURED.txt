@@ -1,0 +1,66 @@
+THE DESIGN'S DECLARED PER-SIDE GROUPING, RUN.
+
+SOURCE (both on this host, in the same run dir the port count came from):
+    input/docs/L3_external_interface.md      "Physical Pad Placement"
+    input/docs/L9_constraints_floorplan.md   9.2.1 "Pad 配置(對齊 L3)"
+        North  address[7:0] + write_data[31:0]   40
+        South  read_data[31:0] + error           33
+        East   clk, reset_n                       2
+        West   cs, we                             2   = 77
+    Only intra-side ORDERING is left to the tool. The grouping is declared twice.
+    L9 9.2.2: die size 不指定 — derived by the Plugin from FP_CORE_UTIL (=20).
+
+RUN 1 — declared grouping on the published 2.262 mm die:
+    PAD_RING_DOES_NOT_FIT: PAD_SOUTH  2475000 vs 1500000  over by  975000
+    PAD_RING_DOES_NOT_FIT: PAD_NORTH  3000000 vs 1500000  over by 1500000
+    rc = 1   -> DECLARED_on_2262_FAILS.json
+
+RUN 2 — same grouping, die raised to 3.762 mm:
+    PASS, 77 pads + 4 corners, abuts, 77/77 BTerms, rc = 0
+    -> DECLARED_on_3762_PASSES.json
+    3762 = 40 x 75 + 2 x 355 + 2 x 26, the minimum the declared North side needs.
+
+THE PUBLISHED DIE ENCODES THE ASSUMPTION:
+    2262 = 20 x 75 + 2 x 355 + 2 x 26  -> the minimum for a BALANCED split.
+    That is why the earlier run had zero slack on the south side: the die and the
+    split are one choice stated twice, not two agreeing measurements.
+    FP_CORE_UTIL=20 on 0.285 mm^2 of cells derives ~1.946 mm, smaller than both.
+
+FLOW GAP (verified in code, not inferred): nothing at step 15.5ic reads an
+L-document. Of pad_ring_gen / pad_ring_check / _pad_ring / pad_assignment_gen,
+only pad_assignment_gen mentions a side grouping, and it READS
+input/submission_template/tapeout_declaration.json and slots/*.yaml. So the
+declaration is unanswered (rc 2 NOT_ASKED is correct) AND the design input
+answers what the declaration would have carried. Nothing bridges them.
+
+FOUND BY the publishing agent (8HD-8), who read the design input I had cited for
+the port count and never opened.
+
+=== THE PDK THE DESIGN ACTUALLY TARGETS ===
+
+gf180 appears ZERO times in the nine L-documents. L1: "目標 PDK | SKY130 主目標"
+(target PDK: SKY130 primary), "Target Std-Cell Library | sky130_fd_sc_hd"; L9
+sets the clock period against sky130_fd_sc_hd. So every gf180 figure above is a
+statement about a PDK this design never names. Raised by the publishing agent.
+
+MEASURED ON sky130A, same declared grouping, the PDK's own cells
+(sky130_ef_io__gpiov2_pad 80.0 x 197.965, corner 200 x 204, PAD_EDGE_SPACING 0,
+com_bus_slice fillers):
+
+    die 2262 um   PAD_RING_DOES_NOT_FIT
+                    PAD_NORTH 3200000 vs 1862000  over by 1338000
+                    PAD_SOUTH 2640000 vs 1862000  over by  778000
+    die 3604 um   PADRING_DOES_NOT_ABUT, gap -2000 (a 2 um OVERLAP)
+    die 3608 um   gap exactly 0, but PAD_CORNER_SPACING_NOT_SITE_MULTIPLE x2
+    die 3612 um   PASS, clean
+
+SO THE ANSWER TO THE OPEN QUESTION IS NO: the declared grouping does not fit a
+small die on the design's own PDK either. It needs 3.612 mm on sky130A and
+3.762 mm on gf180mcuD. The non-fit is not an artefact of using gf180.
+
+AND MY CLOSED FORM UNDER-PREDICTED BY 12 um. I computed 40 x 80 + 2 x 200 = 3600.
+The tool says 3612, for two reasons arithmetic cannot see: sky130's corner is
+200 x 204 — NOT SQUARE — so a rotated corner presents 204 um along the north
+side, and upstream's step-8 parity refusal rejects an odd remaining span. Same
+lesson as everything else this session: the closed form predicts, the tool
+measures, and where they differ the tool is right.
