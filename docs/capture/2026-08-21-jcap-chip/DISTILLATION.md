@@ -187,6 +187,12 @@ The ruling, which is the owner's and is recorded here rather than argued:
   module, and — worse — several of its own sibling gates exclude `test_*` from
   their populations, so the checker was invisible to the family it belongs to.
 
+  **The class is closed, not just the instance.** Counted afterwards: shipped
+  programs at `programs/` top level whose basename begins with `test_` — **0 on
+  this branch and 0 in the composed tree**. So no other checker is hiding from
+  the gates behind the collection prefix, and the exclusion those gates apply is
+  now exactly what it claims to be: it skips tests, not programs.
+
 ### Composing with the census lane — measured, and the landing recipe
 
 Trial-merged against `jdistmat/matrix-distil` @ `bebd9c1e1` in a throwaway tree
