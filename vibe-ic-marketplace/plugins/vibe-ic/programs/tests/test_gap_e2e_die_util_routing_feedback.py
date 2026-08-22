@@ -62,9 +62,15 @@ class TestLoosenLadderConstants:
         assert mod._PNR_UPSIZE_RETRIES == 3
 
     def test_retry_iters_covers_every_bounded_path(self):
-        # initial + upsize budget + one downsize + (ladder-1) loosen steps.
+        # initial + upsize budget + one downsize + the loosen ladder's own rung
+        # bound. #914 — the ladder no longer terminates on the AUTHORED ladder's
+        # length (that was a budget masquerading as a measurement), so the loop
+        # budget is pinned to the ladder's bound rather than to the schedule.
+        # The relationship, not the arithmetic, is the load-bearing part: the
+        # loop guard is SHARED, so a budget below the ladder's own bound would
+        # make the guard — not the ladder's criterion — decide the outcome.
         expected = (1 + mod._PNR_UPSIZE_RETRIES + 1
-                    + (len(mod._ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + mod._ROUTE_LOOSEN_MAX_RUNGS)
         assert mod._PNR_RETRY_ITERS == expected
 
 
