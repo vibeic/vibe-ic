@@ -794,3 +794,42 @@ for: 3 failed / 22 passed, restored 25 passed, checker byte-identical.
 Every other instance of this class on this branch was in code someone else
 wrote. This one is mine, in the program whose entire purpose is to stop a claim
 about upstream from going unchecked.
+
+
+---
+
+## The open question, answered — and the answer is not about my pins
+
+I left it open: do the pins' upstream halves ever execute at the gate, or are
+they green-over-nothing where it counts?
+(`evidence/WHERE_THE_UPSTREAM_HALF_ACTUALLY_RUNS.md`)
+
+**There is no CI.** `gatekeeper-ci.yml` does not exist in the tree. The
+pre-push hook says why in its own header: Actions is disabled at the ACCOUNT
+level, the appeal was rejected, twelve pushes produced zero runs, and a
+self-hosted runner does not help because SCHEDULING is the blocked layer. "So
+the checks CI would enforce are enforced HERE or nowhere."
+
+**And the hook deliberately runs no pytest** — every `run_gate` call in it is a
+cheap deterministic program, because "a hook slow enough to be bypassed is a
+hook that gets bypassed".
+
+So **no test in this repository runs automatically at any gate**. My pins are
+not worse off than anything else; they are exactly as enforced as every other
+test here, which is "when someone runs them". I cannot attach them to a gate —
+there is no gate to attach to. What I could do is make running them cheap and
+record that they HAVE been run, at this sha, against an image named by content:
+
+    BASIS: upstream re-read under /usr/local/lib/python3.12/dist-packages
+           for 3 of 3 entry/entries.
+    PASS: 3 registered re-implementation(s)
+    10 passed
+
+    ghcr.io/vibeic/vibeic-eda:0.3.24
+    sha256:8658d4698220a47c2d40c91898b251ce9673e4f70488341b8ff44968f0f244b9
+
+That establishes all three snapshots are byte-current with the shipped
+distribution and both pins pass their upstream halves, on this branch, now. It
+does not establish they will be run again — and the BASIS line is the guard
+against the failure that matters more: a later reader taking a PASS for a
+statement about upstream when upstream was never opened.
