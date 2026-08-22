@@ -118,6 +118,15 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
+    "phase3.pad_ring": {
+      "description": "Pad-ring site resolution, per-side fit and abutment for the self-tape-out path (flow step 15.5ic). Added because the step ships two programs and had no routing entry at all, so a capture taken here was reported unrouted and its Bucket-A program-rule sketch was silently skipped.",
+      "bucket_A_program": "programs/pad_ring_check.py",
+      "bucket_A_related": [
+        "programs/pad_ring_gen.py",
+        "programs/_pad_ring.py"
+      ],
+      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md"
+    },
     "phase3.synth": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"

@@ -1,0 +1,5 @@
+=== absence_verdict_names_its_search_space_check ===
+  files parsed     : 1278
+  absence verdicts : 31
+  naming a locus   : 31
+  PASS: every absence verdict names where it looked.

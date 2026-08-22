@@ -1,0 +1,63 @@
+[
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "A",
+    "rule_name": "absence verdict names its search space",
+    "pattern": "A step reports that a declared thing is absent, and its message discloses a count without disclosing which CLASSES of source that count ranges over. The reader cannot separate 'I looked everywhere and it is not there' from 'I looked in one of the two places that can declare it'. Disclosing a denominator and disclosing the POPULATION that denominator covers are different properties, and only the first was enforced anywhere.",
+    "docstring": "A negative verdict about a declared thing must enumerate the source classes it consulted, not merely count the items it found inside one of them. Not-found and not-looked-for are different verdicts; a message that states only a count reports the first while doing the second.",
+    "expected_signal": "ERROR",
+    "fix_action": "Require every absence verdict to carry the list of source classes searched, alongside the per-class count. A resolver that can read more than one class of source must name every class it can read in the refusal it raises when none of them answered."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "A",
+    "rule_name": "upstream reimplementation is pinned",
+    "pattern": "A step re-implements a computation that an upstream flow already performs, cites the upstream file in prose, and nothing mechanical ever reads that file. The prose citation is a claim made once by a human and never re-checked, so the re-implementation drifts from its source silently and the drift surfaces later as an unrelated refusal rather than as a mismatch.",
+    "docstring": "When a step re-implements an upstream computation, a test must READ the upstream artefact and go red when our version drifts from it. A citation in a comment is not a pin: it is a claim about a file, made once, that nothing re-evaluates.",
+    "expected_signal": "ERROR",
+    "fix_action": "Declare every module that mirrors an upstream computation, and require each declared mirror to carry a test that opens the upstream file and compares the pinned property. On a host without the upstream artefact the test declines BY NAME rather than passing vacuously."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "A",
+    "rule_name": "no effect claim states the population swept",
+    "pattern": "A step publishes, as a disclosure to its reader, the finding that one of its configuration inputs has no effect. The finding rests on a sweep that varied that input while observing only PART of the population the input governs. Every number in the sweep is correct and the inference drawn from it is false, so the claim is unfalsifiable by re-reading the numbers and survives review.",
+    "docstring": "A published claim that a configuration input is without effect must state which population was varied AND which population was observed. No-effect and not-varied-for-the-part-that-responds are different verdicts, and a sweep that observed a subset can only support the second.",
+    "expected_signal": "ERROR",
+    "fix_action": "Require a no-effect disclosure to carry the observed population beside the varied one, so a reader can see when the two do not cover the same set. A claim whose observed set is narrower than the set the input is documented to govern is not a measurement of inertness."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "C",
+    "title": "A shipped step publishes an inertness disclosure whose stated reason is false",
+    "pattern": "A step carries, in every report it writes, a machine-readable disclosure asserting that one of its configuration inputs is not honoured by the downstream tool, together with the measurement offered as evidence. The measurement is sound and the assertion drawn from it is wrong, because the tool applies that input to a different part of the layout than the one the sweep observed. The disclosure is therefore a false statement shipped to every reader, in the field whose whole purpose is to be trusted without re-derivation.",
+    "why_not_bucket_a": "The exact input a program would see is a free-text reason string beside a correct table of measured numbers. The decision it cannot make is whether the sentence drawn from those numbers is a sound inference, because soundness here turns on which part of the layout the downstream option is documented to govern, and that fact exists only as prose in the tool's own option table. No deterministic rule in this repo can read that table and adjudicate the inference. The adjacent deterministic rule, captured separately in this batch, makes the gap VISIBLE by requiring the observed population beside the varied one; it cannot decide the claim.",
+    "suggested_fix": "Replace the reason with what was actually measured and re-derive the verdict. The refusal raised when the input is deliberately set remains correct and should stand; the justification behind it must stop asserting that the tool ignores the input, and should instead say that this step cannot honour it because the step and the tool bind the same word to different parts of the layout.",
+    "backlog_slug": "inertness-disclosure-states-a-false-reason",
+    "backlog_type": "bug",
+    "severity": "P1",
+    "component": "program:pad_ring_gen",
+    "session_context": "Found while converging a prior lane's recovery report on a second image and a newer build of the downstream tool. The numbers reproduced exactly; the inference did not survive the tool's own documented option table."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "D",
+    "title": "The downstream placer crosses its two axis arguments",
+    "why_discard": "REFUTED BY MEASUREMENT, and recorded so it is not filed again. The prior lane observed that sweeping the vertical rotation argument left the east and west pads unchanged, and concluded the argument was inert; a row-level dump then showed the horizontal arguments feeding the east and west rows and the vertical arguments feeding the north and south rows, which reads as a transposition and was drafted here as a forked-tool defect. It is not one. The tool's own option table documents the horizontal argument as naming the site for the horizontal pads, east and west, and the vertical argument as naming the site for the vertical pads, north and south, and it further documents the vertical rotation default as belonging to the southern row. Every number measured is the documented behaviour of a tool that is self-consistent with its own contract. There is no defect to fix in the fork, and a fork-side change here would break every caller that reads the documentation. The defect is entirely on our side, and it is that our step bound the word vertical to the vertical SIDE while the tool binds it to the vertically-oriented PAD. That is not a discard: it is captured as the upstream-pinning rule and as the false-reason defect in this same batch."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "A",
+    "rule_name": "a locus word naming the missing thing is not a locus",
+    "pattern": "A guard that requires a negative verdict to disclose where it looked accepts, as that disclosure, any word from its own vocabulary appearing anywhere in the message prose. Part of that vocabulary consists of the ordinary nouns for the thing whose absence is being reported, which an absence message can hardly avoid containing. The guard therefore passes verdicts that name no place at all, and would not notice if a real one stopped naming one.",
+    "docstring": "Words that disclose a PLACE and words that merely name the MISSING THING must not satisfy the same predicate. Only the first tells a reader where the search happened; the second is the subject of every absence message ever written, so accepting it makes the check unfalsifiable for the population it most needs to bind.",
+    "expected_signal": "ERROR",
+    "fix_action": "Partition the vocabulary. Only place-denoting words satisfy the prose branch; thing-denoting nouns continue to count when they are identifier names or appear beside a path-shaped literal, which is where they carry real information. The partition must be measured against the existing conformant population before it ships, because a guard that reddens on the state we just shipped is a bug rather than a guard."
+  }
+]
