@@ -47,3 +47,46 @@ RE-RUN THIS AUDIT: extract with the regex over RESULT.md that produced the list
 (`^\s{2,}(\$ )?(git|grep|python3|docker|sha256sum|ls|find|pytest|bash)\b`), then
 run each. The regex is a LOWER BOUND -- an ad-hoc pattern is always narrower than
 its subject -- so a command it misses is not a command that works.
+
+AND EVERY QUOTATION, CHECKED AGAINST ITS SOURCE
+===============================================
+Same reasoning one step over: a quotation a reader cannot find by searching for
+it is not a quotation. Ten quotations, six sources, all verified in the pinned
+image or at main a4caccefe.
+
+  IN THE REPO
+    flow yaml :3045-3048   "composes the config ... derives nothing, and stamps
+                            every variable with which source it came from"   EXACT
+    #492  flow_compliance_check.py   "39 registered gates be permanently
+                            silent"                                          EXACT
+    #1347 slot_pad_budget_check.py   "exit 2 is this flow's VACUOUS_PASS
+                            tier"                                            EXACT
+    slot_pad_budget_check.py "A question that could not be asked has not
+                            passed"                                          EXACT
+    declared_pdk_is_the_pdk_used_check.py  "both halves are always present in
+                            a real run" / "the missing input IS the finding"  EXACT
+    benchmark-data/ic/CELL_MATRIX.md  "declares SKY130 only"                 EXACT
+  UPSTREAM, in ghcr.io/vibeic/vibeic-eda:0.3.16
+    librelane/config/flow.py         the PAD_FAKE_SITES docstring            EXACT
+    scripts/openroad/common/pad_cfg.tcl  "set width [expr [[$inst getMaster]
+                            getWidth] / $units]" and "incr sum_of_cell_widths
+                            $width"                                          EXACT
+    scripts/openroad/common/io.tcl   "if { [info exists ::env(PAD_FAKE_SITES)] }" EXACT
+
+ONE REAL DEFECT, AND IT WAS ABOUT EMPHASIS RATHER THAN WORDS. The flow yaml
+writes `derives nothing` in LOWERCASE. This report rendered it `DERIVES NOTHING`.
+That is worse than it looks: the SAME SENTENCE contains the author's own
+capitalisation, "WHERE THE SLOT SPEAKS", so a reader sees two stressed phrases
+and takes both as the flow owner's. My emphasis was misrepresenting which word
+the flow owner chose to stress, inside the one quotation the report relies on to
+say a precedence question is already settled. Restored; my emphasis moved to my
+own prose.
+
+TWO FALSE ALARMS, BOTH MY INSTRUMENT, BOTH CONFIRMED BEFORE ACTING:
+  * "both halves are always present in a real run" reported MISSING -- it is
+    line-wrapped in the source and `grep -F` cannot span a newline.
+  * the flow yaml quote reported MISSING under whitespace normalisation -- that
+    source is YAML COMMENTS, so every line carries a `#` the normaliser kept.
+Acting on either would have "corrected" a correct quotation into a wrong one.
+The rule that saved both: a MISSING result gets verified by hand before it gets
+acted on. A found result is self-checking; a missing one is not.
