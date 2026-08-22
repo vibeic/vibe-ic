@@ -1,7 +1,7 @@
 type: enhancement
 severity: P1
 component: program:phase3_one_shot_runner
-plugin_version: "1.11.69"
+plugin_version: "1.11.71"
 
 title: >-
   A generated report header must be derived from the inputs the session actually opened

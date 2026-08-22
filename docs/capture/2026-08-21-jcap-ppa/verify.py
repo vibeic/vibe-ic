@@ -505,11 +505,17 @@ control("orphan-routing", "ppa.feasibility" in _added)
 check("no routing step added by this branch is unused",
       not (_added - _used), f"{len(_added)} added, orphaned {sorted(_added - _used)}")
 
-_names = {(r.get("rule_name") or r.get("title", "")).strip() for r in RECS}
+_names = {str(n).strip() for r in RECS
+          for n in (r.get("rule_name"), r.get("title")) if str(n or "").strip()}
 _hmap = {sid: nm for sid, nm in heads}
 _srows = [m.group(1) for m in re.finditer(r"^\| (A-\d+|C-2) \| ", MD, re.M)]
-control("orphan-rows", bool(_srows))
-_orph_rows = [s for s in _srows if _hmap.get(s, "") not in _names]
+def _orphan_rows(rows, hmap, names):
+    return [s for s in rows if hmap.get(s, "") not in names]
+_control_hmap = dict(_hmap)
+_control_hmap["A-999"] = "a record identity that does not exist"
+control("orphan-rows", bool(_srows)
+        and _orphan_rows(["A-999"], _control_hmap, _names) == ["A-999"])
+_orph_rows = _orphan_rows(_srows, _hmap, _names)
 check("no sweep-table row names a record that does not exist",
       not _orph_rows, f"{len(_srows)} rows, orphaned {_orph_rows}")
 
@@ -805,13 +811,20 @@ _added = [f for f in _git("diff", "--name-only", "--diff-filter=A", _base, "HEAD
                           "--", "vibe-ic-marketplace/").split() if f.endswith(".py")]
 _on_main = _sp2.run(["git", "merge-base", "--is-ancestor", "HEAD", _base],
                     cwd=str(ROOT), capture_output=True).returncode == 0
-control("constraints", bool(_git("rev-parse", _base).strip()))   # the base must resolve,
-# or every diff below is empty and all four constraints "pass" against nothing.
-_viol = []
-if _vers:   _viol.append(f"version line(s) changed: {len(_vers)}")
-if _basel:  _viol.append(f"baseline file(s) changed: {_basel}")
-if _added:  _viol.append(f"program file(s) added: {_added}")
-if _on_main: _viol.append("HEAD is an ancestor of main")
+def _constraint_violations(versions, baselines, programs, on_main):
+    out = []
+    if versions:  out.append(f"version line(s) changed: {len(versions)}")
+    if baselines: out.append(f"baseline file(s) changed: {baselines}")
+    if programs:  out.append(f"program file(s) added: {programs}")
+    if on_main:   out.append("HEAD is an ancestor of main")
+    return out
+_control_viol = _constraint_violations(
+    ["+ version"], ["control-baseline.json"], ["control-program.py"], True)
+control("constraints", bool(_git("rev-parse", _base).strip())
+        and len(_control_viol) == 4
+        and all(token in " ".join(_control_viol)
+                for token in ("version", "baseline", "program", "ancestor")))
+_viol = _constraint_violations(_vers, _basel, _added, _on_main)
 check("the brief's four constraints hold, measured against the base",
       not _viol,
       f"plugin files touched: {len(_plugdiff)}" + ("; " + "; ".join(_viol) if _viol else

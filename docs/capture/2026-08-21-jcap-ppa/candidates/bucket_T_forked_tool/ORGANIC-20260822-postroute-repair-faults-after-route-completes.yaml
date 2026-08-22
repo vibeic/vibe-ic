@@ -1,7 +1,7 @@
 type: bug
 severity: P1
 component: flow:phase3
-plugin_version: "1.11.69"
+plugin_version: "1.11.71"
 
 title: >-
   Post-route design-rule repair faults on a netlist shape after routing completes

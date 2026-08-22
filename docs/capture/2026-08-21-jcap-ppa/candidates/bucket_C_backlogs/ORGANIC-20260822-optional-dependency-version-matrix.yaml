@@ -1,7 +1,7 @@
 type: enhancement
 severity: P2
 component: program:gate_host_independence_check
-plugin_version: "1.11.69"
+plugin_version: "1.11.71"
 
 title: >-
   An optional dependency needs a version matrix, because present-but-too-old is the arm nothing tests

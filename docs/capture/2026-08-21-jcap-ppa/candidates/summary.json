@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 45,
+    "A": 46,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -16,6 +16,7 @@
       "programs/ppa_search_run.py",
       "programs/enhancement_emit.py",
       "programs/backlog_sanitize_check.py",
+      "programs/gate_host_independence_check.py",
       "programs/changelog_command_reproducibility_check.py",
       "programs/lec_post_layout_check.py",
       "programs/crosslayer_search_space.py",
@@ -47,6 +48,7 @@
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_search_run_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_enhancement_emit_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_backlog_sanitize_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_gate_host_independence_check_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_changelog_command_reproducibility_check_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_lec_post_layout_check_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_search_space_rule_sketches.py",
