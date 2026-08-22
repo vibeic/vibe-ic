@@ -2528,7 +2528,7 @@ four, and not one survived unchanged.**
 | A-6 | 759 of 1238 take an output path | **7 relative defaults, not all defects** | **swept**: the offending property is where a path RESOLVES at runtime, not that its default is relative — a static scan reports 7 and several are correct. Confirms the check belongs in the shared writer |
 | A-10 | 29 choice sets | **0**, and 1 for the grammar form | **swept**: the rule does NOT widen to accepted-value sets generally — for a plain choice list, handled-ness is not statically decidable once a value is passed onward. Screen went 10 → 2 → 0, all mine |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
-| A-16 | — | 5 admitted, 0 counted | verified on the published document |
+| A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. The published `layer` field is the discriminator |
 | A-17 | 6804 absolute, **2 roots** | **0 outside a run tree** | **swept**: no absolute path is forced, so the declared-convention check has an empty false-positive population and the "rewriting breaks provenance" objection does not apply. Earlier correction stands: mixed WITHIN producers, 6804/6804 host-prefixed |
 | A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
@@ -2699,9 +2699,8 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the three unswept rules** — A-16, A-18,
-   A-19, which are exactly the rows carrying no *before* figure in the sweep
-   table. **Four of the nine are now swept**, and the yield argues for
+3. **Sweep before building each of the two unswept rules** — A-18, A-19, which are exactly
+   the rows carrying no *before* figure in the sweep table. **Four of the nine are now swept**, and the yield argues for
    the rest: two overturned their own row, one survived on a population twice
    the batch, and one settled a design question the record had argued on
    reasoning alone. **A-1 and A-2 were two of the nine and have now
