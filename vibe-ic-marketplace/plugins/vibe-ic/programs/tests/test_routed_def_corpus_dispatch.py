@@ -1026,10 +1026,30 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
 #
 # So this is a REGRESSION PIN, not a fix, and it is not red on `81cd5321b`.
 # Saying otherwise would be the same overstatement this record already corrected
-# once. What it pins is that the two guards stay independent: the strict dict
-# equality against `expansion: "EXPANDED"` is what makes guard 2 unnecessary,
-# and a later widening of it to a subset check — or dropping `expansion` from
-# it — would put the whole weight back on one binding being right.
+# once. What it pins is that the predicate keeps refusing an unopened corpus
+# WITHOUT leaning on guard 1 — on the record itself, not on the pointer binding
+# being right.
+#
+# WHICH BYTES DO THAT REFUSING. Re-measured at the branch head, because the
+# first version of this comment named only one of them. There are TWO
+# in-predicate guards, and each refuses on its own. Over the exact record case
+# (2) builds — `NO_CORPUS`, the NOT FOUND gate label, `benchmark_data_sha`
+# MATCHING, so guard 1 is satisfied and cannot be what refuses:
+#
+#     widen `expansion` to accept NO_CORPUS, literal kept   -> pin GREEN
+#         (the gate-label filter still selects nothing)
+#     widen the gate-label filter to accept NOT FOUND too   -> pin GREEN
+#         (the exact `expansion` dict still fails)
+#     widen BOTH, both literals kept                        -> pin RED, on the
+#         substantive assertion below: `assert 0 == 1`
+#     drop `"expansion"` from the dict comparison           -> pin RED, on the
+#         shape check in `_shipped_authorizer`
+#
+# The substantive assertion bites only when BOTH are widened, which is the state
+# worth catching: widening one is harmless, widening both hands the landing a
+# corpus nothing opened. Deleting a literal instead of widening a comparison is
+# what the shape check covers. So this pin rests neither on one comparison nor
+# on one string search.
 
 VERIFY_MERGE = REPO / "tools" / "gatekeeper-verify-merge.sh"
 _AUTHORIZER = "base_has_exact_legacy_routed_empty"
@@ -1135,13 +1155,19 @@ def test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus(
     # (2) A NO_CORPUS ROW CARRYING THE MATCHING BOUND SHA. The producer cannot
     # reach this state — see (3) — so the population is stubbed while the RECORD
     # stays the real dispatcher's. That is the whole point: with the SHA guard
-    # satisfied, the refusal below can only come from the row itself, which is
-    # the distinction vibe-ic#1764 added.
+    # satisfied -- asserted below, not assumed -- the refusal can only come
+    # from what vibe-ic#1764 added: the corpus row's `expansion` and the gate
+    # label that travels with it. Either alone refuses; see the matrix above.
     a_record = _transition_base_record(
         tmp_path, "a", "bash -c 'exit 3'", None, _BOUND_SHA)
     a_row, a_labels = _corpus_row(a_record)
     assert a_row["expansion"] == "NO_CORPUS", a_row
     assert a_labels == [_REAL_ABSENT_LABEL], a_labels
+    # Guard 1 is SATISFIED here. Without this the refusal below would be
+    # ambiguous -- a `benchmark_data_sha` mismatch refuses every record, and a
+    # pin that cannot tell which guard fired is measuring nothing.
+    assert (json.loads(a_record.read_text(encoding="utf-8"))
+            .get("corpus_inputs", {}).get("benchmark_data_sha")) == _BOUND_SHA
     assert _shipped_authorizer(tmp_path, "a", a_record) == 1, (
         "a base arm whose corpus was NEVER OPENED authorised the trusted "
         "parent to enumerate and execute the routed corpus. The transition "

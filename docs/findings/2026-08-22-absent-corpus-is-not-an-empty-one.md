@@ -835,20 +835,39 @@ interesting one is not the obvious one:
 `81cd5321b`.**  Calling it a fix would repeat exactly the overstatement the top
 of this file already corrected once.  What
 `test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus` pins
-is that the two guards stay **independent**: the strict dict equality against
-`expansion: "EXPANDED"` is what makes guard 2 unnecessary, and widening it to a
-subset check would put the whole weight back on one binding being right — the
-same shape of single-guard dependence §"How far that reaches" closed in the
-waiver.
+is that the predicate keeps refusing an unopened corpus **without leaning on
+guard 1** — on the record itself, not on the pointer binding being right, which
+is the same shape of single-guard dependence §"How far that reaches" closed in
+the waiver.
 
-**Shown to bite, twice.**  Widening the predicate to accept `NO_CORPUS` fails on
-the substantive assertion — `assert 0 == 1`, *"a base arm whose corpus was NEVER
-OPENED authorised the trusted parent to enumerate and execute the routed
-corpus"* — and it fails that way **even when the mutation keeps the literal the
-shape check looks for**, so the pin does not rest on a string search.  The
-predicate's bytes are lifted out of the shipped script rather than restated, and
-the extraction asserts what it took, so a rename fails loudly here instead of
-leaving the test silently measuring nothing.
+**Which bytes do that refusing — re-measured at the branch head, because the
+first version of this section named only one of them.**  The predicate carries
+**two** in-predicate guards against an absent-corpus record, not one, and each
+refuses on its own.  Four mutations of the shipped bytes, each driven over the
+same real-dispatcher record the test builds — `expansion: "NO_CORPUS"`, gate
+label *"… was NOT FOUND — nothing was opened to check"*, `benchmark_data_sha`
+**matching**, so guard 1 is satisfied and cannot be what refuses:
+
+| mutation of the shipped predicate | authorizer | the pin |
+|---|---|---|
+| widen the `expansion` comparison to accept `NO_CORPUS`, literal kept | refuses — the gate-label filter still selects nothing | **green** |
+| widen the gate-label filter to accept the `NOT FOUND` label too | refuses — the exact `expansion` dict still fails | **green** |
+| widen **both**, both literals kept | **AUTHORISES** | **red** on the substantive assertion: `assert 0 == 1`, *"a base arm whose corpus was NEVER OPENED authorised the trusted parent to enumerate and execute the routed corpus"* |
+| drop `"expansion"` from the dict comparison altogether | — | **red** on the shape check: *"the landing-transition authorizer no longer mentions `\"expansion\": \"EXPANDED\"`"* |
+
+So the sentence this paragraph replaces — *"the strict dict equality against
+`expansion: "EXPANDED"` is what makes guard 2 unnecessary"* — was half the
+truth, and the half it left out is the reassuring one: the gate-label filter is
+an equal partner, and **either one alone** already refuses.  The substantive
+assertion goes red only when **both** are widened, which is exactly the state
+worth catching — widening one is harmless, widening both hands the landing a
+corpus nothing opened.  The remaining move, deleting a literal rather than
+widening a comparison, is what the shape check covers: it requires the predicate
+to still mention `"expansion": "EXPANDED"`, `is EMPTY` and `benchmark_data_sha`.
+So the pin rests neither on a single comparison nor on a single string search.
+The predicate's bytes are lifted out of the shipped script rather than restated,
+and the extraction asserts what it took, so a rename fails loudly here instead
+of leaving the test silently measuring nothing.
 
 ### 8. Re-verified at the branch head, independently
 
