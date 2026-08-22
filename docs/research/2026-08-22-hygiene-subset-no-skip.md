@@ -2566,3 +2566,53 @@ be caught. But the older string-based test, which is the one the BRIEF names, is
 not. **Two tests guard this property and the landing runs only the newer one**,
 which is an argument for the guard existing and not an argument that the gap is
 harmless.
+
+## 40. The guarantee is now enforced by a test the landing actually runs
+
+Everything above says what is broken. This says what this branch changed about
+the thing the brief was written to protect, and it is the one conclusion here
+that is a positive claim rather than a defect.
+
+**Before this branch**, the no-skip property was guarded by exactly one test —
+`test_the_cli_offers_no_way_to_skip_the_hygiene_set`, in a file that
+path-loads its subject. Measured in the section above: the landing's targeted
+selection does not include it for a change to `gatekeeper_review.py`. So the
+guarantee was policed by a test the landing could not see, which is why
+`4232a7301` landed.
+
+**After this branch** there are two, and the second one is selected. For a diff
+touching only `gatekeeper_review.py` and its own test file:
+
+```
+ci_targeted_test_select.py --base d9322cdab^      119 files selected
+  test_hygiene_handover_is_in_process_only.py       SELECTED
+  test_issue538_merge_gate_covers_ci_hygiene.py     not selected
+```
+
+The seam guard is selected because it reaches the module with a plain
+`import gatekeeper_review as R` — the one route the default analysis follows.
+And it fails on BOTH spellings of the defect:
+
+* the flag that actually shipped — §5, on the batch tree: `4 failed`, including
+  `test_the_flag_is_rejected_by_the_shipped_program[--hygiene-record-in]` and
+  `[--hygiene-record-rc]`;
+* the rename that would have evaded the string test — §38, constructed:
+  `3 failed`, by two independent routes.
+
+**So a re-regression of this defect, under either spelling, would now be caught
+by the landing itself** — not by a batch differential weeks later, and not by
+somebody happening to run a broader set. That is the property the owner's ruling
+asked for, restored one level down from where the ruling put it: the review was
+wired where it cannot be stepped around, and the test that polices the review is
+now reachable by the thing that decides what to run.
+
+**Stated with its conditions, because an unconditional version would be the
+sixteenth corrected claim.** This holds provided the landing runs its targeted
+lane (unit L1, `lane_targeted`) and that run is not itself refused for an
+unrelated reason — §31 shows this host currently refuses the whole tier over an
+`argparse` backport. It does not depend on the mode default, which is exactly
+why it is worth having: the gap in §39 is real, unfixed, and an owner decision,
+and this branch's guarantee no longer depends on it being fixed.
+
+That is the strongest thing this work does. The fix restored a property; the
+guard made the property survivable by the gate that is supposed to enforce it.
