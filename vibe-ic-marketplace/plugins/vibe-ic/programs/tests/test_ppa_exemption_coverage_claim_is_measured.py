@@ -38,6 +38,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[5]
 PROGRAMS = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
 WIRING = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
@@ -133,6 +135,37 @@ def _numbered_exemptions():
     return out
 
 
+def _corpus_of(argv):
+    """The directory a row was aimed at, or None."""
+    if "--corpus" not in argv:
+        return None
+    i = argv.index("--corpus")
+    return Path(argv[i + 1]) if i + 1 < len(argv) else None
+
+
+def _split_readable(rows):
+    """(rows whose corpus is there, [named paths that are not]).
+
+    WHY THIS EXISTS. Every assertion below runs a gate and reads a count out of
+    its output. A gate whose corpus is ABSENT exits 2 having looked at nothing
+    and prints no count -- and the first version of this file reported that as
+    "claims N and printed no count", i.e. as a false declaration. That is "I
+    could not look" laundered into a finding about the tree, inside a file whose
+    whole subject is that substitution.
+
+    `ppa-crosslayer/` and `ppa-e2e/` are tracked, so a complete checkout always
+    has them; a sparse or partial one need not, and this repository already
+    carries a gate about exactly that state. So the two are kept apart here: an
+    unreadable corpus is NAMED and disclosed, never counted as a lie.
+    """
+    ok, missing = [], []
+    for row in rows:
+        c = _corpus_of(row[3])
+        (ok if (c and c.is_dir()) else missing).append(
+            row if (c and c.is_dir()) else f"{row[0]}: {c}")
+    return ok, [m for m in missing if isinstance(m, str)]
+
+
 def test_the_parser_still_finds_the_rows_it_is_about():
     """THE DENOMINATOR, asserted before anything is compared.
 
@@ -164,8 +197,13 @@ def test_every_stated_coverage_number_is_the_one_the_gate_reports():
     population it examined, so a claim of 20 against a line reporting 21 and 210
     is red, which is exactly the defect this file was written for.
     """
-    wrong, noted = [], []
-    for label, claimed, unit, argv, _ex in _rows():
+    rows, missing = _split_readable(_rows())
+    if not rows:
+        pytest.skip("no PPA corpus is readable in this checkout, so nothing "
+                    "could be measured — NOT a pass: " + "; ".join(missing))
+    wrong, noted = [], list(f"corpus not in this checkout, not checked: {m}"
+                            for m in missing)
+    for label, claimed, unit, argv, _ex in rows:
         proc = subprocess.run([sys.executable] + argv, capture_output=True,
                               text=True, timeout=600)
         # The roll-up line names the corpus it walked; per-record chatter does
@@ -245,8 +283,13 @@ def test_a_declaration_that_says_it_passes_is_on_a_gate_that_passes():
     punish a gate for improving. That case is disclosed as a NOTE so the stale
     sentence is still visible to a reader.
     """
-    wrong, noted = [], []
-    for label, _claimed, _unit, argv, exemption in _rows():
+    rows, missing = _split_readable(_rows())
+    if not rows:
+        pytest.skip("no PPA corpus is readable in this checkout, so no verdict "
+                    "could be measured — NOT a pass: " + "; ".join(missing))
+    wrong, noted = [], list(f"corpus not in this checkout, not checked: {m}"
+                            for m in missing)
+    for label, _claimed, _unit, argv, exemption in rows:
         rc = subprocess.run([sys.executable] + argv, capture_output=True,
                             text=True, timeout=600).returncode
         says_pass = "PASSES today" in exemption
