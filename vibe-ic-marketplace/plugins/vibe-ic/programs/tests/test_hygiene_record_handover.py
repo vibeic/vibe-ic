@@ -196,6 +196,34 @@ def test_all_three_consumers_agree_on_what_counts_as_having_run():
     assert tuple(G._RAN) == tuple(H.PROCESS_STATES)
 
 
+def test_the_owner_answers_so_no_fallback_is_reported():
+    """Direction one. On a healthy tree the source is None -- otherwise the
+    control below could pass simply because the loader is always failing."""
+    states, source = R._process_states_with_source()
+    import hygiene_finding_delta as H
+    assert source is None, source
+    assert tuple(states) == tuple(H.PROCESS_STATES)
+
+
+def test_a_denominator_from_the_fallback_copy_says_so(monkeypatch):
+    """Direction two, and the reason the fallback is not simply deleted.
+
+    `_PROCESS_STATES_FALLBACK` is a COPY of the set this module loads by path
+    precisely so it does not re-derive it. Keeping the copy means a packaging
+    fault cannot brick every landing; using it SILENTLY would mean a `ran`
+    count derived from a stale set reads identically to one derived from its
+    owner. If a state were ever removed upstream, the copy would keep counting
+    it and `ran` would OVER-report gates as having run.
+    """
+    monkeypatch.setattr(
+        R, "_process_states_with_source",
+        lambda: (R._PROCESS_STATES_FALLBACK, "ImportError: simulated"))
+    summary = R._hygiene_verdict(_doc(["PASS"] * 3), 0).summary
+    assert "FALLBACK copy" in summary, summary
+    assert "hygiene_finding_delta" in summary, summary
+    assert "ImportError: simulated" in summary, summary
+
+
 # --------------------------------------------------------------------------
 # THE ARM THAT SHOULD BE UNCHANGED — CHECKED, NOT ASSERTED.
 # --------------------------------------------------------------------------
