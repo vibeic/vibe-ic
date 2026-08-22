@@ -3099,6 +3099,53 @@ one command and turned a headline into a footnote. The headline would have been
 wrong.
 ```
 
+## THE FIXTURE MATRIX, RE-RUN AT TODAY'S TIPS — 988 runs
+
+```text
+The last block of this report's evidence not yet re-derived: the brief's
+questions 1 and 2, restated as a matrix. 19 paired fixture trees I wrote,
+every checker on both branches over both arms, at facc28860 / c0e19ace9.
+
+    988 runs      rc 2 = 554     rc 0 = 415     rc 1 = 19
+
+OWNER CHECK — each fixture's owning rule red on the defect, green on the remedy:
+19 OF 19, and getting there took one correction of my own harness.
+
+    Driven as the harness had them, it read 17 of 19. The two misses were
+    `content_pinned_authority_verified_only_at_merge` and
+    `wall_clock_bound_standing_in_for_a_verdict`, both rc 0 on BOTH arms —
+    which is the signature of a rule answering in a mode you did not mean.
+    Both are ADVISORY: rc 0 is what they return on a finding unless asked
+    otherwise. With `--strict`, which is the shipped verdict for a red:
+
+        authpin  defect --strict rc 1   remedy --strict rc 0
+        wall     defect --strict rc 1   remedy --strict rc 0
+
+    So 19 of 19. THAT IS THE FIFTH TIME IN THIS WORK AN INVOCATION FORM HAS
+    CHANGED AN ANSWER, and the fourth where the wrong form made a branch look
+    worse than it is. The list is now: `--strict` on advisory rules, an empty
+    `--inventory` on rules that grandfather, `--inventory` passed to rules that
+    reject it, a bare invocation in F12, and this. Every one of them is the same
+    mistake — driving a program in a way its wiring never drives it — and I have
+    made it in both directions.
+
+DISAGREEMENTS — a non-owner checker red on another rule's REMEDY: ZERO.
+That is the harm the brief named, and it does not occur across 988 runs.
+
+    One row is red on BOTH arms and is discarded as noise, exactly as before:
+    `every_required_metric_key_has_a_producer` on my `measonly` fixture, whose
+    records file carries a single metric key, so most of that rule's axes are
+    unprovable in it. It answers correctly about a tree built for a different
+    rule.
+
+    THE NOISE COUNT HAS HALVED SINCE I FIRST RAN THIS, from two rows to one,
+    and for a reason worth naming: jdistchip fixed that rule at 094c2cb7e —
+    "the metric gate counted the consumer as its own producer" — and one of the
+    two rows went away with the bug. A cross-run that gets quieter because the
+    author repaired something is the cheapest possible confirmation that the
+    repair was real.
+```
+
 ## VERDICTS
 
 ```text
