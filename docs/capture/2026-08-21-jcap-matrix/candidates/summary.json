@@ -1,0 +1,26 @@
+{
+  "date": "2026-08-21",
+  "totals": {
+    "A": 10,
+    "B": 0,
+    "C": 1,
+    "D": 0,
+    "T": 0
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/flow_compliance_check.py",
+      "programs/phase3_one_shot_runner.py",
+      "tools/phase1_engine/ingest.py"
+    ]
+  },
+  "bucket_A_files": [
+    "/tmp/claude-1000/-home-reyerchu-vibe-ic/23c54645-4f61-44a5-940a-b1129f4992c6/scratchpad/jcap/verify/bucket_A_programs_flow_compliance_check_rule_sketches.py",
+    "/tmp/claude-1000/-home-reyerchu-vibe-ic/23c54645-4f61-44a5-940a-b1129f4992c6/scratchpad/jcap/verify/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py",
+    "/tmp/claude-1000/-home-reyerchu-vibe-ic/23c54645-4f61-44a5-940a-b1129f4992c6/scratchpad/jcap/verify/bucket_A_tools_phase1_engine_ingest_rule_sketches.py"
+  ],
+  "bucket_C_dir": "/tmp/claude-1000/-home-reyerchu-vibe-ic/23c54645-4f61-44a5-940a-b1129f4992c6/scratchpad/jcap/verify/bucket_C_backlogs",
+  "bucket_C_files": [
+    "ORGANIC-20260821-landing-verdict-not-auditable-from-the-repository.yaml"
+  ]
+}

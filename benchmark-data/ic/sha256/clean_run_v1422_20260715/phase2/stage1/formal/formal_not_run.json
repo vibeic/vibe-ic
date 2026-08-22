@@ -1,5 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "fallback_skill": "assertion-gen",
-  "reason": "no formal proof tool ran in this chain — reference-TB simulation results are NOT a proof and are never copied here (#433c/#440). AI invokes skill assertion-gen: author per-IC SVA from L3 constraints, write a real .sby, run SymbiYosys; only that run may write formal/results.json with all_proved."
-}
