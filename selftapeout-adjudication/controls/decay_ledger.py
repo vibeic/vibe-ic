@@ -73,7 +73,7 @@ row("external", "the placeability-bound branch on the remote", "4d1de0e2c",
 
 BR2 = "next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path"
 got2 = sh(f"git ls-remote --heads origin refs/heads/{BR2}", WT)
-row("external", "the report branch on the remote", "4a8d0cfa6",
+row("external", "the report branch on the remote", "79496abce",
     (got2.split()[0][:9] if got2 else "GONE"))
 
 # The pushed report is a SNAPSHOT.  This directory's copy keeps moving, so the two
