@@ -1,0 +1,9 @@
+{
+  "_comment": "Extractors of a constitutive concept carrying their own denial vocabulary, as they stand on the tree denial_that_constitutes_the_value_it_appears_to_negate.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Each closes by calling _prose_polarity.classify_denial(<concept>, span). Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/ip_catalog_query.py::_extension_excluded::exclusion",
+      "reason": "Its subject IS the exclusion, and it reads the denial as constitutive — which is the RIGHT answer. What it does not do is get that answer from the shared table: it carries a private grammar of 'no <ext>' / 'without <ext>' / 'excludes <ext>' / '<ext> not supported'. That is the class this rule is about, in its benign form: the classification is currently correct because somebody noticed, and the table exists so the next one is decided by lookup instead. Recorded rather than repaired — rewiring a live catalogue guard onto a new helper is a behaviour change and belongs to the lane that owns it."
+    }
+  ]
+}

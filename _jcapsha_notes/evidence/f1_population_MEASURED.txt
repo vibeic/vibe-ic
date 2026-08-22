@@ -1,0 +1,17 @@
+programs scanned                                    : 1232
+declare an upstream contract AND cite it by PATH    : 5
+
+  _pad_ring.py
+      librelane/scripts/openroad/pad.tcl
+      librelane/steps/openroad.py
+  die_finishing_gen.py
+      librelane/steps/klayout.py
+  digital_hardmacro_check.py
+      librelane/flows/chip.py
+      librelane/scripts/magic/lef.tcl
+  digital_hardmacro_gen.py
+      librelane/flows/chip.py
+      librelane/scripts/magic/lef.tcl
+  phase3_one_shot_runner.py
+      librelane/config.tcl
+      librelane/config/pdk_compat.py

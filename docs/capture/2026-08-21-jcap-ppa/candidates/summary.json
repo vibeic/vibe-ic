@@ -1,9 +1,9 @@
 {
-  "date": "2026-08-21",
+  "date": "2026-08-22",
   "totals": {
-    "A": 12,
+    "A": 41,
     "B": 0,
-    "C": 1,
+    "C": 2,
     "D": 0,
     "T": 1
   },
@@ -16,28 +16,57 @@
       "programs/ppa_search_run.py",
       "programs/enhancement_emit.py",
       "programs/backlog_sanitize_check.py",
-      "programs/gate_host_independence_check.py"
+      "programs/changelog_command_reproducibility_check.py",
+      "programs/lec_post_layout_check.py",
+      "programs/crosslayer_search_space.py",
+      "programs/_ppa/metrics.py",
+      "programs/flow_compliance_check.py",
+      "programs/_ppa/cli_exit.py",
+      "programs/tracked_json_yaml_parses_check.py",
+      "programs/_ppa/schema_validation.py",
+      "programs/ppa_problem_integrity_check.py",
+      "programs/phase3_one_shot_runner.py",
+      "programs/crosslayer_rewrite_equivalence.py",
+      "programs/_ppa/timing.py",
+      "programs/benchmark_run_manifest.py",
+      "programs/gen_program_inventory.py",
+      "programs/landing_merge_verdict.py"
     ],
     "bucket_T": [
       "OpenROAD"
     ]
   },
   "bucket_A_files": [
-    "ppa-capture/candidates/bucket_A_programs_ppa_feasibility_check_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_ppa_head_to_head_check_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_plugin_change_pytest_gate_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs__atomic_artefact_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_ppa_search_run_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_enhancement_emit_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_backlog_sanitize_check_rule_sketches.py",
-    "ppa-capture/candidates/bucket_A_programs_gate_host_independence_check_rule_sketches.py"
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_feasibility_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_head_to_head_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_plugin_change_pytest_gate_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__atomic_artefact_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_search_run_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_enhancement_emit_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_backlog_sanitize_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_changelog_command_reproducibility_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_lec_post_layout_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_search_space_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_metrics_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_flow_compliance_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_cli_exit_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_tracked_json_yaml_parses_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_schema_validation_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_problem_integrity_check_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_rewrite_equivalence_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_timing_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_benchmark_run_manifest_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_gen_program_inventory_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_landing_merge_verdict_rule_sketches.py"
   ],
-  "bucket_C_dir": "ppa-capture/candidates/bucket_C_backlogs",
+  "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
   "bucket_C_files": [
-    "ORGANIC-20260821-generated-header-derived-from-recorded-inputs.yaml"
+    "ORGANIC-20260822-generated-header-derived-from-recorded-inputs.yaml",
+    "ORGANIC-20260822-optional-dependency-version-matrix.yaml"
   ],
-  "bucket_T_dir": "ppa-capture/candidates/bucket_T_forked_tool",
+  "bucket_T_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_T_forked_tool",
   "bucket_T_files": [
-    "ORGANIC-20260821-postroute-repair-faults-after-route-completes.yaml"
+    "ORGANIC-20260822-postroute-repair-faults-after-route-completes.yaml"
   ]
 }

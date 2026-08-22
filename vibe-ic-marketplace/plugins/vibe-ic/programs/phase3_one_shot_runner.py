@@ -37643,6 +37643,19 @@ def _measured_subject_lines(subject: Dict[str, Any]) -> str:
     return "\n".join(out) + "\n"
 
 
+def _rel_to_project(path, project):
+    """`path` as the project sees it — resolved, never typed by the author.
+
+    A source-naming line must hold what the emitter READ. Falling back to the
+    absolute path when it lies outside the project keeps an unexpected location
+    VISIBLE instead of laundering it into a plausible relative one.
+    """
+    try:
+        return str(Path(path).relative_to(project))
+    except (ValueError, TypeError):
+        return str(path)
+
+
 def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                          container: str, antenna_rpt: Path,
                          notes: List[str]) -> bool:
@@ -37748,7 +37761,13 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "# check_antennas, until 0). This is\n"
                     "# the faithful measurement of the realized, antenna-repaired\n"
                     "# routing; a separate re-read cannot credit the jumpers\n"
-                    "# (ANT-0008). Source: phase3/stage3/pnr/openroad.log.\n"
+                    # RESOLVED, NOT TYPED. This sentence used to name a fixed
+                    # path while the subject block above it named the RESOLVED
+                    # log, so the artefact carried two source claims and the
+                    # typed one could never look wrong — correct-looking after
+                    # the read failed, after the layout moved, and when the
+                    # artefact was about another design entirely.
+                    f"# (ANT-0008). Source: {_rel_to_project(pnr_log, project)}.\n"
                     f"antenna check: {_count_str}\n"
                     f"antenna clean: {'YES' if clean else 'NO'}\n"
                     f"routing complete: {'NO' if routing_incomplete else 'YES'}\n"

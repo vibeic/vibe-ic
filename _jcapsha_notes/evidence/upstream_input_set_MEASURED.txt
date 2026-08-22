@@ -1,0 +1,27 @@
+Upstream PAD_* variable set vs ours. Both sides enumerated by the same rule:
+every PAD-prefixed uppercase token appearing in the file.
+
+upstream config module (pinned image, 2026-08-22):  20
+  PAD_BONDPAD_HEIGHT PAD_BONDPAD_NAME PAD_BONDPAD_OFFSETS PAD_BONDPAD_WIDTH
+  PAD_CDLS PAD_CORNER PAD_CORNER_SITE_NAME PAD_EDGE_SPACING PAD_FAKE_SITES
+  PAD_FILLERS PAD_GDS PAD_LEFS PAD_LIBS PAD_PLACE_IO_TERMINALS
+  PAD_ROTATION_CORNER PAD_ROTATION_HORIZONTAL PAD_ROTATION_VERTICAL
+  PAD_SITE_NAME PAD_SPICE_MODELS PAD_VERILOG_MODELS
+
+origin/main               names 11 of 20
+  unaccounted: PAD_BONDPAD_HEIGHT PAD_BONDPAD_WIDTH PAD_CDLS PAD_FAKE_SITES
+               PAD_GDS PAD_LEFS PAD_LIBS PAD_SPICE_MODELS PAD_VERILOG_MODELS
+
+origin/jpadsite/pad-site  names 12 of 20
+  unaccounted: PAD_BONDPAD_HEIGHT PAD_BONDPAD_WIDTH PAD_CDLS
+               PAD_GDS PAD_LEFS PAD_LIBS PAD_SPICE_MODELS PAD_VERILOG_MODELS
+
+The single name the fix adds is the declaration variable the refusal was about.
+The 8 that remain are the library-file and bondpad-geometry variables; they are
+outside this step, and they are in neither declared tuple, so nothing in the
+artefact records that they are outside it.
+
+The source report states this comparison as "13 of upstream's 14" under a
+narrower denominator (the pad step's own declarations only). Both denominators
+are defensible and they give different cardinals over the same finding, which
+is why the rule reports the unaccounted NAMES and never a count.

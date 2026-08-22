@@ -1,0 +1,14 @@
+module                             functions with a taintable chain
+_pad_ring.py                                                      5   ['parse_def', 'parse_lef_macros', 'parse_lef_sites', 'discover_io_lefs']
+die_finishing_gen.py                                              7   ['die_size', 'derive_tech', 'write_finished_def', 'die_id_state']
+digital_hardmacro_check.py                                        8   ['base_name', 'parse_lef', 'parse_liberty', 'parse_verilog']
+digital_hardmacro_gen.py                                          4   ['group_buses', 'write_lef_with_magic', 'run', 'main']
+phase3_one_shot_runner.py                                       198   ['_design_identity_fields', '_publish_artefact_mirror', '_emitted_script_root_tcl', '_tool_from_command']
+pad_ring_gen.py                                                   2   ['_place', 'main']
+
+total candidate sites across the population: 224
+
+Each of these is a place where SOMETHING flows through a transform into
+an aggregate. Only a reader who knows what upstream does can say which
+of them must NOT be transformed. That is the question the predicate
+cannot answer from this input.

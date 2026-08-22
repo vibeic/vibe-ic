@@ -1,0 +1,46 @@
+THE OPPOSITE SIDE IS A MIRROR IN THE TOOL AND A HALF TURN IN OURS.
+Visible at the DEFAULT -- no declaration required.
+
+MEASURED, both halves, at PAD_ROTATION_* all R0:
+
+  ours  (drive pad_ring_gen, read the orientation it RECORDS per side)
+        SOUTH = N     NORTH = S
+        DEF spelling; the module's own alias table reads R0 -> N, R180 -> S.
+        So ours derives NORTH as a 180-degree ROTATION of SOUTH.
+
+  tool  (separate process, evidence/rotation_two_arm_MEASURED.txt)
+        SOUTH = R0    NORTH = MX
+        MX is DEF `FS`. So the tool derives NORTH as a MIRROR of SOUTH.
+
+  N (R180) != FS (MX). A half turn and a mirror are different orientations.
+
+THE TOOL SAYS SO IN ITS OWN SOURCE, and it is not ambiguous:
+
+    const odb::dbOrientType south_rotation_ver = odb::dbOrientType::R0;
+    const odb::dbOrientType north_rotation_ver = south_rotation_ver.flipX();
+    odb::dbOrientType west_rotation_hor = odb::dbOrientType::MXR90;
+    const odb::dbOrientType east_rotation_hor = west_rotation_hor.flipY();
+
+  north = south.flipX()      east = west.flipY()      -- MIRRORS, both axes.
+
+OURS:
+    "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2)
+    "E": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_VERTICAL"], 2)
+  a half turn, both axes, and the helper's own docstring says so:
+  "One quarter turn CLOCKWISE."
+
+WHY IT MATTERS AND WHY NOTHING CAUGHT IT. For a rectangular footprint a half
+turn and a mirror occupy the SAME bounding box, so every geometric check in this
+step -- the fit sum, the spacing arithmetic, abutment, BTerm coverage -- agrees
+under both. What differs is where the cell's PINS end up: a mirrored pad and a
+rotated pad present their bond pad and their core-side signal on opposite edges.
+A ring built this way passes every check the step makes and hands the DEF reader
+a pad ring whose cells face the wrong way.
+
+SEVERITY RELATIVE TO THE REST OF THIS CAPTURE. Every other finding here needs
+somebody to DECLARE something before it becomes visible. This one is present at
+the default, with no pad configuration written at all, on both axes.
+
+NOT A NEW CLASS. It is the same one the other findings are: a re-implementation
+that drifted from the upstream whose behaviour it claims to reproduce -- on the
+input set, on the arithmetic, on the convention, and now on the transform.

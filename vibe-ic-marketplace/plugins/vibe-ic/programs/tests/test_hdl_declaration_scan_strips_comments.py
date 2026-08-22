@@ -117,6 +117,65 @@ def test_the_strip_is_followed_through_one_more_hop():
     assert G.scan_source(src, "m") == []
 
 
+# ── the binding form must not decide the answer ─────────────────────────────
+#
+# A value reaches a name three ways: assignment, a `for` target, and a
+# comprehension target. Only assignment propagated, so the commonest shape for
+# a declaration scan -- strip once, then walk the lines -- read as unstripped.
+# MEASURED: 7 sites across 6 regexes, 2 of them among the 5 the gate was
+# BLOCKING on, so a third of the blocking list was the analyser's own limit.
+#
+# Every clean case below is paired with the same code over RAW text. Without
+# that pair, a "fix" that simply stopped flagging would pass all of them.
+
+_FOR_OVER_STRIPPED = r"""
+import re
+_MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)")
+def detect(t):
+    code = _strip_hdl_comments(t)
+    for line in code.splitlines():
+        _MODULE_RE.findall(line)
+"""
+
+_FOR_OVER_RAW = _FOR_OVER_STRIPPED.replace("_strip_hdl_comments(t)", "t")
+
+
+def test_a_for_target_inherits_the_strip_of_its_iterable():
+    assert G.scan_source(_FOR_OVER_STRIPPED, "m") == []
+
+
+def test_and_a_for_target_over_RAW_text_is_still_flagged():
+    """The pair. This is what stops the fix above from being 'flag nothing'."""
+    assert G.scan_source(_FOR_OVER_RAW, "m") == ["m::detect::_MODULE_RE(line)"]
+
+
+def test_a_comprehension_target_inherits_it_too():
+    src = _FOR_OVER_STRIPPED.replace(
+        "    for line in code.splitlines():\n        _MODULE_RE.findall(line)",
+        "    return [_MODULE_RE.findall(l) for l in code.splitlines()]")
+    assert G.scan_source(src, "m") == []
+    assert G.scan_source(src.replace("_strip_hdl_comments(t)", "t"),
+                         "m") == ["m::detect::_MODULE_RE(l)"]
+
+
+def test_every_name_in_a_tuple_target_inherits_it():
+    src = _FOR_OVER_STRIPPED.replace(
+        "for line in code.splitlines():",
+        "for i, line in enumerate(code.splitlines()):")
+    assert G.scan_source(src, "m") == []
+
+
+def test_the_strip_survives_two_nested_loops():
+    """Transitivity must hold ACROSS the binding forms, not only within one."""
+    src = _FOR_OVER_STRIPPED.replace(
+        "    for line in code.splitlines():\n        _MODULE_RE.findall(line)",
+        "    for blk in code.split(';'):\n        for line in blk.splitlines():\n"
+        "            _MODULE_RE.findall(line)")
+    assert G.scan_source(src, "m") == []
+    assert G.scan_source(src.replace("_strip_hdl_comments(t)", "t"),
+                         "m") == ["m::detect::_MODULE_RE(line)"]
+
+
 # ── reading the pattern ─────────────────────────────────────────────────────
 
 def test_the_keyword_is_found_in_an_escaped_pattern():

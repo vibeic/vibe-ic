@@ -1,0 +1,41 @@
+{
+  "_comment": "Searches that decide a verdict inside a fixed-size slice, as they stand on the tree declaration_searched_only_inside_a_truncated_window.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Each closes by keeping the window for display and re-running the search over the full text, reporting a marker found outside the window as its own outcome. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/_signoff_drc_format.py::text::head::4096",
+      "reason": "A 4096-byte head window over a sign-off report, searched for a format marker. Same shape, same remedy: keep the window for display and re-search the full text on a miss."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/_signoff_drc_format.py::text::head::65536",
+      "reason": "REVEALED BY THE RULE, NOT INTRODUCED BY IT. `_signoff_drc_format.py:274` searches the router marker inside `text[:_HEAD_BYTES]`, 65536 bytes, and the bound is behind a NAME \u2014 so it was invisible to this rule for as long as the rule read literals only, on a file that ALREADY carried a row for its 4096-byte sibling four lines above. The site is byte-identical on origin/main a4caccefe, so it is pre-existing debt this batch EXPOSED and not debt this batch created. 65536 is generous and generous is still a bound doing a predicate's work: a report whose router marker sits past 64 KiB is attributed to the wrong producer, and the miss reads as the marker being absent. Same remedy as every row here: keep the window for display, re-search the full text on a miss, and report a marker found outside it as its own outcome with its byte offset."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/flow_gate_enforcement_audit.py::text::head::4000",
+      "reason": "THE INSTANCE THE CAPTURE MEASURED. `declared_intent` searches the ENFORCEMENT declaration inside `text[:4000]`, so a twelve-line intent block at byte 8249 was reported as 'declares no intent at all' \u2014 prose above the marker silently un-declares the gate. Control pair through this exact predicate: a byte-identical declaration returns 'blocking' at byte 26 and None at byte 5121. On this tree every declaration is inside the window, so the repair adds no finding today; it prevents the next one."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/hamming_synth.py::prompt::head::200",
+      "reason": "A 200-byte head of the prompt searched for a structural cue. The window is small enough that a cue stated in a second sentence is invisible, and the miss is read as the cue being absent."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_one_shot_runner.py::text::head::1200",
+      "reason": "Head windows of 1200 and 2000 bytes over ingested document text, searched for markers whose miss steers extraction. A document whose front matter grows past the bound changes verdict with no edit to the sentence that matters."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_one_shot_runner.py::text::head::2000",
+      "reason": "Head windows of 1200 and 2000 bytes over ingested document text, searched for markers whose miss steers extraction. A document whose front matter grows past the bound changes verdict with no edit to the sentence that matters."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::post_route_rpt.read_text(errors='replace')::head::400",
+      "reason": "A 400-byte head of a post-route report tested for a marker by `in`, and a 200000-byte head searched by a compiled pattern. The second is generous, but generous is still a bound doing the work of a predicate."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::p.read_text(errors='ignore')::head::200000",
+      "reason": "A 400-byte head of a post-route report tested for a marker by `in`, and a 200000-byte head searched by a compiled pattern. The second is generous, but generous is still a bound doing the work of a predicate."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/signoff_audit.py::txt::head::2000",
+      "reason": "Two 2000-byte head windows over sign-off text tested by `in` membership, deciding whether a required statement was made."
+    }
+  ]
+}

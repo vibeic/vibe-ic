@@ -1,0 +1,20 @@
+module                           upstream reads  unaccounted
+_pad_ring.py                                 13            2
+die_finishing_gen.py                         28           27
+digital_hardmacro_check.py                   11            6
+digital_hardmacro_gen.py                     11            8
+phase3_one_shot_runner.py                     0            0
+
+_pad_ring.py — 2 of 13 unaccounted:
+    DIE_AREA, SCRIPTS_DIR
+
+die_finishing_gen.py — 27 of 28 unaccounted:
+    KLAYOUT_ANTENNA_OPTIONS, KLAYOUT_ANTENNA_RUNSET, KLAYOUT_CONFLICT_RESOLUTION, KLAYOUT_DEF_LAYER_MAP, KLAYOUT_DENSITY_OPTIONS, KLAYOUT_DENSITY_RUNSET, KLAYOUT_DENSITY_THREADS, KLAYOUT_DRC_OPTIONS, KLAYOUT_DRC_RUNSET, KLAYOUT_DRC_THREADS, KLAYOUT_EDITOR_MODE, KLAYOUT_FILLER_OPTIONS, KLAYOUT_FILLER_SCRIPT, KLAYOUT_GUI_USE_GDS …
+
+digital_hardmacro_check.py — 6 of 11 unaccounted:
+    CURRENT_GDS, DESIGN_NAME, GND_PIN, SCRIPTS_DIR, STEP_DIR, VDD_PIN
+
+digital_hardmacro_gen.py — 8 of 11 unaccounted:
+    CURRENT_GDS, DESIGN_NAME, GND_NETS, GND_PIN, SCRIPTS_DIR, STEP_DIR, VDD_NETS, VDD_PIN
+
+POPULATION 5 modules; upstream reads 63; unaccounted 43; modules that would FIRE: 4/5

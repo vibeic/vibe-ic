@@ -1,0 +1,86 @@
+type: floor-defect
+severity: P2
+component: 'ppa-crosslayer :: records/trials/*/candidates.json'
+
+title: >-
+  The published cross-layer campaign's candidate documents declare no
+  design-for-ECO stance, so its winners were never adjudicated on ECO readiness.
+  The arm that KEPT all ten spare cells and the arm that DELETED all ten are
+  indistinguishable in the shipped gate's output.
+
+pattern: |
+  `_ppa/feasibility.py` grew an `eco_readiness` axis specifically because this
+  campaign's published place-and-route winner bought roughly a third of its area
+  margin by deleting the design's entire spare/ECO population.
+
+  The axis works. It is inert on this campaign, because the axis is DECLARED,
+  never assumed, and none of the 21 candidate documents declares anything:
+
+    - no `eco_readiness` requirement
+    - no `delivery_path` (so the route cannot decide what silence means)
+    - `required_views_by_axis` enumerates NINE axes by name and the tenth is
+      absent from every copy -- these policies were written before the axis
+      existed and nothing added it when the table grew
+
+  Consequence: the shipped `ppa_feasibility_check.py`, run over the campaign's
+  own committed records, reports `eco_readiness: NOT_APPLICABLE` for every arm.
+  z23 (10 spares kept) and p04 (all 10 deleted, and the arm the campaign
+  published as its winner) produce the SAME axis status and the SAME candidate
+  verdict. Nothing in that output separates them.
+
+  This is not a defect in the axis. It is that the published numbers were
+  produced by a run which made no ECO-readiness finding, and nothing in the
+  published record says so.
+
+evidence: |
+  Measured on a758f4adc, clean tree, PYTHONDONTWRITEBYTECODE=1:
+
+    ppa_feasibility_check.py --candidates ppa-crosslayer/records/trials/z23/candidates.json
+      -> z23: UNDETERMINED  [eco_readiness NOT_APPLICABLE]   spare_cells.json count 10
+    ppa_feasibility_check.py --candidates ppa-crosslayer/records/trials/p04/candidates.json
+      -> p04: UNDETERMINED  [eco_readiness NOT_APPLICABLE]   spare_cells.json count 0
+
+    over all 21 candidate sets: eco_readiness NOT_APPLICABLE, 21 of 21
+    declaring eco_readiness: 0 of 21;  stating delivery_path: 0 of 21
+
+  (Both read UNDETERMINED overall for the unrelated reason named in
+  ppa-gate-audit/RESULT.md -- `em` and `equivalence` carry no measurement in
+  these sets. The ECO axis status is the subject here.)
+
+  With the requirement declared, the same records separate cleanly:
+    z23 FEASIBLE / p08 FEASIBLE / p04 INFEASIBLE / z21 INFEASIBLE.
+
+repro: |
+  for t in z23 p04; do
+    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_feasibility_check.py \
+      --candidates ppa-crosslayer/records/trials/$t/candidates.json | grep "$t:"
+    python3 -c "import json;print('  spares:', json.load(open('ppa-crosslayer/records/trials/$t/spare_cells.json'))['count'])"
+  done
+
+suggested_fix: |
+  Two independent halves; the second is the one that matters for published
+  numbers.
+
+  1. MECHANISM -- addressed on branch jeco2/eco-axis-bite-audit: `ppa_search_run`
+     gained `--project` (the other two PPA CLIs already had it), so a campaign can
+     resolve its delivery path; and `audit_manifest` now refuses a manifest that
+     publishes ELIGIBLE candidates on an undeclared ECO stance, so a run that
+     cannot see can no longer publish an unrefused claim.
+
+  2. THE RECORDS -- not addressed anywhere. The campaign's candidate documents
+     should declare an `eco_readiness` requirement (or a `delivery_path`), and the
+     published summary should state which arms were adjudicated on ECO readiness
+     and which were not. Re-running the place-and-route is NOT required: the
+     records already carry the spare counts, so re-adjudicating with a declaration
+     is enough to say which published winner would not have been promotable.
+
+  Deliberately not done here: authoring a declaration into somebody else's
+  published campaign records is a statement about that design's requirements, and
+  it is theirs to make.
+
+session_context: >-
+  Found by jeco2 auditing whether the design-for-ECO axis actually bites
+  (branch jeco2/eco-axis-bite-audit, 19 commits, 58 tests). Related:
+  ORGANIC-20260822-ppa-promotion-feasibility-declares-nine-axes, which is the
+  same silence one level up -- the hygiene gate over these candidate sets
+  explains its result in terms of nine axes while the table has ten.

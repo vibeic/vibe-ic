@@ -1,0 +1,53 @@
+F1 TOOK THREE FORMULATIONS. The first two were swept and dropped. Recorded in
+order, because the two that failed are the reason the third is shaped as it is.
+
+FORMULATION 1 -- "pin the INPUT SET of a re-implementation against upstream",
+    caught by a set difference.
+    REFUTED. Population 5 of 1232. Natural scoping: 43 unaccounted, fires 4/5.
+    Narrowed by upstream's own pdk=True flag: 19, fires 3/5, and the control on
+    the pre-fix tree returns [] -- it does not catch the defect it was written
+    for. Third scoping, the upstream step's own config_vars introspected from
+    the running library: the variable is not in the list either.
+    Structural reason: the dropped variable is declared in the PDK variable
+    table and consumed in a shared helper, attached to no step.
+    Full detail: f1_input_set_pin_REFUTED.txt
+
+FORMULATION 2 -- "a refusal on absence must have READ EVERY VIEW the
+    distribution ships".
+    DROPPED, and I dropped it after adopting it, which is the mistake worth
+    recording. It fires on the defect, and its two arms looked clean on the
+    fixture -- but it was never swept. Sweeping it: population 14, of which 10
+    refuse after a lookup into a distribution view, and EIGHT OF THE TEN read
+    exactly ONE view. A rule that fires on 8 of 10 correct programs is the same
+    bug as formulation 1, arrived at from the other side.
+    Measured: f1_formulation2_sweep_MEASURED.txt,
+              f1_formulation2_inscope_MEASURED.txt
+
+FORMULATION 3 -- "a refusal that a declared name is ABSENT must be FALSIFIED
+    against the views that were not read".
+    It fires only when the refused NAME is actually FINDABLE in a view the step
+    did not open. That is a grep over directories that exist, for a string the
+    step itself chose, so there is no judgement in it -- and it CANNOT fire on
+    a step that read one view and was right, because the name is not there.
+
+    MEASURED, both arms, with the negative control that formulation 2 never had
+    (`f1_final_probe.py`):
+
+      PDK declares the name in the other view   refused 'io_site'
+                                                unread ['libs.tech']
+                                                findable in libs.tech/.../config.tcl
+                                                -> FIRES
+
+      PDK declares it NOWHERE (the control)     refused 'io_site'
+                                                unread []
+                                                findable none
+                                                -> silent
+
+    The second arm is the one that matters: a genuine NOT_FOUND stays a genuine
+    NOT_FOUND. The rule refuses the REFUSAL, never the design.
+
+WHAT THE SEQUENCE COSTS, STATED. Three formulations, two of them published in
+this branch before being swept. The lesson is not about pads and not about
+views: A RULE IS NOT A RULE UNTIL IT HAS BEEN RUN OVER ITS OWN POPULATION.
+Both failures were invisible from the one case that motivated them, and both
+took one sweep to expose.

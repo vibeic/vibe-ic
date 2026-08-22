@@ -83,6 +83,14 @@
       "bucket_A_program": "programs/rtl_hygiene_lint.py",
       "bucket_B_skill_file": "skills/rtl-review/SKILL.md"
     },
+    "phase2.pad_budget": {
+      "description": "Phase 2 step 2: can the declared interface be bonded out on a purchased slot at all (pad-budget arithmetic, fold candidates)",
+      "bucket_A_program": "programs/slot_pad_budget_check.py",
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
     "phase2.synth_netlist_check": {
       "bucket_A_program": "programs/synth_netlist_check.py",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
@@ -99,6 +107,11 @@
     "phase2.final_audit": {
       "bucket_A_program": "programs/flow_compliance_check.py",
       "bucket_B_skill_file": "skills/checkpoint-gate/SKILL.md"
+    },
+    "phase3.pad_ring": {
+      "description": "Step 15.5ic pad-ring placement: the DECLARED pad ring is placed by upstream's own algorithm, or the config variables it went without are named. Its producer and its gate are pad_ring_gen.py / pad_ring_check.py, which is why this step does NOT route to phase3_one_shot_runner.py like its floorplan neighbour.",
+      "bucket_A_program": "programs/pad_ring_gen.py",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "phase3.floorplan": {
       "description": "Floorplan / die-area / core-utilization / macro placement setup ahead of PnR.",
@@ -234,6 +247,78 @@
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
+    },
+    "repo.doc_command_reproducibility": {
+      "bucket_A_program": "programs/changelog_command_reproducibility_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "phase3.lec_post_layout": {
+      "bucket_A_program": "programs/lec_post_layout_check.py",
+      "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
+    },
+    "ppa.search_space": {
+      "bucket_A_program": "programs/crosslayer_search_space.py",
+      "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
+    },
+    "ppa.record_provenance": {
+      "bucket_A_program": "programs/_ppa/metrics.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "ppa.cli_contract": {
+      "bucket_A_program": "programs/_ppa/cli_exit.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "repo.tracked_artefact_hygiene": {
+      "bucket_A_program": "programs/tracked_json_yaml_parses_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "ppa.schema_coverage": {
+      "bucket_A_program": "programs/_ppa/schema_validation.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "ppa.problem_identity": {
+      "bucket_A_program": "programs/ppa_problem_integrity_check.py",
+      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
+    },
+    "phase3.reference_flow_ingest": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "phase2.rewrite_equivalence": {
+      "bucket_A_program": "programs/crosslayer_rewrite_equivalence.py",
+      "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
+    },
+    "repo.pr_scope": {
+      "description": "Merge gate: which of the twenty Appendix-C review questions a change-set makes applicable, and whether each is backed by evidence a machine can re-verify",
+      "bucket_A_program": "programs/ppa_pr_scope_check.py",
+      "bucket_A_related": [
+        "programs/gatekeeper_review.py"
+      ],
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
+    "ppa.timing_scope": {
+      "bucket_A_program": "programs/_ppa/timing.py",
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
+    "benchmark.aggregate_verdict": {
+      "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
+      "bucket_A_program": "programs/benchmark_run_manifest.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.artefact_write_ownership": {
+      "description": "Wiring a gate's output path against the artefact paths producers already write",
+      "bucket_A_program": "programs/flow_compliance_check.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.generated_manifest": {
+      "description": "Regenerating a tracked manifest whose subject is the tracked file set",
+      "bucket_A_program": "programs/gen_program_inventory.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.enforcement_point": {
+      "description": "Proving that a named client-side enforcement point is installed and current",
+      "bucket_A_program": "programs/landing_merge_verdict.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {

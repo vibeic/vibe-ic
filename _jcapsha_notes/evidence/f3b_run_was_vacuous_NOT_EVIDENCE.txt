@@ -1,0 +1,31 @@
+A RUN THAT EXAMINED NOTHING CANNOT CONFIRM WHAT I WANTED IT TO CONFIRM.
+
+Having written "a finding is not a finding until the thing it describes has been
+RUN", I applied it to my own F3b claim -- "0 of 4 instances carry the
+non-honouring as a machine-readable record" -- which was a GREP result, the exact
+shape that had just failed me on F3c.
+
+So I ran one of the four:
+
+    rc 0
+    VACUOUS_PASS: no analog_block_list.json under <empty dir> -- nothing was
+    examined; this is not a finding that the design is digital-only
+
+    mentions of the construct it documents as un-honoured, in its output: 0
+
+AND THAT ZERO IS WORTH NOTHING. The program examined no blocks, so it had no
+occasion to disclose anything about them. A vacuous run's silence is not evidence
+of silence on a real run -- it is the absence of a run. Counting it would be the
+wrong-shaped verification: it would let me retire the question with the
+authority of having "checked", which is worse than leaving the question open,
+because nobody re-opens a box marked checked.
+
+(The program's own VACUOUS_PASS line is, separately, exactly the disclosure
+behaviour this repo's denominator rule asks for. It said plainly that it
+examined nothing. That is why I could tell.)
+
+STATUS OF THE F3b SUB-CLAIM: the "0 of 4" is a SOURCE-level result and is
+labelled as one. Confirming it at RUNTIME needs a real project fixture per
+instance -- an analog block list with a hardmacro for this one -- which this
+capture does not build. Left open and named, rather than closed on a vacuous
+run.

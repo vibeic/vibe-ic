@@ -241,10 +241,41 @@ def test_the_base_record_is_cached_beside_the_base_log():
 
 
 def test_the_land_script_still_honours_the_variable():
-    """The record this all rests on is produced by `gatekeeper-land.sh`."""
+    """The record this all rests on is produced by `gatekeeper-land.sh`.
+
+    This asserted the literal `--summary-json "$GATEKEEPER_HYGIENE_REPORT"`
+    until 2026-08-22, when the record became UNCONDITIONAL: the caller's path is
+    still used when the variable names one, and a lander-owned path is used when
+    it does not, because `full:gatekeeper-review` adjudicates that record and
+    with no record it can only report "skipped — 0 gate state(s) examined".
+    The literal is therefore no longer the shape; the PROPERTY is, and the
+    property is strictly stronger than the one this test began with — so it is
+    asserted in three parts rather than relaxed to a substring.
+    """
     src = _LAND.read_text(encoding="utf-8")
     assert "GATEKEEPER_HYGIENE_REPORT" in src
-    assert '--summary-json "$GATEKEEPER_HYGIENE_REPORT"' in src
+
+    # (1) the caller's variable is what the record path defaults FROM, so a
+    #     caller that names a path still gets its record at that path.
+    holder = re.search(
+        r'(\w+)="\$\{GATEKEEPER_HYGIENE_REPORT:-([^}]*)\}"', src)
+    assert holder, ("the land script no longer resolves "
+                    "GATEKEEPER_HYGIENE_REPORT into a record path")
+    var, fallback = holder.group(1), holder.group(2)
+
+    # (2) that resolved value — and nothing else — is what `--summary-json`
+    #     receives, so the two cannot drift apart.
+    assert f'--summary-json "${var}"' in src, (
+        f"the hygiene record is no longer written to ${var}, which is what "
+        f"GATEKEEPER_HYGIENE_REPORT resolves into")
+
+    # (3) and the fallback is non-empty, which is the new guarantee: with the
+    #     variable UNSET a record is still produced. An empty fallback would
+    #     restore the old behaviour silently and leave the deadline unadjudicated.
+    assert fallback.strip(), (
+        "the fallback record path is empty, so an unset "
+        "GATEKEEPER_HYGIENE_REPORT produces no record and the landing review "
+        "cannot adjudicate the acknowledgement ledger")
 
 
 def test_the_judge_and_its_helper_both_count_as_the_gate_being_edited():

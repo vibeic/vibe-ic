@@ -1,0 +1,58 @@
+THE F1 BUCKET-A RULE AS FIRST WRITTEN IS REFUTED. Measured, three scopings.
+
+The rule proposed: "a re-implementation must account for every input its
+upstream declares", caught by a set difference. It fails, and it fails in both
+directions at once -- it over-fires on the corpus AND it is blind to the defect
+it was written for.
+
+POPULATION. Programs that declare an upstream contract AND cite it by path:
+5 of 1232.
+    _pad_ring.py  die_finishing_gen.py  digital_hardmacro_check.py
+    digital_hardmacro_gen.py  phase3_one_shot_runner.py
+
+SCOPING 1 -- upstream variables read by the CITED files.
+    upstream reads 63, unaccounted 43, modules that FIRE 4/5.
+    The 43 are dominated by harness plumbing (SCRIPTS_DIR, STEP_DIR,
+    DESIGN_NAME, CURRENT_GDS) and by one step's entire option surface
+    (27 KLAYOUT_* in die_finishing_gen). That is a bug, not a guard.
+
+SCOPING 2 -- narrowed to variables upstream itself marks pdk=True
+    (145 of its 406 -- the narrowing comes from upstream's own declaration,
+    not from picking the names that look important).
+    unaccounted 19, modules that FIRE 3/5.
+    CONTROL, and this is the line that ends it:
+        the same predicate on the PRE-FIX pad module reports unaccounted = []
+    It does not catch PAD_FAKE_SITES.
+
+SCOPING 3 -- the upstream STEP's own declared inputs, introspected from the
+    running library: PadRing.config_vars = 20 (5 own: PAD_CFG, PAD_EAST,
+    PAD_NORTH, PAD_SOUTH, PAD_WEST; 15 inherited).
+        "PAD_FAKE_SITES" in PadRing.config_vars  ->  False
+
+WHY NO SCOPING CONTAINS IT. The variable is declared in upstream's PDK variable
+table and consumed in a COMMON helper sourced by many steps, not in the pad
+step's own scripts and not in its config_vars. Upstream's own model does not
+attach it to the step at all: it is a fact about the DISTRIBUTION that any step
+touching pads inherits implicitly. A set difference over "this step's declared
+inputs" therefore cannot see it under any reading of that phrase.
+
+WHAT SURVIVES -- and it is a strengthening of F1's original statement, not a
+retreat from it. Not "say which views you read" (measured earlier: the pre-fix
+refusal already said that). Instead:
+
+    A REFUSAL ON ABSENCE MUST HAVE READ EVERY VIEW THE DISTRIBUTION SHIPS
+    FOR THAT CLASS OF THING.
+
+A distribution's view directories are a fixed, small, ON-DISK set, and the step
+already records in its artefact exactly which files it opened. So the check is
+a set difference over directories that exist, with no judgement in it, and it
+only asks the question when the verdict is a refusal on absence -- a passing
+run can never trip it.
+
+MEASURED, both arms (`f1_view_coverage_probe.py`):
+    PRE-FIX   verdict FAIL, refuses on absence True,
+              ships ['libs.ref','libs.tech'], read ['libs.ref'],
+              UNREAD ['libs.tech']          -> PREDICATE FIRES
+    POST-FIX  verdict PASS, refuses on absence False,
+              ships ['libs.ref','libs.tech'], read ['libs.ref','libs.tech'],
+              UNREAD []                     -> silent

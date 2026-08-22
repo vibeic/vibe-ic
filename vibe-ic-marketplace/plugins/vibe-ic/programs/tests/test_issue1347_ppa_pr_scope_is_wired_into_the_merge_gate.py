@@ -27,6 +27,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import gatekeeper_review as G  # noqa: E402
+import _hostpaths  # noqa: E402
 
 
 def _repo_with_a_surface() -> tuple[Path, str]:
@@ -63,6 +64,14 @@ def _answers(d: Path, doc: dict) -> None:
     (d / ".github").mkdir(exist_ok=True)
     (d / G._PPA_ANSWERS_REL).write_text(json.dumps(doc))
 
+
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
 
 # --------------------------------------------------------------------------- #
 # the verdict is actually consulted
@@ -212,7 +221,6 @@ def test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES():
 # Documenting it creates the classic second list. This pins the two together.
 
 def _pr_template() -> Path:
-    import _hostpaths
     return _hostpaths.require_repo(".github", "PULL_REQUEST_TEMPLATE.md")
 
 
@@ -250,14 +258,11 @@ def test_the_documented_schema_string_is_the_one_the_checker_accepts():
 # NOT the flow, because a change-set is not a design.
 
 def _wiring_audit_report() -> dict:
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="cewppa_")) / "cew.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "checker_execution_wiring_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=600)
-    return json.loads(out.read_text())
+    """In-process: as a spawned child this scan takes ~23s against a 60s
+    harness ceiling, and that headroom measurably failed under load."""
+    import checker_execution_wiring_audit as C
+    plugin = PROG.parent
+    return C.audit(plugin, plugin.parents[2])
 
 
 def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
@@ -301,7 +306,7 @@ def test_the_checker_really_exits_3_on_a_bad_invocation():
     apart."""
     import subprocess as _s
     r = _s.run([sys.executable, str(PROG / "ppa_pr_scope_check.py"),
-                "--not-a-real-flag"], capture_output=True, text=True, timeout=120)
+                "--not-a-real-flag"], capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
     assert r.returncode == 3, (
         f"expected rc 3 (bad invocation), got {r.returncode}")
 
@@ -350,13 +355,33 @@ def test_the_four_exit_codes_map_to_four_distinct_gate_readings(monkeypatch):
 # unanchored pattern read each of those as a declaration.
 
 def test_the_checker_declares_its_enforcement_intent_on_its_own_line():
-    import re
-    doc = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
-    m = re.search(r"^ENFORCEMENT:\s*(blocking|advisory)\s*$", doc, re.M)
-    assert m, ("ppa_pr_scope_check declares no ENFORCEMENT intent. Silence is "
-               "not neutral: an unstated default of advisory is how 62 of 72 "
-               "gates ended up unable to stop anything.")
-    assert m.group(1) == "blocking"
+    """Asked through the AUDIT'S OWN READER, not a regex re-typed here.
+
+    The first version of this test re-implemented the pattern, and a test that
+    re-implements the rule it checks cannot see the rule's real limits. One of
+    those limits is a 4000-byte window (`declared_intent` searches only
+    `text[:4000]`), which a re-typed regex does not have — so prose added above
+    the line would un-declare the gate while this test stayed green. That
+    exact failure happened to the sibling gate on this branch.
+    """
+    import flow_gate_enforcement_audit as A
+    assert A.declared_intent(PROG, "ppa_pr_scope_check") == "blocking", (
+        "the audit's own reader does not see this gate's declaration. Silence "
+        "is not neutral: an unstated default of advisory is how 62 of 72 gates "
+        "ended up unable to stop anything.")
+
+
+def test_the_declaration_stays_inside_the_readers_window():
+    """The bound is invisible from inside the docstring, so it needs a test
+    that names it. Measured on the sibling gate: two paragraphs of prose moved
+    the line to byte 4371 and the gate silently went UNDECLARED."""
+    import flow_gate_enforcement_audit as A
+    src = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
+    idx = src.find("ENFORCEMENT:")
+    assert 0 <= idx < A.DECL_WINDOW_BYTES, (
+        f"the ENFORCEMENT declaration sits at byte {idx}; `declared_intent` "
+        f"reads only the first {A.DECL_WINDOW_BYTES}. Present and unread "
+        f"reports as UNDECLARED — move it above the prose.")
 
 
 def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
@@ -403,3 +428,123 @@ def test_it_writes_no_verdict_FAIL_json_anywhere_under_reports():
         v = _j.loads(p.read_text()).get("verdict")
         assert v not in ("FAIL", "MISSING"), f"{p} declares verdict={v}"
     assert not list(repo.glob("ppa_pr_scope.json"))
+
+
+# --------------------------------------------------------------------------- #
+# this branch's own answers document must not go stale silently
+# --------------------------------------------------------------------------- #
+# Committing `.github/ppa_pr_answers.json` moved THIS branch into the gate's
+# blocking arm. That buys enforcement and costs upkeep: the document names a
+# sha256 of the flow definition and a set of test IDs, and any of them can be
+# invalidated by an ordinary later commit — edit the flow, rename a test, move
+# a file.
+#
+# Without this test the staleness surfaces only at the MERGE GATE, i.e. to the
+# lander, long after the commit that caused it. That is the #306 shape one more
+# time: a check that describes a change already made instead of refusing it at
+# the point it is made. The author should learn it from their own test run.
+#
+# Asked through `verify_evidence` — the checker's OWN verifier — rather than by
+# re-deriving what "valid evidence" means. Measured: it resolves the test NAME,
+# not merely the file, so a renamed test reports UNVERIFIED.
+
+def test_this_branchs_own_answers_document_is_still_valid():
+    import ppa_pr_scope_check as P
+    doc = _hostpaths.require_repo(".github", "ppa_pr_answers.json")
+    repo = _hostpaths.repo_path(".")
+    answers = json.loads(doc.read_text(encoding="utf-8"))
+    assert answers.get("schema") == "vibeic.ppa.pr_answers.v1"
+
+    stale = []
+    checked = 0
+    for a in answers["answers"]:
+        for e in a.get("evidence", []):
+            rec = P.verify_evidence(repo, e)
+            checked += 1
+            if rec["status"] != "VERIFIED":
+                stale.append(f"Q{a['question']} {e.get('kind')} "
+                             f"{e.get('ref')} -> {rec['status']}: "
+                             f"{rec.get('reason', '')}")
+    assert checked, "the answers document carries no evidence at all"
+    assert not stale, (
+        "this branch answers its own merge gate, and that answer has gone "
+        "stale — the gate will refuse the landing:\n  " + "\n  ".join(stale))
+
+
+def test_every_answered_question_carries_at_least_one_entry():
+    """An answer with an empty `evidence` list satisfies nothing; the checker
+    reports MISSING_EVIDENCE for it. Catching that here means the author sees
+    an empty answer they meant to fill in, not the lander."""
+    doc = _hostpaths.require_repo(".github", "ppa_pr_answers.json")
+    answers = json.loads(doc.read_text(encoding="utf-8"))
+    empty = [a["question"] for a in answers["answers"] if not a.get("evidence")]
+    assert not empty, f"questions answered with no evidence: {empty}"
+
+
+def test_the_reader_actually_honours_the_named_window():
+    """`DECL_WINDOW_BYTES` has to be the number `declared_intent` USES, not a
+    constant sitting beside a hardcoded one.
+
+    The two guards on this branch import it and assert an offset against it.
+    That pins THEM to the constant — it does not pin the READER to it. If
+    someone inlined `text[:4000]` back into `declared_intent` while leaving the
+    constant defined, both guards would keep passing over a window that no
+    longer existed, and the gate they protect could go silently UNDECLARED
+    again. This is the third time on this branch that a number kept in two
+    places has been the defect; this asserts there is only one.
+
+    Behavioural, not textual: a synthetic gate whose declaration sits at byte
+    11 must be READ at the shipped window and NOT read when the window is
+    narrowed below it."""
+    import flow_gate_enforcement_audit as A
+    probe = Path(tempfile.mkdtemp(prefix="declwin_")) / "probe_check.py"
+    probe.write_text('"""probe.\n\nENFORCEMENT: blocking\n'
+                     '=====================\n"""\n' + "# pad\n" * 50)
+    assert probe.read_text().find("ENFORCEMENT:") < 20
+
+    original = A.DECL_WINDOW_BYTES
+    try:
+        assert A.declared_intent(probe.parent, "probe_check") == "blocking"
+        A.DECL_WINDOW_BYTES = 10          # narrower than the declaration's offset
+        assert A.declared_intent(probe.parent, "probe_check") is None, (
+            "`declared_intent` ignored DECL_WINDOW_BYTES — the window is "
+            "hardcoded somewhere and the constant is decorative, so every "
+            "guard that imports it is measuring the wrong thing")
+    finally:
+        A.DECL_WINDOW_BYTES = original
+    # and the restore really restored it, or later tests inherit a broken audit
+    assert A.declared_intent(probe.parent, "probe_check") == "blocking"
+
+
+def test_the_merge_gates_composed_programs_list_is_complete():
+    """`gatekeeper_review`'s docstring says it AGGREGATES existing programs and
+    then lists them: "The existing programs it COMPOSES (import or subprocess —
+    never re-implemented)". A list that claims that and omits entries is a
+    catalogue a reader cannot trust — and the merge gate is exactly where
+    someone goes to learn what a landing is checked against.
+
+    MEASURED on origin/main before this branch touched it: FOUR programs were
+    spawned by a gate and absent from the list. Wiring this branch's checker in
+    made it five. Adding only my own entry would have documented mine and left
+    four untrue lines standing.
+
+    Derived from the source both ways rather than from a hand-kept list: the
+    spawned set comes from `_PROGRAMS_DIR / "<name>.py"` inside each `*_gate`
+    function, the listed set from the docstring's bullets."""
+    import ast
+    import re
+    src = (PROG / "gatekeeper_review.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    spawned = set()
+    for fn in [n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name.endswith("_gate")]:
+        body = ast.get_source_segment(src, fn) or ""
+        spawned |= {m.group(1) for m in
+                    re.finditer(r'_PROGRAMS_DIR / "([a-z0-9_]+\.py)"', body)}
+    assert spawned, "no gate spawns a program — the extractor is broken"
+    listed = {m.group(1) for m in
+              re.finditer(r'\*\s+([a-z0-9_]+\.py)', ast.get_docstring(tree) or "")}
+    missing = sorted(spawned - listed)
+    assert not missing, (
+        "these programs are spawned by a gate and absent from the docstring's "
+        "list of what it composes:\n  " + "\n  ".join(missing))

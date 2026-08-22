@@ -48,16 +48,16 @@
     "step": "phase3.sta",
     "design": "n/a — one place-and-route run of one digital block",
     "bucket": "A",
-    "rule_name": "emitted_script_paths_are_project_relative",
+    "rule_name": "emitted_script_portability_check",
     "docstring": "A path an emitter writes into a generated analysis script must be relative to the project root or to a declared tool root. An absolute run-directory path makes two runs of one configuration hash differently, so any identity taken over that script identifies where the run happened instead of what was configured, and the two runs can never be compared as the same measurement.",
     "pattern": "A generator writes the absolute path of the directory a run happened in into the script that defines the measurement, so the artefact that ought to be the stable identity of a configuration becomes unique per run and every identity check over it either refuses or is dropped.",
     "expected_signal": "ERROR",
     "fix_action": "Write every path in a generated analysis script relative to the project root or to a declared tool root, and fail the emit when an absolute path outside those roots is written. Extend the existing absolute-path rule from shipped source and from analog decks to the population of generated analysis scripts; do not solve it by dropping the script from the identity.",
     "measured_before": "The emitted power analysis script linked the netlist by an absolute path under the run's own trial directory, so the run identity check refused it and the lane excluded the script from the identity and said so.",
-    "measured_after": "Not fixed; the exclusion is a disclosure, not a repair.",
+    "measured_after": "Found ALREADY IMPLEMENTED at distillation time, not newly written. emitted_script_portability_check.py enforces exactly this rule over exactly this population — the analysis decks the flow emits into the run tree — and its own docstring carries the measurement: 26 of 34 emitted scripts on one real run tree carried an absolute path pointing back into the run directory they were written for. It is landed, tested by test_emitted_script_portability_check.py, and takes the run root as its argument.",
     "fires_on_original": "Yes — the absolute run path is in the emitted script.",
     "fires_on_a_different_instance": "Yes — the rule is about the shape of a written path, not about this script.",
-    "notes": "ALREADY-PROGRAM for two other populations: one gate refuses a personal or absolute home path in shipped plugin source, and another refuses a non-standard absolute include path in an analog deck. Neither covers a generated digital analysis script, which is the population that defeated the identity here."
+    "notes": "RUNG 1 — ALREADY IMPLEMENTED; the enforcing program is emitted_script_portability_check.py. This record's earlier note claimed the two known absolute-path gates covered only shipped source and analog decks and that a generated digital analysis script was uncovered. That claim was WRONG: a third program owns this population. It also draws a SHARPER line than the rule as stated here — a finding is an absolute path INSIDE the run root, which is what this run produced and must reach relatively, while a path OUTSIDE it names the environment (the process kit, the tool install) and must NOT be relativised, because rewriting that would break the script rather than port it. A near-duplicate was drafted and swept during distillation before the existing program was found, and was DELETED rather than landed beside it."
   },
   {
     "step": "phase3.sta",
@@ -123,7 +123,7 @@
     "step": "benchmark.verify_claim_done",
     "design": "n/a — a repository gate tier",
     "bucket": "A",
-    "rule_name": "test_aggregate_carries_its_runtime_identity",
+    "rule_name": "pytest_aggregate_carries_its_runtime_identity",
     "docstring": "An aggregate of test results records the tree it measured but not the runtime it ran in, so a failure caused by a dependency the runtime cannot import is charged to the tree. Two aggregates produced by different runtimes are then differenced as if they were one measurement, and the difference is read as a change in the code.",
     "pattern": "A selection asks the runtime to load a plugin the runtime does not carry, every test in those files dies at load rather than at assertion, and the resulting failures are counted against the revision under test because nothing in the record names the runtime that produced them.",
     "expected_signal": "ERROR",
@@ -132,7 +132,7 @@
     "measured_after": "Not fixed; the attribution exists only in that lane's write-up.",
     "fires_on_original": "Yes — the aggregate carried no runtime identity, which is what made the five arms necessary.",
     "fires_on_a_different_instance": "Yes — any dependency the runtime lacks, and any comparison of two arms run in different places.",
-    "notes": "ALREADY-PROGRAM for the flow's own container: a program records and can enforce which image a run actually executed, for exactly this reason. The test aggregate is the population it does not cover."
+    "notes": "ALREADY-PROGRAM for the flow's own container: a program records and can enforce which image a run actually executed, for exactly this reason. The test aggregate is the population it does not cover. RENAMED at distillation: the FILE may not begin with `test_` — pytest collects such a program as a test module, and it was also skipped by this rule's own sibling gates, which exclude `test_*` from their populations, so the checker was invisible to the family it belongs to. The rule's subject is still a test aggregate; only the filename changed."
   },
   {
     "step": "benchmark.verify_claim_done",
@@ -189,10 +189,10 @@
     "expected_signal": "ERROR",
     "fix_action": "For every value a generator can either read or default, emit a disclosure line beside it stating which happened; for a read value name the input file and line it came from and the key that matched. A design that declares nothing keeps the historical default byte-for-byte and its disclosure says exactly that, and two input rows that match with different values are refused rather than resolved by list order.",
     "measured_before": "A design stated its clock period in a table keyed by standard-cell library and its input delay as a percentage of that period. Neither was read: the run signed off at the generator's defaults, a period of 20 against a declared 24 — a 20 per cent over-constraint — and a fixed input delay of 2 against a declared 4.8, an under-constraint of 2.8 in the opposite direction. Both are the same class: a declared RELATIONSHIP read as if it were a declared VALUE, or not read at all.",
-    "measured_after": "Three full runs on one design, same image and host: the applied period moved from 20 to 24 and the input delay from 2 to 4.8, and the design still met timing. Of the table's six rows against the old default, five make sign-off STRICTER, so the rule is not a relaxation.",
+    "measured_after": "Three full runs on one design, same image and host: the applied period moved from 20 to 24 and the input delay from 2 to 4.8, and the design still met timing. Of the table's six rows against the old default, five make sign-off STRICTER, so the rule is not a relaxation. Distilled into a program at this pass: the general rule now has one, and it is keyed on the SHAPE of a read-or-default helper rather than on a list of the two values the v1.11.5 program marks, so a newly added helper extends it with no edit. Swept over this repository: 2 helpers discovered, 3 non-test call sites, all 3 carry their disclosure, exit 0.",
     "fires_on_original": "Yes — the emitted constraint file carried both values with no disclosure of where either came from.",
     "fires_on_a_different_instance": "Yes — it is keyed on the existence of a fallback default, not on these two values, so it covers every other generator value that can be read or defaulted.",
-    "notes": "ALREADY-PROGRAM for these two values specifically: a program landed at v1.11.5 that reads the period from a table keyed by cell library and computes the input delay as the declared fraction, and writes a disclosure naming the matched key and the document line. What did NOT land is the general rule that every read-or-defaulted value must be marked; that program marks two."
+    "notes": "ALREADY-PROGRAM for these two values specifically: a program landed at v1.11.5 that reads the period from a table keyed by cell library and computes the input delay as the declared fraction, and writes a disclosure naming the matched key and the document line. What did NOT land is the general rule that every read-or-defaulted value must be marked; that program marks two. RESOLVED at distillation: the general rule is now implemented as its own program with a test whose negative control reintroduces the dropped disclosure and goes red. The population is call sites of read-or-default helpers, and helpers are DISCOVERED by the shape of the report they return (a value field beside at least three disclosure fields) rather than named in a list, which is the difference between marking two values and stating the rule."
   },
   {
     "step": "phase3.pnr_setup_repair",
