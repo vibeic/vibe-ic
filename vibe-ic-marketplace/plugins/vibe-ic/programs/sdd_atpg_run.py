@@ -494,8 +494,10 @@ def _augment_defaults(project: Path, args) -> int:
         args.spef = _first_rel("phase3/stage3/extracted/*.spef",
                                "phase3/stage3/extracted/design.spef")
     if args.netlist is None:
-        args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
-                                  "phase2/stage2/synth/synth.v")
+        # Prefer a genuinely TECH-MAPPED netlist (shared resolver with DT1/DT2);
+        # a generic `$_DFF_*` netlist is skipped so the SDD grade never inherits
+        # a 0-pair cut from the pre-map netlist.
+        args.netlist = _tdf.discover_mapped_netlist(project)
     if args.liberty is None:
         args.liberty = _first_rel("input/pdk/liberty/*typ*.lib",
                                   "input/pdk/liberty/typ.lib")

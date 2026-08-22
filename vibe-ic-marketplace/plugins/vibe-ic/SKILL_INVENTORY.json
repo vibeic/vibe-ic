@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 60,
+  "total": 69,
   "by_tier": {
     "debug": 13,
-    "judgment": 6,
-    "nl_primary": 32,
-    "unclassified": 1,
+    "judgment": 7,
+    "nl_primary": 33,
+    "unclassified": 8,
     "verification": 8
   },
   "skills": [
@@ -37,6 +37,8 @@
     "eco-plan",
     "equivalence-check",
     "field-agent-loop",
+    "flow-change-acceptance",
+    "fork-gatekeeper-loop",
     "formal-verify",
     "fpga-hps-bridge",
     "fpga-led-probe-allocation",
@@ -47,6 +49,7 @@
     "hold-fix",
     "hw-debug-loop",
     "ir-drop-triage",
+    "layer-contract-doctrine",
     "lvs-triage",
     "mixed-signal-cosim",
     "open-benchmark-methodology",
@@ -56,7 +59,13 @@
     "phase1-output-verify",
     "phase2-rtl-verify",
     "phase3-backend-verify",
+    "ppa-benchmark",
+    "ppa-diagnose",
+    "ppa-distill",
+    "ppa-measure",
+    "ppa-optimize",
     "ppa-predict",
+    "ppa-recover",
     "regression-issue-fix",
     "regression-manage",
     "rtl-repair",
@@ -208,6 +217,16 @@
       "tier": "nl_primary"
     },
     {
+      "name": "flow-change-acceptance",
+      "frontmatter_name": "flow-change-acceptance",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "fork-gatekeeper-loop",
+      "frontmatter_name": "fork-gatekeeper-loop",
+      "tier": "unclassified"
+    },
+    {
       "name": "formal-verify",
       "frontmatter_name": "formal-verify",
       "tier": "nl_primary"
@@ -258,6 +277,11 @@
       "tier": "debug"
     },
     {
+      "name": "layer-contract-doctrine",
+      "frontmatter_name": "layer-contract-doctrine",
+      "tier": "judgment"
+    },
+    {
       "name": "lvs-triage",
       "frontmatter_name": "lvs-triage",
       "tier": "debug"
@@ -303,9 +327,39 @@
       "tier": "verification"
     },
     {
+      "name": "ppa-benchmark",
+      "frontmatter_name": "ppa-benchmark",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-diagnose",
+      "frontmatter_name": "ppa-diagnose",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-distill",
+      "frontmatter_name": "ppa-distill",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-measure",
+      "frontmatter_name": "ppa-measure",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-optimize",
+      "frontmatter_name": "ppa-optimize",
+      "tier": "unclassified"
+    },
+    {
       "name": "ppa-predict",
       "frontmatter_name": "ppa-predict",
       "tier": "judgment"
+    },
+    {
+      "name": "ppa-recover",
+      "frontmatter_name": "ppa-recover",
+      "tier": "unclassified"
     },
     {
       "name": "regression-issue-fix",

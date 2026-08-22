@@ -49,6 +49,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 # Canonical product name forced across every doc.
 LPDDR5_IC_NAME = "LPDDR5 SDRAM (JEDEC JESD209-5)"
@@ -74,7 +77,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 # ----------------------------------------------------------------------
@@ -1019,7 +1024,7 @@ def _l9(gd: Path) -> None:
         "link-ECC + DBI, DVFS, and per-bank state tracking. Concrete LPDDR5 "
         "controller IP appears in mobile SoCs (Snapdragon, Apple M-series, "
         "MediaTek Dimensity, Kirin) and IP vendors (Synopsys, Cadence).")
-    d["top_module"] = "LPDDR5_SDRAM_component"
+    _ptm.apply(d, "LPDDR5_SDRAM_component")
     # FORCE-OVERWRITE shared L9 keys the DDR3 sibling authors.
     d["integration_overview"] = {
         "channel_organization": "Typically two x16 channels per package; per-channel CK/WCK/RDQS/CA/CS/DQ/DMI; two-deck internal organization.",

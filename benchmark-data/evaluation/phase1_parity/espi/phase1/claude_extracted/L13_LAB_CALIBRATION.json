@@ -1,5 +1,0 @@
-{
-  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
-  "lab_calibration": "N/A — purely digital protocol; no analog trim/calibration.",
-  "applicable": false
-}
