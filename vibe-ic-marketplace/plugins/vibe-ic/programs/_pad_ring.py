@@ -311,6 +311,19 @@ _ROTATED = ("E", "W", "FE", "FW")
 #: Part 3 of the flow owner's ruling -- "the DEF must not contradict itself,
 #: write the orientation the tool actually produces" -- was applied to the
 #: vertical sides and missed here.
+#:
+#: RE-CONFIRMED on a SECOND build before landing, because a value carried
+#: forward under the word "measured" is what produced the claim this file
+#: exists to correct: identical in OpenROAD 26Q3-1666, and the default row
+#: identical again in 26Q3-1535. Three builds, one answer -- a property of the
+#: placer, not of one release.
+#:
+#: AND IT IS RE-DERIVABLE, WHICH THE ORIGINAL CLAIM WAS NOT. In
+#: `tests/test_pad_ring.py`, the test named
+#:     test_the_shipped_orientations_are_what_the_placer_produces
+#: runs upstream's own call shape against whatever IO library is installed and
+#: compares the tool's answer with this dict. Change a value here without the
+#: placer agreeing and that test says so, in the tool's own words.
 SIDE_ORIENT: Dict[str, str] = {
     "S": ORIENT_ALIASES["R0"],
     "N": ORIENT_ALIASES["MX"],
@@ -333,6 +346,10 @@ SIDE_ORIENT: Dict[str, str] = {
 #: writes FS. Same bounding box for a square corner cell, mirrored rather than
 #: rotated, so the fit arithmetic cannot see it and a DEF reader can. Two of
 #: four corners, in every ring this step has ever written.
+#:
+#: Re-confirmed on 26Q3-1666 before landing, and re-derived on every run of
+#: the placer test named above -- which fails on THIS dict alone, with the
+#: sides left correct, so the corner half cannot hide behind them.
 CORNER_ORIENT: Dict[str, str] = {
     "SW": ORIENT_ALIASES["R0"],
     "SE": ORIENT_ALIASES["MY"],

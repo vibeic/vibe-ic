@@ -99,6 +99,17 @@ read back from odb.
   default row is identical in 26Q3-1535 — so the correction is a property of
   the placer, not of one build.
 
+THIS REPOSITORY ALREADY FORBADE THE INFERENCE, IN WRITING, AND IT WAS MADE
+ANYWAY. `metric_constant_across_differing_arms_is_not_measured` states the rule
+this probe broke: across arms whose settings PROVABLY DIFFER, an axis holding
+one value "is not evidence that the lever does not move it. It is evidence that
+the axis was not measured under that lever." The probe ran four differing arms,
+watched two of the four sides, saw one value on both, and published the
+flattering reading. The rule lives in a metrics gate, so nothing applied it to a
+claim about a config knob — but the doctrine is the same and it is older than
+this mistake. A no-effect claim is only ever as wide as the set of outputs
+observed, and this one was stated four sides wide from a two-side window.
+
 Silently ignoring a declared value is the defect; claiming a variable does
 nothing when it does is a different one. So it degrades loudly in BOTH
 directions:
