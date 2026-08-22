@@ -2553,3 +2553,127 @@ NEGATIVE CONTROL, the awaited-artefact naming removed:
 All three fail on a stated assertion, not on an IndexError — the first draft of
 the third test crashed instead of asserting when nothing was named, which would
 have made its red unreadable, and it was hardened to say so out loud.
+
+
+# Part 24 — a stamp written, tested, and read by nothing
+
+Part 23 classified the end-to-end head-to-head row as "missing artefact
+content, correctly named" and left the cause named but unrepaired: the deck that
+writes `sta_spef_based.rpt` read a SPEF on one line and stamped four other facts
+about the corner on the next five. That classification was right about that one
+emitter and **wrong about the scale of it**.
+
+## The measurement, on `origin/main`
+
+`phase3_one_shot_runner.py` writes seven `STA_*` stamps into the reports it
+emits. `_ppa/backends/opensta.py` — the only reader those reports have on the
+PPA record path — parsed four:
+
+    STA_BASIS                  parsed
+    STA_BASIS_LIBERTY          parsed
+    STA_SIGNOFF_CORNER         parsed
+    STA_SIGNOFF_CORNER_COUNT   parsed
+    STA_BASIS_SPEF             NOT PARSED
+    STA_BASIS_NETLIST          NOT PARSED
+    STA_BASIS_NOTE             NOT PARSED
+
+`STA_BASIS_SPEF` is written by **four** emitters in the runner and asserted by
+an existing test, `test_multicorner_signoff_reports_declare_their_stage.py:172`
+— *"assert `STA_BASIS_SPEF: ` in body"*. The producer side was built, guarded
+and shipped. **No consumer ever read it.** That is the "declared but inert"
+class in its purest form: a disclosure that exists from the emitter's side and
+does not exist from the reader's, with a green test over the half that was done.
+
+What it cost is not hypothetical. The PPA layer discarded the parasitics
+identity, wrote records saying `rc_corner: null`, and `ppa_head_to_head_check`
+then refused those records `SCOPE_SENTINEL` — for a field the artefact chain had
+been stating.
+
+## What the run actually contains, so the scale is not overstated
+
+Measured across the campaign's own trial `b000`:
+
+    aging_sta.rpt              CARRIES  STA_BASIS_SPEF: <top>.max.spef (max-RC / late-path corner)
+    sta_spef_based.rpt         no spef stamp   <- the report the e2e records read
+    sta_mcorner_ocv.rpt        no spef stamp   <- dialect B, names its SPEF on the banner instead
+    sta_spef_multicorner.rpt   no spef stamp   <- dialect A, names its RC corner on the banner
+    post_route_timing.rpt, pre_pnr_timing.rpt, sta_{FF,SS,TT}.rpt   no spef stamp
+
+So on this run exactly one report carries the stamp, and its disclosure was
+thrown away. The three reports the PPA timing layer reads never received it —
+two of them disclose per-stanza on their banners instead, which is finer and
+correct, and the third, `sta_spef_based.rpt`, disclosed nothing at all because
+it has no banner and was not given the stamp.
+
+## The repair, both halves, because either alone is still inert
+
+    _ppa/backends/opensta.py   parses STA_BASIS_SPEF -> Report.basis_spef
+    _ppa/timing.py             relates the whole-file stamp to the bannerless
+                               section, exactly as it already does for
+                               `basis_liberty` and `signoff_corner`
+    phase3_one_shot_runner.py  the single-corner deck now stamps the parasitics
+                               it reads, alongside the four facts it already
+                               stamped
+
+Proven end to end against the real artefact:
+
+    BEFORE   report.basis_spef = None
+             rc_corner gap -> "this report names no RC corner for the section;
+                               the RC axis is reported by the multi-corner SPEF
+                               report, not this one"
+    AFTER    report.basis_spef = .../extracted/<top>.spef
+             rc_corner gap -> "this section names its parasitics as
+                               '.../extracted/<top>.spef' but no normalised
+                               RC-corner label ..."
+    rc_corner values emitted: {None}   — in BOTH cases. Still not invented.
+
+## No row moves, again
+
+    head-to-head (cross-layer)   14 record(s), 0 refused, 2 undetermined -> rc 2
+    head-to-head (end-to-end)     2 record(s), 0 refused, 2 undetermined -> rc 2
+    promotion feasibility        21 set(s), 0 infeasible, 21 undetermined -> rc 2
+
+Published records are static JSON. This repairs what the NEXT run can say about
+itself, and it stops the reader from denying a datum the emitter provided.
+
+## The guard, and why it is a ledger rather than a rule
+
+`tests/test_a_stamp_nothing_reads_is_not_a_disclosure.py`. Every `STA_*` stamp
+the runner writes must be either parsed by the reader **or listed with a
+reason**. Two are listed:
+
+  * `STA_BASIS_NOTE` — free prose for a human; it is not a field, has no
+    grammar, and nothing could compare two of them.
+  * `STA_BASIS_NETLIST` — **a real gap, recorded rather than quietly parsed.**
+    Which netlist was timed IS comparability data. No consumer wants it yet,
+    and adding an unread field to `Report` is the same disease this file exists
+    to name, so it is declared instead of fixed or hidden.
+
+A blanket "every stamp must be parsed" would have shipped red, and a silent
+allowance would have let the next inert stamp in unnoticed. The ledger makes it
+a decision somebody takes on purpose. Three further arms keep the ledger honest:
+an entry that is *also* parsed is refused as stale, every entry must state a
+real reason, and the premise itself is pinned so the rule cannot pass by finding
+nothing to check.
+
+NEGATIVE CONTROLS, three, all on real code rather than a mock:
+
+    A. the parse removed (i.e. exactly main's state)
+       FAILED ::test_every_stamp_is_either_parsed_or_declared_unread
+       FAILED ::test_the_spef_stamp_is_now_actually_read
+       E  AssertionError: these stamps are written into reports by the runner
+          and read by nothing in the PPA reader: ['STA_BASIS_SPEF']
+
+    B. the test file run UNCHANGED against pristine origin/main — the strongest
+       form, because a guard that cannot fail against the pre-fix code proves
+       nothing. Same two reds, same message.
+
+    C. the emitter's stamp line deleted
+       FAILED ::test_the_single_corner_deck_stamps_the_parasitics_it_reads
+
+One note worth keeping, because it nearly went the other way. The emitter arm
+anchors on that deck's own sentence, and the first anchor read past the point
+where the runner splits the f-string across two source lines. The test did not
+quietly match a different emitter — it asserted that its anchor matched zero
+times and said so. A structural test that cannot identify its subject must
+refuse, not guess.

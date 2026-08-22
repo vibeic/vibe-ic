@@ -34476,6 +34476,15 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"puts $_bf \"STA_BASIS: POST_ROUTE_SPEF\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER: {_signoff_corner}\"\n"
         f"puts $_bf \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+        # AND THE PARASITICS, which this block stopped one line short of. The
+        # deck reads a SPEF above (`read_spef`) and stamped four other facts
+        # about the corner and not that one, so the report it wrote could name
+        # no RC condition at all -- this report has NO banner, and a whole-file
+        # stamp is the only place it could ever be stated. MEASURED: every
+        # timing row taken from it is `rc_corner: null`, and the published
+        # head-to-head records that read it are refused SCOPE_SENTINEL for a
+        # field the emitter had in hand and did not disclose.
+        f"puts $_bf \"STA_BASIS_SPEF: {spef_c}\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
         f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"

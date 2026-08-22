@@ -595,12 +595,18 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         liberty = sec.liberty
         rc_corner = sec.rc_corner
         process = sec.process
+        spef = sec.spef
         if sec.banner is None:
             # Dialect C: one implicit section, and the whole-file stamps are
             # what describe it. Relating them is meaning, so the BACKEND left
             # it alone and it happens here.
             liberty = liberty or report.basis_liberty
             process = process or report.signoff_corner
+            # Dialect C has no banner, so the whole-file stamp is the ONLY
+            # place its parasitics can be named. Same relation as the two
+            # lines above: the BACKEND parsed the stamp, relating it to this
+            # section is meaning, and meaning happens here.
+            spef = spef or report.basis_spef
         pvt = opensta.parse_liberty_pvt(liberty)
         gaps: Dict[str, str] = {}
         if stage_gap:
@@ -639,13 +645,13 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             # pre-layout estimate be compared against sign-off evidence". What
             # the reason owes is the TRUE cause and the identity it is holding,
             # so the next reader starts at the artefact instead of at a denial.
-            if sec.spef:
+            if spef:
                 gaps["rc_corner"] = (
                     "this section names its parasitics as %r but no normalised "
                     "RC-corner label, and the file name is NOT read as one: "
                     "deriving a corner from a stem is the filename inference "
                     "this module refuses elsewhere. The RC identity IS stated "
-                    "by the report and is not yet carried in scope" % (sec.spef,))
+                    "by the report and is not yet carried in scope" % (spef,))
             else:
                 gaps["rc_corner"] = (
                     "this report names no RC corner for the section; the RC "

@@ -135,6 +135,13 @@ _BASIS_LIBERTY_RE = re.compile(
     r"^\s*#?\s*STA_BASIS_LIBERTY\s*:\s*(\S+)", re.MULTILINE)
 _SIGNOFF_CORNER_COUNT_RE = re.compile(
     r"^\s*#?\s*STA_SIGNOFF_CORNER_COUNT\s*:\s*(\d+)", re.MULTILINE)
+#: The parasitics the run timed. Dialect C carries NO banner, so this whole-file
+#: stamp is the only place its RC condition can be stated -- and until the
+#: emitter was taught to write it, the deck read a SPEF on one line and
+#: disclosed four other facts about the corner on the next five. Parsed as a
+#: fact; judged nowhere in this file.
+_BASIS_SPEF_RE = re.compile(
+    r"^\s*#?\s*STA_BASIS_SPEF\s*:\s*(\S+)", re.MULTILINE)
 
 # ── the emitter's own attestations that a query RAN ────────────────────────
 # Their ABSENCE is what separates "queried and clean" from "never asked", which
@@ -264,6 +271,7 @@ class Report:
     basis_stamp: Optional[str] = None        # RAW, e.g. "POST_ROUTE_SPEF"
     signoff_corner: Optional[str] = None
     basis_liberty: Optional[str] = None
+    basis_spef: Optional[str] = None
     signoff_corner_count: Optional[int] = None
     check_types_reported: Optional[bool] = None
     check_types_failure: Optional[str] = None
@@ -492,6 +500,7 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
     mb = _STA_BASIS_RE.search(body)
     ms = _SIGNOFF_CORNER_RE.search(body)
     ml = _BASIS_LIBERTY_RE.search(body)
+    mp = _BASIS_SPEF_RE.search(body)
     mc = _SIGNOFF_CORNER_COUNT_RE.search(body)
     ct_fail = _CHECK_TYPES_FAILED_RE.search(body)
     ct_ok = _CHECK_TYPES_OK_RE.search(body)
@@ -500,6 +509,7 @@ def parse_report(text: Optional[str], *, path: Optional[str] = None,
         basis_stamp=mb.group(1) if mb else None,
         signoff_corner=ms.group(1) if ms else None,
         basis_liberty=ml.group(1) if ml else None,
+        basis_spef=mp.group(1) if mp else None,
         signoff_corner_count=int(mc.group(1)) if mc else None,
         check_types_reported=(False if ct_fail else (True if ct_ok else None)),
         check_types_failure=ct_fail.group(1).strip() if ct_fail else None,
