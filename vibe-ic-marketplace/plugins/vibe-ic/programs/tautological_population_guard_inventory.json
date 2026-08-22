@@ -1,0 +1,17 @@
+{
+  "_comment": "Population guards that assert a literal against its own size, as they stand on the tree population_guard_asserts_equality_not_a_floor.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Each closes by asserting the literal against the POPULATION it describes, as a set in both directions, or by deleting the guard. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_0_63_issue704_l9_pin_parser_ifdef_aware.py::len(_RVFI_PORTS) == 23",
+      "reason": "A 23-element tuple asserted to hold 23 elements, at module scope. It passes for free on every tree. What it was probably meant to say is that the parser recovers all 23 declared ports from the fixture — an assertion against the PARSED set, which can fail. Recorded, not repaired: rewriting it is a change to what that test asserts and belongs to its owner."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_1_76_dff_edge.py::len(NEG_FIXTURES) >= 5",
+      "reason": "The test is named test_at_least_five_negatives and the literal holds 9, so the bound is already satisfied by the source it reads. It cannot answer NO. The useful form asserts the negatives are all REJECTED by the subject, which is a property of the code rather than of the list."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_1_77_sequential_waveform.py::len(NEG_FIXTURES) >= 5",
+      "reason": "The same shape in the sibling suite, literal of 8 against a floor of 5. Same remedy."
+    }
+  ]
+}

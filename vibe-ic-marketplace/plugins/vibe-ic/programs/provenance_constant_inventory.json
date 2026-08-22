@@ -1,0 +1,53 @@
+{
+  "_comment": "Source-naming fields filled from a path constant, as they stand on the tree provenance_value_is_resolved_not_constant.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/bit_level_full_stack_tb_check.py::source::L4_REGMAP.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='L4_REGMAP.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/crypto_arch_extractor.py::source::input/docs/README.md",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='input/docs/README.md' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/oracle_tb_gen.py::source::phase1/generated_docs/L10_TEST_CASES.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='phase1/generated_docs/L10_TEST_CASES.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/perc_signoff_check.py::source::reports/phase3/perc_equivalent.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='reports/phase3/perc_equivalent.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/pg_rail_geometry_check.py::source::waivers.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='waivers.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::source::phase3/stage3/pnr/openroad.log",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='phase3/stage3/pnr/openroad.log' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact. RULING 2026-08-22: this site is REPAIRED on the gate branch (jdistchip), reproduced there as a true positive by reverting it. When that lands, this row matches nothing and must be REMOVED \u2014 which is the only direction this inventory allows, and the census will say so."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/readme_class_detector.py::source::input/docs/README.md",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='input/docs/README.md' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/readme_class_detector.py::source::input/docs/README.md",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='input/docs/README.md' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/readme_class_detector.py::source::input/docs/README.md",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='input/docs/README.md' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/readme_vendor_extractor.py::source::input/docs/README.md",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='input/docs/README.md' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/regmap_transaction_tb_gen.py::source::L4_REGMAP.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='L4_REGMAP.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/signoff_audit.py::source::waivers.json",
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='waivers.json' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+    }
+  ]
+}

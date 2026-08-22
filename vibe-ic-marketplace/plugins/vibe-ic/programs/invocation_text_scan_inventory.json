@@ -1,0 +1,37 @@
+{
+  "_comment": "Wiring and consumption audits that decide from raw python source text, as they stand on the tree invocation_proved_by_parse_not_by_text.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Each closes by parsing the caller and deciding from the syntax tree, and by reporting a prose-only occurrence as its own outcome. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/flow_step_executor_coverage_check.py::runner_text::re.search()",
+      "reason": "THE INSTANCE THE CAPTURE MEASURED. Its own docstring says a step with no dispatching producer 'can only ever be MISSING, and that is the root cause of middle steps silently skipped' \u2014 and it concatenates seven runner sources and applies regular expressions to the result, with no syntax-tree parse anywhere in the module. Measured corpus: 3,055,921 bytes of which 1,472,929 (48%) are docstring and comment, so a name in prose is graded as a call. On the same commit three producers declared by two path steps appear ZERO times in any runner, in code or in prose."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/flow_step_executor_coverage_check.py::runner_text::`in` membership",
+      "reason": "THE INSTANCE THE CAPTURE MEASURED. Its own docstring says a step with no dispatching producer 'can only ever be MISSING, and that is the root cause of middle steps silently skipped' \u2014 and it concatenates seven runner sources and applies regular expressions to the result, with no syntax-tree parse anywhere in the module. Measured corpus: 3,055,921 bytes of which 1,472,929 (48%) are docstring and comment, so a name in prose is graded as a call. On the same commit three producers declared by two path steps appear ZERO times in any runner, in code or in prose."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/l18_interconnect_topology_factuality_check.py::txt::re.search()",
+      "reason": "Reads a schema module's source and extracts a mapping by regular expression. A mapping shown in an example inside a docstring is indistinguishable from the real one."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_gate_contract_check.py::src::re.search()",
+      "reason": "Reads gate program sources and decides contract compliance by regular expression over the raw text, so a contract line quoted in a docstring counts as the contract being met."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_gate_contract_check.py::src::`in` membership",
+      "reason": "Reads gate program sources and decides contract compliance by regular expression over the raw text, so a contract line quoted in a docstring counts as the contract being met."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/plugin_full_audit.py::test_blob::re.findall()",
+      "reason": "The D1/D2 audit greps a concatenation of test sources for the program names they cover. A test that names a program only in its docstring is graded as covering it, and a test that builds the program path at run time is invisible."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/plugin_full_audit.py::_words::`in` membership",
+      "reason": "The D1/D2 audit greps a concatenation of test sources for the program names they cover. A test that names a program only in its docstring is graded as covering it, and a test that builds the program path at run time is invisible."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/plugin_full_audit.py::test_blob::re.search()",
+      "reason": "The D1/D2 audit greps a concatenation of test sources for the program names they cover. A test that names a program only in its docstring is graded as covering it, and a test that builds the program path at run time is invisible."
+    }
+  ]
+}

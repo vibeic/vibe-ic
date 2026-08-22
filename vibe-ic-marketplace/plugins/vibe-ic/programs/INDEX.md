@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1165
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1165)
+- **Total programs (excluding helpers / shims):** 1184
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1184)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1156 |
+| `any` | 1175 |
 
 ## Alphabetical listing
 
@@ -218,6 +218,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `container_exec_deadline_check` | any | — | A `docker exec` whose deadline bounds the CLIENT and not the tool. |
 | `container_image_provenance` | any | — | record, and on request enforce, which IMAGE the run's `--container` actually executes. |
 | `container_login_banner_parse_check` | any | — | A login shell in the container prints two lines before the tool does. |
+| `content_pinned_authority_verified_only_at_merge` | any | — | An authority pin whose only reader runs after the point of repair. |
 | `control_substance_check` | any | — | how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent. |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap... |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
@@ -272,7 +273,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | Scan all RTL files for `define macros and localparam declarations whose |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ... |
+| `declaration_searched_only_inside_a_truncated_window` | any | — | A marker searched inside a fixed-size slice, and a miss called ABSENCE. |
 | `declared_clock_period` | any | — | read the clock period the DESIGN declares for the library this run is actually building against. |
+| `declared_invocation_accepted_by_its_own_parser` | any | — | A flow-declared invocation the invoked program's own parser refuses. |
 | `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
 | `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
@@ -280,6 +283,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `defect_artifact_fixture_check` | any | v0.2.98 | Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A |
 | `defect_artifact_snapshot` | any | v0.2.98 | Filing-side helper for the field-agent / community-backlog filing flow |
 | `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict the orchestrator it claims to summarise. |
+| `denial_that_constitutes_the_value_it_appears_to_negate` | any | — | A blanket denial check on an extractor whose subject IS the denial. |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC. |
 | `derived_corpus_figure_check` | any | — | A checker's docstring may not state a corpus funnel it does not compute. |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation. |
@@ -347,6 +351,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
+| `explicit_argument_outranks_the_environment_pointer_census` | any | — | An environment pointer that overrules a location the caller NAMED. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
@@ -440,6 +445,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_process_attestation` | any | — | Structured process evidence for repo hygiene gates. |
+| `gate_proof_vocabulary_has_a_producer` | any | — | An axis whose whole proof vocabulary is produced by nobody. |
 | `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
@@ -519,6 +525,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `interface_encoding_audit` | any | — | Detect gray-code vs binary encoding mismatches across module boundaries. |
 | `interlaken_protocol_synth` | any | — | Interlaken protocol synth helper. |
 | `internal_vs_external_timing_check` | any | — | L8 must separate host-side from DUT-side timing. |
+| `invocation_proved_by_parse_not_by_text` | any | — | A wiring audit that decides invocation by searching the caller's TEXT. |
 | `io_link_protocol_synth` | any | — | IO-Link (IEC 61131-9 / SDCI) protocol synth helper. |
 | `ip_catalog_pull` | any | — | Pull catalog IP RTL files into project's canonical phase2/stage1/rtl/ directory + record provenance. |
 | `ip_catalog_query` | any | — | IP catalog query + match + pull engine. |
@@ -621,6 +628,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
 | `latency_conformance_check` | any | — | v1.0 plugin gate (ORGANIC #705). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
+| `layer_membership_is_declared_not_inferred_from_a_filename_prefix` | any | — | A layer population selected by a filename prefix instead of by the relation. |
 | `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `lec_gate_netlist_select` | any | — | Truthful diagnosis of a structural LEC abort. |
@@ -634,6 +642,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
+| `local_clone_does_not_borrow_objects_census` | any | — | A clone that BORROWS its objects from the repository it was cloned from. |
 | `loop_admission_guard` | any | — | loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills. |
 | `loop_watchdog_compliance_check` | any | — | FORCE the watchdog primitive. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
@@ -671,6 +680,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted, and judge any PER-LAYER density it carries. |
 | `metal_fill_emit` | any | — | per-layer density metal fill on the streamed GDS. |
 | `metal_layer_density_check` | any | — | PER-LAYER metal-density sign-off gate for tapeout. |
+| `metric_constant_across_differing_arms_is_not_measured` | any | — | An axis that takes ONE value on every arm was not measured under that lever. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves stray top-level entries and stray `reports/` flat artefacts into the canonical Phase/Stage/Step layout... |
 | `migrate_to_layout_p` | any | — | pre-v2 → Layout P project migration. |
 | `milstd1553_protocol_synth` | any | v0.1.83 | MIL-STD-1553B protocol synth helper. |
@@ -712,6 +722,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
+| `only_the_declaring_step_writes_its_output_census` | any | — | Two writers for one path the flow declares as a step's required output. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `opcode_field_width_consistency_check` | any | v0.2.13 | Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13). |
 | `open_issue_claim_scan` | any | — | Which open issues carry no CLAIMED comment — with the un-readable ones NAMED. |
@@ -823,6 +834,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence. |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using. |
 | `policy_direction_pin_check` | any | — | A DIRECTION argued in prose and left unpinned by every test. vibe-ic. |
+| `population_guard_asserts_equality_not_a_floor` | any | — | A population guard that cannot fail: a literal asserted against its own size. |
+| `population_pin_without_its_member_set` | any | — | A pinned population SIZE with no pin on its MEMBERS. |
 | `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
 | `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
@@ -837,7 +850,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_contract_build` | any | — | build the measurement contract for one PPA run. |
 | `ppa_contract_check` | any | — | the validator, and what it must REFUSE. |
 | `ppa_diagnostic_router` | any | — | CLI: run Program-First diagnosis over a situation; hand off only on a waive. |
-| `ppa_eco_spare_records` | any | — | the design-for-ECO spare population, as canonical metric records the promotion gate can adjudicate. |
 | `ppa_feasibility_check` | any | — | the hard promotion gate, as a flow-callable gate. |
 | `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2. |
 | `ppa_measurement_check` | any | — | The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided. |
@@ -877,9 +889,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs. |
+| `provenance_value_is_resolved_not_constant_census` | any | — | A source-naming field filled from a path typed into the emitter. |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
+| `published_absence_claim_is_rechecked_against_the_tree` | any | — | A published reason string that names a path as ABSENT, and it exists. |
 | `published_record_staleness_check` | any | — | a landed gate rule does not reach the records the gate already published. |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style). |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
@@ -895,6 +909,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `readme_usage_sequence_extractor` | any | — | for #36 Bug 2: README "usage sequence" / numbered-step picker. |
 | `readme_vendor_extractor` | any | — | best-effort vendor extraction from README text. |
 | `real_artefact_test_backing_check` | any | — | how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change. |
+| `reference_control_resolved_through_a_mutable_ref` | any | — | A control whose reference point is a name that moves. |
+| `registry_is_the_iteration_domain` | any | — | A registry that IS the population instead of a FILTER over one. |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields. |
 | `regmap_table_extractor` | any | — | Extract register-table rows from extracted PDF/text docs. |
 | `regmap_transaction_tb_gen` | any | — | ORGANIC #186 part 2. |
@@ -1018,6 +1034,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spacewire_protocol_synth` | any | — | SpaceWire protocol synth helper (ECSS-E-ST-50-12C). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
+| `spawned_gate_whose_status_is_discarded` | any | — | A gate spawned as a subprocess whose verdict reaches nothing. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
 | `spec_analog_iface_extract` | any | — | PROGRAM-FIRST structural extractor for the L5 ANALOG/DIGITAL INTERFACE (ADI) facet of a design doc / prompt (chip-AGNOSTIC, §4.05 no-leak). |
 | `spec_artifact_catalog` | any | — | the MASTER CATALOG of structured ELEMENT TYPES that appear in IC design documents / specs / prompts. The single vocabulary the recognizer... |
@@ -1132,6 +1149,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tristate_self_rx_mask_check` | any | — | Self-RX masking audit for tristate/open-drain tristate bus pins. |
 | `trusted_pytest_entry` | any | — | Isolated pytest entry for the protected landing runtime. |
 | `truth_table_rtl_gen` | any | v0.1.7 | deterministic truth-table → combinational RTL generator. |
+| `two_input_selectors_given_together_must_refuse` | any | — | Two ways to name the input, and nothing decides what happens if both arrive. |
 | `tx_abort_during_transmission_check` | any | v0.108 | Verify TX modules do not abort/reset during active bit-serial transmission. |
 | `tx_bit_timing_units_check` | any | v0.119.29 | verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to. |
 | `tx_bit_width_min_resolution_check` | any | v0.119.20 | advisory gate that flags when the chip's TX bit-clock granularity is too coarse for the smallest L2 timing parameter the chip must place ... |
@@ -1176,6 +1194,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_emit_gated_by_first_rx_command_check` | any | Wave 18 | In half-duplex single-wire bit-bang protocols the chip's wake-pulse |
 | `wake_pulse_implementation_check` | any | Wave 9 | LL-11 / Wake-pulse value gate. |
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Half-duplex single-wire bit-bang protocols typically specify the chip's |
+| `wall_clock_bound_standing_in_for_a_verdict` | any | — | A short wall-clock deadline asserted as a substantive finding. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from gate programs is explicitly addressed before the flow can declare PASS. |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
 | `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption). |
@@ -1237,7 +1256,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1156 programs)
+### `any` (1175 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1429,6 +1448,7 @@ _(no programs in this group)_
 - `container_exec_deadline_check` — A `docker exec` whose deadline bounds the CLIENT and not the tool.
 - `container_image_provenance` — record, and on request enforce, which IMAGE the run's `--container` actually executes.
 - `container_login_banner_parse_check` — A login shell in the container prints two lines before the tool does.
+- `content_pinned_authority_verified_only_at_merge` — An authority pin whose only reader runs after the point of repair.
 - `control_substance_check` — how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent.
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap...
 - `convergence_doctrine_present_check` — ORGANIC #716
@@ -1482,7 +1502,9 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — Scan all RTL files for `define macros and localparam declarations whose
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ...
+- `declaration_searched_only_inside_a_truncated_window` — A marker searched inside a fixed-size slice, and a miss called ABSENCE.
 - `declared_clock_period` — read the clock period the DESIGN declares for the library this run is actually building against.
+- `declared_invocation_accepted_by_its_own_parser` — A flow-declared invocation the invoked program's own parser refuses.
 - `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
 - `def_manufacturing_grid_check` — ORGANIC #597.
@@ -1490,6 +1512,7 @@ _(no programs in this group)_
 - `defect_artifact_fixture_check` — Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A  _[v0.2.98]_
 - `defect_artifact_snapshot` — Filing-side helper for the field-agent / community-backlog filing flow  _[v0.2.98]_
 - `deliverable_verdict_consistency_check` — a deliverable may not contradict the orchestrator it claims to summarise.
+- `denial_that_constitutes_the_value_it_appears_to_negate` — A blanket denial check on an extractor whose subject IS the denial.
 - `derived_clock_sdc_required_check` — Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC.
 - `derived_corpus_figure_check` — A checker's docstring may not state a corpus funnel it does not compute.
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation.
@@ -1556,6 +1579,7 @@ _(no programs in this group)_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
+- `explicit_argument_outranks_the_environment_pointer_census` — An environment pointer that overrules a location the caller NAMED.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
@@ -1649,6 +1673,7 @@ _(no programs in this group)_
 - `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_process_attestation` — Structured process evidence for repo hygiene gates.
+- `gate_proof_vocabulary_has_a_producer` — An axis whose whole proof vocabulary is produced by nobody.
 - `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
@@ -1728,6 +1753,7 @@ _(no programs in this group)_
 - `interface_encoding_audit` — Detect gray-code vs binary encoding mismatches across module boundaries.
 - `interlaken_protocol_synth` — Interlaken protocol synth helper.
 - `internal_vs_external_timing_check` — L8 must separate host-side from DUT-side timing.
+- `invocation_proved_by_parse_not_by_text` — A wiring audit that decides invocation by searching the caller's TEXT.
 - `io_link_protocol_synth` — IO-Link (IEC 61131-9 / SDCI) protocol synth helper.
 - `ip_catalog_pull` — Pull catalog IP RTL files into project's canonical phase2/stage1/rtl/ directory + record provenance.
 - `ip_catalog_query` — IP catalog query + match + pull engine.
@@ -1829,6 +1855,7 @@ _(no programs in this group)_
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
 - `latency_conformance_check` — v1.0 plugin gate (ORGANIC #705).
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
+- `layer_membership_is_declared_not_inferred_from_a_filename_prefix` — A layer population selected by a filename prefix instead of by the relation.
 - `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `lec_gate_netlist_select` — Truthful diagnosis of a structural LEC abort.
@@ -1842,6 +1869,7 @@ _(no programs in this group)_
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
+- `local_clone_does_not_borrow_objects_census` — A clone that BORROWS its objects from the repository it was cloned from.
 - `loop_admission_guard` — loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills.
 - `loop_watchdog_compliance_check` — FORCE the watchdog primitive.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
@@ -1879,6 +1907,7 @@ _(no programs in this group)_
 - `metal_fill_density_check` — Verify metal fill was inserted, and judge any PER-LAYER density it carries.
 - `metal_fill_emit` — per-layer density metal fill on the streamed GDS.
 - `metal_layer_density_check` — PER-LAYER metal-density sign-off gate for tapeout.
+- `metric_constant_across_differing_arms_is_not_measured` — An axis that takes ONE value on every arm was not measured under that lever.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves stray top-level entries and stray `reports/` flat artefacts into the canonical Phase/Stage/Step layout...
 - `migrate_to_layout_p` — pre-v2 → Layout P project migration.
 - `milstd1553_protocol_synth` — MIL-STD-1553B protocol synth helper.  _[v0.1.83]_
@@ -1920,6 +1949,7 @@ _(no programs in this group)_
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
+- `only_the_declaring_step_writes_its_output_census` — Two writers for one path the flow declares as a step's required output.
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `opcode_field_width_consistency_check` — Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13).  _[v0.2.13]_
 - `open_issue_claim_scan` — Which open issues carry no CLAIMED comment — with the un-readable ones NAMED.
@@ -2031,6 +2061,8 @@ _(no programs in this group)_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence.  _[v0.1.26]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using.
 - `policy_direction_pin_check` — A DIRECTION argued in prose and left unpinned by every test. vibe-ic.
+- `population_guard_asserts_equality_not_a_floor` — A population guard that cannot fail: a literal asserted against its own size.
+- `population_pin_without_its_member_set` — A pinned population SIZE with no pin on its MEMBERS.
 - `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
 - `port_parser` — the SHARED interface-port reader for the deterministic solvers.
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
@@ -2045,7 +2077,6 @@ _(no programs in this group)_
 - `ppa_contract_build` — build the measurement contract for one PPA run.
 - `ppa_contract_check` — the validator, and what it must REFUSE.
 - `ppa_diagnostic_router` — CLI: run Program-First diagnosis over a situation; hand off only on a waive.
-- `ppa_eco_spare_records` — the design-for-ECO spare population, as canonical metric records the promotion gate can adjudicate.
 - `ppa_feasibility_check` — the hard promotion gate, as a flow-callable gate.
 - `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive every way such a claim goes wrong. vibe-ic#1121, comparison schema v2.
 - `ppa_measurement_check` — The gate over a PPA record set: what was owed and was not measured, and the comparison that must be refused instead of decided.
@@ -2085,9 +2116,11 @@ _(no programs in this group)_
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provenance_output_hash_completeness_check` — verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs.  _[v0.2.102]_
+- `provenance_value_is_resolved_not_constant_census` — A source-naming field filled from a path typed into the emitter.
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
+- `published_absence_claim_is_rechecked_against_the_tree` — A published reason string that names a path as ABSENT, and it exists.
 - `published_record_staleness_check` — a landed gate rule does not reach the records the gate already published.
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style).
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
@@ -2103,6 +2136,8 @@ _(no programs in this group)_
 - `readme_usage_sequence_extractor` — for #36 Bug 2: README "usage sequence" / numbered-step picker.
 - `readme_vendor_extractor` — best-effort vendor extraction from README text.
 - `real_artefact_test_backing_check` — how many of a change's tests are driven by a REAL checked-in artefact, and how many by a fixture the author typed alongside the change.
+- `reference_control_resolved_through_a_mutable_ref` — A control whose reference point is a name that moves.
+- `registry_is_the_iteration_domain` — A registry that IS the population instead of a FILTER over one.
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields.
 - `regmap_table_extractor` — Extract register-table rows from extracted PDF/text docs.
 - `regmap_transaction_tb_gen` — ORGANIC #186 part 2.
@@ -2224,6 +2259,7 @@ _(no programs in this group)_
 - `spacewire_protocol_synth` — SpaceWire protocol synth helper (ECSS-E-ST-50-12C).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
+- `spawned_gate_whose_status_is_discarded` — A gate spawned as a subprocess whose verdict reaches nothing.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
 - `spec_analog_iface_extract` — PROGRAM-FIRST structural extractor for the L5 ANALOG/DIGITAL INTERFACE (ADI) facet of a design doc / prompt (chip-AGNOSTIC, §4.05 no-leak).
 - `spec_artifact_catalog` — the MASTER CATALOG of structured ELEMENT TYPES that appear in IC design documents / specs / prompts. The single vocabulary the recognizer...
@@ -2338,6 +2374,7 @@ _(no programs in this group)_
 - `tristate_self_rx_mask_check` — Self-RX masking audit for tristate/open-drain tristate bus pins.
 - `trusted_pytest_entry` — Isolated pytest entry for the protected landing runtime.
 - `truth_table_rtl_gen` — deterministic truth-table → combinational RTL generator.  _[v0.1.7]_
+- `two_input_selectors_given_together_must_refuse` — Two ways to name the input, and nothing decides what happens if both arrive.
 - `tx_abort_during_transmission_check` — Verify TX modules do not abort/reset during active bit-serial transmission.  _[v0.108]_
 - `tx_bit_timing_units_check` — verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to.  _[v0.119.29]_
 - `tx_bit_width_min_resolution_check` — advisory gate that flags when the chip's TX bit-clock granularity is too coarse for the smallest L2 timing parameter the chip must place ...  _[v0.119.20]_
@@ -2381,6 +2418,7 @@ _(no programs in this group)_
 - `wake_pulse_emit_gated_by_first_rx_command_check` — In half-duplex single-wire bit-bang protocols the chip's wake-pulse  _[Wave 18]_
 - `wake_pulse_implementation_check` — LL-11 / Wake-pulse value gate.  _[Wave 9]_
 - `wake_pulse_width_matches_measurement_check` — Half-duplex single-wire bit-bang protocols typically specify the chip's  _[Wave 18]_
+- `wall_clock_bound_standing_in_for_a_verdict` — A short wall-clock deadline asserted as a substantive finding.
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from gate programs is explicitly addressed before the flow can declare PASS.
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
 - `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption).

@@ -1,0 +1,13 @@
+{
+  "_comment": "Flow-declared output paths with more than one writing module, as they stand on the tree only_the_declaring_step_writes_its_output.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Closes by giving the non-declaring writer BOTH a private directory and a different basename \u2014 discovery is a recursive glob, so a private directory alone is still found. Hand-authored from --json; there is no --write-baseline. RULING 2026-08-22: reports/spare_cell_coverage.json is a LIVE FAIL on the gate and stays red until the flow-ownership question is decided in the open. Its row here is a CENSUS classification, not a waiver \u2014 the census does not make the gate green and must never be quoted as though it had.",
+  "known": [
+    {
+      "key": "phase2/stage2/synth/netlist.v::design_one_shot_runner.py,phase3_one_shot_runner.py",
+      "reason": "Declared by steps 9 and 14 and written by two runners. A synthesis netlist written by the phase-3 runner as well as the phase-2 runner means the artefact a downstream step grades depends on which runner ran last. Recorded, not repaired: deciding which runner owns the netlist is a flow-ownership question belonging to the lane that owns the phase boundary, and moving the write changes what every downstream step reads."
+    },
+    {
+      "key": "reports/spare_cell_coverage.json::phase3_one_shot_runner.py,spare_cell_coverage_check.py",
+      "reason": "The shape the chip capture measured, on its own evidence path: a checker and the orchestrating runner both write the flow's canonical report for step 18. The lane's measurement of this class recorded the declaring form producing 811 bytes with two findings and the scoping key populated, against a delegate's 308 bytes with one finding and no scope keys \u2014 the weaker file wearing the declared filename, graded by a release tier with no sign that a stronger one existed. Recorded, not repaired: which of the two is the declaring producer is a flow-ownership decision, and the record is explicit that fixing the clobber ALONE would turn the cell green while leaving the real gap invisible."
+    }
+  ]
+}
