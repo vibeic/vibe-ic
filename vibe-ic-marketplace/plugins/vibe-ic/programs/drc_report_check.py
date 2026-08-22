@@ -459,10 +459,20 @@ def run(caller_argv, _audit=None) -> int:
                   f"sign-off gate must disclose how much it read.",
                   file=sys.stderr)
             return RC_FAIL
+        # A PASS states how much it looked at — and, since #997-D9, how much of
+        # that it was able to CHECK AGAINST THE TOOL rather than against the
+        # runner's summary of the tool. `tool_corroborated` is the second
+        # denominator: a report with no tool transcript beneath its summary is
+        # passed on the summary alone, and a reader is entitled to see that
+        # said out loud instead of inferring it from a single count.
+        summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
         print(f"drc_report_check: PASS over files_found={files_found} "
               f"determined_files={determined} "
-              f"real_violation_total={real_total} project={project_dir}",
-              file=sys.stderr)
+              f"real_violation_total={real_total} "
+              f"tool_corroborated_files={summary.get('tool_corroborated_files')} "
+              f"tool_uncorroborated_files="
+              f"{summary.get('tool_uncorroborated_files')} "
+              f"project={project_dir}", file=sys.stderr)
     return rc
 
 
