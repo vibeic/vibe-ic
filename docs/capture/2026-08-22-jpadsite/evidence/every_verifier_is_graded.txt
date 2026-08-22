@@ -137,3 +137,27 @@ turns it red.
 54 checks now, and the ring depth is read out of the report's own table rather
 than recomputed from the constants -- so the report and the artefact have to
 agree with each other, not merely each with me.
+
+THE CORPUS-CLAIM CHECKS, ADDED LAST AND GRADED LIKE THE REST
+============================================================
+The shipped header states a 7/4/3/2/2/0/0 breakdown of the PDK corpus. It was
+CORRECT when checked -- and so was the pad-variable count, right up until it
+shipped wrong. Nothing bound it, so it is bound now, against the sweep's own
+ROWS rather than against its prose summary.
+
+  rc=0  8 checks pass
+  rc=1  perturbing ONE row of the sweep (gf180mcuD declares in neither view)
+        trips THREE of them at once:
+            declare via the TECH view: 1 (expected 2)
+            declare in neither: 1 (expected 0)
+            the two halves account for every IO tree: 3 (expected 4)
+        the third is the one worth having -- it compares two figures BOTH
+        derived from the artefact, so it is not a literal comparison and it
+        catches a row that falls out of both halves.
+  rc=2  removing corpus_sweep.txt gives NOT VERIFIED, not a pass
+
+62 checks total. The audit that produced this was a REGEX THAT FOUND NOTHING:
+my first pattern reported no numeric claims in any sibling docstring. Listing
+EVERY numeric token instead surfaced this one, which the pattern could not have
+matched. A narrow instrument would have let me publish "siblings clean" -- true,
+and reached by something incapable of seeing otherwise.

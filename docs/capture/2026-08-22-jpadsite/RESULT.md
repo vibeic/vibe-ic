@@ -1646,7 +1646,7 @@ THE CLAIMS THAT NO FILE BACKS -- ENUMERATED, NOT DISCOVERED BY A READER
                                            python3 no_test_was_weakened.py /tmp/b.py /tmp/t.py
 
 EVERY ARITHMETIC CLAIM, RE-DERIVABLE BY RUNNING ONE FILE
-  arithmetic_selfcheck.py                54 checks, all PASS: the balanced and
+  arithmetic_selfcheck.py                62 checks, all PASS: the balanced and
                                          declared splits both summing to 77,
                                          2262 as the minimum die for 20/side,
                                          the N/S overages in DBU, 3762, all five

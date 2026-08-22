@@ -306,6 +306,31 @@ else:
           [len(re.findall(r"^\s*- ", f.read_text(), re.M)) for f in (_pre_def, _post_def)],
           [81, 81])
 
+print("\nTHE SHIPPED HEADER'S CORPUS CLAIM, BOUND TO THE SWEEP THAT MEASURED IT")
+# The module header states a 7/4/3/2/2/0/0 breakdown of the PDK corpus. It was
+# CORRECT when checked -- and so was the variable count, right up until it was
+# not. The count shipped wrong because nothing bound it; this binds the other
+# one, against the sweep's own rows rather than against the prose.
+_sweep = _ev / "flow_change_acceptance" / "corpus_sweep.txt"
+if not _sweep.exists():
+    print("  [NOT VERIFIED] corpus_sweep.txt is missing -- cannot judge")
+    UNVERIFIED += 1
+else:
+    _t = _sweep.read_text()
+    _rows = json.loads(_t[:_t.rindex("}") + 1])["rows"]
+    _io   = [r for r in _rows if r["n_io_lefs"] > 0]
+    _lef  = [r for r in _io if r["lef_pad_class_sites"]]
+    _tech = [r for r in _io if r["declared_sites"] and not r["lef_pad_class_sites"]]
+    check("trees swept", len(_rows), 7)
+    check("carry an IO cell library", len(_io), 4)
+    check("carry none", len(_rows) - len(_io), 3)
+    check("declare via LEF SITE records", len(_lef), 2)
+    check("declare via the TECH view", len(_tech), 2)
+    check("declare in neither",
+          len([r for r in _io if not r["lef_pad_class_sites"] and not r["declared_sites"]]), 0)
+    check("declare one site at two sizes", len([r for r in _rows if r["conflicts"]]), 0)
+    check("the two halves account for every IO tree", len(_lef) + len(_tech), len(_io))
+
 print("\nRATIOS AGAINST THE LARGEST DIE EVER PRODUCED")
 big = max(five)
 # NOT check(x, round(die/big,3), round(die/big,3)) -- an earlier draft of this
