@@ -2884,3 +2884,56 @@ one command.
 document whose §32 register exists because I made two.** "One comment and some
 docs" was true about the CONTENT and false about the WORK, and the difference is
 exactly the thing a reader would hit.
+
+## 44. The resolution is verified — and it surfaced 16 red lander tests on `main`
+
+Two results, and the second is not about this branch at all.
+
+**The "take the branch" resolution is verified, not argued.** Merged into
+`main` `a4caccefea`, resolved all three conflicts with `--theirs`, committed:
+
+```
+conflicts after resolution                          0
+merged tree's lander sha        710087cd5587fed7
+its _LANDING_SCRIPT_SHA256      710087cd5587fed7    MATCH
+ci_harness_timeout_ceiling_check                   rc 0
+149 passed  — ceiling tests, both targets, seam guard, seventh node
+```
+
+So §43's re-landing recipe is now measured end to end: three conflicts, resolve
+by taking the branch, and the result is self-consistent and green. (Still
+re-derive the digest by running the checker; the match above is evidence, not a
+licence to transcribe.)
+
+**And the repo-root lander tests are RED ON MAIN — 16 of them.**
+
+```
+merged tree (main + this branch)   16 failed, 44 passed
+CLEAN main a4caccefea              16 failed, 44 passed    IDENTICAL
+this branch                        60 passed, 0 failed
+```
+
+The merge introduces exactly none of them. All 16 are in
+`tools/test_gatekeeper_land_differential.py` — `test_a_same_host_bundle_is
+_subtracted`, `test_a_gate_red_on_the_base_is_named_as_inherited`,
+`test_a_refusal_removes_the_stamp_and_a_pass_writes_it`,
+`test_no_stamp_is_written_with_no_stamp`, `test_the_four_arms_overlap_in_time`
+and eleven more.
+
+**These are the tests that guard the differential landing path** — the arms, the
+stamp, the base-vs-candidate subtraction. On `main`, at v1.11.69, they are red.
+They are green on this branch, which predates most of what v1.11.69 carried, so
+whatever broke them landed in between and is not this work.
+
+**And nothing routine would catch them.** §33 measured that repo-root `tools/`
+tests sit outside every plugin-scoped selection; §39 measured that the landing's
+own arm IS the targeted selection. So a suite guarding the landing differential
+is red on `main` in a location the landing does not look at. That is the same
+shape as the defect this whole brief was about, one directory over.
+
+**Not diagnosing them.** Sixteen failures in someone else's subsystem, arrived
+during a landing I did not observe, is a separate piece of work with its own
+attribution problem. What is established here is narrow and checkable: they are
+on `main`, they are not this branch's, they are green on this branch, and they
+are in a file no routine selection reaches. Reproduction is one command:
+`python3 -m pytest -q tools/test_gatekeeper_land_differential.py` on `main`.
