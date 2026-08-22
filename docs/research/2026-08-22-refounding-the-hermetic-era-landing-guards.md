@@ -379,9 +379,16 @@ green test already asserts for exactly this purpose. The hedge was on the wrong
 sentence — the thing I should have checked was not whether receipts were
 *sufficient* but whether they were *reachable*, and they are not.
 
-What remains genuinely unverified, and stands: **none of this is implemented or
-run.** B and D still need new fixture scaffolding (a sentinel commit; a two-corpus
-fixture), and neither is sketched here beyond the mechanism.
+**THIRD RETRACTED CAVEAT — this said "none of this is implemented or run".**
+True when written, false in both halves now. **A and C are implemented, run, and
+pass in BOTH lanes** (including the configured image lane, M90). **B was BUILT and
+RUN** (M92): the sentinel-commit fixture works — the stub took the routed-transition
+path on both arms for the first time since the migration — and it was reverted at
+the NEXT layer, not this one.
+
+What genuinely remains unverified is narrower: **whether anything downstream of the
+trusted-parent-evidence integrity check also blocks B and D.** Two layers appeared
+where I had reasoned about one, so I will not predict a third.
 
 
 # ===== A: IMPLEMENTED =====
@@ -411,11 +418,16 @@ rename. A set-difference over test IDs cannot tell "renamed" from "fixed" and
 will happily report the first as the second — worth knowing before anyone uses
 that diff on a rename again.
 
-**The assertions discriminate** — this is not a green that cannot fail.
+**The assertions are NON-VACUOUS BY CONSTRUCTION — "discriminate" was the wrong
+word (M111).**
 `base_total == 0` is an explicitly guarded and disclosed condition
 (`landing_merge_verdict.py:121`, `:848`), and `base_land is None` is a real
 branch (`:1213`) that the document emits as `null` (`:1838`). All four read
-values that genuinely take the failing value.
+values that genuinely take the failing value, and every one is a BARE SUBSCRIPT, so
+a missing key is a `KeyError` rather than a pass. Measured: `base_total > 0` is
+asserted against **6**. **What is NOT established is a live mutation arm** —
+suppressing a wave needs a control injected into the arm, which the exact-set env
+contract refuses (M107): the same wall blocking four of the six surviving reds.
 
 **What I did NOT restore, and said so in the docstring:** ordering. The old name
 promised "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", and
@@ -441,8 +453,17 @@ the bound should ship with the design rather than be rediscovered.**
 
 1. kills the recorded verifier process group by PID — the helper already does
    exactly this on its failure path;
-2. force-removes any container carrying this run's label, using the run id
-   captured from `refs/gk-verify/*` inside the existing poll loop (above).
+2. force-removes any container carrying this run's label — **BUT NOT BY THE ROUTE
+   THIS LINE USED TO GIVE.** It said *"using the run id captured from
+   `refs/gk-verify/*` inside the existing poll loop"*. **Those refs are created
+   ONLY on the `--pr` path** (`gatekeeper-verify-merge.sh:925`); these tests run
+   `--ref probe --no-fetch`, so the poll loop finds nothing and the cleanup has no
+   target. **Measured, not reasoned:** the run failed with `no container ever
+   appeared for run(s) ['NONE ANNOUNCED']` (M83). The label's VALUE is also
+   unlearnable — `run_id` is `os.urandom(12).hex()` minted inside the runner and
+   written only into a receipt a COMPLETED run produces (M82). **Whoever builds B
+   needs the verifier to announce its `RUN_ID`, which is one line in a PROTECTED
+   file.** Do not follow the ref route; it is the trap I walked into.
 
 Both targets are recorded values, not patterns, which satisfies the standing rule
 against `pkill` on anything that could match one's own command line. Residual risk
