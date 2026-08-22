@@ -61,6 +61,12 @@ nothing else, and neither `main` nor either verified branch was touched.
          See the CORRECTION in F12. NOT a mechanical fix — I tried it; the
          branch's own tests distinguish "no corpus" from "a corpus with nothing
          of this kind in it", and only the first should refuse.
+    F17  Nineteen of its twenty checkers ship a `--json` artefact path that no
+         test exercises — proved by breaking one and watching 33 tests pass. Not
+         blocking, but it means the F14 remedy above lands untested unless the
+         person applying it runs the twenty with `--json` themselves. jdistchip
+         has no such gap: none of its twelve writes an artefact, which is also
+         why F14 does not touch it.
 
   jdistchip:
     F16  three gates never return 1 on ANY revision of main I tested, including
@@ -350,7 +356,12 @@ COUNT CORRECTION: the brief says "21 new checkers (10 + 11)". The chip branch
 adds TWELVE, not eleven — `test_aggregate_carries_its_runtime_identity.py` is a
 CHECKER whose filename began with `test_`, easy to read as a test file (the
 author has since renamed it; see F7). With jdistmat's later additions the final
-population is 30 program files: 18 on jdistmat, 12 on jdistchip. Four filenames
+population is 32 program files: 20 on jdistmat, 12 on jdistchip. (This sentence
+read "30 ... 18 on jdistmat" until 2026-08-22, when I re-derived the population
+from the tree and found it disagreed with this report's own table header, which
+says 32 rows. The table was right and the sentence was stale — the four
+`*_census` files appear in it under their pre-rename names, so coverage was
+always complete at 32; only the count in this paragraph was wrong.) Four filenames
 appeared on BOTH branches with different implementations for part of this
 exercise; that was F13 and it is resolved. All 30 are covered in the table.
 ```
@@ -2549,6 +2560,41 @@ F8  COSMETIC — test_generated_values...::test_the_landed_helpers_are_still_
     recognised emits `DeprecationWarning: invalid escape sequence '\s'` from
     `<unknown>:2`. The literal is in a PRE-EXISTING repo source file that the
     new checker parses. Suite noise, nothing more.
+
+F17 NEW, 2026-08-22 (matrix) — NINETEEN OF TWENTY CHECKERS SHIP A `--json`
+    ARTEFACT PATH THAT NO TEST EVER RUNS. Found while positive-controlling my
+    own F14 remedy validation, which is the only reason it surfaced: I was
+    checking my evidence, not theirs.
+
+        jdistmat: 20 of 20 new checkers declare a `--json` option
+                   1 of 20 has a test that passes `--json`
+                  19 of 20 therefore ship an unexercised artefact path
+        jdistchip: 0 of 12 declare `--json` — NO GAP, nothing to test
+
+    DEMONSTRATED, not inferred. I applied the F14 conversion to three of them
+    and deliberately omitted the import, leaving `atomic_write_text` undefined
+    on the write path:
+
+        33 passed, pytest rc=0        <- the suite is blind to it
+        same program with --json:  rc 2, "the walk did not complete
+                                   (NameError: name 'atomic_write_text' is not
+                                   defined). NOT a pass."
+
+    So the branch's green is real for the verdict logic and says nothing about
+    the artefact path. Any edit to that path — the F14 remedy above being the
+    one this repository is about to make to all twenty — lands untested.
+
+    A ONE-LINE REMEDY EXISTS AND THE BRANCH ALREADY CONTAINS IT.
+    `test_two_input_selectors_given_together_must_refuse.py` is the one file
+    that does it; the other nineteen can copy its shape.
+
+    AND IT EXPLAINS F14's ASYMMETRY, which I had recorded as a fact without a
+    cause. F14 hits matrix and not chip because chip's twelve programs write no
+    declared artefacts at all — there is nothing for `atomic_artifact_write_
+    check` to police. The two branches are not differently disciplined here;
+    they are differently shaped. That is a fairer statement of the same
+    measurement, and I would not have had it without asking why my own control
+    passed.
 ```
 
 ## THINGS I TRIED THAT DID NOT BREAK ANYTHING
@@ -2631,6 +2677,128 @@ SO THE F12 DEFECT WAS LOCAL TO F12'S HARNESS, not general to this report. The
 sweep column was measured per gate, each in its own form, and it holds. That is
 a finding about my own instrument, and it is the reason this section exists: a
 correction is worth more when it comes with the bound on what else it touches.
+```
+
+## F14 RE-VALIDATED ON THE COMPOSED TREE, 2026-08-22
+
+```text
+F14 is the only finding that stops a landing, and I had validated its remedy
+nine commits earlier. The landing test is the COMPOSED tree, not the branch tip,
+so I rebuilt it and re-ran the whole thing at main a4caccefe + jdistmat
+facc28860.
+
+THE MERGE IS NOW CLEAN. jdistmat merges into a4caccefe with ZERO conflicts —
+the four generated count files no longer collide, the author having absorbed
+main at b7f504e25. Both arms below are the same merge: identical tree hash
+967ace003166466991cb816c8bad863a0c2c0208, differing only by the remedy.
+
+THE THREE ARMS, each replaying the runner's own 28 wired invocations:
+
+    main a4caccefe                        rc0 26   rc1 0   rc2 2
+    composed, NO remedy                   rc0 25   rc1 1   rc2 2
+    composed, WITH the 20-file remedy     rc0 26   rc1 0   rc2 2
+
+    The single rc 1 is atomic_artifact_write_check under `run`, which is
+    _dispatch 0 0 — rc 1 fails the suite. The two rc 2 are
+    macro_obs_geometry_intersect_check and tool_diagnostic_id_gate, both under
+    run_tolerating_uncheckable, and BOTH ARE ALSO rc 2 ON MAIN. They are the
+    tree's normal state, not a branch effect.
+
+    Diffing the remedied arm against main row by row: all 28 identical. The
+    only differing line is the harness's own header naming the tree path.
+
+THE REMEDY, EXACTLY. All 20 offending sites are one shape —
+`Path(a.json_out).write_text(json.dumps(...))`. Two lines per file:
+
+    +from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
+    -            Path(a.json_out).write_text(json.dumps(
+    +            atomic_write_text(Path(a.json_out), json.dumps(
+
+    20 files changed, 40 insertions, 20 deletions. All 20 compile. The gate goes
+    533 -> 513 non-atomic writes, rc 1 -> rc 0, which is main's number exactly.
+    Note the idiom: these sites write TEXT, so it is `write_text`, not the
+    `write_json` this report named earlier — both exist in the helper, and the
+    house pattern for this shape is `write_text as atomic_write_text`.
+
+THE TEST-SUITE EVIDENCE FOR THIS REMEDY IS NOT LOAD-BEARING, and it was mine.
+I had written that the remedy is validated partly because "the branch's own test
+files still pass". At today's tip that run is 233 passed, rc 0, writing nothing
+into the tree. Then I asked the question that makes a green mean something:
+would those tests go RED on a remedy applied WRONGLY?
+
+    Applied the call swap to three programs and DELIBERATELY OMITTED the import,
+    leaving `atomic_write_text` an undefined name:
+
+        33 passed in 63.50s     pytest rc=0
+
+    The suite does not notice. The mechanism, confirmed directly:
+
+        broken program, no --json   -> rc 0   (what the tests run)
+        broken program, with --json -> rc 2
+            "[CANNOT DETERMINE] registry_is_the_iteration_domain: the walk did
+             not complete (NameError: name 'atomic_write_text' is not defined).
+             NOT a pass."
+
+    Only 1 of the 21 matrix test files passes `--json` at all. The artefact-write
+    path — the thing F14 is entirely about — is exercised by one test file out of
+    twenty-one, so a broken conversion passes the suite.
+
+    THIS ALSO INDICTS MY OTHER TWO EVIDENCE LINES, and I would rather say so than
+    let the reader assume they cover it. `atomic_artifact_write_check` is a
+    STATIC check over the source, so it certifies the call shape and not that the
+    program still runs. And the 28 wired invocations do not touch these programs
+    at all, because none of the twenty is wired yet (F5b). So none of my three
+    original evidence lines actually executed the converted code path. The
+    remedy is validated by running the twenty with `--json` and comparing rc and
+    artefact against the pre-remedy tree — which is recorded below — and NOT by
+    the suite being green.
+
+    THE REMEDY, RE-VALIDATED THE RIGHT WAY. All twenty programs run with
+    `--json`, pre-remedy and post-remedy, on the SAME composed base (identical
+    tree hash, the only difference being the forty added and twenty removed
+    lines):
+
+        rc, pre vs post ............ identical for all 20
+                                     (17 rc 0 + 3 rc 1 in both arms; the three
+                                      rc 1 are the declared reds — gate_proof_
+                                      vocabulary, layer_membership, metric_
+                                      constant — matching the sweep column)
+        artefact written ........... 20/20 both arms, valid JSON both arms
+        artefact CONTENT ........... byte-identical in 20 of 20, after
+                                     normalising the two tree paths
+
+    And the instrument is proven able to answer otherwise: the deliberately
+    broken conversion above returns rc 2 with a NameError named in its message,
+    so a run that comes back rc-identical is a measurement and not an absence.
+    (I also positive-controlled the file comparison itself — diffing two
+    DIFFERENT programs' artefacts, which it correctly reports as differing.
+    A 20-of-20 "identical" from a comparison that cannot see a difference would
+    have been the same shape of empty green as the suite result it replaces.)
+
+    NOTE FOR WHOEVER APPLIES IT: a wrong conversion does not crash loudly. The
+    branch's own traceback guard turns it into a courteous rc 2 with a named
+    reason, and rc 2 under `run` fails the landing suite just as rc 1 does. So a
+    botched F14 fix would swap one suite failure for another that looks unrelated
+    to it.
+
+AND COMMIT BEFORE RUNNING THE SUITE. I nearly published a false red here:
+policy_direction_pin_check returns an untolerated rc 2 on a dirty checkout, so
+the remedied arm would have failed on the 20 uncommitted edits rather than on
+anything real. Committed first; it returns rc 0 in both arms.
+
+A MEASUREMENT OF MINE THAT I THREW AWAY, recorded because the failure is
+instructive and it nearly went into this document as a result. My first
+composed replay was VOID: I applied the 20-file remedy while that replay was
+still running against the same tree. It was at row 27 of 29, and
+atomic_artifact_write_check is row 29 — so the decisive cell was measured on
+the remedied tree while the other 28 were measured on the un-remedied one, and
+the suite came up green BY ACCIDENT. The right answer, for the wrong reason,
+is the hardest kind to catch: it agrees with what you expected. Both arms above
+were re-run on frozen trees with nothing edited during either.
+
+This is the same rule as "never edit the tree during a pytest run", which this
+repository already knows and which I had written down. Knowing a rule and
+holding it while impatient are different skills.
 ```
 
 ## VERDICTS
