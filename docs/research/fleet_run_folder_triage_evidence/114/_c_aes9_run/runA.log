@@ -1,0 +1,30 @@
+Everything is complete. No stray background jobs (only my own `claude` process and a system dbus-daemon). PR #610 is OPEN. Completeness gate passed. Let me give the final report.
+
+## Round 9 complete — opentitan_aes × sky130A
+
+**The target, resolved: the producer is the wrong side, and it's fixed.**
+
+### Which side was wrong (established, not inherited)
+`dft_signoff_check` names `reports/phase2/dft/coverage.json` and `atpg_coverage.rpt`. Both are **declared in `fault_atpg_run.py`'s own module docstring as its outputs** — so the gate is faithful to the contract and does *not* name files the producer never promised. **The producer is the responsible side.** It writes `coverage.yml` (the `fault atpg` engine's native metadata) the instant stuck-at is measured, but wrote the contract-named `coverage.json`/`atpg_coverage.rpt` only *after* the long, timeout-prone transition (at-speed) pass — and `coverage.json` only in the CLI `main()`. Interrupt the transition pass (or call `run_fault()` in-process) and the completed 50.73 % survives only in `coverage.yml`, which the gate doesn't read → **"no coverage evidence"** on a design that *had* been measured.
+
+### The fix — vibe-ic#610 (producer side, no decoy)
+`run_fault()` now emits both contract-named artefacts in a **durable stuck-at snapshot the moment the ratio is parsed** — before the transition pass and independent of the CLI wrapper — then re-writes them complete once transition resolves. I did *not* teach the consumer to read the freshness-unmanaged `coverage.yml` (round 5's is correctly quarantined).
+
+**Effect on the real `coverage.yml`:** `dft_signoff_check` flips `measured_pct None` *("no coverage evidence found")* → `50.7316` *("below required foundry floor 95%")* — an absence becomes a real below-floor number.
+
+**Negative control:** RED on origin/main (`coverage.json is absent after the transition pass was interrupted`), GREEN here. ~2400 tests, 0 regressions. chip-/PDK-agnostic. Version-less. Not merged (I'm not the gatekeeper).
+
+### Full `flow_compliance_check --strict` verdict — NAME SET
+```
+Overall: FAIL   PASS=5 FAIL=3 MISSING=4 VACUOUS_PASS=2 WAIVED=4 SKIPPED=21 DEFERRED=24
+```
+- **FAIL:** P0 umbrella · **11 DFT insertion** · FS1 FMEDA
+- **MISSING:** 7 SDC+PVT · 8 SDC validation · 10 pre-layout STA · DT1 transition ATPG
+- **VACUOUS_PASS:** D1 Doc Extraction · 14 Synthesis handoff
+
+FS1 moved VACUOUS→FAIL vs r8, **confirming r8's PR2 landed as v1.9.27**.
+
+### Honest limits
+Step 11 on this snapshot stays FAIL and my fix doesn't change *that* here — the snapshot's netlist is generic/unmapped so ATPG genuinely can't measure; the 50.73 % is round 5's mapped-netlist run, correctly quarantined. The fix bites on the *measuring* path, which the demonstration exercises. I did **not** touch #603 raw-vs-testable (caravel's), and landed nothing.
+
+**Final gate:** `run_output_completeness_check` → `[PASS] COMPLETE`, exit 0. PR: https://github.com/vibeic/vibe-ic/pull/610

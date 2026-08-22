@@ -505,6 +505,13 @@ def _step11_happy_path(tmp_path: Path) -> Path:
     rep.mkdir(parents=True)
     (dft / "scan_netlist.v").write_text("module scan; endmodule\n")
     (dft / "atpg_coverage.rpt").write_text("Stuck-at %    : 96.00\n")
+    # The ENGINE's own machine-readable coverage metadata. `fault atpg` writes
+    # `coverage.yml` beside its report (dft_atpg_coverage_check._ENGINE_COVERAGE_META),
+    # and bcd444425 added it to step 11's required_outputs. A run that measured and
+    # left no coverage.yml is a shape the engine does not produce, so omitting it made
+    # this "happy path" report 5 of 6 declared outputs present.
+    (dft / "coverage.yml").write_text(
+        "ratio: 9.6e-1\nfaultPoints:\n  - {node: n0, sa0: true, sa1: true}\n")
     (dft / "tv.json").write_text('{"vectors": []}')
     (dft / "cell_model_combined.v").write_text("// combined\n")
     (dft / "transition_atpg_plan.md").write_text("# plan\n")

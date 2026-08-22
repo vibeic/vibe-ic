@@ -293,11 +293,13 @@ def test_the_three_spm_cells_carry_the_shipped_width_as_evidence():
     failing on since v1.6.90, and the number they ship is 32."""
     if not _CORPUS.is_dir():
         pytest.skip("published corpus not checked out")
-    seen = 0
-    for name in ("spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
-                 "spm/v1.9.96_gf180mcuD"):
+    cells = ("spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
+             "spm/v1.9.96_gf180mcuD")
+    seen, absent = 0, []
+    for name in cells:
         d = _CORPUS / name
         if not d.is_dir():
+            absent.append(name)
             continue
         seen += 1
         assert _GATE.shipped_netlist_port_widths(d).get("x") == 32, name
@@ -310,7 +312,15 @@ def test_the_three_spm_cells_carry_the_shipped_width_as_evidence():
         assert port["shipped_netlist_width"] == 32, (name, port)
     if seen == 0:
         pytest.skip("spm cells not checked out")
-    assert seen == 3, f"only {seen} of 3 cells present"
+    # DERIVED FROM THE ROSTER ABOVE, not typed beside it. The literal `3` was
+    # `len(cells)` written a second time, so editing the roster silently made
+    # the two disagree — and when a cell was withdrawn the message said "only 2
+    # of 3" without naming which. The claim is unchanged: this test names
+    # specific cells and a missing one is a real finding, not a smaller run.
+    assert seen == len(cells), (
+        f"{len(absent)} of the {len(cells)} cell(s) this test names are no "
+        f"longer published: {absent}. Either they were withdrawn — in which "
+        f"case pick their successors — or the roster is stale.")
 
 
 def test_ibex_is_refused_on_real_data():
