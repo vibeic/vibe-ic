@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 
 import _gate_denominator as GD
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 # #496 — one unit of this gate's denominator, in the gate's own terms.
 _DENOM_UNIT = "serial RX bit-assembler files"
@@ -318,7 +319,7 @@ def main(argv: List[str] = None) -> int:
     out = json.dumps(report, indent=2, ensure_ascii=False)
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json_out).write_text(out)
+        atomic_write_text(Path(args.json_out), out)
     print(out)
     if any(f.category == "IO" for f in findings):
         return 2
