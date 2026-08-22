@@ -138,3 +138,30 @@ production code touched — both gate programs and the dispatcher are byte-
 identical to main. No GDS touched. Nothing pushed to main. No version bumped.
 The 12 remaining unexcused gates are not diagnosed and nothing is claimed about
 them.
+
+## HYGIENE, BOTH SIDES, SEPARATE TREES — the branch moves nothing
+
+Two clean checkouts, `git clean -xdfq` and `PYTHONDONTWRITEBYTECODE=1` in both,
+one arm each, hygiene and pytest never sharing a checkout (the branch arm was
+restarted after an early launch on a tree still holding uncommitted evidence —
+a dirty worktree invents failures that vanish on commit, so that run was
+discarded rather than reported):
+
+    a4caccefe   83 of 93 decided — 81 passed, 2 failed; 10 NOT CHECKED, 0 WROTE CORPUS, 462s
+    045114294   83 of 93 decided — 81 passed, 2 failed; 10 NOT CHECKED, 0 WROTE CORPUS, 497s
+
+    gate-name sets: IDENTICAL, 93 = 93
+    NEWLY FAILED:   none
+    the same two failures on both sides, and they are not this branch's:
+        ^^ FAILED: PPA measurement coverage
+        ^^ FAILED: liar census controls still fire
+
+83 + 10 = 93 reconciles on both arms. The base figure reproduces the
+measurement report's recorded `83 of 93 — 81 passed, 2 failed; 10 NOT CHECKED`
+for a4caccefe on an independent run, and `PPA measurement coverage` — the gate
+the report flagged as arriving red with v1.11.69 and left undiagnosed — is
+confirmed red here a fourth time. It is still not diagnosed and this branch
+claims nothing about it.
+
+`gates are host-independent` PASSED on both arms at load ~27, consistent with
+the report's narrowed finding that its NOT CHECKED threshold sits above load 48.

@@ -1,0 +1,93 @@
+an argued direction is pinned
+a printed population agrees with its pin
+argparse help format
+artefact-defect close discipline
+a step whose gate cannot fail
+a zero denominator refuses
+backlog items are tracked
+blocker list contract on committed reports
+bundled work is named in NOTICE
+checker execution wiring
+chip-AGNOSTIC source guard
+citation routing is true
+closed-loop edges resolve
+closed-loop executable census
+container exec deadlines
+container login-banner parses
+corpus "published cells carrying a routed DEF" was NOT FOUND — nothing was opened to check  [population: producer rc 3 — NO CORPUS RESOLVED, nothing was opened, over published cells carrying a routed DEF]
+cross-layer reference regression
+d3 declaration/manifest parity
+dead plugin path
+declaration scans strip comments
+declared outputs are findable
+declared reports are written atomically
+engineering evidence fresh
+evidence citation resolves
+final-summary roll-up consistency
+flow dependency graph
+flow-gate enforcement audit
+flow-gate grid
+fork downgrades stay visible
+gates are host-independent
+gates are wired to something
+gates disclose their denominator
+gate skips reach the vacuous tier
+gitignore scratch guard
+ic_expert_db health
+image-gated verifications are not silently skipped
+inner timeouts fit the harness
+input-doc claims vs installed PDK
+L4 -> SystemRDL disposition
+layout-artefact size policy
+L-doc field producer
+liar census controls still fire
+marketplace version sync
+NDA scan of the TRACKED tree
+no gate is left neutered
+no retired pytest plugin request
+no upstream forked twice
+openroad TCL deprecations
+P0 disposition backing
+P0 gate invocability drift
+PDK registry selectable
+PDK via patch vs layer min width
+per-PDK table coverage
+per-source record merges
+plugin full audit
+plugin version stated in prose
+PPA arms solved one problem (cross-layer campaign)
+PPA arms solved one problem (end-to-end campaign)
+PPA frontier recomputes
+PPA head-to-head records
+PPA head-to-head records (cross-layer campaign)
+PPA head-to-head records (end-to-end campaign)
+PPA measurement contract
+PPA measurement contract (cross-layer campaign)
+PPA measurement contract (end-to-end campaign)
+PPA measurement coverage
+PPA promotion feasibility (cross-layer campaign)
+practical notes specificity
+PR bases reach main
+programs index fresh
+prose extractors read polarity
+provenance correction notes
+published-evidence index honest
+published records not superseded
+severity=ERROR is consumed
+shipped-path portability
+signoff gate self-skip
+silent remedy decline
+STA engines agree
+stage membership declared once
+stated corpus figures are derived, not typed
+step FAIL bubbles up
+table rows belong to tables
+tracked blob size ceiling
+tracked JSON/YAML parses
+tracked-symlink portability
+tracked-symlink target present
+triage notes state a true reason
+vendored attribution retained
+verdict token propagation
+watchdog compliance
+waveform artifact hygiene
