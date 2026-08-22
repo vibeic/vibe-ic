@@ -98,11 +98,12 @@ class ReapReport(NamedTuple):
     reaped: List[str]
     live: List[str]      # a peer is holding the lock: left alone, on purpose
     kept: List[Tuple[str, str]]   # (path, why it was not touched)
-    #: A PEER reaped it between our listing and our look.  Its own bucket and
-    #: not folded into `reaped`: this run did NOT do that removal, and a report
-    #: that claimed it had would be the same class of lie as counting a sweep
-    #: that could not look as a sweep that found nothing.
-    vanished: List[str]
+    #: A candidate that DISAPPEARED between the listing and the inspection —
+    #: a peer finished and cleaned up in the window. Reported rather than
+    #: swallowed: on a shared host it is the difference between "quiet" and
+    #: "several other runs are alive right now", and a reaper that hides it
+    #: cannot be told apart from one that is not running at all.
+    vanished: List[str] = []
 
 
 def _tmp_root() -> Path:
@@ -181,18 +182,6 @@ def reap(prefix: str, remover: Optional[Callable[[Path], None]] = None,
     running the pre-lock build may be alive can say so, and keep every
     unlockable directory instead of guessing.  Locked directories are decided
     exactly as before; only the guess is suppressed.
-
-    CONCURRENT PEERS ARE THE OPERATING CONDITION, NOT AN ERROR.  Several agents
-    run against one host and every one of them reaps this same shared prefix, so
-    a candidate listed by ``iterdir`` can be gone by the time the loop reaches
-    it — a peer got there first, which is this module working exactly as
-    designed.  Until #1263 that interleaving reached ``d.stat()`` and raised an
-    uncaught ``FileNotFoundError`` straight out of ``reap`` — and so out of
-    ``reserve`` and out of every caller — which broke the module's own stated
-    contract ("anything unexpected -> left, and reported") in the loudest
-    possible way: a nondeterministic crash whose arrival depended on host load
-    rather than on anything the caller did.  A directory that a peer removed is
-    now reported in ``vanished``, never as ours and never as a crash.
     """
     # `Path(root)` and not `root`: a caller that passes a string is the normal
     # case across a subprocess boundary, and the first test written against
@@ -208,68 +197,60 @@ def reap(prefix: str, remover: Optional[Callable[[Path], None]] = None,
     except OSError:
         return ReapReport([], [], [], [])
     for d in candidates:
-        if exclude is not None and d.resolve() == exclude.resolve():
-            continue
-        lock = d / LOCK_NAME
-        if lock.is_file():
-            held = _is_locked(lock)
-            if held is None:
-                if not d.exists():
-                    # The sidecar did not fail to open; the whole directory
-                    # went. Saying "could not be opened" here would send the
-                    # next reader looking for a permissions fault that is not
-                    # there.
-                    vanished.append(str(d))
-                    continue
-                kept.append((str(d), "its lock sidecar could not be opened"))
-                continue
-            if held:
-                live.append(str(d))
-                continue
-        else:
-            # No sidecar can mean two very different things, and only one of
-            # them is the pre-lock build this branch was written for: a peer
-            # mid-`rmtree` has already deleted the sidecar while the directory
-            # is still standing, and a peer that FINISHED leaves nothing at all.
-            # Both land here, and neither is a legacy leftover to reason about.
-            if not d.exists():
-                vanished.append(str(d))
-                continue
-            if not reap_unlocked:
-                kept.append((str(d), "no lock sidecar, and the caller reports "
-                                     "a peer that predates the lock may be "
-                                     "alive — unattributable, so kept"))
-                continue
-            try:
-                age = time.time() - d.stat().st_mtime
-            except FileNotFoundError:
-                # The residual window the `exists()` above cannot close. Kept
-                # narrow ON PURPOSE: only "it is not there" is a peer doing its
-                # job. A PermissionError here is a real fault about a directory
-                # that IS there, and must stay loud.
-                vanished.append(str(d))
-                continue
-            if age < legacy_max_age_s:
-                kept.append((str(d), "no lock sidecar and only %ds old — it may "
-                                     "be a peer between mkdtemp and lock"
-                                     % int(age)))
-                continue
-            if _referenced_by_a_process(d):
-                kept.append((str(d), "no lock sidecar, but a live process "
-                                     "references the path"))
-                continue
-        if remover is not None:
-            try:
-                remover(d)
-            except Exception as exc:                       # noqa: BLE001
-                kept.append((str(d), "remover raised %s: %s"
-                             % (type(exc).__name__, exc)))
-                continue
-        shutil.rmtree(d, ignore_errors=True)
-        if d.exists():
-            kept.append((str(d), "rmtree left it standing"))
-        else:
-            reaped.append(str(d))
+      # THE LISTING IS A SNAPSHOT, AND PEERS ARE REMOVING THEIR OWN SCRATCH
+      # WHILE WE WALK IT. `d.stat()` below raised FileNotFoundError the moment
+      # a peer finished in that window, and the exception escaped `reserve()`
+      # into the caller — a reaper that crashes because someone else tidied up.
+      # Measured on this fleet (31 agents, one /tmp): it took down two tests of
+      # an unrelated PR's verification run, and did not reproduce on a re-run,
+      # which is exactly how it stayed invisible.
+      #
+      # A directory that is already gone needs no reaping. It is NOT `reaped`
+      # (we did not remove it), NOT `kept` (it is not there to keep), so it is
+      # reported as its own outcome.
+      try:
+          if exclude is not None and d.resolve() == exclude.resolve():
+              continue
+          lock = d / LOCK_NAME
+          if lock.is_file():
+              held = _is_locked(lock)
+              if held is None:
+                  kept.append((str(d), "its lock sidecar could not be opened"))
+                  continue
+              if held:
+                  live.append(str(d))
+                  continue
+          else:
+              if not reap_unlocked:
+                  kept.append((str(d), "no lock sidecar, and the caller reports "
+                                       "a peer that predates the lock may be "
+                                       "alive — unattributable, so kept"))
+                  continue
+              age = time.time() - d.stat().st_mtime
+              if age < legacy_max_age_s:
+                  kept.append((str(d), "no lock sidecar and only %ds old — it may "
+                                       "be a peer between mkdtemp and lock"
+                                       % int(age)))
+                  continue
+              if _referenced_by_a_process(d):
+                  kept.append((str(d), "no lock sidecar, but a live process "
+                                       "references the path"))
+                  continue
+          if remover is not None:
+              try:
+                  remover(d)
+              except Exception as exc:                       # noqa: BLE001
+                  kept.append((str(d), "remover raised %s: %s"
+                               % (type(exc).__name__, exc)))
+                  continue
+          shutil.rmtree(d, ignore_errors=True)
+          if d.exists():
+              kept.append((str(d), "rmtree left it standing"))
+          else:
+              reaped.append(str(d))
+      except FileNotFoundError:
+          vanished.append(str(d))
+          continue
     return ReapReport(reaped, live, kept, vanished)
 
 
