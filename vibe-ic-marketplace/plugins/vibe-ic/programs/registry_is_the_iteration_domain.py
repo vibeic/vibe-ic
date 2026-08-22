@@ -50,6 +50,41 @@ For every `programs/*.py` and `tools/**/*.py`:
 `in`-membership uses of the same name are NOT findings: that is the filter
 shape and it is the remedy this gate asks for.
 
+COVERAGE, MEASURED — the clause's reach, and what it cannot see
+===============================================================
+The "every finding-emitting loop" clause is what makes this rule usable: it is
+the difference between 17 findings and 1, and it is what correctly clears
+`checker_execution_wiring_audit`, whose registry loop is a STALENESS check over
+a filter. It also bounds what the rule can see, and that bound is stated here
+rather than left for a reader to discover.
+
+MEASURED on the tree this shipped with: of 22 registry-reading enforcement
+modules, **20 already contain at least one appending loop over a derived
+population**, so a registry-iterating finding loop added to any of them would
+be exculpated and NOT flagged. The clause's reach is **2 of 22** —
+`gate_red_since_check` and `spare_cell_coverage_check`, and the test pins those
+two BY NAME rather than by the number, because one leaving as another entered
+would keep the count and change the set.
+
+That is a FALSE-NEGATIVE boundary, not a false-positive one: everything the
+rule reports is real, and it under-reports by construction.
+
+THE ALTERNATIVE WAS MEASURED, not assumed. Requiring the exculpating loop to
+append to a FINDING-SHAPED collection raises the reach to 10 of 22 — and
+returns `checker_execution_wiring_audit:951` as a second finding, which is a
+legitimate staleness check whose own docstring explains why it must go stale.
+One measured false positive on a live blocking gate, for eight modules of
+reach. It was not taken, and the numbers are here so the decision can be
+revisited with evidence rather than re-argued.
+
+The principled fix is narrower than either: count a derived loop as exculpating
+only when the collection it appends to REACHES THE VERDICT, which would exclude
+a local AST-walk accumulator (`stack.append`) while keeping a reported one.
+That is a dataflow question and a larger change than this lane distils.
+
+The run prints the reach every time, so the bound is visible in the verdict and
+not only in this docstring.
+
 DENOMINATORS, because this gate is subject to its own rule
 ==========================================================
 The verdict states three: modules parsed, registry-reading modules found, and
@@ -366,8 +401,13 @@ def _independent_population(tree: ast.AST, registries: Set[str],
     return None
 
 
-def scan_module(path: Path, root: Path, tracked: Set[str]) -> Tuple[List[dict], bool]:
-    """Findings for one module, and whether it reads a tracked registry.
+def scan_module(path: Path, root: Path,
+                tracked: Set[str]) -> Tuple[List[dict], bool, bool]:
+    """Findings, whether it reads a registry, and whether it is IN REACH.
+
+    "In reach" means the module has NO appending loop over a derived
+    population, so the only-loop clause could still flag it. A module out of
+    reach is one this rule cannot see the defect in — see COVERAGE above.
 
     A module is a FINDING only when EVERY finding-emitting loop it contains
     iterates a registry-derived name. One such loop beside a loop over a
@@ -378,17 +418,17 @@ def scan_module(path: Path, root: Path, tracked: Set[str]) -> Tuple[List[dict], 
         text = path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(text)
     except (OSError, SyntaxError, ValueError):
-        return [], False
+        return [], False, False
 
     registries = _module_registries(tree, tracked)
     if not registries:
-        return [], False
+        return [], False, False
 
     loaders = _registry_loader_funcs(tree)
     binder = _RegistryBindings(tracked, registries, loaders)
     binder.visit(tree)
     if not binder.bound:
-        return [], False
+        return [], False, False
 
     rel = path.relative_to(root).as_posix()
     on_registry: List[dict] = []
@@ -417,7 +457,7 @@ def scan_module(path: Path, root: Path, tracked: Set[str]) -> Tuple[List[dict], 
         })
 
     if not on_registry or on_derived:
-        return [], True
+        return [], True, not on_derived
 
     # Only the loader that ACTUALLY produced the registry binding is excluded.
     # Excluding every function that happens to parse JSON swallowed `main`
@@ -425,12 +465,12 @@ def scan_module(path: Path, root: Path, tracked: Set[str]) -> Tuple[List[dict], 
     other = _independent_population(tree, registries, set(binder.path_names),
                                     binder.used_loaders)
     if other is None:
-        return [], True
+        return [], True, True
     for f in on_registry:
         f["independent_population_reached_by"] = other
     for f in on_registry:
         f["sibling_loops_over_a_derived_population"] = 0
-    return on_registry, True
+    return on_registry, True, True
 
 
 def _key(f: dict) -> str:
@@ -460,6 +500,7 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     findings: List[dict] = []
     parsed = 0
     readers = 0
+    in_reach = 0
     roots = [root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
              root / "tools"]
     for base in roots:
@@ -471,11 +512,13 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
             if not _is_enforcement(p):
                 continue
             parsed += 1
-            f, is_reader = scan_module(p, root, tracked)
+            f, is_reader, reachable = scan_module(p, root, tracked)
             readers += 1 if is_reader else 0
+            in_reach += 1 if reachable else 0
             findings.extend(f)
     return findings, {"modules_parsed": parsed,
                       "registry_reading_modules": readers,
+                      "registry_readers_within_the_clause_reach": in_reach,
                       "tracked_json_files": len(tracked),
                       "finding_emitting_registry_loops": len(findings)}
 
@@ -528,6 +571,8 @@ def main(argv=None) -> int:
 
     print(f"  modules parsed:                    {denom['modules_parsed']}")
     print(f"  modules reading a tracked registry:{denom['registry_reading_modules']:5d}")
+    print(f"  of those, within the clause's reach:{denom['registry_readers_within_the_clause_reach']:5d}"
+          f"   <- the rest cannot be seen; see COVERAGE in the docstring")
     print(f"  finding-emitting registry loops:   {denom['finding_emitting_registry_loops']}")
     print(f"  inventory rows applied:            {len(known)}")
 

@@ -174,6 +174,78 @@ def test_a_bad_invocation_is_rc_3():
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
+# ----------------------------------------------- the clause's measured reach
+def test_the_run_states_the_clause_reach_not_only_the_findings():
+    """A rule that under-reports must say so in its own verdict.
+
+    The only-loop clause is what takes this rule from 17 findings to 1, and it
+    also bounds what the rule can SEE. A verdict that prints the findings but
+    not the reach reads as complete coverage, which is the same disease as a
+    green over an empty denominator — the thing this rule is about.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True, timeout=1800)
+    assert "within the clause's reach" in r.stdout, (
+        "the run does not disclose how much of its population the clause can "
+        "actually see")
+
+
+def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
+    """The reach is 2 of 22 — and this pins WHICH 2.
+
+    A bare `== 2` is exactly the defect
+    `population_pin_without_its_member_set` refuses: one module leaving the
+    reach as another enters would keep the number and change the set. So the
+    identities are compared in both directions, and the count is derived from
+    them rather than typed a second time.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+
+    sys.path.insert(0, str(PROG.parent))
+    import ast
+    import registry_is_the_iteration_domain as R
+
+    tracked = R._tracked_json_names(root)
+    base = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    reach = set()
+    readers = set()
+    for f in sorted(base.rglob("*.py")):
+        if "tests" in f.parts or not R._is_enforcement(f):
+            continue
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        regs = R._module_registries(tree, tracked)
+        if not regs:
+            continue
+        b = R._RegistryBindings(tracked, regs, R._registry_loader_funcs(tree))
+        b.visit(tree)
+        if not b.bound:
+            continue
+        readers.add(f.name)
+        if not any(isinstance(n, (ast.For, ast.AsyncFor))
+                   and R._iter_target_name(n.iter) not in b.bound
+                   and R._emits_a_finding(n.body, strict=False) is not None
+                   for n in ast.walk(tree)):
+            reach.add(f.name)
+
+    expected = {"gate_red_since_check.py", "spare_cell_coverage_check.py"}
+    assert reach == expected, (
+        f"the clause's reach MOVED. entered: {sorted(reach - expected)}; "
+        f"left: {sorted(expected - reach)}. Re-derive the COVERAGE section of "
+        f"the checker's docstring against this set — do not just restate the "
+        f"number.")
+    assert len(reach) < len(readers), (
+        "the reach must be a strict subset of the registry-reading population, "
+        "or the boundary this test exists to record has stopped existing")
+
+
 # --------------------------------------------------------- the shipped corpus
 def test_the_shipped_tree_passes_its_own_rule():
     """A guard that flags the very tree it ships with is a bug, not a guard."""
