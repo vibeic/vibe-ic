@@ -2530,7 +2530,7 @@ four, and not one survived unchanged.**
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. The published `layer` field is the discriminator |
 | A-17 | 6804 absolute, **2 roots** | **0 outside a run tree** | **swept**: no absolute path is forced, so the declared-convention check has an empty false-positive population and the "rewriting breaks provenance" objection does not apply. Earlier correction stands: mixed WITHIN producers, 6804/6804 host-prefixed |
-| A-18 | — | 0 mentions | the ranking layer has no word for the property it deletes |
+| A-18 | objective = **1 metric**; feasibility names **6** families | **spare cells in neither** | **swept**: removing them lowers the area the ranking optimises AND passes a gate that has no term for them — while the artefact carries a protection block asserting they cannot be stripped |
 | A-19 | — | order INVERTED | the cheap rung's top candidate places third |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
@@ -2699,7 +2699,7 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the two unswept rules** — A-18, A-19, which are exactly
+3. **Sweep before building the one unswept rule** — A-19, which is exactly
    the rows carrying no *before* figure in the sweep table. **Four of the nine are now swept**, and the yield argues for
    the rest: two overturned their own row, one survived on a population twice
    the batch, and one settled a design question the record had argued on

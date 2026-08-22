@@ -682,13 +682,18 @@ _key = lambda x: (x[0], int(x.split("-")[1]))   # ONE key for both lists: the
 # first version sorted one by (letter, number) and the other by number alone, so
 # two identical sets compared unequal and the check failed on its own ordering.
 _unswept = sorted({c for c, before in _rows if before.strip() in ("—", "-", "")}, key=_key)
-_m = re.search(r"Sweep before building each of the (\w+) unswept rules", MD)
-_named = re.search(r"unswept rules\*\* — ([A-Z0-9, \-\n]+?), which are exactly", MD, re.S)
+# Tolerate the singular. The prose went from "each of the two unswept rules" to
+# "the one unswept rule" as the sweeps landed, the anchor stopped matching, and
+# this check RAISED instead of failing -- a crash is not a verdict.
+_m = re.search(r"Sweep before building (?:each of )?the (\w+) unswept rules?", MD)
+_named = re.search(r"unswept rules?\*\* — ([A-Z0-9, \-\n]+?), which (?:are|is) exactly",
+                   MD, re.S)   # singular too, for when one rule is left
 _listed = sorted(set(re.findall(r"A-\d+", _named.group(1))) if _named else set(), key=_key)
 control("unswept", bool(_rows) and bool(_m))
 check("the handoff's unswept list is the sweep table's unswept rows",
-      WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
-      f"prose says {_m.group(1) if _m else '-'} ({len(_listed)} named), table has {len(_unswept)}")
+      bool(_m) and WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
+      (f"prose says {_m.group(1)} ({len(_listed)} named), table has {len(_unswept)}"
+       if _m else f"the handoff sentence did not match; table has {len(_unswept)}"))
 
 # 45. a bundle's directory declares a date and its emitted summary declares one
 # too, and nothing compared them. They disagree here: the batch was re-emitted
