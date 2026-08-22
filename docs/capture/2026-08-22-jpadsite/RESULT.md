@@ -1102,6 +1102,48 @@ more on a side -- INCLUDING the 40 the design actually declares. It is not a
 substitute for a pin-out, and it is not a verdict on the declared grouping
 either; it is not offered as either one.
 
+WHAT STANDS BETWEEN THIS DESIGN AND A FINISHED PAD RING, in order
+==================================================================
+Every piece below is measured and appears somewhere in this report. NONE OF
+THEM APPEARED TOGETHER until now -- a reader asking "what would it take" had to
+assemble it from nine places. The order is the order they bite:
+
+  0. PAD_SITE_NOT_FOUND ........... OURS, AND GONE. The step read one PDK view;
+                                    both sites are declared in the other. Fixed,
+                                    on main, verified on gf180mcuD AND on the
+                                    design's own sky130A.
+
+  1. NO PIN-OUT DECLARATION ....... A HUMAN'S. `phase3/stage3/pnr/
+                                    pad_assignment.json` is absent, so
+                                    `pad_ring_gen` SKIPs and names all 13
+                                    variables. It comes from section 2B of the
+                                    tape-out declaration: pad instances, their
+                                    order per side, and the signal map --
+                                    questions somebody answers with a bond
+                                    diagram in front of them. MEASURED on the
+                                    real tree 2026-08-22. NOTHING DOWNSTREAM CAN
+                                    START UNTIL THIS EXISTS.
+
+  2. THE DECLARED GROUPING NEEDS A DIE NOBODY HAS BUILT. L3/L9 declare
+                                    40/33/2/2. That needs 3.762 mm on gf180mcuD
+                                    or 3.612 mm on sky130A, both measured. The
+                                    largest sha256 die that has ever existed is
+                                    0.873 mm -- 4.3x smaller. On the real die a
+                                    ring holds 20 pads on sky130A and 4 on
+                                    gf180mcuD, against 77 port bits (measured on
+                                    the netlist: 8 declarations, 77 bits).
+
+  3. NO FINISHED LAYOUT ........... The real run stops after routing: 15 DEFs
+                                    through routed and post_hold, ZERO GDS. That
+                                    is why `general_precheck` is NOT_DETERMINED
+                                    with layouts_found=0 -- unfinished, not
+                                    hollow.
+
+READ TOGETHER: our defect was AHEAD of all three and is fixed. The first thing
+now blocking the row is a question nobody has asked a human. The second is a die
+four times larger than any that exists. Neither is a flow defect, and no amount
+of work on this step reaches either.
+
 So the honest final state of the row:
 
     sha256 pad ring, gf180mcuD, self-tape-out path
