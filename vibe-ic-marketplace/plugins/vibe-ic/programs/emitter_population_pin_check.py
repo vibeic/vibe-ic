@@ -758,9 +758,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     seen_unparsed: Set[str] = set()
 
     def record_unparsed(name: str, e: SyntaxError) -> None:
-        """Say once that a source could not be read. Both checks can reach the
-        same file, and a reach report that counts one file twice is its own
-        small lie."""
+        """Say once that a PROGRAM could not be read.
+
+        Two readers on this side reach the same file -- CHECK A's `incr ` scan
+        and `emitter_phrases` -- and a reach report that counts one file twice
+        is its own small lie.
+
+        THE TEST SIDE APPENDS DIRECTLY and does not need this: `rglob` yields
+        each test once, and it records the full path rather than a basename
+        because tests nest in subdirectories where a basename would be
+        ambiguous. Two key spaces, deliberately, so this set cannot collide
+        with a test path either."""
         if name not in seen_unparsed:
             seen_unparsed.add(name)
             unparsed.append(f"{name}:{e.lineno}: {e.msg}")
