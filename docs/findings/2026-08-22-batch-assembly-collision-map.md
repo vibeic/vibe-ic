@@ -602,12 +602,29 @@ UNDETERMINED`, same meaning -- differing only in the corpus path:
     checkout arm : <TREE>/ic is a directory but holds no L-doc this gate can read
     worktree arm : /tmp/.../bench-data/ic is a directory but holds no L-doc ...
 
-The mechanism is in the gate: `gate_host_independence_check.py:328` redacts with
-`line = line.replace(root, "<TREE>")`, which normalises each arm's own TREE ROOT. A
-corpus bound OUTSIDE the tree -- which is the only way to bind one since v1.10.56
-moved it to its own repository -- is not covered by that substitution, so one arm
-redacts and the other prints an absolute path, and identical verdicts compare
-unequal.
+WHAT IS ESTABLISHED, AND WHAT IS NOT. Established: the six differ only in the
+corpus path, one arm rendering `<TREE>` and the other an absolute path, while the
+VERDICT on both arms is the same `rc=2 UNDETERMINED`. So this is a text-comparison
+artefact of an externally-bound corpus, not a host-dependent verdict.
+
+NOT established: why one arm redacts it. An earlier revision of this section
+asserted that the corpus path "escapes the substitution" -- that explanation is
+WRONG and is retracted. Both redaction paths take the same roots:
+
+    gate_host_independence_check.py:352   semantic_record(..., roots=(repo_root, wt))
+    gate_host_independence_check.py:323   _norm(line, repo_root, wt)
+
+Neither includes the corpus root. If neither redacted it, BOTH arms would print the
+absolute path and they would compare EQUAL. Something normalises it on the checkout
+side and I did not find what. The gate's own docstring says the checkout arm is
+"the argv-bound machine record the outer sweep has already produced", so the two
+sides are produced by different code paths -- recorded versus freshly normalised --
+which is where the asymmetry must live, but I did not confirm it.
+
+I am leaving it there rather than authoring a fix on a partial diagnosis, in a
+1434-line gate I have read a fraction of. The owner has what is needed: the six
+lines, the two roots= call sites, and the recorded-versus-fresh asymmetry to check
+first.
 
 So: binding a corpus makes this gate report spurious non-determinism. That is a
 defect worth a ledger row, and it is the gate's, not the tree's. It also means the
