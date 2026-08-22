@@ -91,11 +91,19 @@ for wt in "$@"; do
     if   [ -z "$b" ];     then dnew=$((dnew+1));  [ ${#dlist} -lt 260 ] && dlist="${dlist}${dlist:+,}NEW:$f"
     elif [ "$a" = "$b" ]; then dsame=$((dsame+1))
     else                       dmod=$((dmod+1));  [ ${#dlist} -lt 260 ] && dlist="${dlist}${dlist:+,}MOD:$f"; fi
-  done < <(env -u GIT_INDEX_FILE git -C "$wt" status --porcelain 2>/dev/null)
+  # --untracked-files=ALL, never the default. The default collapses an untracked DIRECTORY to a
+  # single entry ending in "/", and the loop above tests [ -f ], so an entire untracked tree was
+  # skipped and counted as ZERO new files. On .102 that hid untracked content in 43 rows whose
+  # verdict authorises deletion. jharv3 found the -uno version of this; this is the subtler one.
+  done < <(env -u GIT_INDEX_FILE git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)
 
   if   [ "$nnovel" -gt 0 ];                            then st=KEEP_NOVEL_CONTENT
-  elif [ "$nsuper" -gt 0 ];                            then st=KEEP_SUPERSEDED_CONTENT_DIFFERS
+  # UNCOMMITTED outranks SUPERSEDED. A superseded row becomes ABANDON and ABANDON deletes,
+  # so a worktree whose committed change is contained in main but which ALSO holds untracked
+  # or modified content must never take that branch. Two rows on .102 sat exactly there once
+  # the untracked-directory bug stopped hiding their content.
   elif [ $((dmod+dnew)) -gt 0 ];                       then st=KEEP_UNCOMMITTED_ONLY
+  elif [ "$nsuper" -gt 0 ];                            then st=KEEP_SUPERSEDED_CONTENT_DIFFERS
   elif [ "$ndiff" -eq 0 ] && [ "$ddel" -eq 0 ];        then st=DROP_ALL_FILES_MATCH
   elif [ "$ndiff" -eq 0 ];                             then st=DROP_ALL_FILES_MATCH_DELETIONS_ONLY
   elif [ "$nnovel" -eq 0 ] && [ "$nsuper" -eq 0 ];     then st=DROP_VERSION_NOISE_ONLY

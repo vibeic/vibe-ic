@@ -722,3 +722,48 @@ ever exercised it. It is load-bearing now because a case was built for it: a row
 main lacks a file main has.
 
 Shipped as `bin_jharv2/evidence_selftest.sh` so the claim is repeatable rather than asserted.
+
+## 43 rows authorised deletion of untracked content — a subtler bug than `-uno`
+
+jharv3 found that their sweep measured cleanliness with `git status --porcelain -uno`, which
+**excludes untracked files**, and asked whether the pattern was fleet-wide. Grepped: **zero
+occurrences of `-uno` anywhere in my tooling.** Every judge used plain `--porcelain`, which
+includes untracked by default.
+
+That answer was true and useless, because the defect was one level down.
+
+    $ git status --porcelain                       # what my judge used
+    ?? vibe-ic-marketplace/scratch_geom_signoff_tests/          1 line
+
+    $ git status --porcelain --untracked-files=all
+    ?? …/scratch_geom_signoff_tests/agree/out.json
+    ?? …/agree/reports/phase3/antenna.rpt
+    …                                                          23 lines
+
+**The default collapses an untracked DIRECTORY to a single entry ending in `/`.** My loop tested
+`[ -f "$wt/$f" ]` to skip deletions — and a directory fails that test, so the entry was skipped
+and the whole tree counted as **zero new files**. Not excluded by a flag; hidden by a shape.
+
+Measured with `--untracked-files=all` across every deletion-bound row:
+
+| file | deletion-bound rows | holding untracked content not on main |
+|---|---|---|
+| `verdicts_shard_b.tsv` | 17 | **0** |
+| `verdicts_shard_c_80_recovered.tsv` | 11 | **0** |
+| `verdicts_extra_8hd9.tsv` | 75 | **0** |
+| `verdicts_extra_8hd7.tsv` | 132 | **43** |
+
+**43 rows said delete over content that exists nowhere else.** Re-judged with the fix: all 43 are
+now RECOVER — 41 were LANDED, 2 were ABANDON.
+
+### And a precedence bug the fix exposed
+
+Two of the 43 first came back `KEEP_SUPERSEDED_CONTENT_DIFFERS`, which maps to **ABANDON**, which
+deletes. A worktree whose committed change is contained in main but which *also* holds untracked
+content must never take that branch. The ladder tested `nsuper` before `dmod+dnew`; those two
+rows sat exactly there, and only became visible once the directory bug stopped hiding their
+content. **Uncommitted now outranks superseded.** All 43 are RECOVER.
+
+Both fixes are in `bin_jharv2/judge.sh`. The contract deliverables were never affected — shard B
+and the recovered 80 are 28/28 clean under the widest setting — which is luck of which hosts had
+untracked scratch directories, not care.
