@@ -82,18 +82,26 @@ Every transferred file was re-hashed here against what the host reported
 (169 of 169, 0 mismatches) before anything was committed, and files were read
 back *through* the pushed refs to close the round trip.
 
-## Two gates are deliberately RED
+## Gate state
 
-They are not failures of this shard. They are findings that outlive the agent
-that made them, because prose does not survive a regeneration and a gate does.
+Every shard-C gate is green. The reds that remain are findings about other files,
+kept red because prose does not survive a regeneration and a gate does.
 
-| gate | state | why |
+| gate | state | what it checks |
 |---|---|---|
+| `bin_jharv3/contract_check.py` | GREEN | shape, vocabulary, 1:1 roster join, every RECOVER's named file re-resolved against current main |
+| `bin_jharv3/reverify_shard_c.py` | GREEN | every evidence claim re-derived from the repository alone |
+| `bin_jharv3/ignored_accounted.py` | GREEN on B and C | deletion-bound rows clean on disk; every ignored entry attributed by `git check-ignore` to a rule main declares generated or scratch. **RED on shard A ×5** — five of its twelve deletion-bound rows are dirty on disk |
+| `bin_jharv3/absent_from_main_accounted.py` | GREEN | 17472 paths these rows hold that main's tip lacks: 17471 identical at the merge-base, 1 covered by a live origin ref |
+| `bin_jharv3/abandon_survivable.py` | ALLOW ×2 | both shard-C ABANDONs shown survivable, by two independent rules each |
+| `bin_jharv3/vacuous_universal.py` | 0 findings in C | no empty-set universal, no stale main cite, no unaccounted untracked |
 | `bin_jharv3/rescue_contradiction.py` | RED on shard A ×4 | four rows say LANDED over work a rescue ref proves is not on main |
-| `bin_jharv3/joined_parity.py` | RED ×8 | the consumable contradicts the shard files it is derived from; 4 of the 8 in the direction that deletes |
+| `bin_jharv3/joined_parity.py` | RED ×2, was ×8 | shard A and C now agree with the consumable; shard B's two remain |
 
-Both go green when the underlying verdicts are fixed. `verdicts_shard_a.tsv` and
-`verdicts_shard_b.tsv` are untouched — those corrections belong to their owners.
+`verdicts_shard_a.tsv` and `verdicts_shard_b.tsv` are untouched — those corrections
+belong to their owners, and `bin_jharv3/joined_from_shard.py --shard b` closes the
+parity half in one command. The disk measurement behind the shard-A red is in
+`HANDOVER_shards_a_b_untracked_ignored_jharv3.md`, with no verdict attached.
 
 ## Nothing was deleted
 
