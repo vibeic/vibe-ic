@@ -4013,3 +4013,60 @@ pre-existing on both arms — would have appeared as present-on-main-only and I 
 reported 17 removed instead of 16, or worse, gone looking for a regression that does not
 exist. The re-run passes `-rf` and the list now matches the count. **A name set is
 evidence only if it is complete, and an incomplete one looks exactly like a shorter one.**
+
+## 58. §39's gate defect, measured exactly — and why it cannot be fixed from here
+
+§39 said the no-skip test is unreachable by the default targeted mode and §47 corrected the
+CAUSATION. Neither pinned the MECHANISM. Asked of the actual breaking commit,
+`4232a7301e`, checked out and run at that tree:
+
+    mode                          issue1498      issue538       selection
+    default (import-edge)         SELECTED       NOT selected   122 files
+    reference                     selected       selected       138 files
+
+**Why one and not the other.** `test_issue1498` carries real import edges —
+`import landing_merge_verdict as V`, `import gate_process_attestation as A`.
+`test_issue538` reaches its subject like this:
+
+    subprocess.run([sys.executable, str(_PROGRAMS / "gatekeeper_review.py"), "--help"])
+
+A path assembled from a constant, handed to a subprocess. There is no import edge to find,
+so an import-edge analyser is **structurally blind** to it — and `4232a7301e` changed
+`gatekeeper_review.py`. The only guard on that program's CLI surface was not selected while
+that program was being changed. This is the same shape as
+[[a-contract-relation-leaves-no-import-edge]]: the relation is real, the edge is absent.
+
+The selector already keys a rule on basename-with-extension for `.sh` (a measured hole
+someone closed earlier — "a `.sh` never survived to reach a rule"). The equivalent for a
+`.py` driven as a subprocess does not exist.
+
+**What the rule would cost, computed at that same tree rather than guessed:**
+
+    test files naming a changed program as a string literal   12
+    of those ALREADY selected by default mode                 10
+    NET NEW files the rule would add                           2
+    default selection 122 -> 124   (+1.6%)
+
+versus +16 (+13%) for promoting `reference` to the default. The narrow rule is **eight
+times cheaper and lands on the same two files**, one of which is exactly the guarantee test.
+
+### Why I did not write it
+
+`vibe-ic-marketplace/plugins/vibe-ic/programs/ci_targeted_test_select.py` is in
+`tools/ci/protected_landing_transition.json` with `roles: ["authority"]`, and its sha256 is
+**identical in `current` and `next`** (`546d9dd1…`) — the selector is not part of the
+pending transition. Editing it therefore needs a PREPARE→ACTIVATE pair
+([[protected-manifest-needs-a-prepare-activate-pair]]).
+
+And the tuple on `main` is already MIXED: `landing_merge_verdict.py`
+(`e65dd27e` vs `01282f8c`), `tools/gatekeeper-land.sh` (`282a2e92` vs `ca3dd877`) and
+`ci_harness_timeout_ceiling_check.py` all differ between the two recorded states. That is
+not inference — it is why both `phase_b_activated_parity` nodes are red on clean main in
+the two-arm run in §57's addendum, and one of them is named
+`test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture`.
+
+An ACTIVATE carrying the selector would add its paths to that same mixture rather than
+resolve it ([[protected-tuple-on-main-is-already-mixed]]). So the measurement is recorded
+and the edit is not made. **An honest UNDETERMINED with a named missing input beats a
+manufactured PASS**, and the missing input here is named: the pending transition
+`activated-at-lane-parallel-window` has to settle first.
