@@ -69,3 +69,29 @@ ancestor of live `origin/main` 81cd5321b08:
 
 So the direction argument holds for every row I shipped. Under a force-push it would not, and the
 rows would need re-judging rather than re-labelling.
+
+## ABANDON was the smaller half. LANDED authorises deletion too.
+
+I re-audited the 29 ABANDON rows and stopped, which was the same mistake in miniature: ABANDON is
+not the deletion-bound verdict, it is *one* of them. `LANDED` means every file matched main, and an
+executor reading that deletes the worktree just as readily. There are **163** LANDED rows against
+29 ABANDON -- the class I checked was 15% of the class at risk.
+
+Re-audited all 163 under `--untracked-files=all`, resolving each on whichever host actually holds
+it rather than assuming the host that named it:
+
+| host | LANDED rows resolved | dirty |
+|---|---|---|
+| .105 (8HD-9) | 74 | 0 |
+| .102 (8HD-7) | 69 | 0 |
+| .112 | 4 | 0 |
+| .114 | 10 | 0 |
+| .121 | 6 | 0 |
+| **total** | **163** | **0** |
+
+**Deletion-bound total: 192 rows (163 LANDED + 29 ABANDON). All 192 re-measured under `-uall`,
+0 dirty, 0 unresolved, 0 verdicts moved.**
+
+Every one reads a true zero, and a zero under `-uall` cannot be a collapsed anything. The exposure
+was nil on all 192 -- but that is a fact about which worktrees happened to hold scratch directories,
+not a property of the method, and it was only knowable by measuring all 192.
