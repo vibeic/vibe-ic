@@ -2381,12 +2381,25 @@ was re-checked:
     records those five carry                           9
     closed by main                                     1   (withdrawn, above)
     still holding                                      8
+      of which one had its MOTIVATING SITE fixed         1   (A-11, and the
+        while the class survived elsewhere                    record stands)
 
 The eight were verified individually rather than assumed from the diff: the
 equivalence prover still emits no depth and no exhaustion flag, the interface
 document still states exactly one identity's membership rule, the feasibility
 module still contains no satisfiability check, and the area figure's required
 scope is still a single key with no composition.
+
+**One of the eight is the brief's own case, made concrete.** A-11's motivating
+site was repaired on main during this lane — the comparison gate stopped guessing
+at filenames, and a landed test states the old defect in the same terms this
+record does. Its SECOND instance was not touched: the timing module still selects
+sign-off reports by a filename prefix, and its own comment still promises that a
+new corner report is picked up without a change there, which was measured false
+at 8 of 13. So the record is updated and **not** withdrawn. Withdrawing on the
+strength of the visible site being fixed is precisely the mistake the brief warns
+about — *a fix that landed is where the distilled rule is missing, because the
+next occurrence is somewhere the fix did not look.*
 
 **One of the eight nearly read as closed.** A screen for whether the search space
 had gained a record of which levers were exercised returned six hits — and all
@@ -2882,7 +2895,7 @@ gap was non-empty every single time it was measured.
 | A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard** — but the remedy is **already demonstrated in-tree**: a sibling uses argparse's mutually exclusive group and refuses both selectors with rc 2, so this is application, not design |
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
-| A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off |
+| A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off. **Its motivating site was fixed on main mid-lane — and the record stands**: the timing selector still picks sign-off reports by filename prefix |
 | A-14 | 11 candidates | **8 confirmed** | strengthened; 3 masked, not cleared |
 | A-3 | 161 floors | 36 | rescoped; `>= 1` is a different, valid assertion |
 | A-4 | 32 prefix globs | needs a discriminator | **most are correct**; see below |
