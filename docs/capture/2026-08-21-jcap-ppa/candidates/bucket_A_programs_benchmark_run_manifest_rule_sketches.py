@@ -1,5 +1,5 @@
-# Bucket A — program-rule sketches for benchmark_run_manifest.py
-# Corpus-sweep REQUIRED before merging into benchmark_run_manifest.py.
+# Bucket A — program-rule sketches for programs/benchmark_run_manifest.py
+# Corpus-sweep REQUIRED before merging into programs/benchmark_run_manifest.py.
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A gate grows a corpus mode: it runs a per-subject check over many subjects and must return ONE exit code for the whole population. The obvious aggregator is the largest code seen. That is correct only if the code space happens to be ordered by severity, and in a three-code contract it is NOT: the codes are pass, a finding, and could-not-check, and could-not-check carries the LARGEST integer while being the WEAKEST verdict. So the largest-integer rule silently prefers the weakest claim. The consequence is not a cosmetic mislabel, it is a defeat-the-gate primitive: ADDING a subject the gate cannot read REMOVES a real finding from the aggregate, and the per-subject lines still print the finding, so the human-readable output and the exit code disagree while both look healthy. A downstream consumer that maps could-not-check to a permissive verdict then turns the whole population green.

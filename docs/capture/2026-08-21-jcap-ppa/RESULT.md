@@ -1148,6 +1148,29 @@ my attempt to count quantified docstring sentences matched a pattern literal
 inside a regex and reported a "document" that does not exist. That is the tenth
 measurement-apparatus error of this batch, so the record ships with **one
 confirmed instance rather than a number I could not defend.**
+
+*Attempted again, properly, and the naive number turns out to be the wrong
+number* — which is worth more to the implementer than no number. A quantifier
+screen over every module, class and function docstring in the package returns
+**44 sentences**. Reading all 44:
+
+| what the sentence is | can a tree change falsify it? |
+|---|---|
+| a design invariant — *refusing is the only safe read*, *the ONLY place exit codes are decided*, *an empty list is the only PASS* | **no** — the majority |
+| a tree census — *the only dialect that stamps*, *all 22 edges on main*, *all three sign-off reports are byte-identical* | **yes** — the enforceable subset |
+
+A gate flagging all 44 is switched off as noise within a day. The screen must
+pair the quantifier **with an artefact-class noun**, because a census sentence
+always names the thing it is counting and an invariant does not.
+
+Two findings for whoever builds it. The lane's **second** flagged docstring was
+already repaired in place — and repaired well, stating the old behaviour in the
+past tense and the new one after it — so this class is handled today
+*reactively, one site at a time, by whoever happens to touch the file*. That is
+the argument for the gate, not against it. And there is a test in the tree whose
+**name reads as exactly this rule and which is the wrong thing to extend**: its
+subject is canned prose emitted into generated documents by one function, not
+docstrings at all. I nearly recommended it.
 *Landed during this branch, and it narrows this record without closing it:*
 `programs/emitter_population_pin_check.py` binds a stated population to its source
 in two places — an emitted script's literal denominator against the sites that
