@@ -899,9 +899,15 @@ I checked rather than assumed, and clause 2 still runs and still passes
 
 So an absent pin-out does not make this step REFUSE; it makes it VACUOUS_PASS,
 which in an aggregate reads as "nothing to worry about here". That is the
-empty-denominator shape again, now at the flow level. (Written as "the third
-time"; by the end of the session the count was eight, so it is stated without a
-number here rather than carrying one that drifts.)
+empty-denominator shape again, now at the flow level. (This parenthesis has now been wrong twice about
+its own subject. It first said "the third time". I replaced that with "by the
+end of the session the count was eight" -- a number anchored to a moment that
+had not happened, in a sentence whose POINT was to avoid a number that drifts,
+and it drifted again as later instances turned up: the vacuous `CLEAN` on the
+PR, a third author routing around rc=2, and my own self-check scoring a refusal
+as a failure. NO COUNT IS GIVEN HERE. The shape recurs; grep this file for
+VACUOUS and for "empty denominator" to enumerate it at whatever state you find
+it in.)
 NOT PATCHED: how the flow reads rc=2 is a verdict rule every design passes
 through, which is a flow-owner decision and not one to take inside a brief about
 a different defect. In fairness the flow does not hide it — it emits 15 lines of
