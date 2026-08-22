@@ -4894,3 +4894,54 @@ kept because it was true when measured`, and left `since` and `max_commits`
 untouched. That is the append-only correction discipline, applied by someone else,
 to a row I had just measured and written up. The only thing it got wrong is which
 layer to hand the defect to.
+
+## 72. §71 rests on a premise I quoted instead of measuring, and it does not reproduce
+
+§71 analysed WHY `L-doc field producer` is red, taking from the landing's note
+that the gate *"returns rc 2 UNDETERMINED over a zero denominator"* and building
+a wrapper-mismatch argument on it. **I never ran the gate to check that, and it
+is not what happens here.**
+
+Measured on `main` ae78abb285, the declared invocation, both corpus conditions:
+
+    pointer UNSET                          rc 1
+    VIBE_IC_BENCHMARK_DATA=~/benchmark-data rc 1
+
+    [FAIL] 3 field(s) READ by a checker that NO document populates
+       floorplan_hints:      1 reader(s), present in 4 doc(s), populated in 0
+       power_budget_uw:      1 reader(s), present in 4 doc(s), populated in 0
+       sdc_constraints_path: 1 reader(s), present in 4 doc(s), populated in 0
+
+**rc 1 with a real finding over a denominator of FOUR, not rc 2 over zero.** So
+the wrapper question §71 spent a section on is MOOT: rc 1 fails under `run` and
+under `run_tolerating_uncheckable` alike. Nothing about the declaration is what
+keeps this row red.
+
+### What is true, and the part I cannot settle from here
+
+The corpus commit the note cites, `b971220`, is real and is a DESCENDANT of this
+host's clone HEAD (`146d6656`, 2026-08-18). Sampling 400 L-doc JSONs at that
+commit by blob, **247 carry a `fields` object** — evidence against "holds NO
+L-doc carrying a `fields` object at all", though `grep` for the key is coarser
+than whatever predicate the checker applies.
+
+What I did NOT do is check out `b971220` in `~/benchmark-data`. That clone is on
+a shared host with nineteen live worktrees and other agents' sessions
+([[the-shared-checkout-has-19-live-worktrees]]); moving its HEAD to satisfy my
+curiosity would change what every other agent's gate reads. So the honest
+position is: **the note may describe a state reachable at a newer corpus HEAD
+than this host holds, and on the tree anyone here can actually measure, the gate
+is rc 1 with a non-empty denominator.**
+
+### The lesson, which is not subtle
+
+§70 recorded their note carefully and correctly — it IS what the ledger says. §71
+then reasoned from it as though quoting were measuring. One command would have
+caught it, and I ran that command only because a number in my own earlier notes
+(rc 1) contradicted the quote and I finally noticed the contradiction.
+
+**A peer's measurement is evidence, not a premise.** It deserves the same
+treatment as my own: re-run it before building on it, especially when it
+supersedes something and therefore arrives with authority. §71's conclusion —
+that the item needs the PREPARE plus a dated exemption — is *withdrawn*: it
+answers a question the tree does not pose.
