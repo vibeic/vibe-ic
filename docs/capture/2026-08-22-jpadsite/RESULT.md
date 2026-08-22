@@ -263,8 +263,22 @@ both measured. The blocker this brief was about is gone; the row is not.
 
 ## 1. Where `PAD_SITE_NOT_FOUND` is raised and what it was looking for
 
-`programs/pad_ring_gen.py:526` — upstream's two site lookups, run before every
-other geometric check, so this refusal MASKS whatever comes after it.
+`programs/pad_ring_gen.py:526` **AS OF a00f53f20 — that coordinate is now dead
+and this is the one citation the fix's own landing destroyed.** On main today
+line 526 is an unrelated missing-inputs block, and the anchor string
+`site = lib.sites.get(name)` exists NOWHERE on main (measured: 0 hits) because
+the fix replaced it; the lookup is line 690, `lib.resolve_site(name)`. The
+durable form, which works at any head:
+
+    git show a00f53f20:vibe-ic-marketplace/plugins/vibe-ic/programs/\
+        pad_ring_gen.py | sed -n '526p'
+
+(I pinned this in the FILE:LINE section below when I realised the change deletes
+its own anchor, and did not pin it HERE, where the citation is actually used.
+The correction landed where I found the problem, not where a reader meets it.)
+
+It is upstream's two site lookups, run before every other geometric check, so
+this refusal MASKS whatever comes after it.
 
 That lookup, two lines above, reads exactly one PDK view — `_pad_ring.discover_io_lefs()`:
 
@@ -278,7 +292,10 @@ MACRO, which names a site but declares none.
 `:latest` until 2026-08-22. There is no `latest` tag on this host, and a
 floating tag is not an identifier -- the same words would name a different
 image next week, which is the failure the IDENTIFY BY CONTENT section below is
-about. Pinned to the tag and the image id.)
+about. Pinned to the tag here; the image id
+`sha256:f6b09c1388c6efe96bae562ec1b0454beef4736096feb0b1bbc2d3af6b6123c6` is in
+the FILE:LINE section — an earlier draft of this parenthesis said "pinned to the
+tag AND the image id" while showing only the tag.)
 
     $ ls  /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_io/lef/*.lef | wc -l
     15
