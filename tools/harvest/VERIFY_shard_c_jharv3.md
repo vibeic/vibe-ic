@@ -195,3 +195,48 @@ That is the same shape as jharv2's coverage checker reporting
 like the disaster it is checking for.** A red from a verifier earns the same
 suspicion as a green — the first question is whether the checker asked the
 question the file actually answers.
+
+## The file now checks itself, and doing that caught four more false reds — all mine
+
+`verdicts_shard_c.tsv` asserts a contract: three fields, one of four verdicts,
+and for RECOVER a file a stranger can go and check. Nothing enforced that. So
+`bin_jharv3/contract_check.py` does, reading the file **from the branch as
+pushed** rather than from any local copy, and it runs clean:
+
+```
+rows=110  {'RECOVER': 91, 'LANDED': 17, 'ABANDON': 2}
+RECOVER evidence re-measured: absent_from_main=23  bytes_differ=66  uncommitted=2
+CONTRACT OK
+```
+
+Those 89 are not a pattern match. For each RECOVER row the checker takes the file
+the row names, resolves it at the head that row was judged at, and compares the
+blob against `origin/main` — so a row claiming a difference that is not there
+fails. The 2 remaining are rule L2, where the value is in bytes no commit holds.
+
+**Every red it produced before it ran clean was the checker's fault, not the
+file's.** That is worth writing down, because the first instinct on a red is to
+go fix the artefact:
+
+1. `…/riscv_isa_ref_oracle/common.inc` — reported as "names no checkable file".
+   `.inc` was missing from an extension allowlist. Measured: the file is absent
+   from main, sha256 `a2394e389954c97f…`, 64 lines, exactly as the row says.
+2. `.image-version-ignore` — same report. It is a dotfile with **no extension at
+   all**, so no allowlist could ever have matched it. Measured: absent from main,
+   `cc4363979c546d9e…`, 240 lines, exactly as the row says.
+3. `HANDOFF_TO_GATEKEEPER.md` in the drv3 row — "absent at its own head". It is
+   untracked; that is the entire point of that row, and the word the checker
+   recognised was "uncommitted", not "untracked".
+4. Earlier, an anchor reported as not holding a commit, which was the checker
+   cross-joining two independent claims in one row.
+
+In each case I measured the artefact **before** touching the checker, and in each
+case the artefact was right. The fix was to stop asking a proxy question: the
+extension allowlist is gone, replaced by "the token the rule puts before
+`sha256`", and the file is resolved rather than pattern-matched.
+
+**The rule, stated once:** relaxing a check to clear a red is forbidden when the
+artefact is wrong, and it is the *only* correct move when the checker is wrong.
+Those two are indistinguishable from the red alone. What separates them is
+measuring the artefact independently first — and a checker that has cried wolf
+four times has earned scrutiny, not deference, on its fifth.
