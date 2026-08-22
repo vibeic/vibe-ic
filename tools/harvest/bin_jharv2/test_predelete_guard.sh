@@ -18,6 +18,33 @@ mk clean; git -C "$R/clean" checkout -q main
 out=$(printf '%s\n' "$R/clean" | bash "$G" "$SHORT"); v=${out%%$'\t'*}
 say "clean worktree" "$v"; [ "$v" = ALLOW ] || { echo "  FAIL: a clean worktree must be ALLOWed or the guard protects nothing"; rc=1; }
 
+# THE ARM THAT MATTERS. My first ALLOW arm used a worktree whose diff was EMPTY, so it never
+# exercised the state every real worktree is in: its change is already in main, and main has moved
+# on the same file since. A blob compare calls that "differing" and refuses. Measured: it refused
+# all 29 of my ABANDON rows, every one of them wrongly. A guard that refuses everything protects
+# nothing, and the trivial ALLOW arm could not see it.
+mk landed; git -C "$R/landed" checkout -q main
+printf 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n' > "$R/landed/g.txt"
+git -C "$R/landed" add g.txt; git -C "$R/landed" commit -qm seed
+git -C "$R/landed" push -q origin main 2>/dev/null
+git -C "$R/landed" checkout -q -b feat
+sed -i '2s/.*/b-CHANGED-BY-BRANCH/' "$R/landed/g.txt"; git -C "$R/landed" commit -qam branch-change
+BR=$(git -C "$R/landed" rev-parse HEAD)
+# main lands the branch's change AND moves further on the same file
+mk adv; git -C "$R/adv" fetch -q origin; git -C "$R/adv" checkout -q main
+git -C "$R/adv" pull -q origin main 2>/dev/null
+sed -i '2s/.*/b-CHANGED-BY-BRANCH/' "$R/adv/g.txt"; sed -i '9s/.*/i-LATER-WORK-ON-MAIN/' "$R/adv/g.txt"
+git -C "$R/adv" commit -qam "land branch change, plus later work"
+git -C "$R/adv" push -q origin main 2>/dev/null
+git -C "$R/landed" fetch -q origin main 2>/dev/null
+NEWMAIN=$(git -C "$R/landed" rev-parse origin/main); NS=${NEWMAIN:0:11}
+out=$(printf '%s\n' "$R/landed" | bash "$G" "$NS"); v=${out%%$'\t'*}
+say "change landed, main moved on since" "$v"
+[ "$v" = ALLOW ] || { echo "  FAIL: its own change IS in main; refusing it means refusing every real worktree"; rc=1; }
+b=$(git -C "$R/landed" rev-parse -q --verify "HEAD:g.txt"); m=$(git -C "$R/landed" rev-parse -q --verify "origin/main:g.txt")
+[ "$b" != "$m" ] || { echo "  FIXTURE WEAK: blobs are equal, so this arm does not exercise the case"; rc=1; }
+say "  (fixture check: head blob != main blob)" "${b:0:8} vs ${m:0:8}"
+
 mk dirtyc; git -C "$R/dirtyc" checkout -q main; echo changed > "$R/dirtyc/f.txt"
 git -C "$R/dirtyc" commit -qam edit
 out=$(printf '%s\n' "$R/dirtyc" | bash "$G" "$SHORT"); v=${out%%$'\t'*}

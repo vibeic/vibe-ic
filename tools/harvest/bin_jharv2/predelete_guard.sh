@@ -8,6 +8,13 @@
 # origin/main is not the ref you are judging against -- REFUSES. An unmeasured worktree and a clean
 # one are otherwise byte-identical in the output, and that equivalence is how content gets deleted.
 #
+# COMMITTED content is judged by REVERSE-APPLYING the branch's own diff (merge-base..head) onto
+# main, NOT by comparing blobs. "differs from origin/main" is not "holds work not in main": a
+# worktree whose change is already contained in main still differs from it on every file main has
+# touched since, because it holds an OLDER copy of what main already has. Measured: a blob compare
+# refused all 29 of my ABANDON rows; reverse-apply showed all 29 CONTAINED_IN_MAIN and the two real
+# losses still NOT_CONTAINED. A guard that refuses everything protects nothing.
+#
 # Pass the expected origin/main as $1. The guard refuses if the clone disagrees, because a stale or
 # divergent origin/main manufactures a false LANDED: content that matches an OLD main and differs
 # from the current one reads as "already landed" and is deleted. Measured on .112, whose clone held
@@ -29,14 +36,20 @@ while IFS= read -r wt; do
   [ -n "$head" ] || { printf 'REFUSE\t%s\tno HEAD (pruned registration) -- cannot scope owned files\n' "$wt"; refused=$((refused+1)); rc=1; continue; }
   mb=$(git -C "$repo" merge-base "$head" origin/main 2>/dev/null)
   [ -n "$mb" ] || { printf 'REFUSE\t%s\tno merge-base with origin/main\n' "$wt"; refused=$((refused+1)); rc=1; continue; }
+  nfiles=$(git -C "$repo" diff --name-only "$mb" "$head" 2>/dev/null | grep -c '')
   n=0; ex=""
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    a=$(git -C "$repo" rev-parse -q --verify "$head:$f" 2>/dev/null)
-    b=$(git -C "$repo" rev-parse -q --verify "origin/main:$f" 2>/dev/null)
-    [ "$a" = "$b" ] && continue
-    n=$((n+1)); [ -z "$ex" ] && ex="$f"
-  done < <(git -C "$repo" diff --name-only "$mb" "$head" 2>/dev/null)
+  if [ "$nfiles" -gt 0 ]; then
+    idx=$(mktemp); rm -f "$idx"
+    if ! GIT_INDEX_FILE="$idx" git -C "$repo" read-tree origin/main 2>/dev/null; then
+      printf 'REFUSE\t%s\tcannot build a main index to test containment\n' "$wt"; refused=$((refused+1)); rc=1; rm -f "$idx"; continue
+    fi
+    if git -C "$repo" diff --binary "$mb" "$head" 2>/dev/null | GIT_INDEX_FILE="$idx" git -C "$repo" apply -R --cached --check - 2>/dev/null; then
+      n=0
+    else
+      n=$nfiles; ex=$(git -C "$repo" diff --name-only "$mb" "$head" 2>/dev/null | head -1)
+    fi
+    rm -f "$idx"
+  fi
   m=0; dex=""
   # --untracked-files=all, never `normal`: `normal` collapses an untracked DIRECTORY to one entry
   # and the [ -f ] test below drops it, so a worktree whose only content is in a directory reads 0.
@@ -51,9 +64,9 @@ while IFS= read -r wt; do
     m=$((m+1)); [ -z "$dex" ] && dex="$f"
   done < <(env -u GIT_INDEX_FILE git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)
   if [ $((n+m)) -gt 0 ]; then
-    printf 'REFUSE\t%s\tcommitted_differing=%s uncommitted_differing=%s first=%s\n' "$wt" "$n" "$m" "${ex:-$dex}"; refused=$((refused+1)); rc=1
+    printf 'REFUSE\t%s\tnot_contained_in_main=%s uncommitted_differing=%s first=%s\n' "$wt" "$n" "$m" "${ex:-$dex}"; refused=$((refused+1)); rc=1
   else
-    printf 'ALLOW\t%s\tcommitted_differing=0 uncommitted_differing=0 vs %s\n' "$wt" "$EXPECT"; ok=$((ok+1))
+    printf 'ALLOW\t%s\tchange_contained_in_main uncommitted_differing=0 vs %s\n' "$wt" "$EXPECT"; ok=$((ok+1))
   fi
 done
 printf '# allow=%s refuse=%s\n' "$ok" "$refused"
