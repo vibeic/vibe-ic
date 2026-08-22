@@ -1,9 +1,29 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: A and C are IMPLEMENTED and verified on this branch. B is fully
-specified — both channels confirmed from source, with a safety bound — and
-deliberately NOT built. D's mechanism is fully described and NOT built, for a
-doctrinal reason stated with it.**
+**Status: A and C are IMPLEMENTED and verified on this branch — and C is the only
+one of the four that actually works, for the reason this document spends its
+length arriving at: its control is a COMMIT, and the tree crosses where the
+environment refuses. B was BUILT, RUN, and REVERTED. D's premise was FALSE.**
+
+> **THIS LINE USED TO SAY:** *"B is fully specified — both channels confirmed from
+> source, with a safety bound — and deliberately NOT built. D's mechanism is fully
+> described and NOT built, for a doctrinal reason."* **Three claims, all wrong,
+> each corrected hundreds of lines below where a reader would never look first:**
+>
+> * *"both channels confirmed"* — the label EXISTS but a test cannot learn its
+>   VALUE, and `refs/gk-verify` exists ONLY on the `--pr` path while these tests
+>   use `--ref`. **The channel failed twice over.**
+> * *"deliberately NOT built"* — **it was built and run.** The sentinel-commit
+>   fixture WORKS; the stub took the routed-transition path on both arms for the
+>   first time since the migration. It was reverted at the NEXT layer, whose
+>   files are all protected.
+> * D *"NOT built for a doctrinal reason"* — **the doctrine was a stale blocker.**
+>   A real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with
+>   `routed.def`), and the sandbox fixture already publishes one. Authoring
+>   remains forbidden AND unnecessary.
+>
+> **Every one of those was corrected in place below and left standing here, at the
+> top, where the status line is the only thing some readers will read.**
 
 **Effect, measured in both lanes** (authority: **M65** in the findings document —
 this is a reference, re-derive there): host `9 failed -> 6 failed` (134 collected,
@@ -350,8 +370,8 @@ verified in both lanes, with dependants checked. **Nine remain**, and the earlie
 |---|---|---|
 | **A** | **DONE** — 1 test, RED→GREEN, full-file verified | — |
 | **C** | **DONE** — 3 tests, RED→GREEN, specification verified against a live run BEFORE editing | — |
-| **D** | designed, mechanism fully traced | a REAL published cell in the fixture's benchmark-data. ~~a fixture supplying two corpora~~ — **that model was wrong twice** (the arms enumerate for themselves; the verifier audits). Authoring a cell to turn a test green is the move this campaign forbids. |
-| **B** | designed, both channels confirmed, safety bound documented | a sentinel-commit fixture plus a rewiring of the stub's hang guard, inside the protected closure. Hazard is BOUNDABLE; the reason it is unbuilt is sequencing and my measured error rate, not danger. |
+| **D** | designed, mechanism fully traced | ~~a REAL published cell in the fixture's benchmark-data~~ — **FALSE.** One IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, 211 paths, carrying `routed.def`), and the sandbox fixture already creates `ic/tiny/v1/phase3/stage3/pnr/routed.def` — the producer's exact cell predicate. **Nothing needs authoring.** What blocks it is the same layer that blocks B. |
+| **B** | **BUILT, RUN, REVERTED** — the channel works | ~~sequencing and my measured error rate~~ — **that is no longer the reason.** The sentinel crosses and the arm hangs; it fails at container IDENTIFICATION, needing **one line in `gatekeeper-verify-merge.sh` (PROTECTED)** to announce `RUN_ID`. Reverted rather than ship a test whose final assertion would pass vacuously. |
 
 **Revised order for what REMAINS: D before B.** D is blocked on evidence somebody
 else can supply; B is blocked on a decision plus the largest edit of the four. The
