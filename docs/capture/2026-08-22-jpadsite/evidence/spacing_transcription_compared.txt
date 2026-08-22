@@ -1,0 +1,76 @@
+THE SPACING ARITHMETIC, COMPARED STEP BY STEP AGAINST pad_cfg.tcl
+==================================================================
+The position arithmetic could not be verified by RUNNING upstream: `place_pad
+-location` takes the position as an argument, so OpenROAD echoes the caller's
+number. In upstream's flow the caller IS pad_cfg.tcl. So this compares the two
+implementations line by line instead, which is weaker than an A/B and stronger
+than "it is a transcription".
+
+Source read in ghcr.io/vibeic/vibeic-eda:0.3.16,
+librelane/scripts/openroad/common/pad_cfg.tcl.
+
+  step  upstream (um, 3dp)                        this step (integer DBU)
+  ----------------------------------------------------------------------------
+  1     sum_of_cell_widths += getWidth            total = sum(along)      SAME
+  2     DIE - PAD_EDGE_SPACING*2                  (urx-llx) - 2*edge
+          - pad_corner_site_width*2                 - 2*corner_sw          SAME
+        (vertical sides use DIE_HEIGHT and        E/W use (ury-lly) and
+         pad_corner_site_height)                   corner_sh              SAME
+  3     sum > side_width -> exit 1                PAD_RING_DOES_NOT_FIT   SAME
+  4     space_for_fill = side_width - sum         avail - total           SAME
+  5-6   floor( (S/(n+1)) / w ) * w                floor( floor(S/(n+1)) / w ) * w
+                                                                          SAME VALUE
+        -- mine floors twice, and that is not a difference:
+           floor(floor(a)/w) == floor(a/w) for integer w > 0.
+  7     space_side = (S - filler*(n-1)) / 2,      to_corner, odd = divmod(rest, 2)
+        rounded to 3 decimals                     and REFUSES if odd     DIVERGES
+  8     space_side not a site multiple            PAD_CORNER_SPACING_NOT_
+        -> exit 1                                 SITE_MULTIPLE           SAME
+
+VERIFIED NUMERICALLY on the real case, EAST side, 19 pads:
+    side_width      2262 - 26*2 - 355*2            = 1500 um
+    sum             19 * 75                        = 1425 um
+    space_for_fill                                 =   75 um
+    between         floor((75/20)/0.1)*0.1         =    3.7 um  -> 3700 DBU
+    to_corner       (75 - 3.7*18)/2                =    4.2 um  -> 4200 DBU
+matching the artefact's spacing record exactly.
+
+THE ONE DIVERGENCE, AND IT IS MINE, NOT UPSTREAM'S. At step 7 upstream halves
+the remainder and rounds to three decimals; this step REFUSES an odd remainder.
+In integer DEF units an odd remainder cannot be halved into two EQUAL gaps, and
+upstream -- working in um -- would carry a half-DBU that a DEF cannot express.
+Refusing is the safer reading of the same rule. But it is a CHOICE, it makes
+this step stricter than the tool it models, and IT IS NOT DOCUMENTED AS ONE in
+the shipped code: a future reader comparing the two would see a bug and
+"fix" it back.
+
+CANDIDATE FOR next/ (not taken during the freeze): one comment at step 7 saying
+the divergence is deliberate and why. No behaviour change.
+
+AND THE DEF ROUND-TRIPS THROUGH THE TOOL ITSELF
+===============================================
+The strongest available evidence for the orientation fix is not that the JSON
+says FS -- it is that OpenROAD reads the DEF this step writes and reports the
+orientations ITS OWN PLACER produces.
+
+  read_def on evidence/orient_AB_POST_fix.def, OpenROAD 26Q3-1581:
+      READ OK: 81 instances
+
+  my DEF writes      OpenROAD reads back      the placer produces
+  ------------------------------------------------------------------
+  S pads   N         R0                       R0
+  N pads   FS        MX                       MX      <- the corrected side
+  W pads   FW        MXR90                    MXR90
+  E pads   W         R90                      R90
+  corners  N FN S FS R0 MY R180 MX            R0 MY R180 MX
+
+UNITS ROUND-TRIP TOO, and this was the other thing that could have been wrong.
+The DEF declares 1000 DBU/um; the tech LEF is 2000. OpenROAD converted rather
+than mixed: the NW corner at 26000 in my DEF read back as bbox xMin 52000, which
+is 26 um at 2000/um. A factor-of-two error here would have doubled the die.
+
+CAVEAT ON THE SIDE COUNTS IN THAT RUN: the classifier binning instances by
+position was crude -- a yMin threshold put 8 vertical-side pads in the "north"
+bucket (27 where 19 belong, 15 each for W/E where 19 belong; totals still 81).
+The ORIENTATION SETS are unaffected and are what this checks. Stated because a
+reader comparing the counts would otherwise find them wrong and be right.

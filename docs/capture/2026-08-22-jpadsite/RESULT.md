@@ -51,6 +51,21 @@ load-bearing lines of `pad_cfg.tcl` are quoted verbatim and verified
 character-exact in the pinned image (`evidence/every_published_command_runs.txt`),
 and that is weaker than the orientation evidence, which is now an A/B.
 
+SO IT WAS COMPARED LINE BY LINE INSTEAD, which is weaker than an A/B and
+stronger than "it is a transcription". All eight steps of upstream's algorithm
+against this step's Python: seven are the SAME, including the one place they
+look different (mine floors twice, and `floor(floor(a)/w) == floor(a/w)` for
+integer w). Verified numerically on the east side: 1500 um available, 1425 um of
+pads, 75 um to fill, `between` 3.7 and `to_corner` 4.2 -- matching the
+artefact's 3700/4200 DBU exactly. STEP 7 DIVERGES AND THE DIVERGENCE IS MINE:
+upstream halves the remainder and rounds to 3 decimals; this step REFUSES an odd
+remainder, because in integer DEF units it cannot be halved into two EQUAL gaps
+and upstream would carry a half-DBU a DEF cannot express. Stricter than the tool
+it models, defensible, and NOT DOCUMENTED IN THE CODE as a deliberate choice --
+a future reader would see a bug and "fix" it back. That comment is a `next/`
+candidate, not taken during the freeze.
+`evidence/spacing_transcription_compared.txt`.
+
 ONE THING THAT PROBE DID SETTLE. OpenROAD's tech LEF is 2000 DBU/um and this
 step's DEF declares 1000 -- a factor of two that would double or halve a die if
 they were ever mixed. They are not: `_pad_ring` READS `UNITS DISTANCE MICRONS`
@@ -1361,6 +1376,16 @@ this one gates through the merge queue and adversarial review instead. The
 defect would be quoting CLEAN as if it were a test result, which is what I was
 one sentence away from doing.
 
+## What goes to `next/` when the freeze lifts
+
+`jpadsite/pad-site` is FROZEN in the batch at 725f9352f. Everything below that
+is not already in it goes to a NEW `next/<what-it-does>` branch, never merged
+into the frozen one. The agenda is assembled with its evidence and its cost in
+`evidence/NEXT_AGENDA.md`: the spacing-provenance comment (evidence complete,
+one comment), the rc=2 clause-path CENSUS (shape already ruled, denominator
+missing), an orientation check that measures rather than pins, and the three
+flow-owner calls unchanged. Nothing on it is a reason to reopen the batch.
+
 ## Decisions taken, and what I deliberately did NOT do
 
 TESTED AGAINST A MEASURED BASE RATE, not just written down. Another agent on this
@@ -1544,6 +1569,20 @@ find six paragraphs. The owner is asleep and will read this cold.
    a decided precedent, a named precedent-setter, and one site that did not get
    it. That is a far more actionable thing to hand a flow owner than the version
    I first wrote.
+
+   AND IT NOW HAS ITS MEASURED BLAST RADIUS, which is what a ruling needed:
+   :7220, the site #492 FIXED, covers 10 P0 gates. :3134, the site it did not,
+   covers 182 GATE CLAUSES INVOKING 140 DISTINCT PROGRAMS -- eighteen times as
+   many. #492's own finding is that conflating the two meanings let 39 gates go
+   permanently silent; the mechanism it fixed for 10 is untouched for 140.
+   Written up with both sides and options in
+   `evidence/rc2_clause_path_decision.md`. The recommendation is a CENSUS first,
+   not the mapping change, because the load-bearing unknown is how many of the
+   182 return rc=2 in a REAL run and I have no such population -- only a
+   constructed project where 1 of 2 gates did. That recommendation needs no new
+   ruling: the standing authority has already decided this shape -- the
+   wide-population version becomes a census that records debt and is never
+   wired as blocking.
 
    IT IS STILL NOT MINE TO TAKE, and now for a better-stated reason: the mapping
    at 3134 IS reasoned in writing ("Treat as vacuous pass -- surface the program
