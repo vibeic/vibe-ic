@@ -46,3 +46,30 @@ own horizon, and the shape of the answer — a big plausible number of "missing"
 like a real finding.
 
 Full depth: 1394 on that host, all 481 known rows present, 0 of them gone.
+
+## Untracked files: the category no rescue anchor can reach
+
+Every anchor in this harvest preserves **commits**. An untracked file is on no commit, so all of
+them miss it by construction — and "the tree is clean" cannot answer the question either, because
+an untracked file does not make a tree dirty in the sense a verdict measures.
+
+Swept all 1113 judged worktrees on .105 and .102:
+
+| | |
+|---|---|
+| untracked files found | 2111 |
+| distinct blobs | 1409 |
+| on **no** origin ref (heads + PR heads + tags) | 1247 |
+
+Classified by the repo's own `git check-ignore`, not by extension: **247 paths ignored, 331 not.**
+Of the 331, 194 files are `benchmark-data/` evaluation output — that path was split out into
+`vibeic/benchmark-data`, so this repo's ignore rules no longer describe it — and most of the rest is
+agent scratch (`.scratch/`, `.probe/`, `.sweep-*`).
+
+**16 are authored source, tests and a handoff document** under `vibe-ic-marketplace/` and `tools/`,
+each verified absent from origin before inclusion, preserved at
+`harvest/preserve-untracked-authored` with a `MANIFEST.tsv` recording which worktree each came from.
+
+(The paths inside that commit carry a doubled `preserved/preserved/` prefix — a cosmetic slip in the
+tree builder. The files and the manifest are correct; recording it here rather than leaving a reader
+to wonder whether the duplication means something.)
