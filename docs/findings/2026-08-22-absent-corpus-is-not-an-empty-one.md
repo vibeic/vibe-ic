@@ -320,6 +320,42 @@ it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
   captures the whole defect in one log: the producer prints `NO_CORPUS: …
   NOTHING WAS SCANNED`, the next line calls the corpus `EMPTY`, and the DAG
   closes rc 0.
+* **`test_landing_merge_verdict.py`, both trees, complete runs.** This file
+  matters more than the others in the sweep because `landing_merge_verdict.py`
+  is one of the six files this change edits, and the earlier record's "the same
+  9 test IDs are red on pristine `origin/main`" was true but not the whole
+  count. Measured:
+
+  | tree | result |
+  |---|---|
+  | this branch | 9 failed, 125 passed (887s) |
+  | pristine `origin/main` | 13 failed, 121 passed (972s) |
+
+  134 tests on both, so nothing was added or removed. **The branch's 9 are a
+  strict SUBSET of main's 13: no test is red on this branch that is not already
+  red on `origin/main`.** That, not the counts, is the claim worth making.
+
+  Four IDs are red on `main` and green here (`…mutable_base_cache_is_disabled_
+  and_remeasured`, `…the_caller_checkout_is_never_touched`, `…the_fallback_
+  allows_a_known_good_branch`, `test_the_forced_fallback_is_the_only_thing_the_
+  env_var_can_do`). **This record does not claim the change fixes them.** They
+  are parallel end-to-end tests that build worktrees and kill process groups on
+  timeouts, both runs were taken under host load 70-85, and a change that adds
+  one note string to `decide()` is not a plausible cause. The honest reading is
+  load-sensitivity in that file, in the same family as the
+  `test_gate_process_attestation` intermittent above.
+
+* **Every assertion removed by this branch, enumerated.** `git diff
+  origin/main...HEAD -- '*test*' | grep '^-' | grep assert` returns exactly one
+  line across the whole change:
+
+      assert proc.returncode == 0, proc.stdout + proc.stderr
+
+  which is the `may_be_absent` rc that this issue exists to change, and it is
+  replaced by `== NO_CORPUS_RC` **and** an explicit `!= 0`. No other assertion
+  was touched. No `def test_` was removed from any file (6/60/24/33/12 on
+  `main`, 6/62/25/35/18 here — 11 added, 0 removed).
+
 * `test_an_unconfigured_moved_corpus_is_explicit_no_corpus` is the one
   pre-existing test whose assertion changed. It was **tightened, not relaxed**:
   every assertion it made on `main` still stands, and `returncode == 0` became
