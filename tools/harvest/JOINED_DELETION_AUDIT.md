@@ -136,3 +136,38 @@ questions had to be asked separately. All 149 pass all three.
 **No unrecoverable loss exists in any deletion-bound row measured in this audit.** The verdicts are
 still false and should be corrected: a row that says "all 0 files matched" while its tree holds 98
 differing files is wrong regardless of whether the content survives elsewhere.
+
+## 48 of 48, and the seven I had not asked about were on a host I never asked
+
+The sweep resolved 41 of 48 and left 7 "unresolved on any host". All 7 name host **.108** in the
+roster, and .108 answers directly from here. I had swept .105, .102, .112, .114, .120 and .121 and
+simply never asked it — the same shape as the four rows I called GONE earlier. Asked, all 7 resolved.
+
+**Final: 48/48 resolved. 34 ALLOW, 14 REFUSE.**
+
+The 14 REFUSE break down as: 8 holding content by direct measurement, 3 twin-justified ABANDONs the
+guard cannot see past, 2 whose HEAD commit object is gc'd (measured separately — my rows stand), and
+1 whose clone was stale until fetched forward.
+
+## `git diff-files` compares stat data, not content
+
+`wt-j63x8c` is jharv3's ABANDON, justified as having an identical HEAD to `jf-63x8-work/base-mml`.
+My twin check reported the twin as dirty in all 6368 files, which would have made that justification
+unsafe. It was my check that was wrong:
+
+| worktree | diff-files before refresh | after refresh | differing by CONTENT |
+|---|---|---|---|
+| `wt-j63x8c` | 4728 | 0 | 0 |
+| `jf-63x8-work/base-mml` | 6368 | 1640 | 122 |
+
+`diff-files` compares the index's **stat** data to the working tree, so after a copy or a checkout
+that rewrites mtimes every entry reads dirty. `git status` refreshes first; `diff-files` does not.
+
+The error is one-directional — it over-reports — so **a 0 from it is trustworthy and a non-zero
+means nothing until content is checked**. That asymmetry is why my four twins reading `dirty=0`
+stand unchanged, and why this one needed content measurement before I could say anything.
+
+`wt-j63x8c` itself is clean, its HEAD equals the twin's, and that HEAD `3ab7fc723e4` is an advertised
+origin tip on `origin/jmatrix/63x8-main-reds`. **jharv3's ABANDON is safe.** The 122 differing files
+belong to `base-mml`, which is named in no verdict file and is therefore not scheduled for deletion —
+but it holds unjudged uncommitted work, which is worth someone's attention.
