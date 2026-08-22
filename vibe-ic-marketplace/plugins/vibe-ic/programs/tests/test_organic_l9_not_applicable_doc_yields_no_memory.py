@@ -63,6 +63,7 @@ import sys
 from pathlib import Path
 
 from _hostpaths import require_repo
+from _published_corpus import corpus_root
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
@@ -144,37 +145,66 @@ def test_no_not_applicable_doc_in_the_repo_carries_a_populated_memory():
     markdown document — every row the rule discards must be a null-everything
     row (no name, no depth, no width, no port count). A populated row here
     would mean the rule deletes hardware a design genuinely has.
+
+    NOT A CORPUS TEST, and deliberately not marked as one — read the failure
+    before assuming the cause. Every document this rule can fire on is a DESIGN
+    INPUT (`ic/*/input/docs/L*.md`), and design inputs stay in vibe-ic; it is
+    the RESULT cells that moved to `vibeic/benchmark-data` at the 2026-08
+    split. Measured across that split: 9 documents declare
+    `status: not-applicable`, all 9 under `input/docs/`, all 9 still here, and
+    the published corpus contributes ZERO — 505 markdown documents in it, none
+    with a not-applicable frontmatter. So the rule's exposure is unchanged and
+    a skip keyed on the corpus would suppress a check that can still measure.
+
+    What did break was the population floor `scanned > 100`, which counted the
+    506 RESULT documents too and so measured a denominator this invariant never
+    used. It is asked of both roots now — the inputs that stay, plus the
+    published cells whenever they are readable — and the floor that decides the
+    premise is on `na_docs`, the documents that actually exercise the rule.
     """
-    root = require_repo("benchmark-data")
+    roots = [require_repo("benchmark-data")]
+    # When a published corpus IS readable, judge it too: before the split its
+    # cells were in this walk, and this keeps them in it.
+    corpus = corpus_root()
+    if corpus is not None and corpus.resolve() not in {r.resolve()
+                                                       for r in roots}:
+        roots.append(corpus)
     scanned = 0
     na_docs = 0
     dropped = []
-    for doc in sorted(root.rglob("*.md")):
-        if not doc.is_file():
-            continue
-        try:
-            text = doc.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        scanned += 1
-        if not P._doc_declares_not_applicable(text):
-            continue
-        na_docs += 1
-        # Re-run the walker with the rule neutralised, to see exactly what it
-        # is discarding on this document.
-        real = P._doc_declares_not_applicable
-        P._doc_declares_not_applicable = lambda _t: False
-        try:
-            rows = P._v1_6_426_extract_memories_from_text(text, doc.name)
-        finally:
-            P._doc_declares_not_applicable = real
-        for r in rows:
-            dropped.append((str(doc), r))
-    assert scanned > 100, (
-        f"premise broken: only {scanned} markdown documents scanned")
-    assert na_docs > 0, (
-        "premise broken: no document in benchmark-data declares "
-        "status: not-applicable, so this rule is untested by the corpus")
+    for root in roots:
+        for doc in sorted(root.rglob("*.md")):
+            if not doc.is_file():
+                continue
+            try:
+                text = doc.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            scanned += 1
+            if not P._doc_declares_not_applicable(text):
+                continue
+            na_docs += 1
+            # Re-run the walker with the rule neutralised, to see exactly what
+            # it is discarding on this document.
+            real = P._doc_declares_not_applicable
+            P._doc_declares_not_applicable = lambda _t: False
+            try:
+                rows = P._v1_6_426_extract_memories_from_text(text, doc.name)
+            finally:
+                P._doc_declares_not_applicable = real
+            for r in rows:
+                dropped.append((str(doc), r))
+    assert scanned >= 90, (
+        f"premise broken: only {scanned} markdown documents scanned. The "
+        f"design INPUT documents do not leave this repository — 99 of them "
+        f"here when this was measured — so a number below the floor means the "
+        f"inputs went missing, not that the result cells moved")
+    assert na_docs >= 9, (
+        f"premise broken: {na_docs} document(s) declare status: "
+        f"not-applicable, against the 9 measured across the split (spm, "
+        f"subservient and sha256 L4/L5/L6). Fewer means the documents that "
+        f"exercise this rule are disappearing and the invariant below is "
+        f"being asserted over a shrinking population")
     populated = [(f, r) for f, r in dropped
                  if r.get("name") or r.get("depth") is not None
                  or r.get("width") is not None or r.get("port_count")]
