@@ -805,3 +805,53 @@ deliberately. **#901 says the STEP-level half was deferred as an owner decision*
 and which of them to restate is an owner decision, not a reviewer's"* — so the
 gap may be exactly that deferral, still open. **That is the question to put to the
 owner, and it now comes with the fix already written next door.**
+
+---
+
+# Part 16 — reading the roots' commit CONFIRMS one census finding and CORRECTS another
+
+Applied Part 13's lesson to the largest group. The `home`-kind roots trace to
+`76c73b499 matrix(63x8): re-enumerated on clean main`, and its body settles two
+things the census had reasoned about separately.
+
+**CONFIRMED — the in-file-interaction diagnosis, with a mechanism the census did
+not have.** The census measured
+`test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress` as 3/3
+green in isolation and red in-file, and called it *"deterministic in-file
+interaction, not a flake"*. The commit names the cause:
+
+> *"[they] all die on a **WATCHDOG_STALLED** whose window is 0.25s / 0.45s / 60s,
+> and they die **only inside a full-file run whose own nested pytest children
+> saturate the box**. Re-run alone on the same tree at load 44.61: `4 passed`.
+> **They are detecting the host, not the repo.**"*
+
+**Same conclusion, arrived at independently, from opposite directions** — the
+census from an isolation A/B, the commit from the watchdog windows. That is worth
+more than either alone.
+
+**CORRECTED — the 3 mutation-ledger reds are NOT "downstream of D3".** The census
+(Part 6 / M108) folded them under the corpus root because the replay returned
+`ALREADY_RED`. The commit states the actual cause:
+
+> *"`0.5ic/d3` and `1.6x/d3` are ENFORCED with no mutation covering them —
+> **`applies_to` is frozen by design, so a new step must redden this gate**"*
+
+**They are red BY DESIGN.** `applies_to` is deliberately frozen so that adding a
+step to the flow forces someone to measure and record a mutation for it. **The
+gate is doing its job: two new steps arrived and nobody has measured their
+mutation yet.**
+
+**The census's `ALREADY_RED` measurement is still true and is a SECOND obstacle,
+not the cause** — the mutation cannot be measured today because the d3 cell is red
+at baseline. **So the chain is: frozen `applies_to` demands a measurement → the
+measurement cannot be taken while d3 is red → the gate stays red.** Two links, and
+the census had only the second.
+
+**Revised grouping:** the 16-red "corpus/record" root becomes **13**, with the 3
+mutation-ledger reds standing on their own as *"a designed demand for a
+measurement that a second, unrelated red currently blocks"*.
+
+**That is the fifth time reading a commit changed a census finding**, and the
+second time it split a group the census had merged. **The census's error was
+consistent in shape: it inferred causation from co-occurrence** — the ledger reds
+and the D3 reds share a symptom, and I grouped on the symptom.
