@@ -249,4 +249,8 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    assert total == 1221, total
+    # 1311 -> 1448: the census tracks the flow, and the flow gained six
+    # gate-carrying steps (0.5ic, 15.5ic, 26.5ic, 37.5ic, 37.5ip, 1.6x).
+    # The CLAIM is unchanged and still holds — 6 real data dependencies
+    # against 1448 ordering-licensed pairs is still two orders of magnitude.
+    assert total == 1448, total
