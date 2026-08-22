@@ -58,3 +58,27 @@ A record here that names no program is NOT an oversight: it carries a measured
 reason — already implemented elsewhere, half implemented, no static signature,
 or a population too thin to earn a gate. Re-deriving those measurements is the
 work this file exists to save.
+
+## OUT OF SCOPE: the records that are not Bucket A (2 of 14)
+
+The DISTIL brief covered the Bucket-A records only. These were NOT
+examined, and are listed so a reader of a capture with 14 records and 12 dispositions can tell
+*considered and excluded* from *missed*. The reason on each line is the
+record's own `why_not_bucket_a` field, not a judgement added here.
+
+- **[C]** A generated report header must be derived from the inputs the session actually opened
+  > A program can decide this and the predicate is trivial — compare the
+  > claim against the input list — but no emitter records the inputs it
+  > opened, so today the check has nothing to read. The work is the
+  > provenance plumbing across every emitter, not the predicate, which is
+  > why this is a backlog item rather than a rule someone can add to one
+  > file.
+
+- **[T]** Post-route design-rule repair faults on a netlist shape after routing completes
+  > The fault is inside the forked tool's post-route repair stage; the
+  > flow's own classification and resume path already behave correctly —
+  > they name the crash, distinguish it from a routing failure, and re-run
+  > the tail with the faulting pass omitted. Any further plugin-side rule
+  > could only widen that workaround, and on two arms the resume already
+  > consumed the whole trial budget.
+
