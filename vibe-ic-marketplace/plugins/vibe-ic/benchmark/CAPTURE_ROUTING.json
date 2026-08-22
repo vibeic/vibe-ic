@@ -503,6 +503,11 @@
       "description": "Emitting a verdict that will be quoted after the tree it judged has moved",
       "bucket_A_program": "programs/benchmark_evidence_structure_check.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.lane_artefact_namespace": {
+      "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
+      "bucket_A_program": "programs/enhancement_emit.py",
+      "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
     }
   },
   "default_routing": {
