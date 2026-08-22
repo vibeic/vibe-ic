@@ -66,6 +66,27 @@ F15 AND F1 LANDED UNFIXED, and both are red on main right now:
     tree can satisfy. It blocks nothing mechanically. It is now main's false
     statement rather than a branch's.
 
+    AND ITS REMEDY RE-VALIDATES ON THE LANDED TREE, so the fix is not a claim
+    about a branch that no longer exists. The gate itself is unchanged by the
+    landing except for the F14 conversion — same 38 emitting modules, same 143
+    names, same one unprovable axis — and both producers it says do not exist
+    are still in main: drv_records.py declares timing.drv keys on seven lines,
+    signoff_records.py:204 emits timing.drv.violations. Applying the two-part
+    remedy to ae78abb28:
+
+        emitting modules   38 -> 50      names declared   143 -> 191
+        axes with no produced name  1 -> 0       gate rc 1 -> 0
+        its own suite: 3 failed, 5 passed — THE SAME THREE, on the same tree
+        the gate now ships on
+
+    So the cost quoted for the branch is the cost on main, unchanged: the fix
+    clears the verdict, and three tests have to be rewritten because three tests
+    encode a false one. One of those three
+    (`test_the_consumer_is_excluded_and_that_is_what_makes_it_discriminate`)
+    cannot pass on ANY tree where the gate passes, and its repair is named in
+    F15 — assert that excluding the consumer removes NAMES, which it still does
+    (191 against 195), rather than that some axis stays unprovable.
+
 ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
 25 / 6 / 1). One went GREEN in landing — `signoff_report_states_its_stage`, rc 1
 on the chip tip and rc 0 on main, its three unstamped reports having been
