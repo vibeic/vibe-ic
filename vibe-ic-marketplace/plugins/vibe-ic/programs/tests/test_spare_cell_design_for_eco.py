@@ -165,20 +165,20 @@ def _write_project(tmp_path, plan):
 # 3) coverage-check PASS / FAIL
 # ──────────────────────────────────────────────────────────────────
 def test_coverage_pass_good_plan():
-    r = cov.evaluate_coverage(_good_plan(), None, target_density=0.02)
+    r = cov.evaluate_coverage(_good_plan(), target_density=0.02)
     assert r["verdict"] == "PASS", r["reasons"]
     assert r["density_ok"] and r["distribution_ok"] and r["tie_off_ok"]
 
 
 def test_coverage_fail_clustered():
-    r = cov.evaluate_coverage(_good_plan(distributed=False), None, 0.02)
+    r = cov.evaluate_coverage(_good_plan(distributed=False), 0.02)
     assert r["verdict"] == "FAIL"
     assert not r["distribution_ok"]
     assert any("cluster" in x for x in r["reasons"])
 
 
 def test_coverage_fail_untied():
-    r = cov.evaluate_coverage(_good_plan(tied=False), None, 0.02)
+    r = cov.evaluate_coverage(_good_plan(tied=False), 0.02)
     assert r["verdict"] == "FAIL"
     assert not r["tie_off_ok"]
 
@@ -186,7 +186,7 @@ def test_coverage_fail_untied():
 def test_coverage_fail_below_density():
     # actual density below target
     plan = _good_plan(n=5, density=0.005)
-    r = cov.evaluate_coverage(plan, None, target_density=0.02)
+    r = cov.evaluate_coverage(plan, target_density=0.02)
     assert r["verdict"] == "FAIL"
     assert not r["density_ok"]
 

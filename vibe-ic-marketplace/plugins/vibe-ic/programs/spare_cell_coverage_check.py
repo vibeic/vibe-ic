@@ -2,9 +2,8 @@
 """spare_cell_coverage_check.py — Design-for-ECO READINESS gate (Step 18).
 
 Reads the spare-cell insertion plan emitted by phase3_one_shot_runner
-(`phase3/stage3/pnr/spare_cells.json`) — and, when present, the runner's
-coverage summary `reports/spare_cell_coverage.json` — and confirms the
-project carries a usable spare-cell ECO budget:
+(`phase3/stage3/pnr/spare_cells.json`) and confirms the project carries a
+usable spare-cell ECO budget:
 
   PASS iff ALL of:
     1. actual_density >= target_density (default target 0.02 = 2%).
@@ -16,6 +15,24 @@ project carries a usable spare-cell ECO budget:
 
 Emits a JSON verdict and exits 0 (PASS) / 1 (FAIL) / 2 (IO/arg error).
 chip-AGNOSTIC: reads only the generic spare_cells.json schema.
+
+THIS PROGRAM IS THE DECLARING PRODUCER of `reports/spare_cell_coverage.json`
+— step 18 of `flow/phase1_phase2_phase3.yaml` declares that path and names
+this program in the step's `programs:` list. It is therefore the ONLY writer,
+and it does NOT read that path. See
+`docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md`.
+
+Until 2026-08-22 this file read the path it writes: `audit()` loaded
+`reports/spare_cell_coverage.json` as a "runner-emitted coverage summary" and
+PREFERRED its `actual_density` over the current `spare_cells.json`. Because
+this program also wrote that path, the summary it read on any second
+invocation was its OWN previous verdict. Measured on one project directory:
+a run whose insertion collapsed from 203 spares to 5 (actual_density 0.000493,
+40x under the 0.02 floor) exited 0 and published `"verdict": "PASS"` carrying
+`"actual_density": 0.020022` — the PREVIOUS run's number — beside its own
+`"count": 5`. Deleting the report first and re-running the identical input
+gave rc=1, FAIL, 0.000493. The stale value beat the plan's own fresh one
+because the summary was consulted FIRST.
 """
 from __future__ import annotations
 
@@ -74,15 +91,18 @@ def compute_distribution(instances: List[Dict[str, Any]]
 
 
 def evaluate_coverage(spare_plan: dict,
-                      coverage_summary: Optional[dict] = None,
                       target_density: float = _DEFAULT_TARGET_DENSITY
                       ) -> dict:
-    """Pure evaluator. `spare_plan` is the spare_cells.json dict;
-    `coverage_summary` is the optional runner-emitted coverage JSON.
+    """Pure evaluator. `spare_plan` is the spare_cells.json dict — the
+    ONLY input. There is deliberately no second source: the removed
+    `coverage_summary` parameter was fed `reports/spare_cell_coverage.json`,
+    which is this program's own output path, so it let a previous run's
+    number outrank the plan this run produced.
 
-    Returns a verdict dict {target_density, actual_density, count,
-    distinct_positions, distribution_ok, tie_off_ok, density_ok,
-    verdict, reasons[]}. chip-AGNOSTIC."""
+    Returns a verdict dict {target_density, plan_target_density,
+    actual_density, count, placed_cells_est, distinct_positions,
+    distribution_ok, tie_off_ok, tie_off, density_ok, verdict,
+    reasons[]}. chip-AGNOSTIC."""
     reasons: List[str] = []
     count = int(spare_plan.get("count", 0) or 0)
     instances = spare_plan.get("instances", [])
@@ -96,25 +116,23 @@ def evaluate_coverage(spare_plan: dict,
     # at a laxer self-target must still clear the gate's minimum.
     tgt = target_density
 
-    # Actual density: prefer an explicit field, else plan's recorded
-    # density, else recompute from count / placed_cells_est.
+    # Actual density comes from the plan and only from the plan: its
+    # recorded `actual_density`, else recomputed from
+    # count / placed_cells_est. Both are the runner's measurement of THIS
+    # run, carried in the runner's own declared artefact.
+    placed = spare_plan.get("placed_cells_est")
+    try:
+        placed = int(placed)
+    except (TypeError, ValueError):
+        placed = 0
     actual: Optional[float] = None
-    for src in (coverage_summary or {}, spare_plan):
-        if isinstance(src, dict) and src.get("actual_density") is not None:
-            try:
-                actual = float(src["actual_density"])
-                break
-            except (TypeError, ValueError):
-                pass
-    if actual is None:
-        placed = spare_plan.get("placed_cells_est")
+    if spare_plan.get("actual_density") is not None:
         try:
-            placed = int(placed)
+            actual = float(spare_plan["actual_density"])
         except (TypeError, ValueError):
-            placed = 0
-        actual = round(count / placed, 6) if placed > 0 else 0.0
+            actual = None
     if actual is None:
-        actual = 0.0
+        actual = round(count / placed, 6) if placed > 0 else 0.0
 
     density_ok = actual >= tgt
     if not density_ok:
@@ -135,10 +153,23 @@ def evaluate_coverage(spare_plan: dict,
                          and count > 0) else "FAIL"
     if count <= 0:
         reasons.append("no spare cells inserted (count == 0)")
+    # The plan's OWN target is provenance, kept under a distinct key so it
+    # can never be mistaken for the gate floor above.
+    plan_tgt = spare_plan.get("target_density")
+    try:
+        plan_tgt = round(float(plan_tgt), 6)
+    except (TypeError, ValueError):
+        plan_tgt = None
     return {
         "target_density": round(tgt, 6),
+        "plan_target_density": plan_tgt,
         "actual_density": round(actual, 6),
         "count": count,
+        "placed_cells_est": placed or None,
+        # The runner's MEASURED tie-off evidence ({raised, sinks, ...}),
+        # carried through so the one file at the declared path says WHICH
+        # of "raised", "never ran" or "partial" produced `tie_off_ok`.
+        "tie_off": spare_plan.get("tie_off"),
         "distinct_positions": n_distinct,
         "distribution_ok": distribution_ok,
         "tie_off_ok": tie_off_ok,
@@ -148,23 +179,22 @@ def evaluate_coverage(spare_plan: dict,
     }
 
 
-def _resolve_paths(project: Path) -> Tuple[Path, Path]:
-    """Resolve (spare_cells.json, coverage.json) from canonical layout,
-    with a literal fallback so the checker also works without
-    _path_layout importable."""
+def _resolve_spare_json(project: Path) -> Path:
+    """Resolve spare_cells.json from the canonical layout, with a literal
+    fallback so the checker also works without _path_layout importable.
+
+    This returns ONE path. It used to return a second — the coverage
+    report this program writes — and reading that was the defect the
+    module docstring records.
+    """
     if _pl is not None:
-        spare_json = _pl.pnr_dir(project) / "spare_cells.json"
-    else:  # pragma: no cover
-        spare_json = project / "phase3/stage3/pnr/spare_cells.json"
-    # Coverage summary is emitted by the runner at the literal
-    # flow-declared path reports/spare_cell_coverage.json.
-    cov_json = project / "reports" / "spare_cell_coverage.json"
-    return spare_json, cov_json
+        return _pl.pnr_dir(project) / "spare_cells.json"
+    return project / "phase3/stage3/pnr/spare_cells.json"  # pragma: no cover
 
 
 def audit(project: Path,
           target_density: float = _DEFAULT_TARGET_DENSITY) -> dict:
-    spare_json, cov_json = _resolve_paths(project)
+    spare_json = _resolve_spare_json(project)
     if not spare_json.is_file():
         return {
             "program": "spare_cell_coverage_check",
@@ -184,15 +214,12 @@ def audit(project: Path,
             "reasons": [f"spare_cells.json is not valid JSON: {spare_json}"],
             "count": 0,
         }
-    summary = _load_json(cov_json) if cov_json.is_file() else None
-    result = evaluate_coverage(plan, summary, target_density)
+    result = evaluate_coverage(plan, target_density)
     result.update({
         "program": "spare_cell_coverage_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "project_dir": str(project),
         "spare_cells_json": str(spare_json),
-        "coverage_summary_json": (str(cov_json)
-                                  if cov_json.is_file() else None),
     })
     # `status` mirrors `verdict` so consumers reading the documented
     # coverage schema (benchmark_verify_report Pillar 6 expects a
@@ -218,8 +245,12 @@ def main(argv: Optional[list] = None) -> int:
 
     report = audit(project, args.target_density)
     out = json.dumps(report, indent=2, ensure_ascii=False)
-    # Canonical output: reports/spare_cell_coverage.json (Pillar 6 reads
-    # this literal path), in addition to any explicit --json path.
+    # Canonical output: reports/spare_cell_coverage.json — step 18's
+    # declared required_output, which this program declares and therefore
+    # is the sole writer of. `benchmark_verify_report` Pillar 6 grades this
+    # literal path by its `status` alone, so a second writer there is a
+    # second sign-off verdict the release tier cannot tell apart. Written
+    # in addition to any explicit --json path.
     canon = project / "reports" / "spare_cell_coverage.json"
     try:
         canon.parent.mkdir(parents=True, exist_ok=True)
