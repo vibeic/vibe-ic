@@ -44,10 +44,20 @@ DETS = {
 }
 
 from _plugin_tree import repo_path_or_missing  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 # flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
 # the flattened cache; resolve defensively so the existing skipif guards fire.
-BP = repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
+#
+# The parity RUNS (`<bench>/phase1/input_doc/` + `<bench>/phase1/generated_docs/`)
+# are PUBLISHED RESULTS and moved with the rest of them to vibeic/benchmark-data;
+# only `<bench>/input/docs/` — the design input the flow reads — stayed here. So
+# the sweep resolves its corpus the way every other published-cell check in this
+# suite does: an explicit VIBE_IC_BENCHMARK_DATA pointer wins, and the in-repo
+# path remains the fallback for a checkout that still carries the runs.
+_CORPUS = corpus_root()
+BP = ((_CORPUS / "evaluation" / "phase1_parity") if _CORPUS is not None
+      else repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity"))
 
 
 # --------------------------------------------------------------------------- unit
@@ -156,6 +166,7 @@ def _blob_for(b: str) -> str:
     return "\n".join(parts)
 
 
+@needs_corpus
 @pytest.mark.skipif(not BP.is_dir(), reason="benchmark_phase1 fixtures absent")
 def test_no_misfire_across_all_benchmarks():
     """Each Tier-F detector must fire ONLY on its own benchmark's full content.

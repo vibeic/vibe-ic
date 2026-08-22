@@ -75,7 +75,14 @@ def _l7(project: Path, **kw):
 def test_no_l7_skips(tmp_path):
     _gen(tmp_path)
     proc, report = _run(tmp_path)
-    assert proc.returncode == 0
+    # vibe-ic#1051 follow-up: an input-missing skip is the DISCLOSED tier, not a
+    # plain pass. rc 2 is `_vacuous_exit.RC_VACUOUS`, which `flow_compliance_check`
+    # records as VACUOUS_PASS; the `VACUOUS_PASS:` sentinel is the second,
+    # rc-independent channel the same consumer reads. Asserting BOTH is the point —
+    # either one alone can regress silently while the other keeps the test green.
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "VACUOUS_PASS:" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert report["summary"]["skip_kind"] == "input-missing"
     assert report["summary"]["skipped_reason"]
 
 
@@ -130,7 +137,14 @@ def test_no_pin_namespace_skips_grounding(tmp_path):
     _l7(tmp_path, debug_observability=[
         {"method": "tap", "signals": ["some_signal"]}])
     proc, report = _run(tmp_path)
-    assert proc.returncode == 0, proc.stdout
+    # vibe-ic#1051 follow-up: an input-missing skip is the DISCLOSED tier, not a
+    # plain pass. rc 2 is `_vacuous_exit.RC_VACUOUS`, which `flow_compliance_check`
+    # records as VACUOUS_PASS; the `VACUOUS_PASS:` sentinel is the second,
+    # rc-independent channel the same consumer reads. Asserting BOTH is the point —
+    # either one alone can regress silently while the other keeps the test green.
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "VACUOUS_PASS:" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert report["summary"]["skip_kind"] == "input-missing"
     assert "L7_DEBUG_SIGNAL_UNGROUNDED" not in _rules(report)
 
 

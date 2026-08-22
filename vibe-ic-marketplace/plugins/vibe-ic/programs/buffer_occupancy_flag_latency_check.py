@@ -85,6 +85,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     from gate_utils import find_modules, find_rtl_files, read_text
@@ -353,7 +354,7 @@ def main() -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(result, indent=2))
+        atomic_write_text(Path(args.json), json.dumps(result, indent=2))
 
     if not result["applicable"]:
         print("PASS_SKIP — no occupancy (empty/full) flag detected; "

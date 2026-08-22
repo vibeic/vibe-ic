@@ -1,0 +1,249 @@
+{
+ "schema": "vibeic.ppa.comparison.v2",
+ "arms": [
+  {
+   "flow": "vibe-ic-phase3-defaults",
+   "role": "baseline",
+   "design": {
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+    "pdk": "sky130A",
+    "clock_target_ns": 10.0,
+    "corners": [
+     "ss",
+     "tt",
+     "ff"
+    ]
+   },
+   "contract": {
+    "sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+    "source": "/home/reyerchu/_jxlayer/records/trials/b000/contract.json"
+   },
+   "measurement_basis": "post_route_sta",
+   "config_source": "d",
+   "tuned_by_this_project": false,
+   "ppa": {
+    "area_um2": {
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad",
+      "fill": "post_fill"
+     },
+     "value": 6594.0,
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/b000/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:f792dd4dbfe984c64744f808a5536db9cdd374cdede17d7d84580e9c2c0afb36",
+      "tool": "openroad",
+      "parser": "_ppa/backends/openroad.py"
+     }
+    },
+    "timing_wns_ns": {
+     "status": "MEASURED",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": null,
+      "check": "setup"
+     },
+     "value": 0.0,
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4c1f7d312b8026572bd303432c6643ef839a0fb08cc1241a64d1ae825cb06d7f",
+      "tool": "opensta",
+      "parser": "_ppa/backends/opensta.py"
+     }
+    },
+    "power_mw": {
+     "status": "MEASURED",
+     "unit": "mW",
+     "scope": {
+      "stage": "post_route_extracted",
+      "scenario": "diagnostic",
+      "activity_basis": "VECTORLESS",
+      "liberty": null,
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "mode": "functional",
+      "group": "Total"
+     },
+     "value": 0.5730000000000001,
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/records/trials/b000/diag/power_postroute.rpt",
+      "sha256": "sha256:9fb6f4f6fd04e6cec9944f5357e42cb0ae7bb7eefb736cd1e86d24e8f4e32a28",
+      "tool": "opensta",
+      "parser": "_ppa/power.py"
+     }
+    }
+   },
+   "feasibility": {
+    "checks": {
+     "setup": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "hold": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "drv": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "drc": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)",
+      "violations": 0
+     },
+     "lvs": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "antenna": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)",
+      "violations": 0
+     }
+    }
+   },
+   "tuning": {
+    "supported": false
+   },
+   "_trial": "b000",
+   "_feasibility_verdict": "UNDETERMINED"
+  },
+  {
+   "flow": "x",
+   "role": "subject",
+   "design": {
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+    "pdk": "sky130A",
+    "clock_target_ns": 10.0,
+    "corners": [
+     "ss",
+     "tt",
+     "ff"
+    ]
+   },
+   "contract": {
+    "sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522",
+    "source": "/home/reyerchu/_jxlayer/records/trials/c05/contract.json"
+   },
+   "measurement_basis": "post_route_sta",
+   "config_source": "s",
+   "tuned_by_this_project": true,
+   "ppa": {
+    "area_um2": {
+     "status": "MEASURED",
+     "unit": "um^2",
+     "scope": {
+      "stage": "post_route",
+      "tool": "openroad",
+      "fill": "post_fill"
+     },
+     "value": 6148.0,
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/run/trials/c05/phase3/stage3/pnr/openroad.log",
+      "sha256": "sha256:42618516f1bb2cee16d16a0b892323ad765886a2e244f940c316899f53af5f21",
+      "tool": "openroad",
+      "parser": "_ppa/backends/openroad.py"
+     }
+    },
+    "timing_wns_ns": {
+     "status": "MEASURED",
+     "unit": "ns",
+     "scope": {
+      "stage": "post_route_extracted",
+      "mode": "functional",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "rc_corner": "max",
+      "clock": null,
+      "check": "setup"
+     },
+     "value": 0.0,
+     "source": {
+      "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+      "sha256": "sha256:4a80c63df18b7808d789abf16d6e5341d1242e720044417358e36e574362faf5",
+      "tool": "opensta",
+      "parser": "_ppa/backends/opensta.py"
+     }
+    },
+    "power_mw": {
+     "status": "MEASURED",
+     "unit": "mW",
+     "scope": {
+      "stage": "post_route_extracted",
+      "scenario": "diagnostic",
+      "activity_basis": "VECTORLESS",
+      "liberty": null,
+      "tool": "opensta",
+      "process": "tt",
+      "voltage_v": 1.8,
+      "temperature_c": 25.0,
+      "mode": "functional",
+      "group": "Total"
+     },
+     "value": 0.541,
+     "source": {
+      "path": "/home/reyerchu/_jxlayer/records/trials/c05/diag/power_postroute.rpt",
+      "sha256": "sha256:554ec3cd97db8e2ef359a4b2211169fbfe7e3ce80591788fc81633c3dd8320d9",
+      "tool": "opensta",
+      "parser": "_ppa/power.py"
+     }
+    }
+   },
+   "feasibility": {
+    "checks": {
+     "setup": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "hold": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "drv": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "drc": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)",
+      "violations": 0
+     },
+     "lvs": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_METRIC_ABSENT)",
+      "violations": 0
+     },
+     "antenna": {
+      "status": "CLEAN",
+      "source": "ppa_feasibility_check: SATISFIED (FEAS_OK)",
+      "violations": 0
+     }
+    }
+   },
+   "tuning": {
+    "supported": false
+   },
+   "_trial": "c05",
+   "_feasibility_verdict": "UNDETERMINED"
+  }
+ ]
+}
