@@ -126,11 +126,16 @@ step (in the flow runner), not by this skill:
 - The stage3 step **inserts** the distributed, tied-off spare std-cell pool
   (inverter / nand2 / nor2 / dff / mux2 / aoi / oai) + reserved ECO pads, all
   marked `dont_touch`/`keep`, and emits:
-  - `phase3/stage3/pnr/spare_cells.json` — the inserted spare inventory.
-  - `reports/spare_cell_coverage.json` — density / distribution / tie-off
-    readiness summary.
+  - `phase3/stage3/pnr/spare_cells.json` — the inserted spare inventory, and
+    the ONLY artefact the stage3 step emits for the readiness question. It
+    carries the measurements (`count`, `placed_cells_est`, `target_density`,
+    `actual_density`, `tied_off`, `tie_off`, per-instance coordinates); it
+    carries no verdict, because the step that inserts the spares does not
+    grade its own insertion.
 - `spare_cell_coverage_check.py` (**readiness**) verifies the pool meets the
-  density / distribution / tie-off targets → coverage PASS.
+  density / distribution / tie-off targets → coverage PASS, and is the
+  DECLARING PRODUCER of `reports/spare_cell_coverage.json`: it is the only
+  writer of that path, and it does not read it back.
 - `spare_cell_preservation_check.py` (**preservation**) verifies that NO spare/
   ECO cell/gate/pad was optimized away by any later step, and that all keep
   attributes are intact → emits `reports/spare_preservation.json`
