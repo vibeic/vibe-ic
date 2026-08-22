@@ -102,9 +102,22 @@ VERDICTS AND EXIT CODES
                               same-width in/out pair -- with the shortfall
     UNDECIDED          rc 2   no slots ingested, or no port list could be read.
                               A question that could not be asked has not passed.
+    (usage error)      rc 3   the COMMAND LINE was rejected -- an unknown flag,
+                              a missing positional, a `--param` value that is
+                              not an integer, or a `--json` destination that
+                              climbs out of the project. NOTHING was examined,
+                              and that is a verdict about the CALLER, not about
+                              the design.
 
 rc 2 is the flow's "could not measure" tier. It is NEVER returned for a design
 that simply does not fit: that is an answer, and it is rc 1.
+
+rc 3 AND rc 2 ARE DIFFERENT ON PURPOSE (#712). argparse exits 2 by default, and
+2 is the vacuous tier here, so a mistyped invocation would have reported "I
+examined nothing" -- indistinguishable from the honest skip a cell/IP design
+gets. `_gate_usage_exit.GateArgumentParser` moves it to 3, which the flow reads
+as a FAIL rather than folding into a pass. `--help` still exits 0: that is a
+successful invocation and must not read as a failure to a wrapper.
 
 Chip-, PDK-, operator- and vendor-AGNOSTIC. Every number comes from the ingested
 slot files and the design's own RTL at runtime. No slot geometry, pad count,
