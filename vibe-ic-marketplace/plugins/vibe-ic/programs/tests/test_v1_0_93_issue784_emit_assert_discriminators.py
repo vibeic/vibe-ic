@@ -612,14 +612,17 @@ def test_cli_correct_hold_passes(tmp_path):
 # both rule names are wired into the emit-blocking set
 # ===========================================================================
 def test_both_rules_are_emit_blocking():
-    src = GATES.read_text()
-    # _BLOCKING_CONFORMANCE_RULES is a module-local set; assert by source.
-    import re
-    m = re.search(r"_BLOCKING_CONFORMANCE_RULES\s*=\s*\{(.*?)\}", src, re.S)
-    assert m, "could not locate _BLOCKING_CONFORMANCE_RULES set"
-    block_src = m.group(1)
-    assert RULE_SHIFT in block_src, block_src
-    assert RULE_HOLD in block_src, block_src
+    # Asserted against the SET ITSELF, not against a source literal. This used
+    # to regex `_BLOCKING_CONFORMANCE_RULES = {...}` out of gates_atomic; that
+    # literal was a hand-kept duplicate of the canonical set and was deleted in
+    # v1.11.70 when the two drifted. The property these two rules need is
+    # "the gate treats me as emit-blocking", and the honest way to ask it is to
+    # read the set the gate binds.
+    import spec_conformance_check as _scc
+    assert RULE_SHIFT in _scc.EMIT_BLOCKING_CONFORMANCE_RULES, sorted(
+        _scc.EMIT_BLOCKING_CONFORMANCE_RULES)
+    assert RULE_HOLD in _scc.EMIT_BLOCKING_CONFORMANCE_RULES, sorted(
+        _scc.EMIT_BLOCKING_CONFORMANCE_RULES)
 
 
 # ===========================================================================

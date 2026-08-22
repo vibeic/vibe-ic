@@ -102,31 +102,63 @@ def test_every_bound_is_a_bound(rows):
 # --------------------------------------------------------------------------
 
 def test_a_row_whose_since_has_fallen_past_its_bound_refuses(rows, age):
-    """Direction one. Take a shipped row, leave `since` where the measurement
-    put it, and set the bound BELOW the red's real age. It must fail."""
-    row = dict(rows[0])
-    behind = age(row["since"])
-    assert behind and behind > 1
-    row["max_commits"] = behind - 1
-    findings, _, _ = G.adjudicate(
-        _record({row["gate"]: "FAIL"}), [row], age)
-    kinds = [f.kind for f in findings]
-    assert "expired" in kinds, kinds
-    assert str(behind) in " ".join(f.detail for f in findings), (
-        "the refusal must say how far behind it actually is, not merely that "
-        "it is behind")
+    """Direction one. Take every shipped row, leave `since` where the
+    measurement put it, and set the bound BELOW the red's real age. It must
+    fail, and the refusal must say how far behind it actually is.
+
+    THE CLAMP IS LOAD-BEARING, NOT COSMETIC. `behind - 1` is below the age by
+    construction, but it is not necessarily a LEGAL bound: `adjudicate` refuses
+    anything above MAX_BOUND_COMMITS as `unbounded` and returns BEFORE it ever
+    reaches the expiry comparison. Measured 2026-08-22, two shipped rows stood
+    540 commits back, so an unclamped `behind - 1` asked for a bound of 539 and
+    got `unbounded` -- and this test, which exists to prove the deadline bites,
+    would have reported that it does not, at the exact moment it bites hardest.
+    Clamping keeps the bound legal AND still strictly below the age, which is
+    the only property direction one needs.
+
+    It also walks every row rather than rows[0]. The single-row form was green
+    only because rows[0] happened to be younger than the ceiling.
+    """
+    for row in (dict(r) for r in rows):
+        behind = age(row["since"])
+        assert behind and behind > 1, (row["gate"], behind)
+        row["max_commits"] = min(behind - 1, G.MAX_BOUND_COMMITS)
+        findings, _, _ = G.adjudicate(
+            _record({row["gate"]: "FAIL"}), [row], age)
+        kinds = [f.kind for f in findings]
+        assert "expired" in kinds, (row["gate"], kinds)
+        assert str(behind) in " ".join(f.detail for f in findings), (
+            f"{row['gate']!r}: the refusal must say how far behind it actually "
+            f"is, not merely that it is behind")
 
 
 def test_the_same_row_inside_its_bound_does_not_refuse(rows, age):
     """Direction two, and it is the one that makes direction one mean
-    something: if every row refused, `expired` would be a constant."""
-    row = dict(rows[0])
-    behind = age(row["since"])
-    row["max_commits"] = min(behind + 1, G.MAX_BOUND_COMMITS)
-    findings, known, _ = G.adjudicate(
-        _record({row["gate"]: "FAIL"}), [row], age)
-    assert [f.kind for f in findings] == [], [f.line() for f in findings]
-    assert row["gate"] in known
+    something: if every row refused, `expired` would be a constant. The row is
+    also asserted to be COUNTED as acknowledged, which is what stops a silently
+    dropped row from reading like a quiet one.
+
+    WHY THE AGE IS INJECTED HERE WHILE DIRECTION ONE USES THE REAL ONE. "Inside
+    its bound" needs a bound ABOVE the red's age, and for a row older than
+    MAX_BOUND_COMMITS no legal bound is above it -- the state cannot be
+    expressed against real history at all. This used to write
+    `min(behind + 1, MAX_BOUND_COMMITS)`, which for such a row silently CLAMPED
+    the bound to BELOW the age and then refused it, i.e. reported that a row
+    inside its bound is refused. Measured 2026-08-22 that was already true of
+    two of the eight shipped rows ('L-doc field producer' and 'evidence
+    citation resolves', both 540 behind against a 500 ceiling); the test was
+    green only because it read rows[0], which had 166 commits of headroom left
+    -- under two days at the rate this repo was landing. So direction two keeps
+    each row's OWN shipped bound and asks the question at an age that bound can
+    actually cover.
+    """
+    for row in rows:
+        bound = int(row["max_commits"])
+        findings, known, _ = G.adjudicate(
+            _record({row["gate"]: "FAIL"}), [row], lambda _sha, b=bound: b)
+        assert [f.line() for f in findings] == [], (
+            row["gate"], [f.line() for f in findings])
+        assert row["gate"] in known, row["gate"]
 
 
 def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
@@ -144,20 +176,55 @@ def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
 def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     """The mutation arm on the SHIPPED rows.
 
-    Every row is driven red, then the SAME row is driven red again with its
-    bound raised to the ceiling. If a row refuses in both arms, something other
-    than the deadline is failing it and the row's number is decorative.
+    Every row is driven red at an age one commit PAST the bound it typed for
+    itself, and then again at an age exactly AT it. The first must report
+    `expired` and the second must report nothing at all -- so what decides is
+    the comparison between the red's age and this row's own number, and nothing
+    else about the row.
+
+    WHY THE AGE IS VARIED AND NOT THE BOUND. Until v1.11.70 this held the real
+    age fixed and raised the bound to `MAX_BOUND_COMMITS`, expecting `expired`
+    to stop. That is the same question only while every shipped row is YOUNGER
+    than the ceiling. The ceiling is 500 commits, and MEASURED on 2026-08-22 this
+    repo took 539 commits in the 5.69 days from c5d7f2d00e1d (2026-08-16 19:07)
+    to a4caccefe -- 94.7 a day, which makes that ceiling a 5.3-DAY deadline. So
+    two rows citing c5d7f2d00e1d -- 'L-doc field producer' (bound 210, itself
+    2.2 days) and 'evidence citation resolves' (bound 140, 1.5 days) -- stood
+    539 commits back, 39 PAST the ceiling. For a row in that state no
+    legal bound clears the deadline, so the old loose arm asked `adjudicate`
+    for a verdict it is designed never to give, and then read the refusal as
+    evidence that "something other than the deadline is failing it". That is
+    precisely backwards: it was the deadline, and only the deadline. The bound
+    had not become decorative; it had been overtaken. Varying the AGE asks the
+    intended question at any repo age and never has to name a number past the
+    ceiling, so it cannot expire on its own the way the old form did.
+
+    The at-bound arm asserts NO findings rather than merely no `expired` one.
+    `adjudicate` returns early for `stale`, `unresolvable` and `incomplete`, so
+    a row failing for one of those produces no `expired` finding either and
+    "not any expired" would have passed on it -- green because the row was
+    broken in a different way, which is the one thing this arm must not do.
     """
     for row in rows:
         red = _record({row["gate"]: "FAIL"})
-        tight, _, _ = G.adjudicate(red, [dict(row, max_commits=1)], age)
-        loose, _, _ = G.adjudicate(
-            red, [dict(row, max_commits=G.MAX_BOUND_COMMITS)], age)
-        assert any(f.kind == "expired" for f in tight), (
+        bound = int(row["max_commits"])
+        past, _, _ = G.adjudicate(red, [row], lambda _sha, b=bound: b + 1)
+        at, _, _ = G.adjudicate(red, [row], lambda _sha, b=bound: b)
+        assert any(f.kind == "expired" for f in past), (
+            f"{row['gate']!r} does not expire one commit past its own bound of "
+            f"{bound}, so its number is not what refuses")
+        assert [f.line() for f in at] == [], (
+            f"{row['gate']!r} is still refused at an age equal to its bound of "
+            f"{bound} -- something other than the deadline is deciding it")
+
+    # ...and the SHIPPED rows, at the age they really stand at today against
+    # real history, still expire. The two arms above are synthetic by
+    # construction; this is what keeps the test attached to the actual ledger.
+    for row in rows:
+        today, _, _ = G.adjudicate(
+            _record({row["gate"]: "FAIL"}), [dict(row, max_commits=1)], age)
+        assert any(f.kind == "expired" for f in today), (
             f"{row['gate']!r} does not expire even at a bound of 1")
-        assert not any(f.kind == "expired" for f in loose), (
-            f"{row['gate']!r} still expires at the ceiling -- its stated bound "
-            f"is not what is deciding this")
 
 
 def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):

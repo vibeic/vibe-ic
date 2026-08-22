@@ -71,6 +71,22 @@ HERE = Path(__file__).resolve().parent          # .../benchmark/
 PLUGIN = HERE.parent                            # .../vibe-ic/
 PROGRAMS = PLUGIN / "programs"
 
+# The EMIT-BLOCKING conformance rule set is NOT declared here. It is IMPORTED
+# from the module that owns it, because this gate and `spec_conformance_check`
+# must agree by construction and not by hand.
+#
+# MEASURED: this file used to carry its own copy of the set. On 2026-08-17
+# `ordered-phase-monitoring-early` was added to the canonical set in b444b42c67
+# (#1701) and never reached the copy, so for 515 commits a finding the canonical
+# set called emit-blocking was NOT blocked by the gate that enforces it — the
+# exact "a gate-blocked emit reads as Tier-1 solved" hole this gate exists to
+# close, reopened in the newest rule. A set that has to be re-typed in two files
+# is the defect; one name with one definition is the fix.
+if str(PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(PROGRAMS))
+from spec_conformance_check import (                      # noqa: E402
+    EMIT_BLOCKING_CONFORMANCE_RULES as _BLOCKING_CONFORMANCE_RULES)
+
 
 def _registry_entry(bench: str) -> dict | None:
     reg_file = HERE / "BENCHMARK_REGISTRY.json"
@@ -360,16 +376,6 @@ def main():
     #    the Prob150_review2015_fsmonehot dropped-Count-self-loop defect that
     #    SKIPped the case-driven check and shipped PASS. Zero-false-fire: fires
     #    only on a disclosed table + parseable one-hot assigns; SKIPs otherwise.
-    _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
-                                   "fsm-output-style-mismatch",
-                                   "port-missing",
-                                   "zero-output-ports",
-                                   "msbfirst-direction-mismatch",
-                                   "moore-output-reset-gated",
-                                   "shift-implemented-as-rotate",
-                                   "waveform-peak-hold-dropped",
-                                   "fsm-onehot-missing-transition",
-                                   "sync-reset-next-state-redundant-gate"}
     blocking: list = []
     # ORGANIC #688 — harness-exact self-verify BLOCKs (standalone `-s <top>`
     # codegen / verilator lint) are emit-blocking: the scorer rejects the same
