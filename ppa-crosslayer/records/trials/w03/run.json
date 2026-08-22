@@ -1,0 +1,18 @@
+{
+  "trial": "w03",
+  "levers": {
+    "rtl_variant": "csa_mux",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.50",
+    "spare_cell_density": "0.00"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 278.007,
+    "cpu_seconds": 321.512,
+    "peak_rss_mb": 609.1
+  }
+}

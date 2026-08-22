@@ -51,7 +51,7 @@ Write your per-problem draft completions to a drafts JSONL
 (`{"id": ..., "completion": ...}` per line), then run:
 
 ```bash
-python3 <plugin>/benchmark-harness/cvdp_gate.py \
+python3 <plugin>/benchmark/cvdp_gate.py \
     --batch <your_drafts.jsonl> --out responses/<batch>.jsonl \
     --report reports/cvdp_gate_<batch>.json
 ```
