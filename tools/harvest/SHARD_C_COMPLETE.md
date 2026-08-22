@@ -8,17 +8,17 @@ long because it records what was wrong as well as what was right.
 
 `tools/harvest/verdicts_shard_c.tsv` — 110 rows, exactly the 110 paths of
 `_harv_shard_c.tsv`, checked by set difference. Judged by CONTENT against
-`origin/main` `81cd5321b082f9535f1a607a6feb7855498e7fe6`.
+`origin/main` `a4caccefeab577a5337f1854c9c857e4d7a2bd42`.
 
 | verdict | count |
 |---|---:|
-| RECOVER | 91 |
-| LANDED | 17 |
+| RECOVER | 90 |
+| LANDED | 18 |
 | ABANDON | 2 |
 | UNREACHABLE | 0 |
 
 Machine-validated by `bin_jharv3/contract_check.py` against the file *as pushed*:
-every RECOVER's named file re-resolved against current main — 66 differ, 23 are
+every RECOVER's named file re-resolved against current main — 65 differ, 23 are
 absent from main, 2 are uncommitted, **0 unparseable, 0 overtaken by main**.
 
 ## What changed, and why it mattered
@@ -32,19 +32,21 @@ copies are different files — 9892 vs 7455 bytes, neither on main, neither on a
 ref. Tree identity cannot see untracked content, and untracked content was the
 whole of the value. Dropping that directory would have destroyed the only copy.
 
-## The 19 deletion-bound rows are now measured, not disclosed
+## The 20 deletion-bound rows are measured, not disclosed
 
-The rows that authorise deletion — 17 LANDED and 2 ABANDON — carried a disclosure
+The rows that authorise deletion — 18 LANDED and 2 ABANDON — carried a disclosure
 that 11 of them rested on an input nobody had measured: untracked content on .112
 and .121, which `git status --porcelain -uno` cannot see and which those hosts
 would not answer for. `.102` is authorised on both; `ssh .102 "ssh .1xx ..."`
 closes it.
 
-**19 of 19: 0 untracked, 0 tracked modifications, HEAD object present, HEAD
-unchanged since judging, 0 owned files differing from main. No verdict changed.**
+**20 of 20: 0 untracked, 0 tracked modifications, HEAD object present, HEAD
+unchanged since judging, 0 owned files differing from current main.** No verdict
+changed by this measurement; the one verdict that did change, `_jd3`, changed
+because main moved, and it was measured to this same standard before it moved.
 
 The same defect exists one level down and is also closed: `-uall` reports untracked
-files and NOT ignored ones. 121 ignored entries were found under those 19 rows, all
+files and NOT ignored ones. 121 ignored entries were found under those 20 rows, all
 121 attributed by `git check-ignore` to a rule `origin/main`'s own `.gitignore`
 declares generated or scratch. One row's evidence was wrong and is corrected —
 `wt-j63x8c` claimed a twin that "is kept" and is in fact in no shard at all.
@@ -60,9 +62,9 @@ hazard for this pass. All 110 directories were then read on the host that owns
 them: .108 directly, .112 and .121 through a hop via .102. Nothing was guessed
 and nothing was left UNREACHABLE.
 
-- **17 LANDED** — owned files compared blob-by-blob against main; all 17 clean on
+- **18 LANDED** — owned files compared blob-by-blob against main; all 18 clean on
   disk. Zero false LANDED.
-- **91 RECOVER** — 89 verified by measurement, 2 are uncommitted edits no commit
+- **90 RECOVER** — 88 verified by measurement, 2 are uncommitted edits no commit
   holds and now name their file.
 - **2 ABANDON** — both duplicate claims re-confirmed by tree sha, both trees clean.
 

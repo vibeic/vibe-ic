@@ -23,7 +23,7 @@ closes it, and finds a second, deeper instance of the same shape one level down.
 Three read-only probes were piped in over stdin. Nothing was written on either
 host — no file, no index, no ref, no fetch.
 
-## Result: 19 of 19 clean, no verdict changed
+## Result: 19 of 19 clean, no verdict changed (and a 20th row joined them later)
 
 | | rows | untracked (`-uall`) | tracked modified |
 |---|---:|---:|---:|
@@ -46,7 +46,13 @@ from a clean tree:
   the identical 2-file owned set, and 0 untracked each. The twin is a shard-C row
   and its verdict is RECOVER, so "which is kept" is checkable, not assumed.
 
-Raw: `raw_untracked_ignored_shard_c_jharv3.tsv` (21 rows: the 19 plus both twins).
+Raw: `raw_untracked_ignored_shard_c_jharv3.tsv` (22 rows: the 19, both twins, and
+`_jd3`, which became deletion-bound when main advanced 214 commits and its work
+landed — measured to the same standard before the verdict was allowed to move).
+`origin/main` has since moved `81cd5321b` → `a4caccefea`; every count in this file
+was re-derived against the new main and only `wt-j63x8c`'s absent-from-main count
+changed, 1 → 3, the two additions being paths main deleted at its tip that are
+byte-identical at the merge-base.
 
 ## The same defect one level down: `-uall` cannot see ignored files either
 

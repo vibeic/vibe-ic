@@ -12,6 +12,7 @@ host	path	head	head_object	merge_base	owned	owned_differing	untracked_all	tracke
 112	/home/reyerchu/_gf180_priv/wt2	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	present	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	0	0	0	0	3	12	84847	1
 112	/home/reyerchu/_i_solo_1126	30ca1a916507478dbe53f7517e3b16f76fa6efde	present	3d13e2c59eb0e65527326b1f932050550c982188	2	2	0	0	1	2	27989	1
 112	/home/reyerchu/_jcorpus/base	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	present	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	0	0	0	0	12	379	16042463	1
+112	/home/reyerchu/_jd3	66e0806689ecebaca790e037418676fad45b9de6	present	66e0806689ecebaca790e037418676fad45b9de6	0	0	0	0	0	0	0	1
 112	/home/reyerchu/_jppa_skills/tree	39b985af57acb42a71855fb323391dac747880f5	present	867de428920c708934f06411fc91225dc4f58fe6	28	0	0	0	10	371	14622974	1
 112	/home/reyerchu/_v1126	a7b1ed913e21485660bfa3d9d5ba69042dabaea4	present	3d13e2c59eb0e65527326b1f932050550c982188	2	2	0	0	6	17	242486	1
 121	/home/reyerchu/AI_IC_design/_jm9_base	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	present	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	0	0	0	0	7	208	7320294	3

@@ -4,17 +4,18 @@ path	head	merge_base	held_absent_from_main_tip	identical_at_merge_base	examples
 /home/reyerchu/_jfeas_base	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_jppa_fixtures/tree	0dc3e9e7f81486e2594a191ea0ec1f8beb5c5dd1	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_jppa_power/base	867de428920c708934f06411fc91225dc4f58fe6	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
-/home/reyerchu/wt-j63x8c	3ab7fc723e4984597ed5a6662798b60e7bbb505c	a00f53f2094812041c8aa6094f27058bc1b14ddd	1	0	RESULT.md
+/home/reyerchu/wt-j63x8c	3ab7fc723e4984597ed5a6662798b60e7bbb505c	a00f53f2094812041c8aa6094f27058bc1b14ddd	3	2	RESULT.md; ppa-crosslayer/records/h2h_F.json
 /home/reyerchu/wt-main62	6dfe15a329e6e1fbd621d0bfaadaed41c3c5db9a	6dfe15a329e6e1fbd621d0bfaadaed41c3c5db9a	0	0	
 /tmp/claude-1000/-home-reyerchu-vibe-ic/0144f922-cbe4-48a4-937e-a5e723ca0cec/scratchpad/wt-base	867de428920c708934f06411fc91225dc4f58fe6	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_cpath_priv/basetree	46db018669cbd98a2bf6738235edaa03b2ae32a7	46db018669cbd98a2bf6738235edaa03b2ae32a7	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_gf180_priv/wt2	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_jcorpus/base	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
+/home/reyerchu/_jd3	66e0806689ecebaca790e037418676fad45b9de6	66e0806689ecebaca790e037418676fad45b9de6	2	2	ppa-crosslayer/records/h2h_F.json; ppa-crosslayer/records/h2h_F_report.json
 /home/reyerchu/_jppa_skills/tree	39b985af57acb42a71855fb323391dac747880f5	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_v1126	a7b1ed913e21485660bfa3d9d5ba69042dabaea4	3d13e2c59eb0e65527326b1f932050550c982188	17331	17331	.image-version-ignore; IP/cpu/ibex
 /home/reyerchu/AI_IC_design/_jm9_base	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	e36d81c0a39dfa2ac496c4f683e7a21fb4fbf075	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_j4reds2/base	867de428920c708934f06411fc91225dc4f58fe6	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_j4reds3/base	867de428920c708934f06411fc91225dc4f58fe6	867de428920c708934f06411fc91225dc4f58fe6	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
-/home/reyerchu/_jcap_priv/wt	4c7df07a03b2295fb5ffbb4dd4bba84c24754ec3	4c7df07a03b2295fb5ffbb4dd4bba84c24754ec3	9	9	jcap-chip/RESULT.md; jcap-chip/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py
+/home/reyerchu/_jcap_priv/wt	4c7df07a03b2295fb5ffbb4dd4bba84c24754ec3	4c7df07a03b2295fb5ffbb4dd4bba84c24754ec3	11	11	jcap-chip/RESULT.md; jcap-chip/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py
 /home/reyerchu/_ptmo_priv/ppa	bb90724dcd7ebe8d31474d5245a54fdce112b527	bb90724dcd7ebe8d31474d5245a54fdce112b527	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
 /home/reyerchu/_smrg_priv/smrg_base	053eecd27404294086d55b72b6d52d011b7a3257	053eecd27404294086d55b72b6d52d011b7a3257	10	10	.image-version-ignore; tools/vibeic-eda/VERSION
