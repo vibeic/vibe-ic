@@ -1778,6 +1778,53 @@ def test_equality_is_not_agreement_when_K_is_a_lower_bound(tmp_path):
             f"sites={sites} denominator={denom}: {other} should be empty: {doc}")
 
 
+def test_the_detectors_two_failure_modes_both_stay_visible(tmp_path):
+    """`multiplied_counters` is deliberately narrow, and a narrow detector is
+    only safe while BOTH ways it can be wrong stay visible. Those directions are
+    pinned here, not its cleverness.
+
+    UNDER-FIRE: a helper that is a METHOD is missed -- `calls` counts
+    `ast.Call` whose func is a plain `Name`. The counter reads as a COUNT and
+    the old false refusal returns: rc=FAIL, loud and answerable.
+
+    OVER-FIRE: two lexical calls in EXCLUSIVE branches count as two though only
+    one runs, so a possibly-decidable comparison is DECLINED -- reported as
+    NOT DECIDABLE, never passed.
+
+    If either direction ever flips to a quiet PASS, this goes red. That is the
+    property; the counts themselves are allowed to be imperfect, because the
+    corpus has no method-hosted emitter (measured: 0 of 29) and widening the
+    detector to reach one would pay for it in the silent direction."""
+    method = ('class C:\n'
+              '    def _r(self, n):\n'
+              '        return "  if {[catch {x}]} { incr _n }\\n"\n\n'
+              '    def script(self):\n'
+              '        return ("  set _n 0\\n" + self._r(1) + self._r(2)\n'
+              '                + self._r(3) + "  if {$_n >= 3} { puts ALL }\\n")\n')
+    progs, tests = _tree(tmp_path / "method", method,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "m.json")
+    assert r.returncode == RC_FAIL, (
+        "the method-hosted helper stopped failing LOUDLY -- if it now passes, "
+        "the under-fire direction has gone quiet:\n" + r.stdout)
+    doc = json.loads((tmp_path / "m.json").read_text())
+    assert doc["not_determined"] == [], doc
+
+    branches = ('def _r(n):\n    return "  if {[catch {x}]} { incr _n }\\n"\n\n\n'
+                'def script(x):\n'
+                '    if x:\n        return "  set _n 0\\n" + _r(1) + "  if {$_n >= 2} { puts A }\\n"\n'
+                '    return "  set _n 0\\n" + _r(2) + "  if {$_n >= 2} { puts B }\\n"\n')
+    progs, tests = _tree(tmp_path / "branches", branches,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "b.json")
+    doc = json.loads((tmp_path / "b.json").read_text())
+    assert r.returncode != RC_PASS, (
+        "an over-fired decline was reported as a pass:\n" + r.stdout)
+    assert len(doc["not_determined"]) == 1, (
+        "the declined comparison was not reported at all:\n"
+        + json.dumps(doc, indent=2))
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

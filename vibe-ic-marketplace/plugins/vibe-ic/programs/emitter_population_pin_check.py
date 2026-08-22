@@ -612,6 +612,24 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     comparison at all -- is NOT among them. So no verdict this guard reaches
     today moves.
 
+    ITS TWO FAILURE MODES, MEASURED, AND NEITHER IS SILENT -- which is why it
+    is left this narrow rather than made cleverer:
+
+      UNDER-FIRE   a helper that is a METHOD is missed: `calls` counts
+                   `ast.Call` whose func is a plain `Name`, so `self._r(...)`
+                   is not seen. The counter reads as a COUNT and the false
+                   refusal returns for that shape -- LOUD, and answerable.
+      OVER-FIRE    two lexical calls in EXCLUSIVE branches count as two, though
+                   only one runs. The comparison is then DECLINED where it might
+                   have been decidable -- conservative, and printed as
+                   NOT DECIDABLE rather than passed.
+
+    Extending it to `Attribute` calls would close the first and widen the
+    second, and MEASURED over this corpus that trade buys nothing: of 29 `incr`
+    literals in the six programs that contain one, ZERO are hosted by a method
+    and 29 by a plain function. Machinery for a shape the corpus does not have,
+    paid for in the silent direction.
+
     IT ASKS POLARITY, for the reason `counters_of` does and about the same text.
     A denied `incr` must not count as evidence of a multiplier here while being
     refused as a member there; two readers of one script that disagree about a
