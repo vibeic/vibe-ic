@@ -1579,3 +1579,43 @@ and saying so is worth more than my decline was. **A cost I declined to pay
 turned out to be a cost I had never counted** — which is the same defect as
 every other correction in this document, arriving one last time from the
 direction I was least watching: my own reason for not doing something.
+
+## 27. What the wiring evidence does NOT cover
+
+The brief asked to "show it firing, not just present in the file", and §5 and §6
+do that — but through a chain EXTRACTED from `tools/gatekeeper-land.sh`
+(`run` → `run_capture` → `run_emit` → `lane_resolve` → `run_gatekeeper_review`,
+plus the `run "full:gatekeeper-review"` call site, so a rename or a deleted call
+site makes the driver unbuildable). That is a reconstruction, and its limits
+should be stated by me rather than discovered by a reviewer.
+
+**What it establishes:** the real functions, the real call site, and the real
+`gatekeeper_review.py`, wired together as the script wires them — the review
+fires, blocks at rc 2 when killed, and decides at rc 1 when allowed to finish.
+
+**What it does not:** `tools/gatekeeper-land.sh` has never been run end to end
+against this branch. Everything before the review in the full tier — the lane
+launcher, the window, the joins — is exercised by
+`tools/test_gatekeeper_land_lanes.py` (32 passed with the budget file) but not
+by a real landing on this tree.
+
+**Why it was not run, decided rather than skipped.** A full-tier run costs the
+whole landing suite, and at the time of writing the host carried five other
+agents' pytest arms at load ~11. Two reasons, and the second is the stronger:
+
+1. It would degrade five peers' in-flight measurements — the same reason the
+   bound-and-loaded control in §17 was declined, applied consistently rather
+   than only when it suited me.
+2. **It would not be informative on a contended host.** §18 measured that the
+   hygiene set's shards trip the runner's 300 s watchdog when they run slowly,
+   and a landing tier competing with five pytest arms is exactly that
+   condition. The run would refuse with `parallel hygiene incomplete` — a
+   verdict about the host, not about this wiring, and I would have paid the
+   whole tier to learn nothing about the thing I was testing.
+
+**What would close it:** `GATEKEEPER_NO_STAMP=1 bash tools/gatekeeper-land.sh`
+on a quiet host. The script never pushes — verified, zero `git push` in it — and
+that flag makes it remove the stamp instead of minting one, so the run is
+non-destructive. It is the one piece of evidence in this document that remains
+a reconstruction, and naming it is worth more than an extra assertion that the
+reconstruction was faithful.
