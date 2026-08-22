@@ -135,3 +135,75 @@ pointer to its successor.
 
 Nothing was deleted. No working tree, index or HEAD was modified on any host. The
 only writes this audit made were remote-tracking ref updates from its own fetches.
+
+---
+
+## Second round: the checker's own negative control was vacuous
+
+Prompted by a note from the `.120` sweep, which had just found its first negative
+control did nothing — a hash "corrupted" with `awk gsub(/[0-9a-f]{64}/…)`, where
+mawk has no interval expressions, so nothing was corrupted and the checker "passed"
+a file believed broken. I pointed the same question at this file and found two
+defects in it. Both are fixed; the evidence and the 110 verdicts did not change.
+
+**1. The control could not tell which check caught a fault.** `--self-test` asserted
+only that *some* check went red. Deleting `check_survivability` **entirely** still
+printed `D dead rescue ref — RED (detected)` and `all checks fire`, exit 0, because
+check B happened to fire on the same synthetic row. Survivability is the check that
+guarantees no row can be executed and lose work, and the harness would have
+certified a blind one as working.
+
+Each case now declares the check it targets and passes only if *that* check fires.
+Verified by blinding each check in turn:
+
+```
+  blinding check_survivability -> self-test flags 2 blind case(s), exit=1
+  blinding check_content       -> self-test flags 3 blind case(s), exit=1
+  blinding check_freshness     -> self-test flags 2 blind case(s), exit=1
+  blinding check_shape         -> self-test flags 7 blind case(s), exit=1
+```
+
+Before the fix each of those was exit=0.
+
+**2. Unreadable claims were hiding in an honest-looking bucket.** The first version
+knew two of this shard's evidence phrasings and filed everything else under
+`no-sha-pair` — which read as "this rule makes no sha claim by design". Three rows
+in that bucket *did* carry sha256 claims: `_v1123` (a full 64-char hash for a file
+on disk), and both caravel rows (untracked-file claims, one of them the very row
+this audit corrected). 88 verified, 22 "no claim" was really 88 verified, 19 no
+claim, **3 unchecked**.
+
+An unread claim is now a **failure**, not a pass, and the two categories are counted
+apart. A hash *literal* is what makes a claim — `_jppa_skills/tree` says "sha256 on
+both sides of all 28 files", which is prose about method and correctly counts as no
+claim.
+
+Three further parser bugs surfaced while fixing this, each of which had been
+silently producing a wrong "cannot read" or "not found":
+
+- the on-disk form (`is on disk here and ABSENT FROM origin/main`) was unknown;
+- rows name their rescue branch in more phrasings than the strict claim-bearing
+  forms (`pushed it as X` as well as `Preserved as X`), so a blob lookup had
+  nowhere to look. Widening where to *search* cannot manufacture a pass — the
+  sha256 still has to match;
+- `the file of the same name in <dir>` names a **directory**; reading it as a
+  filename made the lookup search for a stem no file has. The filename is inherited
+  from the row's primary claim.
+
+**Result — every sha256 literal in all 110 rows is now read and checked:**
+
+```
+  rows 110   freshness-ok 110   fully-read 90   no-claim-by-design 20
+  main-side-verified 90   head-side-verified 88   on-disk-verified 1
+  untracked-verified-from-preserved-blob 3
+  branch-live 264   containment-verified 85
+  0 unreadable   0 undetermined   -> all checks passed
+```
+
+Untracked bytes are on no commit, so they are only checkable if somebody preserved
+them. All three untracked claims — including both sides of the caravel correction —
+now verify against blobs on the rescue branches those rows name, which is the same
+thing this audit had done by hand, done by the checker instead.
+
+No verdict changed in this round either. What changed is that the file can no longer
+report a green it has not earned.
