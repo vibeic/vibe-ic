@@ -61,6 +61,13 @@ USAGE
     census               what the sharper predicate finds
     newly_visible        the difference, named -- the debt this file exists for
     newly_visible        the debt: blind, and nothing says why
+    code_shaped          of `newly_visible`, those whose own literals name an
+                         HDL/layout/netlist construct. A CAVEAT on the number,
+                         never subtracted from it: `parameter WIDTH = 8;` cannot
+                         be denied by a sentence, so the polarity question does
+                         not arise -- but telling prose from code needs a human
+                         read, and a heuristic that silently dropped them would
+                         invent a precision it does not have.
     declared_in_place    blind, and the function's own docstring ARGUES that it
                          is deliberate. Named on every run, never hidden --
                          classified, because "designed this way" and "nobody
@@ -99,6 +106,26 @@ _DECLARED_RE = re.compile(r"NOT ASKED FOR POLARITY|POLARITY IS NOT ASKED",
 #: A marker on a one-line docstring is an assertion, not an argument. The gate's
 #: exemption register sets its own floor at 80 characters for a reason.
 _DECLARED_REASON_MIN = 200
+
+#: A CAVEAT, NEVER A FILTER. The predicate above matches a SHAPE -- a regex over
+#: text, a declared value written, no polarity consulted -- and that shape is
+#: also what a parser of Verilog, LEF/DEF, Liberty or SPICE looks like. A
+#: `parameter WIDTH = 8;` cannot be denied by a surrounding sentence, so for
+#: those the polarity question does not arise at all and the entry is not debt.
+#:
+#: Sampled by hand at this tip: `saturate_synth::_param_defaults` matches
+#: `parameter\s+...=\s*(\d+)` and `reset_discipline_check::analyse_module`
+#: matches `\bif\s*\(([^)]*)\)`. Both are code. Neither is debt.
+#:
+#: So the census PRINTS this split and does not act on it. Judging prose from
+#: code needs a human read of what the function is pointed at, and a keyword
+#: heuristic that silently dropped a third of the count would be inventing a
+#: precision it does not have -- while hiding any genuine prose extractor that
+#: happens to mention a net or a pin.
+_HDL_SHAPED = re.compile(
+    r"\b(parameter|localparam|module|endmodule|always|assign|wire|reg|input|"
+    r"output|posedge|negedge|instance|net|pin|via|layer|lef|liberty|spice|"
+    r"subckt|measure)\b", re.I)
 
 TOOL = "prose_polarity_census"
 RC_OK, RC_UNDETERMINED, RC_USAGE = 0, 2, 3
@@ -146,6 +173,36 @@ def writes_a_declared_value(fn: ast.AST) -> bool:
                 and getattr(n.func.value.func, "attr", "") == "setdefault"):
             return True
     return False
+
+
+def looks_like_a_code_parser(fn: ast.FunctionDef,
+                            module: ast.Module | None = None) -> bool:
+    """True when the text this function matches on names an HDL, layout or
+    netlist construct -- a CAVEAT on the count, never a filter on it.
+
+    THE PATTERN IS USUALLY NOT INSIDE THE FUNCTION. `PAT = re.compile(r"...")`
+    at module level and `PAT.finditer(text)` in the body is the common idiom,
+    and reading only the function's own literals found NOTHING for it -- the
+    first version of this check missed a fixture built exactly that way and
+    failed on unmutated code. So the module-level constants the function
+    actually REFERENCES are resolved too.
+
+    Referenced ones only, not every literal in the file: a module that parses
+    Verilog somewhere else would otherwise tar every function in it."""
+    lits = [n.value for n in ast.walk(fn)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    if module is not None:
+        used = {n.id for n in ast.walk(fn)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        for node in module.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            targets = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            if not targets & used:
+                continue
+            lits += [c.value for c in ast.walk(node.value)
+                     if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+    return bool(_HDL_SHAPED.search(" ".join(lits)))
 
 
 def declares_a_reason(fn: ast.FunctionDef) -> bool:
@@ -236,6 +293,7 @@ def main(argv: List[str] | None = None) -> int:
     sharp, narrow, unreadable = census_of(args.programs)
     newly_all = sorted(set(sharp) - set(narrow))
     declared: List[str] = []
+    code_shaped: List[str] = []
     for name in newly_all:
         stem, _, fname = name.partition("::")
         src = args.programs / f"{stem}.py"
@@ -245,8 +303,12 @@ def main(argv: List[str] | None = None) -> int:
             continue
         fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                    and n.name == fname), None)
-        if fn is not None and declares_a_reason(fn):
+        if fn is None:
+            continue
+        if declares_a_reason(fn):
             declared.append(name)
+        elif looks_like_a_code_parser(fn, tree):
+            code_shaped.append(name)
     newly = [n for n in newly_all if n not in declared]
 
     report: Dict[str, object] = {
@@ -256,6 +318,7 @@ def main(argv: List[str] | None = None) -> int:
         "census": len(sharp),
         "newly_visible": newly,
         "declared_in_place": declared,
+        "code_shaped": code_shaped,
         "unreadable": unreadable,
     }
     to_stderr = False
@@ -297,6 +360,13 @@ def main(argv: List[str] | None = None) -> int:
           f"[{len(sources)} program(s) "
           f"SCANNED; {len(unreadable)} NOT examined because they would not "
           f"parse]. THIS RECORDS DEBT AND NEVER REFUSES.", file=out)
+    if newly:
+        print(f"[CALIBRATION] {len(code_shaped)} of those {len(newly)} match on "
+              f"an HDL/layout/netlist construct in the text they match on, where "
+              f"a denial cannot arise and the entry is not debt. This number is "
+              f"an UPPER BOUND on a SHAPE. The split is printed and never "
+              f"subtracted: telling prose from code needs a human read.",
+              file=out)
     return RC_OK
 
 

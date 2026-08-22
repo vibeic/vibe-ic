@@ -283,3 +283,48 @@ def test_declaring_it_cannot_change_the_verdict(tmp_path):
     a = _run(_tree(tmp_path / "x", declared_emit=DECLARED))
     b = _run(_tree(tmp_path / "y", bare_emit=BARE_MARKER))
     assert a.returncode == RC_OK and b.returncode == RC_OK, (a.stdout, b.stdout)
+
+
+# Blind by the same shape, but pointed at Verilog. `parameter WIDTH = 8;`
+# cannot be denied by a surrounding sentence, so the polarity question does not
+# arise -- and the census must SAY that without acting on it.
+CODE_SHAPED = '''\
+import re
+
+PAT = re.compile(r"parameter\\s+([A-Z][A-Z0-9_]+)\\s*=\\s*(\\d+)")
+
+
+def extract(text):
+    out = {}
+    for m in PAT.finditer(text):
+        out["die_area_budget_um"] = m.group(2)
+    return out
+'''
+
+
+def test_a_code_shaped_debt_is_flagged_and_NOT_subtracted(tmp_path):
+    """The caveat is printed, never applied. A keyword heuristic that silently
+    dropped a third of the count would invent a precision it does not have --
+    and would hide any genuine prose extractor that happens to mention a pin."""
+    d = _tree(tmp_path, verilog_emit=CODE_SHAPED)
+    r = _run(d, "--json", "-")
+    doc = json.loads(r.stdout)
+    assert "verilog_emit::extract" in doc["code_shaped"], doc
+    assert "verilog_emit::extract" in doc["newly_visible"], (
+        "the caveat was SUBTRACTED from the count it qualifies: " + repr(doc))
+
+
+def test_a_prose_debt_is_not_flagged_as_code(tmp_path):
+    d = _tree(tmp_path, fortarget_emit=BLIND_FOR_TARGET_ONLY)
+    doc = json.loads(_run(d, "--json", "-").stdout)
+    assert doc["code_shaped"] == [], doc
+    assert "fortarget_emit::extract" not in doc["code_shaped"], doc
+
+
+def test_the_calibration_is_printed_beside_the_number_it_qualifies(tmp_path):
+    """A reader who sees `45 say nothing` and not the split will read a shape
+    count as a defect count."""
+    d = _tree(tmp_path, verilog_emit=CODE_SHAPED)
+    r = _run(d)
+    assert "[CALIBRATION]" in r.stdout, r.stdout
+    assert "UPPER BOUND on a SHAPE" in r.stdout, r.stdout
