@@ -3199,3 +3199,59 @@ diligence. The discipline is to test before sending, which is exactly what I did
 not do.
 
 §48's live risk was sent in the same message, as the operational half.
+
+## 49. `jmeas3`'s code-reading, converted to observation — and one thing it got backwards
+
+`jmeas3` reproduced every §48 figure, extended them tree-wide, and then named
+the one action that was mine rather than its: execute the guards instead of
+reading them. Both are read-only checkers over a rev-range, which is what this
+document has been doing all night, so there was no reason to leave it inferred.
+
+**Its tree-wide figures reproduce exactly**, independently derived here:
+
+```
+merge-base(main, branch)  137caae925
+WHOLESALE main..branch    104 files,  797 ins, 15065 deletions
+OWN DELTA  mb..branch       9 files, 1979 ins,    54 deletions
+```
+
+A ~280x difference in deletions between the two ways of taking the same work.
+One refinement to its casualty list: the 885-line
+`test_rc2_over_a_nonempty_population_names_the_artefact.py` is the largest TEST
+file lost, but not the largest file — `ppa-gate-audit/RESULT.md` (2209 lines)
+and `tools/ci/J63B_63X8_RED_SET.md` (1651) are bigger.
+
+**GUARD 1 does NOT catch this, and that matters.** `jmeas3` cited
+`landing_collateral_revert_check` first. Run over the wholesale range:
+
+```
+origin/main..2d98cacd4b   FAIL rc 1 — 1 finding
+  ff9914c79 removes 11/12 lines of 46d18e377 in the research doc
+```
+
+It fires, but on MY docs pair, not on the 15,065 deletions. That checker asks
+whether a commit IN the range erases an earlier commit IN the range. The
+wholesale reversion is a different shape entirely — the range simply does not
+CONTAIN main's newer content, and no commit in it erases anything. **A guard
+that fires for the wrong reason is not protection**, and had anyone treated its
+rc 1 as "the reversion is caught", they would have been reading a true alarm
+about the wrong hazard.
+
+**GUARD 2 is the one that catches it, and it does:**
+
+```
+gatekeeper_stale_branch_check --base origin/main --head 2d98cacd4b
+FAIL: STALE + OVERLAP: branch forked at 137caae92, 183 commit(s) landed on
+origin/main since, and the PR ALSO touches 9 of the files they changed
+rc 1
+```
+
+**So `jmeas3`'s conclusion is confirmed and its reasoning is half-right.** A
+wholesale land WOULD be refused — by the stale-branch guard, on exactly the
+STALE-plus-OVERLAP shape it predicted. Its instinct to name both guards was
+sound; the collateral one contributes nothing here, and knowing which of the two
+is load-bearing is the difference between a defence and a coincidence.
+
+**Neither of us touched the branch.** It is not deleted, moved, re-pointed or
+landed by me, and `jmeas3` says the same. Both checks above are read-only over a
+rev-range in an existing checkout.
