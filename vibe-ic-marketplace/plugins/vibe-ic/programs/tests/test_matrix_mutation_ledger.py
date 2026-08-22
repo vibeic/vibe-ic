@@ -72,6 +72,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -85,7 +86,7 @@ import yaml
 
 import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
-from matrix_63x8.cells import DIMENSION_NAMES
+from matrix_63x8.cells import DIMENSION_NAMES, DIMENSIONS
 
 
 def _domain_progress(scope: str, completed: int, total: int) -> None:
@@ -279,9 +280,32 @@ def dimension_modules() -> Dict[int, object]:
     return out
 
 
+#: A cell whose owning dimension module could not answer at all, carrying the
+#: reason. NEVER folded into ENFORCED/WAIVED/NA: an unanswerable cell is a third
+#: state, and the whole point of naming it is that "I could not look" must not
+#: read the same as "I looked and it was fine".
+UNREADABLE = "UNREADABLE: "
+
+
 @lru_cache(maxsize=1)
 def cell_states() -> Dict[Tuple[str, int], str]:
-    """``{(step, dim): state}`` — live, from the eight owning modules."""
+    """``{(step, dim): state}`` — live, from the eight owning modules.
+
+    ONE UNANSWERABLE CELL USED TO POISON ALL 552. `matrix_cell_state` raises
+    when its dimension cannot place a step — dimension 3 does exactly that for
+    a step with no record in `matrix_d3_output_manifest.json` — and the
+    exception escaped this loop, so `cell_states()` itself blew up and EVERY
+    parametrized case of `test_every_enforced_cell_carries_a_named_mutation`
+    went red. MEASURED with the growth control's own synthetic step spliced in:
+    69 of the 70 reported step ids were perfectly covered steps reporting a
+    failure about a step that is not them, and the one real cause appeared
+    only inside a traceback. A gate that reddens everything names nothing.
+
+    The failure is therefore ATTRIBUTED to the cell that produced it and every
+    other module still answers. It is not swallowed: an `UNREADABLE` cell is
+    neither ENFORCED nor covered, so the per-step test below refuses on it
+    explicitly rather than letting the census count it as "not enforced".
+    """
     mods = dimension_modules()
     assert sorted(mods) == list(range(1, 9)), (
         f"expected eight dimension modules, found {sorted(mods)}; a dimension "
@@ -290,7 +314,11 @@ def cell_states() -> Dict[Tuple[str, int], str]:
     out: Dict[Tuple[str, int], str] = {}
     for dim, mod in mods.items():
         for sid in F.step_ids():
-            out[(F.normalize_id(sid), dim)] = mod.matrix_cell_state(sid)
+            try:
+                state = mod.matrix_cell_state(sid)
+            except Exception as exc:                        # noqa: BLE001
+                state = f"{UNREADABLE}d{dim} could not place step {sid!r}: {exc}"
+            out[(F.normalize_id(sid), dim)] = state
     return out
 
 
@@ -482,6 +510,12 @@ def test_every_enforced_cell_carries_a_named_mutation(sid):
     problems: List[str] = []
     for dim in range(1, 9):
         state = states[(sid, dim)]
+        if state.startswith(UNREADABLE):
+            problems.append(
+                f"{sid}/d{dim}:{DIMENSION_NAMES[dim]} could not be READ at "
+                f"all, so its falsifiability is UNKNOWN rather than fine — "
+                f"{state[len(UNREADABLE):]}")
+            continue
         if state != "ENFORCED":
             continue
         covering = L.mutations_covering(sid, dim)
@@ -582,6 +616,19 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
     This is the cheap half — it exercises the ledger's arithmetic against a
     grown flow without paying for a subprocess. The expensive half, which runs
     the REAL gate, is the next test.
+
+    A DELTA, NOT AN ABSOLUTE, and that is the repair this test needed. It used
+    to open with `assert not before["uncovered"]`, which made it report SOMEONE
+    ELSE'S finding and stop measuring its own: the ledger's own comment on
+    :data:`LEDGER_AS_MEASURED` says `0.5ic/d3` is honestly uncovered and must
+    stay that way, so from the day that cell arrived this control was red for a
+    reason that has nothing to do with a flow that grew. Two tests already say
+    `0.5ic/d3` — `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
+    and the aggregate above — and a third saying it in a growth control is not
+    a third finding, it is a control that stopped controlling. What this test
+    owns is the DIFFERENCE the extra step makes, so that is what it asserts:
+    exactly the canary's eight cells arrive, and no pre-existing uncovered cell
+    is lost on the way (a census that dropped one would otherwise pass here).
     """
     grown = tmp_path / "grown_flow.yaml"
     grown.write_text(yaml.safe_dump(_flow_with_an_extra_step(), sort_keys=False,
@@ -591,7 +638,6 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
         states[(CANARY_STEP_ID, dim)] = "ENFORCED"
 
     before = L.census(cell_states())
-    assert not before["uncovered"], before["uncovered"]
 
     old = os.environ.get(L.FLOW_YAML_ENV)
     os.environ[L.FLOW_YAML_ENV] = str(grown)
@@ -604,10 +650,16 @@ def test_a_grown_flow_arrives_with_uncovered_cells(tmp_path):
             os.environ[L.FLOW_YAML_ENV] = old
 
     assert after["steps"] == before["steps"] + 1
-    assert sorted(after["uncovered"]) == sorted(
+    baseline = set(before["uncovered"])
+    grown_set = set(after["uncovered"])
+    assert baseline <= grown_set, (
+        f"growing the flow LOST uncovered cell(s) {sorted(baseline - grown_set)} "
+        f"— the census answered a smaller question about a bigger flow")
+    assert sorted(grown_set - baseline) == sorted(
         f"{CANARY_STEP_ID}/d{d}" for d in range(1, 9)), (
-        f"a 64th step must arrive with exactly its own 8 cells uncovered; "
-        f"got {after['uncovered']}")
+        f"a new step must arrive with exactly its own 8 cells uncovered; the "
+        f"grown census added {sorted(grown_set - baseline)} over a baseline of "
+        f"{sorted(baseline)}")
 
 
 def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
@@ -620,15 +672,27 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
     NAMES the step. Without this the growth claim would rest on a census
     function agreeing with itself.
 
-    The same invocation with the UNMODIFIED flow is asserted to exit 0, so the
-    control runs in both directions and a gate that reddened on everything
-    would be caught here.
+    BOTH DIRECTIONS, AS A DIFFERENCE OF FAILING CASES rather than as
+    `clean_run.returncode == 0`. The absolute form was the right control only
+    while the live census was perfectly covered; the moment one cell became
+    honestly uncovered — `0.5ic/d3`, which the ledger argues at length must
+    STAY uncovered — the clean arm exited 1, this test went red, and the growth
+    claim it exists to certify stopped being measured at all. Worse, the red it
+    reported was a restatement of a finding two other tests already name.
+
+    What the control actually needs is that the gate DISCRIMINATES: the grown
+    flow must fail for the canary and the clean flow must not. So both arms are
+    run with `-rf`, their FAILING parametrized step ids are compared, and the
+    difference must be exactly the canary. That still catches a gate red on
+    everything (the canary would then be in the clean set too) and it also
+    catches the opposite defect the old form could not see: a gate that stops
+    reddening some OTHER step keeps the exit code at 1 and would have passed.
     """
     grown = tmp_path / "grown_flow.yaml"
     grown.write_text(yaml.safe_dump(_flow_with_an_extra_step(), sort_keys=False,
                                     allow_unicode=True), encoding="utf-8")
-    node = (str(Path("programs/tests") / Path(__file__).name) +
-            "::test_every_enforced_cell_carries_a_named_mutation")
+    name = "test_every_enforced_cell_carries_a_named_mutation"
+    node = str(Path("programs/tests") / Path(__file__).name) + "::" + name
 
     def run(flow_override):
         env = dict(os.environ)
@@ -639,9 +703,14 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
             env[L.FLOW_YAML_ENV] = str(flow_override)
         return subprocess.run(
             [sys.executable, "-m", "pytest", node,
-             "-q", "-p", "no:randomly", "--no-header", "-rN"],
+             "-q", "-p", "no:randomly", "--no-header", "-rf"],
             cwd=str(L.PLUGIN_ROOT), capture_output=True, text=True,
             timeout=_PYTEST_TIMEOUT_S, env=env)
+
+    def failing_steps(proc):
+        return {m.group(1) for m in
+                re.finditer(rf"^FAILED .*::{name}\[step(.+?)\]\s*$",
+                            proc.stdout, re.MULTILINE)}
 
     grown_run = run(grown)
     assert grown_run.returncode != 0, (
@@ -652,10 +721,23 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
         f"an author cannot act on it:\n{grown_run.stdout[-3000:]}")
 
     clean_run = run(None)
-    assert clean_run.returncode == 0, (
-        f"the gate is red against the UNMODIFIED flow, so the growth control "
-        f"above proves nothing — a gate that fails on everything fails on a "
-        f"64th step too.\n{clean_run.stdout[-4000:]}")
+    grown_failed = failing_steps(grown_run)
+    clean_failed = failing_steps(clean_run)
+    assert grown_failed, (
+        "the grown run named no failing step at all; the -rf summary this "
+        f"control reads is missing:\n{grown_run.stdout[-3000:]}")
+    assert CANARY_STEP_ID not in clean_failed, (
+        f"the gate names the synthetic step even with the UNMODIFIED flow, so "
+        f"the growth control above proves nothing — a gate that fails on "
+        f"everything fails on a new step too.\n{clean_run.stdout[-4000:]}")
+    assert grown_failed - clean_failed == {CANARY_STEP_ID}, (
+        f"growing the flow by one step must change the gate's verdict by "
+        f"exactly that step. clean={sorted(clean_failed)} "
+        f"grown={sorted(grown_failed)}\n{grown_run.stdout[-3000:]}")
+    assert clean_failed <= grown_failed, (
+        f"the grown flow made the gate STOP naming "
+        f"{sorted(clean_failed - grown_failed)}; splicing in a step may add a "
+        f"finding and may never retire one")
 
 
 def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
@@ -681,6 +763,7 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
     shuffled.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                         encoding="utf-8")
 
+    baseline = L.census(cell_states())
     old = os.environ.get(L.FLOW_YAML_ENV)
     os.environ[L.FLOW_YAML_ENV] = str(shuffled)
     try:
@@ -695,7 +778,17 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
             os.environ.pop(L.FLOW_YAML_ENV, None)
         else:
             os.environ[L.FLOW_YAML_ENV] = old
-    assert not rep["uncovered"], rep["uncovered"]
+    # UNCHANGED, not EMPTY. `assert not rep["uncovered"]` was a statement about
+    # the live census's coverage, which is not what this test measures and not
+    # what reordering can affect: once `0.5ic/d3` became honestly uncovered it
+    # made this reverse case red for a reason the reordering did not cause —
+    # precisely the failure mode the docstring above warns about one paragraph
+    # earlier for the ARTEFACT entries. What must hold is that the SET does not
+    # move: a reorder that covered a cell would be as wrong as one that
+    # uncovered a cell, and both are caught by comparing sets.
+    assert sorted(rep["uncovered"]) == sorted(baseline["uncovered"]), (
+        f"reordering the flow changed which cells are uncovered: "
+        f"{sorted(baseline['uncovered'])} -> {sorted(rep['uncovered'])}")
     assert rep["steps"] == len(F.step_ids())
 
 
@@ -1188,10 +1281,20 @@ def test_a_stub_population_never_escapes_the_test_that_installed_it():
     """
     replay_results.cache_clear()
     with pytest.MonkeyPatch.context() as mp:
-        # Make the `== 24` assertion legitimately false, which is what `all`
-        # mode does in the field.
+        # Make the denominator assertion legitimately false, which is what
+        # `all` mode does in the field.
+        #
+        # DERIVED FROM THE PLAN, not written down. A literal here RACES the pin
+        # in the test below, and on 2026-08-20 it lost that race: adding
+        # `D5-PHANTOM-FALLBACK` moved the frozen plan from 24 to 25, the
+        # hard-coded 25 became EQUAL to it, the inner assertion passed, and
+        # `pytest.raises(AssertionError)` reported this test as broken —
+        # i.e. a guard on the `finally` stopped driving the failing direction
+        # and said so as if the `finally` had regressed. Deriving the wrong
+        # count from the right one cannot go stale.
+        wrong_denominator = len(L.replay_plan()) + 1
         mp.setattr(L, "replay_plan", lambda *a, **k: tuple(
-            (f"M{i}", f"s{i}") for i in range(25)))
+            (f"M{i}", f"s{i}") for i in range(wrong_denominator)))
         with pytest.raises(AssertionError):
             test_witness_replay_relays_the_exact_frozen_plan_denominator(mp)
     assert replay_results.cache_info().currsize == 0, (
@@ -1242,10 +1345,17 @@ def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
         seen.append((scope, completed, total)))
     try:
         assert replay_results() == ()
-        assert len(L.replay_plan()) == 24
+        # 24 -> 25: `D5-PHANTOM-FALLBACK` joined the ledger (2026-08-20). It is
+        # the first mutation to reach `closed_loop.fallback_to` — the flow's
+        # CONVERGENCE edges, 19 of which had shipped with no reader in the
+        # repository at all. Witness mode is one pair per entry, so the plan
+        # grows by exactly one. Re-stated by hand rather than derived from
+        # `len(L.MUTATIONS)`, because this pin exists to make a new entry force
+        # a human to say the number.
+        assert len(L.replay_plan()) == 25
         assert seen == [
-            ("matrix-mutation-replays", completed, 24)
-            for completed in range(1, 25)
+            ("matrix-mutation-replays", completed, 25)
+            for completed in range(1, 26)
         ]
     finally:
         replay_results.cache_clear()
@@ -1790,7 +1900,7 @@ def test_not_falsifiable_cells_are_published_and_specific():
             problems.append(
                 f"{nf.step_id}/d{nf.dim}: names a step the flow does not "
                 f"declare, so the finding is about nothing")
-        if nf.dim not in range(1, 9):
+        if nf.dim not in DIMENSIONS:
             problems.append(f"{nf.step_id}/d{nf.dim}: dimension out of range")
         if len(nf.tried) < 1:
             problems.append(
@@ -1821,6 +1931,55 @@ def test_not_falsifiable_cells_are_published_and_specific():
 # ══════════════════════════════════════════════════════════════════════
 # Guards on this file's own instruments
 # ══════════════════════════════════════════════════════════════════════
+#: Dimensions of the live matrix that this ledger does NOT carry cells for,
+#: each with the reason. `CELL_TESTS` is what decides the ledger's grid, and
+#: nothing required it to cover every declared dimension — so a dimension added
+#: to the matrix simply contributed no cells here and no test said a word.
+#: Silent absence is the one thing this campaign refuses, so it is named.
+LEDGER_DIMENSIONS_NOT_COVERED: Dict[int, str] = {
+    9: ("verdict_consumed, added 2026-08-21. Its cells are NOT in this ledger. "
+        "Registering them means a measured `applies_to` sweep over all 69 "
+        "steps for each mutation shape, which is a sweep this change did not "
+        "run — and an entry whose applies_to was not measured is exactly what "
+        "LOCK 1 exists to refuse. The dimension is not unguarded in the "
+        "meantime: test_matrix_d9_verdict_consumed.py carries its own mutation "
+        "arms for all three legs plus both control arms, and they RUN on every "
+        "session. What is missing is this ledger's per-cell reach, not "
+        "falsifiability evidence."),
+}
+
+
+def test_the_ledger_names_every_dimension_it_does_not_cover():
+    """A dimension outside this ledger must be DECLARED, never merely absent.
+
+    `census()` derives its grid from `CELL_TESTS`, so a dimension with no entry
+    there contributes no cells and no assertion notices. That is silent absence
+    — "a cell with no test is not covered", one level up. This test makes the
+    gap loud in both directions: a dimension that leaves the ledger must be
+    named here, and one that JOINS it must be removed from this map in the same
+    change, so the declaration cannot rot into a description of an older tree.
+    """
+    covered = set(L.CELL_TESTS)
+    declared = set(DIMENSIONS)
+    missing = declared - covered
+    assert missing == set(LEDGER_DIMENSIONS_NOT_COVERED), (
+        f"dimension(s) {sorted(missing)} of the live matrix carry no cells in "
+        f"this ledger, and the declared set is "
+        f"{sorted(LEDGER_DIMENSIONS_NOT_COVERED)}.\n"
+        f"Undeclared: {sorted(missing - set(LEDGER_DIMENSIONS_NOT_COVERED))} — "
+        f"their cells are contributing nothing to the coverage arithmetic and "
+        f"nothing said so.\n"
+        f"Stale: {sorted(set(LEDGER_DIMENSIONS_NOT_COVERED) - missing)} — now "
+        f"covered; delete the entry in the change that covered it.")
+    assert not (covered - declared), (
+        f"CELL_TESTS names dimension(s) {sorted(covered - declared)} that the "
+        f"matrix does not declare; the ledger would census cells that do not "
+        f"exist")
+    for dim, reason in LEDGER_DIMENSIONS_NOT_COVERED.items():
+        assert len(reason.strip()) >= 60, (
+            f"dimension {dim}'s exclusion reason is too short to check")
+
+
 def test_the_cell_test_addresses_are_real_pytest_nodes():
     """Every address :data:`CELL_TESTS` names must collect, or a replay would be
     measuring nothing and reporting a tidy green.

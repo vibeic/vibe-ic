@@ -1,91 +1,110 @@
 #!/usr/bin/env python3
-"""pad_assignment_gen — step 15.5ic's FIRST producer: write the pad-ring config
-from a DECLARED source, or refuse and name the field nobody answered.
+"""pad_assignment_gen — the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`.
 
-THE HOLE THIS CLOSES, MEASURED BEFORE IT WAS CODED
-==================================================
-`pad_ring_gen` reads its whole geometry out of ONE file,
-`phase3/stage3/pnr/pad_assignment.json`. Measured on v1.11.7:
+ENFORCEMENT: advisory here — this program is not in
+``phase3_one_shot_runner._DECLARED_SIGNOFF_GATES``; no one-shot runner invokes
+it, and measured on this tree no runner dispatches step 15.5ic at all. It runs
+when ``flow_compliance_check`` evaluates that step's first ``program_exit_zero``
+clause, so its rc IS half that step's verdict — "advisory" names the RUNNER
+channel it is absent from, not a verdict it cannot reach. The same words, for
+the same reason, as its sibling ``pad_ring_check``. Declared because
+vibe-ic#886 counts an undeclared AUDIT_ONLY gate as an enforcement decision
+nobody made; wiring it into the runner would change what a real run blocks on,
+which is the flow owner's call and is recorded, not taken here. Kept in the
+first 4 kB: `declared_intent` reads only `text[:4000]`.
 
-    grep -rn pad_assignment --include=*.py --include=*.yaml --include=*.json .
-      -> 5 hits, every one of them a READER inside `_pad_ring.py` /
-         `pad_ring_gen.py`. NOTHING IN THE TREE WRITES IT.
+WHY THIS PROGRAM EXISTS
+=======================
+`pad_ring_gen` reads that file and NOTHING WROTE IT. Measured on this tree
+before this program landed:
 
-    python3 programs/pad_ring_gen.py <a project carrying an operator slot
-                                      template with four pad lists in it>
-      -> verdict: SKIP, rc 2, "absent variable" x 13
+    grep -rn "pad_assignment" <repo root>          ->  2 files
+        programs/pad_ring_gen.py                        reader
+        programs/_pad_ring.py                           reader
 
-So step 15.5ic could only ever SKIP — and not only on the self-tape-out path
-the step's condition excluded, but on the SHUTTLE path too, the one path the
-condition admitted. A step wired to a file with no producer is the same defect
-as an unwired step, and it had been shipping.
+Two hits, both readers, zero writers. `_pad_ring.py`'s own docstring recorded
+the same fact and drew the correct conclusion for the tree it was written in:
+"NOTHING IN THIS FILE DERIVES AN ASSIGNMENT ... So `pad_ring_gen` SKIPs".
+So step 15.5ic could take exactly one branch — the SKIP — on the shuttle path
+and on the self-tape-out path alike. A step that can only skip is not a step.
 
-Meanwhile the two artefacts that DO carry the answers were already being
-written, by step 0.5ic, on every run:
+WHAT CHANGED UNDER IT
+=====================
+The input it went without now exists. Step 0.5ic writes
+`input/submission_template/tapeout_declaration.json` on EVERY route, and its
+section 2B is `_pad_ring.REQUIRED_VARS` grouped into the 8 things a human
+decides — `_tapeout_declaration.py` says so where it derives the 18 questions,
+naming `pad_ring_gen` as the `consumer` of every one of the 8. The consumer
+was never wired to the answers. This program is that wiring and nothing more.
 
-    reports/phase1/submission_template.json   the operator's slot, PARSED —
-        `submission_template_ingest` already reads PAD_SOUTH / PAD_EAST /
-        PAD_NORTH / PAD_WEST out of the slot yaml into `ingest.slots[].pads`,
-        and then stops. That parse is this program's input; the slot file is
-        NOT re-parsed here, because two parsers of one file drift and the
-        second one is always the one nobody re-measures.
-    input/submission_template/tapeout_declaration.json   the design's own
-        answers — `_tapeout_declaration`'s section `2B_pad_ring`, whose eight
-        questions carry `consumer="pad_ring_gen"` in their own definition.
+TWO SOURCES, AND WHICH ONE WINS
+===============================
+    operator slot file    `input/submission_template/slots/*.yaml`
+    the design's own      `input/submission_template/tapeout_declaration.json`
 
-This program is the wire between them. It computes NOTHING.
+The SLOT WINS where it speaks, and it speaks about ONE thing. Measured in
+`_submission_template.py`: a slot record carries `DIE_AREA`, `CORE_AREA`,
+`FP_SIZING`, a ring width, and the pad lists matched by
+`PAD_LIST_KEY_RE` — and of the 13 variables `_pad_ring.REQUIRED_VARS` names,
+the only ones a slot file can supply are the four per-side lists. It carries no
+site name, no corner site, no edge spacing, no rotation, no corner master, no
+filler and no signal map. So the merge is:
 
-WHAT IT WILL NOT DO
-===================
-It never invents a pad order, a site name, a spacing, a rotation, a corner
-master, a filler or a signal map. Every one of the 13 variables comes from a
-source that DECLARED it, and each is stamped with which source that was. A
-variable no source declared is a refusal that names the variable and, when it
-is a declaration question, names the question — never a default. A default is
-a fake number wearing a real number's clothes: it reads as an answer at
-`pad_ring_gen`, survives into `padring.def`, and the one thing it cannot do is
-be wrong in a way anybody notices.
+    PAD_SOUTH/EAST/NORTH/WEST   slot, when the slot names that side;
+                                otherwise the declaration's `pad_order_by_side`
+    the other nine variables     the declaration, always
 
-TWO SOURCES THAT DISAGREE ARE A REFUSAL, NOT A PREFERENCE
-=========================================================
-An operator template pins the pads for its slot; the design declares its own.
-When both are present and they differ, picking one silently records a pin-out
-nobody chose — and the losing value is exactly the one a reader would have to
-see to notice. So a disagreement is `PAD_CONFIG_SOURCES_DISAGREE`, naming the
-variable, BOTH values and BOTH source paths, and nothing is written.
+and a shuttle design that answers nothing gets what it gets today: nothing
+written, and `pad_ring_gen`'s own SKIP untouched.
 
-Precedence therefore only ever applies where the sources AGREE, which is where
-precedence cannot change an answer. It is recorded anyway (`provenance`) so a
-reader can see which document each variable came out of.
+THE THREE OUTCOMES, AND WHY THE MIDDLE ONE IS NOT A FAIL
+========================================================
+    0  WROTE       every required variable resolved; the config was written
+                   with a per-variable `provenance` block naming its source.
+    2  NOT_ASKED   no source answered ANY of section 2B. This is not a defect
+                   and not a refusal: it is "nobody was asked", which is the
+                   state every tree in this repository is in today. NOTHING IS
+                   WRITTEN — in particular no half-filled config, because
+                   `pad_ring_gen` reads a config that declares SOME of the
+                   contract as a MALFORMED DECLARATION and FAILs on it, and
+                   turning "nobody was asked" into "somebody wrote it wrong"
+                   is precisely the substitution both programs exist to refuse.
+    1  REFUSE      a source could not be read, two sources disagree, or the
+                   declaration was STARTED and still owes a field. The message
+                   NAMES THE FIELD. It never guesses a pad site, a spacing, a
+                   rotation or a filler.
 
-THIS PROGRAM'S OWN OUTPUT IS NOT ONE OF ITS SOURCES
-===================================================
-An existing `pad_assignment.json` is read as a source — a human or an upstream
-tool may legitimately have written one, and that is a declaration like any
-other. But a file THIS program wrote carries `_provenance.written_by`, and one
-of those is skipped and replaced. A checker that re-ingests its own last
-verdict agrees with itself forever; that failure has already happened once in
-this tree (step 26's `_discover`) and it is not being reintroduced here.
+THE PARTIAL RULE, STATED ONCE
+=============================
+Section 2B is answered ALL-OR-NOTHING by construction: there is no answer in it
+that makes another unnecessary. `pad_ring_gen` needs all 13 variables or it can
+place nothing. So:
 
-For the same reason a refusal DELETES a stamped stale config: leaving one
-behind would let `pad_ring_gen` place a ring from geometry this run refused.
-An UNSTAMPED file is never deleted — it is somebody else's input and this
-program does not own it.
+    0 of 8 answered   -> NOT_ASKED (rc 2). Today's state; behaviour unchanged.
+    1..7 of 8         -> REFUSE (rc 1), naming every one of the 8 still owed.
+    8 of 8            -> WROTE (rc 0).
 
-EXIT
-    0  PASS — every one of the 13 variables is declared; the config is written.
-    2  SKIP — no source declared ANY of them, i.e. nobody was ever asked. No
-       config is written and `pad_ring_gen` skips downstream exactly as it does
-       today. Non-zero on purpose: the flow reads exit 2 as its "could not
-       measure" tier, never as a pass.
-    1  FAIL — a source declared SOME of the contract and not the rest, or two
-       sources disagree, or a declared answer is the wrong shape. Somebody
-       wrote it and it is wrong, which is a different fact from nobody having
-       written it, and the two must not buy the same exit code.
+The distinction is the same one `pad_ring_gen` already draws between an ABSENT
+config and a HALF-WRITTEN one, and it is drawn here for the same reason: an
+unanswered question and a wrong answer must never buy the same exit code.
 
-chip-AGNOSTIC: no chip, vendor, SKU, foundry, PDK or process-node literal. The
-only fixed strings are upstream's own variable names, this module's question
-keys and this flow's relative paths.
+WHAT THIS PROGRAM WILL NOT DO
+=============================
+It derives NOTHING. Every value it writes was read out of a slot file or out of
+the declaration, verbatim, and is stamped with which. There is no default, no
+fallback value and no "sensible" pad site anywhere in this file — the six
+refusals `_pad_ring` renders as rule ids (`PAD_SITE_NOT_FOUND`,
+`PAD_SITE_CLASS_NOT_PAD`, `PAD_INSTANCE_NOT_IN_BLOCK`, `PAD_RING_DOES_NOT_FIT`,
+`PAD_CORNER_SPACING_NOT_SITE_MULTIPLE`, `PAD_CONFIG_VARIABLE_ABSENT`) all
+remain reachable and all still fire, because this program hands `pad_ring_gen`
+declared values and never manufactured ones.
+
+    pad_assignment_gen <project_dir> [--json REPORT] [--out CONFIG]
+    main(argv) -> 0 wrote / 1 refuse / 2 nobody was asked
+
+chip-AGNOSTIC: no chip, vendor, SKU, foundry, library or process-node literal.
+The only fixed strings are upstream's own variable names, the declaration's own
+question keys, and this flow's relative paths.
 """
 from __future__ import annotations
 
@@ -95,357 +114,83 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:                                  # pragma: no cover
-    sys.path.insert(0, str(_HERE))
+from _atomic_artefact import write_json as atomic_write_json
 
-from _atomic_artefact import write_json as atomic_write_json    # noqa: E402
-
-import _pad_ring as PR                                          # noqa: E402
-import _submission_template as ST                               # noqa: E402
-import _tapeout_declaration as TD                               # noqa: E402
+import _pad_ring as PR
+import _submission_template as ST
+import _tapeout_declaration as TD
 
 PROGRAM = "pad_assignment_gen"
 SCHEMA = "vibe-ic/pad_assignment/1"
 REPORT_REL = "reports/phase3/pad_assignment.json"
 
-#: The key this program stamps its own output with, so a later run reads its
-#: own file as OUTPUT and not as a source. See "THIS PROGRAM'S OWN OUTPUT".
-PROVENANCE_KEY = "_provenance"
+#: The declaration's section-2B key -> the upstream variable(s) it answers.
+#: One entry per question, so a question added to 2B without a variable behind
+#: it is a loud failure at import rather than a silent omission at run time.
+#: A tuple of more than one variable is a question a HUMAN answers once and
+#: upstream spells several times; the split rule is stated beside it below.
+QUESTION_TO_VARS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("pad_order_by_side",
+     ("PAD_SOUTH", "PAD_EAST", "PAD_NORTH", "PAD_WEST")),
+    ("pad_site_name", ("PAD_SITE_NAME",)),
+    ("pad_corner_site_name", ("PAD_CORNER_SITE_NAME",)),
+    ("pad_edge_spacing_um", ("PAD_EDGE_SPACING",)),
+    ("pad_rotations",
+     ("PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
+      "PAD_ROTATION_CORNER")),
+    ("pad_corner_master", ("PAD_CORNER",)),
+    ("pad_fillers", ("PAD_FILLERS",)),
+    ("pad_signal_map", ("SIGNAL_MAP",)),
+)
 
-PASS, FAIL, SKIP = 0, 1, 2
+#: `pad_order_by_side` is one mapping; upstream spells it four variables. The
+#: side words are the declaration's own prompt, verbatim.
+SIDE_KEY_TO_VAR: Tuple[Tuple[str, str], ...] = (
+    ("south", "PAD_SOUTH"), ("east", "PAD_EAST"),
+    ("north", "PAD_NORTH"), ("west", "PAD_WEST"),
+)
+#: `pad_rotations` is one mapping; upstream spells it three variables.
+ROTATION_KEY_TO_VAR: Tuple[Tuple[str, str], ...] = (
+    ("horizontal", "PAD_ROTATION_HORIZONTAL"),
+    ("vertical", "PAD_ROTATION_VERTICAL"),
+    ("corner", "PAD_ROTATION_CORNER"),
+)
 
-# --------------------------------------------------------------------------- #
-# The 8 declaration questions -> the 13 placer variables.
-#
-# This is the 13:8 grouping `_tapeout_declaration` records in its own
-# "SECTION 2B" comment, written out as data. The sub-keys are the ones each
-# question's PROMPT shows the answerer ("{south: [...], east: ...}",
-# "{horizontal: ..., vertical: ..., corner: ...}"), so an answer written
-# against the prompt is readable here unchanged.
-# --------------------------------------------------------------------------- #
-#: question key -> {sub-key -> placer variable}. A question with no sub-keys
-#: maps its whole answer to one variable.
-SIDE_SUBKEY: Dict[str, str] = {"south": "PAD_SOUTH", "east": "PAD_EAST",
-                               "north": "PAD_NORTH", "west": "PAD_WEST"}
-ROTATION_SUBKEY: Dict[str, str] = {
-    "horizontal": "PAD_ROTATION_HORIZONTAL",
-    "vertical": "PAD_ROTATION_VERTICAL",
-    "corner": "PAD_ROTATION_CORNER",
-}
-#: question key -> placer variable, for the six that map one-to-one.
-SCALAR_QUESTION: Dict[str, str] = {
-    "pad_site_name": "PAD_SITE_NAME",
-    "pad_corner_site_name": "PAD_CORNER_SITE_NAME",
-    "pad_edge_spacing_um": "PAD_EDGE_SPACING",
-    "pad_corner_master": "PAD_CORNER",
-    "pad_fillers": "PAD_FILLERS",
-    "pad_signal_map": "SIGNAL_MAP",
-}
-QUESTION_OF_VAR: Dict[str, str] = {}
-for _sub, _var in SIDE_SUBKEY.items():
-    QUESTION_OF_VAR[_var] = f"pad_order_by_side.{_sub}"
-for _sub, _var in ROTATION_SUBKEY.items():
-    QUESTION_OF_VAR[_var] = f"pad_rotations.{_sub}"
-for _q, _var in SCALAR_QUESTION.items():
-    QUESTION_OF_VAR[_var] = _q
+#: A slot file's own spelling of each side, matched case-insensitively against
+#: the keys `_submission_template.PAD_LIST_KEY_RE` claimed. `PADS`, `PAD_LIST`
+#: and `PAD_ORDER` also match that pattern and name NO side — see
+#: `_unsided_slot_lists`, which refuses rather than splitting them.
+SLOT_SIDE_KEYS: Tuple[Tuple[str, str], ...] = (
+    ("PAD_SOUTH", "PAD_SOUTH"), ("PAD_EAST", "PAD_EAST"),
+    ("PAD_NORTH", "PAD_NORTH"), ("PAD_WEST", "PAD_WEST"),
+)
 
-# LOUD ON DRIFT, at import. A variable added to the placer's contract, or a
-# question renamed in the declaration, must be a failure here and not a
-# silently unmapped field that reaches a reader as "nobody declared it".
-_mapped = set(QUESTION_OF_VAR)
-if _mapped != set(PR.REQUIRED_VARS):                            # pragma: no cover
+# Every question in section 2B must appear above exactly once, and every
+# variable in `_pad_ring.REQUIRED_VARS` must be produced by exactly one of
+# them. Asserted at import: a question or a variable added on one side and not
+# the other is the drift this map exists to prevent, and a silent 12-of-13
+# config is a config `pad_ring_gen` calls MALFORMED.
+_2B_KEYS = tuple(q.key for q in TD.QUESTIONS
+                 if q.section == TD.SECTION_PAD_RING)
+_MAPPED_QUESTIONS = tuple(k for k, _ in QUESTION_TO_VARS)
+_MAPPED_VARS = tuple(v for _, vs in QUESTION_TO_VARS for v in vs)
+if sorted(_2B_KEYS) != sorted(_MAPPED_QUESTIONS):        # pragma: no cover
     raise AssertionError(
-        f"{PROGRAM}: the question->variable map covers {sorted(_mapped)} but "
-        f"the placer requires {sorted(PR.REQUIRED_VARS)}")
-_2b = {q.key for q in TD.QUESTIONS if q.section == TD.SECTION_PAD_RING}
-_used = set(SCALAR_QUESTION) | {"pad_order_by_side", "pad_rotations"}
-if _used != _2b:                                                # pragma: no cover
+        f"section {TD.SECTION_PAD_RING} declares {sorted(_2B_KEYS)} but this "
+        f"map covers {sorted(_MAPPED_QUESTIONS)}")
+if sorted(_MAPPED_VARS) != sorted(PR.REQUIRED_VARS):     # pragma: no cover
     raise AssertionError(
-        f"{PROGRAM}: this map reads {sorted(_used)} but section "
-        f"{TD.SECTION_PAD_RING} declares {sorted(_2b)}")
-
-#: The operator's slot file can only ever declare these four — measured on the
-#: ingest's own parse, which matches `PAD_SOUTH|EAST|NORTH|WEST` and nothing
-#: else in the placer's contract. 4 of 13; the other 9 are the design's.
-OPERATOR_VARS: Tuple[str, ...] = tuple(SIDE_SUBKEY.values())
-
-
-# --------------------------------------------------------------------------- #
-# sources
-# --------------------------------------------------------------------------- #
-def _source(path: str, kind: str, **kw: Any) -> Dict[str, Any]:
-    rec: Dict[str, Any] = {"path": path, "kind": kind, "present": False,
-                           "readable": None, "declared": {}, "notes": []}
-    rec.update(kw)
-    return rec
-
-
-def _read_json(path: Path) -> Tuple[Optional[Any], Optional[str]]:
-    """(document, None) or (None, why-not). NEVER collapses the two.
-
-    "I could not read it" and "I read it and it declared nothing" must not
-    produce the same record: the first is an unusable source and the second is
-    a source that answered.
-    """
-    if not path.is_file():
-        return None, None
-    try:
-        return json.loads(path.read_text(errors="replace")), None
-    except (ValueError, OSError) as exc:
-        return None, f"{exc}"
-
-
-def existing_config(project: Path) -> Dict[str, Any]:
-    """A `pad_assignment.json` somebody ELSE wrote, as a source.
-
-    Our own stamped output is not a source (see the module docstring); it is
-    recorded as skipped, with the stamp that identified it.
-    """
-    path = project / PR.ASSIGNMENT_REL
-    rec = _source(PR.ASSIGNMENT_REL, "explicit pad-ring config",
-                  ours=False)
-    doc, err = _read_json(path)
-    rec["present"] = path.is_file()
-    if not rec["present"]:
-        rec["notes"].append("no explicit config was written by hand or by an "
-                            "upstream tool")
-        return rec
-    if err is not None:
-        rec["readable"] = False
-        rec["notes"].append(f"present but unreadable: {err}")
-        return rec
-    rec["readable"] = True
-    if not isinstance(doc, dict):
-        rec["notes"].append(
-            f"present but its top level is {type(doc).__name__}, not a "
-            f"mapping, so it declares nothing this program can read")
-        return rec
-    stamp = doc.get(PROVENANCE_KEY)
-    if isinstance(stamp, dict) and stamp.get("written_by") == PROGRAM:
-        rec["ours"] = True
-        rec["notes"].append(
-            f"skipped as a source: this file carries "
-            f"{PROVENANCE_KEY}.written_by={PROGRAM!r}, i.e. a previous run of "
-            f"this program wrote it. A producer that reads its own last output "
-            f"back agrees with itself forever")
-        return rec
-    for var in PR.REQUIRED_VARS:
-        val = doc.get(var)
-        if val is None or val == "":
-            continue
-        rec["declared"][var] = val
-    if not rec["declared"]:
-        rec["notes"].append("present and declares none of the 13 variables")
-    return rec
-
-
-def operator_pads(project: Path) -> Dict[str, Any]:
-    """The operator slot's four pad lists, taken from the INGEST'S PARSE.
-
-    The slot yaml is deliberately not opened here. `submission_template_ingest`
-    already parses it (`ingest.slots[].pads.lists`) and that record is a
-    declared step output; a second parser of the same file is a second thing to
-    keep in step with the operator's spelling, and it is always the one nobody
-    re-measures.
-    """
-    path = project / ST.REPORT_REL
-    rec = _source(ST.REPORT_REL, "operator slot template (ingested)",
-                  declared_slot=None, slots_shipped=[])
-    doc, err = _read_json(path)
-    rec["present"] = path.is_file()
-    if not rec["present"]:
-        rec["notes"].append(
-            "step 0.5ic wrote no ingest report, so no operator template was "
-            "read on this run")
-        return rec
-    if err is not None:
-        rec["readable"] = False
-        rec["notes"].append(f"present but unreadable: {err}")
-        return rec
-    rec["readable"] = True
-    ingest = (doc or {}).get("ingest") if isinstance(doc, dict) else None
-    if not isinstance(ingest, dict):
-        rec["notes"].append("the report carries no `ingest` block")
-        return rec
-    slots = [s for s in (ingest.get("slots") or []) if isinstance(s, dict)]
-    rec["slots_shipped"] = [str(s.get("slot")) for s in slots]
-    declared = ingest.get("declared_slot")
-    rec["declared_slot"] = declared
-    if not slots:
-        rec["notes"].append(
-            "no operator template was ingested — this design targets no "
-            "shuttle slot, so the operator declares no pads for it")
-        return rec
-    if declared is None:
-        rec["notes"].append(
-            f"a template was ingested and no slot was declared, so which of "
-            f"the {len(slots)} shipped slot(s) pins this design's pads is not "
-            f"knowable here. Refused rather than guessed; step 0.5ic's own "
-            f"gate refuses this as SLOT_NOT_DECLARED")
-        return rec
-    chosen = [s for s in slots if str(s.get("slot")) == str(declared)]
-    if not chosen:
-        rec["notes"].append(
-            f"the declared slot {declared!r} is not among the ingested slots "
-            f"{rec['slots_shipped']}, so no pad list can be attributed to it")
-        return rec
-    pads = (chosen[0].get("pads") or {}) if isinstance(chosen[0], dict) else {}
-    lists = [l for l in (pads.get("lists") or []) if isinstance(l, dict)]
-    by_key = {str(l.get("key") or "").strip().upper(): l for l in lists}
-    for var in OPERATOR_VARS:
-        entry = by_key.get(var)
-        if entry is None:
-            continue
-        raw = entry.get("raw")
-        if isinstance(raw, list):
-            rec["declared"][var] = list(raw)
-    matched = [k for k in by_key if k not in OPERATOR_VARS]
-    if matched:
-        rec["notes"].append(
-            f"the slot also declares {sorted(matched)}, which name no "
-            f"per-side list in the placer's contract and are not read here")
-    if not rec["declared"]:
-        rec["notes"].append(
-            f"slot {declared!r} declares no per-side pad list "
-            f"({list(OPERATOR_VARS)}); the design's own declaration is then "
-            f"the only source for the pad order")
-    return rec
-
-
-def declaration_pads(project: Path) -> Dict[str, Any]:
-    """Section `2B_pad_ring` of the design's own tape-out declaration.
-
-    An answer of the wrong SHAPE is a refusal recorded here, not a value
-    passed on: `_tapeout_declaration.validate` deliberately does not inspect
-    the inside of a `list`-kind answer, so this is where a
-    `pad_order_by_side` that is not a mapping, or a `pad_rotations` missing a
-    sub-key, is caught — named, with the sub-key it went without.
-    """
-    path = project / TD.DECLARATION_REL
-    rec = _source(TD.DECLARATION_REL, "the design's tape-out declaration "
-                                      "(section 2B_pad_ring)",
-                  unanswered=[], shape_refusals=[])
-    doc, err = _read_json(path)
-    rec["present"] = path.is_file()
-    if not rec["present"]:
-        rec["notes"].append(
-            "step 0.5ic wrote no declaration, so this design has never been "
-            "asked the eight pad-ring questions")
-        return rec
-    if err is not None:
-        rec["readable"] = False
-        rec["notes"].append(f"present but unreadable: {err}")
-        return rec
-    rec["readable"] = True
-    if not isinstance(doc, dict):
-        rec["notes"].append(
-            f"present but its top level is {type(doc).__name__}, not a mapping")
-        return rec
-
-    def _refuse(rule: str, message: str) -> None:
-        rec["shape_refusals"].append({"rule": rule, "message": message})
-
-    for qkey, sub_map in (("pad_order_by_side", SIDE_SUBKEY),
-                          ("pad_rotations", ROTATION_SUBKEY)):
-        val = TD.answer(doc, qkey)
-        if val == TD.NOT_DETERMINED:
-            rec["unanswered"].extend(sorted(sub_map.values()))
-            continue
-        if not isinstance(val, dict):
-            _refuse("PAD_DECLARATION_SHAPE_INVALID",
-                    f"declaration question {qkey!r} is "
-                    f"{type(val).__name__}, not the mapping its own prompt "
-                    f"asks for ({{{', '.join(sub_map)}}})")
-            rec["unanswered"].extend(sorted(sub_map.values()))
-            continue
-        lowered = {str(k).strip().lower(): v for k, v in val.items()}
-        extra = sorted(set(lowered) - set(sub_map))
-        if extra:
-            _refuse("PAD_DECLARATION_SHAPE_INVALID",
-                    f"declaration question {qkey!r} carries sub-key(s) "
-                    f"{extra} that name no side/orientation this placer has "
-                    f"({sorted(sub_map)})")
-        for sub, var in sub_map.items():
-            if sub not in lowered or not TD.is_answered(lowered[sub]):
-                rec["unanswered"].append(var)
-                continue
-            rec["declared"][var] = lowered[sub]
-
-    for qkey, var in SCALAR_QUESTION.items():
-        val = TD.answer(doc, qkey)
-        if val == TD.NOT_DETERMINED:
-            rec["unanswered"].append(var)
-            continue
-        rec["declared"][var] = val
-
-    rec["unanswered"] = sorted(set(rec["unanswered"]))
-    if not rec["declared"]:
-        rec["notes"].append(
-            f"the declaration exists and all eight of section "
-            f"{TD.SECTION_PAD_RING} are {TD.NOT_DETERMINED} — a legal state, "
-            f"and one that declares no pad ring")
-    return rec
-
-
-# --------------------------------------------------------------------------- #
-# merge
-# --------------------------------------------------------------------------- #
-def _same(a: Any, b: Any) -> bool:
-    """Do two sources declare the SAME value?
-
-    Compared on the JSON they would each write, so `["a"]` from a yaml parse
-    and `["a"]` from a declaration compare equal, and `1` and `1.0` do not
-    silently disagree.
-    """
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)) \
-            and not isinstance(a, bool) and not isinstance(b, bool):
-        return float(a) == float(b)
-    try:
-        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
-    except (TypeError, ValueError):                             # pragma: no cover
-        return a == b
-
-
-def merge(sources: List[Dict[str, Any]]
-          ) -> Tuple[Dict[str, Any], Dict[str, str], List[str],
-                     List[Dict[str, Any]]]:
-    """(config, provenance, absent, disagreements).
-
-    `sources` is in precedence order, and precedence is only ever consulted
-    where the sources AGREE — a disagreement is a refusal, so precedence can
-    never pick a winner over a loser.
-    """
-    config: Dict[str, Any] = {}
-    provenance: Dict[str, str] = {}
-    disagreements: List[Dict[str, Any]] = []
-    for var in PR.REQUIRED_VARS:
-        claims = [(s, s["declared"][var]) for s in sources
-                  if var in s["declared"]]
-        if not claims:
-            continue
-        first_src, first_val = claims[0]
-        for other_src, other_val in claims[1:]:
-            if not _same(first_val, other_val):
-                disagreements.append({
-                    "variable": var,
-                    "question": QUESTION_OF_VAR[var],
-                    "sources": [
-                        {"path": first_src["path"], "value": first_val},
-                        {"path": other_src["path"], "value": other_val},
-                    ],
-                })
-        config[var] = first_val
-        provenance[var] = first_src["path"]
-    absent = [v for v in PR.REQUIRED_VARS if v not in config]
-    return config, provenance, absent, disagreements
+        f"this map produces {sorted(_MAPPED_VARS)} but _pad_ring requires "
+        f"{sorted(PR.REQUIRED_VARS)}")
 
 
 # --------------------------------------------------------------------------- #
 # report
 # --------------------------------------------------------------------------- #
-def _finding(severity: str, rule: str, message: str) -> Dict[str, str]:
-    return {"severity": severity, "rule": rule, "message": message}
+def _finding(severity: str, rule: str, message: str, **extra: Any) -> Dict[str, Any]:
+    d = {"severity": severity, "rule": rule, "message": message}
+    d.update(extra)
+    return d
 
 
 def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
@@ -454,13 +199,18 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "program": PROGRAM,
         "verdict": verdict,
         "reason": reason,
+        "sources": {
+            "slot_files": [],
+            "slot_files_unreadable": [],
+            "declaration": None,
+            "declaration_unreadable": None,
+        },
+        "questions_total": len(_2B_KEYS),
+        "questions_answered": 0,
+        "questions_unanswered": sorted(_2B_KEYS),
         "config_variables_required": list(PR.REQUIRED_VARS),
-        "sources": [],
         "provenance": {},
-        "absent_variables": [],
-        "disagreements": [],
-        "assignment": None,
-        "stale_removed": None,
+        "config_written": None,
         "findings": [],
     }
     out.update(kw)
@@ -471,161 +221,334 @@ def _write_report(project: Path, json_arg: Optional[str],
                   report: Dict[str, Any]) -> None:
     dest = Path(json_arg) if json_arg else (project / REPORT_REL)
     if not dest.is_absolute():
-        dest = project / dest
+        dest = (Path.cwd() / dest).resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(dest, report)
 
 
-def _retire_our_stale(project: Path) -> Optional[str]:
-    """Delete a `pad_assignment.json` THIS program wrote, and nothing else.
+# --------------------------------------------------------------------------- #
+# sources
+# --------------------------------------------------------------------------- #
+def read_slot_pad_lists(project: Path) -> Tuple[Dict[str, Dict[str, Any]],
+                                                List[Dict[str, str]],
+                                                List[Dict[str, Any]],
+                                                List[str]]:
+    """The operator's per-side pad lists, and everything that got in the way.
 
-    A refusal that left a previously-written config on disk would let
-    `pad_ring_gen` place a ring from geometry this run refused — the artefact
-    outliving the evidence, which is this tree's own worst failure shape. An
-    UNSTAMPED file is somebody else's input and is never touched.
+    Returns (by_var, unreadable, unsided, files_seen).
+
+    `unreadable` is NEVER folded into "the slot declared nothing". A slot file
+    that could not be parsed may carry the very pad list that should have
+    overridden the declaration, so it is returned for the caller to REFUSE on —
+    rule 9 of this repository's own operating rules: "I could not read it" and
+    "I read it and it was empty" must never produce the same verdict.
     """
-    path = project / PR.ASSIGNMENT_REL
+    slots_dir = project / ST.SLOTS_DIR_REL
+    by_var: Dict[str, Dict[str, Any]] = {}
+    unreadable: List[Dict[str, str]] = []
+    unsided: List[Dict[str, Any]] = []
+    files_seen: List[str] = []
+    if not slots_dir.is_dir():
+        return by_var, unreadable, unsided, files_seen
+
+    records, scan = ST.discover_slots(slots_dir)
+    for bad in scan.get("unparsable") or []:
+        unreadable.append({"file": str(bad.get("file")),
+                           "reason": str(bad.get("reason"))})
+    for rec in records:
+        rel = rec.get("source_relpath") or rec.get("source_file")
+        files_seen.append(str(rel))
+        pads = rec.get("pads") or {}
+        for entry in pads.get("lists") or []:
+            key = str(entry.get("key", "")).strip().upper()
+            var = dict(SLOT_SIDE_KEYS).get(key)
+            if var is None:
+                # `PADS` / `PAD_LIST` / `PAD_ORDER`: a real pad list that names
+                # no side. Splitting it across four sides would be choosing
+                # which package pin each signal leaves on, which is the one
+                # decision this whole step refuses to make for anybody.
+                unsided.append({"slot": rec.get("slot"), "file": str(rel),
+                                "key": entry.get("key"),
+                                "count": entry.get("count")})
+                continue
+            prior = by_var.get(var)
+            if prior is not None and prior["value"] != list(entry.get("raw") or []):
+                # Two slot files pinning the same side differently: this tree
+                # holds more than one slot and nothing here can say which one
+                # this design was accepted into.
+                prior.setdefault("conflicts", []).append(
+                    {"file": str(rel), "value": list(entry.get("raw") or [])})
+                continue
+            by_var[var] = {"value": list(entry.get("raw") or []),
+                           "source": f"slot {rec.get('slot')} ({rel}) key "
+                                     f"{entry.get('key')}",
+                           "conflicts": prior.get("conflicts", []) if prior else []}
+    return by_var, unreadable, unsided, files_seen
+
+
+def read_declaration(project: Path) -> Tuple[Optional[Dict[str, Any]],
+                                             Optional[str]]:
+    """The design's own declaration, or (None, why-not)."""
+    path = project / TD.DECLARATION_REL
     if not path.is_file():
-        return None
-    try:
-        doc = json.loads(path.read_text(errors="replace"))
-    except (ValueError, OSError):
-        return None
-    stamp = doc.get(PROVENANCE_KEY) if isinstance(doc, dict) else None
-    if not (isinstance(stamp, dict) and stamp.get("written_by") == PROGRAM):
-        return None
-    try:
-        path.unlink()
-    except OSError:                                             # pragma: no cover
-        return None
-    return PR.ASSIGNMENT_REL
+        return None, None                     # absent is not unreadable
+    doc, why = TD.load(path)
+    if doc is None:
+        return None, why
+    if not isinstance(doc, dict):
+        return None, f"{TD.DECLARATION_REL}: the top level is not a mapping"
+    return doc, None
 
 
-def build(project: Path) -> Dict[str, Any]:
-    """Read every source, merge, and decide. Writes nothing."""
-    sources = [existing_config(project),
-               operator_pads(project),
-               declaration_pads(project)]
-    config, provenance, absent, disagreements = merge(sources)
-    return {"sources": sources, "config": config, "provenance": provenance,
-            "absent": absent, "disagreements": disagreements}
+# --------------------------------------------------------------------------- #
+# the merge
+# --------------------------------------------------------------------------- #
+def _mapping_answer(value: Any, pairs: Tuple[Tuple[str, str], ...],
+                    question: str) -> Tuple[Dict[str, Any], List[str]]:
+    """Split one declaration mapping into its upstream variables.
+
+    Returns (by_var, missing_keys). A key the mapping does not carry is
+    MISSING, never an empty default: "no pads on the north side" is written
+    `[]` on purpose and "I did not say what is on the north side" is the key
+    not being there, and `_tapeout_declaration.is_answered` already draws that
+    distinction the same way.
+    """
+    if not isinstance(value, dict):
+        return {}, [f"{question} (not a mapping: "
+                    f"{type(value).__name__})"]
+    lowered = {str(k).strip().lower(): v for k, v in value.items()}
+    by_var: Dict[str, Any] = {}
+    missing: List[str] = []
+    for key, var in pairs:
+        if key in lowered and TD.is_answered(lowered[key]):
+            by_var[var] = lowered[key]
+        else:
+            missing.append(f"{question}.{key}")
+    return by_var, missing
 
 
+def compose(slot_vars: Dict[str, Dict[str, Any]],
+            declaration: Optional[Dict[str, Any]]
+            ) -> Tuple[Dict[str, Any], Dict[str, str], List[str], List[str]]:
+    """(config, provenance, answered_questions, owed).
+
+    Nothing is derived. Every value in `config` came verbatim from a slot file
+    or from the declaration, and `provenance` says which for every variable.
+    """
+    config: Dict[str, Any] = {}
+    provenance: Dict[str, str] = {}
+    answered: List[str] = []
+    owed: List[str] = []
+
+    decl_answers: Dict[str, Any] = {}
+    if isinstance(declaration, dict):
+        decl_answers = declaration.get("answers") or {}
+        if not isinstance(decl_answers, dict):
+            decl_answers = {}
+
+    for question, variables in QUESTION_TO_VARS:
+        raw = decl_answers.get(question)
+        declared_here: Dict[str, Any] = {}
+        missing_here: List[str] = []
+        if question == "pad_order_by_side":
+            if TD.is_answered(raw):
+                declared_here, missing_here = _mapping_answer(
+                    raw, SIDE_KEY_TO_VAR, question)
+        elif question == "pad_rotations":
+            if TD.is_answered(raw):
+                declared_here, missing_here = _mapping_answer(
+                    raw, ROTATION_KEY_TO_VAR, question)
+        elif TD.is_answered(raw):
+            declared_here = {variables[0]: raw}
+
+        if declared_here or missing_here:
+            answered.append(question)
+
+        for var in variables:
+            # THE SLOT WINS. It is the operator's own geometry and the design
+            # does not get to restate it; where the slot is silent the
+            # declaration is the only source there is.
+            if var in slot_vars:
+                config[var] = slot_vars[var]["value"]
+                provenance[var] = slot_vars[var]["source"]
+            elif var in declared_here:
+                config[var] = declared_here[var]
+                provenance[var] = f"declaration answer {question}"
+            else:
+                owed.append(f"{var} (declaration question {question})")
+    return config, provenance, answered, owed
+
+
+# --------------------------------------------------------------------------- #
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Step 15.5ic producer — write the pad-ring config from a "
-                    "DECLARED source, or refuse and name the field nobody "
-                    "answered. Nothing is ever defaulted or inferred.")
-    ap.add_argument("project_dir", nargs="?", default=".")
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("project_dir")
     ap.add_argument("--json", default=None,
                     help=f"report destination (default {REPORT_REL})")
+    ap.add_argument("--out", default=None,
+                    help=f"config destination (default {PR.ASSIGNMENT_REL})")
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
     if not project.is_dir():
         print(f"[{PROGRAM}] project dir not found: {project}", file=sys.stderr)
-        return FAIL
+        return 1
 
-    got = build(project)
-    sources, config = got["sources"], got["config"]
-    provenance, absent = got["provenance"], got["absent"]
-    disagreements = got["disagreements"]
-    shape_refusals = [r for s in sources for r in s.get("shape_refusals") or []]
+    out_path = Path(args.out) if args.out else (project / PR.ASSIGNMENT_REL)
+    if not out_path.is_absolute():
+        out_path = (Path.cwd() / out_path).resolve()
 
-    def emit(verdict: str, reason: str, rc: int, **kw: Any) -> int:
-        rep = _report(verdict, reason, sources=sources, provenance=provenance,
-                      absent_variables=absent, disagreements=disagreements,
-                      **kw)
+    slot_vars, slot_unreadable, unsided, slot_files = read_slot_pad_lists(project)
+    declaration, decl_why = read_declaration(project)
+    config, provenance, answered, owed = compose(slot_vars, declaration)
+
+    sources = {
+        "slot_files": slot_files,
+        "slot_files_unreadable": slot_unreadable,
+        "slot_lists_without_a_side": unsided,
+        "declaration": (TD.DECLARATION_REL
+                        if declaration is not None else None),
+        "declaration_unreadable": decl_why,
+    }
+    common = dict(sources=sources,
+                  questions_answered=len(answered),
+                  questions_unanswered=sorted(set(_2B_KEYS) - set(answered)),
+                  provenance=provenance)
+
+    def _emit(verdict: str, reason: str, findings, rc: int, **kw: Any) -> int:
+        rep = _report(verdict, reason, findings=list(findings), **common, **kw)
         _write_report(project, args.json, rep)
         print(f"=== {PROGRAM} ({project.name}) ===")
-        print(f"  verdict: {verdict}  (rc={rc})")
-        for s in sources:
-            state = ("declares " + ", ".join(sorted(s["declared"]))
-                     if s["declared"] else "declares nothing")
-            print(f"  source {s['path']}: {state}")
-            for n in s["notes"]:
-                print(f"      {n}")
-        for f in rep["findings"][:16]:
-            print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
+        print(f"  verdict: {verdict}")
+        print(f"  {reason}")
+        for f in rep["findings"]:
+            print(f"  {f['rule']}: {f['message']}")
         return rc
 
-    # ── the SKIP tier: nobody was ever asked ───────────────────────────────
-    if not config and not disagreements and not shape_refusals:
-        parts = [f"`{s['path']}` ({s['kind']}): "
-                 + ("; ".join(s["notes"]) or "declares none of the 13")
-                 for s in sources]
+    # ── refusals that come BEFORE any verdict about completeness ───────────
+    # A source that could not be READ is not a source that said nothing. Both
+    # of these can hide the very answer the merge below would have used, so
+    # neither may fall through into NOT_ASKED.
+    if slot_unreadable:
+        named = "; ".join(f"{u['file']} ({u['reason']})"
+                          for u in slot_unreadable)
+        return _emit(
+            "REFUSE",
+            f"{len(slot_unreadable)} operator slot file(s) under "
+            f"{ST.SLOTS_DIR_REL} could not be parsed, so this program cannot "
+            f"say whether they pin a pad list that would have overridden the "
+            f"declaration: {named}",
+            [_finding("ERROR", "SLOT_FILE_UNREADABLE", named)], 1)
+
+    if decl_why:
+        return _emit(
+            "REFUSE",
+            f"the tape-out declaration exists and could not be read, so the "
+            f"answers to section {TD.SECTION_PAD_RING} are unknown rather "
+            f"than absent: {decl_why}",
+            [_finding("ERROR", "DECLARATION_UNREADABLE", decl_why)], 1)
+
+    if unsided:
+        named = "; ".join(f"{u['file']} key {u['key']} ({u['count']} pad(s))"
+                          for u in unsided)
+        return _emit(
+            "REFUSE",
+            f"an operator slot file declares a pad list that names NO die "
+            f"side. Assigning those pads to sides would be choosing which "
+            f"package pin each signal leaves on, which this step refuses to "
+            f"do for anybody. Re-express it as PAD_SOUTH / PAD_EAST / "
+            f"PAD_NORTH / PAD_WEST: {named}",
+            [_finding("ERROR", "SLOT_PAD_LIST_WITHOUT_A_SIDE", named)], 1)
+
+    conflicted = {v: rec["conflicts"] for v, rec in slot_vars.items()
+                  if rec.get("conflicts")}
+    if conflicted:
+        named = "; ".join(
+            f"{v}: {slot_vars[v]['source']} vs "
+            + " vs ".join(str(c["file"]) for c in cs)
+            for v, cs in sorted(conflicted.items()))
+        return _emit(
+            "REFUSE",
+            f"two or more operator slot files pin the same die side "
+            f"differently and nothing here can say which slot this design was "
+            f"accepted into: {named}",
+            [_finding("ERROR", "SLOT_PAD_LIST_CONFLICT", named)], 1)
+
+    # ── nobody was asked ───────────────────────────────────────────────────
+    if not answered and not slot_vars:
         reason = (
-            f"SKIPPED: no source declares any of the {len(PR.REQUIRED_VARS)} "
-            f"pad-ring config variables {list(PR.REQUIRED_VARS)}, so there is "
-            f"no pad ring to configure and nobody has been asked for one. "
-            f"Sources consulted: {' | '.join(parts)}. This program does not "
-            f"derive a pad ring config: the side variables name INSTANCES "
-            f"that must already exist in the netlist, and choosing them would "
-            f"mean choosing which package pin each signal leaves on.")
-        stale = _retire_our_stale(project)
-        return emit("SKIP", reason, SKIP, stale_removed=stale,
-                    findings=[_finding("INFO", "PAD_CONFIG_NEVER_DECLARED",
-                                       reason)])
+            f"NOT_ASKED: no source answers any of the "
+            f"{len(_2B_KEYS)} questions of declaration section "
+            f"{TD.SECTION_PAD_RING} and no operator slot file pins a per-side "
+            f"pad list, so there is nothing to write down. "
+            f"`{PR.ASSIGNMENT_REL}` was NOT created: a config declaring SOME "
+            f"of the contract is what `pad_ring_gen` calls a MALFORMED "
+            f"declaration and FAILs on, and an unanswered question must not "
+            f"buy the exit code of a wrong answer. Answer section "
+            f"{TD.SECTION_PAD_RING} in `{TD.DECLARATION_REL}`, or ingest an "
+            f"operator template that pins the per-side pad lists.")
+        return _emit("NOT_ASKED", reason,
+                     [_finding("INFO", "PAD_RING_NOT_DECLARED", reason)], 2)
 
-    findings: List[Dict[str, str]] = []
-    for r in shape_refusals:
-        findings.append(_finding("ERROR", r["rule"], r["message"]))
-    for d in disagreements:
-        a, b = d["sources"]
-        findings.append(_finding(
-            "ERROR", "PAD_CONFIG_SOURCES_DISAGREE",
-            f"{d['variable']} (declaration question {d['question']}) is "
-            f"declared as {json.dumps(a['value'])} by `{a['path']}` and as "
-            f"{json.dumps(b['value'])} by `{b['path']}`. Two sources that "
-            f"disagree about a pin-out are a refusal, not a preference: "
-            f"choosing one silently records a pin-out nobody chose, and the "
-            f"losing value is exactly what a reader would need to see"))
-    if absent:
-        findings.append(_finding(
-            "ERROR", "PAD_CONFIG_VARIABLE_ABSENT",
-            f"{len(absent)} of {len(PR.REQUIRED_VARS)} required config "
-            f"variable(s) are declared by no source: "
-            + "; ".join(f"{v} (declaration question "
-                        f"{QUESTION_OF_VAR[v]} is {TD.NOT_DETERMINED})"
-                        for v in absent)
-            + ". Upstream's placer aborts on the first unset one, and a value "
-              "this program invented would be a pin-out nobody chose"))
+    # ── a source spoke, and the contract is still incomplete ───────────────
+    # TWO WAYS TO GET HERE, and the message says which, because the reader's
+    # next move differs:
+    #   the DESIGN answered some of section 2B and not the rest — a
+    #   declaration somebody started and left;
+    #   the OPERATOR's slot pinned the per-side pad lists and the design has
+    #   answered nothing. That is NOT "nobody was asked": a source was asked
+    #   and answered, and reporting NOT_ASKED would be false about the tree.
+    #   It is also the ONLY thing an operator template can supply — a slot
+    #   file carries no site name, no spacing, no rotation, no corner master,
+    #   no filler and no signal map — so the remaining nine are owed by the
+    #   design whatever the operator published.
+    if owed:
+        named = "; ".join(owed)
+        if answered:
+            started = (f"declaration section {TD.SECTION_PAD_RING} was STARTED "
+                       f"({len(answered)} of {len(_2B_KEYS)} question(s) "
+                       f"answered)")
+            note = ""
+        else:
+            started = (f"the operator's slot geometry pinned "
+                       f"{len(slot_vars)} of the {len(PR.REQUIRED_VARS)} "
+                       f"variables while declaration section "
+                       f"{TD.SECTION_PAD_RING} answers none of its "
+                       f"{len(_2B_KEYS)} questions")
+            note = (" A slot file cannot supply the rest — it carries no site "
+                    "name, no edge spacing, no rotation, no corner master, no "
+                    "filler and no signal map — so these are owed by the "
+                    "design whatever the operator published.")
+        return _emit(
+            "REFUSE",
+            f"{started} and still owes {len(owed)} of the "
+            f"{len(PR.REQUIRED_VARS)} variables `pad_ring_gen` requires."
+            f"{note} No value is guessed for any of them — a pad site, an "
+            f"edge spacing or a filler invented here would be "
+            f"indistinguishable in the artefact from a real pin-out. Still "
+            f"owed: {named}",
+            [_finding("ERROR", "PAD_CONFIG_VARIABLE_ABSENT", named,
+                      variables_owed=list(owed))], 1)
 
-    if not findings:
-        # The merged config must satisfy the SAME contract `pad_ring_gen`
-        # applies, and be refused HERE if it does not — a config written to
-        # disk and refused one step later is a refusal a reader has to go
-        # looking for.
-        try:
-            PR.validate_assignment(config)
-        except PR.AssignmentError as exc:
-            findings.append(_finding("ERROR", exc.rule, exc.message))
-
-    if findings:
-        stale = _retire_our_stale(project)
-        reason = f"{findings[0]['rule']}: {findings[0]['message']}"
-        return emit("FAIL", reason, FAIL, findings=findings,
-                    stale_removed=stale)
-
-    doc = dict(config)
-    doc[PROVENANCE_KEY] = {
-        "written_by": PROGRAM,
-        "schema": SCHEMA,
-        "variable_source": provenance,
-        "note": ("every value above came from the source named beside it; "
-                 "this program computed none of them"),
-    }
-    dest = project / PR.ASSIGNMENT_REL
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(dest, doc)
+    # ── every variable resolved ────────────────────────────────────────────
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(config)
+    payload["_provenance"] = dict(provenance)
+    payload["_written_by"] = PROGRAM
+    atomic_write_json(out_path, payload)
+    try:
+        written = str(out_path.relative_to(project))
+    except ValueError:
+        written = str(out_path)
     reason = (
-        f"every one of the {len(PR.REQUIRED_VARS)} pad-ring config variables "
-        f"is declared; `{PR.ASSIGNMENT_REL}` was written from "
-        f"{len(set(provenance.values()))} declared source(s) and nothing was "
-        f"derived")
-    return emit("PASS", reason, PASS, assignment=PR.ASSIGNMENT_REL,
-                findings=[])
+        f"every one of the {len(PR.REQUIRED_VARS)} variables `pad_ring_gen` "
+        f"requires resolved from a declared source; none was derived. "
+        f"{sum(1 for v in provenance.values() if v.startswith('slot '))} came "
+        f"from the operator's slot geometry and "
+        f"{sum(1 for v in provenance.values() if v.startswith('declaration'))} "
+        f"from the design's own tape-out declaration.")
+    return _emit("WROTE", reason, [], 0, config_written=written)
 
 
-if __name__ == "__main__":                                      # pragma: no cover
-    sys.exit(main())
+if __name__ == "__main__":                                 # pragma: no cover
+    raise SystemExit(main())

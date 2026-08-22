@@ -556,6 +556,21 @@ def _k_blocks_on_append_phantom(step: Dict, _p: Dict) -> bool:
     return True
 
 
+def _k_closed_loop_fallback_phantom(step: Dict, _p: Dict) -> bool:
+    """Repoint a `closed_loop.fallback_to` at a step id that does not exist.
+
+    The `blocks_on` sibling of this edit is :func:`_k_blocks_on_append_phantom`;
+    this one reaches the OTHER edge set — the CONVERGENCE edges — which had no
+    mutation at all until 2026-08-20, because nothing in the repository read
+    them.
+    """
+    cl = step.get("closed_loop")
+    if not isinstance(cl, dict) or "fallback_to" not in cl:
+        return False
+    cl["fallback_to"] = "__PHANTOM" + CANARY_SUFFIX + "__"
+    return True
+
+
 def _k_notes_append_ghost_program(step: Dict, _p: Dict) -> bool:
     notes = step.get("notes")
     if not isinstance(notes, str):
@@ -578,6 +593,7 @@ YAML_KINDS: Dict[str, Callable[[Dict, Dict], bool]] = {
     "required_outputs_empty": _k_required_outputs_empty,
     "required_outputs_delete_key": _k_required_outputs_delete_key,
     "blocks_on_append_phantom": _k_blocks_on_append_phantom,
+    "closed_loop_fallback_phantom": _k_closed_loop_fallback_phantom,
     "notes_append_ghost_program": _k_notes_append_ghost_program,
 }
 
@@ -860,15 +876,27 @@ _THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
               "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
               "the five path-specific steps this entry gained)")
 
-#: `37.5self` (the General Precheck — the chip path with NO operator) arrived
-#: after every sweep above AND after the five path-specific steps, so it is in
-#: no `applies_to` any earlier run produced. A THIRD suffix rather than a reuse
-#: of :data:`_THEN_FIVE`, for that constant's own stated reason: this one step
-#: rests on ONE single-step replay run on the rebased tree, and a reader must be
-#: able to tell which claim rests on which run.
-_THEN_37_5SELF = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
-                  "37.5self   (2026-08-20, the one step this entry gained on "
-                  "top of the five)")
+#: `37.5self` (the General Precheck) HAD a suffix of its own here — it arrived
+#: after every sweep above AND after the five path-specific steps, so it rested
+#: on one single-step replay of its own. IT IS GONE, together with the step:
+#: 2026-08-20 the owner retired `37.5self` as a step and folded the general
+#: precheck into `37.5ic` as a SECOND ARM rather than a third route, so the
+#: flow went 69 -> 68 and the cells that replay measured no longer exist. The
+#: replay is not disowned and its result is not re-typed as some other step's;
+#: the CELL it measured was removed, so the claim it supported was removed with
+#: it. Every `reddened` below moves by exactly one for that reason, and by
+#: nothing else — `test_lock3_every_entry_is_arithmetically_consistent_with_
+#: its_own_evidence` re-derives it from `len(applies_to)` on every run.
+
+#: The sweep for the CONVERGENCE-edge entry. It is deliberately NOT
+#: :data:`_SWEEP`: `closed_loop` is declared by a MINORITY of steps, so a
+#: 63-step sweep would report a mostly-NOT_APPLICABLE run and the real
+#: denominator would be buried. This one names its own denominator — every step
+#: that DECLARES a `closed_loop`, derived from the live yaml at replay time, not
+#: from a number written down here.
+_CL_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each step "
+             "declaring a closed_loop, derived live from the flow yaml>   "
+             "(2026-08-20, one pytest run per step)")
 
 #: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
 _RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
@@ -895,10 +923,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D1-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (7.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=66,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
@@ -980,11 +1009,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D2-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE + _THEN_37_5SELF, reddened=66,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=66,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -1094,10 +1124,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-UNGATED-DELIVERABLE --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
@@ -1125,9 +1156,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A8", "A9", "17", "19", "20", "22", "DT2", "DT3", "23",
                     "24", "25", "26", "28", "29", "30", "31", "34", "35", "36",
                     "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41", "42",
-                    "43", "44"),
+                    "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-CLI-CONTRACT --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=50,
+            date="2026-08-06", command=_SWEEP, reddened=51,
             stayed_green=("D1", "21", "33"),
             note="carries FS1, the one step with a gate and no required_outputs. "
                  "D1/21/33 stayed green because their first clause's program "
@@ -1174,11 +1208,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "M4", "40", "41", "42", "43", "44", "P0",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-EDGE --step 1.6x` -> REDDENED (2.3s).
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE + _THEN_37_5SELF, reddened=69,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=69,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1201,6 +1236,61 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "commit message)."),
     ),
 
+    # THE OTHER EDGE SET. `D5-PHANTOM-EDGE` above mutates `blocks_on`; this one
+    # mutates `closed_loop.fallback_to`, and the two are not substitutes.
+    # REPLAYED before this entry was written: `--replay D5-PHANTOM-EDGE --step 33`
+    # comes back REDDENED on a tree where step 33 declares NO closed_loop at all,
+    # because step 33 has a `blocks_on` to append a phantom to. A replay of the
+    # blocks_on entry is therefore not evidence about a convergence edge, and
+    # reading it as such is the "adjacent measurement" this campaign exists to
+    # stamp out.
+    Mutation(
+        name="D5-PHANTOM-FALLBACK",
+        dim=5, channel=FLOW_YAML, kind="closed_loop_fallback_phantom",
+        what="repoint the step's `closed_loop.fallback_to` at a step id that "
+             "does not exist",
+        breaks="a CONVERGENCE edge that resolves to nothing — the flow says "
+               "'on this verdict, go back to step K' and there is no step K. "
+               "Until 2026-08-20 that was not a defect anything could see: the "
+               "flow carried NINETEEN `closed_loop` declarations and the "
+               "repository had ZERO readers of the key. The 63x8 substrate even "
+               "shipped the accessor (`flowref.closed_loop`, exported in "
+               "`__all__`) with no caller. Every convergence edge in the flow "
+               "was unfalsifiable as a class.",
+        red_signal="step",
+        witness="24",
+        applies_to=(
+            "2", "3", "4", "5", "8", "9", "10", "13", "A7", "A9", "14",
+            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-FALLBACK --step 1.6x` -> REDDENED (2.2s).
+            "1.6x"),
+        measured=Measurement(
+            date="2026-08-20",
+            command=_CL_SWEEP.replace("{name}", "D5-PHANTOM-FALLBACK"),
+            reddened=22,
+            note="21 red = every step that declares a `closed_loop`, in one sweep, "
+                 "each reddening that cell alone; UNMEASURABLE 0 of 21. Times in the "
+                 "commit message. THE DENOMINATOR IS THE POINT: 21, not 63 — "
+                 "`closed_loop` is declared by a MINORITY of steps and every other step "
+                 "has no edit site at all, so a whole-flow sweep would have "
+                 "reported the majority NOT_APPLICABLE and buried the real "
+                 "count. TWO OF THE 21 ARE NEW IN "
+                 "THIS CHANGE (steps 9 and 33, the area and power convergence edges) "
+                 "and both reddened, which is the whole reason the entry exists: the "
+                 "brief that asked for those edges named `--replay D5-PHANTOM-EDGE "
+                 "--step 33` as the proof, and that replay comes back REDDENED on a "
+                 "tree where step 33 declares NO closed_loop at all — it reaches "
+                 "`blocks_on`, which step 33 already had. A criterion that cannot "
+                 "distinguish the change from no change is not a proof of the "
+                 "change. BIDIRECTIONAL CONTROL, run by hand before this entry was "
+                 "written: with step 24's fallback repointed at "
+                 "`__PHANTOM_MUTANT__`, "
+                 "`test_d5_blocks_on_covers_the_real_dependency_graph[step24]` fails "
+                 "with `CL-FALLBACK-UNRESOLVED`; on the unmutated flow the same cell "
+                 "passes."),
+    ),
+
     # ---------------- dimension 6 — skip discipline --------------------
     Mutation(
         name="D6-UNCONDITIONAL-OPTIONAL",
@@ -1221,12 +1311,13 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-UNCONDITIONAL-OPTIONAL --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
@@ -1257,9 +1348,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT3", "23",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-ADVISORY-ONLY-GATE --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-06", command=_SWEEP, reddened=60,
             stayed_green=("DT2",),
             note="a second, independent lever on 59 of the same cells; kept "
                  "because it charges a different leg (L1b) than "
@@ -1313,10 +1407,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-GATE-PROBES-A-GHOST --step 1.6x` -> REDDENED (62.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=64,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
                  "sweep. The 4 greens are exactly its 4 waived cells. "
@@ -1341,9 +1436,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A3", "A7", "A8", "A9", "15", "16", "17", "18", "19", "20",
                     "21", "22", "DT2", "DT3", "24", "25", "26", "27", "28",
                     "29", "30", "31", "32", "33", "34", "35", "36", "37", "38",
-                    "M2", "M3", "M4", "40", "41", "42", "43", "44"),
+                    "M2", "M3", "M4", "40", "41", "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-UNDECLARED-KEY --step 1.6x` -> REDDENED (65.2s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=48,
+            date="2026-08-06", command=_SWEEP, reddened=49,
             stayed_green=("D1", "1", "7", "12", "A1", "A2", "A4", "A5", "A6",
                           "14", "23", "39", "M1"),
             note="13 steps stayed green and the reason is measured, not "
@@ -1366,9 +1464,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
         applies_to=("1", "2", "4", "8", "10", "11", "12", "A1", "A2", "A4",
                     "A5", "A7", "15", "16", "17", "18", "19", "20", "21", "22",
                     "DT3", "26", "27", "28", "29", "30", "31", "32", "34",
-                    "35", "36", "38"),
+                    "35", "36", "38",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-RENAMED-DELIVERABLE --step 1.6x` -> REDDENED (65.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=32,
+            date="2026-08-06", command=_SWEEP, reddened=33,
             stayed_green=("D1", "3", "5", "6", "7", "9", "DT1", "13", "A3",
                           "A6", "A8", "A9", "14", "DT2", "23", "24", "25",
                           "33", "37", "39", "M1", "M2", "M3", "M4", "40", "41",
@@ -1397,10 +1498,11 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "40", "41", "42", "43", "44",
             # the five path-specific steps, replayed 2026-08-20
             "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
-            # the general precheck path, replayed 2026-08-20
-            "37.5self"),
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D8-EMPTY-PROMISE --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP + _THEN_FIVE + _THEN_37_5SELF, reddened=67,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
                  "required_outputs and are dimension 8's 2 NA cells. "
@@ -1861,7 +1963,72 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: covered would be exactly the forgery the ledger exists to refuse. It stays
 #: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
 #: stays red, naming one cell instead of thirty-six.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (68, 8, 514)
+#:
+#: MOVED (68, 8, 514) -> (69, 8, 521) at v1.11.5. The flow grew ONE step,
+#: `37.5self` ("General Precheck — the tape-out check for a design with NO
+#: operator"), the third route out of stage 4: 37.5ic is an outside operator's
+#: refusal and 37.5ip is the IP terminal, and a chip taping itself out was
+#: neither, so until this step it passed no submission check at all. Another
+#: shape change, stated as one: 69 x 8 = 552 cells, 31 of them not ENFORCED
+#: (see below), 552 - 31 = 521.
+#:
+#: +7 AND NOT 8, for the reason its three siblings are NA: the step carries
+#: `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`
+#: with `condition_kind: design_dependent`, no admissible run root satisfies
+#: it, and dimension 3 therefore re-derives NA_DORMANT_CONDITION for it live.
+#: The cell is NOT "left ENFORCED"; it entered the grid NA, and it is named in
+#: the inventory below rather than only subtracted here.
+#:
+#: The other 7 were NOT counted into coverage on the strength of the +7: each
+#: is covered by a mutation family whose `applies_to` already resolves an edit
+#: site on this step, which the census re-checks live per cell (LOCK 1) rather
+#: than trusting the list — `census()` reports `uncovered == ['0.5ic/d3']` and
+#: nothing else on this tree, so `37.5self` arrived fully covered on those
+#: seven dimensions. `0.5ic/d3` is unchanged by this move and stays the one
+#: uncovered cell, for the reason argued directly above.
+#: MOVED (69, 8, 521) -> (68, 8, 514) at smrg/retire-37p5self, and this is the
+#: FIRST TIME THIS PIN HAS EVER GONE DOWN ON A SHAPE CHANGE. The flow LOST one
+#: step: `37.5self` is retired, because the general precheck was never a third
+#: ROUTE out of stage 4 — it is a second ARM of `37.5ic`, which now runs our
+#: ladder on every design that reaches it and the shuttle operator's own
+#: container IN ADDITION wherever the PDK ships a precheck and its template was
+#: fetched. 68 x 8 = 544 cells, 30 of them not ENFORCED (see below),
+#: 544 - 30 = 514.
+#:
+#: -7 AND NOT 8, and it is the exact mirror of the +7 recorded directly above.
+#: `37.5self/d3` was NA, never ENFORCED — it entered the grid NA and it leaves
+#: the grid NA — so seven ENFORCED cells go and the eighth was never in the
+#: count. This pin's own rule is that "a cell moving OUT of ENFORCED must say
+#: which cell and why", and the seven are named by their owner: every d1/d2/
+#: d4/d5/d6/d7/d8 cell of the removed step. There is no eighth to name here
+#: because there was never an eighth; the NA one is struck from
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below instead, which is where it lived.
+#:
+#: NOTHING ELSE MOVED, AND THAT IS MEASURED, NOT ASSUMED. The live grid was
+#: recomputed from the eight dimension modules on this tree and its
+#: not-ENFORCED inventory diffed against the pinned one: the ONLY difference in
+#: either direction is `("37.5self", 3, "NA")`. A step removal that had
+#: silently reclassified a neighbouring cell — the exact shape #1421 records
+#: the scalar being unable to see — would appear in that diff as a second
+#: entry. There is none, so the -7 is one cause and not a batch.
+#:
+#: THE COVERAGE CLAIM SHRINKS WITH IT AND IS NOT REDISTRIBUTED. The seven
+#: `applies_to` tuples that named `37.5self` drop it, and each entry's
+#: `measured.reddened` moves by exactly one, which
+#: `test_lock3_every_entry_is_arithmetically_consistent_with_its_own_evidence`
+#: re-derives from `len(applies_to)` on every run. The replay that produced
+#: those reds really happened and is not disowned; the CELL it measured no
+#: longer exists, so the claim it supported goes with it. `0.5ic/d3` is
+#: untouched by this move and remains the one uncovered cell.
+#: 2026-08-21: (68, 8, 514) -> (69, 8, 522). +1 step and +8 ENFORCED cells, and
+#: they are the same step: 1.6x, added to the flow by `7fcbc7397` with none of
+#: these registries moved. All eight of its cells are ENFORCED — it declares a
+#: gate, one required_output and `blocks_on: [1]`, carries no step-level
+#: condition and holds no waiver — so the count moves by exactly 8 and no cell
+#: changed state. Twelve mutation entries gained "1.6x", each REPLAYED rather
+#: than assumed; the two that could not be are named in the note on
+#: LEDGER_CELLS_NOT_ENFORCED.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 522)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -1934,6 +2101,25 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     ("26.5ic", 3, "NA"),
     ("37.5ip", 3, "NA"),
     ("37.5ic", 3, "NA"),
+    # 37.5self/d3 STOOD HERE and is STRUCK, at smrg/retire-37p5self. It was
+    # added at v1.11.5 on exactly the same reading as the four above —
+    # `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`,
+    # `condition_kind: design_dependent`, no admissible run root satisfying it
+    # — and it entered the grid NA and was never ENFORCED.
+    #
+    # IT IS NOT REMOVED BECAUSE ITS STATE CHANGED. Its STEP was retired: the
+    # general precheck is now the first ARM of 37.5ic rather than a route of
+    # its own, so `37.5self` is not a step of this flow and `37.5self/d3` is
+    # not a cell of this grid. That distinction is the one this inventory
+    # exists to keep: a cell that LEFT ENFORCED and a cell that LEFT THE GRID
+    # are different facts, and `grid_findings` reports them with different
+    # words ("LEFT ENFORCED" vs "is no longer a cell of this grid"). It said
+    # the second one, by name, before this line was struck.
+    #
+    # 37.5ic/d3 above is UNCHANGED and still NA. It gained the `SELF_TAPEOUT.txt`
+    # marker as a second `any_of` alternative in its condition, so a run tree
+    # carrying EITHER router file now sends it ENFORCED — a wider door to the
+    # same state, not a different state.
     # ── dimension 5 ───────────────────────────────────────────────────
     ("12", 5, "WAIVED"),
     # ── dimension 6 ───────────────────────────────────────────────────

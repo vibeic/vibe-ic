@@ -249,6 +249,110 @@ def test_exact_legacy_routed_empty_keeps_phase1_aggregate_compatible():
         "the bootstrap exception must not hide a second unexempted refusal")
 
 
+def _routed_corpus_record(label, expansion):
+    """The fixture above, with the routed-DEF row in a chosen state.
+
+    `items` is 0 and `gates` is 1 in BOTH states on purpose: those integers are
+    what made the two indistinguishable, so a waiver that keys off them alone
+    waives both.
+    """
+    reference, a, b, attest = fixture()
+    legacy = gate(label, "LISTED")
+    legacy.update({
+        "corpus": P._LEGACY_ROUTED_CORPUS,
+        "corpus_item": 0,
+        "corpus_items": 0,
+        "scope": None,
+    })
+    reference["gates"].insert(1, legacy)
+    reference["corpora"] = [{
+        "name": P._LEGACY_ROUTED_CORPUS,
+        "items": 0,
+        "gates": 1,
+        "expansion": expansion,
+    }]
+    owned = dict(legacy)
+    owned["state"] = "NOT_CHECKED"
+    other = dict(legacy)
+    other["state"] = "OTHER_SHARD"
+    a["gates"].insert(1, owned)
+    b["gates"].insert(1, other)
+    a["corpora"] = b["corpora"] = reference["corpora"]
+    # Only the phase-1 bootstrap row is allowed to reach a terminal state with
+    # NO process attestation. Every other population refusal is attested --
+    # `repo_hygiene_gates.sh` dispatches this corpus with
+    # `GATE_DISPATCH_ATTEST_POPULATION=1`, and the real dispatcher does write a
+    # record for the NOT FOUND row. Supplying it here keeps the fixture faithful
+    # to the run instead of testing a shape the wiring never produces.
+    if not P._legacy_empty_without_process(reference, label):
+        attest.insert(1, process_attestation(label, "", 2, ["true"],
+                                             state="NOT_CHECKED"))
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert problems == [], problems
+    return doc
+
+
+#: `gate_dispatch_over`'s row for a corpus that was never opened (vibe-ic#1764).
+_ABSENT_LABEL = ('corpus "published cells carrying a routed DEF" was NOT FOUND '
+                 '— nothing was opened to check')
+
+
+def test_the_phase1_waiver_covers_the_measured_empty_row_and_not_the_absent_one():
+    """vibe-ic#1764's pair, at the ONE place that turns a refusal into a pass.
+
+    `gate_dispatch_finish` refuses rc 2 in BOTH states, and the issue said so.
+    It is `_summary_rc` — the closing rc of the parallel hygiene DAG — that
+    waives the refusal, and MEASURED on `origin/main` that waiver covered both:
+
+        origin/main  corpus ABSENT     -> _summary_rc 0   <- a PASS over a
+                                                             corpus NOTHING
+                                                             OPENED
+        origin/main  corpus read-empty -> _summary_rc 0   <- the intended
+                                                             phase-1 bootstrap
+
+    The waiver exists for the row main has carried since #1075: a corpus that
+    WAS read and publishes nothing. It was never meant to answer for a corpus
+    that was never opened, and it silently did, because the two arrived here
+    wearing the same label and the same `expansion`.
+    """
+    empty = _routed_corpus_record(P._LEGACY_ROUTED_EMPTY_LABEL, "EXPANDED")
+    absent = _routed_corpus_record(_ABSENT_LABEL, "NO_CORPUS")
+
+    # Same population integer, same gate count — the trap.
+    assert empty["not_checked_unexempted"] == [P._LEGACY_ROUTED_EMPTY_LABEL]
+    assert absent["not_checked_unexempted"] == [_ABSENT_LABEL]
+    assert empty["decided"] == absent["decided"] == 2
+
+    # The measured-empty row keeps EXACTLY the phase-1 behaviour #1763 relies on.
+    assert P._summary_rc(empty) == 0
+
+    # A corpus nothing opened does not inherit it.
+    assert P._summary_rc(absent) == 2, (
+        "the phase-1 bootstrap waiver closed the hygiene DAG GREEN over a "
+        "corpus that was never opened — an enforcement figure that includes a "
+        "measurement nobody took (vibe-ic#1764)")
+
+
+def test_the_waiver_checks_the_shape_and_not_only_the_label():
+    """Defence in depth: the row's SHAPE has to disqualify it too.
+
+    If the waiver keyed on the label alone, a future dispatcher that reused the
+    EMPTY wording for an absent corpus would walk straight back through it. So
+    an absent corpus is rejected on `expansion` as well, and this test would go
+    red if the shape check were ever dropped for the label check.
+    """
+    disguised = _routed_corpus_record(P._LEGACY_ROUTED_EMPTY_LABEL, "NO_CORPUS")
+
+    assert disguised["not_checked_unexempted"] == [P._LEGACY_ROUTED_EMPTY_LABEL]
+    assert not P._legacy_empty_without_process(
+        disguised, P._LEGACY_ROUTED_EMPTY_LABEL)
+    assert P._summary_rc(disguised) == 2, (
+        "a corpus nothing opened passed the bootstrap waiver by wearing the "
+        "empty corpus's label; the waiver must check the shape too")
+
+
 def test_worker_telemetry_does_not_subtract_an_absent_host_document():
     reference = {
         "gates": [gate(P.HOST_LABEL, "LISTED")],

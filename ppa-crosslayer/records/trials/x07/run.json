@@ -1,0 +1,18 @@
+{
+  "trial": "x07",
+  "levers": {
+    "rtl_variant": "pipe1",
+    "synthesis_strategy": "none"
+  },
+  "pnr_knobs": {
+    "die_um": "auto",
+    "placement_density": "0.30",
+    "spare_cell_density": "0.02"
+  },
+  "runner_rc": 1,
+  "cost": {
+    "wall_seconds": 278.706,
+    "cpu_seconds": 352.847,
+    "peak_rss_mb": 608.3
+  }
+}

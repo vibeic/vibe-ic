@@ -179,9 +179,32 @@ def _run(cmd: Sequence[str], cwd: Optional[str] = None) -> Tuple[str, int]:
 def measure(prs: Sequence[int], node: str, checkout: Callable[[int], Optional[str]],
             runner: Callable[[str, str], Tuple[str, int]] = None) -> Dict[int, str]:
     """`{pr: verdict}` — run `node` on each PR's tree. IO is injected for tests."""
+    # NO TIMEOUT PLUGIN IN THIS ARGV, and it is not a relaxation.
+    #
+    # This argv used to read `-p pytest_timeout --timeout=180
+    # --timeout-method=thread`. MEASURED 2026-08-20: `pytest-timeout` is absent
+    # from the anchored runtime `ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2…d01ff`
+    # (`tools/ci/protected_landing_transition.json` .runner.image) and from its
+    # newer 0.3.13 tag, and `-p <missing plugin>` is a HARD import that dies in
+    # pytest's pre-parse. So inside the runtime this repo anchors, EVERY arm
+    # this function started printed no summary line, `classify_run` read that as
+    # UNMEASURED, and `decide` returned 2/UNKNOWN for every candidate — this
+    # tool could not measure anything at all, and said so in a shape that reads
+    # like "the PRs were unreachable" rather than "my own argv is unrunnable".
+    #
+    # THE BOUND IS NOT LOST, only re-sited to where it can be honoured: `_run`
+    # already bounds the whole arm at 1800 s and turns an overrun into rc 124
+    # with no output, which `classify_run` reports as UNMEASURED — a DECLINED
+    # arm, never a clean one. What changes is that one hanging test now costs
+    # the arm's 1800 s ceiling instead of the plugin's 180 s per-test one; what
+    # also changes is that the other arms are measured at all, which they were
+    # not. The repo retired this idiom repo-wide (see
+    # `programs/pytest_per_file_junit.py`: "There is deliberately no
+    # pytest-timeout guard on the landing path"), and
+    # `programs/retired_pytest_plugin_request_check.py` now keeps it retired.
     runner = runner or (lambda wt, n: _run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "pytest_timeout",
-         "--timeout=180", "--timeout-method=thread", n], cwd=wt))
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", n],
+        cwd=wt))
     out: Dict[int, str] = {}
     for n in prs:
         wt = checkout(n)
