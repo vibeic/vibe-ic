@@ -1,0 +1,34 @@
+U=/usr/local/lib/python3.12/dist-packages/librelane
+echo "IMAGE: ghcr.io/vibeic/vibeic-eda:0.3.26"
+echo "== sha256 of the two upstream files the pins name =="
+sha256sum $U/scripts/openroad/common/pad_cfg.tcl $U/scripts/openroad/common/io.tcl $U/config/flow.py
+echo
+echo "== every getWidth / getHeight in the upstream side arithmetic =="
+grep -n "getWidth\|getHeight\|incr sum_of_cell_widths\|set cur_pos" $U/scripts/openroad/common/pad_cfg.tcl
+echo
+echo "== what the height is USED for (the only consumer is a diagnostic) =="
+grep -n "\$height" $U/scripts/openroad/common/pad_cfg.tcl
+'
+IMAGE: ghcr.io/vibeic/vibeic-eda:0.3.26
+== sha256 of the two upstream files the pins name ==
+a3bae7d559e8c8b9f16d8dc5d086cfd217207ed09667263bd8e183a5c5ebd52c  /usr/local/lib/python3.12/dist-packages/librelane/scripts/openroad/common/pad_cfg.tcl
+edf14028a08bba2a6b075b99fcfddee832b02fadbc1a17d6ec932289c2a5c773  /usr/local/lib/python3.12/dist-packages/librelane/scripts/openroad/common/io.tcl
+d6caa367322e42cc037a4406a920ebb0f64fdc9245d95235b7c1e42c9c5bf513  /usr/local/lib/python3.12/dist-packages/librelane/config/flow.py
+
+== every getWidth / getHeight in the upstream side arithmetic ==
+63:set pad_site_width [expr double([$pad_site getWidth]) / $units]
+64:set pad_site_height [expr double([$pad_site getHeight]) / $units]
+66:set pad_corner_site_width [expr double([$pad_corner_site getWidth]) / $units]
+67:set pad_corner_site_height [expr double([$pad_corner_site getHeight]) / $units]
+99:        set width  [expr [[$inst getMaster] getWidth] / $units]
+100:        set height [expr [[$inst getMaster] getHeight] / $units]
+103:        incr sum_of_cell_widths $width
+145:    set cur_pos 0.0
+147:        set cur_pos [expr $cur_pos + $space_side + $::env(PAD_EDGE_SPACING) + $pad_corner_site_width]
+150:        set cur_pos [expr $cur_pos + $space_side + $::env(PAD_EDGE_SPACING) + $pad_corner_site_height]
+162:        set width  [expr [[$inst getMaster] getWidth] / $units]
+163:        set height [expr [[$inst getMaster] getHeight] / $units]
+169:        set cur_pos [expr $cur_pos + $space_between_pads_min_filler + $width]
+
+== what the height is USED for (the only consumer is a diagnostic) ==
+102:        puts "$master_name: $width $height"
