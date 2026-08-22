@@ -4,6 +4,29 @@ Written in the shape the standing authority asked for: both sides, what each was
 trying to achieve, options WITH MEASURED COSTS. **I am not blocked on this** —
 the frozen branch neither needs nor touches it.
 
+## CORRECTION TO THIS DOCUMENT, made after it was first written
+
+I framed the exposure as "182 clauses / 140 programs" and found TWO pieces of
+prior art (#492 at :7220, and :3134's own `_VACUOUS_HINT_PREFIX`). THERE IS A
+THIRD, AND IT IS THE LARGEST: `_vacuous_exit.py` (#515) routes a gate's exit
+code from the gate's OWN STRUCTURED CONCLUSION, and 61 programs in the tree use
+it. Its header records the same discovery -- five gates announcing a skip in
+stdout and exiting 0 anyway, four others already exiting 2 for the identical
+situation, "both conventions live at once".
+
+Measured against the clause path, that changes the number that matters:
+
+    140  distinct programs invoked by the 182 clauses
+     17  route through _vacuous_exit  (#515's router)
+    123  do not
+     93  of those 123 EMIT rc=2 BY HAND
+     30  cannot return 2 at all -- unaffected either way
+
+SO THE EXPOSURE IS 93 HAND-ROLLED rc=2 SITES, not 140 programs. Each decides on
+its own what "2" means, and :3134 credits all of them identically. That is a
+smaller and much more actionable number, and it also names the remedy shape the
+repo already chose: #515's router, adopted by 17 of the 140 so far.
+
 ## The two sites, and the asymmetry
 
     :7220   P0 umbrella    10 gates      #492 SEPARATES the two meanings here
