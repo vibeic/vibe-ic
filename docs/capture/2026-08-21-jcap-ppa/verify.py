@@ -412,9 +412,20 @@ if SLOW:
     # whose second clause is true whenever the gate printed anything at all,
     # so it could not detect that. Assert the parse produced a real population
     # and that it did not over-match into a name the gate never prints.
-    control("wiring-live", bool(_live) and "no_such_program" not in _live)
-    check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
-          not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
+    # The gate prints the unwired NAMES only when it fails. After main wired three
+    # of them it passes, the list is absent, and the intersection below would be
+    # empty for a reason that has nothing to do with this batch. The control
+    # caught exactly that -- it reported BROKEN rather than letting the check
+    # pass on an empty parse. So the two cases are separated instead.
+    if _r.returncode == 0:
+        control("wiring-live", "gates:" in _r.stdout)
+        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
+              True, "the gate PASSES, so it prints no unwired list; the "
+                    "baseline form of this question is check 18")
+    else:
+        control("wiring-live", bool(_live) and "no_such_program" not in _live)
+        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
+              not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
 
     # 22. the LIVE FIGURES this report quotes must still be what the gate says.
     #     Two places quote "gates N, unwired M (baseline B)" from a run made

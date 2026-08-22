@@ -1004,7 +1004,8 @@ because the record asserts the class is now covered.
 
 The tree already maintains the other half of the join:
 
-    gates 624   unwired 61 (baseline 59)   newly unwired 3
+    gates 624   unwired 58 (baseline 59)   newly unwired 0
+    (was 61 when this branch began; main wired three, and the gate now PASSES)
 
 and one of the three newly unwired is a program of **this very layer**, so the
 bad pairing was reachable rather than hypothetical.
@@ -1743,11 +1744,13 @@ branch touches is one main touched.*
 | gate | base | head | comparison |
 |---|---|---|---|
 | tracked JSON/YAML parses | — | **rc 0** | clean on this branch |
-| gate is wired | rc 1, unwired 61 (baseline 59) | rc 1, unwired 61 | **output byte-identical** — re-run on both arms post-merge, `diff` empty |
+| gate is wired | **rc 0**, unwired 58 (baseline 59) | **rc 0**, unwired 58 | **output byte-identical** — re-run on both arms after each of the two merges; it was rc 1 / 61 at the start of this lane and main has since wired three, so this gate is now GREEN on both |
 | checker execution wiring | rc 1 | rc 1 | **output byte-identical** |
 
-The two red gates are **pre-existing on main** and this branch moves neither —
-not the count, not the names, not a byte of the report. The routing entries
+One of the two red gates **went green while this branch was open** — main wired
+three programs and the wiring gate now passes on both arms. The other is
+pre-existing on main and this branch moves neither: not the count, not the names,
+not a byte of the report. The routing entries
 wire nothing that was unwired, which is consistent with **A-23**: every program
 this batch routes to was already reachable from an automatic verdict.
 
