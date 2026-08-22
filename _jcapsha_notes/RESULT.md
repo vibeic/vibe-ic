@@ -38,6 +38,8 @@ Deliverable: `recoveries.json` (5 records) emitted through
 | F3a | ~~the tool does not honour the rotation variable~~ | **D — WITHDRAWN** | refuted by the tool's own documented contract; replaced by F3c |
 | F3b | the degradation contract for a knob the tool ignores | **A** | drive the step twice and read the exit code and the report keys |
 | F4 | *(found while capturing)* an advertised component form no step id can express | **A** | enumerate the namespace, assert the validator accepts every member |
+| F3c | our side↔variable mapping is inverted vs the tool's contract | **A** | two four-entry mappings, compared |
+| F3d | the opposite side is a MIRROR upstream and a half turn in ours | **A** | two named transforms, compared — **present at the default** |
 
 Nothing landed in B, C or D. No record needed `why_not_bucket_a`, and none was
 discarded.
@@ -637,14 +639,17 @@ Of the five rules proposed, measured honestly:
 | F1 | correct, single-site (population 1 of 10) |
 | F2 | does not generalise as detection; becomes *declare the correspondence, then check it* |
 | F3a | **WITHDRAWN** — the tool was behaving as documented; replaced by the convention-inversion record, which is ours |
-| F3b | a real class with **three** instances and zero absorbed — still the most valuable rule, but its motivating case is not a member |
+| F3b | **population 1**, and that one already implements half the contract by hand — not the class I claimed. Its motivating case is not a member either. The unowned half (the exit-code tier) is still real |
+| F3c | our side-to-variable mapping is **inverted** against the tool's documented contract — the real defect the withdrawn Bucket-T record was masking |
 | F4 | correct, single instance (population 1 of 1232) |
 | F3d | the opposite-side transform: a mirror upstream, a half turn in ours — **present at the default**, and it passes every geometric gate because the two share a bounding box |
 
-The item most worth someone's time is still **F3b** — the one I first dismissed
-as having no population, then over-counted, and whose motivating case turned out
-not to belong to it. It survives all three corrections because three unrelated
-modules independently hit it and none absorbed it.
+The item most worth someone's time is **F3d**. It is the only finding here
+that needs no declaration to occur — it is present at the default, on both
+axes — and the only one that is invisible to every gate the step owns, because
+the gate reduces orientation to an extent and a half turn and a mirror share
+one. F3b, which I called this three times, is a population of one that already
+does half of itself.
 
 ---
 
