@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _published_corpus import corpus_root, needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "l_doc_field_producer_check.py"
 
@@ -130,9 +132,24 @@ def test_paid_debt_must_leave_the_baseline(tmp_path):
     assert r.returncode == 1 and "now HAVE a producer" in r.stdout
 
 
+@needs_corpus
 def test_shipped_tree_passes_against_its_recorded_debt():
-    r = subprocess.run([sys.executable, str(_PROG)], capture_output=True,
-                       text=True, timeout=60)
+    """The recorded debt, re-measured against the L-doc corpus it was recorded
+    over.
+
+    THE CORPUS IS NAMED EXPLICITLY. It used to be left to the program's own
+    default — `benchmark-data/ic` relative to the repo — and that default is now
+    a directory of design INPUTS with no L-document in it. The program then read
+    0 L-docs, found nothing populating `isolation_cells`, `level_shifters` or
+    `tables`, and reported those three as "now HAVE a producer", i.e. as debt
+    that had been PAID. Read over an empty corpus every recorded gap resolves
+    itself, and the register empties by attrition rather than by repair — the
+    exact inversion this gate exists to stop. So the corpus this asserts over is
+    the published one, wherever it is, and where there is none the honest answer
+    is a skip rather than a verdict about a register nobody could re-derive.
+    """
+    r = subprocess.run([sys.executable, str(_PROG), str(corpus_root() / "ic")],
+                       capture_output=True, text=True, timeout=60)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr
