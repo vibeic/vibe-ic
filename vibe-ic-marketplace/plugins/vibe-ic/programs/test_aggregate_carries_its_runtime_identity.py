@@ -95,6 +95,20 @@ def runtime_of(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return rt if isinstance(rt, dict) else None
 
 
+#: Values that occupy an identity field without being one. A stamp reading
+#: "unknown" is the ABSENCE of an identity wearing its shape, which is this
+#: capture's whole seam: an artefact whose stamp is present and whose binding
+#: is therefore reported true, while nothing was actually established.
+PLACEHOLDERS = frozenset((
+    "", "-", "?", "n/a", "na", "none", "null", "unknown", "unset", "tbd",
+    "todo", "missing", "notrecorded", "norecord", "notavailable"))
+
+
+def _is_placeholder(value: Any) -> bool:
+    return str(value).strip().lower().replace(" ", "").replace("_", "") \
+        in PLACEHOLDERS
+
+
 def missing_fields(obj: Dict[str, Any]) -> List[str]:
     """Which parts of the runtime identity are absent. Empty list = complete."""
     rt = runtime_of(obj)
@@ -104,8 +118,11 @@ def missing_fields(obj: Dict[str, Any]) -> List[str]:
     for k in REQUIRED:
         if k not in rt:
             out.append(k)
-        elif k != "unimportable_plugins" and not str(rt[k]).strip():
-            # Present-and-empty is NOT an answer for an identity string.
+        elif k != "unimportable_plugins" and _is_placeholder(rt[k]):
+            # Present-and-empty, and present-and-"unknown", are NOT answers for
+            # an identity string. MEASURED: {"image": "unknown", "interpreter":
+            # "n/a"} passed, so an aggregate that names no runtime could satisfy
+            # the rule that exists to make it name one.
             out.append(k)
     return out
 

@@ -80,15 +80,38 @@ def axis_keys(programs: Path) -> Set[str]:
     return {pr.metric for ax in feas.DEFAULT_AXES for g in ax.groups for pr in g}
 
 
-def _self_declared_non_verdict(rec: Dict[str, Any]) -> Optional[str]:
-    """The record's own sentence disqualifying it, or None."""
-    for field in ("note", "reason", "rationale", "detail", "comment"):
-        text = rec.get(field)
-        if isinstance(text, str):
-            low = text.lower()
-            for phrase in DISQUALIFYING:
-                if phrase in low:
-                    return text
+def _self_declared_non_verdict(rec: Any) -> Optional[str]:
+    """The record's own sentence disqualifying it, or None — at ANY depth.
+
+    MEASURED FALSE PASS: this looked only at the record's TOP-LEVEL fields, so a
+    record carrying
+
+        "provenance": {"note": "... it is not a sign-off verdict ..."}
+
+    reported PASS. Emitters nest provenance routinely, and a disclaimer one level
+    down is exactly as binding as one at the top — it is the record's own words
+    either way.
+    """
+    if isinstance(rec, str):
+        low = rec.lower()
+        for phrase in DISQUALIFYING:
+            if phrase in low:
+                return rec
+        return None
+    if isinstance(rec, dict):
+        for key, value in rec.items():
+            if key in ("metric", "outcomes", "outcome", "verdict", "status",
+                       "state"):
+                continue          # identity/verdict fields, not prose
+            found = _self_declared_non_verdict(value)
+            if found:
+                return found
+        return None
+    if isinstance(rec, list):
+        for v in rec:
+            found = _self_declared_non_verdict(v)
+            if found:
+                return found
     return None
 
 

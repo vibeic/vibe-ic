@@ -82,6 +82,17 @@ def test_rendering_the_same_line_from_the_resolved_value_passes(tmp_path):
 
 # ------------------------------------------------- the narrowing, pinned
 
+def test_a_typed_source_held_in_a_constant_goes_red(tmp_path):
+    """MEASURED FALSE PASS: the same typed claim, one assignment away."""
+    _mk(tmp_path,
+        'LOGPATH = "phase3/stage3/pnr/openroad.log"\n'
+        'def emit(rpt, project, top, def_file, pnr_log):\n'
+        '    s = _measured_subject(project, top, [def_file], tool_log=pnr_log)\n'
+        '    rpt.write_text(_measured_subject_lines(s) + "# Source: " + LOGPATH)\n')
+    rc, out = _run(tmp_path)
+    assert rc == 1, f"the constant-in-a-name form was not caught:\n{out}"
+
+
 def test_an_accurate_constant_alone_is_not_a_finding(tmp_path):
     """A record naming a genuinely fixed canonical input is accurate. Without a
     resolved claim beside it there is no contradiction, and no finding."""

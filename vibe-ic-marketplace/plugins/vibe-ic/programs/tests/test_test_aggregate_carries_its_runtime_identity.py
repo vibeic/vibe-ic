@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +92,21 @@ def test_an_unstamped_aggregate_goes_red(tmp_path):
     assert rc == 1, f"the defect did not go red:\n{out}"
     assert "image" in out and "interpreter" in out
     assert "charged to the revision" in out
+
+
+@pytest.mark.parametrize("junk", ["unknown", "n/a", "-", "TBD", "none", ""])
+def test_a_placeholder_identity_is_not_an_identity(tmp_path, junk):
+    """MEASURED FALSE PASS: {"image": "unknown", "interpreter": "n/a"} passed.
+
+    A stamp reading "unknown" is the ABSENCE of an identity wearing its shape —
+    this capture's seam exactly: the binding is reported true while nothing was
+    established. An aggregate that names no runtime could satisfy the rule that
+    exists to make it name one.
+    """
+    rc, out = _run("--aggregate",
+                   _agg(tmp_path, "a.json", dict(_RT, image=junk)))
+    assert rc == 1, f"placeholder {junk!r} passed as an identity:\n{out}"
+    assert "image" in out
 
 
 def test_an_empty_unimportable_list_is_a_real_answer(tmp_path):

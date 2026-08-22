@@ -77,6 +77,23 @@ def test_a_not_measured_record_satisfying_an_axis_goes_red(tmp_path):
     assert "measured zero" in out
 
 
+def test_a_nested_disclaimer_is_still_the_records_own_words(tmp_path):
+    """MEASURED FALSE PASS: the check read only TOP-LEVEL fields, so a record
+    carrying its disclaimer under `provenance` reported PASS. Emitters nest
+    provenance routinely and a disclaimer one level down binds just as hard."""
+    rec = dict(_GOOD, provenance={"note": _NOTE})
+    rc, out = _run(_tree(tmp_path, [rec]))
+    assert rc == 1, f"a nested disclaimer was not caught:\n{out}"
+    assert "declares itself not a verdict" in out
+
+
+def test_an_unrelated_nested_string_is_not_a_disclaimer(tmp_path):
+    """BIDIRECTIONAL: nesting must not turn every record into a finding."""
+    rec = dict(_GOOD, provenance={"note": "measured against the kit limit"})
+    rc, out = _run(_tree(tmp_path, [rec]))
+    assert rc == 0, out
+
+
 def test_the_same_record_measured_and_unqualified_passes(tmp_path):
     """BIDIRECTIONAL: without the self-declaration and measured, it goes green."""
     rc, out = _run(_tree(tmp_path, [dict(_GOOD)]))

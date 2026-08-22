@@ -96,6 +96,27 @@ def _walk(root: Path) -> List[Path]:
     return sorted(out)
 
 
+def _str_constants(tree: ast.AST) -> dict:
+    """`{name: value}` for simple module-level string assignments.
+
+    MEASURED FALSE PASS: the scan only read constants lexically inside the
+    write, so
+
+        LOGPATH = "phase3/stage3/pnr/openroad.log"
+        rpt.write_text(_measured_subject_lines(s) + "# Source: " + LOGPATH)
+
+    reported PASS — the same typed source claim, moved one assignment away.
+    """
+    out: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            out[node.targets[0].id] = node.value.value
+    return out
+
+
 def audit(root: Path) -> Tuple[List[Finding], List[str], int]:
     findings: List[Finding] = []
     unread: List[str] = []
@@ -114,6 +135,7 @@ def audit(root: Path) -> Tuple[List[Finding], List[str], int]:
         except SyntaxError as exc:
             unread.append(f"{rel}: could not be parsed ({exc.msg})")
             continue
+        names = _str_constants(tree)
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
@@ -122,6 +144,12 @@ def audit(root: Path) -> Tuple[List[Finding], List[str], int]:
             resolved = False
             literals: List[Tuple[int, str]] = []
             for sub in ast.walk(node):
+                # A name bound to a string constant is the same typed claim,
+                # one assignment away.
+                if isinstance(sub, ast.Name) and sub.id in names:
+                    for m in PATH_LIT.finditer(names[sub.id]):
+                        literals.append((getattr(sub, "lineno", node.lineno),
+                                         m.group(0)))
                 if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) \
                         and sub.func.id in RESOLVED_CALLS:
                     resolved = True
