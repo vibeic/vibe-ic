@@ -1102,6 +1102,63 @@ more on a side -- INCLUDING the 40 the design actually declares. It is not a
 substitute for a pin-out, and it is not a verdict on the declared grouping
 either; it is not offered as either one.
 
+WHAT REMAINS, AND WHO OWNS EACH PIECE
+======================================
+Nine numbered items sit further down with their reasoning. This is the same
+set answered as one question -- WHO PICKS EACH UP -- which none of them
+answers on its own.
+
+  DONE AND WAITING ON SOMEBODY ELSE
+    the fix + three orientation defects .. MINE, done. On `jpadsite/pad-site`
+                                           @725f9352f, FROZEN in the batch.
+                                           Waits on: THE LANDER.
+    two next/ items ...................... MINE, done. The odd-remainder
+                                           divergence documented, and a test
+                                           that asks the placer instead of
+                                           trusting a constant. On
+                                           `next/padring-spacing-provenance`.
+                                           Waits on: THE BATCH LANDING.
+
+  NOT MINE, AND NOT AN ENGINEERING TASK
+    the pin-out declaration .............. A HUMAN WITH A BOND DIAGRAM. Section
+                                           2B, 13 variables, unanswered. This is
+                                           the FIRST thing blocking the row and
+                                           no code reaches it.
+    a die that fits the declared grouping  THE DESIGN'S. 40/33/2/2 needs 3.762 /
+                                           3.612 mm; the largest die ever built
+                                           for it is 0.873 mm.
+
+  FLOW-OWNER CALLS, each with its disconfirming check already run
+    wire L-documents into the assignment . WOULD CONTRADICT a written decision
+                                           (`derives nothing`, step 15.5ic). A
+                                           design change, not a precedence
+                                           ruling.
+    harden premise-checking gates ........ questions a premise the flow owner
+                                           wrote deliberately at step 36.
+    how :3134 reads rc=2 ................. shape ALREADY RULED (census, not
+                                           blocking). The missing input is the
+                                           denominator, measured here at 93
+                                           hand-rolled sites.
+
+  UNOWNED, AND I AM SAYING SO RATHER THAN LEAVING THEM IMPLIED
+    the rc=2 clause-path CENSUS .......... I withdrew it. Two lanes in this same
+                                           batch are doing gate-audit work and
+                                           `_vacuous_exit` (#515) is the remedy
+                                           shape the repo already chose; a
+                                           census built in ignorance of them is
+                                           the second implementation with an
+                                           incompatible contract. It wants an
+                                           owner who can see those lanes.
+    extend #564's zero-denominator probe . A SCOPE decision, not a constraint.
+                                           Nothing stops it; I declined it as
+                                           outside this brief.
+    pad_ring_gen's SKIP exits 1, not 2 ... pre-existing, main does the same, and
+                                           no gate clause reads that program's
+                                           rc. A docstring promising an exit
+                                           code nothing reads. next/ candidate.
+
+NOTHING IN THE LAST TWO GROUPS IS A REASON TO REOPEN THE BATCH.
+
 WHERE THIS REPORT WAS WRONG, INDEXED
 =====================================
 Seventeen lines carry a correction, spread from line 106 to line 2349, each
