@@ -245,3 +245,42 @@ def test_no_ppa_exemption_still_claims_that_no_record_has_been_filed():
     assert guilty == [], (
         "a PPA exemption still declares that no record has been filed here:\n  "
         + "\n  ".join(g[:160] for g in guilty))
+
+
+#: A wired `ppa_*` gate this family deliberately does not cover, with the reason.
+#: Empty, and it must stay a DECLARATION rather than a silence: the test below
+#: forces a new wired ppa gate to be either covered or named here.
+NOT_A_RECORD_GATE: dict = {}
+
+
+def test_the_family_list_covers_every_wired_ppa_gate():
+    """THE LIST'S OWN BLIND SPOT, and it is the one this file kept.
+
+    `_invocations()` iterates `PPA_RECORD_CHECKERS` and matches only those keys,
+    so `found` is a SUBSET of the list by construction and
+    `test_the_wiring_still_invokes_every_ppa_record_gate` can only fail when a
+    LISTED gate stops being wired. A gate ADDED to the wiring and missing from
+    the list is invisible to it — the assertion reads as a completeness check
+    and is a deletion check.
+
+    That is not hypothetical in this lane: the symlink table carried the same
+    shape and TWO corpus walks (`ppa_pareto_check`, `ppa_measurement_check`)
+    were added under it without anything going red.
+
+    MEASURED when written: 6 wired, 6 listed, nothing missing — so this closes a
+    latent hole rather than reporting a live one, which is the moment it is
+    cheapest to close.
+    """
+    wired = set()
+    for line in _logical_lines(_wiring_text()):
+        if not line.startswith(("run ", "run_tolerating_uncheckable ",
+                                "run_writing_the_corpus ")):
+            continue
+        wired.update(re.findall(r"\$PG/(ppa_[a-z0-9_]+\.py)", line))
+    assert wired, ("the wiring invokes no ppa_* gate at all; this detector has "
+                   "gone dark rather than the family having gone away")
+    uncovered = sorted(wired - set(PPA_RECORD_CHECKERS) - set(NOT_A_RECORD_GATE))
+    assert not uncovered, (
+        "a ppa_* gate is wired and this family neither covers it nor declares "
+        "why it is out of scope:\n  " + "\n  ".join(uncovered)
+        + "\n(add it to PPA_RECORD_CHECKERS, or to NOT_A_RECORD_GATE with a reason)")
