@@ -2452,8 +2452,30 @@ in `9 of the 33`. A gate that is wrong three times in five is a gate that gets
 switched off, and this one needs the judgement *which population is this?* that a
 regex cannot make.
 
-What generalises instead is a drafting rule, and it is the same family as the
-records about docstrings and quoted counts: **a figure must name its population.**
+**The program layer reached this conclusion first, and I nearly filed a defect
+against it.** The shipped disclosure gate accepts a bare count, and its source
+says why in a sentence that anticipates the objection exactly: *"a bare count
+passes this check (it IS a denominator); the count of gates disclosing with a
+number ONLY is published … because a HIT count is not a SCAN SIZE and text alone
+cannot separate them."* It publishes the residual rather than pretending the
+distinction does not exist:
+
+    rc 0: 163 | disclosing: 162 (reason 140 / number-only 22) | silent: 1
+
+So 22 of the 162 disclose with a number and no noun — the same class as the prose
+figures above, measured and tracked in the program layer since before this lane
+existed. **There is no gap here and no record is owed.**
+
+Getting to that took **four consecutive instrument errors**, and they are worth
+listing because every one produced a confident wrong answer about a correct
+program: I grepped for the identifier where the code prints the *value*; then for
+`number_only` where the output says `number-only`; then read `tail -3` of a run
+whose census is on line 2; then read the JSON of the wrong population. Each time
+the finding looked real. The subject was right throughout and the instrument was
+wrong throughout — which is `A-27` stated as plainly as this lane can state it.
+
+What generalises is a drafting rule, and it is the same family as the records
+about docstrings and quoted counts: **a figure must name its population.**
 `29 records` cannot be distinguished from a stale batch count; `29 in-tree
 backlogs` can, and the staleness becomes self-evident to a reader without any
 tooling. The sweep row above now reads that way.
