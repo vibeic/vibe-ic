@@ -127,6 +127,17 @@ against (names, not counts -- a count hides a 1-in/1-out swap):
     evidence citation resolves         step FAIL bubbles up
     L-doc field producer
 
+**THIS BASELINE HAS A SHELF LIFE, AND THE WAY IT EXPIRES CAUSES MISATTRIBUTION.**
+Its eleven NOT CHECKED rows are all DATE EXEMPTIONS carried in
+`tools/ci/repo_hygiene_gates.sh`, and that file is under active edit by other
+work -- observed 2026-08-22, commits reworking exemptions whose stated reason the
+gate does not actually enforce. When such a fix lands, gates that were NOT CHECKED
+begin to DECIDE, and some will decide FAIL. Diffed naively against the numbers
+below, those read as reds the batch introduced. They are not: they are gates that
+could finally look. Re-measure the "before" side at whatever main actually is
+before attributing any new red to a branch -- the sha this was taken at,
+`a4caccefe`, is stated for exactly that reason.
+
 Three traps: run it STANDALONE, not through `gatekeeper_review` -- the sharded lane
 returned `PROGRESS_PROTOCOL_INCOMPLETE` / watchdog `rc=199` and certified nothing,
 while the unsharded run completed; bind BOTH sides identically, because binding
