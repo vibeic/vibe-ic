@@ -847,3 +847,95 @@ def test_the_hook_still_refuses_when_there_is_no_stamp(hook_repo):
     cp = _push(root, head, base)
     assert cp.returncode == 1
     assert "the full suites have not been run" in cp.stderr
+
+
+# ---------------------------------------------------------------------------
+# THE FIXTURE MUST TRACK WHAT THE DRIVER INVOKES, and that is checked here
+# rather than left to the 16 tests above to discover by dying.
+#
+# d5646372f wired three gates into the differential and did not add them to
+# `_write_stub_tree`. Every test that drives the script then failed with
+# `python3: can't open file '.../landing_noop_verdict_check.py'` — sixteen
+# reds, all naming a path instead of a property, and none of them saying which
+# commit introduced the gap. These two tests fail with the missing name, in
+# under a second, without launching four worktrees.
+# ---------------------------------------------------------------------------
+
+_INVOKED = re.compile(r"programs/([a-z0-9_][a-z0-9_]*\.py)")
+
+
+def _programs_the_differential_invokes():
+    """Program basenames the driver actually runs, prose deliberately excluded.
+
+    Stated predicate: a non-comment line of the script naming `programs/<x>.py`.
+    Whole-line comments are dropped because this script explains itself at
+    length and names programs in prose it does not call — counting those would
+    demand the fixture carry files nothing ever opens.
+    """
+    names = set()
+    for line in DIFFERENTIAL.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        names.update(_INVOKED.findall(line))
+    return names
+
+
+def test_the_synthetic_repo_carries_every_program_the_driver_invokes(tmp_path):
+    needed = _programs_the_differential_invokes()
+    # NON-VACUITY. A derived expectation that derives nothing passes over
+    # nothing: if this regex ever stops matching, every assertion below is
+    # satisfied by the empty set and the guard reports success while checking
+    # no program at all. Driven by pointing the pattern at a path that cannot
+    # occur — the assertion below fires, which is what makes it a guard.
+    assert len(needed) >= 5, (
+        "no program invocations were parsed out of the differential driver, so "
+        "the check below would pass over an empty set and prove nothing; the "
+        f"parse found {sorted(needed)}")
+
+    root = tmp_path / "repo"
+    _write_stub_tree(root)
+    prog = root / PLUGIN_REL / "programs"
+    missing = sorted(n for n in needed if not (prog / n).is_file())
+    assert not missing, (
+        "the differential driver invokes these programs and the synthetic repo "
+        f"does not contain them: {missing}. Add them to `_write_stub_tree` — "
+        "copy the real program when it can run in the synthetic tree, so the "
+        "wiring is exercised rather than stubbed to succeed.")
+
+
+def test_the_stub_selector_answers_the_floor_derivation_too(tmp_path):
+    """Being present is not enough for the selector; it is also IMPORTED.
+
+    The driver derives its selection floor by importing this module and
+    counting how many of `SMOKE_BASENAMES` resolve against the candidate tree.
+    When the three missing programs were first added the refusal did not clear,
+    it MOVED — to `the selector's own smoke floor could not be derived` — with
+    the failure count unchanged at 16. A stub that exists but does not answer
+    the import is indistinguishable from one that is absent, unless something
+    asks this question directly.
+    """
+    root = tmp_path / "repo"
+    _write_stub_tree(root)
+    plugin = root / PLUGIN_REL
+
+    probe = (
+        "import sys\n"
+        "sys.path.insert(0, 'programs')\n"
+        "from pathlib import Path\n"
+        "import ci_targeted_test_select as S\n"
+        "tests = Path('programs/tests')\n"
+        "print(sum(1 for b in S.SMOKE_BASENAMES if (tests / b).is_file()))\n")
+    cp = subprocess.run([sys.executable, "-c", probe], cwd=plugin,
+                        capture_output=True, text=True)
+    assert cp.returncode == 0, (
+        "the synthetic selector cannot be imported the way the driver imports "
+        f"it:\n{cp.stderr}")
+    # The import must be SILENT. A module-level `print` in the stub lands on
+    # this stdout and the floor stops being a number, which the driver reports
+    # as an underivable floor rather than as a chatty selector.
+    assert cp.stdout.strip().isdigit(), (
+        "importing the synthetic selector wrote something other than the floor "
+        f"to stdout; the driver reads this as the floor: {cp.stdout!r}")
+    assert int(cp.stdout.strip()) >= 1, (
+        "no smoke basename resolves against the synthetic tree, so the driver "
+        "refuses before any arm starts: the selection has no denominator")
