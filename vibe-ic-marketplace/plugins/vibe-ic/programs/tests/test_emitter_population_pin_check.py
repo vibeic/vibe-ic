@@ -24,6 +24,8 @@ import json
 import os
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 PROG = (Path(__file__).resolve().parent.parent
@@ -83,13 +85,30 @@ def test_an_emitter_that_agrees_with_itself_and_its_pin_passes(tmp_path):
         "the reach is not stated:\n" + r.stdout
 
 
-def test_the_shipped_corpus_is_clean():
-    """The corpus sweep, pinned: this guard must be green on the tree it ships
-    in. It is also the file that records the reach — small, and stated."""
+#: ONE run of this guard over the real tree, for the whole module.
+#:
+#: It costs ~9.7s -- it parses every program and every test in the tree -- and
+#: TWO tests need it. Paying twice made this module 22.6s where 39 of its other
+#: tests cost 2.6s between them, so a single duplicated corpus sweep was 79% of
+#: the runtime. The neighbouring `test_issue712_prose_polarity` solved the same
+#: problem the same way and wrote down why; this follows it.
+#:
+#: Deterministic and read-only, so sharing is safe: the guard writes only the
+#: JSON it is asked for.
+@pytest.fixture(scope="module")
+def real_run(tmp_path_factory):
+    out = tmp_path_factory.mktemp("realrun") / "r.json"
     r = subprocess.run(
         [sys.executable, str(PROG), "--programs", str(PROGRAMS_DIR),
-         "--tests", str(TESTS_DIR)],
+         "--tests", str(TESTS_DIR), "--json", str(out)],
         capture_output=True, text=True, timeout=900)
+    return r, json.loads(out.read_text())
+
+
+def test_the_shipped_corpus_is_clean(real_run):
+    """The corpus sweep, pinned: this guard must be green on the tree it ships
+    in. It is also the file that records the reach — small, and stated."""
+    r, _ = real_run
     assert r.returncode == RC_PASS, r.stdout + r.stderr
 
 
@@ -1605,19 +1624,15 @@ def test_a_lower_bound_that_EXCEEDS_the_denominator_is_still_refused(tmp_path):
     assert "incremented at 4 site(s)" in r.stdout, r.stdout
 
 
-def test_the_real_tree_has_no_undecidable_population(tmp_path):
+def test_the_real_tree_has_no_undecidable_population(real_run):
     """The shipped corpus must be untouched by the change. `_prr_refused` --
     the only counter that reaches a comparison -- has its `incr` literals INLINE
     in `_postroute_repair_estimate_tcl`, which is called once, so it is a count
     and stays fully compared. Ten other counters in that file DO qualify as
     lower bounds, and none of them states a denominator, so none reaches a
     verdict either way."""
-    r = subprocess.run(
-        [sys.executable, str(PROG), "--programs", str(PROGRAMS_DIR),
-         "--tests", str(TESTS_DIR), "--json", str(tmp_path / "r.json")],
-        capture_output=True, text=True, timeout=900)
+    r, doc = real_run
     assert r.returncode == RC_PASS, r.stdout + r.stderr
-    doc = json.loads((tmp_path / "r.json").read_text())
     assert doc["not_determined"] == [], (
         "the change moved a verdict on the shipped tree: "
         + json.dumps(doc["not_determined"], indent=2))
