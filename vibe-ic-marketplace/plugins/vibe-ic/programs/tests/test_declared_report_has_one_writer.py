@@ -405,3 +405,100 @@ def test_the_declared_report_carries_the_runners_measurement(tmp_path):
     # under the key the gate floor uses, and graded against it.
     assert report["plan_target_density"] == 0.005
     assert report["target_density"] == 0.02
+
+
+# ──────────────────────────────────────────────────────────────────────
+# L4 — the declared output is still PRODUCED, not merely single-writered
+# ──────────────────────────────────────────────────────────────────────
+# L1 asks "who may write this path". It cannot ask the other question, and
+# the two are not the same: a path with exactly one permitted writer that
+# nothing ever runs is single-writered and absent.
+#
+# That is not hypothetical — it is what the first cut of this decision did.
+# Removing the runner's write left `spare_cell_coverage_check` as the sole
+# writer, invoked only by step 18's gate clause. But `phase3_one_shot_runner`
+# also runs `flow_compliance_check --strict` on its own output, and that
+# grades `required_outputs` by PRESENCE. On a RUNNER-ONLY invocation — no
+# orchestrator gate pass — nobody produced the file. MEASURED on a published
+# tree carrying a real spare plan, the report being the only difference:
+#
+#   with it     ⊘ [PASS-VOIDED] Step 18: Spare-cell + ECO-prep insertion
+#   without it  · [MISSING     ] Step 18: Spare-cell + ECO-prep insertion
+#                  └─ required_outputs missing:
+#                     ['reports/spare_cell_coverage.json'] (satisfied: 1/2 —
+#                      the gate passed, but every declared output must be
+#                      produced, not just one)
+#
+# The runner now INVOKES the declaring producer instead of formatting a rival
+# payload, which is the shape step 8 already uses for `sdc_syntax_check`. L1
+# stays green because the writing program is still the declared one.
+RUNNER = "phase3_one_shot_runner"
+
+
+def _programs_invoked_by(source: str) -> Set[str]:
+    """Module stems for every ``"<name>.py"`` string literal in `source`.
+
+    Deliberately PERMISSIVE — any `.py` literal counts, whether or not this
+    scanner can prove it reaches a subprocess. A permissive reading can only
+    make the assertion below easier to satisfy, so a false positive here
+    cannot manufacture a pass for a path that genuinely has no producer,
+    which is the only thing this leg claims.
+    """
+    return {n.value[:-3] for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and n.value.endswith(".py")}
+
+
+def test_every_declared_output_of_step_18_is_produced_on_a_runner_only_run():
+    """RED if step 18 declares an output nothing in the runner's own run
+    produces — the regression that removing the second write introduced."""
+    runner_src = (PROGRAMS / f"{RUNNER}.py").read_text(encoding="utf-8")
+    reachable = {RUNNER} | _programs_invoked_by(runner_src)
+    declared = F.required_outputs(DECLARING_STEP)
+    assert declared, "step 18 declares no outputs — the flow loader is broken"
+    checked: List[str] = []
+    unresolved: List[str] = []
+    for path in declared:
+        # BASENAME, not the full declared path. `path_tail` declines on a
+        # path built from a variable directory — the runner writes
+        # `out_dir / "spare_cells.json"` — and a decline is the scanner
+        # being honest, not a missing writer. Matching the basename widens
+        # the writer set, which can only make the assertion below easier to
+        # satisfy; the vacuity guard after the loop is what stops that
+        # widening from turning into a free pass.
+        writers = set(scan_plugin_writers(path.rsplit("/", 1)[-1]))
+        if not writers:
+            unresolved.append(path)
+            continue
+        checked.append(path)
+        assert writers & reachable, (
+            f"step {DECLARING_STEP} declares {path} but nothing the runner "
+            f"runs produces it: its writers are {sorted(writers)}, and the "
+            f"runner neither writes it nor invokes any of them. A runner-only "
+            f"invocation leaves that declared output MISSING.")
+    # NEVER VACUOUS on the path this module is about. If the scanner stops
+    # resolving it, this leg has stopped asking its question and says so
+    # rather than reporting a pass over an empty set.
+    assert DECLARED_PATH in checked, (
+        f"this leg never actually checked {DECLARED_PATH}; it resolved "
+        f"{checked} and declined on {unresolved}")
+    # And the fix for that must not be a relapse into a second writer.
+    assert RUNNER not in scan_plugin_writers(DECLARED_PATH), (
+        f"{RUNNER} produces {DECLARED_PATH} by WRITING it again, not by "
+        f"invoking {DECLARING_PRODUCER}")
+
+
+def test_that_leg_FIRES_when_the_runner_stops_invoking_the_producer():
+    """PAIRED GUARD: without this, the leg above passes on any runner that
+    happens to mention enough `.py` names."""
+    runner_src = (PROGRAMS / f"{RUNNER}.py").read_text(encoding="utf-8")
+    assert f'"{DECLARING_PRODUCER}.py"' in runner_src, (
+        f"{RUNNER} no longer invokes {DECLARING_PRODUCER} by name — the leg "
+        f"above is asserting over a shape that is gone")
+    stripped = runner_src.replace(f'"{DECLARING_PRODUCER}.py"',
+                                  '"_a_program_that_is_not_it.py"')
+    reachable = {RUNNER} | _programs_invoked_by(stripped)
+    writers = set(scan_plugin_writers(DECLARED_PATH))
+    assert not (writers & reachable), (
+        "the invocation was removed and the leg above would still have "
+        "passed — it is not measuring what it claims")

@@ -21657,6 +21657,57 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if spare_warn:
         spare_note += f" | {spare_warn}"
 
+    # --- Step 18: PRODUCE the declared coverage report -----------------
+    # `reports/spare_cell_coverage.json` is step 18's OTHER declared
+    # required_output, and `spare_cell_coverage_check` is its declaring
+    # producer — see
+    # docs/decisions/2026-08-22-spare-cell-coverage-declaring-producer.md.
+    # Step 18's gate clause is what normally runs it. But this runner also
+    # runs `flow_compliance_check --strict` on its own output, and that
+    # grades `required_outputs` by PRESENCE, not by whether the gate
+    # passed. On a RUNNER-ONLY invocation — no orchestrator gate pass —
+    # nothing produced the file once the convenience summary was removed,
+    # and step 18 read:
+    #     required_outputs missing: ['reports/spare_cell_coverage.json']
+    #     (satisfied: 1/2 — the gate passed, but every declared output
+    #      must be produced, not just one)
+    # MEASURED on a published tree carrying a real spare plan, the file
+    # being the only difference: PASS-VOIDED with it, MISSING without it.
+    #
+    # So the runner INVOKES THE DECLARING PRODUCER rather than formatting a
+    # second payload of its own. This is the shape step 8 already uses for
+    # `sdc_syntax_check` — "emitting here makes the required_outputs gate
+    # (file presence) pass without depending on the gate's invocation
+    # order" — and it is what the removed summary should have been. The
+    # single-writer property the decision establishes is UNAFFECTED: the
+    # only program that ever formats this path is still
+    # `spare_cell_coverage_check`, so the ast guard in
+    # tests/test_declared_report_has_one_writer.py stays green by
+    # construction rather than by exemption.
+    #
+    # Running it again at gate time is IDEMPOTENT: the checker reads only
+    # spare_cells.json, never the path it writes, so both invocations
+    # compute the same verdict from the same artefact. That is exactly the
+    # property the other half of the decision established, and it is what
+    # makes invoking the checker twice safe where clobbering it twice was
+    # not.
+    #
+    # Best-effort: a failure here never fails PnR. The checker's own rc=1
+    # is a genuine readiness FAIL and is deliberately NOT propagated —
+    # producing the declared report is this block's job; ACTING on its
+    # verdict is the gate's.
+    _spare_cov_report = project / "reports" / "spare_cell_coverage.json"
+    if (out_dir / "spare_cells.json").is_file():
+        try:
+            subprocess.run(
+                [sys.executable,
+                 str(PROGRAMS_DIR / "spare_cell_coverage_check.py"),
+                 str(project)],
+                capture_output=True, text=True, timeout=120,
+            )
+        except Exception as _cov_exc:  # nosec — emit is best-effort
+            spare_note += f" | spare_coverage_emit_failed: {_cov_exc}"
+
     # ORGANIC #593/#596 — persist the REQUESTED geometry (the `die_um`
     # arg — NEVER mutated in this function; only die_w/die_h are
     # auto-resized) as the cache KEY so the cache CHECK (which compares
@@ -21684,6 +21735,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     pnr_outputs = [str(def_file), str(sta_file)]
     if spare_json_path.is_file():
         pnr_outputs.append(str(spare_json_path))
+    # Step 18's second declared output, produced above by its declaring
+    # producer. Listed here so the step reports what it actually made.
+    if _spare_cov_report.is_file():
+        pnr_outputs.append(str(_spare_cov_report))
     # PG net ownership is sign-off evidence, so it is stated on the PASS path
     # too — "0 on no net out of N" is a measurement, "no mention" is not.
     #
