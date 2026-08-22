@@ -474,3 +474,38 @@ def test_every_answered_question_carries_at_least_one_entry():
     answers = json.loads(doc.read_text(encoding="utf-8"))
     empty = [a["question"] for a in answers["answers"] if not a.get("evidence")]
     assert not empty, f"questions answered with no evidence: {empty}"
+
+
+def test_the_reader_actually_honours_the_named_window():
+    """`DECL_WINDOW_BYTES` has to be the number `declared_intent` USES, not a
+    constant sitting beside a hardcoded one.
+
+    The two guards on this branch import it and assert an offset against it.
+    That pins THEM to the constant — it does not pin the READER to it. If
+    someone inlined `text[:4000]` back into `declared_intent` while leaving the
+    constant defined, both guards would keep passing over a window that no
+    longer existed, and the gate they protect could go silently UNDECLARED
+    again. This is the third time on this branch that a number kept in two
+    places has been the defect; this asserts there is only one.
+
+    Behavioural, not textual: a synthetic gate whose declaration sits at byte
+    11 must be READ at the shipped window and NOT read when the window is
+    narrowed below it."""
+    import flow_gate_enforcement_audit as A
+    probe = Path(tempfile.mkdtemp(prefix="declwin_")) / "probe_check.py"
+    probe.write_text('"""probe.\n\nENFORCEMENT: blocking\n'
+                     '=====================\n"""\n' + "# pad\n" * 50)
+    assert probe.read_text().find("ENFORCEMENT:") < 20
+
+    original = A.DECL_WINDOW_BYTES
+    try:
+        assert A.declared_intent(probe.parent, "probe_check") == "blocking"
+        A.DECL_WINDOW_BYTES = 10          # narrower than the declaration's offset
+        assert A.declared_intent(probe.parent, "probe_check") is None, (
+            "`declared_intent` ignored DECL_WINDOW_BYTES — the window is "
+            "hardcoded somewhere and the constant is decorative, so every "
+            "guard that imports it is measuring the wrong thing")
+    finally:
+        A.DECL_WINDOW_BYTES = original
+    # and the restore really restored it, or later tests inherit a broken audit
+    assert A.declared_intent(probe.parent, "probe_check") == "blocking"
