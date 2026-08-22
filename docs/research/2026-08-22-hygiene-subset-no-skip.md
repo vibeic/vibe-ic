@@ -1928,7 +1928,7 @@ Two of those — 11 and 13 — were published and refuted within the hour. Two m
 — 9 and 10 — were a DECLINE and its stated blocker, which is the register I had
 not been auditing at all until §30.
 
-**INSTRUMENTS THAT ANSWERED THE WRONG QUESTION — 9.**
+**INSTRUMENTS THAT ANSWERED THE WRONG QUESTION — 12** (nine here, three added below when this register itself went stale).
 
 1. `pgrep -f drive_real_review.py` matched the shells waiting for it.
 2. The ref watch fired on my own pushes.
@@ -1941,6 +1941,36 @@ not been auditing at all until §30.
    could not tell that from "still running" — ten minutes lost.
 9. `git merge <branch>` silently did nothing ("not something we can merge"); the
    measurement that followed described the wrong tree.
+
+**THE REGISTER ABOVE WENT STALE THREE SECTIONS AFTER IT WAS WRITTEN, which is
+the same defect one more time.** §33 called its scan "the tenth instrument
+failure" while this table still said nine, and §35 then added two more. Counted
+again rather than quoted again — the additions:
+
+10. The relevance scan over `tools/test_*.py` said **"none"** twice before
+    saying "four": first `grep -clE` (where `-l` overrides `-c`, so the variable
+    held a FILENAME and never equalled `1`), then a `grep -qE` loop returning
+    `0 of 20` whose condition is correct in isolation. Both wrong answers were
+    EMPTY, which is the permissive direction, and would have left a fourth
+    repo-root file unrun.
+11. The importer scan for `gatekeeper_review` matched **10 of 19** files and
+    missed `test_gatekeeper_review.py` itself, because that file reaches the
+    module through `spec_from_file_location` rather than an `import` statement.
+    Nine files, including the one named after the module under test.
+12. A `comm` against a hand-assembled "already run" list reported 13 unrun files
+    and named this branch's OWN seam guard among them. The list had been built
+    from a selection file and never included tests run individually.
+
+**Twelve, then, not nine** — and the three latecomers are all the same species
+as the original nine: each returned a confident answer that was wrong in the
+permissive direction, and each was caught by a case whose answer I already knew.
+
+Excluded deliberately, and worth saying why: two verification scripts died on
+syntax (`unexpected EOF` in nested bash quoting, `f-string expression part
+cannot include a backslash`). Those are not in the register because they
+**refused rather than answered**. A tool that will not run is loud; the twelve
+above all ran and lied. That distinction is the whole reason the register is
+worth keeping separately from a list of bugs.
 
 **What the two registers have in common.** Every instrument failure produced a
 CONFIDENT wrong reading, and every one was caught only because two readings in
