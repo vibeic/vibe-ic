@@ -34,9 +34,74 @@ Failure modes
    resolves outside the project root (absolute path or `..` traversal).
    Audit chain only attests artefacts owned by the project; outside
    paths can be fabricated externally.
-6. PROVENANCE_HASH_INCONSISTENT (v1.6.32) — same output path appears
-   in two entries with different declared hashes. The audit chain
-   contradicts itself; one of the two is wrong.
+6. PROVENANCE_OUTPUT_SUPERSEDED (DISCLOSED, non-fatal) — an entry
+   declares an output path that a LATER entry declares again. The
+   ledger is append-only and chronological, so the later record
+   describes the artefact's present state and the earlier one
+   describes a state that no longer exists. An earlier record is
+   therefore not a claim about the bytes on disk now, and is not
+   verified against them.
+
+   This replaces PROVENANCE_HASH_INCONSISTENT (v1.6.32), which read
+   two records of the same path with different hashes as a
+   self-contradicting audit chain. On any flow that iterates — every
+   flow with a `🔁` step — a re-run rewrites its outputs in place and
+   appends a fresh record, so that shape is the NORMAL one and the
+   rule fired on it every time. Combined with rule 4 (which compared
+   every historical record against the one current on-disk state),
+   this check was unsatisfiable after the first re-run: N re-runs of a
+   step produced 2N-1 guaranteed faults on an untouched, honest ledger.
+
+   What it still catches is unchanged and is the question this file
+   exists to answer: the NEWEST record of a path is verified against
+   disk exactly as before, so an artefact whose bytes are not the bytes
+   its producer recorded still FAILs rule 4. Superseded records are
+   reported, not silently dropped — see the census on the verdict line.
+6a. PROVENANCE_OUTPUT_UNPRODUCED (DISCLOSED, non-fatal) — the entry
+   declares an output and the entry's own `exit_code` is non-zero.
+   `_log_invocation` hashes every path the CALL SITE declared, whatever
+   the exit code, and it cannot know whether that invocation put those
+   bytes there. So a run that exited 1 having written nothing declares
+   the digest of whatever the previous run — or a hand edit — left
+   behind.
+
+   Such a record is an OBSERVATION, not a production claim, and rule 6
+   must not let it supersede anything: measured, an honest ledger whose
+   artefact is then hand-edited FAILs rule 4, and appending one rc=1
+   invocation that merely NAMES that path made the identical ledger
+   PASS. It is equally not verified against disk, because a later
+   honest run may legitimately have replaced those bytes and faulting
+   on that would punish an honest ledger. Neither authoritative nor
+   verified is its own state, so it gets its own outcome and its own
+   census column rather than being folded into either.
+
+   THOSE TWO ARE THE WHOLE EXEMPTION: it does not supersede, and it is
+   not compared against disk. A failed row remains subject to every
+   check that asks whether the LEDGER IS WELL-FORMED — hash shape,
+   `PROVENANCE_PATH_OUTSIDE_PROJECT`, `PROVENANCE_OUTPUT_FILE_MISSING`
+   and the publish-time disclosure rules — because no exit code answers
+   those questions. A dangling pointer is dangling and a path outside
+   the project root is outside it however the run that wrote the row
+   ended. Rule 6a first shipped as one `continue` placed ahead of the
+   entire on-disk block, which made it a general amnesty for the row
+   instead: a failed invocation that ALSO declared an artefact outside
+   the project boundary became the one row this gate could not report.
+   The exemption is now applied at each of its two points, and the
+   structural checks sit between them.
+
+Known limit (stated because it is real, not because it is fixed)
+----------------------------------------------------------------
+Rule 6 cannot distinguish an honest re-run from a hand-edited artefact
+that a later SUCCESSFUL invocation merely named. Both produce exactly
+one superseded record and a newest record that matches disk, so both
+end PASS with `1 SUPERSEDED`. Closing it needs a fact this ledger does
+not record — whether the invocation actually WROTE the path — and the
+only cheap proxy (a filesystem mtime window) is precisely the
+attribution-by-what-moved shortcut `_hash_declared_outputs` refuses as
+fabrication. So the census discloses that some part of the ledger was
+not verified; it does not claim to say why. Rule 6a closes the half of
+this that IS recorded: a non-zero exit code.
+
 8. PROVENANCE_REMOVAL_EMPTY (v0.2.102) — an entry marked as a removal /
    supersede event but with an empty `removed` / `superseded` list. A
    removal must reference what it removed.
@@ -386,6 +451,69 @@ def _removal_list(entry: dict) -> Optional[list]:
     return refs
 
 
+def _is_failed_invocation(entry: dict) -> bool:
+    """True when this row records an invocation that EXITED NON-ZERO.
+
+    `_log_invocation` hashes whatever sits at each path the CALL SITE
+    declared — it cannot know whether THIS invocation put it there. So a
+    run that exited 1 having written nothing still declares the digest of
+    whatever the previous run (or a hand edit) left at that path. Such a
+    row is an OBSERVATION, not a production claim, and the two must not
+    be read alike; see `PROVENANCE_OUTPUT_UNPRODUCED`.
+
+    A row with NO `exit_code` key is not a failed invocation: the other
+    writer of this ledger (`provenance_logger.py`) omits the key entirely,
+    and every such row predates this rule. Absence stays production.
+    """
+    if "exit_code" not in entry:
+        return False
+    try:
+        return int(entry["exit_code"]) != 0
+    except (TypeError, ValueError):
+        # An unreadable exit_code is not evidence of success. Treat it as
+        # a production row (unchanged behaviour) rather than inventing a
+        # failure — the shape rules elsewhere own malformed records.
+        return False
+
+
+def _latest_declaration_index(entries: List[dict]) -> Dict[str, int]:
+    """Map each declared output path to the index of the LAST entry
+    that PRODUCED it.
+
+    provenance.jsonl is append-only (`provenance_logger.py` opens it
+    with mode "a" and no runner truncates it), so ledger order is
+    production order. When a step re-runs and rewrites an output in
+    place, it appends a new record; the newest record for a path is the
+    one that describes the bytes now on disk.
+
+    Removal / supersede events are skipped: they declare no outputs and
+    are handled by their own rules.
+
+    FAILED invocations are skipped too, and that exclusion is load-
+    bearing rather than tidy. Without it a run that exited non-zero
+    having written nothing becomes the newest record of every path it
+    declared — carrying the digest of whatever was already there — and
+    so vouches for bytes it did not produce, retiring the honest
+    declaration of the run that did. Measured: an honest ledger whose
+    artefact was then hand-edited FAILs; append one rc=1 invocation
+    naming that path and the same ledger PASSes. A failed invocation
+    supersedes nothing.
+    """
+    latest: Dict[str, int] = {}
+    for i, e in enumerate(entries):
+        if _removal_list(e) is not None:
+            continue
+        if _is_failed_invocation(e):
+            continue
+        outs = e.get("outputs")
+        if not isinstance(outs, dict):
+            continue
+        for rel in outs:
+            if isinstance(rel, str) and rel:
+                latest[rel] = i
+    return latest
+
+
 # A13 (#173) — `ip_catalog_pull` (ip_catalog_pull.py) records the RTL files it
 # copied as an `outputs_sha256` LIST of bare sha256 hex digests plus a
 # `files_pulled` count. That is a legitimate AGGREGATE provenance shape, distinct
@@ -541,7 +669,8 @@ def audit_counted(project: Path, strict_timing: bool = False,
         verified_relocated    absent, disclosed relocated, target hashes
         not_verifiable_here   absent, disclosed not shipped, digest kept
     """
-    _counts = {"declared": 0, "verified_present": 0,
+    _counts = {"declared": 0, "superseded": 0, "unproduced": 0,
+               "verified_present": 0,
                "verified_relocated": 0, "not_verifiable_here": 0}
     # #434 follow-up (gatekeeper): "shipped" is a property of the PUBLISHED
     # tree, not of this machine's disk. None -> not a published deliverable,
@@ -564,9 +693,11 @@ def audit_counted(project: Path, strict_timing: bool = False,
     verified_present = 0
     verified_relocated = 0
     to_check = entries[:max_entries] if max_entries else entries
-    # Track hashes per relative output path to flag cross-entry
-    # contradictions (PROVENANCE_HASH_INCONSISTENT, v1.6.32).
-    seen_hashes: Dict[str, Tuple[int, str]] = {}
+    # Newest record per output path. An append-only ledger records a
+    # SEQUENCE of production events; only the newest record of a path
+    # is a claim about the bytes on disk now. Computed over exactly the
+    # audited slice so --max-entries stays self-consistent.
+    latest_decl: Dict[str, int] = _latest_declaration_index(to_check)
     # v0.2.102 — for #493 part 3. Pre-scan removal/supersede events so a
     # NORMAL pull entry's output that was legitimately removed by a later
     # prune event is not flagged PROVENANCE_OUTPUT_FILE_MISSING. The
@@ -738,20 +869,65 @@ def audit_counted(project: Path, strict_timing: bool = False,
                            f"a 'sha256:<64-hex>' string"))
                 continue
             declared_hex = claimed.split(":", 1)[1].lower()
-            # Cross-entry consistency: same rel_path must declare same
-            # hash. (Different tools producing the same artefact would
-            # be unusual; the audit chain should reflect a single owner.)
-            prev = seen_hashes.get(rel_path)
-            if prev is not None and prev[1] != declared_hex:
+            # A FAILED invocation declares what it FOUND, not what it
+            # made. `_log_invocation` hashes each path the call site
+            # declared regardless of the exit code, so a run that exited
+            # non-zero having written nothing still carries the digest of
+            # whatever was already at that path. Reading that as a
+            # production claim is how a broken artefact gets vouched for
+            # by the very run that failed over it.
+            #
+            # So: not authoritative (it superseded nothing — see
+            # `_latest_declaration_index`) and not verified against disk
+            # either, because a later honest run may legitimately have
+            # replaced those bytes and faulting on that would punish an
+            # honest ledger. Which leaves it in neither state, so it gets
+            # its own: DISCLOSED and counted, never silence and never
+            # folded into "verified".
+            #
+            # THAT IS THE WHOLE OF THE EXEMPTION, AND IT IS DELIBERATELY
+            # NOT AN AMNESTY FOR THE ROW. It first shipped as a blanket
+            # `continue` here, ahead of everything below, so a failed
+            # row's outputs skipped the path-boundary check and the
+            # existence check too — questions about whether the LEDGER is
+            # well-formed, which no exit code answers. A dangling pointer
+            # is dangling and a path outside the project root is outside
+            # it however the run that wrote the row ended; a failed
+            # invocation that also escaped the project boundary was the
+            # one row the audit could not name. So the exemption is
+            # applied where each half of it belongs: the supersession
+            # decision immediately below, and the on-disk digest
+            # comparison further down, with the ERROR-class structural
+            # checks between them reached exactly as any other row
+            # reaches them.
+            failed_invocation = _is_failed_invocation(e)
+            # Supersession. The ledger is append-only, so a LATER entry
+            # declaring this same path describes the artefact's present
+            # state and this record describes a state that no longer
+            # exists. An earlier record is not a claim about the bytes
+            # on disk now, so it is not verified against them — it is
+            # DISCLOSED (non-fatal, and nothing is wrong) rather than
+            # dropped in silence, and it is counted on the verdict line.
+            #
+            # Only the newest record of a path reaches the on-disk
+            # verification below, and it reaches it UNCHANGED. Tampering
+            # is still caught there: editing the bytes without producing
+            # a new record leaves the newest record declaring the
+            # pre-tamper digest, which mismatches.
+            latest_i = latest_decl.get(rel_path)
+            if (not failed_invocation
+                    and latest_i is not None and latest_i != i):
+                _counts["superseded"] += 1
                 findings.append(ProvenanceFinding(
-                    entry_index=i, tool=tool,
-                    rule="PROVENANCE_HASH_INCONSISTENT",
+                    entry_index=i, tool=tool, severity="DISCLOSED",
+                    rule="PROVENANCE_OUTPUT_SUPERSEDED",
                     detail=f"output '{rel_path}' declared sha256:"
-                           f"{declared_hex} here, but entry#{prev[0]} "
-                           f"declared sha256:{prev[1]}"))
-                # Continue with on-disk verification anyway.
-            else:
-                seen_hashes[rel_path] = (i, declared_hex)
+                           f"{declared_hex} here, and declared again by "
+                           f"the later entry#{latest_i}; the ledger is "
+                           f"append-only, so entry#{latest_i} is the "
+                           f"record of the bytes now on disk and this "
+                           f"one records a superseded state"))
+                continue
             on_disk = project / rel_path
             # v1.6.32 path-traversal guard
             if not _is_inside_project(project, on_disk):
@@ -878,6 +1054,25 @@ def audit_counted(project: Path, strict_timing: bool = False,
                            f"for it; a reader following the ledger finds "
                            f"nothing and is told nothing"))
                 continue
+            # The path is inside the project and the deliverable ships it.
+            # Everything a failed row can still be held to has now been
+            # asked of it; what remains is the digest comparison, and that
+            # is the half of the exemption that belongs here — the row
+            # recorded what it FOUND, so disagreeing with disk is not
+            # evidence of tampering. Reported, counted, never verified.
+            if failed_invocation:
+                _counts["unproduced"] += 1
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool, severity="DISCLOSED",
+                    rule="PROVENANCE_OUTPUT_UNPRODUCED",
+                    detail=f"output '{rel_path}' is declared by an "
+                           f"invocation that exited "
+                           f"{e.get('exit_code')!r}; a failed run did not "
+                           f"produce these bytes, it only hashed what was "
+                           f"already at that path, so this record neither "
+                           f"supersedes an earlier declaration nor is "
+                           f"verified against disk"))
+                continue
             try:
                 actual = _file_sha256(on_disk)
             except OSError as exc:
@@ -997,7 +1192,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{counts['verified_present']} verified on disk, "
               f"{counts['verified_relocated']} verified through a disclosed "
               f"relocation, {counts['not_verifiable_here']} NOT VERIFIABLE "
-              f"HERE (absent, disclosed as not shipped, digest recorded)")
+              f"HERE (absent, disclosed as not shipped, digest recorded), "
+              f"{counts['superseded']} SUPERSEDED by a later record of the "
+              f"same path (not a claim about the bytes on disk now), "
+              f"{counts['unproduced']} UNPRODUCED (declared by an invocation "
+              f"that exited non-zero; it hashed what was already there)")
     if verdict == "PASS":
         warn = report['warnings_count']
         msg = f"PASS: provenance.jsonl — {census}"

@@ -34,9 +34,31 @@ emitted Tcl carries `#` lines that mention `repair_design`, and a first
 implementation of this check matched one of those and reported the guard as
 mis-ordered when it was not. The probe has to be able to tell a command from a
 sentence about a command.
+
+WHAT WAS CORRECTED HERE (2026-08-05)
+====================================
+41c49f94d re-pointed `_probe_family_reached` from the literal `"__probe_" in
+tcl` to `re.fullmatch` over the emitted pattern tokens, and the landing recorded
+this file as passing on the pre-landing tree e3aa9b126. MEASURED, it does not
+pass there and it does not fail there either: all four tests DIE with
+
+    re.error: nothing to repeat at position 0
+
+because e3aa9b126 emits GLOBS (`*__probe_*`), and a glob is not a regex. So the
+file did discriminate the landing, but by crashing — an error whose message
+names Python's regex parser and says nothing about pin access, cell pools or
+OpenSTA.
+
+The predicate below now models what OpenSTA actually does with what was emitted
+— glob mode is case-SENSITIVE and ignores `-nocase` (measured: `[WARNING
+STA-0358] -nocase ignored without -regexp`), regex mode fullmatches the whole
+cell name — so both trees get an ANSWER, and the pre-landing tree gets an
+AssertionError that names the cell it fails to reach.
 """
 from __future__ import annotations
 
+import fnmatch
+import re
 import sys
 from pathlib import Path
 
@@ -86,9 +108,84 @@ def test_the_fallback_still_excludes_the_family_that_broke_routing():
     pass while excluding nothing that matters."""
     tcl = R._dont_use_family_fallback_tcl()
     assert "set_dont_use" in tcl
-    assert "__probe_" in tcl, (
-        "the fallback no longer excludes the probe family — the cell that "
-        "produced DRT-0085 would be back in every resizer's pool")
+    missed = _unreached_probe_cells(tcl)
+    assert not missed, (
+        f"the fallback does not reach {missed} — the cell that produced "
+        f"DRT-0085 is back in every resizer's pool while the run still prints "
+        f"DONT_USE_FALLBACK_APPLIED")
+
+
+def test_the_exclusion_is_matched_the_only_way_openSTA_can_match_it():
+    """MEASURED in-container on a commercial 180nm library: OpenSTA honours
+    `-nocase` ONLY in regexp mode. In glob mode it prints `[WARNING STA-0358]
+    -nocase ignored without -regexp` and matches case-SENSITIVELY —
+    `get_lib_cells -nocase -quiet *dly*` returned 0 cells while `-quiet *DLY*`
+    returned 4. A block that asks for case-insensitivity while passing globs is
+    therefore a block that silently matches nothing on half the libraries in
+    the world, and prints that it ran.
+    """
+    tcl = R._dont_use_family_fallback_tcl()
+    flags = re.search(r"get_lib_cells((?: -\w+)*) \$_du_pat", tcl)
+    assert flags, tcl
+    assert "-regexp" in flags.group(1), (
+        f"the do-not-use lookup passes{flags.group(1)!r}: case-insensitive "
+        f"matching needs -regexp, and without it OpenSTA drops -nocase and "
+        f"matches case-sensitively")
+
+
+#: the SAME probe family in the two naming conventions the flow has met: the
+#: exact master measured breaking the reroute on ibex, and a bare upper-case
+#: commercial spelling of the same thing.
+_PROBE_CELLS = ("sky130_fd_sc_hd__probe_p_8", "PROBE_X1")
+
+
+def _unreached_probe_cells(tcl: str):
+    """Which of `_PROBE_CELLS` the emitted do-not-use block FAILS to reach.
+
+    Asserted on BEHAVIOUR, not on the `__probe_` spelling. The original pin was
+    the literal `"__probe_" in tcl`, and that literal is the OPEN-PDK
+    ``<lib>__<fn>`` convention — the very anchoring that made the pattern list
+    match ZERO cells on a commercial library while the run still printed
+    DONT_USE_FALLBACK_APPLIED. Pinning the spelling would have re-imposed the
+    defect on every emitter this file guards.
+
+    The patterns are evaluated the way OpenSTA evaluates them, from the FLAGS
+    the block actually passes to `get_lib_cells`:
+
+      * `-regexp`  -> the pattern is a regex and is anchored to the WHOLE cell
+                      name (measured: `dly` -> 0 cells, `.*dly.*` -> 4);
+      * no flag    -> the pattern is a GLOB, and `-nocase` is IGNORED with
+                      `[WARNING STA-0358] -nocase ignored without -regexp`, so
+                      matching is case-SENSITIVE however the flag is spelled.
+
+    A pattern set that is not valid under its OWN declared mode reaches nothing,
+    which is reported as "reaches nothing" rather than raised — an exception
+    here would name Python's regex parser instead of the defect.
+    """
+    m = re.search(r"foreach _du_pat \{([^}]*)\}", tcl)
+    if not m:
+        return list(_PROBE_CELLS)
+    pats = m.group(1).split()
+    flags = re.search(r"get_lib_cells((?: -\w+)*) \$_du_pat", tcl)
+    flagtext = flags.group(1) if flags else ""
+    regexp = "-regexp" in flagtext
+    nocase = "-nocase" in flagtext and regexp   # -nocase alone is dropped
+
+    def reaches(pat: str, cell: str) -> bool:
+        if regexp:
+            try:
+                return bool(re.fullmatch(pat, cell,
+                                         re.IGNORECASE if nocase else 0))
+            except re.error:
+                return False          # OpenSTA would reject it too
+        return fnmatch.fnmatchcase(cell, pat)
+
+    return [c for c in _PROBE_CELLS
+            if not any(reaches(p, c) for p in pats)]
+
+
+def _probe_family_reached(tcl: str) -> bool:
+    return not _unreached_probe_cells(tcl)
 
 
 @pytest.mark.parametrize("fn_name,kwargs", RESIZING_EMITTERS,
@@ -101,9 +198,11 @@ def test_resizing_path_excludes_unroutable_masters_before_it_resizes(fn_name, kw
         f"{fn_name} emits no set_dont_use: it can insert an unroutable "
         f"characterization master and detailed_route will die with DRT-0085")
 
-    assert "__probe_" in tcl, (
-        f"{fn_name} emits set_dont_use without the probe family — the specific "
-        f"master measured breaking the reroute on ibex")
+    missed = _unreached_probe_cells(tcl)
+    assert not missed, (
+        f"{fn_name} emits set_dont_use but its pattern set does not reach "
+        f"{missed} — the specific master measured breaking the reroute on ibex, "
+        f"and/or the same family under a commercial naming convention")
 
     resizes = [n for n in (_first_command_line(tcl, "repair_design"),
                            _first_command_line(tcl, "repair_timing"))

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -35,6 +36,8 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+import _atomic_output  # noqa: E402  (#1082 same-dir temp + atomic rename)
 from typing import List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
@@ -44,6 +47,8 @@ import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 # WNS/TNS tokens, and a SETUP/HOLD section split) — reused rather than
 # re-derived, per Bucket-A-ladder step 1 (ALREADY-PROGRAM).
 import sta_corner_record_completeness_check as _sta_slack
+
+import _sta_basis
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +602,23 @@ STRONG_SIGNATURE_GROUPS = {
         ["klayout", "netlistcomparer", "power-only devices dropped",
          "circuits match uniquely"],
     ],
+    # An OpenROAD PSM `analyze_power_grid` IR-drop SUMMARY is legitimately
+    # COMPACT: the runner emits a small structured JSON (engine id + power
+    # nets + worst-drop + verdict), not a multi-KB transcript. So a
+    # genuinely-real report from ANY design fell under the 1024 B floor
+    # (MIN_REPORT_BYTES["ir_drop"]) and was false-rejected as a "hand-typed
+    # stub" — the SAME small-design false-positive already fixed for `sta`
+    # and `lvs` above, but never wired for `ir_drop`, which shares that
+    # floor. Measured: 16 of 16 authentic openroad-psm ir_drop.json across
+    # benchmark-data are <1024 B (197-611 B). The triple below is the
+    # producer's self-identifying output — engine id + the producing
+    # OpenROAD command + the power-net schema field — content a
+    # "violations: 0" stub could not carry without reproducing a real PSM
+    # run. The basic tool-signature requirement still gates. chip-AGNOSTIC:
+    # universal PSM output structure, no chip / net / vendor / node literal.
+    "ir_drop": [
+        ["openroad-psm", "analyze_power_grid", "power_nets"],
+    ],
 }
 
 
@@ -782,6 +804,58 @@ def _strip_leading_comment_block(text: str) -> str:
     return ""
 
 
+#: expat's `XML_Parse` takes the buffer length as a C `int`, so a single call
+#: with a body >= 2**31 bytes raises `OverflowError: size does not fit in an
+#: int` — NOT an `ET.ParseError`. `ET.fromstring` hands the whole body to expat
+#: in one such call, so on a KLayout RDB at/over this size it CRASHES its
+#: caller. MEASURED: a 2,480,593,258-byte FreePDK45 sign-off `drc_signoff.rpt`
+#: (nangate45) crashed `_drc_real_violation_count`, so Step-31 Physical
+#: Verification returned "launch-failed CRASHED" — the checker could neither
+#: pass nor FAIL the design. `_count_rdb_items_streaming` streams the same body
+#: through `iterparse`, which feeds expat in sub-INT_MAX chunks.
+_EXPAT_SINGLE_BUFFER_MAX = 2 ** 31 - 1
+
+
+def _count_rdb_items_streaming(body: str) -> Optional[Tuple[int, int]]:
+    """`(user, foundry_stdcell)` KLayout-RDB item counts for a body too large
+    for `ET.fromstring`, or None when unreadable.
+
+    Streams the body through `xml.etree.ElementTree.iterparse`, which reads and
+    feeds expat incrementally so no single `XML_Parse` call ever exceeds the
+    C-int length limit that makes `ET.fromstring` raise `OverflowError` at/over
+    2**31 bytes. The per-item attribution and the terminal None cases are the
+    SAME as the in-memory branch below — only how the bytes reach the parser
+    changes:
+      * `<items>` container absent (bare `<report-database>`) -> None;
+      * truncated / malformed mid-stream -> `ET.ParseError` -> None;
+      * well-formed with N items -> the (user, stdcell) split.
+    `_el.clear()` drops each processed item so memory stays bounded on a
+    multi-million-item report. Pure; no I/O beyond the in-memory buffer.
+    """
+    user = 0
+    stdcell = 0
+    seen_items = False
+    try:
+        for _ev, _el in ET.iterparse(io.StringIO(body), events=("end",)):
+            if _el.tag == "item":
+                _cat = _el.find("category")
+                _rule = _cat.text if _cat is not None else ""
+                _cel = _el.find("cell")
+                _cell = _cel.text if _cel is not None else ""
+                if _drc_item_is_foundry_stdcell(_rule, _cell):
+                    stdcell += 1
+                else:
+                    user += 1
+                _el.clear()
+            elif _el.tag == "items":
+                seen_items = True
+    except ET.ParseError:
+        return None
+    if not seen_items:
+        return None
+    return (user, stdcell)
+
+
 def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     """Return `(user_routing, foundry_stdcell_excluded)` DRC violation counts in
     a report body, or None if a count cannot be determined. Three dialects,
@@ -863,10 +937,21 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
         # was graded CLEAN if any "N violations"-shaped sentence existed
         # anywhere in the bytes — the exact injection this function was written
         # to close, re-entered through the parse-failure door.
+        # A body at/over expat's single-call length limit crashes
+        # `ET.fromstring` with OverflowError (see `_EXPAT_SINGLE_BUFFER_MAX`);
+        # stream it instead so the checker returns a verdict rather than
+        # crashing. Below the limit the ORIGINAL in-memory path is unchanged,
+        # byte-for-byte, so every existing corpus report is graded identically.
+        if len(body) > _EXPAT_SINGLE_BUFFER_MAX:
+            return _count_rdb_items_streaming(body)
         try:
             root = ET.fromstring(body)
         except ET.ParseError:
             return None
+        except OverflowError:
+            # Under the char threshold but over expat's BYTE limit (a multibyte
+            # encoding), or an allocation ceiling: stream rather than crash.
+            return _count_rdb_items_streaming(body)
         items = root.find(".//items")
         if items is None:
             return None
@@ -935,6 +1020,49 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _drc_tool_final_violation_count(text: str) -> Optional[int]:
+    """The TOOL's own last word on its violation count, or ``None``.
+
+    THE DEFECT THIS CLOSES (63x8 artefact finding, step 21 / dimension 2).
+    ``reports/phase3/drc_router.rpt`` carries BOTH a runner-written summary at
+    the top AND the router's own transcript below it. `_drc_real_violation_
+    count` reads the summary and stops. MEASURED on the published run named by
+    the ledger entry ART-ROUTER-FINAL-ITERATION, rewriting the router's FINAL
+    detailed-route iteration from ``Number of violations = 0`` to ``= 12`` and
+    leaving the summary alone::
+
+        drc_report_check . --mode drc --under ... --json ...
+            -> rc=0   real_violation_total=0
+
+    A routed design finishing with 12 unresolved violations, certified clean,
+    with the contradicting number sitting in the file the gate had just parsed.
+    The same gate on the same file DOES redden when the SUMMARY is edited — so
+    the green was a statement about the runner's arithmetic, not the router's.
+
+    THE GRAMMAR IS IMPORTED, NOT RE-AUTHORED. `_sdf.router_iter_last_count` is
+    the one implementation `phase3_one_shot_runner._drt_final_violations` and
+    `signoff_audit`'s plain-text reader already share, and its module comment
+    says why: three private copies of it is how the readers of one report came
+    to return different numbers for it. A fourth copy here would be the same
+    mistake with this defect's name on it — and it would be the WORSE fourth
+    copy, because a cross-check that reads a different grammar from the runner
+    it is checking would raise contradictions that are its own.
+
+    That parser also owns the two facts a hand-rolled pattern gets wrong: the
+    count is per-ITERATION and falls as the router converges, so only the LAST
+    is a verdict; and an older build spells the same tally
+    ``Completing 100% with N violations``, which must be an EXCLUSIVE fallback
+    or one report is counted twice.
+
+    Returns ``None`` when the body carries no router-iteration grammar at all —
+    a KLayout RDB, an SVRF tally, a foundry deck transcript. That is NOT a zero
+    and must never be collapsed to one: it means this report has no tool-final
+    word to corroborate against, and `_check_drc` discloses that as an
+    uncorroborated file rather than crediting the silence as agreement.
+    """
+    return _sdf.router_iter_last_count(text)
+
+
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
@@ -970,6 +1098,13 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # the sign-off policy can judge it. See `drc_report_check --signoff`.
     producers: List[dict] = []
     unreadable: List[str] = []
+    # THE TOOL'S OWN FINAL WORD, alongside the summary that claims to report it.
+    # Both are recorded per file and BOTH are disclosed, so a reader never has
+    # to take the gate's word for which one the number came from.
+    tool_total = 0
+    summary_total = 0
+    tool_corroborated = 0
+    contradictions: List[dict] = []
 
     for fp in files:
         try:
@@ -1001,6 +1136,42 @@ def _check_drc(project_dir: Path) -> AuditResult:
             determined_files += 1
             _user_n, _std_n = n
             stdcell_excluded += _std_n
+            summary_total += _user_n
+            # --- THE TOOL'S OWN OUTPUT IS THE AUTHORITY --------------------
+            # The count above came from a SUMMARY line. Where the same report
+            # also quotes the tool's own terminal count, the two are statements
+            # of one quantity and a disagreement between them is a FINDING in
+            # its own right — never a tie broken silently in the summary's
+            # favour. A runner that mis-summarises its own tool must not be
+            # invisible, in either direction.
+            _tool_n = _drc_tool_final_violation_count(text)
+            if _tool_n is not None:
+                tool_corroborated += 1
+                tool_total += _tool_n
+                if _tool_n != _user_n:
+                    contradictions.append({
+                        "file": _rel(fp, project_dir),
+                        "summary_says": _user_n, "tool_says": _tool_n})
+                    result.findings.append(Finding(
+                        rule="DRC_SUMMARY_CONTRADICTS_TOOL", severity="ERROR",
+                        message=(
+                            f"the summary line in this report says "
+                            f"{_user_n} violation(s) and the TOOL's own final "
+                            f"iteration in the same file says {_tool_n}. One "
+                            f"of the two is wrong and nothing here can say "
+                            f"which, so nothing is certified: a post-route DRC "
+                            f"verdict is only as good as the agreement between "
+                            f"the tool that measured it and the summary that "
+                            f"republishes it. The gating total below takes the "
+                            f"LARGER of the two."),
+                        file=str(fp)))
+                # Fail-safe direction, and the reason it is safe to take: a
+                # disagreement is ALREADY an ERROR above, so the maximum never
+                # decides a verdict the tool-authority reading would not also
+                # decide. It only decides the NUMBER reported, and reporting
+                # the smaller of two irreconcilable counts is the one choice
+                # that can grade a dirty design clean.
+                _user_n = max(_user_n, _tool_n)
             if _user_n > 0:
                 real_total += _user_n
                 if not worst_file:
@@ -1100,12 +1271,30 @@ def _check_drc(project_dir: Path) -> AuditResult:
                      f"in the {real_total} user-routing violation(s) the "
                      f"met2+/via2+ honesty gate reports. REVIEW REQUIRED."),
             file=best_file))
+    # `contradictions` gates EXPLICITLY rather than by relying on the maximum
+    # above having made `real_total` non-zero. It always will today — two counts
+    # that disagree cannot both be zero — but a verdict that depends on that
+    # coincidence would be silently undone by any later change to how the total
+    # is formed, and this is the whole decision being added.
     result.passed = (determined_files > 0 and real_total == 0 and authentic
-                     and not unreadable)
+                     and not unreadable and not contradictions)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
                       "real_violation_total": real_total,
+                      # BOTH numbers, always, so a reader can see which one the
+                      # gating total came from instead of inferring it.
+                      "summary_violation_total": summary_total,
+                      "tool_violation_total": tool_total,
+                      # The corroboration DENOMINATOR: of the reports that
+                      # yielded a count, how many also quoted the tool's own
+                      # final word to check it against. A report with no tool
+                      # transcript is not corroborated and is not pretended to
+                      # be — see `tool_uncorroborated_files`.
+                      "tool_corroborated_files": tool_corroborated,
+                      "tool_uncorroborated_files": (determined_files
+                                                    - tool_corroborated),
+                      "tool_contradictions": contradictions,
                       "foundry_stdcell_excluded": stdcell_excluded,
                       "producers": producers,
                       "unreadable_files": len(unreadable),
@@ -1620,18 +1809,14 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
 # about itself. A post-route summary cannot be substantiated by pre-layout
 # reports, and a pre-layout summary cannot be substantiated by post-route
 # ones. chip/PDK-AGNOSTIC: flow-stage vocabulary only, no chip or tool name.
-_STA_BASIS_SCOPE_TOKENS = {
-    "PRE_LAYOUT": ("pre_pnr", "pre-pnr", "prepnr", "pre_layout", "pre-layout",
-                   "prelayout", "pre_route", "pre-route", "pre_floorplan"),
-    "POST_ROUTE": ("post_route", "post-route", "postroute", "post_pnr",
-                   "post-pnr", "postpnr", "post_layout", "post-layout",
-                   "postlayout"),
-}
-#: The `STA_BASIS: <VALUE>` stamp `_emit_multi_corner_sta` / `_emit_spef_sta`
-#: write into the report body. Read as a PREFIX so a new suffix (the emitter
-#: already ships `POST_ROUTE_SPEF` and `POST_ROUTE_NO_SPEF`) needs no change.
-_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
-                                 re.M)
+# The token table and the stamp reader now live in `programs/_sta_basis.py`,
+# imported rather than restated. They were duplicated into two other changes,
+# and across a 24-stamp corpus the copies disagreed with this one on 7 — the
+# copies dropped the prefix NORMALISATION and returned the raw capture, so
+# `POST_ROUTE_SPEF` never equalled the canonical `POST_ROUTE` any consumer
+# compares against. Aliased here so every existing reference keeps working.
+_STA_BASIS_SCOPE_TOKENS = _sta_basis.BASIS_TOKENS
+_STA_BASIS_STAMP_RE = _sta_basis.STAMP_RE
 #: A report that says, in its own header, that its number was COPIED or
 #: APPROXIMATED from a post-PnR run. Keyed on the SELF-DISCLOSURE — both a
 #: derivation verb and a post-layout source — never on the emitter's version
@@ -1682,15 +1867,12 @@ def _scope_declared_basis(project_dir: Path) -> Optional[str]:
 
 
 def _report_declared_basis(text: str) -> Optional[str]:
-    """The basis a report DISCLOSES ABOUT ITSELF, from its `STA_BASIS:` stamp."""
-    m = _STA_BASIS_STAMP_RE.search(text)
-    if not m:
-        return None
-    val = m.group(1).upper()
-    for basis, toks in _STA_BASIS_SCOPE_TOKENS.items():
-        if any(val.startswith(t.replace("-", "_").upper()) for t in toks):
-            return basis
-    return None
+    """The basis a report DISCLOSES ABOUT ITSELF, from its `STA_BASIS:` stamp.
+
+    Delegates to `_sta_basis.declared_basis` — the single reader. Kept as a
+    module-level name because three call sites below and several tests import
+    it; the behaviour is unchanged."""
+    return _sta_basis.declared_basis(text)
 
 
 def _self_discloses_post_layout_derivation(text: str) -> bool:
@@ -1725,6 +1907,56 @@ def _self_discloses_post_layout_derivation(text: str) -> bool:
     head = " ".join(block)
     return (any(v in head for v in _STA_DERIVATION_VERBS)
             and any(s in head for s in _STA_POST_LAYOUT_SOURCES))
+
+
+#: `_report_declared_basis` / `_scope_declared_basis` (this file, via
+#: `_sta_basis`) speak "PRE_LAYOUT" / "POST_ROUTE". `sta_corner_record_
+#: completeness_check` (`_sta_slack`) speaks "PRE_LAYOUT" / "SIGNOFF" for the
+#: identical two concepts. One name each, so a caller crossing the boundary
+#: cannot typo a comparison that silently never matches.
+_BASIS_TO_SLACK_BASIS = {"POST_ROUTE": "SIGNOFF", "PRE_LAYOUT": "PRE_LAYOUT"}
+
+
+def _signoff_basis_corners_elsewhere(project_dir: Path, declared_basis: str) -> int:
+    """How many DISTINCT (axis, corner) pairs has ANY evidence this project's
+    OWN commit carries — not just per_corner/ — actually measured at
+    *declared_basis*?
+
+    WHY THIS EXISTS. `_emit_multi_corner_sta` (the per_corner/ writer) is
+    called twice: once pre-layout (Step 10, unconditional) and once post-route
+    — but the post-route call only fires when the project has STAGED its own
+    `input/pdk/liberty/*.lib`, which no default run does. A default run's real
+    post-route multi-corner sign-off instead comes from
+    `_emit_mcorner_ocv_sta` / the multicorner-SPEF emitter, which resolve their
+    corners through `_resolve_signoff_corner_libs` — the container's own PDK
+    corners, auto-discovered, no staging required — and write
+    `sta_mcorner_ocv.rpt` / the multicorner-SPEF report, NEVER per_corner/. So
+    per_corner/ sits at its Step-10 pre-layout snapshot forever on a default
+    run, while real post-route evidence exists a directory over.
+
+    `sta_corner_record_completeness_check` already reads BOTH sources (that is
+    its entire job — see its own module docstring) and already resolves each
+    corner's basis correctly (an un-stamped `sta_mcorner_ocv.rpt` defaults to
+    its own BASIS_SIGNOFF, since that emitter only ever runs post-route). This
+    reuses that resolution rather than re-deriving it a second, possibly
+    disagreeing way.
+
+    Fail-safe: any exception (unreadable declarations, a project shape this
+    reader does not recognise) returns 0 — the STA_CORNER_BASIS_MISMATCH
+    caller then falls back to per_corner/ alone, exactly today's behaviour.
+    """
+    target = _BASIS_TO_SLACK_BASIS.get(declared_basis)
+    if target is None:
+        return 0
+    try:
+        decl = _sta_slack.read_declarations(project_dir)
+        records = _sta_slack.read_records(project_dir, decl)
+    except Exception:
+        return 0
+    return len({
+        key for key, rec in records.items()
+        if target in (rec.get("basis_used") or {}).values()
+    })
 
 
 def _check_sta(project_dir: Path) -> AuditResult:
@@ -1981,11 +2213,25 @@ def _check_sta(project_dir: Path) -> AuditResult:
     _contradicting = (0 if declared_basis is None else sum(
         n for b, n in basis_distinct.items()
         if b not in (declared_basis, "UNDECLARED")))
-    if declared_basis is not None and _contradicting and corner_distinct_matching < 2:
+    if (declared_basis is not None and _contradicting and corner_distinct_matching < 2
+            and _signoff_basis_corners_elsewhere(project_dir, declared_basis) < 2):
         # The item this closes: a POST_ROUTE summary substantiated by
         # PRE_LAYOUT corner reports (and the mirror case). The per_corner
         # directory IS a multi-corner claim — for THIS step it is a broken
         # one, so it fails exactly as an empty dir or identical copies do.
+        #
+        # UNLESS real sign-off evidence exists OUTSIDE per_corner/ — see
+        # `_signoff_basis_corners_elsewhere`, the exception this ONE clause
+        # adds. per_corner/ is populated pre-layout by every run and refreshed
+        # post-route ONLY when a caller stages `input/pdk/liberty/*.lib`
+        # itself; a default run's real post-route multi-corner sign-off lands
+        # in `sta_mcorner_ocv.rpt` / the multicorner-SPEF report instead,
+        # discovered via the container's own PDK corners
+        # (`_resolve_signoff_corner_libs`), and per_corner/ is simply never
+        # touched again. MEASURED (spm x sky130A/gf180mcuD, 2026-08-07): a
+        # real post-route run with `sta_corner: all analyzed sign-off corners
+        # MET` still failed this check on per_corner/'s untouched Step-10
+        # pre-layout snapshot alone.
         corners_ok = False
         result.findings.append(Finding(
             rule="STA_CORNER_BASIS_MISMATCH", severity="ERROR",
@@ -2241,8 +2487,17 @@ def main(argv: list = None) -> int:
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:
-        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(report_json)
+        # #1082 — the final filename exists ONLY IF this audit completed. This
+        # one write site is the declared-output writer behind six sign-off gates
+        # (drc / antenna / em / ir_drop / sta / lvs `_report_check`), so the
+        # invariant lands for all six here rather than six times over.
+        #
+        # `open(path,'w')` truncates at open, so the previous line left a 0-byte
+        # or partial file under the FINAL name whenever this process died
+        # mid-write — measured with a real SIGKILL: `exists=True size=12
+        # content='{"partial": '`. A downstream consumer opening that cannot tell
+        # it from a complete empty report.
+        _atomic_output.atomic_write_text(args.json, report_json)
 
     print(report_json)
     return 0 if result.passed else 1
