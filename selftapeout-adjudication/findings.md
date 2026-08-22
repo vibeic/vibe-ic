@@ -7184,3 +7184,56 @@ in eleven hours. **Without the row, the report would have gone on citing a super
 and claiming a wall re-verified against it.** The row is now re-pinned to `ae78abb28`,
 and the pin being a literal is CORRECT here — unlike J87's self-referential one, a moving
 main is exactly the finding, and `MOVED` is the signal working.
+
+---
+
+## J92 — the audit nobody had run on this report: does any SUPERSEDED number still stand as current?
+
+This report's method is to correct a figure **where it stands** rather than erase it, so a
+retired number appearing many times is expected and correct. **What would be a real
+defect is one occurrence with no supersession marker near it** — a stale number reading as
+live, in a document whose entire authority is that its numbers are measured. Nothing had
+checked.
+
+Nine retired figures, every occurrence, across 3 784 lines:
+
+```
+5.875 (21x)  5.963 (12x)  6.165 (15x)  4.532 (2x)  2.05x (5x)  2.08x (3x)
+2.154x (5x)  40.6x (1x)   "67 heads" (4x)
+```
+
+**Result: every occurrence of every one of them sits in a context that marks it as
+superseded. No stale number stands as current.** The 82 appearances are corrections,
+not residue — which is what "correct it where it stands" is supposed to produce, and is
+now measured rather than assumed.
+
+### The one flag, and why it is not one
+
+`RESULT.md:1811` carries `5.875` with no marker anywhere near it:
+
+```
+core 5.123 mm (die 5153)  INITIAL_DPL_LEGALIZE_OK disp=full-die   self-tapeout die 5.875 mm
+```
+
+**That is a different quantity.** It is the 5153 arm's own core (5.123 mm) plus the
+2 × 376 µm pad ring — a number that was never superseded and needs no marker. It shares
+its digits with the retired build-to figure.
+
+**And the collision is causal rather than coincidental**, which is the part worth keeping:
+J65 found the old build-to **was** that probe core's die, which is precisely why it was an
+iterate and not a fixed point. The two numbers are equal because one was derived from the
+other. So the audit tripped on the exact numerical fingerprint of the defect J65 had
+already found and fixed.
+
+**A figure-based audit cannot tell two quantities apart when they share a value.** The
+collision is therefore named in the checker with its reason, rather than the pattern being
+widened until nothing trips — widening it would have made the audit pass by seeing less,
+which is the failure mode this whole report has been hunting all day (J83's tolerance
+larger than its signal, J86's `at-or-over-50-sites=0`, J89's 8-ports-against-77-pads).
+
+### What moves
+
+**Nothing.** No verdict, no tier, no number. What this adds is that a property the report
+relies on — *a corrected number does not leave live copies behind* — is now checked by a
+program instead of by the care of whoever last edited it, and it passes with one
+documented collision.

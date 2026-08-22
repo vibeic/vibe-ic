@@ -447,7 +447,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J91). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J92). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
