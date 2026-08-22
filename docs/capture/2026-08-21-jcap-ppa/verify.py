@@ -866,8 +866,25 @@ def _intro_counts(lines):
 
 _LINES = MD.split("\n")
 _im, _iw = _intro_counts(_LINES)
-control("intro-count", bool(_im) and _intro_counts(
-    [l.replace("Seven more classes", "Four more classes") for l in _LINES])[1] != [])
+# The mutation is DERIVED, not a literal. An earlier version hard-coded the
+# opener's wording; renaming that sentence made the mutation match nothing, the
+# control could no longer prove the check fires, and it said so -- which is the
+# guard-whose-target-moved class, caught by the guard. Now it rewrites whatever
+# opener it finds to a DIGIT that is certainly wrong -- a spelled word outside
+# the WORDS table parses to nothing and would break the control a second way.
+def _miscount(lines):
+    out = []
+    done = False
+    for l in lines:
+        m = re.match(r"^([A-Z][a-z]+|\d+)(\s+more\b)", l)
+        if m and not done:
+            done = True
+            l = "99" + m.group(2) + l[m.end():]
+        out.append(l)
+    return out
+
+
+control("intro-count", bool(_im) and _intro_counts(_miscount(_LINES))[1] != [])
 check("a sentence introducing a table counts the rows under it",
       not _iw, f"{len(_im)} introduced table(s), mismatched {_iw}")
 
