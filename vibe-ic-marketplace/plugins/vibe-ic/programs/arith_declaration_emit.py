@@ -5,8 +5,14 @@ Derives the six fields required by L7 §7.0 from already-present artifacts
 (RTL header + phase1/generated_docs JSON + calibration artifacts).
 Writes plugin_output/declaration.json.
 
-FAIL-CLOSED: if any required field cannot be derived, prints the reason,
-writes NO file, and exits non-zero.
+FAIL-CLOSED: if any required field cannot be derived, this program prints the
+banner `arith_declaration_emit: FAIL_CLOSED` on stderr followed by one
+`  - <field_key>: <reason>` line per underivable field, writes NO file, and
+exits with rc EXACTLY 1.  The banner + rc==1 pair is the contract that lets a
+caller (or a test) distinguish "the program ran and refused" from "the program
+never ran" — a deleted file exits rc=2 ("can't open file") and an
+import/syntax error exits rc=1 with a traceback and no banner.  Neither can
+counterfeit a fail-closed refusal.
 
 Fields emitted:
   bit_order           — from RTL header comment  (LSB_first / MSB_first)
@@ -26,6 +32,10 @@ import json
 import re
 import sys
 from pathlib import Path
+
+# Stable stderr banner printed on the fail-closed path (and ONLY there).
+# Keyed on by tests; see the module docstring for why rc alone is not enough.
+FAIL_CLOSED_BANNER = "arith_declaration_emit: FAIL_CLOSED"
 
 # ---------------------------------------------------------------------------
 # Field derivation helpers
@@ -89,7 +99,7 @@ def _derive_size_param(rtl_text: str) -> int | None:
 
 def _derive_multiplier_algorithm(rtl_text: str) -> str | None:
     """Extract algorithm description from RTL header comment."""
-    m = re.search(r'[Aa]lgorithm\s*[:\-–]\s*(.+)', rtl_text)
+    m = re.search(r'[Aa]lgorithm\s*[:\-–=]\s*(.+)', rtl_text)
     if m:
         raw = m.group(1).strip().rstrip(".")
         # Normalise to identifier-safe string (lowercase, spaces -> underscores)
@@ -141,6 +151,31 @@ def _derive_latency_from_gls(run_dir: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _oracle_manifest(run_dir: Path) -> dict | None:
+    """Load arith_oracle_manifest.json from either known location."""
+    for candidate in [
+        run_dir / "phase2" / "stage1" / "sim_full_stack" / "arith_oracle_manifest.json",
+        run_dir / "sim" / "arith_oracle_manifest.json",
+    ]:
+        if not candidate.exists():
+            continue
+        try:
+            d = json.loads(candidate.read_text())
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
+
+
+def _derive_bit_order_from_oracle_manifest(run_dir: Path) -> str | None:
+    """MEASURED serial input bit-order, written by the runner from the oracle
+    TB's framing search. None when the TB established no single framing."""
+    d = _oracle_manifest(run_dir) or {}
+    v = d.get("calibrated_bit_order")
+    return v if v in ("LSB_first", "MSB_first") else None
+
+
 def _derive_latency_from_oracle_manifest(run_dir: Path) -> int | None:
     """Try to read framing offset from arith_oracle_manifest.json.
 
@@ -158,6 +193,14 @@ def _derive_latency_from_oracle_manifest(run_dir: Path) -> int | None:
             d = json.loads(candidate.read_text())
         except Exception:
             continue
+        # MEASURED framing first. `calibrated_latency` is written by the
+        # runner from the oracle TB's own framing search (a real measurement
+        # against an independently computed golden). `declared_latency` is
+        # only ever a copy of declaration.json — the file this program
+        # writes — so preferring it would close a dependency cycle and, for
+        # any IC whose spec requires declaration.json, deadlock the flow.
+        if isinstance(d.get("calibrated_latency"), int):
+            return d["calibrated_latency"]
         if isinstance(d.get("declared_latency"), int):
             return d["declared_latency"]
         # Framing string encodes the winning offset as "offset=N" sometimes
@@ -190,15 +233,21 @@ def main(argv: list[str] | None = None) -> int:
     # --- RTL ---
     rtl_path = _find_rtl(run_dir)
     if rtl_path is None:
-        errors.append("Cannot locate RTL file in phase2/stage1/rtl/")
+        errors.append("rtl_source: cannot locate RTL file in phase2/stage1/rtl/")
         rtl_text = ""
     else:
         rtl_text = rtl_path.read_text(errors="replace")
 
     # --- bit_order ---
-    bit_order = _derive_bit_order(rtl_text)
+    # MEASURED value wins over the RTL header comment: the comment is prose an
+    # author can get wrong, while `calibrated_bit_order` is the framing the
+    # oracle TB proved reassembles the DUT stream to the golden.
+    bit_order = _derive_bit_order_from_oracle_manifest(run_dir)
     if bit_order is None:
-        errors.append("bit_order: no LSB/MSB-first marker found in RTL header")
+        bit_order = _derive_bit_order(rtl_text)
+    if bit_order is None:
+        errors.append("bit_order: no LSB/MSB-first marker found in RTL header "
+                      "and no calibrated_bit_order in arith_oracle_manifest.json")
 
     # --- reset_polarity ---
     reset_polarity = _derive_reset_polarity(rtl_text)
@@ -213,7 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     # --- multiplier_algorithm (informational) ---
     multiplier_algorithm = _derive_multiplier_algorithm(rtl_text)
     if multiplier_algorithm is None:
-        errors.append("multiplier_algorithm: Algorithm: line not found in RTL header")
+        errors.append("multiplier_algorithm: no `algorithm <:|-|=> <value>` "
+                      "line found in RTL header")
 
     # --- integer_encoding ---
     integer_encoding = _derive_integer_encoding(run_dir)
@@ -233,9 +283,12 @@ def main(argv: list[str] | None = None) -> int:
             "run calibration first"
         )
 
-    # FAIL-CLOSED: do not emit a partial file
+    # FAIL-CLOSED: do not emit a partial file.  The banner is emitted ONLY
+    # here, so its presence together with rc==1 is proof this program ran and
+    # refused — see the module docstring.
     if errors:
-        print("arith_declaration_emit: FAIL — required fields not derivable:", file=sys.stderr)
+        print(f"{FAIL_CLOSED_BANNER} — required field(s) not derivable:",
+              file=sys.stderr)
         for e in errors:
             print(f"  - {e}", file=sys.stderr)
         print("No file written.", file=sys.stderr)

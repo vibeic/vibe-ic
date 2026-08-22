@@ -1,0 +1,7 @@
+{
+  "program": "ppa_problem_integrity_check",
+  "baseline": "/home/reyerchu/_jxlayer/records/trials/b000/contract.json",
+  "candidate": "/home/reyerchu/_jxlayer/records/trials/z21/contract.json",
+  "rc": 0,
+  "findings": []
+}

@@ -36,6 +36,9 @@ from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
 
+import _spec_floor_keys as _sfk   # noqa: E402  (re #495 Stage 0)
+import _class_template_resolve as _ctr   # noqa: E402  (re #495 Stage 3)
+
 try:
     import yaml
 except ImportError:
@@ -70,20 +73,33 @@ def count_l10_test_cases(l10: dict) -> tuple[int, int]:
 
 
 def count_l11_tables(l11: dict) -> int:
+    """Count L11 calibration tables.
+
+    re #495 Stage 0 — the incumbent read was ``L11["tables"]``, a key that
+    occurs in 0 of the 201 tracked doc-sets: the L11 emitter writes
+    ``calibration_tables`` (the ``tables`` spelling belongs to L15, a
+    different layer). ``tables`` is kept first so any doc that does carry it
+    reads exactly as before."""
     if not l11:
         return 0
-    t = l11.get("tables")
-    if isinstance(t, dict):
-        return len(t)
-    if isinstance(t, list):
+    _key, t = _sfk.first_nonempty(l11, _sfk.L11_CALIBRATION_TABLE_KEYS)
+    if isinstance(t, (dict, list)):
         return len(t)
     return 0
 
 
 def count_l12_sequences(l12: dict) -> tuple[int, list, list]:
+    """Count L12 behavioural sequences, and collect their ids / categories.
+
+    re #495 Stage 0 — the incumbent read was ``L12["sequences"]`` (written by
+    a handful of protocol synths, 11/201); the mainline L12 emitter writes
+    ``behavioral_sequences`` (22/201 populated), which was unread. ``kinds``
+    is restricted to ``list`` so a dict-shaped ``sequences`` — which this
+    counter cannot consume and returned 0 for — no longer shadows a
+    list-shaped ``behavioral_sequences``."""
     if not l12:
         return 0, [], []
-    seqs = l12.get("sequences") or []
+    _key, seqs = _sfk.first_nonempty(l12, _sfk.L12_SEQUENCE_KEYS, kinds=(list,))
     if not isinstance(seqs, list):
         return 0, [], []
     ids = []
@@ -97,20 +113,17 @@ def count_l12_sequences(l12: dict) -> tuple[int, list, list]:
 
 def load_class_template(class_path: str, class_kb: Path) -> dict:
     tdir = class_kb / "templates"
-    cand = tdir / f"{class_path}.yaml"
-    if not cand.exists():
-        # Fallback: prefer the most-generic ("any-ic") when the specific class has
-        # no template; cable-side-id-ic's floor is <benchmark>-specific and must NOT be
-        # applied to arbitrary ICs.
-        for fb in ("any-ic",):
-            c = tdir / f"{fb}.yaml"
-            if c.exists():
-                cand = c; break
-    if not cand.exists():
-        # chip-AGNOSTIC silent-skip: when class template is absent (e.g.
-        # any-ic / generic project), gate has no floor to enforce.
+    if not tdir.exists():
         return None
-    return _load_yaml(cand)
+    # re #495 Stage 3 — own template, else the nearest templated ANCESTOR in
+    # the class tree, else the vacuous `any-ic`. The incumbent chain skipped
+    # step 2 entirely, so every one of the 20 template-less nodes silently
+    # dropped to a NO-floor template even when the tree named an ancestor that
+    # has one (`hash-function` -> `crypto-engine`, `spi-peripheral` ->
+    # `protocol-ic`). `any-ic` remains the terminal fallback so a class the
+    # tree does not contain still cannot pick up a protocol-specific floor.
+    r = _ctr.resolve(class_path, class_kb, neutral_chain=("any-ic",))
+    return r["template"]
 
 
 def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
