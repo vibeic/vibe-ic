@@ -5310,6 +5310,46 @@ is a third cause, distinct from the `home`-root group and from the allowlist
 group, and **not previously recorded anywhere in this document.**
 
 
+## M99 — M98's "third cause" is the FIRST cause propagating. Corrected within the hour
+
+M98 closed by naming two newly-surfaced reds as *"a third cause, distinct from the
+`home`-root group and from the allowlist group, and not previously recorded
+anywhere."* **I read the message and not its payload. It is not a third cause.**
+
+The full assertion names its own source:
+
+> the nested outcome run produced red test report(s) **outside the matrix cell
+> join**. Its rc=1 is not completely represented by the cell census, so this run
+> is **NORECORD**: [`test_d3_evidence_is_live_wherever_the_run_root_exists`,
+> `test_d3_the_compliance_audit_does_not_create_declared_outputs`]
+
+**Both named reports are D3 reds that the corpus pointer revealed** — two of the
+exact five in M96. So `test_matrix_63x8_coverage.py` is not failing of its own
+accord; **it is refusing to certify a census while a nested run produced reds it
+cannot account for.** That is the gate working, not a defect in it.
+
+**Corrected accounting for what the pointer surfaces:**
+
+    5 revealed in D3          root
+    2 revealed in 63x8        DOWNSTREAM of two of those five
+    -------------------------------------------------
+    7 test failures, 5 causes, ONE group
+
+**And the correct reading is the opposite of alarming.** A census gate that went
+green while its own nested run was red would be the defect. This one goes
+**NORECORD** and says which reports it could not place — *"could not look"
+reported as such, not as clean. Rule 9, again, implemented by the repository and
+not by me.*
+
+**Why I got it wrong, and it is the same shape as the `61 skipped`.** The failure
+message's FIRST line describes a symptom (`the nested outcome run produced red
+test report(s)`) and its payload names the cause. I grouped on the first line
+because it was distinct-sounding, and the payload was one `re.search` away. **A
+distinct-sounding message is not a distinct cause, and I have now made that
+mistake in both directions in one document** — collapsing six items into one root
+(correctly, M91) and splitting one root into a phantom third (wrongly, here).
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
