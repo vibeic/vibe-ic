@@ -60,6 +60,7 @@ Accepted with no refusal and no unrouted record.
 - [No near-duplicates — and the first number I published from a broken instrument](#no-near-duplicates--and-the-first-number-i-published-from-a-broken-instrument)
 - [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
 - [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
+- [Three check NAMES promised more than their predicates deliver](#three-check-names-promised-more-than-their-predicates-deliver)
 - [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
@@ -2149,6 +2150,32 @@ A third flag was my screen's fault, not the records': the Bucket-T record looked
 figure-free because I searched the field the Bucket-A records use, and the ladder
 puts a T record's measurement in `problem` and `bad_sample`, where it is dense
 with them. Check 46 encodes that exemption rather than repeating my mistake.
+
+## Three check NAMES promised more than their predicates deliver
+
+A control proves a check is not vacuous. It does not prove the check's **name**
+matches its strength — and a reader trusts the name, because the name is what the
+output prints. All 51 were read against their predicates, and three named a
+semantic property while testing a syntactic proxy:
+
+| the name said | the predicate did |
+|---|---|
+| every record *answers* the brief's two questions | the `(o)` and `(d)` markers are present |
+| no two patterns *restate one class* | lexical similarity below a threshold |
+| every action names predicate, population and refusal | those concepts appear in the text |
+
+None is wrong; each is weaker than it sounds. The similarity one cannot see two
+patterns restating a class in different words — which is why the closest pair in
+this batch was read by hand rather than trusted to the number. The marker one
+cannot tell a considered answer from the letter `y`. The third is the
+buildability rubric, whose limit is measured above: it passes on *"should be
+checked across all the relevant cases and reported when it fails."*
+
+**Two have been renamed to what they test**, so the output can no longer imply
+more than it establishes, and the third carries its limitation in the section
+that quotes it. That is the cheaper repair than strengthening them: a check that
+honestly reports a syntactic result is useful, and a check whose name claims a
+semantic one quietly retires the reading that would catch the difference.
 
 ## The verifier audited as an artefact, not used as one
 

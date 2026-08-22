@@ -100,7 +100,7 @@ control("similarity", sim(_b, _near) > 0.85 and sim(_b, RECS[7]["pattern"]) < 0.
 worst = max((sim(x["pattern"], y["pattern"]), x["bucket"] + y["bucket"])
             for x, y in __import__("itertools").combinations(
                 [r for r in RECS if str(r.get("pattern", "")).strip()], 2))
-check("no two patterns restate one class", worst[0] < 0.60, f"max {worst[0]:.2f}")
+check("no two patterns are lexically near-duplicate (a conceptual restatement in other words is invisible here)", worst[0] < 0.60, f"max {worst[0]:.2f}")
 
 # 6. B/C/D/T honest sentence rendered verbatim in the report
 flat = " ".join(MD.split()).lower()
@@ -565,7 +565,7 @@ _secs = {m.group(1): s for s in re.split(r"^### ", MD, flags=re.M)[1:]
 control("brief-questions", all("**(z)**" not in s for s in _secs.values()))
 _no_o = sorted(k for k, s in _secs.items() if "**(o)**" not in s)
 _no_d = sorted(k for k, s in _secs.items() if "**(d)**" not in s)
-check("every record answers the brief's two questions",
+check("every record carries BOTH answer markers (not that the answers are good)",
       len(_secs) == len(RECS) and not _no_o and not _no_d,
       f"{len(_secs)} sections; missing (o): {_no_o or 'none'}; missing (d): {_no_d or 'none'}")
 
