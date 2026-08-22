@@ -2,6 +2,13 @@
 
 **Host** 8hd-3 · **date** 2026-08-22 · **agent** `jverify`
 
+**Two copies, and this is the canonical one.** The brief asked for
+`/tmp/jverify_done.txt`; that file sat unchanged through a day of corrections
+and was actively misleading by the end — wrong F12 and F9 figures, a standing
+line that had become false, and no knowledge that the branches had landed. It
+has been refreshed to a copy of this document with a header naming what it had
+got wrong. If the two ever disagree again, this one is right.
+
 **Standing:** an independent read of `origin/jdistmat/matrix-distil` and
 `origin/capture/jdistchip-chip-path-rules`, asked for by the person about to land
 them. The brief's hard rules were: report only, do not push to `main`, do not bump
