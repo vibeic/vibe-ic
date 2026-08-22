@@ -2531,7 +2531,7 @@ four, and not one survived unchanged.**
 | A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. The published `layer` field is the discriminator |
 | A-17 | 6804 absolute, **2 roots** | **0 outside a run tree** | **swept**: no absolute path is forced, so the declared-convention check has an empty false-positive population and the "rewriting breaks provenance" objection does not apply. Earlier correction stands: mixed WITHIN producers, 6804/6804 host-prefixed |
 | A-18 | objective = **1 metric**; feasibility names **6** families | **spare cells in neither** | **swept**: removing them lowers the area the ranking optimises AND passes a gate that has no term for them — while the artefact carries a protection block asserting they cannot be stripped |
-| A-19 | — | order INVERTED | the cheap rung's top candidate places third |
+| A-19 | 21 trials | **21 empty proxy files** | **swept**: a check keyed on the cheap rung's own artefact is born vacuous — it is empty in every trial. Build from the predicted and measured orders, and make emptiness a refusal |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
 | A-22 | 216 imports | 51 | narrowed to true third-party; one package, proven fatal |
@@ -2699,8 +2699,13 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building the one unswept rule** — A-19, which is exactly
-   the rows carrying no *before* figure in the sweep table. **Four of the nine are now swept**, and the yield argues for
+3. **All nine previously unswept rules are now swept — and not one survived
+   unchanged.** Two overturned their own row, one bounded a rule's scope, one
+   settled where a check belongs, one unblocked a repair, one found a false
+   positive the rule would produce on its own motivating document, one showed a
+   check would be born vacuous, and one passed on a population twice this batch.
+   The base rate for sweeping is now 9 of 9; sweep any rule this batch gains.
+ **Four of the nine are now swept**, and the yield argues for
    the rest: two overturned their own row, one survived on a population twice
    the batch, and one settled a design question the record had argued on
    reasoning alone. **A-1 and A-2 were two of the nine and have now

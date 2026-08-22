@@ -689,11 +689,21 @@ _m = re.search(r"Sweep before building (?:each of )?the (\w+) unswept rules?", M
 _named = re.search(r"unswept rules?\*\* — ([A-Z0-9, \-\n]+?), which (?:are|is) exactly",
                    MD, re.S)   # singular too, for when one rule is left
 _listed = sorted(set(re.findall(r"A-\d+", _named.group(1))) if _named else set(), key=_key)
-control("unswept", bool(_rows) and bool(_m))
-check("the handoff's unswept list is the sweep table's unswept rows",
-      bool(_m) and WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
-      (f"prose says {_m.group(1)} ({len(_listed)} named), table has {len(_unswept)}"
-       if _m else f"the handoff sentence did not match; table has {len(_unswept)}"))
+# TERMINAL CASE. Every row now carries a sweep, so there is no list to name and
+# the old anchor sentence is gone. Requiring it would fail forever on a finished
+# job; dropping the check would stop noticing if a NEW unswept rule appeared. So
+# the check switches on the table: zero unswept demands the handoff SAY so, and
+# any non-zero demands the named list match.
+control("unswept", bool(_rows) and (bool(_m) or not _unswept))
+_done = re.search(r"previously unswept rules are now swept", MD) is not None
+if not _unswept:
+    check("the handoff's unswept list is the sweep table's unswept rows",
+          _done, "table has 0 unswept rows; handoff states it: %s" % _done)
+else:
+    check("the handoff's unswept list is the sweep table's unswept rows",
+          bool(_m) and WORDS.get(_m.group(1)) == len(_unswept) and _listed == _unswept,
+          (f"prose says {_m.group(1)} ({len(_listed)} named), table has {len(_unswept)}"
+           if _m else f"the handoff sentence did not match; table has {len(_unswept)}"))
 
 # 45. a bundle's directory declares a date and its emitted summary declares one
 # too, and nothing compared them. They disagree here: the batch was re-emitted
