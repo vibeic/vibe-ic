@@ -2398,16 +2398,22 @@ augments to be reported rather than applied by N agents in parallel. Derived fro
 the routing rather than remembered — the first version of this list named three
 rules against one file and was already out of date by five:
 
-    5 rules -> plugin_change_pytest_gate     A-3, A-4, A-13, A-22, A-26
+    6 rules -> plugin_change_pytest_gate     A-3, A-4, A-13, A-22, A-26, A-30
+    5 rules -> enhancement_emit              A-9, A-23, A-27, A-29, A-31
     3 rules -> ppa_head_to_head_check        A-2, A-5, A-11
-    3 rules -> ppa_search_run                A-7, A-8, A-18
-    3 rules -> enhancement_emit              A-9, A-22-adjacent, A-27
+    3 rules -> ppa_search_run                A-7, A-8, A-19
 
-* **The five test-population rules are one piece of work, not five.** A-3 and
+* **The six test-population rules are one piece of work, not six.** A-3 and
   A-4 share a helper — the relation-derived population is the input both need,
   and computing it twice is how two answers start to disagree. A-13, A-22 and
   A-26 all want the same plumbing: a walk over the test tree that knows which
-  file belongs to which layer. Build that once.
+  file belongs to which layer. Build that once. **A-30 joins them**: it is the
+  same question asked of a guard's inputs rather than of a test tree's
+  membership, and it needs the same walk to find the assertions to inspect.
+* **The five emitter rules likewise.** A-9, A-23, A-27, A-29 and A-31 all
+  constrain one program, and three of them constrain what it WRITES — the field
+  shapes, the output location and the skeleton's signature. One pass over the
+  emit path, not five.
 * **The three-rule files each want one pass, not three.** Apply them together or
   serialise them; three agents editing one file in parallel is the contention
   the skill's reporting rule exists to prevent.
@@ -2416,14 +2422,21 @@ rules against one file and was already out of date by five:
 
 The skill's rule is that a new Bucket-A guard must run CLEAN before it ships,
 because *"a guard that flags the very state you just shipped is not a guard, it's
-a bug."* That rule is about **false** positives. **12 of these 13 Bucket-A rules
-fire on this tree today, and every one of them is a TRUE positive** — each names a measured
-defect quoted in its record. **A-7 is the one that runs clean**, and it says so.
+a bug."* That rule is about **false** positives. **12 of the 13 Bucket-A rules
+that existed when this was written fire on this tree, and every one is a TRUE
+positive** — each names a measured defect quoted in its record. **A-7 was the one
+that ran clean**, and it says so. *That ratio is dated and has NOT been
+re-derived across the thirty: doing so honestly means sweeping each rule, which
+is the work the table below tracks and the handoff assigns. The count of rules
+whose sweep has actually been done is stated there, not estimated here.*
 
 ### Which rules have actually been swept, and what happened to them
 
 A record's measurement is of the DEFECT. A sweep measures the RULE — its false
-positives. **Four rules have been swept. Not one survived unchanged.**
+positives. **22 of the 31 rules in the table below carry a sweep; 9 do not**, and
+those nine are the ones the handoff tells the implementing lane to sweep before
+building. Of the sweeps actually run early in this lane, **four were the first
+four, and not one survived unchanged.**
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
