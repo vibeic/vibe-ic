@@ -369,14 +369,32 @@ def simulate(rtl_path: str, top: str, in_specs, out_name, table):
         tbp = Path(td) / "tb.sv"
         tbp.write_text("\n".join(tb) + "\n")
         binp = Path(td) / "a.out"
-        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-        cp = subprocess.run(
-            ["iverilog", "-g2012", "-o", str(binp), str(rtl_path), str(tbp)],
-            capture_output=True, text=True,
-        )
+        # An ABSENT binary must reach the TOOL_ERR this module already documents
+        # at the top ("2 = tool/usage error (disclosed, non-blocking — caller's
+        # hard iverilog gate still applies)"). Without this, `subprocess.run`
+        # raises FileNotFoundError BEFORE returning, so the verdict that exists
+        # for exactly this situation is unreachable and the caller gets a
+        # traceback instead of an answer: an oracle that could not run reads as
+        # an oracle that crashed, and `check()`'s documented contract
+        # (PASS|SKIP|BLOCK|TOOL_ERR) is broken by a fifth, undeclared outcome.
+        try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
+            cp = subprocess.run(
+                ["iverilog", "-g2012", "-o", str(binp), str(rtl_path), str(tbp)],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError as exc:
+            return ("TOOL_ERR", f"iverilog is not on PATH ({exc.strerror}); the "
+                                f"oracle could not be run — this is NOT a verdict "
+                                f"about the RTL")
         if cp.returncode != 0:
             return ("TOOL_ERR", cp.stderr[-400:])
-        cp = subprocess.run(["vvp", str(binp)], capture_output=True, text=True)
+        try:
+            cp = subprocess.run(["vvp", str(binp)], capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            return ("TOOL_ERR", f"vvp is not on PATH ({exc.strerror}); the oracle "
+                                f"compiled but could not be RUN — this is NOT a "
+                                f"verdict about the RTL")
         out = cp.stdout
         if "ORACLE_PASS" in out:
             return ("PASS", out.strip()[-600:])
