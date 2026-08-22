@@ -249,6 +249,10 @@ The two `test_repo_hygiene_parallel.py` waiver guards named above stayed green
 under the revert, exactly as this record says they would — they are guards for
 the future, and counting them as part of the red would have inflated it.
 
+This run was later rebuilt from scratch on this tree; the 7 IDs match, the
+pass count does not, and the reason is a selector gap in this run itself.
+See section 6 — it supersedes the totals above, not the IDs.
+
 The sharpest failure is the last, because the log it captures holds the entire
 defect in one place: the producer says it scanned nothing, and the very next
 lines call the corpus empty and let the DAG close 0.
@@ -705,3 +709,74 @@ and one of the two state-A variants, and said so as if it had checked the family
 It now rests on all 13 and on both variants.  A record that widens its own
 selector twice is a record whose selector can be trusted the third time; one that
 quietly kept the sample is not.
+
+### 6. The red itself, re-derived on this tree — and the one file the red's own selector left out
+
+Every number above was re-measured at least once except one: the **red**.  The
+`7 failed, 57 passed` under "Red without the fix" was carried forward from the
+run that produced it, and a record that re-derives its sweep twice and takes its
+own central claim on trust has the priority backwards.  So the revert was rebuilt
+from scratch — a throwaway detached worktree at `0d398cb04`, the three production
+files put back (`tools/ci/routed_def_corpus.py` and `tools/ci/_gate_dispatch.sh`
+to `81cd5321b`, `repo_hygiene_parallel.py` to `24a097287^`), every test kept, the
+revert committed so the tree measured CLEAN, `PYTHONDONTWRITEBYTECODE=1`.
+
+**The revert is real, checked before the tests ran:** `NO_CORPUS_RC` occurs 0
+times in the reverted producer and `GATE_DISPATCH_ABSENT_RC` 0 times in the
+reverted dispatcher.
+
+**The collapse reproduces at the producer, both states, one command each:**
+
+    reverted   A absent -> rc 0, 0 items      B read-empty -> rc 0, 0 items
+    this tree  A absent -> rc 3, 0 items      B read-empty -> rc 0, 0 items
+
+On the reverted tree the two are byte-indistinguishable, which is exactly what
+vibe-ic#1764 filed.
+
+**The red, by test ID — the set matches this record exactly, 7 for 7:**
+
+    7 failed, 74 passed in 26.72s
+
+    FAILED test_an_unconfigured_moved_corpus_is_explicit_no_corpus
+    FAILED test_the_absent_exit_code_is_one_number_in_two_languages
+    FAILED test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict
+    FAILED test_the_dispatcher_gives_absent_and_empty_different_rows
+    FAILED test_a_corpus_that_was_read_and_holds_none_says_so
+    FAILED test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND
+    FAILED test_an_absent_corpus_does_not_close_the_hygiene_dag_green
+
+All 7 are in `test_routed_def_corpus_dispatch.py` (7 of its 22).  The counts are
+compared by **ID and not by total**, because a total is the one number that moves
+for reasons that have nothing to do with the defect.
+
+**The count moved, and the reason is a selector gap in the red's own run.**
+`57 -> 74` is not a change in behaviour: 22 + 17 + 42 = 81 = 7 + 74, and the
+earlier `64` is 22 + 42.  The original red ran
+`test_routed_def_corpus_dispatch.py` and `test_repo_hygiene_parallel.py` and
+**omitted `test_corpus_location.py`** — the tests for the very module whose
+`may_be_absent` opt-in this whole ruling turns on.  This is the same weak-selector
+move as sections 2b and 5b, caught a third time, and it is recorded rather than
+quietly corrected.
+
+**Adding those 17 changes nothing, and that is the point.**  All 17 pass on the
+reverted tree and all 17 pass on this one.  `_corpus_location`'s own contract is
+untouched in both directions, which is the claim "Where I disagree with the issue"
+makes when it says the fix *leaves the opt-in standing* — that claim was argued
+there and is measured here.  `test_repo_hygiene_parallel.py` is 42 green under the
+revert, confirming that its two waiver guards are guards for the future and not
+part of the red, exactly as this record already said.
+
+**What the sharpest failure prints on the reverted tree**, the whole defect in
+four consecutive lines of one log:
+
+    [routed-def corpus] NO_CORPUS: nothing at .../benchmark-data/ic and
+    VIBE_IC_BENCHMARK_DATA is unset ... NOTHING WAS SCANNED, 0 routed DEF(s)
+    were examined and nothing is claimed about them
+       ^^ NOT CHECKED (rc 2, BLOCKING; no exemption): corpus "..." is EMPTY —
+          nothing was checked over it [0s]
+    AssertionError: the parallel hygiene DAG closed GREEN (rc 0) over a corpus
+    that was NEVER OPENED ... Got rc 0.
+    assert 0 == 2
+
+The producer says it scanned nothing; the next line calls the corpus empty; the
+DAG closes 0.  Fixed tree, same three files: 22 + 17 + 42 = 81 passed.
