@@ -64,6 +64,14 @@ Against the corpus repository's own tip, freshly fetched on 2026-08-22
 
 So the population is zero at the published tip, not merely zero in this checkout.
 
+**Read the second row with its scope attached.** `phase3/` paths under `ic/` are
+zero; repo-wide there are **444** of them, under `protocol_parity/`. The commit
+message of `0f4c0eeda` dropped that qualifier and stated "0 `phase3/` paths"
+unscoped, which is false. What follows from these rows is only that the `ic/`
+population is empty — see
+[the second correction](#second-correction-the-corpus-is-not-free-of-post-route-evidence-only-of-defs)
+for what is outside it.
+
 ### 3. It was not always zero, and it was emptied deliberately
 
 At `bcf2f94^` the corpus contained exactly one member:
@@ -130,6 +138,11 @@ verdict`, `new tool diagnostic id`) become live verdicts.
 > [the correction](#correction-the-satisfaction-condition-was-unreachable)
 > instead; list items 1-4 above are still necessary, they were just not
 > sufficient.**
+
+> **ALSO NARROWED — this list reads as if one of the cells that already reached
+> post-route could satisfy it. None of the six that did can, without being
+> republished under the `ic/<design>/v<plugin-version>_<PDK>/` layout. See
+> [the second correction](#second-correction-the-corpus-is-not-free-of-post-route-evidence-only-of-defs).**
 
 ## Decision: BLOCKING stays, and it buys no exemption
 
@@ -532,3 +545,124 @@ condition this document states can be met, in the repository it names, by the
 program it names. Before the repair the same procedure ends at
 `population: []` — which is what made the earlier version of this document
 wrong.
+
+---
+
+## Second correction: the corpus is not free of post-route evidence, only of DEFs
+
+Everything above adjudicates the population from the `ic/` tree, because that is
+the tree `routed_def_corpus._index_paths` is pointed at
+(`_index_paths(checkout / "ic")`). Scoped that way every number in it is right,
+and re-measured on 2026-08-22 against `3b58ccd42` they still are.
+
+But the sentence the LANDED adjudication of 2026-08-21 uses to justify
+`BLOCKING` is not scoped that way, and as written it is false:
+
+> "The subject of these four gates is post-route geometry on published silicon.
+> Today nothing published carries post-route geometry."
+
+**Six published cells carry post-route geometry today.** They are not under
+`ic/`, which is why every `ic/`-scoped query in this document missed them:
+
+```
+$ git ls-tree -r --name-only origin/main | grep -c 'phase3/'          444
+$ git ls-tree -r --name-only origin/main | grep -ciE '\.gds$'           6
+$ git ls-tree -r --name-only origin/main | grep -c '/pnr/'             62
+$ git ls-tree -r --name-only origin/main | grep -c 'routed\.def'        0
+```
+
+All 444 sit under `protocol_parity/<design>/`. Six of those designs carry a
+completed back end: `phase3/stage4/gds/chip_top.gds`, `routed.drc.rpt`,
+`stage3/extracted/chip_top.spef`, `stage3/sta/`, `stage3/lvs/` with per-cell
+`.ext` extractions, `spare_cells.json`, `cts/clock_tree.rpt`.
+
+### And each of the six carries a receipt for the exact file the corpus selects on
+
+`reports/phase3/pnr/def_progression.json`, published in every one of them,
+records the routed DEF as a stage that **exists**, with its size and digest:
+
+| cell | recorded path | size | components | `has_routing` | sha256 |
+|---|---|---|---|---|---|
+| `protocol_parity/espi` | `phase3/stage3/pnr/routed.def` | 854,871 B | 3166 | true | `00ae72d6b35c07dc…` |
+| `protocol_parity/interlaken` | `phase3/stage3/pnr/routed.def` | 2,627,603 B | 4078 | true | `21d6abec1af4ec27…` |
+| `protocol_parity/lpc` | `phase3/stage3/pnr/routed.def` | 702,279 B | 2912 | true | `3dd156b38f88d5ce…` |
+| `protocol_parity/mdio` | `phase3/stage3/pnr/routed.def` | 705,010 B | 2977 | true | `95a96654b7248127…` |
+| `protocol_parity/sgmii` | `phase3/stage3/pnr/routed.def` | 900,384 B | 3219 | true | `963216b4ac67e7b9…` |
+| `protocol_parity/usb_pd` | `phase3/stage3/pnr/routed.def` | 2,251,977 B | 6653 | true | `eed85d1fad8f1237…` |
+
+Six routed DEFs were produced, hashed, and named — at `phase3/stage3/pnr/routed.def`,
+character for character the path the producer selects on. Every one is between
+0.7 MB and 2.6 MB, one to two orders of magnitude under the 50 MB
+`_SIZE_CEILING`. **Not one of the six files is published.** The corpus publishes
+the receipts and drops the artefacts.
+
+### Two independent barriers, and this branch removes only the first
+
+**Barrier 1 — the publisher drops it.** `_COPY_SUBTREES` never contained
+`phase3/stage3/pnr/`, so the artefact was omitted at every size. That is the
+defect the parent commits repair, and it is what these six receipts are
+independent evidence of: the file existed at publish time and did not survive it.
+
+**Barrier 2 — the path shape could not match it anyway.** The producer scans
+`ic/` and accepts exactly six components,
+`<design>/<version>/phase3/stage3/pnr/routed.def`. These cells are
+`protocol_parity/<design>/phase3/stage3/pnr/routed.def`: a different root, and
+five components with no `<version>`. **Even with Barrier 1 repaired and all six
+DEFs published, none of them would enter the population.**
+
+So the answer to "what would have to exist" is narrower than this document said.
+It is not "publish one of the cells that already reached post-route". None of the
+six can become a member without also being republished under the
+`ic/<design>/v<plugin-version>_<PDK>/` layout, which is a republish, not a
+publish, and is a corpus-governance decision made in the other repository.
+
+### What is NOT done here, and why
+
+The producer is **not** widened to scan `protocol_parity/`. Three reasons, in
+order of weight:
+
+1. **It would add zero members today.** No DEF is published there. Widening the
+   selector would move the corpus from "empty" to "empty", which is a change
+   with no measurement behind it.
+2. **`tools/ci/routed_def_corpus.py` is in `REQUIRED_AUTHORITY_PATHS`**
+   (`tools/ci/protected_landing_transition.py:58-74`, verified by reading it).
+   It moves only through a base-authorised PREPARE/ACTIVATE transition — two
+   landings, and not this candidate's to make. `benchmark_evidence_publish.py`
+   is not in that set, which is why Barrier 1 is repairable here and Barrier 2
+   is not.
+3. **Whether a `protocol_parity/` cell is a *published cell* in the governed
+   sense is not settled.** None of the six appears in `ic/INDEX.md`, in
+   `ic/retention.json`, or in the `corpus: yes` column those two maintain. A
+   selector that silently adopted them would enlarge a blocking gate's
+   population by a definition nobody wrote down.
+
+### What this does to the verdict: nothing, and it sharpens the reason
+
+The corpus is still empty, the row is still rc 2 `NOT CHECKED`, it still blocks,
+and it still buys no exemption. **An empty corpus must never become a pass**, and
+nothing here moves toward making it one — the six cells are named precisely
+because they are *not* members, and none of them is proposed as one.
+
+What changes is the justification. `BLOCKING` was defended on the ground that
+there is no post-route geometry to check. There is; six cells of it, with the
+DEFs measured and discarded. The honest defence is stronger than the one it
+replaces: this gate is blind to the only post-route evidence the project has
+published, and a row that says `NOT CHECKED` is the single place that fact is
+visible. Making it advisory would retire the only statement anywhere that
+post-route geometry goes unchecked, at the moment it is most true.
+
+### Reproduction
+
+```
+git clone https://github.com/vibeic/benchmark-data && cd benchmark-data
+git ls-tree -r --name-only origin/main | grep -c 'routed\.def'      # 0
+git ls-tree -r --name-only origin/main | grep -c 'phase3/'          # 444
+git show origin/main:protocol_parity/espi/reports/phase3/pnr/def_progression.json
+```
+
+Measured 2026-08-22 against `vibeic/benchmark-data` `origin/main` = `3b58ccd42`,
+freshly fetched. **This is an observation about another repository's published
+tree, not a property of this one, so it is deliberately not pinned by a test
+here** — a test asserting it would either need network access or would encode
+another repository's contents as this one's fixture, and both are worse than a
+dated measurement with its command line written down.
