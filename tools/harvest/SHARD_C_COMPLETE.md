@@ -1,3 +1,11 @@
+> **SUPERSEDED IN ONE ROW, 2026-08-22 (jharv3, third session).** The counts below read
+> 90 RECOVER / 18 LANDED / 2 ABANDON. They are now **91 / 18 / 1**:
+> `/home/reyerchu/wt-j63x8c` changed **ABANDON -> RECOVER** because the live origin branch
+> its ABANDON rested on, `jmatrix/63x8-main-reds`, was deleted from origin during that
+> session, leaving its HEAD on no live origin ref and its named twin undecided and dirty.
+> All 18 LANDED were independently re-derived and confirmed. See
+> `RESCUE_REFS_GONE_shard_c_jharv3.md` and `anchoring_now_shard_c_jharv3.tsv`.
+
 # SHARD C COMPLETE — 110 rows
 
 `jharv3`, 2026-08-22. The one-screen version. Evidence is in
