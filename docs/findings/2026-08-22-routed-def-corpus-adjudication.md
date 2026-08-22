@@ -406,3 +406,46 @@ One converged cell, meeting items 1-4 of *What would have to exist*, **published
 by a `benchmark_evidence_publish.py` that carries this repair**, with its routed
 DEF under the 50 MB ceiling. Cells published before it will not become members
 retroactively; the artefact was never staged, so there is nothing in them to find.
+
+### Verified: the repair does not make the gate pass
+
+Run after the repair, on this branch, against a real clone of the published
+repository at its own `main` (`3b58ccd42`):
+
+```
+$ VIBE_IC_BENCHMARK_DATA=<clone> python3 tools/ci/routed_def_corpus.py --repo .
+rc=0    stdout: 0 lines
+
+[routed-def corpus] MEASURED EMPTY: git's index at <clone> was read under 'ic'
+  and it publishes no */*/phase3/stage3/pnr/routed.def. This IS a measurement …
+[routed-def corpus] … its git index holds 0 routed DEF(s). … This is an EMPTY
+  POPULATION, not a clean one: no published cell was examined and nothing is
+  claimed about any.
+```
+
+Population still zero, row still `rc 2 NOT CHECKED`, still BLOCKING, still no
+exemption. The repair changes what a FUTURE publication can do; it changes
+nothing about today's verdict, which is the only outcome that would have been
+worth refusing.
+
+It does make one sentence the producer already prints true. *"The per-cell gates
+go live again on the first cell published with a routed DEF"* was, until this
+branch, a promise the publishing path could not keep.
+
+### The regression sweep, and the base red it distinguishes itself from
+
+The 13 test files touching `benchmark_evidence_publish`, `LAYOUT_ROUTING` or
+`_COPY_SUBTREES`: **201 passed, 7 failed.**
+
+Six of the seven are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`,
+and the control is what makes them attributable: the **same six** fail on a
+pristine `origin/main` worktree at `a4caccefe` (6 failed / 76 passed). Base red,
+not this branch.
+
+The seventh was mine and is repaired in `0119c53e9` —
+`test_an_artefact_outside_published_scope_is_recorded_not_erased` used
+`routed.def` as its example of an out-of-scope artefact. The example moved to its
+sibling `placed.def`; the property is untouched; and the test now pins the
+boundary from BOTH sides, so the carve-out cannot silently grow into the subtree
+it was carved out of. Confirmed not vacuous: the re-pointed test is RED on
+pristine `origin/main`.
