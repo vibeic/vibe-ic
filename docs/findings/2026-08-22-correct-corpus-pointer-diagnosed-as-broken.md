@@ -378,3 +378,44 @@ and got 196 → 302 passed. The file list came from `grep -rl needs_corpus | hea
 `needs_corpus` in their prose, so they entered the grep and displaced others from
 the window. The integer was meaningless without the set it counted. Every figure
 in the table above is over an explicitly pinned, identical file list.
+
+### CORRECTION to the row above: it is not hermeticity, it is the same defect a third time
+
+The row above calls this *"a test-hermeticity gap"* and says the root cause below
+`rc 2` was not diagnosed. It has since been diagnosed, and the characterisation
+was wrong. The program's own stderr:
+
+```
+note: VIBE_IC_BENCHMARK_DATA adds a corpus to scan -> /home/reyerchu/_matrix_benchmark_data
+UNDETERMINED: VIBE_IC_BENCHMARK_DATA=… is a git checkout but tracks no
+CITATION_ROUTING.txt at all. A corpus that was NAMED and carries none of this
+gate's subject is a wrong pointer, not an absent corpus.
+```
+
+The pointer is not ambient leakage the gate failed to guard against — the gate
+*deliberately* adds the named corpus to its scan and says so. What it then does
+is call a **correct** pointer at the **real** published corpus a **wrong** one,
+because that corpus genuinely carries zero of its subject. That is not a
+hermeticity bug. It is this record's own subject, one gate further along:
+
+| site | "named and carries none of my subject" | state |
+|---|---|---|
+| `tools/ci/routed_def_corpus.py` | fixed — rc 0 measured-empty vs rc 3 absent | #1764 |
+| `programs/tests/_published_corpus.py` | fixed — MEASURED_EMPTY vs broken pointer | this branch |
+| `programs/citation_routing_is_true_check.py` | **still says "a wrong pointer"** | open |
+
+A corpus that was named, opened and read, and holds none of a gate's subject, has
+been **measured**. It is not a misconfiguration. Three programs have now been
+found asking that question and two have been repaired; the third gives the same
+false diagnosis this record was written about.
+
+**What the repair may NOT be.** Turning its `rc 2` into `rc 0` is forbidden and
+would be the wrong fix anyway — an empty population must not become a pass. The
+correct repair is the one `routed_def_corpus`'s own docstring describes for its
+two refusals: *"BOTH states stay NOT CHECKED and BOTH stay blocking; only the
+sentence each of them gets is different."* The rc does not move; the sentence
+stops being false.
+
+That is carried on its own branch, `next/citation-routing-named-corpus-is-not-wrong`,
+because it edits a program this branch does not otherwise touch and it needs its
+own red.
