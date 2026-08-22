@@ -183,6 +183,22 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
+LIVE, not remembered: 177<!--figure:blocking_clauses--> blocking clauses over
+68<!--figure:gated_steps--> gated steps. This is the denominator a reader
+wants, and it moves with the yaml: the digits are written by
+``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
+the bindings that produced them (vibe-ic#961). Do not hand-edit them.
+
+The paragraph below is a PINNED RECORD of what was measured while this file
+was built, not a claim about the tree now. It is kept verbatim on purpose:
+re-deriving a dated measurement destroys the only evidence that the decision
+taken then was taken on real numbers (``programs/_derived_corpus_figure.py``,
+"THE THREE HONEST DISPOSITIONS OF A STATED FIGURE"). Read it as history, and
+read the live count above as the denominator. MEASURED while writing this
+note: the flow yaml at the last commit of 2026-07-28 carries 149 blocking
+clauses, not 150, so the pinned figure does not reproduce at that vintage
+either — reported, not silently overwritten.
+
 Measured on 2026-07-27: 150 blocking clauses over the 62 gated steps, 120 of
 them driven to a real FAIL, 30 registered in :data:`UNREDDENED`. Re-measured
 2026-07-28: 121 reddened, 29 registered — the
@@ -779,6 +795,222 @@ def _f_hollow_reports(p: Path) -> None:
     _w(p, "reports/phase3/dynamic_ir.json", {})
 
 
+def _f_step_fail_unacknowledged(p: Path) -> None:
+    """A step-internal FAIL that nobody acknowledged, beside a step that says it
+    passed — the anti-fabrication shape doctrine rule #4 exists to catch.
+
+    Reddens the Step-36 clause ``step_internal_fail_bubble_up_check .``, which
+    was wired BLOCKING by D9 Phase 1 on 17 measured reds across the published
+    corpus. Neither absence nor presence alone reaches it, and that is the whole
+    reason this fixture is not ``EMPTY``. MEASURED, verbatim:
+
+        EMPTY   rc 2  [CANNOT DETERMINE] step_internal_fail_bubble_up: no
+                      reports/ tree (pre-output project), so no report was
+                      examined. NOT a pass
+
+    i.e. the gate REFUSES a zero denominator rather than passing it, so an empty
+    project can never redden it. The report has to exist, carry ``verdict:
+    FAIL``, and go unacknowledged.
+
+    The PASS report beside it is load-bearing twice over: it gives the gate a
+    real denominator to disclose, and it proves the fixture reddens on the FAIL
+    verdict specifically rather than on "a report exists at all".
+
+    Chip-AGNOSTIC and version-less by construction: an invented step name, no
+    process, no vendor, no tool.
+    """
+    _w(p, "reports/some_internal_step.json", {"verdict": "FAIL"})
+    _w(p, "reports/another_internal_step.json", {"verdict": "PASS"})
+
+
+def _f_pdk_declared_not_used(p: Path) -> None:
+    """The design declares one process and the tools loaded another.
+
+    Reddens the Step-36 clause ``declared_pdk_is_the_pdk_used_check .``, wired
+    BLOCKING by D9 Phase 2 on ONE measured red across the published corpus —
+    a root whose own L19 names one process while its PnR log names another
+    vendor's tech + stdcell LEF.
+
+    EMPTY cannot reach it, and after vibe-ic#1002 that is a VIRTUE rather than
+    a gap. MEASURED, verbatim:
+
+        EMPTY   rc 2  declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — the
+                      design declares no PDK target and no cell library was
+                      loaded — no physical implementation to judge
+
+    The gate refuses a zero denominator, so BOTH halves of its question have to
+    be present before it has anything to judge: a declaration, and a recorded
+    library load to compare it against. A fixture carrying only the declaration
+    is ALSO rc 2 now (that is exactly the change #1002 made), so this fixture
+    is the minimum that reddens — which is what makes it a real negative
+    control rather than a way of tripping an unguarded branch.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: both names are invented,
+    and the rule under test is agreement between two records, not the identity
+    of either.
+    """
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"pdk_target": "Example Foundry ZQ42-K3"}})
+    _w(p, "phase3/stage3/pnr/pnr.log",
+       "[INFO ODB-0227] LEF file: /pdks/othernode/othernode_fd_sc_hd.lef\n"
+       "[INFO STA-0001] Liberty: /pdks/othernode/othernode_fd_sc_hd__tt.lib\n")
+
+
+def _f_em_peak_exceeds_supply(p: Path) -> None:
+    """The EM report contradicts itself: a branch carries more current than the
+    net is supplied with.
+
+    Reddens the Step-25 clause
+    ``em_peak_current_authority_check . --json reports/phase3/em_current_authority.json``.
+
+    EMPTY cannot reach it, and after vibe-ic#1017 that is a VIRTUE rather than a
+    gap. MEASURED on an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: electromigration was NOT screened — missing
+                      authority: per-layer Jmax (PDK tech LEF DCCURRENTDENSITY,
+                      or a --jmax JSON); and the net supply current ...
+
+    Through #1000 that same tree exited **0** and PASSED this BLOCKING clause
+    while printing ``NOT screened`` — which is why `test_d2_gate_has_a_reachable_fail`
+    was red on main for five merges. The refusal now leaves through the exit
+    code as well as the text, so the fixture below has to carry a real
+    contradiction to redden the cell.
+
+    The finding is `EM_PEAK_CURRENT_EXCEEDS_SUPPLY`, and it is ORACLE-FREE: no
+    Jmax, no PDK, no golden value is consulted. The report states its own
+    supply authority (``Total power / Supply voltage``) and its own peak segment
+    current, and the peak is 9x the supply. **No branch of a grid can carry more
+    current than the supply injects**, so the artefact refutes itself on
+    conservation of charge — the limit is 1.0 because it is physics, not a
+    guardband.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: the numbers are invented
+    and the rule is internal consistency of one report, not agreement with any
+    process.
+    """
+    _w(p, "reports/phase3/em.rpt",
+       "Electromigration summary\n"
+       "Net: VDD\n"
+       "  Supply voltage: 1.8 V\n"
+       "  Total power: 1.0e-03 W\n"
+       "  Maximum current: 5.0e-03 A\n")
+
+
+def _f_power_over_budget(p: Path) -> None:
+    """Total power exceeds the budget the design's own L19 declares.
+
+    Reddens the Step-33 clause
+    ``power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json``.
+
+    EMPTY cannot reach it, and after vibe-ic#1017 that is a VIRTUE. MEASURED on
+    an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: total power was NOT compared against
+                      anything — missing authority: L19_CONSTRAINTS_PDK.json
+                      fields.power_budget_uw ...
+
+    Through #1000 that tree exited **0** into a BLOCKING clause.
+
+    BOTH halves are load-bearing, which is what makes this a real negative
+    control rather than a way of tripping an unguarded branch: a fixture with
+    only the report and no budget is rc 2 (nothing to compare against), and a
+    fixture with only the budget and no report is rc 2 as well (nothing to
+    compare). The gate refuses to derive a budget from die area or supply
+    voltage — a threshold nobody declared would turn an unanswered question
+    into an answered one — so the declaration has to be present and the
+    measurement has to be present before there is a verdict to earn.
+
+    330 uW against a declared 100 uW: 3.3x over. Chip- and PDK-AGNOSTIC — a
+    watt figure, a micro-watt budget, and the design's own number as the only
+    authority.
+
+    A THIRD HALF BECAME LOAD-BEARING IN v1.11.22 AND THIS FIXTURE DID NOT SAY SO
+    ----------------------------------------------------------------------------
+    `POWER_ANALYSIS_MODE: vectorless_sdc` is not decoration on the report above.
+    Until v1.11.22 the gate compared any watt figure to the budget; it now
+    refuses — rc 2, INCOMPLETE — a figure whose ACTIVITY BASIS it cannot derive,
+    because a vectorless estimate and a VCD-driven measurement are both "total
+    power" and are not the same number. MEASURED on this fixture with the mode
+    line removed, verbatim:
+
+        rc 2  INCOMPLETE: total power was NOT compared against anything —
+              missing authority: the total-power record's activity basis is
+              'UNSTATED' ...
+
+    and rc 2 is a VACUOUS_PASS to `check_step`, so the blocking Step-33 clause
+    became one no input could redden — silently, because the fixture still
+    "worked" in the sense of being read. `test_d2_gate_has_a_reachable_fail`
+    [step33] is the mutation arm: delete the mode line and it goes red naming
+    this clause. `vectorless_sdc` and NOT a vector mode deliberately — a
+    declared vector basis is CONTRADICTED unless the transcript corroborates it
+    (`_ppa/power.py`: zero published vector report in this repository does), and
+    a fixture that has to fake a corroborating annotation count would be
+    asserting an activity model it never ran.
+    """
+    _w(p, "reports/phase2/power.rpt",
+       "POWER_ANALYSIS_MODE: vectorless_sdc\n"
+       "Group                  Internal  Switching    Leakage      Total\n"
+       "                          Power      Power      Power      Power (Watts)\n"
+       "-----------------------------------------------------------------\n"
+       "Total                  1.00e-04   2.00e-04   3.00e-05   3.30e-04 100.0%\n")
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"power_budget_uw": 100}})
+
+
+def _f_area_over_ceiling(p: Path) -> None:
+    """Synthesised cell area exceeds the die the design's own L19 declares.
+
+    Reddens the Step-9 clause
+    ``area_total_vs_budget_check . --json reports/phase2/gates/area_budget.json``.
+
+    The AREA sibling of :func:`_f_power_over_budget`, and it needs the same
+    three things present for the same reason. EMPTY cannot reach it, and that
+    is a virtue rather than a gap. MEASURED on an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: synthesised area was NOT compared against
+                      anything — missing authority: L19_CONSTRAINTS_PDK.json
+                      fields.die_area_budget_um ...; a readable chip_area in
+                      any synth stats artefact
+
+    THREE halves are load-bearing here, not two, and the third is the one the
+    power axis does not have:
+
+      * a tree with only the stats and no ceiling is rc 2 (nothing to compare);
+      * a tree with only the ceiling and no stats is rc 2 (nothing to compare);
+      * a tree with BOTH, where `chip_area_unit` does not name um^2, is ALSO
+        rc 2 — because `phase2/stage2/synth/stats.json` as the corpus actually
+        ships it says "cell-library area unit (as declared by the library the
+        synthesis script loaded)", i.e. the PRODUCER declines to name the unit.
+        Asserting it anyway would be `ART-POWER-FIGURES-X1000` one axis over: a
+        figure off by 1000x reading as the same verdict as the true one.
+
+    So the fixture makes the producer look RUN and WRONG rather than absent: it
+    states its unit, states its ceiling, and is 3.0x over it. 6000 um^2 of cells
+    against a declared 40x50 um die = 2000 um^2. The limit is 1.0 because
+    utilisation cannot exceed 1.0 by definition of the two words — no PDK, no
+    guardband and no golden value is consulted, exactly as in
+    `_f_em_peak_exceeds_supply`.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: invented numbers, and the
+    rule is the design's own declaration against the design's own measurement.
+    """
+    _w(p, "phase2/stage2/synth/stats.json",
+       {"schema": "vibe-ic/synth-stats/1",
+        "netlist": "phase2/stage2/synth/top_synth.v",
+        "top_module": "top",
+        "chip_area": 6000.0,
+        "chip_area_unit": "um^2",
+        "sequential_area": 2400.0,
+        "cell_count": 512,
+        "includes_submodules": False,
+        "selection": {"rule": "SINGLE_MODULE_NO_HIERARCHY"}})
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"die_area_budget_um": "40x50"}})
+
+
 # ── The three fixtures that replaced an empty-directory red with a real one ──
 #
 # Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
@@ -935,6 +1167,408 @@ def _f_post_dft_scan_lost(p: Path) -> None:
        "endmodule\n")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Steps 15 and 21 — the two obstruction gates
+# ─────────────────────────────────────────────────────────────────────
+# v1.10.26 (2026-08-09) moved `macro_obs_load_parity_check` and
+# `macro_obs_geometry_intersect_check` out of "shipped but invoked by nothing"
+# into a BLOCKING gate leg of the step that owns each one's subject, and
+# recorded the reachable red in its own message: "with one defective LEF
+# staged, macro_obs_load_parity_check returns rc=1 and step 15 goes red".
+# CLAUSE_FIXTURE was not extended in that change, so both clauses fell back to
+# EMPTY — a tree with no LEF and no DEF, on which each gate correctly answers
+# rc=2 __VACUOUS_HINT__ ("I could not read the thing I judge"). That is the
+# gates being honest, not the gates being unfalsifiable; what was missing was
+# an input. These two fixtures supply it.
+#
+# chip-AGNOSTIC by construction: every layer, macro and instance name below is
+# synthetic LEF/DEF grammar. `macro_obs_load_parity_check`'s rule is
+# "referenced but not declared" and never a layer name — held live by
+# test_macro_obs_load_parity.py::
+# test_the_rule_is_referenced_but_not_declared_not_a_layer_name — so no PDK,
+# foundry or process identifier is needed to reach either verdict.
+
+#: The layer an abstract's OBS opens on and the tech LEF may or may not
+#: declare. One name, used by both the fixture and its control, so the control
+#: differs from the fixture in the DECLARATION and not in the reference.
+_OBS_EXTENT_LAYER = "blockExtent"
+
+
+def _tech_lef(*declared: str) -> str:
+    """A tech LEF declaring one routing layer, one cut layer, and whatever
+    else *declared* names. The declaration set is the single variable step
+    15's negative control moves."""
+    extra = "".join(f"\nLAYER {n}\n  TYPE OVERLAP ;\nEND {n}\n"
+                    for n in declared)
+    return ("VERSION 5.8 ;\n"
+            "UNITS\n  DATABASE MICRONS 1000 ;\nEND UNITS\n"
+            "MANUFACTURINGGRID 0.005 ;\n\n"
+            "LAYER metalA\n  TYPE ROUTING ;\n  DIRECTION HORIZONTAL ;\n"
+            "END metalA\n\n"
+            "LAYER cutA\n  TYPE CUT ;\nEND cutA\n"
+            + extra + "\nEND LIBRARY\n")
+
+
+def _abstract_lef(n_metal: int = 8) -> str:
+    """One abstract whose OBS opens on :data:`_OBS_EXTENT_LAYER` and then puts
+    *n_metal* rects on a routing layer the tech LEF DOES declare.
+
+    The undeclared entry is FIRST on purpose: a reader that meets a layer it
+    cannot resolve inside an OBS stops there and returns success, so the whole
+    section — including the rects on the layer it could have loaded — is what
+    is lost. That is the position the gate's own measurement calls the common
+    one, and the position on which parsed-vs-loadable differ by the most.
+    """
+    rects = "".join(
+        f"      RECT 0.500 {0.5 + i * 0.6:.3f} 39.500 {0.8 + i * 0.6:.3f} ;\n"
+        for i in range(n_metal))
+    return ("VERSION 5.8 ;\n\nMACRO block_a\n  CLASS BLOCK ;\n"
+            "  SIZE 40.000 BY 40.000 ;\n"
+            "  OBS\n"
+            f"    LAYER {_OBS_EXTENT_LAYER} ;\n"
+            "      RECT 0.000 0.000 40.000 40.000 ;\n"
+            "    LAYER metalA ;\n" + rects +
+            "  END\nEND block_a\n\nEND LIBRARY\n")
+
+
+def _write_macro_obs_lefs(p: Path, *, declared: bool) -> None:
+    """Stage the LEF pair step 15's gate reads.
+
+    *declared* is the ONE thing that differs between the fixture and its
+    negative control: the abstract, its OBS, the rect count and both file
+    paths are identical in each arm, so a red that came from the tree's shape
+    cannot be mistaken for the parity verdict.
+    """
+    _w(p, "input/pdk/tech.lef",
+       _tech_lef(_OBS_EXTENT_LAYER) if declared else _tech_lef())
+    _w(p, "input/pdk/block_a.lef", _abstract_lef())
+
+
+def _f_macro_obs_layer_undeclared(p: Path) -> None:
+    """An abstract declares obstruction geometry a reader CANNOT LOAD.
+
+    The tech LEF declares ``metalA`` and ``cutA``; the abstract's OBS opens on
+    ``blockExtent``, which no LEF in the set declares. Everything from that
+    entry onward is discarded by a real reader, so all 9 parsed OBS rects are
+    lost and the footprint loads with no obstruction at all.
+
+    MEASURED, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: macro_obs_load_parity_check . --json …
+                     ([CANNOT DETERMINE] no LEF under . — a run with no LEF is
+                     not a run whose obstructions all loaded)
+        THIS   rc 1  [FAIL] 1 macro(s) declare obstruction geometry that a
+                     reader CANNOT LOAD — 9 of 9 parsed OBS rect(s) would be
+                     discarded
+
+    The reverse arm is asserted in
+    :func:`test_d2_the_two_obstruction_gates_redden_and_only_on_content`: the
+    same abstract, byte for byte, against a tech LEF that declares the layer
+    reads PASS — so the red is the missing declaration and not the tree.
+    """
+    _write_macro_obs_lefs(p, declared=False)
+
+
+#: An abstract that declares its extent on ``OVERLAP`` and a real obstruction
+#: on a routing layer. Both are needed: a gate that counted ``OVERLAP`` as
+#: metal would fire on every macro ever placed, and the geometry gate's own
+#: test pins that it does not.
+_OBSTRUCTED_MACRO_LEF = (
+    "VERSION 5.8 ;\n\nMACRO big_ip\n  CLASS BLOCK ;\n"
+    "  SIZE 100.000 BY 60.000 ;\n"
+    "  OBS\n"
+    "    LAYER OVERLAP ;\n      RECT 0 0 100.000 60.000 ;\n"
+    "    LAYER metalA ;\n      RECT 0 0 100.000 60.000 ;\n"
+    "  END\nEND big_ip\n\nEND LIBRARY\n")
+
+
+def _routed_def(*, spanning: int, total: int = 10) -> str:
+    """A routed DEF with one placed macro and *total* supply segments, the
+    first *spanning* of which run straight across its declared obstruction.
+
+    Only the ORDINATE of a segment changes between the two arms — same macro,
+    same orientation, same net, same layer, same segment count — so the
+    control cannot pass by having fewer wires or a differently-shaped tree.
+    """
+    rows = []
+    for i in range(total):
+        y = 102000 + i * 2000 if i < spanning else 20000 + i * 2000
+        rows.append(
+            f"- VDD ( * VDD ) + USE POWER + ROUTED metalA 140 + SHAPE "
+            f"FOLLOWPIN ( 100000 {y} ) ( 400000 {y} ) ;")
+    return ("VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+            "COMPONENTS 1 ;\n"
+            "- u_ip big_ip + FIXED ( 200000 100000 ) N ;\n"
+            "END COMPONENTS\nSPECIALNETS 1 ;\n" + "\n".join(rows)
+            + "\nEND SPECIALNETS\nEND DESIGN\n")
+
+
+def _write_macro_obs_layout(p: Path, *, spanning: int) -> None:
+    """Stage the LEF + routed DEF step 21's gate reads."""
+    _w(p, "input/pdk/big_ip.lef", _OBSTRUCTED_MACRO_LEF)
+    _w(p, "phase3/stage3/pnr/routed.def", _routed_def(spanning=spanning))
+
+
+def _f_macro_obs_spanned(p: Path) -> None:
+    """Supply metal routed straight through a placed macro's obstruction.
+
+    The macro occupies 100x60 um at (200, 100); six of the ten FOLLOWPIN
+    segments are placed inside that footprint on the very layer its OBS
+    claims. Sign-off DRC cannot see this — a macro obstruction is in the LEF,
+    not in the PDK deck — and the wires are attached to the correct net, so a
+    connectivity audit cannot either. That is why the gate exists.
+
+    MEASURED, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: macro_obs_geometry_intersect_check …
+                     ([CANNOT DETERMINE] no routed DEF under .)
+        THIS   rc 1  [FAIL] 6 supply segment(s) SPAN a placed macro's declared
+                     obstruction (6 of them follow-pins)
+                     BY LAYER: metala=6
+
+    The reverse arm is asserted in
+    :func:`test_d2_the_two_obstruction_gates_redden_and_only_on_content`: the
+    same macro and the same ten segments, moved clear of the footprint, read
+    PASS.
+    """
+    _write_macro_obs_layout(p, spanning=6)
+
+
+def _f_pad_decl_partial(p: Path) -> None:
+    """A tape-out declaration whose pad-ring section was STARTED and abandoned.
+
+    Reddens the Step-15.5ic clause
+    ``pad_assignment_gen . --json reports/phase3/pad_assignment.json``,
+    wired in vibe-ic#1410/cpath as the author of
+    ``phase3/stage3/pnr/pad_assignment.json`` — a path that had two references
+    in the whole repository before that change and both were READERS.
+
+    EMPTY cannot reach it, and the reason is the program working correctly.
+    With no declaration and no operator slot file it answers NOT_ASKED at rc 2:
+
+        NOT_ASKED: no source answers any of the 8 questions of declaration
+        section 2B_pad_ring and no operator slot file pins a per-side pad list
+
+    which the flow reads as its disclosed-skip tier. That is "nobody was asked
+    for a pin-out", which is not a statement about a pad ring, and it is the
+    tier this suite refuses to count as a red. It is also the state EVERY tree
+    in this repository is in, which is exactly why the clause could be wired
+    without moving any existing verdict.
+
+    So the fixture has to make the declaration look ANSWERED and INCOMPLETE.
+    It writes a well-formed declaration — one the declaration's own validator
+    accepts, because an incomplete declaration is deliberately NOT a malformed
+    one — carrying SEVEN of section 2B's eight answers and leaving
+    ``pad_site_name`` at ``NOT_DETERMINED``. The program's split between an
+    ABSENT config and a HALF-WRITTEN one then fires.
+
+    MEASURED, verbatim:
+
+        rc 1  declaration section 2B_pad_ring was STARTED (7 of 8 question(s)
+              answered) and still owes 1 of the 13 variables `pad_ring_gen`
+              requires ... Still owed: PAD_SITE_NAME (declaration question
+              pad_site_name)
+
+    Chosen over an unreadable declaration deliberately: that branch reddens on
+    the FILE, and a program that did nothing but try to parse its input would
+    pass it. This branch is one the program has to read the CONTENT to reach,
+    and it is the exact behaviour the change exists for — a NOT_DETERMINED
+    field is NAMED, never guessed, because a pad site invented here would be
+    indistinguishable in the artefact from a real pin-out.
+
+    Chip- and PDK-AGNOSTIC: the instance, master and site names are synthetic
+    and no design, vendor or process literal appears. No oracle is consulted.
+    """
+    decl = p / "input" / "submission_template" / "tapeout_declaration.json"
+    decl.parent.mkdir(parents=True, exist_ok=True)
+    pads = [f"pad_{s}{i}" for s in "senw" for i in range(2)]
+    answers = {
+        "deliverable": "DIE",
+        "pad_order_by_side": {"south": pads[0:2], "east": pads[2:4],
+                              "north": pads[4:6], "west": pads[6:8]},
+        # "pad_site_name" is DELIBERATELY ABSENT — it is the whole fixture.
+        "pad_corner_site_name": "io_corner_site",
+        "pad_edge_spacing_um": 10,
+        "pad_rotations": {"horizontal": "R0", "vertical": "R90",
+                          "corner": "R0"},
+        "pad_corner_master": "pad_corner",
+        "pad_fillers": ["pad_fill1"],
+        "pad_signal_map": {n: n[4:] for n in pads},
+    }
+    # Built through the declaration's OWN constructor and merge, so the fixture
+    # cannot drift into a shape the module would refuse for an unrelated reason
+    # and redden this clause by accident.
+    import _tapeout_declaration as _TD
+    doc = _TD.blank_declaration()
+    doc, ignored = _TD.merge_answers(doc, answers)
+    assert not ignored, ignored
+    assert _TD.validate(doc) == [], _TD.validate(doc)
+    assert doc["answers"]["pad_site_name"] == _TD.NOT_DETERMINED
+    decl.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
+def _f_die_unfinished(p: Path) -> None:
+    """The die-finishing report claims a seal ring the run did not leave behind.
+
+    Reddens the Step-26.5ic clause
+    ``die_finishing_check . --json reports/phase3/die_finishing.json``.
+
+    EMPTY cannot reach it and the reason is the gate working correctly: with no
+    producer report, `die_finishing_check.evaluate` returns DISCLOSED_SKIP and
+    main() prints ``VACUOUS_PASS: die_finishing_check judged nothing`` at rc 2.
+    That is "nobody ran the producer", which is not a statement about a seal
+    ring, and it is exactly the tier this suite refuses to count as a red.
+
+    So the fixture has to make the producer look RUN and WRONG. It writes the
+    producer's own report, correctly attributed (``producer:
+    "die_finishing_gen"`` — the gate refuses an unattributed document outright),
+    claiming ``seal_ring.state == "PASS"``, and leaves
+    ``phase3/stage3/pnr/die_finished.def`` absent. The gate's CROSS-CHECK arm
+    then fires: a claim and the thing it claims about are two different facts.
+
+    MEASURED, verbatim:
+
+        rc 1  die_finishing_check: FAIL — the report says the seal ring was
+              inserted, but phase3/stage3/pnr/die_finished.def is not on disk —
+              the finished die the report describes was not left behind
+
+    Chosen over the simpler ``seal_ring.state == "FAIL"`` deliberately: that
+    branch only re-prints a verdict the producer already reached, so a gate that
+    did nothing but echo its input would pass it. This branch is one the gate
+    has to LOOK at the tree to reach. Chip- and PDK-AGNOSTIC: no design, vendor
+    or process literal, and no oracle is consulted.
+    """
+    _w(p, "reports/phase3/die_finishing.json",
+       {"producer": "die_finishing_gen",
+        "seal_ring": {"state": "PASS",
+                      "reason": "seal ring inserted on the four die edges"},
+        "die_id": {"state": "PRESENT",
+                   "reason": "die identification cells placed"}})
+
+
+def _f_hardmacro_kit_incomplete(p: Path) -> None:
+    """An IP delivery kit with the LEF and none of the other three views.
+
+    Reddens the Step-37.5ip clause
+    ``digital_hardmacro_check . --json reports/phase3/digital_hardmacro.json``.
+
+    EMPTY cannot reach it BY DESIGN, and that design is stated in the gate's own
+    docstring: "An absent ``phase3/stage4/hardmacro/`` is NOT a pass. It is rc 2"
+    — NOT_DETERMINED, "no digital hardmacro package exists to examine". A step
+    whose only red were the absence of the delivery would be measuring that
+    nobody delivered, not that a delivery was bad.
+
+    So the fixture DELIVERS. One macro, a real LEF with CLASS BLOCK, SIZE and a
+    pin with a port rectangle, and no ``.lib``, no ``.v``, no ``.gds``. That is
+    the kit's core failure in the gate's own words — placeable, untimeable,
+    unsimulatable, unstreamable.
+
+    MEASURED, verbatim (rc 1, three findings):
+
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.lib` view. ...
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.gds` view. ...
+        [ERROR] VIEW_MISSING: macro 'core_macro': no `.v` view. ...
+
+    Chip- and PDK-AGNOSTIC: the macro name is a generic noun, the layer name is
+    LEF's own generic ``met1``, and no branch of the gate reads either.
+    """
+    _w(p, "phase3/stage4/hardmacro/core_macro.lef",
+       'VERSION 5.7 ;\n'
+       'BUSBITCHARS "[]" ;\n'
+       'DIVIDERCHAR "/" ;\n'
+       'MACRO core_macro\n'
+       '  CLASS BLOCK ;\n'
+       '  FOREIGN core_macro 0 0 ;\n'
+       '  ORIGIN 0 0 ;\n'
+       '  SIZE 100.000 BY 80.000 ;\n'
+       '  PIN clk\n'
+       '    DIRECTION INPUT ;\n'
+       '    USE SIGNAL ;\n'
+       '    PORT\n'
+       '      LAYER met1 ;\n'
+       '        RECT 1.000 1.000 1.400 1.400 ;\n'
+       '    END\n'
+       '  END clk\n'
+       'END core_macro\n'
+       'END LIBRARY\n')
+
+
+def _f_extract_illegal_overlap(p: Path) -> None:
+    """Magic filed illegal-overlap feedback areas; the extraction is fiction.
+
+    Reddens the Step-31 clause
+    ``magic_illegal_overlap_check . --json
+    reports/phase3/magic_illegal_overlap.json``.
+
+    EMPTY cannot reach it, and the gate's docstring says why in its own terms:
+    with no extraction in scope there is "no run for the question to be about",
+    which is rc 2 and never a statement that the extraction was clean. ABSENT
+    IS NOT ZERO — the distinction is the whole point of the gate — so the
+    fixture must supply an extraction that DID run and DID file feedback.
+
+    Two `feedback add` records in magic's own save format, each preceded by its
+    `box` line so the structural parser can read it, beside an extracted
+    netlist so the extraction is evidenced. Both counting arms then agree at 2,
+    which is itself load-bearing: the gate takes the LARGER of the string and
+    structural counts and raises FEEDBACK_COUNT_DISAGREEMENT when they differ,
+    so a fixture whose records did not parse would redden the gate for the
+    WRONG reason and would prove nothing about the overlap arm.
+
+    MEASURED, verbatim (rc 1):
+
+        [ERROR] MAGIC_ILLEGAL_OVERLAP: the extractor reported 2 illegal
+        overlap(s), against a threshold of 0. Counted from: feedback dump
+        string=2 structural=2 (2 area(s)), transcript=0 ...
+
+    Chip- and PDK-AGNOSTIC: the only literals are magic's own message text (the
+    channel itself) and LEF/SPICE-generic layer and device nouns.
+    """
+    _w(p, "phase3/stage3/extracted/extract_feedback.txt",
+       "box 20 20 35 40\n"
+       'feedback add "Illegal overlap between nwell and pdiff '
+       '(types do not connect)" pale\n'
+       "box 61 12 74 26\n"
+       'feedback add "Illegal overlap between metal1 and poly '
+       '(types do not connect)" pale\n')
+    _w(p, "phase3/stage3/extracted/top.spice",
+       ".subckt top a b\nM1 a b 0 0 nfet\n.ends\n")
+
+
+def _f_crosslayer_refuted(p: Path) -> None:
+    """A cross-layer search whose candidate is NOT the baseline RTL.
+
+    Step 1.6x landed in v1.11.15 with a blocking gate whose FAIL nothing proved
+    reachable, and EMPTY cannot reach it BY DESIGN. The gate's own docstring
+    settles why: it was first written CONDITIONAL on the baseline snapshot and
+    `flow_condition_reachability_check` refused that shape in one line — "a
+    check disabled by exactly the situation it was written for" — so it runs
+    unconditionally and answers `NOT_APPLICABLE` for a design that never ran a
+    search. On EMPTY that is the honest answer, not a defect, which is exactly
+    the position `_f_a0_skipped` was built for one gate over.
+
+    So the fixture has to make a search look ATTEMPTED and REFUTED: the
+    baseline snapshot the search writes before it touches a lever, plus a
+    rewrite-fidelity report whose status says the candidate diverges. That is
+    the step's own closed_loop trigger, spelled in the yaml — "the candidate
+    RTL is not the baseline RTL ... The candidate is DISCARDED and step 1's RTL
+    stands" — so reddening here is the gate doing the one job it exists for,
+    not an artificial break.
+
+    MEASURED: rc 1, `CLX_NOT_EQUIVALENT`. Reached through the program's own
+    status ladder rather than by malforming the file — an unparseable report
+    would redden the clause too, and would prove only that the gate can crash.
+    """
+    (p / "reports" / "crosslayer").mkdir(parents=True, exist_ok=True)
+    (p / "reports" / "crosslayer" / "baseline_rtl").write_text(
+        "cross-layer baseline snapshot marker\n", encoding="utf-8")
+    _w(p, "reports/crosslayer/rewrite_equivalence.json",
+       {"status": "NOT_EQUIVALENT",
+        "compared_points": 4,
+        "unproven_points": 0,
+        "explanation": ("candidate diverges from baseline at 1 of 4 compared "
+                        "points")})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -960,6 +1594,18 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "POST_LAYOUT_NO_SPICE": _f_post_layout_no_spice,
     "ON_BOARD_FAILED": _f_on_board_scenarios_failed,
     "POST_DFT_SCAN_LOST": _f_post_dft_scan_lost,
+    "MACRO_OBS_LAYER_UNDECLARED": _f_macro_obs_layer_undeclared,
+    "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
+    "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
+    "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
+    "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
+    "POWER_OVER_BUDGET": _f_power_over_budget,
+    "AREA_OVER_CEILING": _f_area_over_ceiling,
+    "DIE_UNFINISHED": _f_die_unfinished,
+    "HARDMACRO_KIT_INCOMPLETE": _f_hardmacro_kit_incomplete,
+    "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
+    "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
+    "PAD_DECL_PARTIAL": _f_pad_decl_partial,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -972,10 +1618,132 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # Step 1.6x (v1.11.15) — its single blocking clause answers
+    # NOT_APPLICABLE on EMPTY and banks a PASS, so nothing proved its FAIL
+    # reachable and the cell was red on main from the version it arrived in.
+    # See `_f_crosslayer_refuted` for why EMPTY cannot reach it by design.
+    # TWO LANES MAPPED THIS SAME CLAUSE AND THE MERGE KEPT ONE, ON EVIDENCE.
+    # `CLAUSE_FIXTURE` is a dict, so both entries under one key meant the second
+    # silently won and the first was dead code that read as live — the merge
+    # hazard, before the question of which fixture is better.
+    #
+    # BOTH REDDEN, MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                        tier=PASS  (NOT_APPLICABLE — correct, and
+    #                                            therefore no answer to "can it
+    #                                            fail?")
+    #   CROSSLAYER_SEARCH_UNDECLARED tier=FAIL  CLX_BASELINE_PRESENT_NO_REPORT
+    #   CROSSLAYER_REFUTED           tier=FAIL  CLX_NOT_EQUIVALENT
+    #
+    # Neither is graded ABSENCE_RED, so the choice is not about which counts. It
+    # is about what each PROVES. The first reddens on a procedural precondition
+    # — a search ran and declared nothing. The second reddens on the relation
+    # the step exists for, the candidate diverging from the baseline, reached
+    # through the program's own status ladder rather than by malforming a file.
+    # The second is kept.
+    ("1.6x", "crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json reports/crosslayer/rewrite_equivalence_check.json"): "CROSSLAYER_REFUTED",
+    # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
+    # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
+    # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the
+    # gate answers `SKIP — Phase 1 (doc-extraction) not attempted and no
+    # input/docs/`, which is a self-skip, not a judgement. The fixture has to
+    # make Phase 1 look ATTEMPTED while leaving the coverage report absent.
+    #
+    # MEASURED against all 12 fixtures via `FCC._check_program_exit_zero`, the
+    # same way this register's provenance line was built: three redden it —
+    # LDOC_TODO, PDK_DECLARED_NOT_USED, POWER_OVER_BUDGET — each with a content
+    # red, `") coverage report missing: …/extraction_coverage_report.md"`. The
+    # other nine self-skip. `LDOC_TODO` is chosen because it is the Phase-1
+    # fixture and is already D1's assignment for `l_doc_todo_stub_count_check`,
+    # so the step's two content reds come from one tree rather than two.
+    #
+    # It is assigned here rather than registered in `UNREDDENED`: a fixture DOES
+    # break it, and an `UNREDDENED` entry whose clause reddens fails this suite
+    # by design ("the gap closed and nobody noticed").
+    ("D1", "phase1_coverage_report_present_check ."): "LDOC_TODO",
+    # D9 Phase 1 wired this into step 36 as the one BLOCKING promotion of that
+    # campaign. EMPTY cannot redden it: the gate REFUSES a zero denominator
+    # (rc 2, "no reports/ tree … NOT a pass"), so the unacknowledged FAIL has
+    # to be present for the gate to have anything to judge.
+    ("36", "step_internal_fail_bubble_up_check ."): "STEP_FAIL_UNACKNOWLEDGED",
+    # D9 Phase 2 wired this into step 36 (vibe-ic#1002). EMPTY cannot redden
+    # it: the gate REFUSES a zero denominator, so both halves of its question
+    # -- a declared target AND a recorded library load -- have to be present
+    # before it has anything to compare.
+    ("36", "declared_pdk_is_the_pdk_used_check ."): "PDK_DECLARED_NOT_USED",
+    # vibe-ic#1017. #1000 wired both of these BLOCKING and left INCOMPLETE on
+    # rc 0, so EMPTY answered PASS to a blocking clause while the programs' own
+    # last lines said "NOT screened" / "NOT compared against anything". #1017
+    # moved INCOMPLETE to the disclosed-skip tier (rc 2), so EMPTY can no longer
+    # carry either cell and each needs an artefact that is WRONG on its own
+    # terms -- self-contradiction for EM, an exceeded self-declared budget for
+    # power. Neither fixture consults an oracle.
+    # 2026-08-20, R7 — the three clauses this suite could reach no FAIL on.
+    # Each was VACUOUS_PASS (rc 2) under EMPTY and under every other fixture in
+    # the library, and for 26.5ic and 37.5ip that clause is the step's ONLY
+    # blocking clause, so the whole cell was unfalsifiable: the gate could not
+    # fail on anything a project DID. UNREDDENED is not available for those two
+    # -- it is explicitly "NOT a waiver of the CELL" and presumes a sibling
+    # clause already proven falsifiable -- so a real fixture was the only
+    # honest close. Each new fixture makes the producer look RUN and WRONG
+    # rather than absent; see each `_f_*` docstring for the measured rc and
+    # message, and for why the chosen FAIL branch is one the gate has to look
+    # at the tree to reach.
+    ("26.5ic", "die_finishing_check . --json "
+               "reports/phase3/die_finishing.json"): "DIE_UNFINISHED",
+    # vibe-ic#1410/cpath wired `pad_assignment_gen` into 15.5ic as the AUTHOR
+    # of `phase3/stage3/pnr/pad_assignment.json`, which nothing had ever
+    # written. EMPTY answers NOT_ASKED at rc 2 — the disclosed-skip tier —
+    # because with no declaration and no slot file nobody has been asked for a
+    # pin-out, and that is the state every tree in this repository is in. The
+    # fixture makes the declaration look ANSWERED AND INCOMPLETE, which is the
+    # branch the change exists for: the owed field is NAMED, never guessed.
+    # See `_f_pad_decl_partial` for the measured rc and message, and for why
+    # the half-written declaration is chosen over an unreadable one.
+    ("15.5ic", "pad_assignment_gen . --json "
+               "reports/phase3/pad_assignment.json"): "PAD_DECL_PARTIAL",
+    ("37.5ip", "digital_hardmacro_check . --json "
+               "reports/phase3/digital_hardmacro.json"):
+        "HARDMACRO_KIT_INCOMPLETE",
+    ("31", "magic_illegal_overlap_check . --json "
+           "reports/phase3/magic_illegal_overlap.json"):
+        "EXTRACT_ILLEGAL_OVERLAP",
+    ("25", "em_peak_current_authority_check . --json "
+           "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
+    ("33", "power_total_vs_budget_check . --json "
+           "reports/phase2/gates/power_budget.json"): "POWER_OVER_BUDGET",
+    # The AREA sibling, wired into step 9 in the same change that gave step 9
+    # its `closed_loop` edge. Registered as an ASSIGNMENT and not in
+    # `UNREDDENED`: a fixture DOES break it, and an `UNREDDENED` entry whose
+    # clause reddens fails this suite by design.
+    ("9", "area_total_vs_budget_check . --json "
+          "reports/phase2/gates/area_budget.json"): "AREA_OVER_CEILING",
     # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.
     ("D1", "l_doc_todo_stub_count_check ."): "LDOC_TODO",
+
+    # D1 gained `phase1_coverage_report_present_check` in this change (#1219):
+    # the report moved off step 1, so D1 declares it and D1's gate reads it.
+    # A wired clause with no fixture is exactly what d2 calls `unproven`.
+    #
+    # EMPTY cannot redden it, for the same reason `LDOC_TODO` exists: with no
+    # `generated_docs/` the gate answers "SKIP - Phase 1 (doc-extraction) not
+    # attempted", which is a self-skip, not a judgement. The fixture has to make
+    # Phase 1 look ATTEMPTED while leaving the coverage report absent.
+    #
+    # RE-DERIVED 2026-08-14 against ALL 30 entries of `FIXTURES` via
+    # `FCC._check_program_exit_zero`, rather than adopted: exactly THREE redden
+    # it - LDOC_TODO, PDK_DECLARED_NOT_USED, POWER_OVER_BUDGET - each with the
+    # same content red, `") coverage report missing: .../extraction_coverage_
+    # report.md"`. The other 27 self-skip. LDOC_TODO is chosen because it is the
+    # Phase-1 fixture and is already D1's assignment for
+    # `l_doc_todo_stub_count_check`, so D1's two content reds come from one tree
+    # rather than two.
+    #
+    # Assigned here rather than registered in `UNREDDENED`: a fixture DOES break
+    # it, and an `UNREDDENED` entry whose clause reddens fails this suite by
+    # design ("the gap closed and nobody noticed").
+    ("D1", "phase1_coverage_report_present_check ."): "LDOC_TODO",
     # vibe-ic#717 wired both into step 31. Both are FAIL-SAFE gates, so an
     # EMPTY tree gives them nothing to refuse; each needs the absence of
     # positive evidence to be OBSERVABLE, which means the artefact has to
@@ -1040,6 +1808,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("12", "dft_post_optimization_scan_survival_check . --json "
            "reports/phase2/gates/dft_post_optimization_scan_survival.json"):
         "POST_DFT_SCAN_LOST",
+    # 2026-08-09 (v1.10.26) wired both obstruction gates into a BLOCKING
+    # gate leg; neither got a fixture, so both fell back to EMPTY — a tree
+    # with no LEF and no DEF, where each gate answers rc=2 __VACUOUS_HINT__
+    # because it cannot read its own subject. The gates were always
+    # falsifiable; the harness had no input that reached them. See each
+    # `_f_*` docstring for the measured EMPTY tier and the negative control.
+    ("15", "macro_obs_load_parity_check . --json "
+           "reports/phase3/pnr/macro_obs_load_parity.json"):
+        "MACRO_OBS_LAYER_UNDECLARED",
+    ("21", "macro_obs_geometry_intersect_check . --json "
+           "reports/phase3/pnr/macro_obs_geometry.json"): "MACRO_OBS_SPANNED",
     ("4", "vacuous_testbench_check . --json "
           "reports/phase2/gates/vacuous_testbench.json"): "TB_BAD",
     ("4", "professional_tb_check . --json "
@@ -1835,6 +2614,86 @@ def test_d2_the_two_newly_wired_blocking_clauses_redden_and_only_on_content(
     assert tier == PASS, (
         "agreeing evidence must not be reddened: worst-of is worst-of the "
         f"verdicts REACHED, not a second way to fail :: {out[-300:]}")
+
+
+#: The two obstruction gates, with the fixture that reddens each. Kept beside
+#: the control below so a fixture that stops reddening for the RIGHT reason —
+#: the gate got stricter, the grammar moved — is caught here, named, as well
+#: as in the matrix cell.
+_OBSTRUCTION_BLOCKING: Tuple[Tuple[str, str, str], ...] = (
+    ("15", "macro_obs_load_parity_check . --json "
+           "reports/phase3/pnr/macro_obs_load_parity.json",
+     "MACRO_OBS_LAYER_UNDECLARED"),
+    ("21", "macro_obs_geometry_intersect_check . --json "
+           "reports/phase3/pnr/macro_obs_geometry.json",
+     "MACRO_OBS_SPANNED"),
+)
+
+
+def test_d2_the_two_obstruction_gates_redden_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """The claims in the two obstruction fixtures' docstrings, RUN.
+
+    THE DISTINCTION THIS DEFENDS. Before the fixtures, both clauses reached
+    ``VACUOUS_PASS`` on ``EMPTY`` and the matrix could not tell that apart
+    from a gate with no failing branch at all. The two are opposite facts: one
+    is a gate saying "I was given nothing to read", the other is a gate that
+    can never say no. Three arms per gate keep them apart —
+
+      EMPTY     -> VACUOUS_PASS  the gate DISCLOSES that it could not measure
+      fixture   -> FAIL          the same gate, given its subject, refuses
+      corrected -> PASS          the same tree, one property flipped
+
+    — and the third is what makes the second a verdict rather than a shape:
+    each control is the smallest edit to the SAME tree that flips the answer,
+    so a red earned by a missing directory, an unparseable file or an argument
+    error could not have produced it.
+
+    The EMPTY arm is asserted as ``VACUOUS_PASS`` and not merely "not FAIL":
+    that tier IS the wiring change's stated justification for landing two
+    unconditional legs — a cell that stages no LEF records an honest
+    could-not-measure rather than a green — so it is checked rather than
+    narrated.
+    """
+    for key, command, fixture in _OBSTRUCTION_BLOCKING:
+        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
+            f"step {key}: {command!r} is no longer assigned {fixture!r}; this "
+            f"control and the matrix cell would measure different things")
+        tier, out = _tier(_build_project(tmp_path, f"obs{key}", fixture),
+                          command)
+        assert tier == RED, (
+            f"step {key}: fixture {fixture} no longer reddens {command!r} -> "
+            f"{tier} :: {out[-300:]}")
+        tier, out = _tier(_build_project(tmp_path, f"obse{key}", "EMPTY"),
+                          command)
+        assert tier == VACUOUS, (
+            f"step {key}: on a tree with nothing to read {command!r} answered "
+            f"{tier}, not {VACUOUS}. If it is FAIL the fixture is measuring "
+            f"nothing the bare tree does not; if it is PASS the gate now "
+            f"certifies a run it could not read :: {out[-300:]}")
+
+    # ── step 15, negative control: the SAME abstract, byte for byte, with the
+    #    tech LEF declaring the layer its OBS opens on. Nothing else moves.
+    p15 = _build_project(tmp_path, "obsctl15", "EMPTY")
+    _write_macro_obs_lefs(p15, declared=True)
+    assert ((p15 / "input/pdk/block_a.lef").read_text()
+            == _abstract_lef()), "the control must not alter the abstract"
+    tier, out = _tier(p15, _OBSTRUCTION_BLOCKING[0][1])
+    assert tier == PASS, (
+        "declaring the referenced layer must PASS on the identical abstract, "
+        f"else the red above is the tree and not the parity :: {out[-300:]}")
+
+    # ── step 21, negative control: the same macro, same orientation, same ten
+    #    supply segments — only their ordinate moves clear of the footprint.
+    p21 = _build_project(tmp_path, "obsctl21", "EMPTY")
+    _write_macro_obs_layout(p21, spanning=0)
+    assert ((p21 / "input/pdk/big_ip.lef").read_text()
+            == _OBSTRUCTED_MACRO_LEF), "the control must not alter the OBS"
+    tier, out = _tier(p21, _OBSTRUCTION_BLOCKING[1][1])
+    assert tier == PASS, (
+        "the same segment count routed clear of the obstruction must PASS, "
+        f"else the red above is the macro's presence and not the crossing :: "
+        f"{out[-300:]}")
 
 
 # ─────────────────────────────────────────────────────────────────────
