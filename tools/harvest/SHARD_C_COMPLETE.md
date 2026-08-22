@@ -1,3 +1,33 @@
+> **COUNTS SUPERSEDED AGAIN 2026-08-22T19:xxZ (jharv3, eighth session): now 73 RECOVER /
+> 36 LANDED / 1 ABANDON / 0 UNREACHABLE.** Every count below this banner predates it.
+>
+> The reason is not a better reading of the same evidence — it is that **`origin/main` moved**.
+> Every verdict in this file was decided against `a4caccefe` (v1.11.66). Main is now
+> `ae78abb285630636b2f305f2ed4aef13f92201ed` (v1.11.70), **673 commits later**. A RECOVER
+> decided against a stale main can be work that has since landed, and acting on it sends
+> somebody to redo finished work.
+>
+> All 110 rows were re-swept by CONTENT against main's HISTORY at the new sha. **673 commits
+> moved exactly one row**: `AI_IC_design/wt_jwire2`, whose 13 unproven `(path,blob)` pairs went
+> to 0 when main took `origin/fix/jwire2-hygiene-wiring` at `f26a5ccd9`. The second flip is
+> unrelated to main's advance: `_ld/wt` was held at RECOVER by session 5 naming one missing
+> input — unexamined gitignored bytes — and **those bytes have now been read**; all 13 are
+> byte-identical to committed content, verbatim-derived from it by a committed program, or
+> empty.
+>
+> Also measured this session, and these are the numbers to act on:
+>
+> | check | result |
+> |---|---|
+> | rows judged against current main `ae78abb285` | 110 / 110 |
+> | rows re-read on their host today | 110 / 110 |
+> | judged heads held by a ref origin advertises now | 110 / 110 |
+> | LANDED rows clean on disk (`-uall`) | 36 / 36 |
+> | `contract_check.py` | `CONTRACT OK`, no provenance note, `landed_since_judging: 0` |
+>
+> Full report: `REJUDGE_shard_c_s8_current_main_jharv3.md`.
+> Method with its self-test: `bin_jharv3_s8/rejudge_vs_current_main.sh --self-test`.
+
 > **COUNTS SUPERSEDED 2026-08-22T07:2xZ (jharv3, fifth session): now 74 RECOVER / 34 LANDED /
 > 2 ABANDON / 0 UNREACHABLE.** Every table below reading 90 / 18 / 2 predates this. **16 rows
 > moved RECOVER -> LANDED** because rule R2 compares a worktree against main's *tip*, and a
