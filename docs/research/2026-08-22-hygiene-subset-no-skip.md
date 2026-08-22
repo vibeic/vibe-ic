@@ -1828,12 +1828,46 @@ REFUSE  the protected landing test runtime cannot run on this host.
 /home/reyerchu/.local/lib/python3.10/site-packages/argparse.py   (argparse 1.4.0)
 ```
 
-The ancient PyPI `argparse` BACKPORT is installed in the user site and SHADOWS
-the stdlib module. It predates `allow_abbrev` (stdlib, Python 3.5), so anything
-that reaches the user site and passes that keyword dies. Confirmed both ways:
-stdlib `argparse` accepts `allow_abbrev` here, and `python3 -I` — the isolated
-interpreter — is fine. Only the host lane, which by design adds the user site,
-is poisoned.
+The ancient PyPI `argparse` BACKPORT is installed in the user site. It predates
+`allow_abbrev` (stdlib, Python 3.5).
+
+**CORRECTED, one turn after first writing this, because the first version said
+it "SHADOWS the stdlib module for anything that reaches the user site" and that
+is BACKWARDS.** `sys.path` here is
+
+```
+1 /usr/lib/python310.zip
+2 /usr/lib/python3.10                                   <- stdlib, WINS normally
+3 /usr/lib/python3.10/lib-dynload
+4 /home/reyerchu/.local/lib/python3.10/site-packages    <- the backport lives here
+```
+
+so stdlib comes FIRST and an ordinary `import argparse` gets
+`/usr/lib/python3.10/argparse.py`. Verified. Nothing on this host breaks merely
+by having the user site on the path.
+
+The backport wins ONLY when a site directory is PREPENDED ahead of stdlib, which
+is exactly what an injected trusted-site lane does. Driven both ways:
+
+```
+normal            -> /usr/lib/python3.10/argparse.py
+sys.path.insert(0, <user site>) -> …/site-packages/argparse.py
+                                   allow_abbrev FAILS: unexpected keyword argument
+```
+
+**Why the correction matters rather than being pedantry:** the first wording
+would send a reader hunting for breakage in ordinary tools on this host, and
+there is none. The defect is narrow and precise — a runtime that PREPENDS this
+user site cannot construct an `ArgumentParser` the modern way — and the fix is
+the same either way, but the blast radius I first implied was wrong by a wide
+margin.
+
+**And it settles a validity question about this document's own evidence.** Every
+test result here was produced by `python3 -m pytest`, which reaches the user
+site. Had the backport actually shadowed stdlib, the seam guard — which asserts
+on `argparse` `dest` names and on "unrecognized arguments" — would have been
+measured against a Python-2-era parser. It was not: those runs imported
+`/usr/lib/python3.10/argparse.py`, checked directly. The evidence stands.
 
 **So the remedy in §27 was wrong and is corrected here.** A quiet host is
 necessary and not sufficient. What this host needs first is the stray
