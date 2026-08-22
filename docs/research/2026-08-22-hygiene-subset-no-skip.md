@@ -4134,9 +4134,9 @@ or it will manufacture a finding out of the clock.
 Continuing the branch in §59, the debt went **14 → 4**, with 20 of 96 gates now
 carrying both directions (from 10). Every step was a name-set diff:
 
-    measurement coverage          6 -> 5   (bundle carries its own denominator)
-    promotion feasibility         5 -> 4   (records generated from DEFAULT_AXES)
-    table rows belong to tables   4 -> ... wait, see the list below
+    measurement coverage          7 -> 6   (the bundle carries its own denominator)
+    promotion feasibility         6 -> 5   (records generated from DEFAULT_AXES)
+    table rows belong to tables   5 -> 4   (an orphan row, one line, nothing else)
 
 Final list, and none of the four is a fixture somebody forgot to write:
 
