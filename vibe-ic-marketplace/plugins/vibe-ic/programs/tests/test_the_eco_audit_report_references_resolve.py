@@ -166,3 +166,65 @@ def test_a_cited_branch_either_resolves_or_is_said_to_be_gone():
         f"{unexplained} do not resolve and the report does not say so near "
         f"where it cites them; a reader following one gets `unknown revision`, "
         f"which reads as repo damage rather than a name that moved on")
+
+
+def test_a_branch_cited_with_a_sha_is_cited_at_its_tip():
+    """The gap the three rows above cannot see: STALE BUT LIVE.
+
+    Those rows check that a reference RESOLVES. A sha can resolve perfectly and
+    still be wrong -- this document cited the follow-on branch at a sha that was
+    its tip when written and was six commits behind by the time anyone read it.
+    The check passed, because the sha was a real commit. It just was not that
+    branch any more.
+
+    So a `<branch> @ <sha>` claim is held to the stronger rule: the sha must BE
+    that branch's tip. A branch that MOVES should therefore not be cited with a
+    sha at all -- which is why the follow-on is cited by name here and the
+    frozen branch, whose sha is the whole point, is cited with one.
+
+    A PIN MAY BE HISTORICAL. This document records where another session's
+    branch STOOD when its worktree was destroyed; that sha must not be updated
+    to the tip, because updating it would make the record false. So the rule is
+    the same shape as the branch rule: be current, OR be said not to be.
+    """
+    root = _repo_root()
+    _require_git(root)
+    text = _report().read_text(encoding="utf-8")
+    claims = re.findall(r"`([A-Za-z0-9._/-]+/[A-Za-z0-9._/-]+)`\s*@\s*([0-9a-f]{7,40})",
+                        text)
+    if not claims:
+        pytest.skip("the report pins no `<branch> @ <sha>`; NOT OBSERVED")
+    lines = text.splitlines()
+    wrong = []
+    for name, sha in claims:
+        tip = _git(root, "rev-parse", name)
+        if tip.returncode != 0:
+            continue          # handled by the branch row above
+        if tip.stdout.strip().startswith(sha):
+            continue
+        # A PIN MAY BE HISTORICAL, and this row was too strict without the
+        # exemption: it flagged this document recording where another session's
+        # branch STOOD at the moment its worktree was destroyed. That sha is a
+        # fact about a past event and must NOT be updated to the tip -- updating
+        # it would make the record wrong. Same shape as the branch rule above:
+        # be current, OR be said not to be.
+        # SCOPED TO THE CLAIM ITSELF, not to every line containing the sha.
+        # The first version looked around EVERY occurrence, so an exemption
+        # word anywhere near any of them exempted all of them -- measured: a
+        # deliberately stale pin went unflagged because the same sha also
+        # appears in this document's commit list, four lines from the word
+        # "was". An exemption that can be satisfied by unrelated text is not an
+        # exemption, it is a hole.
+        idx = [i for i, l in enumerate(lines)
+               if sha in l and name in l]
+        if not idx:                      # claim spans a line break
+            idx = [i for i, l in enumerate(lines) if sha in l and "@" in l]
+        near = " ".join(" ".join(lines[max(0, i - 2):i + 3]) for i in idx)
+        if re.search(r"\bwas\b|\bwhen\b|at the time|stood|destroyed|restored"
+                     r"|historical|then|frozen at", near, re.I):
+            continue
+        wrong.append((name, sha, tip.stdout.strip()[:9]))
+    assert not wrong, (
+        f"cited at a sha that is no longer the branch tip: {wrong}. A sha that "
+        f"RESOLVES is not the same as a sha that is CURRENT -- cite a moving "
+        f"branch by name, or update the pin.")
