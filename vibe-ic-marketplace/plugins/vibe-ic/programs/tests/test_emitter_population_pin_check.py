@@ -1506,23 +1506,52 @@ def test_a_helper_assembled_population_is_NOT_DECIDABLE_not_refused(tmp_path):
     per counter whether K is a count or a lower bound, and where it is a lower
     bound a shortfall is exactly what a helper called N times produces.
 
-    It is NOT DECIDABLE, not a pass in disguise: printed, counted in the head,
-    carried in the JSON. `sites > denominator` stays REFUSED -- see the control
-    below -- because a lower bound that EXCEEDS the stated population cannot be
-    explained by emitting more."""
+    It is NOT DECIDABLE, and NOT A PASS IN DISGUISE -- which this test asserted
+    wrongly when it first landed. It required rc=PASS, and the guard duly printed
+    "every population stated twice agrees" having compared NOTHING: the only
+    counter present was declined, and `counters_examined` had already been
+    incremented before the decline, keeping the run out of the VACUOUS tier.
+    That is the manufactured-PASS shape this file is built to refuse, and my
+    expectation encoded it. The count now happens only once a comparison is
+    actually made, and the correct verdict here is VACUOUS -- "nothing was
+    compared; this is NOT a pass".
+
+    Second fixture: the SAME undecidable counter beside a decidable one. There
+    something IS compared, so the verdict is a real PASS carrying the
+    [NOT DECIDABLE] line -- which is what the first fixture would have looked
+    like if it had had anything to compare."""
     progs, tests = _tree(tmp_path, EMITTER_HELPER_ASSEMBLED,
                          "def test_x():\n    assert True\n")
     r = _run(progs, tests, "--json", tmp_path / "r.json")
-    assert r.returncode == RC_PASS, (
+    assert r.returncode != RC_FAIL, (
         "an honest helper-assembled emitter is still refused:\n" + r.stdout)
+    assert r.returncode == RC_VACUOUS, (
+        "the only counter present was declined, so nothing was compared and "
+        "this must not read as a pass:\n" + r.stdout)
+    assert "NOT a pass" in r.stdout, r.stdout
     assert "[NOT DECIDABLE]" in r.stdout, (
         "the guard stopped comparing without saying so:\n" + r.stdout)
-    assert "NOT DECIDABLE" in [l for l in r.stdout.splitlines()
-                               if l.startswith("[PASS]")][0], r.stdout
     doc = json.loads((tmp_path / "r.json").read_text())
     assert doc["findings"] == [], doc
+    assert doc["counters_examined"] == 0, (
+        f"a declined comparison was counted as examined: {doc}")
     assert len(doc["not_determined"]) == 1, doc
     assert doc["not_determined"][0]["emitted_per_site"] == 3, doc
+
+    # ... and with something decidable beside it, a real PASS that still says so
+    both = EMITTER_HELPER_ASSEMBLED.replace(
+        '            + _repair("c") + "  if {$_n >= 3} { puts ALL }\\n")\n',
+        '            + _repair("c") + "  if {$_n >= 3} { puts ALL }\\n"\n'
+        '            + "  if {[catch {y}]} { incr _m }\\n"\n'
+        '            + "  if {[catch {z}]} { incr _m }\\n"\n'
+        '            + "  if {$_m >= 2} { puts M }\\n")\n')
+    progs2, tests2 = _tree(tmp_path / "two", both,
+                           "def test_x():\n    assert True\n")
+    r2 = _run(progs2, tests2, "--json", tmp_path / "r2.json")
+    assert r2.returncode == RC_PASS, r2.stdout + r2.stderr
+    assert "[NOT DECIDABLE]" in r2.stdout, r2.stdout
+    doc2 = json.loads((tmp_path / "r2.json").read_text())
+    assert doc2["counters_examined"] == 1 and len(doc2["not_determined"]) == 1, doc2
 
 
 def test_a_lower_bound_that_EXCEEDS_the_denominator_is_still_refused(tmp_path):

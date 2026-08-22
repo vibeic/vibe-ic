@@ -771,7 +771,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                            "matched": matched, "denial": word})
         for name, sites, dens in rows:
             for kind, value in dens:
-                counters_examined += 1
                 if value != sites and name in lower_bound and sites < value:
                     # K IS A LOWER BOUND HERE, so `sites < denominator` is not a
                     # disagreement -- the shortfall is exactly what a helper
@@ -786,6 +785,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "emitted_per_site": lower_bound[name],
                     })
                     continue
+                # COUNTED ONLY ONCE IT IS ACTUALLY COMPARED. Counting a
+                # comparison this guard then DECLINED overstates the reach and,
+                # worse, keeps an all-declined run out of the VACUOUS tier: it
+                # printed "every population stated twice agrees" having compared
+                # none. Measured -- rc=0 on a run whose only counter was
+                # undecidable.
+                counters_examined += 1
                 if value != sites:
                     findings.append({
                         "check": "emitter-self",
