@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1176
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1176)
+- **Total programs (excluding helpers / shims):** 1178
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1178)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1167 |
+| `any` | 1169 |
 
 ## Alphabetical listing
 
@@ -719,6 +719,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
+| `only_the_declaring_step_writes_its_output` | any | — | Two writers for one path the flow declares as a step's required output. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `opcode_field_width_consistency_check` | any | v0.2.13 | Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13). |
 | `open_issue_claim_scan` | any | — | Which open issues carry no CLAIMED comment — with the un-readable ones NAMED. |
@@ -884,6 +885,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs. |
+| `provenance_value_is_resolved_not_constant` | any | — | A source-naming field filled from a path typed into the emitter. |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
@@ -1248,7 +1250,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1167 programs)
+### `any` (1169 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1938,6 +1940,7 @@ _(no programs in this group)_
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
+- `only_the_declaring_step_writes_its_output` — Two writers for one path the flow declares as a step's required output.
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `opcode_field_width_consistency_check` — Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13).  _[v0.2.13]_
 - `open_issue_claim_scan` — Which open issues carry no CLAIMED comment — with the un-readable ones NAMED.
@@ -2103,6 +2106,7 @@ _(no programs in this group)_
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provenance_output_hash_completeness_check` — verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs.  _[v0.2.102]_
+- `provenance_value_is_resolved_not_constant` — A source-naming field filled from a path typed into the emitter.
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
