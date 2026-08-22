@@ -1,0 +1,36 @@
+/home/reyerchu/AI_IC_design/_jm9_base	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_a1610	LANDED	.112	landed_by_history need=17736 unproven=0	LIVE	live/harvest/rescue-reanchor-6
+/home/reyerchu/_c_o_edge_llm_accel_nangate45_c2_scratch/wt_scope	LANDED	.121	landed_by_history need=17732 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_c_o_edge_llm_accel_nangate45_c2_scratch/wt_sdc	LANDED	.121	snapshot_identity	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_c_o_edge_llm_accel_nangate45_c3_scratch/wt	LANDED	.121	snapshot_identity	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_c_o_edge_llm_accel_nangate45_scratch/wt_cdc	LANDED	.121	landed_by_history need=17734 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_c_o_edge_llm_matmul_accel_nangate45_scratch/wt_pr	LANDED	.121	landed_by_history need=17729 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_c_o_edge_llm_matmul_accel_nangate45_scratch/wt_pr2	LANDED	.121	landed_by_history need=17733 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_cpath_priv/basetree	LANDED	.112	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_ctrl1532	LANDED	.112	landed_by_history need=17779 unproven=0	LIVE	live/harvest/rescue-reanchor-12
+/home/reyerchu/_dens_priv/wt-jdrc1177	LANDED	.108	landed_by_history need=164 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/_gf180_priv/wt2	LANDED	.112	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_i_pin_v1519_1091	LANDED	.112	landed_by_history need=17779 unproven=0	LIVE	live/harvest/rescue-reanchor-3
+/home/reyerchu/_i_solo_1517	LANDED	.112	landed_by_history need=17779 unproven=0	LIVE	live/harvest/rescue-reanchor-1
+/home/reyerchu/_j4reds2/base	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_j4reds3/base	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jcap_priv/wt	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jcapture	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jcorpus/base	LANDED	.112	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jd3	LANDED	.112	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jfeas_base	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jppa_agent/wt	LANDED	.121	landed_by_history need=160 unproven=0	LIVE	live/harvest/rescue-reanchor-8
+/home/reyerchu/_jppa_closure/tree	LANDED	.108	landed_by_history need=159 unproven=0	LIVE	live/harvest/rescue-reanchor-12
+/home/reyerchu/_jppa_contract/tree	LANDED	.112	landed_by_history need=165 unproven=0	LIVE	live/harvest/rescue-reanchor-11
+/home/reyerchu/_jppa_fixtures/tree	LANDED	.108	landed_by_history need=158 unproven=0	LIVE	live/harvest/rescue-reanchor-1
+/home/reyerchu/_jppa_metrics/wt	LANDED	.121	landed_by_history need=163 unproven=0	LIVE	live/harvest/rescue-reanchor-1
+/home/reyerchu/_jppa_power/base	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_jppa_skills/tree	LANDED	.112	landed_by_history need=155 unproven=0	LIVE	live/harvest/rescue-reanchor-4
+/home/reyerchu/_ptmo_priv/ppa	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_smrg_priv/smrg_base	LANDED	.121	snapshot_identity	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/_v1126	ABANDON	.112	landed_by_history need=17780 unproven=1	LIVE	live/harvest/rescue-reanchor-heads
+/home/reyerchu/jf-63x8-work/basejm9	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
+/home/reyerchu/vibe-ic-wt-a3prov	LANDED	.112	landed_by_history need=17440 unproven=0	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/wt-j63x8c	ABANDON	.108	landed_by_history need=9 unproven=9	LIVE	live/harvest/worktree-triage-jharvest
+/home/reyerchu/wt-main62	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
+/tmp/claude-1000/-home-reyerchu-vibe-ic/0144f922-cbe4-48a4-937e-a5e723ca0cec/scratchpad/wt-base	LANDED	.108	snapshot_identity(local)	LIVE	live/agent/j63b-63x8-reenumeration
