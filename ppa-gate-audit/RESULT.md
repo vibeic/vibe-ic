@@ -2677,3 +2677,140 @@ where the runner splits the f-string across two source lines. The test did not
 quietly match a different emitter — it asserted that its anchor matched zero
 times and said so. A structural test that cannot identify its subject must
 refuse, not guess.
+
+
+# Part 25 — a refusal that hid behind an undetermined, over three published
+# records, in both campaigns
+
+WHAT WAS FOUND. `ppa_head_to_head_check.evaluate` ran `check_scope_parity`
+(which raises at RC_UNDETERMINED, 2) BEFORE `check_stage_basis_agreement`
+(which raises at RC_REFUSED, 1). A record tripping both was reported as
+`[UNDETERMINED] ... SCOPE_*` and its refusal was never printed.
+
+THREE PUBLISHED RECORDS WERE IN EXACTLY THAT STATE, all one shape — a
+`power_mw` taken at `stage='synth'` cited under
+`measurement_basis='post_route_sta'`:
+
+    ppa-crosslayer/records/h2h_A.json      both arms
+    ppa-crosslayer/records/h2h_B.json      both arms
+    ppa-e2e/records/head_to_head.json      both arms
+
+Each states on its face that it holds a sign-off measurement; each actually
+holds a pre-physical synthesis estimate. `STAGE_CONTRADICTS_BASIS` exists to
+say so and could not be reached. This is the THIRD instance of the inversion in
+this family — Part 14 (`run_coverage`) and `ppa_problem_integrity_check`
+carried it before.
+
+DENOMINATOR, so the finding is bounded rather than suggestive: 16 comparison
+records tree-wide, 6 arm-axes contradicting, 13 records clean. Twelve of the
+fourteen cross-layer head-to-heads cite `power_postroute.rpt` at
+`post_route_extracted`; only h2h_A and h2h_B cite `power.rpt` at `synth`.
+
+TWO INDEPENDENT MASKS, and they are worth separating because only one is the
+ordering:
+
+  * h2h_A and ppa-e2e/head_to_head.json were masked by the ORDERING alone —
+    a `timing_wns_ns.rc_corner` sentinel consumed the record first.
+  * h2h_B was masked by a PRODUCER DEFECT: `_ppa/power.metric_records` could
+    not emit the required `mode` key at all (repaired in fd2c7c62c6), so the
+    record was SCOPE_INCOMPLETE before any ordering question arose.
+
+THE PRODUCER FIX WAS INERT. fd2c7c62c6 repaired the producer and NOT ONE
+published record was regenerated to reflect it — measured with
+`git diff --stat 54e5395fa5..HEAD -- '*records/*'`, which is empty. A fix whose
+corpus never moves is the declared-but-inert class pointing at itself.
+
+WHAT WAS CHANGED IN THE RECORDS, and what deliberately was not. h2h_A and
+h2h_B's four `power_mw` scopes gained `mode: "functional"`, DERIVED by running
+the shipped producer's own `_mode_for` over each record's own cited artefact,
+whose sha256 was verified byte-identical to what the record declares, and whose
+`pvt_matrix.json` resolves the mode with no gap. NO NUMBER WAS TOUCHED: the
+producer re-derives 0.000306 W and 0.000302 W against the recorded 0.306 mW and
+0.302 mW — the same figures, and the diff is four added lines.
+
+WHAT IS LEFT FOR THE OWNER, NAMED RATHER THAN CHOSEN QUIETLY. The three records
+still cite a synthesis power number under a sign-off basis, and there are two
+defensible repairs that say DIFFERENT things about what the campaign measured:
+
+    (i)  re-point `power_mw` at `power_postroute.rpt`, which exists for both
+         trials with the sha256 that sibling h2h_C already cites. This CHANGES
+         PUBLISHED FIGURES (baseline 0.306 -> 0.573 mW, subject 0.302 -> 0.54)
+         and it widens the subject's margin — it flatters us, which is the
+         direction to be most suspicious of and the reason it was not taken
+         here.
+    (ii) correct the declared `measurement_basis` to one that covers `synth`,
+         which changes the CLAIM instead of the numbers and flatters nobody.
+
+Choosing between them is a statement about campaign intent that the artefacts
+cannot settle, so it is the owner's and not this lane's.
+
+THE ORDERING REPAIR, and a defect it introduced that was caught before it
+shipped. Moving `check_stage_basis_agreement` ahead of `check_scope_parity` is
+safe because the callee skips an unknown basis and an absent scope by name. It
+did NOT skip a scope that is present but declares no `stage`, so an arm whose
+`area_um2` scope is `{}` was reported as "taken at stage=None -- a stage this
+basis does not cover" — a contradiction that does not exist, replacing the
+accurate SCOPE_INCOMPLETE. A stage that was never stated cannot contradict
+anything, so the callee now defers that case to parity. Caught by
+`test_VACUOUS_both_arms_declaring_an_EMPTY_scope_does_not_buy_equality` going
+red, which is the existing suite doing its job on a change of mine.
+
+ONE EXISTING TEST EXPECTATION WAS CHANGED, and it is flagged rather than
+quietly edited. `test_synthesis_area_is_not_post_route_area` asserted
+`rc == RC_UNDETERMINED` while ALSO admitting `STAGE_CONTRADICTS_BASIS` in its
+code list — a code raised only at RC_REFUSED. The two assertions could not both
+hold; the rc line was reachable only while parity ran first. The guarantee the
+test's name states is unchanged and is now delivered by the stronger code:
+RC_OK stays excluded, and a synthesis area still may not be reported as a
+post-route area.
+
+VERDICTS, measured before and after. NOTHING WAS MADE GREEN; this moves in the
+opposite direction, which the brief permits and the reverse of which it forbids:
+
+    PPA head-to-head records (cross-layer)  14 rec, 0 refused, 2 undet, rc 2
+                                        ->  14 rec, 2 refused, 0 undet, rc 1
+    PPA head-to-head records (end-to-end)    2 rec, 0 refused, 2 undet, rc 2
+                                        ->   2 rec, 1 refused, 1 undet, rc 1
+
+`tools/ci/gate_red_since.json` is NOT edited. A NEW red passes that ledger by
+its own rule, and acknowledging a red found this session would be taking on a
+deadline in order to avoid stating a finding.
+
+rc 0 OVER 14 IS STILL NOT AVAILABLE, and the reason is now correct where Part 21
+had it wrong. Part 21 argued the two records "cannot be regenerated here"
+because their run tree is absent. MEASURED: `/home/reyerchu/_jxlayer/run/trials/`
+IS present on this host and every cited artefact matches its recorded sha256,
+which is how `mode` was recovered at all. What genuinely blocks rc 0 is
+narrower and survives: h2h_A's `timing_wns_ns.rc_corner` is stated in no
+artefact — the dialect-B report names only `SPEF=spm.max.spef`, and reading
+`max` out of a filename is the inference `_stage_for` refuses on principle.
+
+NEGATIVE CONTROLS, four, all on real code:
+
+    A. ordering reverted to parity-before-basis
+       3 failed, 3 passed. The three greens are the right ones: the premise
+       (a basis contradiction with matching scopes was ALWAYS caught), the
+       paired half (a scope defect alone is STILL undetermined), and the
+       corpus premise.
+       E  AssertionError: ... got rc=2 {'code': 'SCOPE_SENTINEL' ...}
+       E  ... the finding never reached a reader: [(h2h_A, 2, SCOPE_SENTINEL),
+          (ppa-e2e/head_to_head.json, 2, SCOPE_SENTINEL)]
+
+    B. the file run UNCHANGED against pristine origin/main — the strongest
+       form, since a guard that cannot fail against pre-fix code proves
+       nothing. 3 failed, 3 passed, and it names ALL THREE records with their
+       distinct masking codes, h2h_B's being SCOPE_INCOMPLETE — the producer
+       mask — and the other two SCOPE_SENTINEL.
+
+    C. the `stage is None` deferral removed
+       FAILED ::test_VACUOUS_both_arms_declaring_an_EMPTY_scope_does_not_buy_equality
+
+    D. the paired half is not decorative: it is what stops the whole file from
+       being satisfied by a checker that has learned to refuse everything, and
+       it stays green under A, B and C.
+
+REGRESSION. 2333 passed, 4 failed, 124 skipped, 17 xfailed over the
+ppa/sta/rc2/ablation selection. The same 4 fail IDENTICALLY on pristine
+origin/main — verified by running them there rather than assumed:
+test_ppa_layer_timing_view_dedup x3, test_ppa_runner_extraction_ledger x1.
+None is mine. chip-AGNOSTIC source guard: PASS, 1553 file(s).

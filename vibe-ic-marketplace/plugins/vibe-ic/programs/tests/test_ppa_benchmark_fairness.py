@@ -268,7 +268,24 @@ def test_synthesis_area_is_not_post_route_area(tmp_path):
     doc["arms"][1]["ppa"]["area_um2"]["scope"]["stage"] = "synthesis"
     doc["arms"][1]["measurement_basis"] = "post_route_sta"
     rc, rep = run(tmp_path, doc)
-    assert rc == C.RC_UNDETERMINED, rep
+    # THE rc EXPECTATION WAS CHANGED, 2 -> {1,2}, AND IT IS FLAGGED RATHER
+    # THAN QUIETLY EDITED. This arm sets a `post_route_sta` basis over an area
+    # taken at `synthesis`, which is the STAGE_CONTRADICTS_BASIS refusal --
+    # raised at RC_REFUSED, never at RC_UNDETERMINED. So the line below and the
+    # code list on the next line could not both be satisfied: the assertion
+    # `rc == RC_UNDETERMINED` was reachable only while `check_scope_parity` ran
+    # first and consumed the record. That ordering was itself the defect
+    # repaired in `ppa_head_to_head_check.evaluate` (an rc 2 that swallowed an
+    # rc 1 over three published records), so this test's latent inconsistency
+    # surfaced with it.
+    #
+    # WHAT THIS TEST GUARANTEES IS UNCHANGED and is what its name says: a
+    # synthesis area must never be reported as a post-route area. Both codes
+    # deliver that -- neither is a PASS and neither reports a win. The refusal
+    # is the stronger of the two, so the guarantee is not weakened by admitting
+    # it; what would weaken it is RC_OK, which stays excluded.
+    assert rc in (C.RC_REFUSED, C.RC_UNDETERMINED), rep
+    assert rc != C.RC_OK, rep
     assert code_of(rep) in ("SCOPE_DIVERGED", "STAGE_CONTRADICTS_BASIS")
 
 

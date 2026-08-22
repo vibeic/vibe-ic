@@ -471,8 +471,31 @@ def evaluate(path: Path) -> Tuple[int, Dict[str, Any]]:
         # v2. Each one is argued in `_ppa/benchmark.py`; none of them can be
         # switched off by anything the record says about itself.
         report["contract"] = _bench.check_contract_identity(arms)
-        report["scope"] = _bench.check_scope_parity(arms)
+        # STAGE-BASIS BEFORE SCOPE PARITY, and the order is the finding.
+        # MEASURED on this repo's own corpus: h2h_A and h2h_B each cite a
+        # `synth` power number under `measurement_basis='post_route_sta'` --
+        # a STAGE_CONTRADICTS_BASIS refusal, rc 1 -- and each ALSO trips
+        # `check_scope_parity`. With parity first, both records reported as
+        # `[UNDETERMINED] ... SCOPE_INCOMPLETE`, rc 2, and the refusal was
+        # never printed. An rc 2 that swallows an rc 1 is the failure mode
+        # this whole layer exists to end, and it is the third instance found
+        # in this family (`run_coverage` and `ppa_problem_integrity_check`
+        # carried the same inversion).
+        #
+        # THE ARGUMENT IS NOT MERELY "1 OUTRANKS 2". It is what each check
+        # reads. STAGE_CONTRADICTS_BASIS is INTRA-arm: one arm's declared
+        # basis contradicts its own recorded stage, and no other arm is
+        # consulted. `check_scope_parity` is INTER-arm: it asks whether two
+        # arms are comparable. Withholding "this record contradicts itself"
+        # because "these two records could not be compared" is backwards --
+        # the self-contradiction is established whatever the comparison does.
+        #
+        # SAFE IN THIS ORDER BY CONSTRUCTION, not by luck: the callee skips
+        # (`continue`) on an unknown basis and on an absent scope, naming
+        # C4 and SCOPE_UNDECLARED as the owners of those cases, so it reaches
+        # nothing that parity was holding for it.
         _bench.check_stage_basis_agreement(arms)
+        report["scope"] = _bench.check_scope_parity(arms)
         report["feasibility"] = _bench.check_feasibility(arms)
         subject = next(a for a in arms if a.get("role") == "subject")
         report["tuning"] = _bench.check_tuning_parity(
