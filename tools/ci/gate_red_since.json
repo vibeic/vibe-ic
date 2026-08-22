@@ -53,7 +53,7 @@
       "max_commits": 210,
       "owner": "repo-gatekeeper",
       "why": "floorplan_hints, power_budget_uw and sdc_constraints_path are read by a checker and populated in 0 of the 4 documents that carry them, so the consumer cannot tell empty from clean.",
-      "bound_because": "The fix is in vibeic/benchmark-data, not in this repo: either the L-docs populate the three fields or the checker declares them optional, and a cross-repository change needs a round trip. 210 commits is three days at the measured rate. It is the longest bound here and it is still 290 short of the ceiling.",
+      "bound_because": "The fix is in vibeic/benchmark-data, not in this repo: either the L-docs populate the three fields or the checker declares them optional, and a cross-repository change needs a round trip. 210 commits is three days at the measured rate. It is the longest bound here and it is still 290 short of the ceiling. || SUPERSEDED 2026-08-22, kept because it was true when measured: the corpus moved (b971220) and now holds NO L-doc carrying a `fields` object at all, so the fix described above — populate the three fields, or declare them optional — is no longer the question. The gate returns rc 2 UNDETERMINED over a zero denominator, which is correct behaviour; what is wrong is the DISPATCH recording rc 2 as FAIL. The bound is not what needs revisiting here.",
       "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
     },
     {
@@ -62,7 +62,7 @@
       "max_commits": 140,
       "owner": "repo-gatekeeper",
       "why": "113 baseline entries now resolve and must be shrunk out of the baseline before it becomes a standing waiver, and 4 documents cite proofs they do not ship.",
-      "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today.",
+      "bound_because": "Two halves with different costs: shrinking the baseline is one --write-baseline run, and the 4 dangling citations need someone to decide whether the document or the missing file is wrong. 140 commits is two days at the measured rate, which is the decision half; the mechanical half could be done today. || FIGURES SUPERSEDED 2026-08-22: the corpus moved (b971220) and shrank from 1037 enumerated files to 70. It is now 66 contributing documents of 70, 28 citations, 132 baseline entries resolving and 5 dangling — not the 113 and 4 above. The SHAPE of the reasoning stands (a mechanical half and a decision half) and so does the bound; only the counts moved.",
       "adjudicated": "REAL FINDING — stays red until fixed, NOT renewed. docs/research/2026-08-21-corpus-gate-adjudication.md"
     },
     {
