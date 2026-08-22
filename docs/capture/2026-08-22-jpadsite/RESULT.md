@@ -1587,8 +1587,29 @@ THE MUTATION DENOMINATOR DID NOT MOVE, AND THAT IS PARSED TOO
   denominator is only still 15 if that commit changed no executable program
   code. AST of all three programs at b95dd8a9f vs 41e6562d2, module docstring
   stripped: IDENTICAL, all three. So 15/15 stands at the tip rather than at a
-  commit two behind it. Re-run: the loop is in no_test_was_weakened.py's
-  docstring; the same technique, applied to the programs instead of the tests.
+  commit two behind it. RE-RUN IT WITH THIS, the command actually used. An
+  earlier draft said "the loop is in no_test_was_weakened.py's docstring". IT
+  IS NOT THERE AND COULD NOT BE: that script looks for `test_`-prefixed
+  functions and would refuse (rc=2, zero tests) on a program file. A pointer to
+  a place with nothing in it costs the reader the trip and teaches them to
+  distrust the others.
+
+      python3 - <<'EOF'
+      import ast, subprocess
+      def prog_ast(rev, f):
+          p = f"vibe-ic-marketplace/plugins/vibe-ic/programs/{f}"
+          src = subprocess.run(["git","show",f"{rev}:{p}"],
+                               capture_output=True, text=True).stdout
+          t = ast.parse(src)
+          if t.body and isinstance(t.body[0], ast.Expr) \
+                    and isinstance(t.body[0].value, ast.Constant):
+              t.body = t.body[1:]          # drop the module docstring
+          return ast.dump(t, annotate_fields=False)
+      for f in ("_pad_ring.py","pad_ring_gen.py","pad_ring_check.py"):
+          print(f, prog_ast("b95dd8a9f",f) == prog_ast("41e6562d2",f))
+      EOF
+
+  Verified by running it: True, True, True.
 
 ALL THREE PARTS OF THE RULING, BOUND TO ARTEFACTS RATHER THAN ASSERTED
   (in arithmetic_selfcheck.py)           part 1, the WIDTH extent: the pad
