@@ -77,6 +77,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from _published_corpus import needs_corpus   # vibe-ic: the corpus moved repositories
 
 import pytest
 
@@ -295,6 +296,7 @@ def test_a_declaring_trap_shape_step_is_never_certified_by_its_own_gate(
 
 
 @pytest.mark.parametrize("step_id", _DECLARING_NOTHING)
+@needs_corpus
 def test_declaring_them_would_suppress_the_producer(step_id, tmp_path, record_property):
     """L3 — the mechanism behind L1, MEASURED, not quoted.
 

@@ -81,8 +81,22 @@ def test_malformed_advisory_spec_is_a_real_failure(tmp_path):
         assert any("advisory_program_exit_zero" in r for r in reasons)
 
 
-def test_condition_absent_means_not_applicable_and_silent(tmp_path,
-                                                          monkeypatch):
+def test_condition_absent_means_not_applicable_and_DECLARED(tmp_path,
+                                                            monkeypatch):
+    """W4 renamed the property in this test's own title.
+
+    It used to end `..._and_silent` and assert that an unmet condition emitted
+    NO advisory record at all. That silence was the defect: this slot's whole
+    contract, three lines below it in `_evaluate_gate`, is "advisory: never
+    blocks, ALWAYS RECORDED", and it already refuses to let an rc-2 disclosed
+    skip read as a clean result because "recorded nothing must never be
+    indistinguishable from found nothing". An unmet condition recorded nothing
+    at all, with the program not even started.
+
+    So the program STILL does not run — that half is unchanged and is asserted
+    below — and what it leaves behind now depends on whether the clause
+    declared why an absent input is a genuine not-applicable.
+    """
     called = {"n": 0}
 
     def _never(p, c):
@@ -90,11 +104,24 @@ def test_condition_absent_means_not_applicable_and_silent(tmp_path,
         return False, "should not run"
 
     monkeypatch.setattr(_flow, "_check_program_exit_zero", _never)
+
+    # UNDECLARED: a gate-authoring defect, and this branch already treats a
+    # malformed advisory spec as a real FAIL rather than an advisory one.
     passed, reasons = _flow._evaluate_gate(
         tmp_path, _adv(condition_files_exist=["never_exists.json"]))
+    assert passed is False and called["n"] == 0
+    assert "never_exists.json" in " ".join(reasons)
+
+    # DECLARED: passes, does not run, and says both on the advisory channel.
+    why = ("Fixture clause: the trigger is a board-only artefact a headless "
+           "run legitimately never produces.")
+    passed, reasons = _flow._evaluate_gate(
+        tmp_path, _adv(condition_files_exist=["never_exists.json"],
+                       absent_condition_reason=why))
     assert passed is True and called["n"] == 0
-    assert not [r for r in reasons
-                if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
+    adv = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
+    assert len(adv) == 1 and why in adv[0], (
+        f"the advisory slot must RECORD the declared not-applicable: {reasons}")
 
 
 def test_condition_present_means_it_runs(tmp_path, monkeypatch):

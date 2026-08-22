@@ -28,22 +28,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_comments  # noqa: E402
 
-HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
-GATES = HARNESS / "gates_atomic.py"
-
 import pytest  # noqa: E402
 
 #: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
 #: Without iverilog the gate refuses to run — correctly — and writes no report,
 #: so the read dies with FileNotFoundError on a path that was never meant to
 #: exist. A gate that REFUSED and a gate that produced a bad report are not the
-#: same result, and a traceback cannot tell them apart. The other nine tests in
-#: this file call pure rule functions and need no toolchain.
+#: same result, and a traceback cannot tell them apart (#1430, #1433).
+#:
+#: Marked by CALL RELATIONSHIP, not by name. The `test_gate_*` prefix happens to
+#: select the right set in these two files, but #1430 records that the same
+#: shortcut would have silenced two tests needing no toolchain. The rule is
+#: "its body reaches `_run_gate(` or `_block_rules(`", derived with `ast`.
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 _needs_gate = pytest.mark.skipif(
     not _HAS_IVERILOG,
     reason="runs gates_atomic.py and reads the gates.json it writes; without "
            "iverilog the gate refuses and writes nothing")
+
+
+HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
+GATES = HARNESS / "gates_atomic.py"
 
 RULE = "moore-output-reset-gated"
 
