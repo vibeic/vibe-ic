@@ -1,7 +1,0 @@
-{
-  "doc_class": "lab_calibration",
-  "applicability": "NOT_APPLICABLE",
-  "reason": "digital block; no analog trim/calibration.",
-  "schema_version": 2,
-  "ic_name": "edge_llm_matmul_accel"
-}

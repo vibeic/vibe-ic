@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "evidence": "usb_hid_tester_verify not run",
-  "design_identity": {
-    "design": "edge_llm_accel_vibe_forward",
-    "ic_name": "edge_llm_matmul_accel",
-    "top": "edge_llm_matmul_accel"
-  }
-}
