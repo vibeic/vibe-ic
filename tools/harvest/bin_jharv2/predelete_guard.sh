@@ -21,6 +21,13 @@
 # the main they were judged at, one of them with 678 files. When a row cites a judged main, test
 # BOTH before believing a refusal. A refusal is still the safe direction; it is not proof of loss.
 #
+# SECOND LIMITATION, measured 2026-08-22: this compares against main's TIP. A squash-merge lands
+# content and main then moves on, so the tip no longer matches while nothing is missing. A peer
+# flipped 12 rows to LANDED on exactly that basis and was right: every differing file's blob is in
+# main's HISTORY at the same path. When this refuses, check history before believing loss --
+# `git log --full-history <ref> -- <path>` and compare blobs, WITHOUT a head limit: a 200-commit cap
+# missed one at commit 204 of 226 and would have reported a correct verdict as unlanded work.
+#
 # Pass the expected origin/main as $1. The guard refuses if the clone disagrees, because a stale or
 # divergent origin/main manufactures a false LANDED: content that matches an OLD main and differs
 # from the current one reads as "already landed" and is deleted. Measured on .112, whose clone held

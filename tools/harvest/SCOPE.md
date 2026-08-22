@@ -3,17 +3,28 @@
 `verdicts_all.tsv` holds 1439 decided worktrees. That is not "all the vibe-ic checkouts on the
 fleet", and nothing in the file says so — this does.
 
-## Measured 2026-08-22, full-depth filesystem census on three reachable hosts
+## Measured 2026-08-22, full-depth filesystem census, six reachable hosts
 
-| host | vibe-ic checkouts on disk | carrying a verdict | not judged |
+| host | checkouts on disk | carrying a verdict | not judged |
 |---|---|---|---|
 | .105 (8HD-9) | 1394 | 481 | 913 |
 | .102 (8HD-7) | 2062 | 631 | 1431 |
 | .108 (8HD-6) | 828 | 32 | 796 |
-| **total (3 of 7 hosts)** | **4284** | **1144** | **3140** |
+| .112 | census did not complete | — | — |
+| .114 | 3578 | 99 | 3479 |
+| .120 | 3784 | 122 | 3662 |
+| .121 | 1662 | 51 | 1611 |
+| **total** | **13308** | **1416** | **11892** |
+
+`.112`'s census was still running when this was written and is NOT included — its row says so
+rather than carrying a zero. A missing measurement and a measured zero look identical in a table,
+which is the whole reason this file exists.
 
 A checkout counts if it has a `.git` and either `vibe-ic-marketplace/` or `.claude-plugin/`.
-`.112`, `.114`, `.120`, `.121` were not censused; `.107` answers ICMP with every TCP port filtered.
+`.107` answers ICMP with every TCP port filtered, so it cannot be censused at all.
+
+**1416 of 13308 is 11%.** The harvest was never an enumeration of the fleet — it was a roster of
+477, and 1084 rows beyond it that two hosts happened to surface.
 
 ## Why the gap is scope, not failure
 

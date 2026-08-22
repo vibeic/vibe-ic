@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 32 markdown files and 80 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 33 markdown files and 80 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -16,7 +16,7 @@ with no entry point, and the oldest handoff predates the verdict files entirely.
 
 Verdicts in `verdicts_all.tsv`: RECOVER 1226, LANDED 184, ABANDON 29.
 
-`RECOVER` = keep. `LANDED` and `ABANDON` **authorise deletion** — 213 rows do.
+`RECOVER` = keep. `LANDED` and `ABANDON` **authorise deletion** — 225 rows do.
 
 ## 2. Before deleting anything: `bin_jharv2/predelete_guard.sh`
 
@@ -72,13 +72,17 @@ that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
 ## 4c. Every deletion-bound row now has a recorded guard result
 
-**213 of 213.** An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
+**225 of 225.** An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
 
 | file | rows | covers |
 |---|---|---|
 | `JOINED_DELETION_GUARD_RESULTS.tsv` | 49 | the roster's deletion-bound rows |
-| `EXTRAS_DELETION_GUARD_RESULTS.tsv` | 161 | the extras' — all SAFE |
+| `EXTRAS_DELETION_GUARD_RESULTS.tsv` | 173 | the extras' — all SAFE |
 | `shard_c/108_DROP_guard_results.tsv` | 30 | host 108's DROP rows |
+
+A peer later re-verdicted 12 rows RECOVER → LANDED on `.120`, and `verdicts_all is reproducible`
+caught it: deletion-bound went 213 → 225. All 12 verified by the method their evidence names —
+every file differing from main's **tip** has its exact blob in main's **history** at the same path.
 
 The extras needed three methods. 37 answered directly; 81 first refused as *stale clone* and were
 fetched **forward** before they could be judged at all; and 43 are pruned checkouts with no git dir,
@@ -92,7 +96,7 @@ checkout looks catastrophic: ~446 files differ because main moved, and ~17,192 r
 ## 4d. What this does NOT cover
 
 `verdicts_all.tsv` is 1439 decided worktrees, not every vibe-ic checkout on the fleet. A full-depth
-census of three reachable hosts found **4284 checkouts, of which 1144 carry a verdict**. See
+census of six reachable hosts found **13,308 checkouts, of which 1,416 carry a verdict — 11%**. See
 `SCOPE.md`. The job was defined by a 477-worktree roster; the other 1084 rows are beyond it. An
 unjudged checkout is untouched — a wrong verdict is what deletes.
 
