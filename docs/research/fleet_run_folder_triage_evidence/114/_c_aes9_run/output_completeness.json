@@ -1,0 +1,49 @@
+{
+  "run_dir": "/home/reyerchu/_c_aes9_run",
+  "deliverable": "/home/reyerchu/_c_aes9_run/RESULT.md",
+  "state": "COMPLETE",
+  "verdict": "PASS",
+  "reason": "deliverable RESULT.md present (11262 B, 118 content lines)",
+  "evidence": {
+    "deliverable_exists": true,
+    "deliverable_bytes": 11262,
+    "deliverable_content_lines": 118,
+    "deliverable_all_placeholder": false,
+    "deliverable_complete": true,
+    "min_real_bytes": 400,
+    "min_content_lines": 3,
+    "final_summary": null,
+    "orchestrator_report": null,
+    "orchestrator_verdict": null,
+    "required_artifacts": {},
+    "missing_artifacts": [],
+    "agent_output": null,
+    "agent_output_ok": true,
+    "compute_done": false,
+    "liveness": {
+      "pid": null,
+      "pid_alive": false,
+      "lock": null,
+      "lock_live": false,
+      "live": false
+    },
+    "output_census": {
+      "files_total": 689,
+      "files_outside_input": 689,
+      "input_dir": "/home/reyerchu/_c_aes9_run/input",
+      "input_dir_exists": false,
+      "input_only": false
+    },
+    "self_declared_interim": false,
+    "interim_banner": [],
+    "headline_placeholder": null,
+    "unfilled_slots": [],
+    "deliverable_headline_verdict": null,
+    "verdict_consistency_state": "NOT_APPLICABLE"
+  },
+  "blocking": [],
+  "highlight": "",
+  "capture_candidate": null,
+  "claimed_verdict": "FAIL",
+  "rc": 0
+}

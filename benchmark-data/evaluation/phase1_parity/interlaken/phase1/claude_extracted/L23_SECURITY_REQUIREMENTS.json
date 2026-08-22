@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "Interlaken is a chip-to-chip board-level interconnect; the primary threat is physical board access, not a network attacker.",
-      "No encryption or authentication is defined; integrity is error-detection (CRC-24/CRC-32) not cryptographic."
-    ],
-    "security_notes": "Interlaken defines no confidentiality or authentication; deployments relying on it for security must add protection above the link."
-  }
-}
