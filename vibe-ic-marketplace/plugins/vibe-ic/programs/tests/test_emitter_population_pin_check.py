@@ -1080,11 +1080,18 @@ def test_a_TEST_that_will_not_parse_is_reported_too(tmp_path):
 
 #: The denial is WRAPPED: the words that deny sit on the line above the `incr`
 #: they govern. This is the cost `_RECORD_BREAKS` knowingly accepts.
+# The wrapped denial moved from COMMENT lines to PRINTED ones. Not to make a
+# test pass: `_in_an_emitted_comment` now drops a commented `incr` whatever its
+# polarity, so the comment-borne version counts 2 -- the RIGHT answer -- and the
+# under-reach it demonstrated is simply gone there. The cost itself is not gone;
+# measured, a denial wrapped across two PRINTED lines still yields 3 sites
+# against a denominator of 2. The assertions below are unchanged; only the
+# vehicle moved to where the phenomenon still lives.
 EMITTER_WRAPPED_DENIAL = (
     'def script() -> str:\n'
     '    return """\n'
-    '  # the third repair is deliberately absent: there is no\n'
-    '  # incr _n in the fallback branch\n'
+    '  puts "the third repair is deliberately absent: there is no"\n'
+    '  puts "incr _n in the fallback branch"\n'
     '  if {[catch {a}]} { incr _n }\n'
     '  if {[catch {b}]} { incr _n }\n'
     '  puts "PARTIAL: $_n of 2 repairs refused"\n'
@@ -1119,6 +1126,9 @@ def test_the_accepted_under_reach_fails_LOUDLY(tmp_path):
     the property the design was chosen for. Its companion is
     `test_a_denial_is_bounded_by_the_line_it_is_written_on`, which pins the same
     declaration from the other side."""
+    # (The same wrapping inside COMMENT lines no longer miscounts at all --
+    # see `test_a_wrapped_denial_in_a_comment_no_longer_miscounts` -- so this
+    # fixture states the denial in `puts` lines, where the cost is still real.)
     progs, tests = _tree(tmp_path, EMITTER_WRAPPED_DENIAL, PIN_2)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
     assert r.returncode == RC_FAIL, (
@@ -3004,6 +3014,32 @@ def test_a_printed_line_carrying_a_hash_is_still_a_phrase(tmp_path):
         "a phrase on a PRINTED line was dropped because the line carries a "
         "hash:\n" + r.stdout + r.stderr)
     assert "1 test pin(s) COMPARED" in r.stdout, r.stdout
+
+
+def test_a_wrapped_denial_in_a_comment_no_longer_miscounts(tmp_path):
+    """The under-reach `test_the_accepted_under_reach_fails_LOUDLY` demonstrates
+    used to be reachable through COMMENT lines too, and there it produced a
+    count of 3 for a script with two repairs -- announced, but wrong.
+
+    It is no longer reachable that way: a commented `incr` is not a site
+    whatever its polarity, so the count is 2 and the emitter agrees with itself.
+    Pinned because it is a real improvement to a documented cost, and an
+    improvement nobody checks is one that can quietly go away."""
+    emitter = ('def script() -> str:\n'
+               '    return """\n'
+               '  # the third repair is deliberately absent: there is no\n'
+               '  # incr _n in the fallback branch\n'
+               '  if {[catch {a}]} { incr _n }\n'
+               '  if {[catch {b}]} { incr _n }\n'
+               '  puts "PARTIAL: $_n of 2 repairs refused"\n'
+               '  if {$_n >= 2} { puts ALL }\n'
+               '"""\n')
+    progs, tests = _tree(tmp_path, emitter, PIN_2)
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, (
+        "a commented `incr` is being counted as a site again:\n"
+        + r.stdout + r.stderr)
+    assert "3 site(s)" not in r.stdout, r.stdout
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────

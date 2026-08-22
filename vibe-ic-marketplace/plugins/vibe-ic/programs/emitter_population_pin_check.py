@@ -766,6 +766,25 @@ def counters_of(tree: ast.AST) -> Tuple[
         if word:
             refused.append(("increment", m.group(0), word))
             continue
+        # A COMMENTED `incr` IS NOT A SITE, and this is the SILENT
+        # direction: `# incr _n for the third repair, added later` carries no
+        # denial word, so it was COUNTED, and an emitter that really increments
+        # twice then AGREED with its stated denominator of 3. A real
+        # disagreement, masked by a line that never executes.
+        #
+        # AFTER the polarity consult, not before. A denied `incr` almost always
+        # lives in a comment, so checking this first turned a REPORTED
+        # `[POLARITY]` refusal into a silent skip -- measured, it took 11 tests
+        # with it -- and trading a false pass for a disclosure loss is not a
+        # trade this file may make. In this order nothing that was reported
+        # becomes silent; only what was wrongly counted stops being counted.
+        #
+        # Nor is the skip itself reach: a comment is not a claim the script
+        # makes, and this program does not report every line that stated
+        # nothing. What polarity refuses IS a claim, in text meant to be read,
+        # and that is why it is printed.
+        if _in_an_emitted_comment(src, m.start()):
+            continue
         names[m.group(1)] = names.get(m.group(1), 0) + 1
     rows = []
     for name, sites in sorted(names.items()):
@@ -778,6 +797,12 @@ def counters_of(tree: ast.AST) -> Tuple[
                 word = denial(m)
                 if word:
                     refused.append((f"{kind} denominator", m.group(0), word))
+                    continue
+                # A threshold stated only in a COMMENT is not a threshold the
+                # script states to anyone; counting it invents the second
+                # statement this file exists to compare the first against.
+                # After polarity, for the reason given at the `incr` scan.
+                if _in_an_emitted_comment(src, m.start()):
                     continue
                 if (kind, value) not in dens:
                     dens.append((kind, value))
@@ -845,6 +870,11 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for node in _emitted_nodes(tree):
         for m in INCR.finditer(node.value):
+            # A COMMENTED `incr` is not evidence of a multiplier
+            # either, and the two readers must not disagree about
+            # one script -- that divergence is #711 itself.
+            if _in_an_emitted_comment(node.value, m.start()):
+                continue
             # POLARITY, THE SAME QUESTION `counters_of` ASKS OF THE SAME TEXT.
             # Without this the two readers disagree about one script: a denied
             # `incr` is refused as a member there and counted as evidence of a
