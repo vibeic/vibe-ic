@@ -105,6 +105,11 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
+    "phase3.pad_ring": {
+      "description": "Pad ring: the ring config is composed, the ring is generated, and a gate re-derives every claim from the layout and the PDK. Added because a capture from this step routed to the PnR runner, which is not where any of its rules belong.",
+      "bucket_A_program": "programs/pad_ring_gen.py",
+      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md"
+    },
     "phase3.synth": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"

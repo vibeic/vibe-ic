@@ -1,6 +1,6 @@
 [
   {
-    "step": "phase3.floorplan",
+    "step": "phase3.pad_ring",
     "design": "sha256",
     "bucket": "A",
     "rule_name": "refusal_names_the_views_it_read",
@@ -10,7 +10,7 @@
     "fix_action": "Emit the consulted source kinds as a list on the refusal record, each with its resolved path and its yield, and render the same list into the human message. A source kind that was skipped is listed with the reason it was skipped rather than omitted."
   },
   {
-    "step": "phase3.floorplan",
+    "step": "phase3.pad_ring",
     "design": "sha256",
     "bucket": "A",
     "rule_name": "upstream_reimplementation_carries_a_pin",
@@ -20,7 +20,7 @@
     "fix_action": "Declare the pin beside the code it constrains, resolve the upstream file at test time from the installed tool tree, and assert the anchor. Report an unpinned re-implementation as a census entry rather than a pass, so the set of unpinned ones is a measured number instead of an assumption."
   },
   {
-    "step": "phase3.floorplan",
+    "step": "phase3.pad_ring",
     "design": "sha256",
     "bucket": "A",
     "rule_name": "inert_declared_variable_degrades_loudly",

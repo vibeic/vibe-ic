@@ -9,10 +9,10 @@
   },
   "routing_used": {
     "bucket_A": [
-      "programs/phase3_one_shot_runner.py"
+      "programs/pad_ring_gen.py"
     ]
   },
   "bucket_A_files": [
-    "docs/capture/2026-08-22-jcapsha/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py"
+    "docs/capture/2026-08-22-jcapsha/candidates/bucket_A_programs_pad_ring_gen_rule_sketches.py"
   ]
 }

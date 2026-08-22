@@ -1,5 +1,5 @@
-# Bucket A — program-rule sketches for programs/phase3_one_shot_runner.py
-# Corpus-sweep REQUIRED before merging into programs/phase3_one_shot_runner.py.
+# Bucket A — program-rule sketches for programs/pad_ring_gen.py
+# Corpus-sweep REQUIRED before merging into programs/pad_ring_gen.py.
 
 # Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A step resolves a declared name against files it discovered itself, finds nothing, and refuses NOT FOUND while naming only how many candidates it found. The count is real and the search space behind it is one view of several, so the refusal reads as a fact about the input when it is a fact about where the step looked. Not found and not looked for arrive at the reader as the same sentence.
