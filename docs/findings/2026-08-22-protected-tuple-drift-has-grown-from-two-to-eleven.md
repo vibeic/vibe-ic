@@ -173,3 +173,49 @@ three paths where the transition's own intent is known and only the destination
 is in question, and eight where no intent was ever recorded. The first group can
 be resolved by the transition's author. The second cannot be resolved by anyone
 without asking the landings named in the table above.
+
+## Confirmed by the next landing: 11 became 12, and the landing was not refused
+
+_Measured against `origin/main` at `ae78abb28` (v1.11.70), hours after the
+section above was written._
+
+The document above closed with a prediction about its own twelfth path:
+
+> `programs/_prose_polarity.py` is `jdistmat/matrix-distil`'s own and is
+> expected: that branch edits an authority path, and **its lander must
+> re-render the manifest before landing.**
+
+The batch landed as v1.11.70. The manifest was not re-rendered. Measured on both
+sides of that landing, with the same transition and the same `current`/`next`
+ids:
+
+    origin/main a4caccefe (v1.11.69)   47 pinned, 11 hash to NEITHER state
+    origin/main ae78abb28 (v1.11.70)   47 pinned, 12 hash to NEITHER state
+
+    newly drifted: vibe-ic-marketplace/plugins/vibe-ic/programs/_prose_polarity.py
+    no longer drifted: (none)
+
+**Two facts follow, and neither is an inference.**
+
+1. **The obligation was stated and not discharged.** The re-render was named in
+   this document before the landing, against the exact path that drifted. This
+   is not hindsight: it is the same sentence, checked afterwards.
+
+2. **The landing was not refused.** `build_receipt` raises on the BASE when the
+   base tuple matches neither state — that is the mechanism the companion
+   finding documents at line 512. The base of this landing was `a4caccefe`,
+   whose tuple already matched neither state on eleven paths. A landing
+   completed anyway, and left the tuple worse than it found it.
+
+So the earlier finding's claim that "no landing of any kind can currently
+produce a receipt" is now bounded by evidence: landings ARE completing. Either
+they do not pass through `build_receipt`, or they pass through a path that does
+not raise. Which of those it is cannot be read off the repository — the landing
+commit carries no receipt, no trailer and no gate verdict, which is itself
+Bucket C of the matrix capture: *"a landing's gate verdict is not recoverable
+from the repository"*.
+
+That record was filed as NOT distillable because there is no trailer to detect.
+This landing is the instance it describes: a protected-tuple refusal that should
+have fired, a landing that completed, and nothing written down anywhere that
+says which of the two happened.
