@@ -82,6 +82,7 @@ Accepted with no refusal and no unrouted record.
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
+- [Two classes checked this pass and deliberately NOT recorded](#two-classes-checked-this-pass-and-deliberately-not-recorded)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -3285,6 +3286,40 @@ the only thing available given the interface. That is the record about resolving
 a declared path rather than guessing among candidates, standing outside the
 layer it was captured in, which is the whole argument for distilling a landed
 fix into a rule.
+
+## Two classes checked this pass and deliberately NOT recorded
+
+Both looked like records. Neither survived measurement, and the reasons are
+different enough to be worth separating.
+
+**A gate's exit code must be exercised through the process boundary.** The
+corpus lane drives five CLIs as subprocesses and says why: the flow acts on the
+exit code, and an in-process entry-point call leaves the verdict-to-exit-code
+mapping unmeasured. Real rule, and this layer already obeys it — of 20 `ppa_*`
+commands, **20 are driven as a subprocess somewhere in the suite.** The screen
+is loose (it asks whether a test file naming the command also spawns a process),
+but it is loose in the direction of over-reporting coverage, so a 20 of 20 from
+it is weak evidence of a gap and adequate evidence of none. No record.
+
+**A null count must not be read as zero.** This one is a genuine class — an
+absent count means the tool did not report, not that it found nothing — and
+nothing in the record set covers the CONSUMER side of it; the existing record
+covers the producer emitting the null. A pattern sweep returns **37** sites
+defaulting a violation-, error- or failure-named count to zero. I validated two
+before believing it:
+
+| site | verdict |
+|---|---|
+| a crosstalk gate reading a count out of a tool's report | **correct** — the default sits *after* an explicit presence check that reports the missing field |
+| a schema gate defaulting three counts | **correct** — it is reading its own result object, in a print |
+
+Two of two are correct, and the first is the remedy shape rather than the
+defect: *check presence, then default.* So 37 is a vocabulary count, not a
+defect population, and recording it would repeat the A-5 error I have now made
+and caught several times over. The class stays unrecorded until somebody
+measures it with a screen that can tell an external artefact from a locally
+built dictionary — which is the honest statement of what is missing, and is
+itself the harder half of the rule.
 
 ## Summary
 
