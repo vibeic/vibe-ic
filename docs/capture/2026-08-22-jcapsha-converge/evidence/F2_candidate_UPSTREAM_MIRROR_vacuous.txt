@@ -1,0 +1,8 @@
+=== upstream_mirror_is_pinned_check ===
+  files parsed        : 1280
+  declared mirrors    : 0
+  undeclared candidates (prose claims a borrowing, declares nothing — follow-on, NOT a failure): 3
+      _pad_ring.py cites librelane/steps/openroad.py
+      die_finishing_gen.py cites librelane/steps/klayout.py
+      digital_hardmacro_gen.py cites librelane/scripts/magic/lef.tcl
+  NOT CHECKED: no module declares UPSTREAM_MIRROR. Zero declared mirrors is a question with no subject, not a clean answer to it.

@@ -1,0 +1,9 @@
+<unknown>:166: SyntaxWarning: invalid escape sequence '\s'
+[NOT DETERMINED] no module under /home/reyerchu/_jcapsha_conv/vibe-ic-marketplace/plugins/vibe-ic/programs declares UPSTREAM_PINS, so no re-implementation is pinned and none was compared. This is NOT 'the re-implementations agree'.
+[CENSUS] 5 program(s) cite an upstream flow file BY PACKAGE PATH in prose and declare no UPSTREAM_PINS. This is reported, not judged:
+    _pad_ring.py: librelane/config/flow.py, librelane/scripts/openroad/pad.tcl, librelane/steps/openroad.py
+    die_finishing_gen.py: librelane/steps/klayout.py
+    digital_hardmacro_check.py: librelane/flows/chip.py, librelane/scripts/magic/, librelane/scripts/magic/lef.tcl
+    digital_hardmacro_gen.py: librelane/flows/chip.py, librelane/scripts/magic/lef.tcl
+    phase3_one_shot_runner.py: librelane/config.tcl, librelane/config/pdk_compat.py, librelane/drc_exclude, librelane/openlane
+[POPULATION] 0 pin(s) declared across 1244 program(s)
