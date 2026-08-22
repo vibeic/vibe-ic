@@ -81,6 +81,7 @@ Accepted with no refusal and no unrouted record.
 - [Was every commit green? Replayed, and the answer is one](#was-every-commit-green-replayed-and-the-answer-is-one)
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
+- [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -3053,6 +3054,48 @@ untouched. The rule has three failure shapes, not one.
 
 Ten over-matched screens in this lane now. Nine were caught in scratch. This one
 shipped, and only a sibling lane's unrelated decision note walked me back into it.
+
+## Where two of these rules fire NEXT, now that this layer closed them
+
+The corpus lane's note said one gate still finds its records with a filename
+glob. It does not any more — it walks every JSON under the corpus and selects on
+the declared schema, keeping the glob only so that a file which WAS named a
+record and cannot be parsed stays in the population. *Unreadable is not absent*
+is a distinction I did not have a name for and now do.
+
+The same file carries the self-reading measurement in a comment: pointed at a
+corpus, the old glob matched four files — two records and **two reports the
+checker itself had written**. A report has no arms, so the gate refused its own
+output with the most severe verdict it can reach. **Half that corpus verdict was
+the gate marking its own paper.**
+
+So I measured whether the layer closed it everywhere, and nearly filed a false
+finding doing it:
+
+| how the gate selects | needs an own-output exclusion? | has one |
+|---|---|---|
+| on a declared input schema | **no** — its report declares a different schema, so it cannot be selected | 0 of 3 |
+| on a structural predicate | **yes** — its own output has the same shape | **3 of 3** |
+
+A keyword screen reports that as *three of six gates are unguarded*. It is
+wrong in the same way A-5's screen was wrong: it counts a mechanism's presence
+without asking whether its absence is correct. Three of these gates cannot eat
+their own output no matter what, and adding an exclusion to them would be dead
+code. **The class is closed in this layer.**
+
+Which sharpens the second half of the question both records must answer. If the
+rule cannot fire again here, the different instance has to live outside — so I
+went and found it. Three non-PPA commands find inputs by a semantic filename
+glob and write their own JSON. The one I read through resolves its input like
+this: three declared candidate paths, and when none exists, **two recursive
+globs that return the first match of an unordered walk**, then `None`.
+
+Its producer takes its output path from the caller, so there is no fixed
+filename for the consumer to agree with — the guessing is not sloppiness, it is
+the only thing available given the interface. That is the record about resolving
+a declared path rather than guessing among candidates, standing outside the
+layer it was captured in, which is the whole argument for distilling a landed
+fix into a rule.
 
 ## Summary
 
