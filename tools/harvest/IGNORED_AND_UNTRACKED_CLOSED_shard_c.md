@@ -104,6 +104,42 @@ own history. No rescue ref was needed and none was made.
 
 That is the brief's rule paying for itself: judge by CONTENT.
 
+## A third domain, below both: files the tree HOLDS that main's tip does not
+
+`-uno` misses untracked. `-uall` misses ignored. Both of those are about files git is
+not tracking. The third gap is about files it **is** tracking.
+
+The L0 rule behind every LANDED row compares the files the branch OWNS — its diff
+against its merge-base. That scope is right, and it is the scope a peer got wrong in
+the other direction by walking all 5,256 files and counting main moving on as
+unlanded work. But it cannot see a path the worktree holds that main's tip does not
+have at all: such a path is in neither the owned set nor the untracked set nor the
+ignored set, and `rm -rf` takes it with everything else.
+
+**17 of the 19 deletion-bound rows hold at least one. 17472 paths in total.**
+
+    17471   byte-identical to the same path at the row's merge-base with main
+        1   in no commit main contains
+
+The 17471 are main's own content: files that were on main at the merge-base and that
+main deleted afterwards. Fifteen rows hold the same ten — `.image-version-ignore`,
+`tools/vibeic-eda/sync_image_version.py`, six tests — and `_v1126` holds 17331,
+a vendored IP tree main has since dropped. All of it is reachable from origin
+forever; deleting those directories loses none of it.
+
+The one exception is `wt-j63x8c`'s `RESULT.md`, which exists at no point in main's
+history. It survives the directory only because the whole HEAD commit `3ab7fc723e4`
+is contained by the live origin branch `jmatrix/63x8-main-reds` — which is what makes
+that row's survivability claim load-bearing rather than decorative. If that branch is
+ever deleted, that row stops being safe, and `absent_from_main_accounted.py` goes red
+saying so.
+
+`bin_jharv3/absent_from_main_accounted.py`, four guarantees, each shown red:
+a version of a main-deleted path that main never had, a HEAD commit missing from the
+object store, a deletion-bound row with no measurement, and the clean arm.
+
+Raw: `raw_absent_from_main_shard_c_jharv3.tsv`.
+
 ## Stashes, checked rather than assumed
 
 Four stash entries sit in clones these rows share. All four are already preserved and

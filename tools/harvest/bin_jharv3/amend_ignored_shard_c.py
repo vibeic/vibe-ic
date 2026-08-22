@@ -18,6 +18,7 @@ RE_NOTEXAMINED = re.compile(
     r"\s*UNTRACKED NOT EXAMINED -- READ BEFORE DELETING\..*?"
     r"before acting on this verdict\.", re.S)
 RE_IGN = re.compile(r"\s*IGNORED ACCOUNTED:.*?(?=$)", re.S)
+RE_ABS = re.compile(r"\s*HELD BUT ABSENT FROM MAIN.S TIP:.*?(?= IGNORED ACCOUNTED:|$)", re.S)
 
 
 def load_measured(path):
@@ -87,6 +88,28 @@ def ignored_sentence(m, entries):
         f"(`--self-test` shows each of its five guarantees going red).")
 
 
+def absent_sentence(a):
+    n, same, mb, head = (int(a["held_absent_from_main_tip"]), int(a["identical_at_merge_base"]),
+                         a["merge_base"], a["head"])
+    if n == 0:
+        return (" HELD BUT ABSENT FROM MAIN'S TIP: 0 -- every path in this worktree's HEAD "
+                "tree is also in origin/main " + MAIN + ".")
+    lead = (f" HELD BUT ABSENT FROM MAIN'S TIP: {n} path(s) in this worktree's HEAD tree are "
+            f"not in origin/main {MAIN} (e.g. {a['examples']}). The L0 owned-set rule cannot "
+            f"see these -- they are not in this branch's own diff against its merge-base -- so "
+            f"they are measured separately: a file the tree HOLDS and main's tip lacks is "
+            f"destroyed by the deletion this verdict authorises. ")
+    if same == n:
+        return lead + (f"All {n} are byte-identical to the same path at merge-base {mb[:11]}, "
+                       f"a commit origin/main contains: they are main's OWN content, deleted "
+                       f"from main after this point, and reachable from origin forever.")
+    return lead + (f"{same} of {n} are byte-identical to the same path at merge-base "
+                   f"{mb[:11]}; the remaining {n - same} exist in NO commit main contains and "
+                   f"survive only because the whole HEAD commit {head[:11]} is contained by a "
+                   f"LIVE origin branch this row names -- which is why this row's survivability "
+                   f"claim is load-bearing rather than decorative.")
+
+
 TWIN_OLD = ("byte-for-byte the same tree as /home/reyerchu/jf-63x8-work/base-mml, which is "
             "kept. Every file either owns hashes identically and BOTH working trees are "
             "clean (owns>=1 file AND clean, so the comparison covers all their content -- "
@@ -113,6 +136,7 @@ TWIN_NEW = (
 
 def main():
     meas = load_measured(os.path.join(HARV, "raw_untracked_ignored_shard_c_jharv3.tsv"))
+    absent = load_measured(os.path.join(HARV, "raw_absent_from_main_shard_c_jharv3.tsv"))
     ents = load_entries(os.path.join(HARV, "raw_ignored_entries_shard_c_jharv3.tsv"))
     src = os.path.join(HARV, "verdicts_shard_c.tsv")
     out, changed, missing = [], 0, []
@@ -133,9 +157,14 @@ def main():
         if path == "/home/reyerchu/wt-j63x8c" and TWIN_OLD in new:
             new = new.replace(TWIN_OLD, TWIN_NEW)
         new = RE_IGN.sub("", new).rstrip()
+        new = RE_ABS.sub("", new).rstrip()
         if RE_NOTEXAMINED.search(new):
             new = RE_NOTEXAMINED.sub("", new).rstrip() + untracked_sentence(m)
-        new = new + ignored_sentence(m, ents.get(path, []))
+        if path not in absent:
+            missing.append(path)
+            out.append(ln)
+            continue
+        new = new + absent_sentence(absent[path]) + ignored_sentence(m, ents.get(path, []))
         if new != ev:
             changed += 1
         out.append("\t".join([path, verdict, new]))
