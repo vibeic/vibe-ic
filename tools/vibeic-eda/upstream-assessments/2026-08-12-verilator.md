@@ -1,17 +1,14 @@
 ## verilator — selective-merge assessment
-Range **c09b302b19c67e116e1ce21a9d340e98fc457787 → master** · 4 upstream commit(s) · our branch carries patches over 9 file(s).
-**Already carried: 0** · **decided (recorded): 0** · **clearly-safe to auto-adopt: 0** · **needs human decision: 0** — 4 of them are ALREADY MERGED INTO OUR FORK MAINLINE (origin/master) and are NOT a human adopt/skip decision: the merge already happened, so the open action is a pin bump or a revert
+Range **e4f8ea64bcb8d64548a14e934763a7c969d71b6a → master** · 3 upstream commit(s) · our branch carries patches over 12 file(s).
+**Already carried: 0** · **decided (recorded): 0** · **clearly-safe to auto-adopt: 1** · **needs human decision: 2** (0 the assessor would adopt · 2 it would skip — its recommendation, not a decision)
 
-> Computed on 2026-08-11T22:26:03Z by assessor `045760ee09202510` — a content hash of the judge module, its system prompt, the model id, the chunk size and the sample count — asked as `b21c4caa28428988` (role: RTL simulation (lint / fast sim)). Change any of them, or the `role` that question is built from, and this range is re-judged rather than replayed.
-
-> **4 of 4 commit(s) are ALREADY MERGED INTO OUR FORK MAINLINE** (`origin/master`) and are NOT adopt/skip decisions — the merge already happened, on this tick or an earlier one. They are NOT counted as `already carried`, because that field means the SHIPPED PIN and these are not in it: the open action on them is a PIN BUMP (`release_lag`) or a revert. `already carried` reads 0 on ranges like this BY CONSTRUCTION — the range's base IS the pin, so no commit in it can be an ancestor of the pin — which is why this second bucket exists.
+> Computed on 2026-08-12T15:56:16Z by assessor `045760ee09202510` — a content hash of the judge module, its system prompt, the model id, the chunk size and the sample count — asked as `b21c4caa28428988` (role: RTL simulation (lint / fast sim)). Change any of them, or the `role` that question is built from, and this range is re-judged rather than replayed. Each auto-adopt candidate had to survive 3 independent judgements.
 
 | sha | cat | risk | rel | conflict | clean-pick | reach | agree | rec | decision | summary |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `945ea27fecf1` | on-mainline | ? | ? | not-probed | not-probed | not-probed | not-probed | on-mainline | **mainline** | ALREADY MERGED into our fork mainline (origin/master) — not yet in the shipped pin c09b302b19c6, so the open a |
-| `2ef131f7ac96` | on-mainline | ? | ? | not-probed | not-probed | not-probed | not-probed | on-mainline | **mainline** | ALREADY MERGED into our fork mainline (origin/master) — not yet in the shipped pin c09b302b19c6, so the open a |
-| `e96cfc5e563f` | on-mainline | ? | ? | not-probed | not-probed | not-probed | not-probed | on-mainline | **mainline** | ALREADY MERGED into our fork mainline (origin/master) — not yet in the shipped pin c09b302b19c6, so the open a |
-| `da0c31926e3d` | on-mainline | ? | ? | not-probed | not-probed | not-probed | not-probed | on-mainline | **mainline** | ALREADY MERGED into our fork mainline (origin/master) — not yet in the shipped pin c09b302b19c6, so the open a |
+| `08cd5fe30bc2` | other | low | no | not-probed | not-probed | not-probed | not-probed | skip | **human** | Test formatting only, no functional change to verilator capabilities |
+| `0b51926fffee` | other | low | no | not-probed | not-probed | not-probed | not-probed | skip | **human** | Commentary/documentation update only |
+| `e962efca12ea` | bugfix | low | yes | — | ✓ | undetermined | ✓ 3/3 | adopt | **auto-safe** | Fixes dtype error in sampling functions with property args - affects assertion/property handling correctness |
 
 > Column notes: `conflict` (does it touch a file our carried patches touch), `clean-pick` (does it cherry-pick cleanly onto our branch) and `reach` (can any command our emitters issue reach the symbols it changes) are computed ONLY for adopt-candidates, to bound gh/git cost. `agree` is narrower still — it runs only for commits that already cleared EVERY other auto-adopt condition, which is why re-judging costs a couple of extra requests rather than a multiple of the range. `not-probed` means that analysis did not run — it is never evidence of no conflict, and on `agree` it is never evidence the verdict reproduced. `n/a` means the row is already settled (carried, or a recorded decision). `reach` = `undetermined` means the check could not decide — which is NOT 'unreachable', and leaves the model's verdict standing; `agree` has no such state, because an unconfirmed verdict is exactly the thing that must not auto-adopt.
 
