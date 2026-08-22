@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1174
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1174)
+- **Total programs (excluding helpers / shims):** 1176
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1176)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1165 |
+| `any` | 1167 |
 
 ## Alphabetical listing
 
@@ -351,6 +351,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
+| `explicit_argument_outranks_the_environment_pointer` | any | — | An environment pointer that overrules a location the caller NAMED. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
@@ -639,6 +640,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
+| `local_clone_does_not_borrow_objects` | any | — | A clone that BORROWS its objects from the repository it was cloned from. |
 | `loop_admission_guard` | any | — | loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills. |
 | `loop_watchdog_compliance_check` | any | — | FORCE the watchdog primitive. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
@@ -1246,7 +1248,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1165 programs)
+### `any` (1167 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1569,6 +1571,7 @@ _(no programs in this group)_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
+- `explicit_argument_outranks_the_environment_pointer` — An environment pointer that overrules a location the caller NAMED.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
@@ -1856,6 +1859,7 @@ _(no programs in this group)_
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
+- `local_clone_does_not_borrow_objects` — A clone that BORROWS its objects from the repository it was cloned from.
 - `loop_admission_guard` — loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills.
 - `loop_watchdog_compliance_check` — FORCE the watchdog primitive.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
