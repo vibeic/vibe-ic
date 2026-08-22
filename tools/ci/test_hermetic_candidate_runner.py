@@ -141,10 +141,16 @@ elif args[:2] == ["container", "create"]:
         kind = fields["type"]
         destination = fields["dst"]
         if kind == "bind":
+            # A DAEMON THAT REPORTS A WRITABLE PARENT-OWNED BIND. The runner
+            # asks docker what it ACTUALLY mounted rather than trusting the
+            # flags it passed, so this is how that question is made to matter.
+            _rw = "readonly" not in flags
+            if destination == os.environ.get("FAKE_DOCKER_WRITABLE_DEST"):
+                _rw = True
             mounts.append({
                 "Destination": destination,
-                "Mode": "ro" if "readonly" in flags else "rw",
-                "Propagation": "rprivate", "RW": "readonly" not in flags,
+                "Mode": "rw" if _rw else "ro",
+                "Propagation": "rprivate", "RW": _rw,
                 "Source": fields["src"], "Type": "bind",
             })
         else:
@@ -346,12 +352,15 @@ def case(tmp_path: Path):
     }
 
 
-def invoke(case, *, behavior="good", command=None, tamper=None):
+def invoke(case, *, behavior="good", command=None, tamper=None,
+           writable_dest=None):
     env = dict(os.environ)
     env["FAKE_DOCKER_STATE"] = str(case["state"])
     env["FAKE_DOCKER_BEHAVIOR"] = behavior
     if tamper is not None:
         env["FAKE_DOCKER_TAMPER_PATH"] = str(tamper)
+    if writable_dest is not None:
+        env["FAKE_DOCKER_WRITABLE_DEST"] = writable_dest
     cmd = [
         sys.executable, str(RUNNER_PATH), "run",
         "--docker-bin", str(case["docker"]),
@@ -835,3 +844,35 @@ def test_the_same_run_without_the_tamper_is_recorded(case):
     assert "candidate input changed between pre-arm and stopped copy" not in (
         proc.stdout + proc.stderr)
     assert case["receipt"].exists(), "the clean run must leave a receipt"
+
+
+@pytest.mark.parametrize("destination", ["/corpus", "/subject", "/runtime"])
+def test_a_writable_parent_owned_bind_is_refused_before_the_candidate_runs(
+        case, destination):
+    """The PREVENTION half of the same six properties, and the layer that makes
+    the post-attestation above belt-and-braces rather than the only defence.
+
+    The candidate cannot move B1, hide changed B1 bytes, redefine the verified
+    tree or mutate the corpus because it cannot WRITE any of them: every
+    parent-owned bind is mounted read-only, and the runner re-reads the mount
+    table the daemon reports and refuses if what actually got mounted is
+    writable --
+
+        if item.get("RW") is not False:
+            raise Refusal(f"candidate {role} bind is not exact/read-only")
+
+    MEASURED 2026-08-22 on a4caccefe: that sentence, like the post-attestation
+    one, appears ONCE in the repository and in no test. The only read-only
+    assertion anywhere covered the runtime OVERLAY -- not corpus, not subject,
+    not runtime, which are the three that carry the properties.
+
+    Asked through a daemon that REPORTS a writable bind, because trusting the
+    flags the runner itself passed would test nothing: the whole point of
+    re-reading the mount table is that the daemon is not assumed to have obeyed.
+    """
+    proc = invoke(case, writable_dest=destination)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "is not exact/read-only" in (proc.stdout + proc.stderr), (
+        proc.stdout + proc.stderr)
+    assert not case["receipt"].exists(), (
+        "a run that could not vouch for its own mounts must leave NO receipt")
