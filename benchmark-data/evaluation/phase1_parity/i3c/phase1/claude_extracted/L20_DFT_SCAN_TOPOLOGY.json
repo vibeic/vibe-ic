@@ -1,7 +1,0 @@
-{
-  "fields": {
-    "ic_name": "MIPI I3C Basic Specification v1.0",
-    "dft_present": false,
-    "notes": "MIPI I3C Basic v1.0 does not specify DFT / scan / BIST architecture. Concrete I3C controller IPs implement standard scan insertion at SoC integration time. The spec does define one protocol-level test mechanism — ENTTM (Enter Test Mode, Broadcast CCC 0x0B) per Section 5.1.9.3.8, and ENTTM Test Mode Byte values per Table 32 — which allows the Master to put Slaves into vendor-defined test modes (e.g. to provide a fully-random Provisional ID for DAA collision testing). This is a runtime protocol mechanism, not a silicon DFT architecture."
-  }
-}
