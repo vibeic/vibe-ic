@@ -342,6 +342,24 @@ this step deliberately borrowed:
 
 and upstream's placer consumes it **before** its own two site lookups:
 
+THE ORDERING IS A MECHANISM, NOT A LINE NUMBER — and it has to be stated that
+way, because "line 349 precedes line 40 in a different file" would mean nothing.
+Traced in the pinned image:
+
+    io.tcl:342   proc read_tech_lef {
+    io.tcl:349     if { [info exists ::env(PAD_FAKE_SITES)] } {
+    io.tcl:355       make_fake_io_site -name $site_name -width .. -height ..
+    ------- the tech LEF is read while the design is being LOADED -------
+    pad_cfg.tcl:40   set pad_site        [pad::find_site $::env(PAD_SITE_NAME)]
+    pad_cfg.tcl:41   set pad_corner_site [pad::find_site $::env(PAD_CORNER_SITE_NAME)]
+    pad_cfg.tcl:44   "[ERROR] No pad site $::env(PAD_SITE_NAME) found."  -> exit 1
+
+The consumption sits inside `read_tech_lef`, so the sites EXIST IN THE DB before
+any padring script runs, and `pad::find_site` then resolves them like any other
+site. THAT is why the fix belongs in our Python and not in a fork: upstream has
+no defect here — it materialises what the PDK declares, at load time — and this
+step was the only reader that never looked at the declaration.
+
     librelane/scripts/openroad/common/io.tcl:349
       if { [info exists ::env(PAD_FAKE_SITES)] } {
           dict for {site_name size} $::env(PAD_FAKE_SITES) {
