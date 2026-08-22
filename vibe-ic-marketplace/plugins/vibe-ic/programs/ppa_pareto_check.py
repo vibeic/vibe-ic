@@ -249,9 +249,30 @@ def main(argv=None) -> int:
     objectives = par.objectives_from_document(
         contract_doc if isinstance(contract_doc, Mapping) else {})
     if not objectives:
-        return _undetermined(args.json, par.P_NO_OBJECTIVES,
-                             "the contract declares no objective, so there is "
-                             "no trade-off to compute a frontier over")
+        # NAME WHAT WAS READ AND WHAT IS ABSENT.
+        # This refusal is CORRECT and stays rc 2: with no declared objective
+        # there is no trade-off, and deriving one here so the gate could then
+        # check a frontier against its own recomputation is a manufactured
+        # pass. But it used to be one sentence -- "the contract declares no
+        # objective" -- naming no document, no key and no flag, over a
+        # candidates set it had already opened and counted. An rc 2 with no
+        # named missing input is indistinguishable from an rc 2 over a file
+        # that was never there, and only one of those is fixed by looking
+        # somewhere else.
+        n_metrics = sum(len(c.get("metrics") or [])
+                        for c in candidates if isinstance(c, Mapping))
+        declared_in = args.contract or args.candidates
+        return _undetermined(
+            args.json, par.P_NO_OBJECTIVES,
+            f"no objective is declared, so there is no trade-off to compute a "
+            f"frontier over. READ: {args.candidates} -- {len(candidates)} "
+            f"candidate(s), {n_metrics} metric record(s); the candidate half of "
+            f"this measurement is present. MISSING ARTEFACT (1): an "
+            f"`objectives` list of [{{key, metric, sense, scope}}] rows, read "
+            f"from {declared_in} and absent there. MISSING ARTEFACT (2): a "
+            f"PUBLISHED frontier for this gate to be under test against -- none "
+            f"was supplied with --frontier. Both are needed: with only (1) this "
+            f"gate would recompute a frontier and then check it against itself.")
 
     policy = feas.policy_from_document(
         contract_doc if isinstance(contract_doc, Mapping) else {})

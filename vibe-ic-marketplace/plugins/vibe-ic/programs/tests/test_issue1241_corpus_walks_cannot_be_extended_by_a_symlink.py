@@ -57,6 +57,24 @@ CC = _load("_sym_cc", "ppa_contract_check.py")
 FC = _load("_sym_fc", "ppa_feasibility_check.py")
 PI = _load("_sym_pi", "ppa_problem_integrity_check.py")
 
+import _ppa_corpus as corpus_seam  # noqa: E402  the shared walk
+
+
+def _seam_walk(predicate):
+    """The walk THREE of these gates now share, reached the way they reach it.
+
+    `corpus_contracts`, `corpus_candidate_sets` and `corpus_candidates` were
+    replaced by a SELECTION PREDICATE handed to `_ppa_corpus.collect`, and this
+    table went on calling the old names -- so it raised AttributeError on three
+    of its four rows and the symlink property was held for one walk instead of
+    four. THE WALK ITSELF IS STILL PROGRAM CODE: `collect` is the seam and the
+    predicate is the gate's own, so nothing about what is under test moves into
+    this file. That is what makes this an ADAPTER and not the vacuous shim the
+    problem-integrity guard needed instead of one.
+    """
+    return lambda d: [path for path, _ in corpus_seam.collect(d, predicate).records]
+
+
 #: (label, walk, the document that walk recognises). One row per corpus walk on
 #: this branch, so a walk added later without a row here is visibly missing.
 WALKS = [
@@ -64,14 +82,13 @@ WALKS = [
      {"schema": "vibeic.ppa.comparison.v2",
       "arms": [{"flow": "a", "role": "baseline"},
                {"flow": "b", "role": "subject"}]}),
-    ("contract", lambda d: CC.corpus_contracts(d),
+    ("contract", _seam_walk(CC.is_contract),
      {"schema": "vibeic.ppa.contract.v1", "run_label": "x"}),
-    ("candidates", lambda d: FC.corpus_candidate_sets(d),
+    ("candidates", _seam_walk(FC.is_candidate_set),
      {"schema": "vibeic.ppa.candidates.v1", "candidates": [],
       "required_views_by_axis": {}, "required_views": [], "limits": {},
       "allow_waivers": False}),
-    ("contract_pairs",
-     lambda d: PI.corpus_candidates(d, d / "__no_such_baseline__"),
+    ("contract_pairs", _seam_walk(PI.is_contract),
      {"schema": "vibeic.ppa.contract.v1", "run_label": "x"}),
 ]
 

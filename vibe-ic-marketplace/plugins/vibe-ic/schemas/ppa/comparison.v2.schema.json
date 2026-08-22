@@ -61,6 +61,13 @@
           {"required": ["fom"]}, {"required": ["composite"]}
         ]
       },
+      "allOf": [
+        {
+          "description": "A BASELINE ARM MUST DECLARE `tuned_by_this_project: false`, and until this clause existed the rule was PROSE in the sibling property's description while the shape accepted either value. `ppa_head_to_head_check` refuses such a record BASELINE_TUNED_BY_US, so a producer that validated its output against this schema was told the document was well formed and the contradiction surfaced later, at a hygiene gate, over a comparison that had already been published. This is NOT one of the cross-arm relations the top-level description says JSON Schema cannot express: it reads two properties of ONE arm, so it belongs here and the division of labour is unchanged. A within-project ranking of two configurations we chose ourselves is a legitimate and interesting ablation; it is not a head-to-head, and this document kind carries the head-to-head claim.",
+          "if": {"required": ["role"], "properties": {"role": {"const": "baseline"}}},
+          "then": {"properties": {"tuned_by_this_project": {"const": false}}}
+        }
+      ],
       "description": "A collapsed figure is refused for EXISTING. Area, timing and power trade against each other, so a single number is a proxy for the property and not the property -- and whatever else the record says, the scalar is the number that gets quoted."
     },
     "design": {

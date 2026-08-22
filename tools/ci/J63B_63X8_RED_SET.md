@@ -602,9 +602,33 @@ by anything done here.
 was in flight.** Measured, not assumed: `jfindings-63x8`'s branch does not touch
 `matrix_cell_state` in ANY dimension, and on main `NOT MEASURED` appears only as
 a reporting string inside `test_matrix_63x8_coverage.py:2167` — never as a state
-a dimension can return. Reds 7-9 are not waiting on a branch; they are waiting
-on work nobody has started. A reader who took the earlier wording would have
-waited for a delivery that was never coming.
+a dimension can return.
+
+**AND THAT CORRECTION WENT STALE WITHIN HOURS — it is corrected again here.**
+This file then said the contract was UNSTARTED. Checked on the SERVER rather
+than inferred from local worktrees, `jmatrix/63x8-main-reds` (7 commits, pushed
+6 hours before this line was written) carries *"matrix: NOT_MEASURED is the
+fourth cell state, fenced by a required reason (owner ruling 2026-08-2…)"* and
+*"move the two pins the fourth state moved"*. It is IMPLEMENTED — and it
+independently reports *"the d8 answered a third time"*.
+
+Measured against it, so the handover is concrete rather than a warning:
+
+```
+main + jmatrix                    clean
+main + jmatrix + THIS BRANCH      clean — the two compose
+  flow_manifest_declaration_parity   12 passed   reds 16/17 survive
+  the three timing tests              3 passed   reds 10/12 survive
+  matrix_mutation_ledger           3 failed      reds 7-9 DO NOT CLOSE
+```
+
+**Reds 7-9 stay open even with that fourth state**, and the diff shows why: it
+fences the state on a *configuration axis*
+(`pytest.skip(f"NOT_MEASURED: {_unmeasured}")`) rather than changing what
+`matrix_cell_state` RETURNS. The probe recorded below closes all three by doing
+the latter. The two approaches are not equivalent, and
+`test_matrix_mutation_ledger` is the test that tells them apart — which is worth
+handing to whoever owns that branch.
 
 What it would cost, measured — **9 producers and 7 consumers**:
 
@@ -625,6 +649,36 @@ folding that answer into one of the three it already handles. It is not authored
 here because it was assigned, and two agents writing one contract in parallel is
 the duplication this split exists to prevent — but **"assigned and unstarted" is
 a different fact from "pending on a branch"**, and this is the one that is true.
+
+### The OTHER remedy 7-9's message offers was probed too, and it makes things worse
+
+The ledger's failure text names two ways out: build and run a mutation, or *"if
+no mutation can redden the cell, that is the FINDING: record it in
+NOT_FALSIFIABLE with what was tried."* The first is measured impossible above
+(ALREADY_RED with a corpus, SKIP without). The second was dismissed early in
+this work by READING the code — the same shortcut that was wrong three times
+elsewhere in this file — so it was run:
+
+```
+NOT_FALSIFIABLE populated for both cells (throwaway tree)
+  -> 4 failed, 120 passed   (was 3 failed, 121 passed)
+```
+
+**All three original reds stay red, and a FOURTH appears** —
+`test_not_falsifiable_cells_are_published_and_specific`. The per-step message
+changes but not its verdict:
+
+```
+1.6x/d3 is recorded NOT-FALSIFIABLE (...) yet the module still reports
+ENFORCED — a cell nothing can redden is not enforcing anything
+```
+
+The registry is guarded against exactly this misuse: you may not declare a cell
+unfalsifiable while its own dimension still calls it enforced. **Both offered
+remedies are therefore examined by RUNNING them, and neither is available** —
+which is what makes the fourth-state contract (probed below) the only real
+close, and why "these wait on work nobody has started" is a measured statement
+rather than a shrug.
 
 ### PROBED, not asserted: the fourth state DOES close 7-9, and here is its bill
 
@@ -674,6 +728,37 @@ was tried: `floorplan.def`, `placed.def`, `post_cts.def` and `post_hold.def`
 exist **nowhere** in the corpus, in any cell, at any version. The classification
 "needs evidence this repository does not hold" is confirmed by search, not
 inherited.
+
+### The THIRD remedy for 1-6 was examined too, and it is refused
+
+The d3 message offers three ways to close these: re-point the record, publish a
+run tree, or **waive the cell through the one waiver registry with the
+disclosure**. This report checked the first two — no admissible root carries the
+four `.def` paths, at any version — and left the third unexamined for most of
+this work. It has now been read, and it is the wrong instrument here.
+
+`matrix_63x8/waivers.py` is explicit about what a waiver is for: *"a public,
+dated admission that one cell is NOT enforced and WHY … not a way to make a red
+test green"*, with a `reason` naming **what a program cannot decide** and
+`evidence` that independently verifies it. Its own GOOD examples are genuine
+undecidables — an artefact emitted on only one branch of a real PDK condition,
+a tool absent from CI.
+
+Reds 1-6 are not that. **The program decides them perfectly well** — it returns
+NOT DETERMINED, correctly, because the record cites a run root of kind `home`
+that this dimension searches on no host. The cell is not unenforceable; the
+RECORD is wrong, and a record is repairable by whoever holds the run it names.
+
+So waiving would convert a repairable data defect into a permanent accepted gap,
+and the strict-xfail anti-rot mechanism would not save it: the waiver only
+retires when the predicate starts PASSING, which needs exactly the run tree that
+would have fixed the record in the first place. Red is what prompts that repair;
+a waiver is what stops it being prompted.
+
+This is the same judgement already applied to the 21 stale manifest citations
+above, and it is written down here so the next reader does not reach for the
+waiver as the cheap close. **All three remedies are now examined; none is
+available to this agent, and that is the honest state of 1-6.**
 
 ## The fixes re-verified with the corpus BOUND — and red 10's honest limit
 
@@ -768,6 +853,28 @@ Reds 1-6 also stay red with the corpus bound, which is the behaviour their own
 module documents: an inadmissible `kind` is "decided without opening a file,
 which is what makes the answer identical on a host that has a corpus and on one
 that does not".
+
+## Verification RE-RUN on the current base, not carried over
+
+The 46-file verification below was measured against `a00f53f20`. Main then moved
+30 commits, so both halves of the claim were re-derived against `81cd5321b`
+rather than carried forward — the set the selector names, and the result of
+running it:
+
+```
+selector on current main   46 files   identical set, zero added, zero dropped
+all 46 re-run              GREEN=43   RED=3
+                             d3_outputs_produced    6 failed   reds 1-6
+                             mutation_ledger        3 failed   reds 7-9
+                             63x8_coverage          2 failed   reds 14-15
+```
+
+**Identical to the pre-rebase measurement**, so nothing in the 30 commits
+changed either the coupling graph or the outcome. The completeness claim now
+rests on the base this PR actually lands from.
+
+(`63x8_census_freshness` passed in this run — load 1.15 — which is red 13
+behaving exactly as its own section documents.)
 
 ## Verification closed against the SELECTOR's answer, not against my own guess
 
@@ -864,6 +971,22 @@ It is repairable by exactly one kind of author: someone with the run trees
 staged, re-deriving each record against what they publish, in the same change
 that publishes it. Until then it sits with reds 1-6 — a real finding whose
 missing input is named.
+
+**That was an inference and has now been tested.** The message says the records
+are stale *"while THIS COMMIT answers the entry"*, which reads as though the
+repository itself resolves them — in which case they would be repairable here,
+with no publisher needed. Measured:
+
+```
+test_d3_no_record_cites_an_absent_run_this_commit_can_answer
+  corpus UNBOUND   ->  1 passed
+  corpus BOUND     ->  fires, 21 records
+```
+
+**It is corpus-conditional.** Unbound it does not fire at all, so "this commit
+answers" means the tree WITH a corpus attached, and the answering root is a
+corpus root rather than a repo path. The publisher requirement holds — now a
+measurement rather than a reading of the error text.
 
 Note also that the module already degrades correctly around it: the
 `PRODUCED_BY_RUN` branch searches every admissible root and reports
@@ -1050,12 +1173,240 @@ semantic-progress stall this branch spent its length characterising, appearing
 independently in the hygiene tier.** The tier starves itself the way the coverage
 file does: load went from 30 to 65 during its own run.
 
-**What that does NOT establish, stated because the distinction is the point of
-this file:** a quiet-box control was attempted twice and could not be obtained,
-precisely because the tier loads the box itself. So "not attributable" rests on
-the diff's content and the error's own wording, **not on a control run**. A
-lander with a quiet machine should re-run it; if it still ERRORs there, the
-finding is the hygiene tier's own and is older than this branch.
+**THE CONTROL WAS OBTAINED, and it settles the attribution.** An earlier
+revision of this paragraph said no control was possible because the tier loads
+the box itself. That was the wrong thing to chase: the variable to hold constant
+is the INVOCATION, not the load.
+
+A first attempt ran `tools/ci/repo_hygiene_gates.sh` directly on bare main and
+came back with no stalls at all — **an invalid control**, because
+`gatekeeper_review` does not invoke that script. It invokes
+`programs/repo_hygiene_parallel.py`, which is where "parallel coverage: arm A
+shard 0" comes from. Comparing two different programs would have produced a
+confident wrong answer in the flattering direction.
+
+Re-run with the CORRECT driver, both arms, same corpus, same machine:
+
+```
+CONTROL  bare origin/main 81cd5321b   rc=2   stalls=4    (load 12.81)
+BRANCH   this branch b9782e23f        rc=2   stalls=4    (load 53.35)
+```
+
+**Identical** — and the branch arm ran on a box four times busier, which
+strengthens the result rather than weakening it. The hygiene ERROR is present on
+bare `origin/main` with none of this change applied, so it is **not attributable
+to this branch**, and that is now a measurement rather than an argument from the
+diff's content.
+
+`rc=2` is the "certifies nothing" code, so neither arm's hygiene verdict says
+anything about either tree — which is itself the honest reading, and the reason
+the lander should not treat this gate's ERROR as evidence about this PR.
+
+## Every remedy the tooling offers, executed — the sweep is complete
+
+Two of these reds had a remedy this report had only READ about, and running them
+changed the answer once and confirmed it once. So the question was put to all
+five open reds: **does its own tooling offer a way out that has not been
+EXECUTED?**
+
+| red | remedies its own message offers | status |
+|---|---|---|
+| 1-6 | re-point the record / publish a run tree / waive | all three examined; no admissible root carries the four `.def` paths at any version, publishing needs the run tree, and the waiver registry forbids waiving a decidable cell |
+| 7-9 | build+run a mutation / record NOT_FALSIFIABLE | both RUN: the mutation is ALREADY_RED-or-SKIP, and NOT_FALSIFIABLE leaves all three red **and adds a fourth** |
+| 11 | none — the assertion offers no remedy | not reproducible in 8 attempts; widening the window ×40 reddens it |
+| 13 | none — the failure is a stall | and the census block underneath is **genuinely fresh**: `gen_matrix_63x8_census.py --check` → **rc=0** |
+
+That last cell is a measurement worth having on its own. Red 13 is a
+`test_the_census_block_is_fresh` failure, so the obvious reading is that the
+published census had drifted. It has not: the block regenerates identically.
+**Red 13 is 100% stall and 0% staleness** — nothing about the census needs
+fixing, which is why no remedy is offered and none was missed.
+
+The sweep is therefore closed: across all five open reds, every route their own
+tooling names has been executed rather than reasoned about, and none of them is
+available to this agent.
+
+## URGENT — the sibling branch WAS NEVER PUSHED, and it is 46 hours cold
+
+Everything below tells a lander to rebase `jfindings-63x8` rather than merge it.
+**There is nothing on the server to rebase.** Checked, not assumed:
+
+```
+git ls-remote origin 'refs/heads/fix/jfindings*'   -> no ref
+gh pr list --head fix/jfindings-63x8-live-reds     -> none, ever
+gh issue list --search '63x8 in:title'             -> none
+last commit on that worktree                       -> 2026-08-20 08:49
+```
+
+Its nine commits exist **only** in a local worktree on this host,
+`/home/reyerchu/_jfind63`, and have not been touched in **46 hours**. The brief
+this work was given says agents are reaped after ~16 minutes idle and
+"everything not pushed at any moment is what you lose". That appears to be
+exactly what happened to it.
+
+**Seven of those nine are live work** — each adds a test function main does not
+have (measured, per commit):
+
+```
+ec442cd23  matrix(coverage): the new skip-declaration check costs 20 s ...
+74ba093cc  matrix(d2): step 2's threshold-contiguity clause ...
+4c00898ed  matrix(d2): step 23's sign-off SLACK gate ...
+94990a15b  matrix(d2): step 23's timing-record gate ...
+015a8a29c  matrix(d2): step 8's derived-clock gate ...
+0a83cb1d5  matrix(coverage): the file forbade the skip its own census publishes
+1b46562f0  matrix(d2): step 31's extraction-feedback clause ...
+```
+
+**This corrects language used throughout this report.** Reds 14 and 15 have been
+described here as "owned elsewhere" and "in flight". They are not in flight:
+red 14's fix exists only in that unpushed worktree, and red 15's ruling was
+measured unstarted AT THE TIME (see the correction above — it is now
+implemented on `jmatrix/63x8-main-reds`). So of the seventeen, **none was being
+actively worked by
+anyone but this agent**, and eight of them depend on work that is either
+stranded or never begun.
+
+The work is not lost, and "recoverable" was checked rather than asserted:
+
+```
+refs/heads/fix/jfindings-63x8-live-reds           ec442cd23  object present: yes
+refs/heads/fix/jf2-63x8-d2-three-unfalsifiable... 4b4a7620d  object present: yes
+git rev-parse --git-common-dir  ->  /home/reyerchu/vibe-ic/.git
+```
+
+Both are **branch refs in the SHARED object store**, not worktree-local state.
+That corrects the urgency this section first implied ("before the disk is
+reclaimed"): removing the worktrees does not lose them, and `gc` will not
+collect them, because they are referenced. The only real exposure is losing the
+host itself.
+
+Recovery is therefore one command from the main checkout, with no worktree
+needed:
+
+```
+git -C /home/reyerchu/vibe-ic push origin \
+    fix/jfindings-63x8-live-reds fix/jf2-63x8-d2-three-unfalsifiable-clauses
+```
+
+Publishing another agent's branch is outside this agent's remit, so the command
+is written down rather than run. Both branches are stale against main (each
+conflicts on its own, measured above) and would want a rebase, not a merge.
+
+**AND IT IS NOT THE ONLY ONE — but the number is smaller than the first count
+suggested.** Sweeping every local branch whose name touches this family:
+
+```
+branch                                      commits  age   new tests  already on main
+fix/jfindings-63x8-live-reds                      9   46h      6            0
+fix/jf2-63x8-d2-three-unfalsifiable-clauses       3   35h      1            0
+test/pathsteps-ic-ip-matrix                      14   11h     23           23
+agent/jicip-tapeout-path-matrix                   0   22h      0            -
+```
+
+All four are unpushed. The first instinct was to report **30 stranded test
+functions**; checking each against `origin/main` first cut that to **7**.
+`test/pathsteps-ic-ip-matrix`'s twenty-three are ALL on main already — that work
+landed by another route (`[v1.11.65]`), so the branch is a leftover and nothing
+on it is at risk. `jicip` is zero commits ahead. **Two branches carry genuinely
+stranded work: 12 commits and 7 test functions main does not have.**
+
+That correction is the same discipline as everything else here — a count of what
+exists is not a count of what is at risk, and the difference was 23 of 30.
+
+So the fleet-level statement is: **a second 63x8 agent (`jf2`) also lost its work
+the same way**, and the pattern is worth someone's attention independently of
+this PR.
+
+## The composition map across every LIVE branch in this family — measured
+
+Checking the server (rather than inferring from local worktrees) found this
+family is worked by more than two agents. All three live branches were composed
+against current main, each with a control that isolates this branch's
+contribution:
+
+```
+branch                        vs main        + this branch     this branch adds
+jmatrix/63x8-main-reds        clean          clean             0 conflicts
+jf63x8g/matrix-findings       6 conflicts    the SAME 6        0 conflicts
+jfindings-63x8 (UNPUSHED)     6 conflicts    the SAME 6        0 conflicts
+```
+
+**This branch is conflict-neutral against every one of them.** `jmatrix` lands
+beside it in either order. `jf63x8g` and the stranded `jfindings` are each stale
+against main on their own and need a rebase — not because of anything here.
+
+Two things fall out that are worth having:
+
+* **`jf63x8g` is NOT the stranded `jfindings` work republished.** Checked per
+  test function: **0 of 6** of the stranded ones appear on it, and the subjects
+  are disjoint (figures/ledger/grid/d8/37.5ic versus d2 fixtures and the
+  coverage skip contract). So the stranded-work finding above stands — it was
+  tested for a false alarm and is not one.
+* **`jf63x8g` carries a d8 pin change** (*"fix(d8): the single-entry pin still
+  listed a step that grew two more outputs"*), so rather than warn about it, it
+  was measured on their own tree — no conflict resolution required:
+
+```
+d8 on main (81cd5321b)            347 passed, 0 failed
+d8 on jf63x8g (5fdfe0202)         335 passed, 0 failed
+```
+
+  **The headline holds on both — there is no d8 red either way.** What moves is
+  the CASE COUNT: 347 -> 335, twelve fewer parametrized cases. So "347" is a
+  fact about main and must not be quoted across that landing; "no d8 red" is
+  the claim that survives it.
+
+  **And the twelve were identified, which changes the reading completely.**
+  Diffing collected node IDs (not counts — see the parity lesson this repo
+  already learned) showed 12 gone, 0 added, including `test_d8_missing_caught
+  [step1.6x]` and TWO entire named guards,
+  `test_the_survival_clause_is_load_bearing_and_narrow` and
+  `test_the_two_readings_of_self_written_agree`.
+
+  Written up naively that reads as *another agent deleted coverage*. It is not.
+  Checked at their merge-base before writing anything public:
+
+```
+jf63x8g merge-base   69ce9260d (08-20 20:19) — 119 commits behind main
+step 1.6x at that base                          ABSENT
+test_the_survival_clause_is_load_bearing...     ABSENT at base AND at their head
+test_the_two_readings_of_self_written_agree     ABSENT at base AND at their head
+```
+
+  **Nothing was removed.** All twelve are main's LATER additions that their
+  stale branch predates. The `347 -> 335` delta is explained by 119 commits of
+  staleness, not by lost coverage — and once rebased their count returns to
+  main's population plus whatever their pin fix legitimately changes.
+
+  This is recorded because the near-miss is the lesson: a node-ID diff between
+  two trees is only a statement about REMOVAL if both trees share a base. Ours
+  do not, and the honest instrument was `git merge-base` before `comm`.
+
+## Landing note — RE-MEASURED on current main after the rebase
+
+Everything in this section was first measured against `a00f53f20`. Main then
+moved 30 commits, and this report has already had one claim expire while it
+stood, so the whole landing analysis was re-run against `81cd5321b`:
+
+```
+jfindings onto current main, WITHOUT this branch   6 conflicts
+jfindings onto current main, WITH it applied       the SAME 6
+                                                   -> zero added, still
+
+resolve --ours   : drc_signoff.json + lvs_verdict.json = 2 of 2
+resolve --theirs : drc_signoff.json + lvs_verdict.json = 0 of 2
+
+region asymmetry, all six, unchanged:
+  phase1_phase2_phase3.yaml      ours  89   theirs  17
+  matrix_d3_output_manifest.json ours  17   theirs   1
+  matrix_63x8/README.md          ours   2   theirs   2
+  matrix_63x8/flowref.py         ours  20   theirs  75
+  test_matrix_63x8_ledger.py     ours 114   theirs  27
+  test_matrix_d2_falsifiable.py  ours 241   theirs 380
+```
+
+**Nothing moved.** The analysis below stands on the current base, verified rather
+than assumed.
 
 ## Landing note — this branch is conflict-neutral, and there is ONE trap
 
@@ -1231,7 +1582,9 @@ their own, each with mutation proofs on both arms and stability measured at
 extreme load with their ceilings stated.
 
 **Five left open**, every one with a measured mechanism and a named missing
-input: 7-9 wait on a contract that is UNSTARTED (probed: it closes them, and
+input: 7-9 wait on a contract now IMPLEMENTED on `jmatrix/63x8-main-reds`,
+which composes cleanly here but does NOT close them (measured); the probe below
+shows a `matrix_cell_state`-level change does, and
 costs two further edits); 11 has one observation and no reproduction in eight
 attempts; 13 has a full measured chain, a repeatable reproduction and a shipped
 mitigation whose necessity is unproven.

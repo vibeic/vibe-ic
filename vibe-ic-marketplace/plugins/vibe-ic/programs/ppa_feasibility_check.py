@@ -190,6 +190,52 @@ def is_candidate_set(doc: Any) -> bool:
             and doc.get("schema") not in _OUTPUT_SCHEMAS)
 
 
+#: Module-level for the same reason as its siblings: the unit tests assert on
+#: the walk directly. `is_candidate_set` decides on the document, so the schema
+#: name here is the one a FIXTURE declares, not a second selector.
+_CANDIDATES_SCHEMA = "vibeic.ppa.candidates.v1"
+_NAME_GLOB = "**/*candidate*.json"
+
+
+def corpus_candidate_sets(corpus) -> list:
+    """Every candidate set under `corpus`, by DECLARATION."""
+    return corpus_seam.population(pathlib.Path(corpus), is_candidate_set,
+                                  _NAME_GLOB)
+
+def _undecided_coverage(result: feas.FeasibilityResult) -> List[str]:
+    """One line per axis view that could NOT be decided, NAMING the artefact.
+
+    An UNDETERMINED axis has two very different causes -- a view nobody ran, and
+    a view somebody ran whose artefact could not support the metric -- and the
+    adjudicator already separates them into `AxisResult.coverage`, carrying the
+    record's own `reason` verbatim and the `source` path it cites. Both were
+    reaching the `--json` artefact and neither was reaching the reader.
+
+    `MEASURED` coverage rows are skipped: this is the list of what is MISSING,
+    and padding it with what is present would bury the answer.
+    """
+    out: List[str] = []
+    for axis in result.axes:
+        if axis.status in (feas.AXIS_SATISFIED, feas.AXIS_WAIVED,
+                           feas.AXIS_NOT_APPLICABLE):
+            continue
+        for cov in axis.coverage:
+            state = str(cov.get("state") or "")
+            if state == feas.COV_MEASURED:
+                continue
+            metric = cov.get("metric") or "<metric not named>"
+            reason = str(cov.get("reason") or "the record states no reason")
+            cited = [str(x) for x in (cov.get("sources") or []) if str(x)]
+            where = (f" cited artefact: {', '.join(sorted(cited))}"
+                     if cited else
+                     " no artefact is cited: nothing was produced to read")
+            view = cov.get("view")
+            at = f" at view {cj.dumps(view)}" if view else ""
+            out.append(f"{axis.name}: MISSING `{metric}`{at} [{state}] "
+                       f"-- {reason}.{where}")
+    return out
+
+
 def check_corpus(named: pathlib.Path, contract: Optional[str],
                  no_waivers: bool, may_be_absent: bool = False,
                  json_out: Optional[str] = None) -> int:
@@ -286,8 +332,11 @@ def main(argv=None) -> int:
                             args.contract, args.no_waivers,
                             args.corpus_may_be_absent, args.json)
     if args.candidates is None:
-        print(f"{MARK_REFUSE} give --candidates CANDIDATES.json or --corpus "
-              f"DIR (rc=3, bad invocation)", file=sys.stderr)
+        # Every mode this gate has is NAMED. A refusal that lists two of three
+        # is how a caller concludes the third does not exist.
+        print(f"{MARK_REFUSE} give --candidates CANDIDATES.json, or --corpus "
+              f"DIR, or --corpus DIR --corpus-may-be-absent "
+              f"(rc=3, bad invocation)", file=sys.stderr)
         return feas.RC_BAD_INVOCATION
 
     cand_doc = _load(args.candidates, "candidates")
@@ -387,10 +436,32 @@ def main(argv=None) -> int:
         eco = [a for a in r.axes if a.name == feas.ECO_AXIS]
         if eco:
             line += f"  [eco_readiness {eco[0].status}]"
-        print(line)
+        print(f"{args.candidates}: {line}")
+        for cover in _undecided_coverage(r):
+            print(f"  {cover}")
     if rc == feas.RC_UNDETERMINED:
-        print(f"{MARK_CANNOT} at least one candidate was not adjudicated; "
-              f"this run makes no claim about it", file=sys.stderr)
+        # NAME THE CANDIDATES, AND NAME WHAT IS MISSING FROM EACH.
+        # This line used to read "at least one candidate was not adjudicated;
+        # this run makes no claim about it" and stop there -- an rc 2 over a
+        # corpus of 21 adjudicated candidate sets that named no candidate, no
+        # axis and no absent artefact. The naming was never derived here; it was
+        # read out of the records, carried through `AxisResult.coverage` as a
+        # `reason` lifted VERBATIM from the metric row plus the `sources` path
+        # the row cites, written into the `--json` report -- and then dropped,
+        # because the hygiene wiring passes no `--json` and the human channel
+        # printed the codes alone. An rc 2 with no named missing input is the
+        # failure mode this layer exists to end, so it is named on the channel a
+        # reader actually sees.
+        undecided = [r.candidate_id for r in results
+                     if r.verdict == feas.UNDETERMINED]
+        print(f"{MARK_CANNOT} {len(undecided)} candidate(s) in "
+              f"{args.candidates} were not adjudicated and this run makes no "
+              f"claim about them: {', '.join(undecided)}. Every undecided "
+              f"axis is named on STDOUT as a `MISSING` line -- the metric, the "
+              f"view, the reason the record itself gives, and the artefact it "
+              f"cites. This stream and that one are kept apart deliberately, "
+              f"so the naming is on stdout and not repeated here.",
+              file=sys.stderr)
     elif rc == feas.RC_FAIL:
         print(f"{MARK_REFUSE} at least one candidate carries a measured "
               f"violation and is not eligible for promotion", file=sys.stderr)

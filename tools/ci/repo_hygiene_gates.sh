@@ -148,7 +148,7 @@ run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
 # about a published comparison, and it is acknowledged with a deadline in
 # tools/ci/gate_red_since.json rather than wired around. `ppa-gate-audit/RESULT.md`
 # is the whole measurement.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population, not a missing prerequisite: a record whose axis scope is incomplete or carries a null sentinel cannot be decided either way, and two nulls comparing EQUAL would otherwise pass two numbers taken under unrecorded conditions as taken under the same ones. A record that CAN be decided and fails is rc 1, and this corpus produces one today"
+uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population, not a missing prerequisite: a record whose axis scope is incomplete or carries a null sentinel cannot be decided either way, and two nulls comparing EQUAL would otherwise pass two numbers taken under unrecorded conditions as taken under the same ones. A record that CAN be decided and fails is rc 1. THE DATE ON THIS EXEMPTION IS UNTOUCHED and no leniency changed; only a sentence of FACT did. It used to end 'and this corpus produces one today', naming h2h_F -- which was not a head-to-head at all but a within-project ablation mis-filed under this document kind, and has been re-filed as vibeic.ppa.ablation.v1 with every number byte-identical and the refusal that caused it kept beside it. The corpus is 14 records, 0 refused, and the 2 that remain undecidable are the pre-existing unrecorded-field defect this text already describes"
 run_tolerating_uncheckable "PPA head-to-head records (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-crosslayer"
 # MEASURED 2026-08-22: 2 record(s), 0 refused, 2 undetermined -> rc=2. Both are
@@ -157,7 +157,7 @@ run_tolerating_uncheckable "PPA head-to-head records (cross-layer campaign)" "$R
 # recorded would pass as taken under the same conditions. That is a
 # content-earned NOT_CHECKED over a NAMED population of two, which is a
 # different fact from the zero-second no-op this row used to be.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population of two: both published records declare a timing rc_corner key with no value, so neither comparison can be decided. It is NOT a claim that the corpus is empty — the count is printed on every run — and a record that CAN be decided and fails is rc 1"
+uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY population of two: both published records declare a timing rc_corner key with no value, so neither comparison can be decided. It is NOT a claim that the corpus is empty — the count is printed on every run — and a record that CAN be decided and fails is rc 1. THE PRODUCER-SIDE CAUSE, MEASURED 2026-08-22 over every scope/source pair in ppa-e2e: the timing axis of both records is taken from sta_spef_based.rpt, and that report names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced from it carry rc_corner null. The only source that DOES name one is sta_spef_multicorner.rpt (549 max / 544 min), which is what the cross-layer records use and why they are decided. Re-filing the axis from it is not a repair anyone can make here: its rows sit at a different process corner than the tt/1.6V/100C these records publish, and its own wns_ns is null. NAMED MISSING INPUT: a setup WNS for these two arms, at the corner they publish, from an STA run that records its RC corner. PRODUCER: the end-to-end campaign runner. Stating the field from anything in the tree today would be composing the condition after the measurement"
 run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-e2e"
 
@@ -294,14 +294,31 @@ run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pa
 #   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
 #   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
 uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+# `--baseline` IS GONE, and dropping it is what makes this row decide anything.
+# MEASURED on a758f4adc, exactly as the line below was written:
+#
+#   [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
+#   and --corpus were both given. ... Give exactly one. rc=3.
+#
+# So both of these rows had stopped examining ANY pair. `--corpus` mode was
+# rewritten to GROUP contracts by their problem identity and pair within each
+# group, which needs no baseline, and the refusal of the two-flag form is
+# deliberate and argued in the program. The wiring was not updated with it.
+# rc 3 is a bad invocation: the row decided nothing, and it is a different and
+# quieter failure than the rc 2 the rest of this block is about, because nothing
+# in the roll-up distinguishes a gate the caller mis-invoked from one that ran.
+#
+# MEASURED with the flag removed:
+#   cross-layer  21 contract(s), 1 problem group,  210 pair(s)  -> rc 0
+#   end-to-end   61 contract(s), 1 problem group, 1830 pair(s)  -> rc 0
+# The audit's Part 7 recorded 20 and 60 pairs for the baseline-against-each form;
+# grouping compares every pair inside the group, which is the stronger question.
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --baseline "$ROOT/ppa-crosslayer/records/trials/b000/contract.json" \
     --corpus "$ROOT/ppa-crosslayer"
 uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --baseline "$ROOT/ppa-e2e/records/baseline/contract.json" \
     --corpus "$ROOT/ppa-e2e"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"

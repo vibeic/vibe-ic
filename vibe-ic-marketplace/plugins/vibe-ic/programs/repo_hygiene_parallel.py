@@ -79,6 +79,17 @@ def _legacy_empty_without_process(reference: Dict[str, Any],
     shape, so a candidate cannot add a new synthetic gate and obtain a
     process-attestation exemption.  Phase 2 replaces this row with the trusted
     manifest's non-empty expansion.
+
+    AND IT COVERS A CORPUS THAT WAS *READ*, NEVER ONE THAT WAS NEVER OPENED
+    (vibe-ic#1764).  The row it waives says a population was MEASURED and the
+    measurement is 0.  Until the dispatcher grew a separate row, a corpus that
+    resolved to nothing arrived here wearing this exact label and this exact
+    `expansion`, so the waiver answered for it too and `_summary_rc` closed the
+    hygiene DAG GREEN over a corpus nobody opened -- an enforcement figure
+    covering a measurement nobody took.  BOTH the label and `expansion ==
+    "EXPANDED"` are load-bearing against that: an absent corpus is recorded
+    `NO_CORPUS` and fails the shape check even if some future caller hands it
+    this label.  Do not widen either one.
     """
     if label != _LEGACY_ROUTED_EMPTY_LABEL:
         return False
@@ -999,6 +1010,19 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
         # This is not a generic unexempted-NOT_CHECKED waiver: the list must be
         # exactly the one historical routed EMPTY identity and the complete
         # corpus/gate shape must prove it is the no-process bootstrap row.
+        #
+        # THIS IS THE ONE PLACE A POPULATION REFUSAL CAN BECOME A PASS, so it
+        # is also the one place vibe-ic#1764 actually cost something. An absent
+        # corpus used to reach it wearing the EMPTY row's label and expansion
+        # and be waived. Measured 2026-08-22 on origin/main, real producer
+        # through the real dispatcher:
+        #
+        #     corpus ABSENT      -> _summary_rc 0   <- a PASS, nothing opened
+        #     corpus read-empty  -> _summary_rc 0   <- the intended bootstrap
+        #
+        # `_legacy_empty_without_process` now refuses the first on `expansion`,
+        # and `test_an_absent_corpus_does_not_close_the_hygiene_dag_green`
+        # drives both states end to end so the pair cannot re-merge.
         if not (unexempted == [_LEGACY_ROUTED_EMPTY_LABEL]
                 and _legacy_empty_without_process(
                     doc, _LEGACY_ROUTED_EMPTY_LABEL)):

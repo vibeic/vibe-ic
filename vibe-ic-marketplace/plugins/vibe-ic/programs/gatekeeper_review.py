@@ -1132,6 +1132,11 @@ _HYGIENE_STALL_GRACE_S = 1800
 # MEASURED (2026-08-20, clean origin/main 3199e9b3, this host):
 #     pointer UNSET -> 75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED,
 #                      the routed-DEF corpus EMPTY and BLOCKING, 239s wasted.
+#     — and "EMPTY" is how that row READ at the time, not what happened
+#       (vibe-ic#1764). With the pointer unset nothing was OPENED; the corpus
+#       was NOT FOUND. Both are blocking NOT CHECKED and the measurement above
+#       stands, but the two now get different rows, and the pointer-unset run
+#       is the NOT FOUND one.
 #     pointer SET   -> 77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s,
 #                      and `published-evidence index honest` FAILS — a real,
 #                      committed-INDEX-is-stale defect the empty corpus hid

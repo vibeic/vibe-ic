@@ -157,6 +157,32 @@ def open_corpus(named: Path, gate: str, scanned: str,
 RECORD_GLOB = "**/*.json"
 
 
+def population(corpus: Path, select: Callable[[Any], bool],
+               name_glob: str) -> List[Path]:
+    """The PATHS that make up this gate's population under `corpus`.
+
+    ONE WALK, TWO READERS. `collect` is what the CLI drives and this is the same
+    walk expressed as the path list a unit test can assert on, so a test cannot
+    pass against a walk the gate does not use. `ppa_head_to_head_check.corpus_records`
+    is the shape this generalises; both are selected BY DECLARATION.
+
+    UNREADABLE IS NOT ABSENT. A file whose NAME claims it is one of these
+    records and which cannot be parsed STAYS in the population, so the verdict
+    it would have carried is reported rather than the denominator silently
+    shrinking. A file that was never named one was never a subject.
+
+    SYMLINKS: `Path.glob` does not recurse into symlinked DIRECTORIES, so a
+    corpus cannot be extended to documents living outside the tree it names. A
+    symlinked FILE is counted, because "I could not follow it" becoming "it was
+    never filed" is the substitution this whole family refuses.
+    """
+    named = {p for p in corpus.glob(name_glob) if p.is_file()}
+    scan = collect(corpus, select)
+    out = [path for path, _ in scan.records]
+    out += [path for path, _ in scan.unreadable if path in named]
+    return sorted(set(out), key=str)
+
+
 def collect(corpus: Path, select: Callable[[Any], bool],
             origin: str = _corpus.NAMED) -> Scan:
     """Every document under `corpus` that `select` accepts, plus the denominator.

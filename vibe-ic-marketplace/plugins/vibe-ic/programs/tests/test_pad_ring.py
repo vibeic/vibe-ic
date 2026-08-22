@@ -1258,6 +1258,44 @@ def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
     assert "PAD_FOOTPRINT_DISAGREES_WITH_LIBRARY" in _rules(root)
 
 
+def test_the_lef_wins_when_both_views_declare_the_same_site(tmp_path):
+    """PRECEDENCE, and it was UNPROTECTED until this test.
+
+    `resolve_site` prefers the LEF over the tech-view declaration, on the stated
+    grounds that the LEF record carries real geometry while a declaration is a
+    size somebody wrote down. NO PDK IN THE IMAGE SHIPS BOTH — measured, BOTH=0
+    on all four trees carrying an IO library — so the branch has no real-PDK
+    coverage, and no fixture exercised it either: MEASURED, inverting the
+    precedence left `96 passed, 4 skipped` untouched.
+
+    So this fixture declares the SAME site name in BOTH views at DIFFERENT
+    sizes, and pins which one the ring is built from.
+    """
+    root = _project(tmp_path)                       # LEF declares io_site 1.0 x 350
+    d = root / "pdk/proc/libs.tech/someflow/proc_io"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.tcl").write_text(_site_declaration(
+        ("io_site", "9.00", "350"),                 # a DIFFERENT width
+        ("io_corner_site", "350", "350")))
+    lefs = PR.discover_io_lefs(str(root / "pdk"), "proc")
+    decls = PR.discover_io_site_declarations(str(root / "pdk"), "proc")
+    lib = PR.IoLibrary(lefs, decls)
+    assert "io_site" in lib.sites and "io_site" in lib.declared_sites, \
+        "premise: both views must declare it, or this proves nothing"
+
+    got = lib.resolve_site("io_site")
+    assert got["source"] == PR.SITE_SOURCE_LEF, got
+    assert got["size"] == (1.0, 350.0), got          # the LEF's, not the 9.0
+
+    # and the RING is built from the LEF width: with site_w 1.0 the gaps come
+    # out on the 0.1-um grid the fixture's arithmetic expects. A 9.0-um site
+    # would round the spacing differently.
+    assert _gen(root) == 0, _report(root)["reason"]
+    rep, _ = CHK._unwrap(_report(root))
+    assert rep["config"]["site_source"]["PAD_SITE_NAME"] == PR.SITE_SOURCE_LEF
+    assert rep["spacing"]["S"]["between"] % 1000 == 0, rep["spacing"]
+
+
 # --------------------------------------------------------------------------- #
 # REAL PDKs, not fixtures.
 #
