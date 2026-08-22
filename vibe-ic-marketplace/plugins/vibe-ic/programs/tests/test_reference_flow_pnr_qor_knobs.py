@@ -148,35 +148,81 @@ class TestPnrKnobMapping:
         _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
         m = mod._reference_flow_pnr_mapping(
             mod._reference_flow_pnr_knobs(tmp_path))
-        # CORE_UTILIZATION=50 → die target 0.50; + LB_ADDON 0.25 → density 0.75
-        assert m["die_target_util"] == 0.5
-        assert m["place_density"] == 0.75
+        # #541 — the OPTIMIZATION class is applied verbatim…
         assert m["repair_tns_percent"] == 100
         assert m["cts_cluster_size"] == 20
         assert m["cts_cluster_diameter"] == 50.0
-        assert any("CORE_UTILIZATION=50%" in n for n in m["notes"])
-        assert any("PLACE_DENSITY derivation" in n for n in m["notes"])
         assert any("repair_timing -repair_tns 100" in n for n in m["notes"])
+        # …and the ROUTING-RESOURCE-SUPPLY class is withheld. This used to
+        # assert die_target_util == 0.5 / place_density == 0.75, which is the
+        # exact behaviour measured to take ibex from a converged detailed route
+        # to one that never closed an optimization iteration.
+        assert m["die_target_util"] is None
+        assert m["place_density"] is None
 
-    def test_explicit_place_density_wins_over_derivation(self):
+    def test_supply_class_is_withheld_not_silently_dropped(self, tmp_path):
+        """The withhold is a DECISION and must be on the record with the
+        value, the source file and the parameter it would have fed. Silence
+        here would be indistinguishable from never having read the config."""
+        _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
+        m = mod._reference_flow_pnr_mapping(
+            mod._reference_flow_pnr_knobs(tmp_path),
+            mod._reference_flow_pnr_knob_sources(tmp_path))
+        w = {r["knob"]: r for r in m["withheld"]}
+        assert set(w) == {"CORE_UTILIZATION", "PLACE_DENSITY_LB_ADDON"}
+        assert w["CORE_UTILIZATION"]["value"] == "50"
+        assert w["CORE_UTILIZATION"]["source"].endswith("orfs_config.mk")
+        assert "die_target_util" in w["CORE_UTILIZATION"]["params"]
+        assert "place_density" in w["PLACE_DENSITY_LB_ADDON"]["params"]
+        assert all(r["reason"] for r in m["withheld"])
+        # …and the mapping trace names each one.
+        assert sum(n.startswith("WITHHELD") for n in m["notes"]) == 2
+
+    def test_explicit_place_density_is_withheld_too(self):
+        """An EXPLICIT PLACE_DENSITY is in the same class as a derived one —
+        the risk is the density, not how it was arrived at."""
         m = mod._reference_flow_pnr_mapping({
             "CORE_UTILIZATION": "50", "PLACE_DENSITY_LB_ADDON": "0.25",
             "PLACE_DENSITY": "0.60"})
-        assert m["place_density"] == 0.60          # explicit, NOT 0.75 derived
-        assert m["die_target_util"] == 0.5
+        assert m["place_density"] is None
+        assert m["die_target_util"] is None
+        assert {r["knob"] for r in m["withheld"]} == {
+            "CORE_UTILIZATION", "PLACE_DENSITY_LB_ADDON", "PLACE_DENSITY"}
 
-    def test_fp_core_util_alias(self):
+    def test_fp_core_util_alias_is_withheld_under_its_own_name(self):
         m = mod._reference_flow_pnr_mapping({"FP_CORE_UTIL": "45"})
-        assert m["die_target_util"] == 0.45
-        assert m["place_density"] == 0.45          # derived, LB_ADDON absent → 0
-
-    def test_out_of_range_dropped(self):
-        # util > 100% / density > 1 / negative TNS → dropped, never applied.
-        m = mod._reference_flow_pnr_mapping({
-            "CORE_UTILIZATION": "150", "PLACE_DENSITY": "1.4",
-            "TNS_END_PERCENT": "-5", "CTS_CLUSTER_SIZE": "0"})
         assert m["die_target_util"] is None
         assert m["place_density"] is None
+        assert [r["knob"] for r in m["withheld"]] == ["FP_CORE_UTIL"]
+
+    def test_withheld_class_is_derived_from_the_knob_vocabulary(self,
+                                                                tmp_path):
+        """The class is a property of the flow PARAMETER a knob feeds, read off
+        the one vocabulary table — not a second hand-maintained knob list that
+        could drift away from it.
+
+        The parameter names are checked against the ones the PRODUCER actually
+        emits, not against a literal restated here: a rename in the producer
+        would otherwise leave `_RF_ROUTING_SUPPLY_PARAMS` matching nothing, and
+        the whole class would silently empty out — a withhold that stops
+        withholding while every other assertion in this file still passes."""
+        assert mod._ORFS_WITHHELD_PNR_KNOBS == frozenset(
+            k for k, params in mod._ORFS_PNR_KNOB_PARAMS.items()
+            if mod._RF_ROUTING_SUPPLY_PARAMS.intersection(params))
+        assert mod._ORFS_WITHHELD_PNR_KNOBS, "the class must not be empty"
+        # every recognized PnR knob is in the vocabulary …
+        assert set(mod._ORFS_NUM_PNR_KNOBS) == set(mod._ORFS_PNR_KNOB_PARAMS)
+        # … and every parameter named in it is one the audit really reports.
+        emitted = set(mod._reference_flow_pnr_audit(tmp_path)["applied"])
+        for knob, params in mod._ORFS_PNR_KNOB_PARAMS.items():
+            assert params, knob
+            assert set(params) <= emitted, knob
+        assert mod._RF_ROUTING_SUPPLY_PARAMS <= emitted
+
+    def test_out_of_range_dropped(self):
+        # negative TNS / zero cluster size → dropped, never applied.
+        m = mod._reference_flow_pnr_mapping({
+            "TNS_END_PERCENT": "-5", "CTS_CLUSTER_SIZE": "0"})
         assert m["repair_tns_percent"] is None
         assert m["cts_cluster_size"] is None
         # #198 Branch 1 audit trail: dropped is DISCLOSED, not silent. This
@@ -185,10 +231,24 @@ class TestPnrKnobMapping:
         # The values above must still never be applied (asserted); what changed
         # is that each drop now states knob + value + reason.
         assert {r["knob"] for r in m["rejected"]} == {
-            "CORE_UTILIZATION", "PLACE_DENSITY", "TNS_END_PERCENT",
-            "CTS_CLUSTER_SIZE"}
+            "TNS_END_PERCENT", "CTS_CLUSTER_SIZE"}
         assert all(n.startswith("REJECTED") for n in m["notes"])
         assert all(r["reason"] for r in m["rejected"])
+
+    def test_out_of_range_supply_knob_is_withheld_not_range_judged(self):
+        """A knob this flow will not apply at ANY value must not be reported
+        with a range verdict — that would tell the reader an in-range value
+        would have been applied."""
+        m = mod._reference_flow_pnr_mapping({
+            "CORE_UTILIZATION": "150", "PLACE_DENSITY": "1.4"})
+        assert m["die_target_util"] is None
+        assert m["place_density"] is None
+        assert {r["knob"] for r in m["withheld"]} == {
+            "CORE_UTILIZATION", "PLACE_DENSITY"}
+        assert m["rejected"] == []
+        # the declared value is still carried verbatim, so a malformed
+        # declaration stays visible
+        assert {r["value"] for r in m["withheld"]} == {"150", "1.4"}
 
     def test_empty_knobs_all_none(self):
         m = mod._reference_flow_pnr_mapping({})
@@ -198,8 +258,12 @@ class TestPnrKnobMapping:
         assert m["notes"] == []
 
     def test_declared_die_util_helper(self, tmp_path):
+        # #541 — the die-util hook is single-sourced through the mapping, which
+        # withholds the supply class, so a STAGED reference flow now yields the
+        # same None an absent one does: the auto-die sizer keeps its own
+        # routing-headroom calibration.
         _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
-        assert mod._reference_flow_declared_die_util(tmp_path) == 0.5
+        assert mod._reference_flow_declared_die_util(tmp_path) is None
         # empty project → None (byte-identical guarantee for the die sizer)
         empty = tmp_path / "empty"
         empty.mkdir()
@@ -223,16 +287,27 @@ def _min_pdk():
 
 
 class TestAutoDiePrecedence:
-    def test_reference_flow_feeds_die_util_when_no_l9(self, tmp_path):
+    def test_reference_flow_does_not_size_the_die(self, tmp_path):
+        """#541 — a staged reference flow must NOT shrink the auto die. This
+        used to assert `reference_flow-declared` / `target_util=0.5`, i.e. the
+        exact substitution measured to take ibex from a converged detailed
+        route to one that never closed an optimization iteration. The die the
+        sizer produces must now be the same one it produces with no reference
+        flow at all — measured as a DIE, not just as a label."""
+        nl = _min_netlist(tmp_path)
+        bare = tmp_path / "bare"
+        bare.mkdir()
+        die_bare, note_bare = mod._resolve_auto_die_um(
+            "auto", nl, 0.30, _min_pdk(), project=bare, top="top")
         proj = tmp_path / "proj"
         proj.mkdir()
         _stage(proj, {"orfs_config.mk": _IBEX_MK})
-        nl = _min_netlist(tmp_path)
-        _die, note = mod._resolve_auto_die_um(
+        die_rf, note_rf = mod._resolve_auto_die_um(
             "auto", nl, 0.30, _min_pdk(), project=proj, top="top")
-        assert note is not None
-        assert "reference_flow-declared" in note
-        assert "target_util=0.5" in note
+        assert die_rf == die_bare
+        assert note_rf == note_bare
+        assert "reference_flow-declared" not in note_rf
+        assert "routing-headroom-default" in note_rf
 
     def test_l9_wins_over_reference_flow(self, tmp_path):
         proj = tmp_path / "proj"
@@ -288,9 +363,14 @@ class TestPnrTclEmission:
             cts_cluster_size=20, cts_cluster_diameter=50.0)
         # BOTH executable setup-repair passes get -repair_tns (pre-CTS + post-GR)
         assert tcl.count("repair_timing -setup -repair_tns 100") == 2
+        # -distance_between_buffers defaults to 10 whenever clustering is
+        # active and no explicit CTS_DISTANCE_BETWEEN_BUFFERS knob overrides
+        # it (spm x ihp-sg13g2, 2026-08-07 — sink_clustering alone can still
+        # leave the CTS root buffer over its own fanout limit).
         assert ("clock_tree_synthesis -buf_list {clkbuf_4} -root_buf clkbuf_16"
                 " -sink_clustering_enable -sink_clustering_size 20"
-                " -sink_clustering_max_diameter 50}") in tcl
+                " -sink_clustering_max_diameter 50"
+                " -distance_between_buffers 10}") in tcl
 
     def test_hold_repair_never_gets_repair_tns(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, repair_tns_percent=100)
@@ -299,14 +379,35 @@ class TestPnrTclEmission:
 
     def test_cts_size_only(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, cts_cluster_size=20)
-        assert "-sink_clustering_enable -sink_clustering_size 20}" in tcl
+        assert ("-sink_clustering_enable -sink_clustering_size 20"
+                " -distance_between_buffers 10}") in tcl
         assert "-sink_clustering_max_diameter" not in tcl
 
     def test_cts_diameter_only(self):
         tcl = mod._build_pnr_tcl_text(**_TCL_BASE, cts_cluster_diameter=50.0)
-        assert ("-sink_clustering_enable -sink_clustering_max_diameter 50}"
-                in tcl)
+        assert ("-sink_clustering_enable -sink_clustering_max_diameter 50"
+                " -distance_between_buffers 10}" in tcl)
         assert "-sink_clustering_size" not in tcl
+
+    def test_cts_distance_between_buffers_explicit_overrides_default(self):
+        """A reference-flow-declared CTS_DISTANCE_BETWEEN_BUFFERS must win
+        outright over the built-in default (10) — same non-override
+        guarantee every other reference-flow knob already has."""
+        tcl = mod._build_pnr_tcl_text(
+            **_TCL_BASE, cts_cluster_size=20,
+            cts_distance_between_buffers=40.0)
+        assert ("-sink_clustering_enable -sink_clustering_size 20"
+                " -distance_between_buffers 40}") in tcl
+        assert "-distance_between_buffers 10" not in tcl
+
+    def test_cts_distance_between_buffers_absent_without_clustering(self):
+        """No clustering knob at all -> no -distance_between_buffers either;
+        the default only fires alongside sink clustering, since that is the
+        specific scenario it closes (an ungated design gets byte-identical
+        CTS behaviour to before this fix)."""
+        tcl = mod._build_pnr_tcl_text(**_TCL_BASE)
+        assert "-distance_between_buffers" not in tcl
+        assert "-sink_clustering_enable" not in tcl
 
     @needs_tclsh
     def test_injected_tcl_parses_in_tclsh(self, tmp_path):

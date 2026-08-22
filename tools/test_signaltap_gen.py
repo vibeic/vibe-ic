@@ -204,6 +204,61 @@ class TestGenerateStpXml(unittest.TestCase):
         self.assertEqual(trigger_pos.get('pre_trigger'), '256')
 
 
+class TestRecompileInstructionBlock(unittest.TestCase):
+    """The printed instruction block must survive the gate that audits it.
+
+    vibe-ic#693. This block used to print `quartus_stp` alone, which only
+    ATTACHES the .stp — the SOF is not re-mapped, re-fitted or re-assembled,
+    so following it verbatim programs a board with no logic analyzer in it.
+    Piping this program's real stdout into
+    `programs/signaltap_recompile_sequence_check.py` returned rc=1 with
+    3 x STAGE_MISSING (map, fit, asm). This test binds the two together so the
+    instruction block cannot silently drift back.
+    """
+
+    GATE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+        "signaltap_recompile_sequence_check.py")
+
+    def _emit(self, tmpdir):
+        import subprocess
+        sv = os.path.join(tmpdir, "dut.sv")
+        with open(sv, "w") as f:
+            f.write(MOCK_SV)
+        out = os.path.join(tmpdir, "dut_debug.stp")
+        proc = subprocess.run(
+            [sys.executable,
+             os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "signaltap_gen.py"),
+             "--module", "cd4013b", "--sv", sv, "--output", out],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    def test_instruction_block_names_all_four_stages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = self._emit(tmp)
+        for stage in ("quartus_stp", "quartus_map", "quartus_fit",
+                      "quartus_asm"):
+            self.assertIn(stage, stdout,
+                          f"{stage} missing from the recompile instructions")
+
+    def test_gate_accepts_our_own_instruction_block(self):
+        import subprocess
+        if not os.path.isfile(self.GATE):
+            self.skipTest("plugin gate not present in this checkout")
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = self._emit(tmp)
+            log = os.path.join(tmp, "instructions.txt")
+            with open(log, "w") as f:
+                f.write(stdout)
+            proc = subprocess.run([sys.executable, self.GATE, log],
+                                  capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0,
+                         f"our own instructions fail the gate:\n{proc.stderr}")
+
+
 class TestBISTSignals(unittest.TestCase):
     """Test BIST signal definitions."""
 

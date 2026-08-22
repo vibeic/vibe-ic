@@ -62,7 +62,7 @@ def test_fail_open_drain(tmp_path):
 
 
 def test_skip_i2c(tmp_path):
-    """L2 says I2C protocol → PASS (skip)."""
+    """L2 says a multi-master protocol -> VACUOUS (#521): open-drain is correct there, so this gate holds no opinion."""
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
     (rtl / "i2c.v").write_text(
@@ -76,7 +76,7 @@ def test_skip_i2c(tmp_path):
         json.dumps({"protocol_type": "i2c"})
     )
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     j = json.loads(r.stdout)
     assert j["passed"] is True
     rules = [f["rule"] for f in j["findings"]]
@@ -84,7 +84,7 @@ def test_skip_i2c(tmp_path):
 
 
 def test_skip_no_inout(tmp_path):
-    """RTL with no inout ports → PASS (skip)."""
+    """RTL with no inout ports -> VACUOUS (#521)."""
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
     (rtl / "core.v").write_text(
@@ -92,7 +92,7 @@ def test_skip_no_inout(tmp_path):
         "endmodule\n"
     )
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     j = json.loads(r.stdout)
     assert j["passed"] is True
     rules = [f["rule"] for f in j["findings"]]
