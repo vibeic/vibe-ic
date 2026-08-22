@@ -70,10 +70,22 @@ def _scrub_design_identifiers(text: str) -> str:
     (bare leafs / standalone constants are the capture-time policy's domain)."""
     return _DESIGN_ID_RE.sub("a benchmark design", text)
 
+# The provenance line names a PLUGIN SOURCE file, and this head is written into
+# a RUN TREE. No spelling of that path can resolve from a run tree: the citation
+# resolver's ladder walks the citing document's directory up to the scan root
+# (`benchmark-data/ic` by default) and stops there, so it never reaches
+# `vibe-ic-marketplace/plugins/...`. Writing it as a bare backticked path
+# therefore made every rendered digest carry a citation that could not resolve
+# from where it was cited — 10 of the 38 pre-existing unresolved citations
+# counted in #1168, one per run that shipped a `lessons.md`. The path stays
+# fully readable; it is no longer spelled as a citation of a shipped artefact,
+# and the head now says outright that it is not in this tree.
 _DIGEST_HEAD = (
     "# Captured-lesson digest (READ BEFORE AUTHORING)\n\n"
     "Rendered deterministically from the general-pattern `### Skill:` sections\n"
-    "of `agents/ic-expert-agent.md`. These are chip-AGNOSTIC patterns captured\n"
+    "of the IC-expert corpus — plugin source, NOT shipped in this run tree:\n"
+    "vibe-ic-marketplace/plugins/vibe-ic/agents/ic-expert-agent.md\n"
+    "These are chip-AGNOSTIC patterns captured\n"
     "from prior close-loop recoveries — no design identifiers, no oracle data —\n"
     "so reading them preserves blindness while preventing already-captured\n"
     "recoveries from recurring.\n\n"
