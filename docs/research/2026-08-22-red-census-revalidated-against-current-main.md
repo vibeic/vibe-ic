@@ -5,6 +5,79 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
+> **AND THE UNKNOWN IS BOUNDED — after two corrections, both mine.** Having said a
+> red outside these ten files "was never looked for", I sampled. **The bound moved
+> twice before it settled, and the second move was my own instrument.**
+>
+>     WITH the corpus pointer set (CONTAMINATED — see below):
+>       40 files (seed 20260822)     989 passed, 16 skipped,  0 FAILED
+>      120 files (disjoint, same)   1672 passed, 45 skipped,  7 FAILED
+>     WITHOUT it, as CI runs them — THE FIGURE TO USE:
+>       40 files                     989 passed, 16 skipped,  0 FAILED
+>      120 files                    1678 passed, 45 skipped,  1 FAILED
+>     ------------------------------------------------------------------
+>     CLEAN BOUND: 1 red file in 160 of the 2737 out-of-census files
+>
+> **Six of the seven were manufactured by my own measurement.** The failure said so:
+> *"note: `VIBE_IC_BENCHMARK_DATA` overrides `--tree`"*. The pointer I set so D3
+> could be measured **overrides the tree those tests supply**, so the checker
+> inspects the wrong tree and reports "nothing to enforce". `test_issue1538...`
+> gives **6 failed with the pointer, 12 passed without**. **It was never main's red.**
+>
+> **THE CENSUS IS UNAFFECTED, measured not asserted:** zero census failures cite
+> the override, and the D3 reds the pointer revealed go **skipped → failed**, not
+> **passed → failed**. **The pointer SUPPLIES what D3 lacks; it OVERRIDES what
+> `issue1538` already had. Same variable, opposite effects, and only one is a
+> measurement.**
+>
+> **So: a small unseen population exists.** 1/160 (0.6%) over 2737 files suggests
+> of the order of **seventeen** more files — on ONE event, an interval wide enough
+> that it means *"a small population exists"*, not a number. The one real red:
+> `test_v1_9_63_issue693_repo_process_family_wiring.py::test_the_checker_population_covers_checker_shaped_names`
+> — and it IS now characterised, because naming a red without one line about it is
+> a thin handoff:
+>
+>     assert not ['pad_assignment_gen.py', 'tapeout_docs_gen.py']
+>
+> **Two checker-shaped names the checker population does not cover.** Measured:
+> **fails identically at `a00f53f20` and at `a4caccefe`** — so it is
+> **LONG-STANDING, not a regression**, and both files predate this campaign's base.
+>
+> **I first guessed it was caused by the recent upstream work** — `tapeout_docs_gen`
+> is one of the two gates that just declared `ENFORCEMENT`, and `pad_assignment_gen`
+> is one of the two new flow clauses the liar census found. **That would have been a
+> satisfying story: the fix that closed three census reds opening a fourth. It is
+> false** — `git log --diff-filter=A` puts both files before the base. **Checked
+> before publishing, which is the only reason it is not in this document as a
+> finding.**
+>
+> **What it actually is: a red the inherited list simply never contained** — one
+> concrete instance of exactly what the scope statement above warns about. Root
+> cause not pursued further; it belongs to whoever owns the checker population.
+>
+> **OPERATIONAL WARNING FOR ANY FUTURE SWEEP — the reusable part:**
+> `VIBE_IC_BENCHMARK_DATA` is **REQUIRED** for D3 (61 cells report nothing without
+> it) and **HARMFUL** elsewhere. **A whole-suite run WITH it manufactures false
+> reds; WITHOUT it, 61 real cells go silent. No single setting measures this suite
+> correctly — D3 must be run separately.**
+
+> **⚠ SCOPE, STATED BEFORE ANY NUMBER: THIS IS NOT A SWEEP OF MAIN.**
+>
+>     test files in the plugin        2747
+>     test files this census measured   10
+>
+> Those ten are the files carrying the frozen branch's 34 reds, and that 34 came
+> from a CARRIED-FORWARD list — *"the 92 of v1.11.18 + the 5 that arrived at
+> v1.11.47 = 97"* — narrowed over successive triages. **So "33 on main" means
+> "33 of the inherited list still fail on main", NOT "main has 33 reds".**
+>
+> **A red in one of the other 2737 files would not appear here and was never
+> looked for.** I have not swept main and am not claiming to have. **Every count
+> in this document, and in the frozen branch it revalidates, sits on that
+> denominator** — which is exactly the class of omission this campaign spent its
+> length finding in other people's numbers, and I quoted mine for eighteen parts
+> without stating it.
+
 > **THIS DOCUMENT CITES A DOCUMENT THAT IS NOT ON THIS BRANCH.** It refers
 > throughout to the frozen branch's section C and its `M`-numbered findings. **That
 > file — `docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md` — lives on

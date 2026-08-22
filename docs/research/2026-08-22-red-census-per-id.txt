@@ -2,6 +2,11 @@
 # 2026-08-22-red-census-revalidated-against-current-main.md
 # measured 2026-08-22, host 8hd-3, VIBE_IC_BENCHMARK_DATA SET (without it 61 D3 cells report nothing)
 #
+# PROVENANCE: this list is GENERATED, and was verified BIDIRECTIONALLY against the raw
+# pytest output before shipping -- every id here traces to a run (0 untraceable), and every
+# id the runs produced appears here (0 dropped). A generated list is a claim like any other;
+# checking only one direction would catch invention but not omission.
+#
 # 33 ids on MAIN. The census document's 30 is the FROZEN BRANCH's tree:
 #   main 33 - 4 closed by ptmo/main-red-triage-v11166 + 1 it deliberately reddens = 30
 #
