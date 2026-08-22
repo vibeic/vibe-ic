@@ -67,6 +67,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -109,8 +110,21 @@ def _capture_version(version_cmd: str) -> str:
         r = subprocess.run(
             version_cmd, shell=True, capture_output=True, text=True, timeout=30,  # nosec B602 — trusted version probe
         )
-        first_line = (r.stdout or r.stderr or "").strip().splitlines()
-        return (first_line[0] if first_line else "")[:200]
+        lines = (r.stdout or r.stderr or "").strip().splitlines()
+        # #365 — the EDA container's entrypoint prints its own diagnostic
+        # banners BEFORE the command's output ("[INFO] Final PATH variable:
+        # ..."), so taking line 0 recorded the PATH banner as the tool
+        # VERSION in every provenance entry written through a container.
+        # Skip bracketed-level banner lines; they are the harness talking,
+        # never the tool's version. Tool-AGNOSTIC: keyed on the banner
+        # GRAMMAR, not on any tool or container name. If nothing else
+        # remains, fall back to line 0 rather than returning empty — an
+        # unexpected banner-only output should still be recorded verbatim
+        # for a reader to see.
+        real = [ln for ln in lines
+                if not re.match(r"\s*\[[A-Z][A-Z ]*\]", ln) and ln.strip()]
+        picked = (real or lines or [""])[0]
+        return picked[:200]
     except Exception as exc:
         return f"version-capture-error: {exc!r}"[:200]
 

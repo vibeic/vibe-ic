@@ -64,12 +64,63 @@ def test_no_matrix_is_vacuous_rc2(tmp_path):
     assert PMC.audit(tmp_path)["rc"] == 2
 
 
+def _runner():
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        "phase3_one_shot_runner", PLUGIN / "programs" / "phase3_one_shot_runner.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["phase3_one_shot_runner"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_runner_stamps_corner_count_and_coverage():
-    i = _P3_SRC.index('pvt["corner_count"]')
-    window = _P3_SRC[i - 400:i + 900]
-    assert 'pvt["multi_corner"] = len(corners) >= 2' in window
-    assert "SINGLE_CORNER_ONLY" in window
-    assert "#442" in window
+    """DRIVEN, not scanned. The first version took a +-window of SOURCE around
+    the FIRST `pvt["corner_count"]` and looked for the token in it — which
+    measures DISTANCE, not behaviour.
+
+    The distance it measured was real, though: this runner writes
+    `pvt_matrix.json` from TWO places, #442's disclosure was added to only one
+    of them, and the token sat 8738 characters away beside the other. The
+    omitting writer was the Step-7c one, which runs FIRST and is therefore the
+    one that creates the file when it does not exist.
+    """
+    R = _runner()
+    for corners, want_cov in (([], "NO_CORNERS"),
+                              ([{"name": "a", "label": "TT"}],
+                               "SINGLE_CORNER_ONLY")):
+        pvt = R.stamp_pvt_corner_coverage({}, corners)
+        assert pvt["corner_count"] == len(corners)
+        assert pvt["multi_corner"] is False
+        assert pvt["coverage"] == want_cov, (corners, pvt)
+        assert "#442" in pvt["note"]
+
+
+def test_two_corners_carry_no_shortfall_disclosure():
+    """THE ACCEPT CASE. A real matrix must not be labelled as failing to
+    substantiate one."""
+    R = _runner()
+    pvt = R.stamp_pvt_corner_coverage(
+        {}, [{"name": "a", "label": "SS"}, {"name": "b", "label": "TT"}])
+    assert pvt["multi_corner"] is True
+    assert "coverage" not in pvt and "note" not in pvt
+
+
+def test_both_writers_go_through_the_one_stamper():
+    """The defect was a disclosure present at one of two writers of the same
+    artefact. Neither may stamp the census on its own again."""
+    src = _P3_SRC
+    code = "\n".join(l for l in src.splitlines()
+                      if not l.lstrip().startswith("#"))
+    assert code.count("stamp_pvt_corner_coverage(pvt, corners)") == 2, (
+        "a writer stopped calling the shared stamper")
+    # EXACTLY ONCE in the whole file — inside the stamper. Slicing "everything
+    # after the stamper's `def`" cannot tell the stamper's own body from a
+    # writer's, which is what the first version of this assertion did.
+    assert code.count('pvt["corner_count"] = len(corners)') == 1, (
+        "the census is stamped somewhere other than the shared stamper, so "
+        "the two writers can diverge again")
 
 
 def test_sta_single_corner_disclosure(tmp_path):
@@ -81,7 +132,7 @@ def test_sta_single_corner_disclosure(tmp_path):
     assert r.summary["multi_corner_executed"] is False
     disc = [f for f in r.findings if f.rule == "STA_SINGLE_CORNER_ONLY"]
     assert disc and disc[0].severity == "WARNING"  # advisory, not ERROR
-    assert r.summary["multi_corner_substantiated"] is True  # no broken claim
+    assert r.summary["multi_corner_claim_not_broken"] is True  # no broken claim
 
 
 def test_sta_two_distinct_corners_no_disclosure(tmp_path):

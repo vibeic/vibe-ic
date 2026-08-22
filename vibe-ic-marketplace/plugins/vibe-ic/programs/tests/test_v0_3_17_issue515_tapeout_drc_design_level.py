@@ -24,6 +24,16 @@ literal; the rule names are foundry rule-layer tokens, not a chip identity.
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import signoff_audit as audit  # noqa: E402
 
@@ -54,11 +64,25 @@ def _report_db(category_counts: dict) -> str:
 
 
 def _proj(tmp_path, drc_text=None, drc_name="drc_signoff.rpt"):
-    """A tapeout-ready project: gds + netlist + timing always present; DRC
-    report content supplied per-test."""
-    (tmp_path / "chip_top.gds").write_text("HEADER")
+    """A tapeout-ready project: gds + netlist + timing + LVS always present;
+    DRC report content supplied per-test.
+
+    2026-07-27: tapeout mode gained a fifth pillar (LVS). This suite is about
+    the DRC slot, so the fixture carries a genuine netgen match — otherwise
+    every case here would FAIL on the missing LVS evidence and stop
+    discriminating the DRC tiers it exists to pin. Evidence denominators
+    below moved 4 → 5 accordingly."""
+    _gdsii.write_declared_streamout(tmp_path, "chip_top.gds")
     (tmp_path / "chip_top_synth.v").write_text("module chip_top();endmodule\n")
     (tmp_path / "sta_timing.rpt").write_text("slack 0.1\n")
+    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports/phase3/lvs.rpt").write_text(
+        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about the DRC slot, so it carries a PROVED
+    # SI verdict — without one every case here would collapse onto the
+    # SI refusal and stop discriminating what it exists to pin.
+    _si_signoff_fixture.write_proved_si_report(tmp_path)
     if drc_text is not None:
         (tmp_path / drc_name).write_text(drc_text)
     return tmp_path
@@ -72,7 +96,7 @@ def test_library_internal_only_credits_drc_slot_4of4(tmp_path):
                       "m1.2": 100, "li.1": 14})  # 1114 raw, design-level 0
     p = _proj(tmp_path, xml)
     r = audit._check_tapeout(p)
-    assert r.summary["evidence_count"] == 4, r.summary
+    assert r.summary["evidence_count"] == 5, r.summary  # 4 → 5: LVS pillar
     assert r.summary["evidence"]["drc"] == "library_internal_waived"
     assert r.passed is True
     assert r.summary["verdict_tier"] == "PASS_WITH_WAIVERS"
@@ -110,8 +134,8 @@ def test_design_level_violation_still_fails(tmp_path):
     p = _proj(tmp_path, xml)
     r = audit._check_tapeout(p)
     assert r.summary["evidence"]["drc"] is False
-    assert r.passed is False            # 3/4
-    assert r.summary["evidence_count"] == 3
+    assert r.passed is False            # 4 of 5 — the DRC slot is held
+    assert r.summary["evidence_count"] == 4
     assert r.summary["verdict_tier"] == "FAIL"
     assert r.summary["drc_library_internal_waived"] is False
     msg = next(f.message for f in r.findings

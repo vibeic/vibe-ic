@@ -64,8 +64,12 @@ def _collect_predicates(gate) -> tuple[list, bool]:
                     jft.append(v)
                 elif k == "program_exit_zero":
                     has_pez = True
-                elif k in ("optional_program_exit_zero",):
-                    # optional gate is NOT a real backing checker
+                elif k in ("optional_program_exit_zero",
+                           "advisory_program_exit_zero"):
+                    # Neither is a real backing checker: `optional` may never
+                    # run, and `advisory` (#306) runs but cannot fail the step.
+                    # A json_field_true that trusts an artifact's own PASS
+                    # still needs a BLOCKING program behind it.
                     pass
                 else:
                     rec(v)

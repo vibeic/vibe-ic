@@ -165,9 +165,77 @@ def test_fail_no_clock(tmp_path: Path):
 # --------------------------------------------------------------------------
 # Edge / honesty
 # --------------------------------------------------------------------------
-def test_skip_no_stp_given():
-    # Nothing to validate -> SKIP, exit 0, never a vacuous PASS.
-    assert M.main([]) == 0
+def test_skip_no_stp_given(capsys):
+    """Nothing to validate -> SKIP, never a vacuous PASS.
+
+    CONTRACT CHANGE (2026-08-03, vibe-ic#693): rc 2, not 0. The old assertion
+    contradicted its own comment — rc 0 is exactly the vacuous PASS
+    `flow_compliance_check` credits; rc 2 is the disclosed-skip tier.
+    """
+    assert M.main([]) == 2
+    # `gate_skip_routing_check._skip_token` matches at LINE START.
+    assert capsys.readouterr().err.lstrip().startswith("[SKIP]")
+
+
+def test_empty_self_closing_trigger_set_is_not_a_trigger(tmp_path: Path):
+    """NO_TRIGGER must fire on `<trigger_set .../>`.
+
+    This is the false negative measured on the artefact the gate's own header
+    names as its subject: `eda_rtl_signaltap_autogen` emits an EMPTY
+    self-closing `<trigger_set is_expanded="true" name="trigger: trigger_set_1"/>`,
+    and a tag-PRESENCE regex called that "a trigger is defined". A trigger that
+    triggers on nothing is the free-running capture this rule rejects.
+    """
+    f = tmp_path / "empty_trigger.stp"
+    f.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<session stp_version="9.0">
+  <instance entity_name="sld_signaltap" name="auto_signaltap_0">
+    <signal_set name="signal_set: signal_set_1">
+      <clock name="CLOCK_50" polarity="posedge"/>
+      <config sample_depth="2048"/>
+      <signal name="bist_state" node_index="0"/>
+      <signal name="test_index" node_index="1"/>
+      <signal name="pass_count" node_index="2"/>
+      <signal name="fail_count" node_index="3"/>
+    </signal_set>
+    <trigger_set is_expanded="true" name="trigger: trigger_set_1"/>
+  </instance>
+</session>
+""")
+    out = tmp_path / "r.json"
+    rc = M.main([str(f), "--json", str(out)])
+    rep = json.loads(out.read_text())
+    assert rc == 1, rep
+    assert [x["rule"] for x in rep["findings"]] == ["NO_TRIGGER"], rep
+    assert rep["trigger_present"] is False
+
+
+def test_populated_trigger_set_is_a_trigger(tmp_path: Path):
+    """Positive control for the same predicate: a trigger_set WITH content is
+    still accepted, so the fix cannot be an accept-nothing regression."""
+    f = tmp_path / "real_trigger.stp"
+    f.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<session stp_version="9.0">
+  <instance entity_name="sld_signaltap" name="auto_signaltap_0">
+    <signal_set name="signal_set: signal_set_1">
+      <clock name="CLOCK_50" polarity="posedge"/>
+      <config sample_depth="1024"/>
+      <signal name="bist_state" node_index="0"/>
+      <signal name="test_index" node_index="1"/>
+      <signal name="pass_count" node_index="2"/>
+      <signal name="fail_count" node_index="3"/>
+    </signal_set>
+    <trigger_set is_expanded="true" name="trigger: trigger_set_1">
+      <trigger_input name="bist_fail" condition="rising_edge"/>
+    </trigger_set>
+  </instance>
+</session>
+""")
+    out = tmp_path / "r.json"
+    rc = M.main([str(f), "--json", str(out)])
+    rep = json.loads(out.read_text())
+    assert rc == 0, rep
+    assert rep["trigger_present"] is True
 
 
 def test_fail_garbage_stp_no_signal_set(tmp_path: Path):
