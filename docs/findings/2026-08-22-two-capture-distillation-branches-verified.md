@@ -3146,6 +3146,85 @@ That is the harm the brief named, and it does not occur across 988 runs.
     repair was real.
 ```
 
+## HOW TO DRIVE ALL 32 — the antidote to the mistake I made five times
+
+```text
+Five times in this work an invocation form changed an answer, and four of those
+made a branch look worse than it is. That is not five coincidences; it is one
+hazard that anyone re-running these measurements will meet. So here is the
+contract, MEASURED rather than read off the argparse calls — every program run
+both ways against its own tree, and rc 3 scored as "wrong form", never as a
+verdict.
+
+  branch  root form      flags accepted     shipped rc   checker
+  CHIP R (positional)               rc0   declared_basis_matches_the_session_inputs
+  CHIP R (positional)               rc0   explicit_argument_outranks_the_environment_pointer
+  CHIP R (positional)               rc0   generated_values_state_whether_they_were_read_or_defaulted
+  CHIP R (positional)               rc0   local_clone_does_not_borrow_objects
+  CHIP R (positional)               rc0   measurement_only_artefact_is_not_a_verdict_source
+  CHIP R (positional)               rc0   prepared_checkout_states_the_revision_it_holds
+  CHIP R (positional)               rc0   printed_remedy_runs_as_printed
+  CHIP R (positional)               rc0   provenance_value_is_resolved_not_constant
+  CHIP R (positional)               rc1   every_required_metric_key_has_a_producer
+  CHIP R (positional)               rc1   only_the_declaring_step_writes_its_output
+  CHIP R (positional)               rc1   signoff_report_states_its_stage
+  CHIP R (positional)               rc2   pytest_aggregate_carries_its_runtime_identity
+  MAT  --root R               jsn   rc0   published_absence_claim_is_rechecked_against_the_tree
+  MAT  --root R               jsn   rc1   gate_proof_vocabulary_has_a_producer
+  MAT  --root R               jsn   rc1   layer_membership_is_declared_not_inferred_from_a_filename_prefix
+  MAT  --root R               jsn   rc1   metric_constant_across_differing_arms_is_not_measured
+  MAT  --root R           str jsn   rc0   content_pinned_authority_verified_only_at_merge
+  MAT  --root R           str jsn   rc0   wall_clock_bound_standing_in_for_a_verdict
+  MAT  --root R       inv     jsn   rc0   declaration_searched_only_inside_a_truncated_window
+  MAT  --root R       inv     jsn   rc0   declared_invocation_accepted_by_its_own_parser
+  MAT  --root R       inv     jsn   rc0   denial_that_constitutes_the_value_it_appears_to_negate
+  MAT  --root R       inv     jsn   rc0   invocation_proved_by_parse_not_by_text
+  MAT  --root R       inv     jsn   rc0   population_guard_asserts_equality_not_a_floor
+  MAT  --root R       inv     jsn   rc0   population_pin_without_its_member_set
+  MAT  --root R       inv     jsn   rc0   reference_control_resolved_through_a_mutable_ref
+  MAT  --root R       inv     jsn   rc0   registry_is_the_iteration_domain
+  MAT  --root R       inv     jsn   rc0   spawned_gate_whose_status_is_discarded
+  MAT  --root R       inv     jsn   rc0   two_input_selectors_given_together_must_refuse
+  MAT  --root R       inv str jsn   rc0   explicit_argument_outranks_the_environment_pointer_census
+  MAT  --root R       inv str jsn   rc0   local_clone_does_not_borrow_objects_census
+  MAT  --root R       inv str jsn   rc0   only_the_declaring_step_writes_its_output_census
+  MAT  --root R       inv str jsn   rc0   provenance_value_is_resolved_not_constant_census
+
+READ IT THIS WAY:
+  * ALL 20 matrix programs take `--root R`; positional gives rc 3.
+    ALL 12 chip programs take a positional R; `--root` gives rc 3.
+    The two branches are exact mirrors, which is why scoring an rc 3 as a
+    verdict makes them look identical on an axis where they differ completely.
+  * `inv` = accepts `--inventory`. FOURTEEN do. Passing an EMPTY inventory to
+    one of these does not make it stricter, it removes the grandfathering, and
+    the rule then reports history rather than regression. That is what F9's
+    "10 sites" figure needs and what turned 3 reds into 11 in an early sweep of
+    mine.
+  * `str` = has an ADVISORY mode: rc 0 on a finding unless `--strict`. SIX do.
+    Driving these plain and reading rc 0 as "no finding" is the error that made
+    the fixture matrix read 17 of 19 instead of 19 of 19.
+  * `jsn` = writes a `--json` artefact. TWENTY do, all on matrix, and only one
+    of the twenty has a test that exercises that path — see F17.
+  * shipped rc is the verdict on the tree the branch ships, driven correctly.
+
+AND ONE PROGRAM HAS TWO ARMS, which a static reading gets wrong. I built this
+table from `add_argument` first and it classified
+`prepared_checkout_states_the_revision_it_holds` as taking `--root`, which
+contradicted the rule above and looked like an error in guidance I had already
+published. Measured, the positional gives rc 0 and `--root` gives rc 3, because:
+
+    ap.add_argument("tree", nargs="?", ...)   # source tree to scan
+    ap.add_argument("--root", ...)            # runtime arm: a prepared
+    ap.add_argument("--expect", ...)          #   checkout to interrogate
+    ap.add_argument("--upstream", ...)
+
+It is a two-arm program. Its `--root` is a different MODE, not a different
+spelling of the same one, and its rc 3 was a correct refusal of an incomplete
+runtime invocation. The published rule was right; my static instrument was
+wrong, and I nearly corrected a correct sentence on its word. Sixth entry in
+the same list, and the only one so far that ran the other way.
+```
+
 ## VERDICTS
 
 ```text
