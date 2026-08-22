@@ -31,7 +31,15 @@ script rather than judging over the wire:
 That is how shard B's 102 rows on .114 were judged without an account there: ship the judge to
 the host, run it locally, carry the measurements back.
 
-**.107 (8HD-c) is the one genuine UNREACHABLE.** Port 22 times out from three different
+**.107 (8HD-c) is the one genuine UNREACHABLE — and it is UP.** Re-measured 2026-08-22: it replies
+to ICMP with 0% packet loss, while ports 22, 80, 443, 3000 and 8080 are all closed or filtered from
+this host and from .102. "Down" and "alive but not answering TCP" are different states and the
+second is the one that matters here: a machine that is running may hold worktrees nobody has swept.
+No verdict row depends on it — 0 rows across every verdict file name host 107 — so nothing in the
+deliverable is blocked, but the host itself has never been enumerated and that gap is not closable
+from here.
+
+**Original finding:** Port 22 times out from three different
 hosts — down, not key-refused. Any row on it must be UNREACHABLE, and that is not ABANDON.
 
 ## The local-path origin trap, measured — and it bit me

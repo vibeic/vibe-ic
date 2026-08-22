@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 25 markdown files and 72 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 28 markdown files and 72 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -55,6 +55,20 @@ nothing lands in the delete bucket by construction.
 | `verdicts_extra_8hd9.tsv` | 451 | jharv2 |
 | `verdicts_extra_8hd7.tsv` | 633 | jharv2 |
 | `verdicts_unreachable_resolved.tsv` | 80 | earlier resolution pass |
+
+## 4b. Host 108 — 89 more decided worktrees, in a different vocabulary
+
+`shard_c/108_verdicts.tsv` (jharv3, copied byte-for-byte from `harvest/shard-c-108-jharv3`) holds
+**89 decided worktrees on host 108**, and **56 of those paths appear in no other verdict file here**.
+They were invisible to anything reading the consumable.
+
+They are deliberately **not** merged into `verdicts_all.tsv`: that file says RECOVER / LANDED /
+ABANDON, this one says **KEEP (59) / DROP (30)**. `KEEP` maps to `RECOVER`; **`DROP` does not map** —
+it is deletion-bound, but whether a row means "already on main" or "worthless" is a distinction the
+file does not draw, and guessing would put a verdict in another agent's mouth in the one direction
+that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
+
+**30 of them authorise deletion and none has been through `predelete_guard.sh`.**
 
 ## 5. Still open, and not mine to close
 
