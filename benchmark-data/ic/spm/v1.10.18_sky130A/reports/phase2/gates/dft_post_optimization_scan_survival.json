@@ -1,7 +1,0 @@
-{
-  "verdict": "PASS",
-  "rc": 0,
-  "reason": "post_dft_netlist.v is non-empty, differs from the pre-DFT netlist, and instantiates 99 DFF-family cell(s) (scan_netlist.v had 99)",
-  "scan_netlist_dff_count": 99,
-  "post_dft_netlist_dff_count": 99
-}
