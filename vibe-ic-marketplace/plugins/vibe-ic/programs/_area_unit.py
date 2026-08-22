@@ -35,7 +35,12 @@ present in both files:
 
     library A   229 of 229 cells   liberty_area / lef_um2:
                                      min 1.000000  median 1.000000  max 1.000000
-    library B   405 of 405 cells   min 0.999547  median 1.000000  max 1.000000
+    library B   428 of 428 cells   min 0.999547  median 1.000000  max 1.000000
+
+    (The 405 first published here was my parser's undercount, not the
+    library's size — an invented 4000-byte window dropped 23 cells whose
+    `area` sits past it. Found by another lane re-deriving the figure and
+    getting 428; the window is gone and the count is now reproducible.)
 
 TOLERANCE, NOT EQUALITY, and the data is why. One library's worst agreeing cell
 is 0.999547 — the Liberty figure is rounded — so an equality test would reject a
@@ -110,10 +115,18 @@ _LIB_AREA_RE = re.compile(r'\barea\s*:\s*([0-9.]+)\s*;')
 _LEF_MACRO_RE = re.compile(r'MACRO\s+(\S+)(.*?)END\s+\1', re.DOTALL)
 _LEF_SIZE_RE = re.compile(r'SIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;')
 
-#: How far past a `cell (...)` header to look for its `area`. A whole-file
-#: search would attach the NEXT cell's area to this one; the bound is the
-#: window a cell's own attributes live in.
-_AREA_WINDOW = 4000
+#: NO BYTE WINDOW. A cell's `area` is bounded by the NEXT cell, not by a
+#: character count — that is what the grammar says, and any number chosen
+#: instead is a guess about how big a cell's block happens to be.
+#:
+#: MEASURED, and this is why it is written as a comment rather than a constant:
+#: the first version of this parser looked 4000 characters past each `cell (`
+#: header. On one shipped library that silently dropped 23 of 428 cells whose
+#: `area` sits at offsets 5649..10625, after large pin blocks. The ratios were
+#: unaffected and the conclusion held, so nothing looked wrong — which is the
+#: danger: a parser that drops 5% of a library can drop the one cell that
+#: DISAGREES, and the disagreement is the whole signal this module reads.
+#: Found by another lane re-deriving the published count and getting 428.
 
 
 def _read(p: Optional[Path]) -> Optional[str]:
@@ -128,9 +141,13 @@ def _read(p: Optional[Path]) -> Optional[str]:
 def liberty_areas(text: str) -> Dict[str, float]:
     """`{cell: area}` from a Liberty. The value's unit is what we are deciding."""
     out: Dict[str, float] = {}
-    for m in _LIB_CELL_RE.finditer(text):
-        seg = text[m.end():m.end() + _AREA_WINDOW]
-        a = _LIB_AREA_RE.search(seg)
+    heads = list(_LIB_CELL_RE.finditer(text))
+    for i, m in enumerate(heads):
+        # Bounded by the next cell header, or by the end of the file for the
+        # last one. `search` then takes the FIRST `area` inside that block,
+        # which is the cell's own.
+        stop = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        a = _LIB_AREA_RE.search(text, m.end(), stop)
         if a:
             try:
                 out[m.group(1)] = float(a.group(1))

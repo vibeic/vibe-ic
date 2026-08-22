@@ -19,12 +19,22 @@ the registry resolves — recorded here because these tests do not require the
 image, and a number nobody can reproduce from this file is not evidence:
 
     library  cells   liberty_area / lef_um2        verdict
-      A       405    0.999547 .. 1.000000          established
+      A       428    0.999547 .. 1.000000          established
       B       229    1.000000 .. 1.000000          established
       C        84    0.996528 .. 1.111111          established, 1 outlier
       D       135    0.500000 .. 1.000000          established, 1 outlier
       E        42    1.000000 .. 1.000000          established
     and the registry's sixth entry declares no assets -> refused, correctly.
+
+A's count was first published as 405. That was this parser's UNDERCOUNT, not
+the library's size: an invented 4000-byte window past each `cell (` header
+dropped 23 cells whose `area` sits at offsets 5649..10625, after large pin
+blocks. The ratios were unaffected and the conclusion held, which is exactly
+why it went unnoticed — and exactly the danger, because a parser that drops 5%
+of a library can drop the one cell that DISAGREES, and the disagreement is the
+whole signal. Another lane caught it by re-deriving the count and getting 428.
+The window is gone; the block is bounded by the next cell, which is what the
+grammar says.
 
 THE RULE, AND WHY IT IS NOT FITTED TO THAT ANSWER. C and D each carry exactly
 ONE disagreeing cell — D's is a FILLER cell at exactly 0.5, C's is one scan flop
@@ -437,3 +447,55 @@ def test_end_to_end_an_unresolvable_library_also_leaves_it_unestablished(tmp_pat
     ev = json.loads(Path(out).read_text())["chip_area_unit_evidence"]
     assert ev["established"] is False
     assert "no registry entry declares a Liberty layout" in ev["reason"]
+
+
+def test_a_cell_whose_area_sits_far_into_its_block_is_still_read(tmp_path):
+    """THE REGRESSION, and it was invisible for the worst reason.
+
+    The parser used to look a fixed 4000 characters past each `cell (` header.
+    On a shipped library that dropped 23 of 428 cells whose `area` sits at
+    offsets 5649..10625, behind large pin blocks — and NOTHING looked wrong,
+    because the surviving 405 all agreed and the verdict was unchanged.
+
+    That is the danger this pins: the module's entire signal is DISAGREEMENT,
+    so a parser that silently drops part of a library can drop the one cell
+    that disagrees and turn a refusal into an establishment. The block is now
+    bounded by the next cell, which is what the grammar says; a byte count is a
+    guess about how big a cell happens to be.
+
+    The fixture reproduces the shape rather than the library: one cell padded
+    past any plausible fixed window, and its area on the far side.
+    """
+    au = _au()
+    pad = "\n".join(f'    /* filler attribute {i} */' for i in range(2000))
+    lib = (tmp_path / "t.lib")
+    lib.write_text(
+        'library (t) {\n'
+        '  cell ("near") {\n    area : 4.0 ;\n  }\n'
+        f'  cell ("far") {{\n{pad}\n    area : 8.0 ;\n  }}\n'
+        '}\n')
+    got = au.liberty_areas(lib.read_text())
+    assert got.get("near") == 4.0, got
+    assert got.get("far") == 8.0, (
+        "a cell whose `area` sits past a fixed byte window was dropped; the "
+        "parser has reacquired an invented bound, and the cell it drops next "
+        "may be the one that disagrees")
+    assert len(got) == 2
+
+
+def test_an_area_is_never_attributed_to_the_wrong_cell(tmp_path):
+    """The other direction of the same boundary. Removing the byte window must
+    not let a cell with NO area of its own inherit the next cell's — which is
+    what an unbounded search would do, and it would be worse than dropping it:
+    a fabricated area compares as real."""
+    au = _au()
+    lib = (tmp_path / "t.lib")
+    lib.write_text(
+        'library (t) {\n'
+        '  cell ("no_area_here") {\n    foo : 1 ;\n  }\n'
+        '  cell ("has_area") {\n    area : 9.0 ;\n  }\n'
+        '}\n')
+    got = au.liberty_areas(lib.read_text())
+    assert "no_area_here" not in got, (
+        f"a cell with no area of its own was given one: {got}")
+    assert got["has_area"] == 9.0
