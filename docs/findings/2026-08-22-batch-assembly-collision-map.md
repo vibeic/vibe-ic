@@ -139,3 +139,38 @@ cell's publication as undetermined.
 
 No baseline was rewritten and `--write-baseline` was not run, including where two
 of these gates explicitly suggest it.
+
+## 6. The batch assembles: 15 of 16, and the one blocker is named
+
+Not a prediction -- performed. Merging all sixteen onto `a4caccefe`, resolving
+generated indices by REGENERATION and `CAPTURE_ROUTING.json` by UNION:
+
+    merged 15 of 16
+    left out: jcap-ppa -- docs/capture/2026-08-21-jcap-ppa/recoveries.json
+              conflicts with jdistmat/matrix-distil
+
+Every other conflict fell to the two mechanical rules. Then, on the assembled
+tree:
+
+    python3 programs/gen_program_inventory.py
+        -> changed exactly ONE file, PROGRAM_INVENTORY.json
+
+So the four "collisions" in the generated indices are not merges at all: rebuild
+once at the end and the READMEs and INDEX.md come out identical to what the
+generator produces anyway.
+
+    CAPTURE_ROUTING.json "steps" = 49 entries
+        = 46 base + 2 (fix/jwire2-hygiene-wiring) + 1 (jcapsha/pad-site-capture)
+        jcap-ppa's 15 are absent because that branch is the one left out;
+        with it the count is 64, as in section 2.
+
+    pytest: test_enhancement_emit + the three modules that read the routing file
+        -> 175 passed, 9 skipped
+
+**So the only human decision blocking a full assembly is `recoveries.json`,**
+between `jdistmat/matrix-distil` and `jcap-ppa`. It is one file, it belongs to
+those two authors, and nothing else in the batch waits on anything.
+
+This assembly was built to MEASURE and was not pushed anywhere. Assembling and
+landing the batch belongs to whoever owns it; this section says only that the
+path is clear and where it is not.
