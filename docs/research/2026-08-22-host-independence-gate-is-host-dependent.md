@@ -122,3 +122,72 @@ None of the four is made here. Two touch `repo_hygiene_gates.sh`, a PROTECTED
 path; all four change what main reports; and (3) in particular is a policy
 decision about whether a landing host must carry a corpus at all — which is the
 owner's, with the measurements now in front of them rather than an assertion.
+
+---
+
+## RE-CONFIRMED AT `a4caccefe` (v1.11.69), AND THE PART THAT MAKES IT INVISIBLE
+
+Re-ran `gate_host_independence_check . --jobs 8` on main today. Unchanged, and
+now over a larger probe set:
+
+    main a4caccefe, working checkout under $HOME
+      rc=1  [FAIL] 3 of 87 probed corpus gate(s) (96 declared) did not give one
+            reproducible verdict across two trees: 3 HOST_DEPENDENT_VERDICT
+              tracked-symlink portability
+              L-doc field producer
+              evidence citation resolves
+
+The same run on `agent/jrows-on-batchbig` gives the identical rc and the
+identical three, so this is main's property and the branch is neutral to it.
+
+The gate's own diagnosis of the mechanism is worth quoting, because it is right
+about the symptom and wrong about the cause:
+
+    the same commit gives different answers in a working checkout and a fresh
+    worktree, and does so on BOTH rounds, so the gate is reading something that
+    is not in the commit — almost always untracked run leftovers
+
+It is not leftovers here. The two arms differ because the working checkout sits
+under `/home/reyerchu`, whose ancestor walk finds `~/benchmark-data/ic`, and the
+fresh worktree does not:
+
+    checkout: rc=2 UNDETERMINED: /home/reyerchu/benchmark-data/ic is a directory
+              but holds no L-doc this gate can read
+    worktree: rc=0 NO_CORPUS: nothing at benchmark-data/ic ... NOTHING WAS
+              SCANNED
+
+### WHY CI NEVER SEES IT
+
+Run the same checker from a checkout OUTSIDE `$HOME` — a clean tree, which is
+what CI has — and it does not pass. It refuses:
+
+    rc=2  NO_STIMULUS: host-independence was NOT checked — the checkout carried
+          no untracked and no ignored path, so it and the fresh worktree held
+          the same bytes and all 87 probed gate(s) agreed by construction. A
+          comparison with nothing on one side that is not on the other cannot
+          detect a gate reading local state. This is not a pass. Run it in the
+          working tree the leftovers accumulate in.
+
+That is exactly the right answer and the gate deserves credit for it: it never
+claims a pass it did not earn. But `repo_hygiene_gates.sh:1828` dispatches it
+with `run_tolerating_uncheckable` under an `uncheckable_until 2027-02-28`, and
+rc 2 is precisely what that tolerates. So:
+
+    clean host (CI)        rc 2 NO_STIMULUS  -> tolerated, nothing learned
+    working checkout       rc 1 FAIL         -> blocks, and rc 1 is NOT exempt
+
+The finding is real, the instrument is honest, and the arrangement that can see
+it is the one nobody runs in CI. Anyone running a full hygiene sweep in their
+working tree today gets the red; the pipeline never does.
+
+### AND THE SCALE OF (3), NOW MEASURED
+
+The "two halves the wrong way round" above is not two gates. All **10** gates
+invoked with `--corpus-may-be-absent`, run from outside `$HOME`:
+
+    RECORDED PASS WHILE REPORTING NOTHING SCANNED: 10 of 10
+    roll-up: declared 93  ran 10  decided 10  passed 10  failed 0
+             "all 93 gate(s) passed"
+
+A ninth of the declared set, each counted by `PROCESS_STATES` among the gates
+that "actually ran".

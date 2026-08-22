@@ -114,15 +114,23 @@ def _record(states):
 
 def test_every_row_carries_the_three_required_keys_and_the_three_human_ones(rows):
     assert rows, "the ledger is empty -- the clock is stopped again"
+    # COLLECTED. An assert inside the row loop stops at the first offender, so
+    # the failure names one row and the next is reachable only by fixing that
+    # one and re-running. See the note on the bound test below.
+    missing = []
     for row in rows:
         for key in G._REQUIRED_KEYS:
-            assert key in row, f"{row.get('gate')!r} is missing {key!r}"
+            if key not in row:
+                missing.append(f"{row.get('gate')} is missing {key}")
         # Not required by the adjudicator, and required HERE. A bound with no
         # stated reason is indistinguishable at review time from a bound chosen
         # to reach past today, which is the one thing this mechanism cannot
         # detect for itself.
         for key in ("owner", "why", "bound_because"):
-            assert row.get(key), f"{row['gate']!r} has no {key}"
+            if not row.get(key):
+                missing.append(f"{row.get('gate')} has no {key}")
+    assert not missing, (
+        f"{len(missing)} field(s) missing across the ledger: " + "; ".join(missing))
 
 
 def test_every_row_names_a_gate_this_repo_actually_declares(rows):
@@ -131,26 +139,32 @@ def test_every_row_names_a_gate_this_repo_actually_declares(rows):
     the file looking like coverage, so it is checked against the declaring
     script directly."""
     script = HYGIENE.read_text(encoding="utf-8")
-    for row in rows:
-        assert f'"{row["gate"]}"' in script, (
-            f"{row['gate']!r} is named by no `run` line in "
-            f"{HYGIENE.relative_to(REPO)}")
+    undeclared = [row["gate"] for row in rows
+                  if f'"{row["gate"]}"' not in script]
+    assert not undeclared, (
+        f"{len(undeclared)} row(s) named by no `run` line in "
+        f"{HYGIENE.relative_to(REPO)}: " + ", ".join(undeclared))
 
 
 def test_every_since_resolves_to_a_commit_this_repo_contains(rows, age):
-    for row in rows:
-        assert age(row["since"]) is not None, (
-            f"{row['gate']!r} cites {row['since']!r}, which this repo does not "
-            f"have -- an unresolvable `since` is a clock that never advances")
+    unresolvable = [f"{row['gate']} cites {row['since']}" for row in rows
+                    if age(row["since"]) is None]
+    assert not unresolvable, (
+        f"{len(unresolvable)} row(s) cite a commit this repo does not have -- "
+        "an unresolvable `since` is a clock that never advances: "
+        + "; ".join(unresolvable))
 
 
 def test_every_bound_is_a_bound(rows):
+    bad = []
     for row in rows:
         bound = row["max_commits"]
-        assert isinstance(bound, int) and not isinstance(bound, bool)
-        assert 0 < bound <= G.MAX_BOUND_COMMITS, (
-            f"{row['gate']!r} declares {bound}, outside "
-            f"1..{G.MAX_BOUND_COMMITS}")
+        if not isinstance(bound, int) or isinstance(bound, bool):
+            bad.append(f"{row['gate']} declares {bound!r}, not an int")
+        elif not 0 < bound <= G.MAX_BOUND_COMMITS:
+            bad.append(f"{row['gate']} declares {bound}, outside "
+                       f"1..{G.MAX_BOUND_COMMITS}")
+    assert not bad, f"{len(bad)} bound(s) are not bounds: " + "; ".join(bad)
 
 
 # --------------------------------------------------------------------------
@@ -211,6 +225,38 @@ def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
     assert not [f for f in findings
                 if f.gate == "a gate no row mentions"], [f.line()
                                                          for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# THIS MODULE WAS VALIDATED AS AN INSTRUMENT, 2026-08-22.
+#
+# A suite that passes proves nothing about a mechanism unless it FAILS when the
+# mechanism is broken. Both sites of the deciding clause in
+# `gate_red_since_check` --
+#
+#     if behind > bound:        (x2)   ->   if False:
+#
+# were mutated, and the mutation was confirmed to change observable behaviour
+# BEFORE the suite's verdict was read (a substitution that merely reports
+# "applied" proves only that a string was found):
+#
+#     pristine   a row 999 behind a bound of 1  ->  findings ['expired']
+#     mutant     the same row                   ->  findings []
+#
+# Against that mutant this module goes 1 failed -> 7 failed: SIX guards flip
+# from pass to fail --
+#
+#     test_a_row_whose_since_has_fallen_past_its_bound_refuses
+#     test_the_bound_is_what_refuses_and_not_some_other_clause
+#     test_renewing_by_moving_since_forward_is_what_silences_it
+#     test_no_environment_variable_can_move_the_clock
+#     test_a_candidates_own_commits_do_not_expire_a_row_it_never_touched
+#     test_a_candidate_cannot_renew_its_own_overdue_row
+#     test_the_mechanism_still_expires_a_gate_that_DID_run
+#
+# -- so they sit BEHIND the deadline rather than restating it. The seventh is
+# the ceiling failure this module reports on the shipped rows either way.
+# ---------------------------------------------------------------------------
 
 
 def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):

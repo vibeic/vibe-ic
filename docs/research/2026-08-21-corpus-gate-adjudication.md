@@ -10,6 +10,212 @@ Renewal is not one of the options."*
 Both verdicts are **real finding, stays red until fixed**. Neither row is
 renewed; both remain expired and both therefore refuse a landing.
 
+> ## RE-MEASURED 2026-08-22 — BOTH VERDICTS ARE SUPERSEDED BY A LOCATION TEST
+>
+> The verdicts below were measured against a population that has since moved,
+> and — more importantly — against a corpus that is **not this repository's**.
+> Kept in full because they were true when measured; do not read them as the
+> current state.
+>
+> ### The discriminating pair
+>
+> Same commit, same gates, same host. Only the WORKTREE LOCATION differs, and
+> each run repeated twice:
+>
+>     worktree under /home/reyerchu   0 passed, 3 failed
+>     worktree outside $HOME          2 passed, 1 failed
+>
+> `L-doc field producer` and `evidence citation resolves` flip; `liar census
+> controls still fire` does not. The two that flip are found by the corpus
+> parent-walk climbing out of the worktree into `/home/reyerchu/benchmark-data/
+> ic` — a directory that is **its own git repository** (HEAD `48644ee`,
+> 2026-08-22) and is not this repo's corpus. benchmark-data left this repo at
+> v1.10.56.
+>
+> So the red these two rows acknowledge was produced by judging a foreign
+> corpus that happened to sit in an ancestor directory of the checkout.
+>
+> ### Neither published state is the honest one
+>
+> Inside `$HOME` the gates FAIL, judging a corpus that is not theirs. Outside,
+> they PASS having scanned nothing — and they say so themselves:
+>
+>     [l_doc_field_producer_check] NO_CORPUS: ... NOTHING WAS SCANNED, 0
+>     published L-doc(s) were examined and nothing is claimed about them
+>
+> and the run's own closing line reads *"all 93 gate(s) passed, but 1 loop
+> corpus expanded over 0 item(s) — NOTHING was checked over"*. A gate that
+> prints "nothing is claimed" and is recorded PASS is the vacuous pass the
+> owner's ruling names.
+>
+> ### CORRECTION: "the return code is wrong" was MY error, and the repo already
+> ### decided this
+>
+> An earlier draft of this section said the two gates "must report rc=2 NOT
+> CHECKED; only the return code is wrong". That is wrong and it contradicts a
+> deliberated position I had not read.
+>
+> `NO_CORPUS (rc 0)` is reachable ONLY when the CALL SITE opts in with
+> `--corpus-may-be-absent`. It is never a default. `repo_hygiene_gates.sh`
+> passes it at 20 sites, each with a written justification citing the v1.10.56
+> corpus move (vibe-ic#1710), and at line 117 it documents a gate where the
+> flag is DELIBERATELY withheld for precisely the reason I was about to
+> re-raise: *"rc 0 here would be this gate printing a PASS over a population it
+> never opened"*.
+>
+> The flag does not silence anything. Quoting the call site: a
+> `$VIBE_IC_BENCHMARK_DATA` that is set and broken is STILL `UNDETERMINED`, a
+> corpus that IS supplied is STILL fully adjudicated, and a corpus present but
+> holding no L-doc is `UNDETERMINED` rather than a comparison against zero. The
+> only thing it converts is nothing-anywhere, into a NO_CORPUS that STATES 0
+> documents were examined. Before the flag, these gates refused rc 2 on every
+> landing after v1.10.56 — which is the breakage it was introduced to fix.
+>
+> So the gates are right, the flag is right, and I am not proposing to change
+> either.
+>
+> ### THE GAP THAT SURVIVES THE CORRECTION
+>
+> What remains is one level up, in the AGGREGATION rather than the gate. The
+> dispatcher records a NO_CORPUS gate in the same `PASS` bucket as a gate that
+> actually adjudicated something.
+>
+> **Costed, because a recommendation without a number is how the last one went
+> wrong.** `repo_hygiene_gates.sh` invokes exactly **10** gates with
+> `--corpus-may-be-absent`. Ran all 10 from a worktree OUTSIDE `$HOME`, where
+> the corpus is genuinely absent rather than accidentally found:
+>
+>     L-doc field producer              PASS   says NOTHING WAS SCANNED
+>     tracked-symlink portability       PASS   says NOTHING WAS SCANNED
+>     tracked-symlink target present    PASS   says NOTHING WAS SCANNED
+>     evidence citation resolves        PASS   says NOTHING WAS SCANNED
+>     citation routing is true          PASS   says NOTHING WAS SCANNED
+>     cross-layer reference regression  PASS   says NOTHING WAS SCANNED
+>     step FAIL bubbles up              PASS   says NOTHING WAS SCANNED
+>     L4 -> SystemRDL disposition       PASS   says NOTHING WAS SCANNED
+>     published-evidence index honest   PASS   says NOTHING WAS SCANNED
+>     published records not superseded  PASS   says NOTHING WAS SCANNED
+>
+>     RECORDED PASS WHILE REPORTING NOTHING SCANNED: 10 of 10
+>
+> and the roll-up:
+>
+>     declared 93   ran 10   decided 10   passed 10   failed 0
+>     "repo_hygiene_gates: all 93 gate(s) passed"
+>
+> So it is not two gates, it is **ten** — a ninth of the declared set — each
+> counted by `PROCESS_STATES` among those that "actually ran". The gates said
+> "NOTHING WAS SCANNED ... nothing is claimed about them"; the summary answered
+> "passed".
+> The machinery to say otherwise already half exists — the same run prints
+> *"1 loop corpus expanded over 0 item(s) — NOTHING was checked over"* — but
+> that is `GATE_CORPUS_STATE` in `tools/ci/_gate_dispatch.sh:1374`, which
+> tracks LOOP CORPORA, not gates. It is careful where it applies — it refuses
+> to call an absent corpus "EXPANDED with 0 items" because *"a consumer reading
+> `items: 0` off an EXPANDED row is reading a measured population, and there
+> was none"*. That is exactly the distinction wanted here. But a NON-loop gate
+> that exits rc 0 NO_CORPUS gets no equivalent: the per-gate vocabulary is
+> PASS / FAIL / NOT_CHECKED / WROTE_CORPUS / LISTED / OTHER_SHARD /
+> OUT_OF_SCOPE / QUEUED, and it lands in PASS. `hygiene_finding_delta`'s
+> `PROCESS_STATES` then counts it among the gates that "actually ran".
+>
+> The honest fix is therefore a DISPATCH state, not a return code: NO_CORPUS
+> should be recorded and counted separately, so "93 passed" cannot absorb it.
+> That is a smaller change than the one I first proposed and it does not
+> reopen #1710.
+>
+> ### A THIRD THING ABOUT `evidence citation resolves`, FOUND WHILE CHECKING
+> ### SOMETHING ELSE
+>
+> Its own controls do not fire, and have not for at least 247 commits.
+>
+> `programs/tests/test_evidence_citation_resolves_check.py` has four tests that
+> plant a defect and require the gate to refuse it:
+>
+>     test_dangling_citation_fails
+>     test_resolution_never_escapes_the_scan_root
+>     test_untracked_artifact_does_not_satisfy_a_citation
+>     test_a_citation_pointing_at_a_symlink_is_not_shipped_content
+>
+> All four fail on main today, in BOTH worktree locations (so this is not the
+> $HOME artefact above), and all four already failed at `0095513a0` — the last
+> commit that matched an authorised protected state, 247 commits back.
+>
+> The mechanism, from the first one: the control plants a dangling citation and
+> asserts rc 1. The gate answers rc 0 with
+>
+>     OUT OF SCOPE : 1 citation(s) resolve against the repository but ABOVE
+>                    this gate's scan root
+>     WARNING      : git-tracked file set unavailable — falling back to plain
+>                    filesystem existence
+>
+> So the OUT-OF-SCOPE narrowing absorbs the very defect the control exists to
+> plant, and the control can no longer fail the gate for the reason it was
+> written. That is the same shape as `liar census controls still fire`: a
+> control that cannot fire is not a control.
+>
+> This is NOT in the 75-file targeted selection either — `ci_targeted_test_
+> select --base origin/main` routes 0 of these — so no two-arm measurement of
+> any branch has ever seen them.
+>
+> #### ADJUDICATED: the CONTROLS are right and the GATE is wrong
+>
+> Reproduced by hand, outside pytest. Identical fixture — one document saying
+> a document citing a proof-log filename it does not ship — placed at
+> different depths. **Only the path changes:**
+>
+>     scan root 2 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 3 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 4 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 5 levels below /tmp   rc=1  [FAIL]         DETECTED
+>     scan root 6 levels below /tmp   rc=1  [FAIL]         DETECTED
+>     scan root 7 levels below /tmp   rc=1  [FAIL]         DETECTED
+>
+> The cause is a stray proof-log file directly in /tmp (1448 bytes, dated 2026-08-17,
+> left by some earlier run). The gate resolves a citation by walking UP from
+> the scan root, reaches at most FOUR parent levels, and if it finds a file of
+> that name it reports
+>
+>     OUT OF SCOPE : 1 citation(s) resolve against the repository but ABOVE
+>                    this gate's scan root — the document is correct and this
+>                    gate is not the one that judges it
+>
+> and passes. pytest's `tmp_path` sits 3 levels below `/tmp`, inside that
+> window, which is why all four controls fail.
+>
+> The OUT-OF-SCOPE rule is reasonable INSIDE the repository, where "above the
+> scan root" means another part of a tree someone owns. It is not reasonable
+> when nothing encloses the scan root: the gate's own output says
+> *"git-tracked file set unavailable — falling back to plain filesystem
+> existence"*, and in that state "the repository" is just the filesystem, so
+> **any unrelated file with the cited basename within four parents silences a
+> real dangling citation**.
+>
+> So the four controls are correct and are red for a real reason, and the fix
+> belongs in the gate: when no git-tracked file set is available, do not
+> resolve above the scan root at all. That also makes this the exact mechanism
+> behind the `HOST_DEPENDENT_VERDICT` that
+> `gate_host_independence_check` reports for this same gate — it is reading
+> something that is not in the commit, and this is what.
+>
+> Not fixed here: it is a behaviour change to a gate I do not own, and the
+> owner may prefer a different boundary. That stray file was left in place —
+> it is not mine to delete.
+>
+> A note for whoever writes this up again: the first draft of this section
+> named the file in backticks, and the extractor reads a backticked
+> filename-like token as a CITATION. Measured: it added exactly 2 dangling
+> citations to this repo (138 -> 140), from this document. Writing about
+> dangling citations created two. Name such files without backticks.
+>
+> ### Consequence for the two ledger rows
+>
+> Both rows have aged past `MAX_BOUND_COMMITS = 500` (549 behind), so no legal
+> `max_commits` can cover them: they can never again be legitimately
+> acknowledged. They are also, by the measurement above, not genuine repo reds.
+> Their honest disposition is removal-with-a-reason once the gates return rc=2
+> — not renewal, which the ceiling refuses anyway.
+
 ## FIRST, THE OPTION THAT DID NOT APPLY — AND IT IS ALREADY BUILT
 
 The ruling's second branch is already implemented in both gates, and correctly.

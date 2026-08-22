@@ -2,6 +2,54 @@
 
 Measured 2026-08-22 at `origin/main` 81cd5321b.
 
+> ## UPDATE — THE PREDICTION CAME TRUE, SAME DAY
+>
+> This document was written while main was drifted on **two** paths and argued
+> that nothing on the landing path would stop a third. Hours later
+> `land/batchbig-assembled` landed as `a4caccefe` (v1.11.69). It moved
+> **eleven** protected paths and carried **no transition**, exactly as the
+> section "IT IS NOT RARE" said it would.
+>
+> Re-measured at `a4caccefe` with the shipped code — `_observe_files` over the
+> manifest's own 47 rows, then `_match_state`:
+>
+>     manifest current = eda-image-decouple-v1-next
+>     manifest next    = activated-at-lane-parallel-window
+>     vs current : 11 drifted
+>     vs next    : 11 drifted
+>     _match_state -> REFUSED: protected tuple matches neither authorised
+>                              atomic state
+>
+>     tools/ci/_gate_dispatch.sh
+>     tools/ci/landing_completion_record.py
+>     tools/ci/repo_hygiene_gates.sh
+>     tools/ci/routed_def_corpus.py
+>     tools/gatekeeper-land.sh
+>     .../programs/_corpus_location.py
+>     .../programs/ci_harness_timeout_ceiling_check.py
+>     .../programs/hygiene_finding_delta.py
+>     .../programs/landing_merge_verdict.py
+>     .../programs/repo_hygiene_parallel.py
+>     .../programs/tests/test_matrix_63x8_coverage.py
+>
+> A PREPARE for this exact batch existed and was pushed before the landing
+> (`agent/jrows-prepare-for-batchbig`). It was not used. That is the finding:
+> the transition was **available** and the landing path had no reason to ask
+> for it, so it did not.
+>
+> ### AND THE DRIFT CANNOT BE UNDONE BY A MANIFEST-ONLY COMMIT
+>
+> The obvious repair — re-photograph main and call it the new `current` — is
+> refused by the shipped parser:
+>
+>     parse_manifest :327   refuses current.id == next.id
+>     parse_manifest :333   refuses a next tuple identical to current
+>
+> A transition must declare a REAL move. So the repair has to be **bundled with
+> the next change that genuinely moves a protected path**; it cannot be done as
+> a standalone housekeeping commit. Every protected-path landing is blocked
+> until someone does that, and the block is invisible until it is hit.
+
 ## THE STATE
 
 `origin/main` right now matches **neither** authorised atomic state of its own
@@ -164,3 +212,32 @@ They are split out because that family is the one this repository records as
 killing a session under load; at these sizes (4 s, 24 s, 34 s) they cost about a
 minute an arm, which is why they could be run at load 55 when the 72-file arms
 could not.
+
+
+---
+
+## RE-MEASURED AGAINST THE BATCH AS IT NOW STANDS (ba432789b)
+
+The batch moved twice more while this was being kept in step, so the earlier
+figures no longer covered the tree. Re-run in full:
+
+    72 non-matrix files   base 1 failed / 1947 passed
+                          cand 0 failed / 1991 passed
+    3 test_matrix_* files base 6 failed | cand 6 failed, id sets IDENTICAL
+
+    NEW 0 in both groups.
+
+The candidate now has NO failures at all, and the single only-on-base id is the
+one this delta fixes — `test_the_bound_is_what_refuses_and_not_some_other_clause`,
+whose pre-ceiling version reports "its stated bound is not what is deciding
+this" for a row where the CEILING is deciding.
+
+**The batch also dropped its ninth row.** `PPA head-to-head records
+(cross-layer campaign)` carried no `bound_because`, which this delta's test kept
+failing on; the ledger is now back to eight rows, all complete. Worth recording
+rather than just noticing: the row was REMOVED, not completed. The ledger's own
+`_doc` says to delete a row "in the SAME commit that fixes the gate", so if that
+gate is still red the effect is to make it unowned — and an unowned red is
+reported NEW and is not failed by `gate_red_since`. That is a legitimate choice
+and it is somebody's to make; it is noted here only so it is not mistaken for
+the row having been justified.
