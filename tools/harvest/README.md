@@ -174,3 +174,21 @@ known-open item cannot be quietly closed. The runner asserts its own denominator
 than declared is itself a failure, because a loop that stops early reports no failures.
 
 Counts in this file are checked by `bin_jharv2/readme_numbers_check.py`, which is one of the seven.
+
+### If a ref is lost: recovering, and the one way to get it wrong
+
+Three refs carry this — the branch, `harvest/worktree-triage-jharvest-mirror`, and the tag
+`harvest-jharv2-final`. **Drilled, not assumed:**
+
+    git clone --branch harvest/worktree-triage-jharvest-mirror <url>     # 12/12 gates, 3039/3039 commits
+
+**Recover with a FULL clone or fetch. Never `--depth 1`.** A shallow fetch of the tag produces a
+directory that looks entirely correct — README, all verdict files, 131 rows in
+`verdicts_shard_b.tsv` — and carries **0 of the 3039 preserved commits**. The files are the index;
+the commits are the content, and shallow keeps the first and drops the second.
+
+    shallow: 1 commit reachable,      rescued 0/3039     -> `branch preserves the rescued set` FAILS
+    full:    14365 commits reachable, rescued 3039/3039  -> 12/12 green
+
+That gate is what distinguishes the two. Someone recovering in a hurry reaches for `--depth 1`
+precisely because it is faster, and every file they look at afterwards would tell them it worked.
