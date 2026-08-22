@@ -277,12 +277,22 @@ The record above was written by the run that made the change. Re-measured after
 it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
 `PYTHONDONTWRITEBYTECODE=1`, host load 70:
 
-* **The shipped gate list, diffed between the two trees.** The strongest form
-  of "nothing new fires", and it needs no fixture at all: run the real
-  `tools/ci/repo_hygiene_gates.sh --list` with `VIBE_IC_BENCHMARK_DATA` unset
-  on a clean `origin/main` worktree and on this branch, normalise the worktree
-  path, and diff. **87 declared gates on both trees, and the diff is exactly one
-  line:**
+* **The shipped gate list, diffed between the two trees, in BOTH states.** The
+  strongest form of "nothing new fires", and it needs no fixture at all: run the
+  real `tools/ci/repo_hygiene_gates.sh --list` on a clean `origin/main`
+  worktree and on this branch, normalise the worktree path, and diff.
+
+  **State B — `VIBE_IC_BENCHMARK_DATA` pointed at a git checkout whose `ic/`
+  subtree publishes no `*/*/phase3/stage3/pnr/routed.def`.** 87 declared gates
+  on both trees and the two lists are **byte-identical — zero diff.** The row is
+  still `corpus "…" is EMPTY — nothing was checked over it  [population:
+  producer rc 0, 0 item(s) …]`. This is the #1763 row, and the brief's "your
+  change must leave that row saying exactly what it says today" is satisfied
+  literally, not approximately.
+
+  **State A — the pointer unset, which is what a bare checkout of this
+  repository is in.** 87 declared gates on both trees, and the diff is exactly
+  one line:
 
       -corpus "…routed DEF" is EMPTY — nothing was checked over it  [population: producer rc 0, 0 item(s) over …]
       +corpus "…routed DEF" was NOT FOUND — nothing was opened to check  [population: producer rc 3 — NO CORPUS RESOLVED, nothing was opened, over …]
