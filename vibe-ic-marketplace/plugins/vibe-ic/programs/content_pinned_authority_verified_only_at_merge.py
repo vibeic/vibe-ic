@@ -23,6 +23,26 @@ a COMMENT, so no pre-merge check compares any pin against the tree.
 The verdict is correct and arrives at the wrong time, which is a different
 defect from a verdict that is wrong. This program is the missing early reader.
 
+MEASURED A/B AT THE MERGE WITH main a4caccefe (v1.11.69). This is why the
+program is advisory rather than blocking, and the numbers are the argument:
+
+    pristine main a4caccefe          11 pinned paths hash to NEITHER state
+    this branch merged onto it       12 -- the same 11, plus `_prose_polarity.py`
+
+ELEVEN OF THE TWELVE ARE MAIN'S OWN. `tools/ci/_gate_dispatch.sh`,
+`repo_hygiene_gates.sh`, `landing_completion_record.py`, `routed_def_corpus.py`,
+`tools/gatekeeper-land.sh`, `_corpus_location.py`,
+`ci_harness_timeout_ceiling_check.py`, `hygiene_finding_delta.py`,
+`landing_merge_verdict.py`, `repo_hygiene_parallel.py` and
+`tests/test_matrix_63x8_coverage.py` were all edited on main without the
+manifest being re-rendered. Only the twelfth is this branch's.
+
+That is the defect this program exists to report, and it is reporting it about
+the trunk rather than about a feature branch: the merge-time verification will
+refuse eleven changes that nothing on the producing side ever flagged. A gate
+that blocked here would block main, so it warns and names them, and `--strict`
+is available to whoever wants the refusal.
+
 WHAT COUNTS AS A MISMATCH
 =========================
 A transition manifest names two states, `current` and `next`. A working tree
