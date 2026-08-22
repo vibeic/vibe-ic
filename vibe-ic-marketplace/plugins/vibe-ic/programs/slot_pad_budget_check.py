@@ -770,15 +770,19 @@ def _discover_rtl(project: str) -> List[str]:
     The obvious wiring is `--rtl phase2/stage1/rtl/*.v` in the flow clause.
     It is a trap. `flow_compliance_check._resolve_program_cmd` expands globs
     in a clause into SEPARATE argv tokens, `--rtl` consumes exactly one, and
-    every remaining file arrives as an extra positional. argparse rejects
-    that with **exit 2** -- and exit 2 is this flow's VACUOUS_PASS tier. The
-    gate would report a disclosed skip on every multi-file design, forever,
-    and the skip would look like the ordinary "no slots ingested" one.
+    every remaining file arrives as an extra positional, which is rejected.
 
-    So the clause carries no glob and the expansion happens here, where a
-    directory that does not exist is an ANSWER (`[]` -> rc 2 UNDECIDED with a
-    reason naming the directory) rather than a usage error wearing the same
-    exit code as a skip.
+    THE TRAP WAS SILENT AND IS NOW LOUD, and both halves are worth keeping.
+    Until this program adopted the rc-3 usage tier (#712), that rejection was
+    argparse's default **exit 2** -- this flow's VACUOUS_PASS -- so the gate
+    would have reported a disclosed skip on every multi-file design, forever,
+    looking exactly like the ordinary "no slots ingested" one. It is rc 3 now,
+    which the flow reads as FAIL, so the same mistake breaks the step visibly.
+
+    The clause still carries no glob: a loud break is still a break. The
+    expansion happens here instead, where a directory that does not exist is an
+    ANSWER (`[]` -> rc 2 UNDECIDED with a reason naming the directory) and not
+    a usage error at all.
     """
     d = os.path.join(project, *_RTL_DIR_REL)
     if not os.path.isdir(d):
