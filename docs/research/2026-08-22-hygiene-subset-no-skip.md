@@ -2474,3 +2474,50 @@ path-load census is 15 lines) or an honest denominator in the report
 ("N of M consumers analysed"). Both are flow-level changes to a shipped gate,
 and which one is right is an owner decision — the same boundary as §18, §28
 and §39.
+
+### The escape route is in the LANDING, not only in a patch-cadence gate
+
+I was about to scope §39 as "affects the per-PR gate, so the batch differential
+still catches it" — a reassuring boundary. Checked before writing it, and it is
+wrong in the direction that matters.
+
+`tools/gatekeeper-land.sh:911`, inside the FULL tier:
+
+```sh
+( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" )
+```
+
+and `lane_targeted() { fn_capture "full:targeted-tests" run_pytest; }` runs that
+selection as unit L1 of the landing. **The landing's own test arm IS the
+targeted selection.** It is not a cheap-tier convenience with a full sweep
+behind it.
+
+So the sequence that let `4232a7301` through is not "a fast gate missed it and a
+slow gate would have caught it". It is:
+
+1. the change edits `gatekeeper_review.py`;
+2. the landing builds a targeted selection, which by default cannot see a
+   consumer that path-loads its subject;
+3. `test_the_cli_offers_no_way_to_skip_the_hygiene_set` is therefore not run
+   **by the landing**;
+4. the #565 disclosure reports `NOT selected 0`, so nothing says it was dropped;
+5. the landing stamps.
+
+The no-skip guarantee was not run by the one path every landing takes — which is
+the exact property §5's ruling was about, one level down. The review was wired
+where it could not be stepped around, and the test that polices the review was
+selected by something that could not see it.
+
+**What caught it instead:** the batch differential, which runs a broader set
+(`jmeas3`'s base/head arms, and the 137-file selection in §13), and then this
+brief. A broad periodic measurement is what surfaced a defect the per-landing
+gate is structurally unable to surface. That is worth stating for whoever
+decides what to do: the redundancy did its job, and it is the only reason this
+was found at all.
+
+**Still not fixed here**, same boundary as §18, §28 and §39 — the mode default
+is an owner decision the flag's own help text marks as one. But the severity in
+§39 should be read as landing-path, not advisory: a change to any of the 11
+path-loaded consumers of `gatekeeper_review` — or to the equivalent for any
+other module — can land without its guarding test running, and without the
+disclosure saying so.
