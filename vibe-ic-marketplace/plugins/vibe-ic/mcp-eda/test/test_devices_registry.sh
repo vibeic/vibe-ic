@@ -525,7 +525,13 @@ fi
 # --- 11. v1.6.18 Fix 3: device_id_bus_force_low_pulse not duplicated in index.js ---
 echo ""
 echo "--- 11. v1.6.18 no duplicate registration of device_id_bus_force_low_pulse ---"
-DUP_HITS=$(grep -F '"device_id_bus_force_low_pulse"' "$ROOT_DIR/src/index.js" 2>/dev/null | wc -l | tr -d ' ')
+# vibe-ic#1476 — `LC_ALL=C` + `-a`. In a UTF-8 locale GNU grep OMITS a
+# matching line that carries an improperly-encoded byte: nothing reaches
+# stdout, the notice goes to stderr (discarded here) and the status stays 0,
+# so `wc -l` reads 0 and this check prints `ok` over a registration that IS
+# still there. Measured on grep 3.7 with the registration line carrying one
+# truncated multi-byte character: DUP_HITS 0 (false clean) vs 1 with the fix.
+DUP_HITS=$(LC_ALL=C grep -aF '"device_id_bus_force_low_pulse"' "$ROOT_DIR/src/index.js" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$DUP_HITS" = "0" ]; then
   ok "src/index.js does not register device_id_bus_force_low_pulse (manifest is canonical)"
 else
