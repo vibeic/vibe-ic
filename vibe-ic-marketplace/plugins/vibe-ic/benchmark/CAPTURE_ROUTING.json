@@ -274,6 +274,10 @@
     "phase3.reference_flow_ingest": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "phase2.rewrite_equivalence": {
+      "bucket_A_program": "programs/crosslayer_rewrite_equivalence.py",
+      "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
     }
   },
   "default_routing": {

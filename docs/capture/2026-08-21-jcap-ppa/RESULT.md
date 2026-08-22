@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 35 records, and the seventeen already-program claims of which sixteen hold
+# The PPA cluster, DISTILLED — 36 records, and the seventeen already-program claims of which sixteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 35 records](#the-35-records)
+- [The 36 records](#the-36-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -84,7 +84,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 32 | deterministic rules — the default, and every one names its predicate |
+| **A** | 33 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -225,7 +225,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 35 records
+## The 36 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1036,7 +1036,7 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            32     (22 when the rule was written)
+    Bucket-A records            33     (22 when the rule was written)
     distinct target programs    16
     targets that are unwired     0
 
@@ -1367,6 +1367,37 @@ ingest the runner performs, not the one directory this search happened to need.
 
 ---
 
+### A-34 · a verdict reachable by exhaustion must say whether it exhausted · `phase2.rewrite_equivalence`
+
+Two runs of one prover, which a search must respond to in opposite ways:
+
+    converged, left a point open        3.8 s
+    exhausted partway, ~33 steps      1795 s
+    what the record says of each      a single unproven point
+    the only discriminator             elapsed seconds, for the reader to interpret
+
+One says *give it more time*; the other says *this needs a different relation*.
+A caller that cannot tell them apart either spends the budget again or abandons a
+case that was provable.
+
+**What makes the omission legible rather than arguable** is that the program
+already emits a depth for the OTHER half of its method — a bounded-refutation
+depth — and emits nothing naming how far the induction reached or whether a
+budget stopped it. The shape is available, in the same file, for the sibling
+technique.
+
+The source names the prize: the rewrite an agent is most likely to attempt —
+changing a state encoding — is the one this relation proves least well. Whether
+that whole family is reachable turns on being able to read exhaustion apart from
+convergence.
+
+**(o)** yes — on the pair above, which is where it was found.
+**(d)** yes: the predicate is presence of a depth and an exhaustion flag on any
+verdict a budget can cause, so it covers every prover in the layer that runs
+under one, not this relation alone.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1470,8 +1501,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **10** steps. Without them **11 of the
-35 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **12 of the
+36 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1720,7 +1751,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          32     (26 when the rubric was applied)
+    Bucket-A records                          33     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1774,9 +1805,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 35 records**:
+the patterns were unchecked by anything. Over **all 36 records**:
 
-    pairs compared                      595
+    pairs compared                      630
     maximum similarity                 0.38
     pairs above 0.40                      0
 
@@ -2163,7 +2194,7 @@ what it contains. Mapped properly:
 | 4 | fix the Phase-3 power session or stop the report claiming post-PnR | the class is **F-7** in the eighteen |
 | 5 | a `drv` producer | **A-1** exactly — the axis with no producer for any of its proof names |
 | 6 | declare the schema library or bundle it | the bundled-schema ALREADY-PROGRAM, plus **C-2** for the version matrix |
-| 7 | report how far the equivalence induction got | **unmined** — partial-progress disclosure |
+| 7 | report how far the equivalence induction got | **now recorded as A-34** — the program already emits a depth field for its refutation half and none for its induction half |
 | 8 | the post-route repair crash, ten reproductions | **T-1** exactly |
 | 9 | name the taps in the area taxonomy | **unmined** — plausibly an instance of **A-1** or **A-25** |
 | 10 | the smaller ones | **unmined** |
@@ -2607,7 +2638,7 @@ rather than in a command line that would fail for whoever tried it.
 
 ## Summary
 
-**STATUS**: 35 records emitted and validated — 32 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 36 records emitted and validated — 33 Bucket A, 2 C, 1 T, zero B,
 zero D. 17 ALREADY-PROGRAM claims examined, 16 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -2635,7 +2666,7 @@ bucket. My 27 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 17 claims, **16 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 9 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33 |
+| **EXTRACT-NEW** | 10 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2778,6 +2809,7 @@ gap was non-empty every single time it was measured.
 | A-31 | 52 of 52 | **29 + 13 + 10** | the emitter's own template, across three lanes; not one step takes those inputs |
 | A-32 | 5 identities | **1 states its rule** | the prohibition exists in bold, one identity over, in the same section |
 | A-33 | 3 knobs, **0 synthesis actuators** | **6 of 9 staged files** carry a hand-written disclosure | the correct fact, in the one place no consumer parses |
+| A-34 | 2 runs, 3.8 s and 1795 s | **identical JSON** | the depth field exists for the other half of the method |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
