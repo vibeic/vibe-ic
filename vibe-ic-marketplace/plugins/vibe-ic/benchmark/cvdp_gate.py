@@ -580,6 +580,20 @@ def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str, str]:
     rc, out, err = _run(["iverilog", "-g2012", "-t", "null", str(f)])
     if rc == 0:
         return True, "compile clean", ""
+    # The iverilog BINARY IS ABSENT (rc=127 is _run's FileNotFoundError
+    # sentinel). Falling through would reach the "elaboration-only tolerated
+    # diagnostics" return below — a sentence that asserts elaboration RAN and
+    # produced only benign messages — and would degrade this gate to a NO-OP
+    # while the report reads clean: gibberish that is not Verilog at all comes
+    # back ok=True. That is the #604 silent false-PASS class, which `yosys_smoke`
+    # already refuses ("yosys-smoke CANNOT ENFORCE ... no yosys start banner").
+    # The same refusal belongs here: a check that COULD NOT RUN and a check that
+    # found nothing wrong are not the same result.
+    if rc == 127:
+        return False, ("iverilog_gate CANNOT ENFORCE: iverilog did not run "
+                       "(rc=127; binary absent) — install iverilog or run on a "
+                       "host that has it. Refusing to report an absent tool as "
+                       "elaboration diagnostics (#604 class)."), ""
     offending, missing = _offending_lines((out or "") + "\n" + (err or ""))
     if offending:
         return False, "; ".join(offending[:4]), ""
@@ -646,9 +660,12 @@ def _confirming_rerun(code_text: str, top: str, workdir: Path,
     never widen the tolerance."""
     f2 = workdir / "smoke_confirm.sv"
     f2.write_text(code_text)
+    # `yosys -p` takes a SCRIPT, which yosys re-splits on whitespace — an
+    # UNQUOTED path made a workdir containing a space open two non-existent
+    # files and abort before SYNTH (see yosys_smoke for the full shape).
     rc, out, err = _run(
         ["yosys", "-p",
-         f"read_verilog -sv {f2}; synth -top {top}; stat"], timeout=300)
+         f'read_verilog -sv "{f2}"; synth -top {top}; stat'], timeout=300)
     blob = (out or "") + "\n" + (err or "")
     if rc == 0:
         return True, "confirming re-run clean"
@@ -916,8 +933,10 @@ def _context_rtl_for_smoke(ctx_texts, code: str) -> str:
         with _tf.NamedTemporaryFile("w", suffix=".sv", delete=False) as _fp:
             _fp.write(v)
         try:
+            # quoted: TMPDIR itself may contain a space, and an
+            # unparseable-looking ctx file silently drops to the stub path.
             _rc, _o, _e = _run(["yosys", "-p",
-                                f"read_verilog -sv {_fp.name}"], timeout=60)
+                                f'read_verilog -sv "{_fp.name}"'], timeout=60)
         finally:
             try:
                 _os.unlink(_fp.name)
@@ -985,9 +1004,23 @@ def yosys_smoke(code: str, workdir: Path,
     synth_timeout = 300
     for top in own_modules:
         # NOTE: no -q — quiet mode suppresses the stat table itself.
+        # QUOTED path. `yosys -p` takes a SCRIPT string and yosys re-splits
+        # it on whitespace, so an UNQUOTED absolute path made read_verilog
+        # try to open two non-existent files whenever the caller's workdir
+        # contained a SPACE. yosys then aborted BEFORE the SYNTH pass, and
+        # the `frontend` branch below — which infers "host frontend gap"
+        # from the ABSENCE of a SYNTH/HIERARCHY pass header — TOLERATED it.
+        # Net effect: a workdir path with a space silently switched the
+        # whole #531 synthesizability gate off while the record still read
+        # PASS. Measured on 24ff9530: the identical multiple-edge PROC_DFF
+        # design was BLOCKED under `/tmp/x/plain/wd` and PASSED under
+        # `/tmp/x/has space/wd`. That is the exact silent false-PASS class
+        # this smoke exists to catch, manufactured by the smoke's own
+        # plumbing. Guarded by
+        # test_cvdp_gate_toolpath_must_not_disable_synth_smoke.py.
         rc, out, err = _run(
             ["yosys", "-p",
-             f"read_verilog -sv {f}; synth -top {top}; stat"],
+             f'read_verilog -sv "{f}"; synth -top {top}; stat'],
             timeout=synth_timeout)
         blob = (out or "") + "\n" + (err or "")
         if rc != 0:

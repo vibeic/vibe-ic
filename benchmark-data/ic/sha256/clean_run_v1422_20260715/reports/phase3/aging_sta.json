@@ -1,9 +1,0 @@
-{
-  "tool": "opensta",
-  "is_aging": true,
-  "aging_derate": "generic late=1.1000 (lifetime Vt-drift margin, no foundry aging Liberty)",
-  "aging_corner": "generic_aging_late_derate",
-  "worst_slack_ns": -11.26,
-  "report": "reports/phase3/aging_sta.rpt",
-  "disclosure": "REAL OpenSTA slack under a DISCLOSED generic aging late derate beyond fresh OCV; not a foundry aging-Liberty number. Supply a foundry aging Liberty for a certified NBTI/PBTI/HCI sign-off."
-}

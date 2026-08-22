@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "PC16550D is a stand-alone 40-pin packaged part; no PDK / floorplan / SDC constraints in the datasheet. M2CMOS process is mentioned but no design rules. Modern SoC integrations (Synopsys DesignWare UART, Cadence UART IP, ARM PL011) provide their own SDC + UPF + DFT files at the IP-license level."
-  }
-}
