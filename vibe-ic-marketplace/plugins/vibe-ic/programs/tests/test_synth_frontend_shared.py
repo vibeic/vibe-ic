@@ -23,10 +23,10 @@ from pathlib import Path
 import pytest
 
 sf = importlib.import_module("synth_frontend")
-p2 = importlib.import_module("phase2_one_shot_runner")
+p2 = importlib.import_module("design_one_shot_runner")
 p3 = importlib.import_module("phase3_one_shot_runner")
 
-_CONTAINER = "iic-eda"
+_CONTAINER = "vibeic-eda"
 
 # A genuine modern-SystemVerilog repro that BOTH default frontends
 # (`read_verilog -sv`, `iverilog -g2012`) reject — a package-scoped
@@ -60,12 +60,29 @@ endmodule
 
 
 def _need_iic_eda():
+    """Skip unless a RUNNING container named _CONTAINER can actually be exec'd.
+
+    `docker inspect <name>` resolves IMAGES as well as containers, and
+    `vibeic-eda` is precisely our image name — so on any machine that has the
+    image pulled the old guard returned rc=0, declared the container
+    "available", and let the test proceed to fail inside `docker exec` with
+    "could not create container workdir". An environment-gated test must SKIP
+    when its environment is absent, never FAIL.
+
+    `--type=container` restricts the lookup to containers, and `.State.Running`
+    rejects a stopped one (which also inspects fine but cannot be exec'd).
+    """
     if not shutil.which("docker"):
-        pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", _CONTAINER],
+        skip_not_verified("docker not installed", RUN_REMEDY)
+    r = subprocess.run(["docker", "inspect", "--type=container",
+                        "-f", "{{.State.Running}}", _CONTAINER],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        pytest.skip(f"{_CONTAINER} container not available")
+        skip_not_verified(f"{_CONTAINER} container not available",
+                          RUN_REMEDY)
+    if r.stdout.strip() != "true":
+        skip_not_verified(f"{_CONTAINER} container is not running",
+                          RUN_REMEDY)
 
 
 # ---------------------------------------------------------------------------
@@ -341,3 +358,70 @@ endmodule
         # defect is reported honestly.
         assert rc != 0
         assert frontend == "iverilog_g2012"
+
+
+# ── ORGANIC E2E (opentitan_aes GDS blocker) — phase-3 -DSYNTHESIS retry decision ──
+# The phase-3 yosys/slang/sv2v synth frontends hardcode -DSIMULATION; a vendor
+# primitive's `ifdef SIMULATION DV-only arm ($urandom / std::randomize / slang
+# "Feature unimplemented") then FAILs synth even though the identical closure
+# elaborates under -DSYNTHESIS. `synth_frontend_should_retry_under_synthesis`
+# decides the retry; it must fire on a sim-only signature and STAY OFF (keep the
+# honest FAIL) on a genuine design error — the §4.05 no-leak boundary.
+import synth_frontend as _sfmod
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
+
+# v1.4.x — decided by the OBSERVABLE (no netlist) + the DESIGN PROPERTY
+# (the closure branches on the define set), not by the tool's phrasing.
+_SIMONLY_RTL_P3 = (
+    "module prim(input clk, input d, output q);\n"
+    "`ifdef SIMULATION\n"
+    "  initial q = $urandom;\n"
+    "`else\n"
+    "  logic qq; always_ff @(posedge clk) qq <= d; assign q = qq;\n"
+    "`endif\n"
+    "endmodule\n")
+
+
+def test_synth_dsynthesis_retry_fires_on_urandom():
+    ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "slang: error: $urandom not allowed in a constant context",
+        rtl_text_blob=_SIMONLY_RTL_P3)
+    assert ok is True
+    assert "-DSYNTHESIS" in reason
+
+
+def test_synth_dsynthesis_retry_fires_on_std_randomize():
+    ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "std::randomize used in a synthesis context",
+        rtl_text_blob=_SIMONLY_RTL_P3)
+    assert ok is True
+
+
+def test_synth_dsynthesis_retry_fires_on_slang_feature_unimplemented():
+    ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "error: Feature unimplemented: $value$plusargs",
+        rtl_text_blob=_SIMONLY_RTL_P3)
+    assert ok is True
+
+
+def test_synth_dsynthesis_retry_stays_off_on_genuine_design_error():
+    # NEGATIVE no-leak: a real elaboration/syntax error carries NO sim-only
+    # signature → do NOT retry, keep the honest FAIL (a -DSYNTHESIS retry would
+    # mask a genuine bug).
+    ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "ERROR: syntax error, unexpected TOK_ID at chip_top.sv:42",
+        rtl_text_blob="module chip_top(input a); wire b = ; endmodule\n")
+    assert ok is False
+    assert "honest FAIL" in reason
+
+
+def test_synth_dsynthesis_signatures_superset_of_verilator():
+    # single-source-of-truth: the phase-3 set includes every verilator #668
+    # signature (so the shared retry doctrine is not duplicated/divergent).
+    for s in _sfmod.VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES:
+        assert s in _sfmod.SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES
