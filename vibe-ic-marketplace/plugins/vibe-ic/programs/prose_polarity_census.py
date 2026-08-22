@@ -39,6 +39,41 @@ private copies of a negation vocabulary is the defect #712 exists to answer, and
 a census that re-implemented `_searches_prose` would drift from the thing that
 actually decides the census.
 
+WHAT READING THEM ACTUALLY FOUND
+================================
+The count is a shape; the defects are what a human finds by reading. All the
+entries the HDL caveat did NOT cover were read at this branch's tip. TWO were
+real, and both are repaired on their own branches:
+
+    spec_numeric_pack_extract::_detect_width_pairs
+        "The path from 8-bit to 16-bit is no longer supported." -> (8, 16),
+        returned as an EXPLICIT stated width pair.
+    conv_encoder_synth::_parse_generators
+        'g1 = "111" is no longer used.' -> g1 = 111, and `setdefault` keeps the
+        FIRST match, so a retired polynomial stated before the live one TOOK ITS
+        PLACE. That value decides which encoder is synthesised.
+
+The rest are structured input, where a denial cannot arise, and each was
+declined for a stated reason rather than by a rule:
+
+    _families                   a list of port NAMES; an identifier has no
+                                surrounding sentence to deny it
+    _acknowledged               an anchored commit TRAILER, whose presence is
+                                the acknowledgement, like a signature. Asking
+                                polarity would silently drop valid trailers
+    _check_sta                  its keywords filter FILENAMES, not report prose
+    parse_transcript,           anchored machine output
+      parse_meas_delays,
+      parse_path_meas
+    _find_advanced_pointers     an RTL non-blocking assignment
+    _build_*_index              module paths and identifiers
+
+So the shape over-counts in BOTH buckets, and the split it prints is a caveat in
+both directions -- an entry the HDL heuristic clears is not thereby a defect,
+and one it flags is not thereby safe. Reading is the step; this file only makes
+the list short enough to read.
+
+
 EXIT CODES
 ==========
     0  the corpus was read and the census is printed. ALWAYS 0 when it could
