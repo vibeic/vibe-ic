@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 47 records, and the twenty already-program claims of which nineteen hold
+# The PPA cluster, DISTILLED — 47 records, and the twenty-one already-program claims of which twenty hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -165,7 +165,7 @@ it now — checked by reading it, not by trusting the fix note.
 | F-18 a count is demanded where the schema allows a status | `_ppa/benchmark.py` `CHECK_CLEAN` / `VERDICT_CLEAN`; `test_ppa_verdict_and_scope_shapes.py` | every floor check, verdict-valued or count-valued |
 | (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the too-old case the import guard missed |
 
-Eight more classes, drawn from the six lane records rather than from the 18, are
+Nine more classes, drawn from the six lane records rather than from the 18, are
 also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 
 | class | already enforced by |
@@ -178,6 +178,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
 | a shared ABSENCE is not a shared value, so records with no measured identity are not grouped together | `programs/ppa_contract_check.py` clause `PPA-C-007` — an identity that is NOT_MEASURED is CANNOT CHECK, never a pass, and the corpus mode refuses to key on it rather than comparing two runs on the strength of a shared blank. **Driven, not cited**: a contract declaring one identity as NOT_MEASURED returns four UNDETERMINED `PPA-C-007` rows naming each absent identity. The sibling gate states the matching exclusion out loud — a contract with no identities is dropped from the conflict scan, *because a silent exclusion is a denominator nobody can see* |
 | an EMPTY value is not a value, because two empties compare equal | `programs/_ppa/metrics.py` `validate` — a verdict metric whose value is the empty string is refused `VERDICT_SENTINEL`, *"two of them compare EQUAL, so two circuits nobody compared would read as agreeing"*. **Driven, and two-directional**: the empty string is refused, a NUMBER carrying `unit: verdict` is refused `VERDICT_NOT_A_STRING` (*"a verdict encoded as a number is a number downstream"*), and a real verdict string trips neither. A different enforcement point and a different operation from `PPA-C-007` above — that one refuses GROUPING on an absent identity, this one refuses COMPARING on an absent value |
+| a lever TRIED AND LOST is a measurement; one quietly dropped is not | `programs/_ppa/search.py` `audit_manifest` clause `LEDGER_TRUNCATED` — a manifest whose proposed-trial count exceeds the trials it publishes is refused with *"Publish every trial, not the best one."* **Driven, with the control inside the measurement**: two calls differing ONLY in the proposed count — the honest one does not raise it, the truncated one does. A sibling clause `RAN_COUNT_DISAGREES` covers the same gap from the ran side |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:

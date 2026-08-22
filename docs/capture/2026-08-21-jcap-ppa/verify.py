@@ -184,12 +184,16 @@ WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
          "seven": 7, "eight": 8, "nine": 9, "ten": 10,
          "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
          "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20}
+         "nineteen": 19, "twenty": 20,
+         "twenty-one": 21, "twenty-two": 22, "twenty-three": 23}
 # `claimed_ap`, not `claimed`: that name is already bound above for the summary
 # file list. Rebinding it worked only because the first use is consumed before
 # this line -- which is the shadowing trap check 36 refuses for `def` names, and
 # variables are not covered by it.
-m = re.search(r"and the (\w+) already-program claims of which (\w+) hold", MD)
+# `[\w-]+`, not `\w+`: the counts are spelled, and a hyphenated one --
+# twenty-one -- silently parsed to None, which read as "the title states no
+# number" rather than "the title states a number this parser cannot spell".
+m = re.search(r"and the ([\w-]+) already-program claims of which ([\w-]+) hold", MD)
 claimed_ap = WORDS.get(m.group(1)) if m else None
 holding_ap = WORDS.get(m.group(2)) if m else None
 # COUNT THE TWO ALREADY-PROGRAM TABLES STRUCTURALLY, by their header rows.
