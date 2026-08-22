@@ -2259,7 +2259,7 @@ def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
     # `== 7` and went red on `substituted` for the wrong reason.
     required = {"tool", "counters_examined", "pins_examined", "findings",
                 "denied_by_polarity", "not_determined", "unparsed",
-                "substituted", "corpus"}
+                "substituted", "corpus", "pins_unmatched"}
     assert required <= emitted, (
         "a documented key has been removed from the report and its schema "
         f"together: {sorted(required - emitted)}")
@@ -2486,6 +2486,84 @@ def test_an_empty_corpus_is_not_a_statement_about_a_tree(tmp_path):
         "an empty directory is answering as though it held programs that "
         "state no population twice:\n" + out)
     assert "out of a corpus of 0 program(s)" in r.stdout, out
+
+
+# ── pins the emitter states no literal for ──────────────────────────────────
+
+# The emitter DOES state a literal phrase, so it is reached -- `gate(s) ready`
+# is matchable. What it never states a literal for is `document(s) checked`,
+# which is the phrase the test pins. That is the branch under test. An emitter
+# with no matchable phrase at all is dropped one step EARLIER, by `if not em`,
+# and is a different limit (named in the docstring, not in this count) -- the
+# first version of this fixture staged that one by mistake and proved nothing.
+# `PHRASE` matches the literal shape `of <digits> <words>`. The emitter DOES
+# state one -- `of 3 gate(s) ready` -- so it is reached and `em` is non-empty.
+# What it never states a literal for is `document(s) checked`, whose count it
+# computes, and that is the phrase the test pins. THAT is the branch under test.
+#
+# An emitter with no matchable phrase at all is dropped one step EARLIER by
+# `if not em`, which is a different limit -- named in the docstring, not in this
+# count. The first two versions of this fixture staged that one by mistake and
+# proved nothing about the branch they claimed to cover.
+PIN_UNMATCHED_EMITTER = '''\
+def script() -> str:
+    n = 7
+    return (
+        "  puts \\"READY: $_g of 3 gate(s) ready\\"\\n"
+        "  puts \\"DOCS: $_d of %d document(s) checked\\"\\n" % n
+    )
+'''
+
+PIN_UNMATCHED_TEST = '''\
+from document_emit import script
+
+
+def test_it():
+    assert "of 2 document(s) checked" in script()
+'''
+
+
+def _unmatched_tree(tmp_path):
+    progs = tmp_path / "progs"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "document_emit.py").write_text(PIN_UNMATCHED_EMITTER,
+                                            encoding="utf-8")
+    (tests / "test_document_emit.py").write_text(PIN_UNMATCHED_TEST,
+                                                 encoding="utf-8")
+    return progs, tests
+
+
+def test_a_pin_the_emitter_states_no_literal_for_is_said_not_dropped(tmp_path):
+    """The emitter computes the count, so there is no literal for the pinned
+    `2` to disagree with. Declining is right. Dropping it in silence is not --
+    this branch took 10 of the shipped corpus's 11 pins with nothing in the
+    reach to show for it, while the verdict said `1 test pin(s) COMPARED` and
+    read as though one was all there was."""
+    progs, tests = _unmatched_tree(tmp_path)
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert "test pin(s) the named program does not state a literal for" in out, out
+    assert "0 test pin(s) the named program does not" not in out, (
+        "the pin was dropped without being counted:\n" + out)
+
+
+def test_the_unmatched_pin_count_is_in_the_json_reach(tmp_path):
+    progs, tests = _unmatched_tree(tmp_path)
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    rep = json.loads(j.read_text())
+    assert rep["pins_unmatched"] >= 1, rep
+    assert rep["pins_examined"] == 0, rep
+
+
+def test_an_unmatched_pin_is_reach_and_never_a_finding(tmp_path):
+    """`pins_unmatched` must not become a way to fail a tree for stating
+    something this guard cannot read."""
+    progs, tests = _unmatched_tree(tmp_path)
+    r = _run(progs, tests)
+    assert r.returncode in (RC_PASS, RC_VACUOUS), r.stdout + r.stderr
+    assert "[FAIL]" not in r.stdout, r.stdout
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────

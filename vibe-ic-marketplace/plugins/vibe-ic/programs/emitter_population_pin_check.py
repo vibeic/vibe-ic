@@ -180,6 +180,14 @@ need not read the source:
                          it -- "0 compared" out of 214 programs and out of an
                          empty directory are the same number and not the same
                          fact. vibe-ic#1200.
+    pins_unmatched       pins found in a test whose named program states no
+                         literal for that phrase -- typically because the
+                         program computes the value. Nothing to compare, so not
+                         a finding; counted because the alternative is dropping
+                         it in silence. It counts pins from tests that named a
+                         program which emits SOMETHING; a test naming a program
+                         that emits nothing matchable is not reached at all, and
+                         that limit is not in this number.
     substituted          sources whose BYTES would not decode as UTF-8. Read with
                          substitution, so the text analysed is not the file; what
                          substitution mangles goes unmatched, and an unmatched
@@ -867,6 +875,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     counters_examined = 0
     pins_examined = 0
+    pins_unmatched = 0
 
     # ── CHECK A — the emitter against itself ────────────────────────────────
     text_cache: Dict[str, str] = {}
@@ -1021,6 +1030,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                            "matched": phrase, "denial": word})
         for tail, values in pinned.items():
             if tail not in em:
+                # SAID, not skipped. A test pins `2 document(s)` and the program
+                # it names emits `{docs} document(s)` -- a computed count, with
+                # no literal for the pin to disagree with. Declining is right;
+                # dropping it in silence is not, and this branch took 10 of the
+                # corpus's 11 pins with nothing in the reach to show for it.
+                pins_unmatched += len(values)
                 continue
             emitted = {v for v, _ in em[tail]}
             emitted_lines = sorted({ln for _, ln in em[tail]})
@@ -1047,9 +1062,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"source(s) NOT examined because they would not parse; "
             f"{len(undecidable)} population(s) NOT DECIDABLE; "
             f"{len(substituted)} source(s) whose bytes were SUBSTITUTED to be "
-            f"read at all")
+            f"read at all; {pins_unmatched} test pin(s) the named program does "
+            f"not state a literal for, so there was nothing to compare")
     report = {"tool": TOOL, "counters_examined": counters_examined,
               "corpus": {"programs": len(sources), "tests": tests_seen},
+              "pins_unmatched": pins_unmatched,
               "pins_examined": pins_examined, "denied_by_polarity": denied,
               "unparsed": unparsed, "not_determined": undecidable,
               "substituted": substituted,
