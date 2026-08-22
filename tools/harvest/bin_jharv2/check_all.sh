@@ -20,6 +20,7 @@ add "derived file matches its sources" 0 "python3 $B/derived_freshness_check.py 
 add "README counts match the files"    0 "python3 $B/readme_numbers_check.py $H"
 add "verdicts_all is reproducible"     0 "d=\$(mktemp -d); cp $H/verdicts_joined.tsv $H/verdicts_extras_joined.tsv \$d/; python3 $B/build_verdicts_all.py \$d >/dev/null; cmp -s \$d/verdicts_all.tsv $H/verdicts_all.tsv; r=\$?; rm -rf \$d; exit \$r"
 add "branch preserves the rescued set" 0 "python3 $B/branch_preserves_rescued_check.py $H . HEAD"
+add "redundancy: >=2 refs carry it"   0 "python3 $B/redundancy_check.py $H"
 add "survivability citations are live"  0 "python3 $B/live_ref_citation_check.py $H"
 add "extras coverage (EXPECTED RED)"   1 "python3 $B/extras_coverage.py"
 ran=0; bad=0
