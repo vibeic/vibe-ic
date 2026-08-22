@@ -10,15 +10,20 @@ fleet", and nothing in the file says so — this does.
 | .105 (8HD-9) | 1394 | 481 | 913 |
 | .102 (8HD-7) | 2062 | 631 | 1431 |
 | .108 (8HD-6) | 828 | 32 | 796 |
-| .112 | census did not complete | — | — |
+| .112 | **≥888** (depth-4 lower bound) | 37 | ≥851 |
 | .114 | 3578 | 99 | 3479 |
 | .120 | 3784 | 122 | 3662 |
 | .121 | 1662 | 51 | 1611 |
-| **total** | **13308** | **1416** | **11892** |
+| **total (bounded where noted)** | **≥14,196** | **1,453** | **≥12,743** |
 
-`.112`'s census was still running when this was written and is NOT included — its row says so
-rather than carrying a zero. A missing measurement and a measured zero look identical in a table,
-which is the whole reason this file exists.
+`.112`'s row is a **depth-4 lower bound**, not a full census. Two full-depth attempts were
+abandoned: that host sits at **load average 50** with **16,148 entries directly under `/tmp`** and
+3,642 `.git` directories there at depth 4 alone, and the walk produced no output in ten minutes
+before I stopped it rather than keep adding load. The bound is labelled in the table.
+
+A missing measurement and a measured zero look identical in a table, and a bounded measurement
+presented as a complete one is the same problem wearing a number. Both are why this file exists.
+The total below therefore **understates** the fleet.
 
 A checkout counts if it has a `.git` and either `vibe-ic-marketplace/` or `.claude-plugin/`.
 `.107` answers ICMP with every TCP port filtered, so it cannot be censused at all.
