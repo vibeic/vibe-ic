@@ -360,3 +360,47 @@ the half of the problem that was costing measurement rounds. **The census was ri
 that a bare bump was the wrong move and wrong that the only alternative was a full
 derivation.** Third time on this branch that the remedy space was larger than the
 two options I could see.
+
+---
+
+# Part 7 — the LAST open request, and my move-list was too short a fourth time
+
+`ppa_pr_scope_check` is the one census request still unanswered upstream. **M88
+called it "the only one of the three the repo does not already answer" and sent it
+to "a PR-context runner" — a venue I could not point at.** Checked, and that was
+wrong.
+
+**IT DOES NOT NEED A FORGE PR. Its own docstring says what it needs:**
+
+> *"It decides WHICH questions apply, **from the change-set itself**."*
+
+And its interface takes refs, not a PR number:
+
+    --repo  --base <git ref>  --head <git ref>  --changed-file  --diff-file
+    --answers  --catalogue  --json
+
+**"PR" in the name is the REVIEW CHECKLIST it automates, not a forge dependency.**
+I read the word and inferred the dependency.
+
+**THE VENUE EXISTS AND IS NOT HYPOTHETICAL.** `gatekeeper-verify-merge.sh`
+computes exactly the pair this program takes:
+
+    BASE_SHA="$("${G[@]}" rev-parse "$BASE")"            :945
+    HEAD_SHA=...                                          on BOTH the --pr and --ref paths
+
+**So the answer is the merge verifier, not "a PR-context runner somewhere".**
+The verifier is where change-set-scoped checks belong, and it already resolves the
+change-set on every landing, PR or not.
+
+**M88's RULE still holds; my APPLICATION of it did not.** The hygiene criterion is
+*"a repo-wide invariant needing no PR context and no design run"*, and a
+change-set IS context hygiene does not have — so excluding it from hygiene was
+right. **What was wrong was concluding that the remaining venue was
+hypothetical.** It is `gatekeeper-verify-merge.sh`, which is PROTECTED — so this
+joins the other protected-file asks rather than being the one homeless item.
+
+**FOURTH TIME on this branch that the remedy space was larger than the two options
+I could see** — after the flow-gate token, "publish a run tree", and the liar
+census. **The pattern is now consistent enough to state as a finding about the
+method rather than about any one item: when I could see exactly two options, the
+real answer was outside both, four times out of four.**
