@@ -3558,8 +3558,8 @@ number and not the question.
     records                                            47
       fix text quotes a figure                         35
         names a literal command                         6
-        describes HOW the count was taken              28
-        neither — a bare number                         7
+        describes HOW the count was taken              29
+        neither — a bare number                         6
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 29 figure-bearing records fall short.
@@ -3603,6 +3603,7 @@ was wrong":
 | evidence artefacts carrying a digest | 525 of 525 | **525 of 525** | **reproduces exactly** |
 | schema files in the layer's schema directory | 14 | **15** | the tree grew by one |
 | document types emitted | 29 | **≥25** | a literal screen cannot settle it — see below |
+| axes constant across a 21-arm sweep | 24 of 54 | **24 of 53–55** | the flagged count is exact; the denominator brackets it |
 
 **Six re-derivations. Five are small growths and none is a screen mismatch.** The numbers
 were sound; what was missing was the question that produced them. That is a
@@ -3663,7 +3664,26 @@ starting, **because the grep looks like it worked.** The rule itself is
 unaffected: the floor already exceeds the schema count, so types without a
 schema exist whichever figure is right.
 
-Seven records remain, and that is the first thing I would do next. A figure
+**The invariance figure reconstructed further than I expected, and it corrected
+the heuristic above.** Grouping every entry in the 21 published trials' flat
+record files by metric identifier and counting those holding one value across
+all arms gives **24** constant — identical to the record — over **53** axes when
+restricted to measured records, or **55** when derived ones are admitted. The
+number the rule turns on is settled; the recorded 54 sits between the two, so
+the whole remaining ambiguity is one inclusion decision about derived records.
+
+**And it breaks the direction heuristic, which needs a precondition I did not
+state.** "Larger means growth" assumes the population *can* grow. This one is
+committed evidence, which cannot — so a larger answer here means only a broader
+screen. The heuristic misleads on exactly the artefacts that are most stable,
+and the record now says so.
+
+Two traps it cost, both this batch's own class: the contract document's metrics
+key is **empty** on these arms (the measurements live in a sibling file), so a
+sweep aimed at the contract returns 0 axes from 21 arms and looks like a clean
+corpus.
+
+Six records remain, and that is the first thing I would do next. A figure
 without its question is a memory, which is the brief's own word for what this
 loop exists to stop producing.
 
