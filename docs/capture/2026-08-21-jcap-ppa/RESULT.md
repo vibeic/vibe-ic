@@ -69,6 +69,7 @@ Accepted with no refusal and no unrouted record.
 - [Re-measuring the older sweeps, and what it cost to try](#re-measuring-the-older-sweeps-and-what-it-cost-to-try)
 - [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
 - [A record closed on main while this branch was open](#a-record-closed-on-main-while-this-branch-was-open)
+- [Re-checked against main's 214 commits](#re-checked-against-mains-214-commits)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -2367,6 +2368,34 @@ was invisible to both judges, and main independently built the producer, the axi
 and two gates. The record's value now is the measurement it leaves behind, not
 the rule it no longer needs to argue for.
 
+
+## Re-checked against main's 214 commits
+
+The brief's anti-duplication rule has to be discharged against the tree as it is,
+not as it was when a record was written — and main moved twice under this branch,
+the second time by 214 commits. Every record whose target program main touched
+was re-checked:
+
+    distinct programs this batch routes to            18
+    changed by main's 214 commits                      5
+    records those five carry                           9
+    closed by main                                     1   (withdrawn, above)
+    still holding                                      8
+
+The eight were verified individually rather than assumed from the diff: the
+equivalence prover still emits no depth and no exhaustion flag, the interface
+document still states exactly one identity's membership rule, the feasibility
+module still contains no satisfiability check, and the area figure's required
+scope is still a single key with no composition.
+
+**One of the eight nearly read as closed.** A screen for whether the search space
+had gained a record of which levers were exercised returned six hits — and all
+six are the word *searched* in other senses: the directories the program reads
+documents from, a lever refused for want of permission, and the pre-existing list
+of place-and-route knobs excluded on purpose. None of them says which ADMITTED
+lever a run turned. The vocabulary trap this report has now recorded five times,
+appearing once more in the check that exists to prevent duplicating other
+people's work.
 
 ## The honest sentences, checked verbatim against the records
 
