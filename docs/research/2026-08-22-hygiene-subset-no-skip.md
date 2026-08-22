@@ -3308,3 +3308,46 @@ of `land/batch67-assembled` is REFUSED by `gatekeeper_stale_branch_check`
 (STALE + OVERLAP, rc 1); recovery is the merge-base delta, 9 files against 104.
 `main` `a4caccefea` remains unmeasured by either of us and is stated as a gap on
 both sides rather than covered by a clean batch-68 result.
+
+## 51. A gap I CAN fill: the repo-root `tools/` suite on `main`, measured whole
+
+Both `jmeas3` and I recorded the same open item — `main` `a4caccefea` is covered
+by no measurement of either of ours. A batch-scale sweep is not mine and I am not
+attempting one. But one region of it is squarely mine, small, and covered by
+nobody: the repo-root `tools/` tests, which §33 established sit outside every
+plugin-scoped selection and which §39 established the landing's own arm cannot
+reach either.
+
+**So that region has never been measured by the landing, by the targeted
+selection, or by either of us. Measured now, whole, on `main` `a4caccefea`:**
+
+```
+tools/test_*.py          20 files
+                         17 failed, 485 passed   (71s)
+
+by file:
+  16   test_gatekeeper_land_differential.py
+   1   test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
+```
+
+**17 of 502, concentrated in two files, and 16 of those guard the differential
+landing path** — the arms, the stamp, the base-vs-candidate subtraction. All 17
+are green on this branch (§44 measured the same three files at 60/0), so they
+arrived with something that landed after this branch forked.
+
+**Why this is worth having rather than another red list.** The region is defined
+by being unreachable: §33 (no plugin-scoped selection reaches `tools/`), §39
+(the landing's test arm IS the targeted selection). A suite that guards the
+LANDING DIFFERENTIAL is therefore red on `main` in the one place the landing
+structurally cannot look — which is the defect this whole brief was about,
+holding one directory over and at a larger scale.
+
+**Scope stated so this is not read as more than it is.** 20 files and 502 tests
+is a small corner of `main`; it says nothing about the plugin suite, the
+benchmark corpus, or anything else `jmeas3` and I both flagged as unmeasured. It
+closes exactly the piece I identified, and it is offered as that.
+
+**Not diagnosing the 16.** They are someone else's subsystem, arrived in a
+landing I did not observe, and each needs its own attribution — the same
+boundary as §18, §28, §39 and §42. Reproduction is one command on `main`:
+`python3 -m pytest -q tools/test_gatekeeper_land_differential.py`.
