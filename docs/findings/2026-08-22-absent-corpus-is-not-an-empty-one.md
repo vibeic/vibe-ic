@@ -377,5 +377,83 @@ population grew to 80 files in the same interval. The comparison that matters is
 branch against `main` **at the same commit**, which is what the table above is.
 
 No test was relaxed, no assertion widened, no baseline written. The only source
-changes on this branch are comment blocks in `repo_hygiene_parallel.py` and
-`tests/test_routed_def_corpus_dispatch.py`; no executable line moved.
+changes on this branch are prose in `repo_hygiene_parallel.py` and
+`tests/test_routed_def_corpus_dispatch.py`; no executable line moved. Precisely:
+a `#` comment block in `_summary_rc`, and — the part "comment blocks" was
+wrong about — the **docstring** of `_legacy_empty_without_process`, which is a
+runtime object rather than a comment. The distinction changes nothing here and
+is measured below rather than asserted.
+
+### 3. Re-verified independently, 2026-08-22, on both trees
+
+Everything above was re-derived from scratch rather than re-read, because a
+record that only ever gets re-read is a record nobody has checked.
+
+**The executable delta between this branch and `origin/main` is empty.** Parse
+both revisions of `repo_hygiene_parallel.py`, normalise every docstring to one
+placeholder, and compare the ASTs:
+
+    identical once docstrings are normalised — the delta is prose only
+
+So the sweep on this branch and the sweep on `origin/main` are the same
+measurement, and any red on one is a red on the other by construction. That is
+the strongest available form of *"whatever you change must run clean on the
+current repo"*: there is nothing left that could fire.
+
+**The whole `tools/ci` directory, not the grep-derived subset.** Section 2 ran
+the 3 files its query selected. Re-run over all 17:
+
+| tree | result |
+|---|---|
+| `10563c3da` (this branch) | 238 passed, 6 skipped, **4 failed** (50.4s) |
+| `a4caccefe` (pristine `origin/main`) | 238 passed, 6 skipped, **4 failed** (49.9s) |
+
+Same four IDs on both, in the same order: `test_gate_fixtures_discriminate.py::
+test_fixture_pair_discriminates[ppa_head_to_head_records]`,
+`test_gate_mutation_fixture_check.py::test_the_real_repo_is_clean_under_this_
+gate`, and the two `test_phase_b_activated_parity.py` rows. The branch
+introduces none of them.
+
+**The red, re-shown on the pre-fix tree.** `81cd5321b` carries neither
+`NO_CORPUS_RC` nor `GATE_DISPATCH_ABSENT_RC` (grep: 0 occurrences in
+`routed_def_corpus.py` and `_gate_dispatch.sh`). Drop *only* this branch's test
+file onto that tree and run the nine tests it adds:
+
+    6 failed, 3 passed
+
+The six are `test_the_absent_exit_code_is_one_number_in_two_languages`,
+`test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict`,
+`test_the_dispatcher_gives_absent_and_empty_different_rows`,
+`test_a_corpus_that_was_read_and_holds_none_says_so`,
+`test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND` and
+`test_an_absent_corpus_does_not_close_the_hygiene_dag_green`. The three that
+pass pre-fix pin invariants that already held and had to survive the change —
+that they are green on both trees is the point of including them.
+
+The last of the six is the one worth reading, because it prints the defect in
+its own words on the tree that had it:
+
+    AssertionError: the parallel hygiene DAG closed GREEN (rc 0) over a corpus
+    that was NEVER OPENED. ... Got rc 0.
+      ── corpus "..." is EMPTY — nothing was checked over it
+      [routed-def corpus] NO_CORPUS: nothing at .../benchmark-data/ic and
+      VIBE_IC_BENCHMARK_DATA is unset. ... NOTHING WAS SCANNED
+
+The producer says *nothing was scanned*; the row two lines up says *is EMPTY*;
+`_summary_rc` returns 0. **This was a manufactured pass, not a wording bug** —
+which is why the record's headline is the pass and not the sentence.
+
+**Both states, re-run through the real producer.** On `10563c3da`, no fixture,
+just the shipped program:
+
+    A  no benchmark-data/, VIBE_IC_BENCHMARK_DATA unset
+       -> rc 3, 0 items, "NOT FOUND ... the ABSENCE of a measurement,
+          not a measurement of zero. The line above names what was looked for."
+    B  VIBE_IC_BENCHMARK_DATA -> a git checkout whose ic/ publishes no
+       */*/phase3/stage3/pnr/routed.def
+       -> rc 0, 0 items, "MEASURED EMPTY: git's index at <top> was read under
+          'ic' ... This IS a measurement"
+
+Different rc, different sentence, and each names the thing the other cannot: A
+names what it looked for, B names the index it read. `test_routed_def_corpus_
+dispatch.py` on this branch: **22 passed**.
