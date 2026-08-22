@@ -97,6 +97,67 @@ def test_a_write_that_is_not_a_declared_report_is_out_of_scope(tmp_path):
     assert G.main([str(d), "--baseline", str(bl)]) == 0
 
 
+def _tree_no_baseline(tmp_path, files: dict) -> Path:
+    """A programs directory with NO residual artefact beside it."""
+    d = tmp_path / "programs"
+    d.mkdir(exist_ok=True)
+    for name, body in files.items():
+        (d / name).write_text(body)
+    assert not (d / "_atomic_artefact_residual.json").exists()
+    return d
+
+
+# --- vibe-ic#1462: an absent baseline is not a measurement of zero ----------
+# The gate's verdict is `current - baseline`. When the baseline states no
+# measurement, that subtraction attributes nothing, and BOTH of the verdicts it
+# used to render were unearned — in opposite directions, from the same line.
+
+
+def test_an_absent_baseline_does_not_read_as_a_clean_sweep(tmp_path, capsys):
+    """The false zero vibe-ic#1462's reporter hit: no residual, no offender,
+    `[PASS]` — a clean sweep over a comparison the gate never had."""
+    d = _tree_no_baseline(tmp_path, {"scratch.py": _NO_DEST})
+    rc = G.main([str(d)])
+    assert rc == 2, "a tree with no recorded residual was never measured"
+    assert "[PASS]" not in capsys.readouterr().out
+
+
+def test_an_absent_baseline_does_not_make_the_population_a_regression(
+        tmp_path, capsys):
+    """The other direction, and the one that misattributed two programs to a
+    batch that did not introduce them: with no residual, every pre-existing
+    offender in the tree was reported as one that NEWLY landed."""
+    d = _tree_no_baseline(tmp_path, {"inherited.py": _OFFENDER})
+    rc = G.main([str(d)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "newly" not in err.lower(), (
+        "an offender the gate has no baseline for cannot be called new")
+
+
+def test_a_truncated_baseline_is_NOT_CHECKED_never_PASS(tmp_path, capsys):
+    """The gate exists because a half-written artefact reads as a whole one.
+    Its OWN input is such an artefact, and it used to read a truncated residual
+    as `baseline 0` and pass."""
+    d = _tree_no_baseline(tmp_path, {"scratch.py": _NO_DEST})
+    bl = tmp_path / "truncated.json"
+    bl.write_text('{"offenders": [')
+    assert G.main([str(d), "--baseline", str(bl)]) == 2
+    assert "[PASS]" not in capsys.readouterr().out
+
+
+def test_an_explicitly_empty_baseline_IS_a_measurement_and_still_fails(
+        tmp_path, capsys):
+    """The refusal must not swallow the ratchet. `{"offenders": []}` is a tree
+    that was measured and found clean, so the first offender against it is a
+    real regression and must still FAIL."""
+    d = _tree_no_baseline(tmp_path, {"newbie.py": _OFFENDER})
+    bl = tmp_path / "measured_clean.json"
+    bl.write_text(json.dumps({"offenders": []}))
+    assert G.main([str(d), "--baseline", str(bl)]) == 1
+    assert "newbie.py" in capsys.readouterr().err
+
+
 def test_an_empty_or_unreadable_tree_is_NOT_CHECKED_never_PASS(tmp_path):
     assert G.main([str(tmp_path / "nope")]) == 2
     empty = tmp_path / "empty"

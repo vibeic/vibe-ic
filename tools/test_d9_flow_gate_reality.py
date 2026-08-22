@@ -35,6 +35,17 @@ import gen_flow_gate_d9_section as gen  # noqa: E402
 
 CLEAN, FINDING, NO_INPUT, ERROR = d9.CLEAN, d9.FINDING, d9.NO_INPUT, d9.ERROR
 
+#: THE CENSUS LIVES BESIDE ITS TOOL, NOT IN THE PUBLISHED CORPUS.
+#: It used to sit under `benchmark-data/evaluation/d9_flow_gate_reality/`, and it
+#: left with everything else in v1.10.56. Restoring it there is REFUSED by
+#: `benchmark_evidence_structure_check`, and correctly: at the IC level only
+#: `input/` and `v<version>_<PDK>` cells are allowed, because a published result
+#: must be attributable to a plugin version and a PDK. This file is neither -- it
+#: is the output of `tools/d9_flow_gate_reality.py`, consumed by
+#: `tools/gen_flow_gate_d9_section.py`, both of which live here. Being in the wrong
+#: place is why it was swept out in the first place.
+REALITY = TOOLS / "d9_reality" / "d9_reality.json"
+
 
 def cell(bucket, rc):
     return {"bucket": bucket, "rc": rc}
@@ -89,8 +100,7 @@ class TestZeroDenominatorRefusesRatherThanPasses:
 
     def test_zero_denominator_steps_are_dark_with_that_cause(self):
         report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
         zero = [r for r in report["rows"] if r["denominator"] == 0]
         assert zero, "no zero-denominator step found; corpus shape changed"
         for row in zero:
@@ -101,8 +111,7 @@ class TestZeroDenominatorRefusesRatherThanPasses:
 
     def test_no_cell_claims_to_have_moved_on_more_runs_than_it_probed(self):
         report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
         for row in report["rows"]:
             assert row["runs_moved"] <= row["runs_probed"], row["step"]
             assert row["runs_probed"] <= row["denominator"], row["step"]
@@ -120,8 +129,7 @@ class TestThePageMayNotSoftenTheSentence:
 
     def test_the_rendered_block_carries_it_and_both_belief_lists(self):
         report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
         block = gen.render(report)
         assert gen.CERTIFIES in block
         assert "MAY believe" in block and "MAY NOT believe" in block
@@ -130,8 +138,7 @@ class TestThePageMayNotSoftenTheSentence:
 
     def test_every_dark_cell_is_rendered_as_dark_with_a_named_cause(self):
         report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
         block = gen.render(report)
         assert block.count('class="d9-dark"') == report["dark"], (
             "the number of rows drawn dark must equal the number measured dark")
@@ -143,8 +150,7 @@ class TestThePageMayNotSoftenTheSentence:
 
     def test_the_block_does_not_claim_d9_is_shipped(self):
         report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
         block = gen.render(report)
         assert "D9 不是一個已經出貨的維度" in block
         assert "PLANNED" in block
@@ -167,8 +173,7 @@ class TestNoMeasuredNumberInTheBlockIsHandTyped:
 
     def _report(self):
         return json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+            REALITY.read_text())
 
     @pytest.mark.parametrize(
         "field", ["on_disk", "all_py_in_programs", "referenced_by_flow"])
@@ -195,8 +200,7 @@ class TestDriftIsDetected:
     """
 
     def test_check_fails_when_the_page_block_no_longer_matches(self, tmp_path):
-        reality = (REPO / "benchmark-data" / "evaluation"
-                   / "d9_flow_gate_reality" / "d9_reality.json")
+        reality = REALITY
         report = json.loads(reality.read_text())
         page = tmp_path / "p.html"
         page.write_text("<style>\n</style>\n"

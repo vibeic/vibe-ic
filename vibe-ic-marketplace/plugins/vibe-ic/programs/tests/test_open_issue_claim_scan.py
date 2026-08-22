@@ -93,6 +93,62 @@ def test_the_refusal_names_the_consequence(monkeypatch, capsys):
     assert "0 unclaimed" in capsys.readouterr().err
 
 
+def test_a_transient_failure_is_retried_and_recovers(monkeypatch, capsys):
+    """MEASURED: `--json number,comments` takes ~23 s against ~1 s without the
+    comments field, and HTTP 504 came back six times in one session with the
+    quota untouched. A retry cleared it every time. Without this the scan
+    refuses on a gateway hiccup and the queue looks unreadable when it is not."""
+    calls = []
+
+    def gh(args, timeout=None):
+        calls.append(args)
+        if args[0] == "issue" and len(calls) == 1:
+            return 1, "", "HTTP 504: We couldn't respond to your request in time"
+        if args[0] == "issue":
+            return 0, json.dumps([_issue(9, _chatter())]), ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(P, "_gh", gh)
+    monkeypatch.setattr(P.time, "sleep", lambda _s: None)
+    rc = P.main([])
+    assert rc == P.RC_OK, f"a transient 504 was not retried (rc={rc})"
+    assert json.loads(capsys.readouterr().out)["unclaimed"] == [9]
+
+
+def test_the_retry_does_NOT_soften_the_refusal(monkeypatch, capsys):
+    """The paired guard. A retry that eventually answers "nothing" would be
+    strictly worse than no retry: it would convert a persistent outage into a
+    confident empty queue, which is this program's whole subject."""
+    def gh(args, timeout=None):
+        return 1, "", "HTTP 504: We couldn't respond to your request in time"
+
+    monkeypatch.setattr(P, "_gh", gh)
+    monkeypatch.setattr(P.time, "sleep", lambda _s: None)
+    rc = P.main([])
+    cap = capsys.readouterr()
+    assert rc == P.RC_CANNOT_SCAN, \
+        f"a persistent outage produced an answer after retrying (rc={rc})"
+    assert cap.out == "", "a refusal printed something a caller's $(...) reads"
+    assert f"{P._GH_ATTEMPTS} attempt" in cap.err, \
+        "the refusal does not say how many attempts were made, so 'transient' " \
+        "and 'could not look' read the same"
+
+
+def test_the_scan_stops_retrying_once_it_succeeds(monkeypatch):
+    """A retry loop that keeps going after success would pay the ~23 s cost
+    again for nothing, on the query this program exists to make cheap."""
+    calls = []
+
+    def gh(args, timeout=None):
+        calls.append(args)
+        return 0, json.dumps([_issue(1, [_claim()])]), ""
+
+    monkeypatch.setattr(P, "_gh", gh)
+    res = P.scan()
+    assert res["calls"] == 1 and len(calls) == 1, \
+        f"a successful listing cost {len(calls)} calls"
+
+
 def test_an_unparsable_listing_is_refused(monkeypatch, capsys):
     def gh(args, timeout=None):
         return 0, "<html>not json</html>", ""

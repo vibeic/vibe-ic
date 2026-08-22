@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 # ONE `gh` invoker for every polling program in this directory. It was copied
 # into this file and into its sibling, byte for byte — the shape of
 # vibeic-eda#29, where two copies of `branch_is_ours` gave opposite answers
@@ -96,6 +97,27 @@ DEFAULT_MARKER = "CLAIMED:"
 #: Below the landing harness's own bound, so a hung `gh` kills this call and
 #: not the session around it.
 _GH_TIMEOUT = 55
+
+#: How many times the listing is attempted before the scan refuses.
+#:
+#: MEASURED 2026-08-14 on this repository, quota healthy throughout (core
+#: 4942/5000, graphql 3873/5000), so this is not exhaustion and backing off for
+#: a reset would be waiting on the wrong clock:
+#:
+#:     --json number             1 s
+#:     --json number,title       2 s
+#:     --json number,comments   23 s    <- the shape this scan needs
+#:
+#: `comments` costs ~20x and pushes the call past the gateway's patience;
+#: `HTTP 504` came back on six separate attempts, three of them consecutive.
+#: A retry cleared it every time it was tried again within seconds.
+#:
+#: THE RETRY DOES NOT SOFTEN THE REFUSAL, which is the whole subject of
+#: vibe-ic#1464. After the last attempt the scan still exits 2 with nothing on
+#: stdout, and the message says how many attempts were made — so "transient,
+#: recovered" and "could not look" stay different answers, and the second one
+#: never becomes a count.
+_GH_ATTEMPTS = 3
 
 
 def _claim_visible(comments: List[Dict[str, Any]], marker: str) -> bool:
@@ -144,15 +166,21 @@ def scan(repo: Optional[str] = None, limit: int = DEFAULT_LIMIT,
             "--json", "number,title,comments"]
     if repo:
         args += ["--repo", repo]
-    rc, out, err = _gh(args, timeout=_GH_TIMEOUT)
-    calls = 1
+    calls = 0
+    for attempt in range(1, _GH_ATTEMPTS + 1):
+        rc, out, err = _gh(args, timeout=_GH_TIMEOUT)
+        calls += 1
+        if rc == 0:
+            break
+        if attempt < _GH_ATTEMPTS:
+            time.sleep(2 * attempt)
     if rc != 0:
         # The whole point. `gh` prints "GraphQL: API rate limit already
         # exceeded" here and returns nothing; the reason is quoted rather than
         # classified, because the caller needs to know WHICH wall it hit and a
         # second copy of that classification would drift from api_health's.
-        return {"error": f"gh issue list failed (rc={rc}): "
-                         f"{(err or out).strip()[:200]}"}
+        return {"error": f"gh issue list failed (rc={rc}) after {calls} "
+                         f"attempt(s): {(err or out).strip()[:200]}"}
     try:
         issues = json.loads(out or "[]")
     except ValueError as exc:

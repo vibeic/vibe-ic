@@ -265,7 +265,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -556,6 +556,21 @@ def _k_blocks_on_append_phantom(step: Dict, _p: Dict) -> bool:
     return True
 
 
+def _k_closed_loop_fallback_phantom(step: Dict, _p: Dict) -> bool:
+    """Repoint a `closed_loop.fallback_to` at a step id that does not exist.
+
+    The `blocks_on` sibling of this edit is :func:`_k_blocks_on_append_phantom`;
+    this one reaches the OTHER edge set — the CONVERGENCE edges — which had no
+    mutation at all until 2026-08-20, because nothing in the repository read
+    them.
+    """
+    cl = step.get("closed_loop")
+    if not isinstance(cl, dict) or "fallback_to" not in cl:
+        return False
+    cl["fallback_to"] = "__PHANTOM" + CANARY_SUFFIX + "__"
+    return True
+
+
 def _k_notes_append_ghost_program(step: Dict, _p: Dict) -> bool:
     notes = step.get("notes")
     if not isinstance(notes, str):
@@ -578,6 +593,7 @@ YAML_KINDS: Dict[str, Callable[[Dict, Dict], bool]] = {
     "required_outputs_empty": _k_required_outputs_empty,
     "required_outputs_delete_key": _k_required_outputs_delete_key,
     "blocks_on_append_phantom": _k_blocks_on_append_phantom,
+    "closed_loop_fallback_phantom": _k_closed_loop_fallback_phantom,
     "notes_append_ghost_program": _k_notes_append_ghost_program,
 }
 
@@ -849,6 +865,39 @@ _SWEEP_THEN_ONE = (
     _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
              "{added}   (2026-08-11, the one step this entry gained)")
 
+#: The five PATH-SPECIFIC steps (`0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`)
+#: arrived after every sweep above, so none of them is in any `applies_to` the
+#: 2026-08-06/08-11 runs produced. Appended rather than folded into
+#: :data:`_SWEEP` for the same reason :data:`_SWEEP_THEN_ONE` is separate: the
+#: bulk of each `applies_to` rests on a 63-step sweep on a 2026-08 tree, and
+#: these five rest on five single-step replays run on 2026-08-20. A reader can
+#: tell which claim rests on which run.
+_THEN_FIVE = ("   THEN   matrix_mutation_ledger.py --replay {name} --step "
+              "<each of 0.5ic, 15.5ic, 26.5ic, 37.5ip, 37.5ic>   (2026-08-20, "
+              "the five path-specific steps this entry gained)")
+
+#: `37.5self` (the General Precheck) HAD a suffix of its own here — it arrived
+#: after every sweep above AND after the five path-specific steps, so it rested
+#: on one single-step replay of its own. IT IS GONE, together with the step:
+#: 2026-08-20 the owner retired `37.5self` as a step and folded the general
+#: precheck into `37.5ic` as a SECOND ARM rather than a third route, so the
+#: flow went 69 -> 68 and the cells that replay measured no longer exist. The
+#: replay is not disowned and its result is not re-typed as some other step's;
+#: the CELL it measured was removed, so the claim it supported was removed with
+#: it. Every `reddened` below moves by exactly one for that reason, and by
+#: nothing else — `test_lock3_every_entry_is_arithmetically_consistent_with_
+#: its_own_evidence` re-derives it from `len(applies_to)` on every run.
+
+#: The sweep for the CONVERGENCE-edge entry. It is deliberately NOT
+#: :data:`_SWEEP`: `closed_loop` is declared by a MINORITY of steps, so a
+#: 63-step sweep would report a mostly-NOT_APPLICABLE run and the real
+#: denominator would be buried. This one names its own denominator — every step
+#: that DECLARES a `closed_loop`, derived from the live yaml at replay time, not
+#: from a number written down here.
+_CL_SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each step "
+             "declaring a closed_loop, derived live from the flow yaml>   "
+             "(2026-08-20, one pytest run per step)")
+
 #: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
 _RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
             "(2026-08-11, every declared step, one pytest run per step)")
@@ -871,14 +920,26 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
-            "41", "42", "43", "44"),
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D1-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (7.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=60,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=66,
             stayed_green=(),
             note="3 steps have no executable gate clause at all and are "
                  "structurally out of this entry's reach: 1 and 12 (files_exist "
                  "only) and P0 (no gate key). They are covered by "
-                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE."),
+                 "D1-UNREACHABLE-CLAUSE and D1-ORPHAN-UMBRELLA-GATE. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D1-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D1-UNREACHABLE-CLAUSE",
@@ -945,10 +1006,15 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
-            "41", "42", "43", "44"),
+            "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D2-BLIND-GATE-PROGRAMS --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "12"), reddened=60,
+            command=_SWEEP_THEN_ONE.replace("{added}", "12") + _THEN_FIVE, reddened=66,
             stayed_green=("35",),
             note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
                  "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
@@ -964,7 +1030,14 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "so the very commit that made 12/d2 ENFORCED also created the "
                  "edit site this mutation needs, and nothing re-ran the sweep. "
                  "Replayed 2026-08-11: `--replay D2-BLIND-GATE-PROGRAMS "
-                 "--step 12` -> REDDENED in 1.5s."),
+                 "--step 12` -> REDDENED in 1.5s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 
     # ---------------- dimension 3 — outputs produced -------------------
@@ -1048,13 +1121,25 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-UNGATED-DELIVERABLE --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             baseline_red=("1",),
             note="the 2 steps not reached declare no required_outputs at all "
                  "(FS1, P0) and are carried by D4-CLI-CONTRACT and "
-                 "D4-PROSE-NAMES-A-GHOST."),
+                 "D4-PROSE-NAMES-A-GHOST. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D4-UNGATED-DELIVERABLE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D4-CLI-CONTRACT",
@@ -1071,9 +1156,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A8", "A9", "17", "19", "20", "22", "DT2", "DT3", "23",
                     "24", "25", "26", "28", "29", "30", "31", "34", "35", "36",
                     "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41", "42",
-                    "43", "44"),
+                    "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D4-CLI-CONTRACT --step 1.6x` -> REDDENED (2.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=50,
+            date="2026-08-06", command=_SWEEP, reddened=51,
             stayed_green=("D1", "21", "33"),
             note="carries FS1, the one step with a gate and no required_outputs. "
                  "D1/21/33 stayed green because their first clause's program "
@@ -1117,10 +1205,15 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31",
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
-            "M4", "40", "41", "42", "43", "44", "P0"),
+            "M4", "40", "41", "42", "43", "44", "P0",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-EDGE --step 1.6x` -> REDDENED (2.3s).
+            "1.6x"),
         measured=Measurement(
             date="2026-08-11",
-            command=_SWEEP_THEN_ONE.replace("{added}", "P0"), reddened=63,
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0") + _THEN_FIVE, reddened=69,
             note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
                  "sweep, each reddening that cell alone. There is no longer an "
                  "NA cell in this dimension. "
@@ -1133,7 +1226,69 @@ MUTATIONS: Tuple[Mutation, ...] = (
                  "re-evaluation. The re-evaluation was done, not waived: "
                  "`d5_problems('P0')` is empty, so P0 runs the full predicate as "
                  "an ENFORCED cell. Replayed 2026-08-11: `--replay "
-                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s."),
+                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D5-PHANTOM-EDGE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
+    ),
+
+    # THE OTHER EDGE SET. `D5-PHANTOM-EDGE` above mutates `blocks_on`; this one
+    # mutates `closed_loop.fallback_to`, and the two are not substitutes.
+    # REPLAYED before this entry was written: `--replay D5-PHANTOM-EDGE --step 33`
+    # comes back REDDENED on a tree where step 33 declares NO closed_loop at all,
+    # because step 33 has a `blocks_on` to append a phantom to. A replay of the
+    # blocks_on entry is therefore not evidence about a convergence edge, and
+    # reading it as such is the "adjacent measurement" this campaign exists to
+    # stamp out.
+    Mutation(
+        name="D5-PHANTOM-FALLBACK",
+        dim=5, channel=FLOW_YAML, kind="closed_loop_fallback_phantom",
+        what="repoint the step's `closed_loop.fallback_to` at a step id that "
+             "does not exist",
+        breaks="a CONVERGENCE edge that resolves to nothing — the flow says "
+               "'on this verdict, go back to step K' and there is no step K. "
+               "Until 2026-08-20 that was not a defect anything could see: the "
+               "flow carried NINETEEN `closed_loop` declarations and the "
+               "repository had ZERO readers of the key. The 63x8 substrate even "
+               "shipped the accessor (`flowref.closed_loop`, exported in "
+               "`__all__`) with no caller. Every convergence edge in the flow "
+               "was unfalsifiable as a class.",
+        red_signal="step",
+        witness="24",
+        applies_to=(
+            "2", "3", "4", "5", "8", "9", "10", "13", "A7", "A9", "14",
+            "20", "23", "24", "25", "26", "27", "28", "31", "32", "33",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D5-PHANTOM-FALLBACK --step 1.6x` -> REDDENED (2.2s).
+            "1.6x"),
+        measured=Measurement(
+            date="2026-08-20",
+            command=_CL_SWEEP.replace("{name}", "D5-PHANTOM-FALLBACK"),
+            reddened=22,
+            note="21 red = every step that declares a `closed_loop`, in one sweep, "
+                 "each reddening that cell alone; UNMEASURABLE 0 of 21. Times in the "
+                 "commit message. THE DENOMINATOR IS THE POINT: 21, not 63 — "
+                 "`closed_loop` is declared by a MINORITY of steps and every other step "
+                 "has no edit site at all, so a whole-flow sweep would have "
+                 "reported the majority NOT_APPLICABLE and buried the real "
+                 "count. TWO OF THE 21 ARE NEW IN "
+                 "THIS CHANGE (steps 9 and 33, the area and power convergence edges) "
+                 "and both reddened, which is the whole reason the entry exists: the "
+                 "brief that asked for those edges named `--replay D5-PHANTOM-EDGE "
+                 "--step 33` as the proof, and that replay comes back REDDENED on a "
+                 "tree where step 33 declares NO closed_loop at all — it reaches "
+                 "`blocks_on`, which step 33 already had. A criterion that cannot "
+                 "distinguish the change from no change is not a proof of the "
+                 "change. BIDIRECTIONAL CONTROL, run by hand before this entry was "
+                 "written: with step 24's fallback repointed at "
+                 "`__PHANTOM_MUTANT__`, "
+                 "`test_d5_blocks_on_covers_the_real_dependency_graph[step24]` fails "
+                 "with `CL-FALLBACK-UNRESOLVED`; on the unmutated flow the same cell "
+                 "passes."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------
@@ -1153,16 +1308,28 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-UNCONDITIONAL-OPTIONAL --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         params={"command":
                 "clock_plan_check . --json reports/phase2/gates/zzmatrixcanary.json"},
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             stayed_green=("DT2",),
             note="61 red = every ENFORCED dimension-6 cell except P0, which "
                  "declares no gate to append to and is carried by "
                  "D6-UMBRELLA-ALWAYS-SKIPS. DT2 is the one waived cell and its "
-                 "strict xfail correctly held."),
+                 "strict xfail correctly held. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D6-UNCONDITIONAL-OPTIONAL "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D6-ADVISORY-ONLY-GATE",
@@ -1181,9 +1348,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT3", "23",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D6-ADVISORY-ONLY-GATE --step 1.6x` -> REDDENED (5.9s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-06", command=_SWEEP, reddened=60,
             stayed_green=("DT2",),
             note="a second, independent lever on 59 of the same cells; kept "
                  "because it charges a different leg (L1b) than "
@@ -1234,12 +1404,24 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34",
             "35", "36", "37", "38", "39", "M2", "M3", "M4", "40", "41", "42",
-            "43", "44"),
+            "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-GATE-PROBES-A-GHOST --step 1.6x` -> REDDENED (62.1s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=58,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=64,
             stayed_green=("7", "FS1", "23", "M1"),
             note="58 red = every one of dimension 7's 58 ENFORCED cells, in one "
-                 "sweep. The 4 greens are exactly its 4 waived cells."),
+                 "sweep. The 4 greens are exactly its 4 waived cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D7-GATE-PROBES-A-GHOST "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
     Mutation(
         name="D7-UNDECLARED-KEY",
@@ -1254,9 +1436,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
                     "A3", "A7", "A8", "A9", "15", "16", "17", "18", "19", "20",
                     "21", "22", "DT2", "DT3", "24", "25", "26", "27", "28",
                     "29", "30", "31", "32", "33", "34", "35", "36", "37", "38",
-                    "M2", "M3", "M4", "40", "41", "42", "43", "44"),
+                    "M2", "M3", "M4", "40", "41", "42", "43", "44",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-UNDECLARED-KEY --step 1.6x` -> REDDENED (65.2s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=48,
+            date="2026-08-06", command=_SWEEP, reddened=49,
             stayed_green=("D1", "1", "7", "12", "A1", "A2", "A4", "A5", "A6",
                           "14", "23", "39", "M1"),
             note="13 steps stayed green and the reason is measured, not "
@@ -1279,9 +1464,12 @@ MUTATIONS: Tuple[Mutation, ...] = (
         applies_to=("1", "2", "4", "8", "10", "11", "12", "A1", "A2", "A4",
                     "A5", "A7", "15", "16", "17", "18", "19", "20", "21", "22",
                     "DT3", "26", "27", "28", "29", "30", "31", "32", "34",
-                    "35", "36", "38"),
+                    "35", "36", "38",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D7-RENAMED-DELIVERABLE --step 1.6x` -> REDDENED (65.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=32,
+            date="2026-08-06", command=_SWEEP, reddened=33,
             stayed_green=("D1", "3", "5", "6", "7", "9", "DT1", "13", "A3",
                           "A6", "A8", "A9", "14", "DT2", "23", "24", "25",
                           "33", "37", "39", "M1", "M2", "M3", "M4", "40", "41",
@@ -1307,12 +1495,24 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
             "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
             "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3", "M4",
-            "40", "41", "42", "43", "44"),
+            "40", "41", "42", "43", "44",
+            # the five path-specific steps, replayed 2026-08-20
+            "0.5ic", "15.5ic", "26.5ic", "37.5ip", "37.5ic",
+            # step 1.6x, REPLAYED 2026-08-21 and not assumed:
+            # `--replay D8-EMPTY-PROMISE --step 1.6x` -> REDDENED (2.0s).
+            "1.6x"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=61,
+            date="2026-08-06", command=_SWEEP + _THEN_FIVE, reddened=67,
             note="61 red = every one of dimension 8's 61 ENFORCED cells, in one "
                  "sweep. The 2 steps not reached (FS1, P0) declare no "
-                 "required_outputs and are dimension 8's 2 NA cells."),
+                 "required_outputs and are dimension 8's 2 NA cells. "
+                 "THE FIVE PATH-SPECIFIC STEPS WERE ADDED 2026-08-20. 0.5ic, "
+                 "15.5ic, 26.5ic, 37.5ip and 37.5ic are declared in the flow yaml "
+                 "and were in no sweep above, so their cells were uncovered and "
+                 "`test_the_flow_declares_no_step_the_ledger_never_measured` said "
+                 "so by name. Each was REPLAYED, not assumed: `--replay D8-EMPTY-PROMISE "
+                 "--step <id>` -> REDDENED for all five (times in the "
+                 "commit message)."),
     ),
 )
 
@@ -1685,7 +1885,257 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: MOVED 482 -> 479 on 2026-08-14 (vibe-ic#1421). THREE cells left ENFORCED and
+#: they are NAMED in :data:`LEDGER_CELLS_NOT_ENFORCED` below — M2/d3, M3/d3 and
+#: M4/d3 — which is the whole reason that inventory now exists. `bcd444425`
+#: ("the mixed-signal steps were never unpublished", #1159) recorded those three
+#: steps as dormant: all four mixed-signal steps carry the same step-level
+#: ``condition: {files_exist: [phase1/analog/analog_block_list.json]}`` and that
+#: path occurs ZERO times in ``git ls-tree -r HEAD``, so the steps have never
+#: run here and dimension 3 answers NA rather than pretending to measure them.
+#:
+#: The drop is NOT the ledger being re-recorded to match a gate that stopped
+#: catching, and the difference is checkable rather than asserted. Dimension 3's
+#: ``matrix_na_precondition`` RE-DERIVES the dormancy live on every call from
+#: the flow yaml and the admissible run roots — publish any tree carrying the
+#: condition file and all three cells go back to ENFORCED and this pin reddens
+#: in the other direction. A cell that was silently losing its mutation would
+#: have no such live precondition to show, and lowering the count for one is the
+#: move this pin exists to refuse.
+#:
+#: THE COMMIT THAT CAUSED THE MOVE DID NOT MAKE IT, and that is the defect
+#: vibe-ic#1421 records. #1159 moved every counter it could see — the d3
+#: manifest's ``_LIVE_ENTRY_COUNT``, the 63x8 ledger's entry totals — and could
+#: not see this one, because it lives in ``programs/`` rather than the test
+#: tree and no diff connects a flow-yaml edit to it. It presented as a batch
+#: INTERACTION (no PR in the batch touches this file) when it is one PR and one
+#: number.
+#:
+#: MOVED 479 -> 478 on 2026-08-15 (vibe-ic#1421 again, and this time the gate
+#: caught it on the day it drifted). ONE cell left ENFORCED and it is NAMED in
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below — 34/d7 — which is the whole reason
+#: that inventory exists. ``9167b162`` ("flow(#1215): the write-record pin fired
+#: correctly — dispose the promotions, then move it") registered a dimension-7
+#: waiver on step 34: W2 charges ``reports/phase3/cmp_fill_emit.json`` as
+#: produced, gate-read and undeclared, and the waiver argues the READ half is an
+#: artefact of the consumer oracle mining a gate program's own default-output
+#: constant rather than a path anything in the tree reads.
+#:
+#: WHY IT REACHED main UNRECORDED, stated so it is not mistaken for the same
+#: defect twice: ``9167b162`` and ``aa9b39d5`` (the commit 19 minutes later that
+#: authored this inventory) are NEITHER an ancestor of the other. The pin was
+#: measured on a tree that did not yet carry the waiver, the waiver was written
+#: against a tree that did not yet carry the pin, and the two met for the first
+#: time on main. That is a genuine batch INTERACTION — unlike the -3 above, which
+#: only presented as one.
+#:
+#: NOT a gate that stopped catching, and the difference is checkable rather than
+#: asserted. Dimension 7's ``matrix_cell_state`` re-derives this cell's state from
+#: the live waiver registry on every call: withdraw the waiver and 34/d7 goes
+#: straight back to ENFORCED and this pin reddens in the other direction, naming
+#: the same cell. A cell whose mutation had quietly stopped reddening it would
+#: still answer ENFORCED here and would move neither this number nor that list,
+#: which is exactly why the -1 has to arrive with the cell named.
+#: MOVED (63, 8, 478) -> (68, 8, 514) on 2026-08-20. The flow GREW FIVE STEPS
+#: — `0.5ic` `15.5ic` `26.5ic` `37.5ip` `37.5ic`, the path-specific chip/IC and
+#: cell/IP steps — and this is the first move of this pin that is a shape change
+#: rather than a reclassification, so it is stated as one. 68 x 8 = 544 cells,
+#: 30 of them not ENFORCED (see below), 544 - 30 = 514.
+#:
+#: +36 ENFORCED is NOT the arithmetic 5 x 8 = 40. Four of the five carry a
+#: step-level `condition: {files_exist: [input/submission_template/...]}` with
+#: `condition_kind: design_dependent`, and no admissible run root satisfies it,
+#: so dimension 3 answers NA_DORMANT_CONDITION for 15.5ic, 26.5ic, 37.5ip and
+#: 37.5ic — four NA cells, named below. `0.5ic` carries no condition (it is the
+#: step that WRITES `input/submission_template/slots/*.yaml`, so it cannot be
+#: conditioned on its own output) and its d3 cell is ENFORCED. 40 - 4 = 36.
+#:
+#: EVERY ONE OF THE 36 WAS REPLAYED, NOT COUNTED. 35 of them are covered by a
+#: measured mutation added to `applies_to` above (`--replay <NAME> --step <id>`
+#: -> REDDENED, per-cell times in the commit message). The 36th, `0.5ic/d3`, is
+#: NOT covered and is not pretended to be: the d3 mutation replays
+#: ALREADY_RED there (`--replay D3-UNDECLARED-ARTEFACT --step 0.5ic`,
+#: baseline_rc=1), because step 0.5ic's own dimension-3 cell is red on main —
+#: no published corpus cell ran the chip/IC path, so neither declared output
+#: exists in any admissible run root. A pair that is red before the edit
+#: "proves nothing either way" in this program's own words, and recording it as
+#: covered would be exactly the forgery the ledger exists to refuse. It stays
+#: uncovered and `test_every_enforced_cell_carries_a_named_mutation[step0.5ic]`
+#: stays red, naming one cell instead of thirty-six.
+#:
+#: MOVED (68, 8, 514) -> (69, 8, 521) at v1.11.5. The flow grew ONE step,
+#: `37.5self` ("General Precheck — the tape-out check for a design with NO
+#: operator"), the third route out of stage 4: 37.5ic is an outside operator's
+#: refusal and 37.5ip is the IP terminal, and a chip taping itself out was
+#: neither, so until this step it passed no submission check at all. Another
+#: shape change, stated as one: 69 x 8 = 552 cells, 31 of them not ENFORCED
+#: (see below), 552 - 31 = 521.
+#:
+#: +7 AND NOT 8, for the reason its three siblings are NA: the step carries
+#: `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`
+#: with `condition_kind: design_dependent`, no admissible run root satisfies
+#: it, and dimension 3 therefore re-derives NA_DORMANT_CONDITION for it live.
+#: The cell is NOT "left ENFORCED"; it entered the grid NA, and it is named in
+#: the inventory below rather than only subtracted here.
+#:
+#: The other 7 were NOT counted into coverage on the strength of the +7: each
+#: is covered by a mutation family whose `applies_to` already resolves an edit
+#: site on this step, which the census re-checks live per cell (LOCK 1) rather
+#: than trusting the list — `census()` reports `uncovered == ['0.5ic/d3']` and
+#: nothing else on this tree, so `37.5self` arrived fully covered on those
+#: seven dimensions. `0.5ic/d3` is unchanged by this move and stays the one
+#: uncovered cell, for the reason argued directly above.
+#: MOVED (69, 8, 521) -> (68, 8, 514) at smrg/retire-37p5self, and this is the
+#: FIRST TIME THIS PIN HAS EVER GONE DOWN ON A SHAPE CHANGE. The flow LOST one
+#: step: `37.5self` is retired, because the general precheck was never a third
+#: ROUTE out of stage 4 — it is a second ARM of `37.5ic`, which now runs our
+#: ladder on every design that reaches it and the shuttle operator's own
+#: container IN ADDITION wherever the PDK ships a precheck and its template was
+#: fetched. 68 x 8 = 544 cells, 30 of them not ENFORCED (see below),
+#: 544 - 30 = 514.
+#:
+#: -7 AND NOT 8, and it is the exact mirror of the +7 recorded directly above.
+#: `37.5self/d3` was NA, never ENFORCED — it entered the grid NA and it leaves
+#: the grid NA — so seven ENFORCED cells go and the eighth was never in the
+#: count. This pin's own rule is that "a cell moving OUT of ENFORCED must say
+#: which cell and why", and the seven are named by their owner: every d1/d2/
+#: d4/d5/d6/d7/d8 cell of the removed step. There is no eighth to name here
+#: because there was never an eighth; the NA one is struck from
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below instead, which is where it lived.
+#:
+#: NOTHING ELSE MOVED, AND THAT IS MEASURED, NOT ASSUMED. The live grid was
+#: recomputed from the eight dimension modules on this tree and its
+#: not-ENFORCED inventory diffed against the pinned one: the ONLY difference in
+#: either direction is `("37.5self", 3, "NA")`. A step removal that had
+#: silently reclassified a neighbouring cell — the exact shape #1421 records
+#: the scalar being unable to see — would appear in that diff as a second
+#: entry. There is none, so the -7 is one cause and not a batch.
+#:
+#: THE COVERAGE CLAIM SHRINKS WITH IT AND IS NOT REDISTRIBUTED. The seven
+#: `applies_to` tuples that named `37.5self` drop it, and each entry's
+#: `measured.reddened` moves by exactly one, which
+#: `test_lock3_every_entry_is_arithmetically_consistent_with_its_own_evidence`
+#: re-derives from `len(applies_to)` on every run. The replay that produced
+#: those reds really happened and is not disowned; the CELL it measured no
+#: longer exists, so the claim it supported goes with it. `0.5ic/d3` is
+#: untouched by this move and remains the one uncovered cell.
+#: 2026-08-21: (68, 8, 514) -> (69, 8, 522). +1 step and +8 ENFORCED cells, and
+#: they are the same step: 1.6x, added to the flow by `7fcbc7397` with none of
+#: these registries moved. All eight of its cells are ENFORCED — it declares a
+#: gate, one required_output and `blocks_on: [1]`, carries no step-level
+#: condition and holds no waiver — so the count moves by exactly 8 and no cell
+#: changed state. Twelve mutation entries gained "1.6x", each REPLAYED rather
+#: than assumed; the two that could not be are named in the note on
+#: LEDGER_CELLS_NOT_ENFORCED.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (69, 8, 522)
+
+#: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
+#: owning dimension module answers. The COMPANION to the count above, and the
+#: reason it is here rather than folded into that tuple: **a count cannot name
+#: what moved, and two cells trading places move nothing.**
+#:
+#: That is not hypothetical, and it is not only history. The bisect recorded
+#: above found ``23d96bf5`` swapping step 12 between dimensions 2 and 5 "for a
+#: net change of zero" — a real state change on two real cells that the scalar
+#: was structurally unable to report, and it went unreported. Pinned as an
+#: inventory, the same swap is two findings that name both cells.
+#:
+#: The SAME change that forced the -3 carries a live second instance. Diffing
+#: the eight modules' answers across ``6011b4886`` -> ``75776dbb`` gives FOUR
+#: moved cells, not three: M1/d3 went WAIVED -> NA when its waiver was
+#: withdrawn for the same dormancy reason. That cell was never ENFORCED on
+#: either side, so it contributes nothing to 482 -> 479 and the count cannot
+#: mention it. It is in this tuple, so a reader can see it.
+#:
+#: It also decides the question the count alone leaves open, which is the one
+#: vibe-ic#1421 is about: 482 -> 479 could be three enforcements deliberately
+#: retired or three gates that quietly stopped catching, and no reader of the
+#: number can tell. A reader of this tuple sees WHICH three and in WHAT state,
+#: so the diff that lowers it has to say what it is doing.
+#:
+#: Measured 2026-08-14 on ``75776dbb`` from the eight dimension modules'
+#: ``matrix_cell_state``, the same live source the count is summed from. 25
+#: cells: 10 WAIVED (a registered, argued waiver) and 15 NA (a precondition the
+#: module re-derives live). 504 - 25 = 479, and the gate asserts that
+#: arithmetic rather than trusting it.
+#:
+#: RE-MEASURED 2026-08-15 on ``2efa6af3`` (v1.10.43 main) from the same eight
+#: modules: 26 cells — 11 WAIVED and 15 NA. 504 - 26 = 478. The one added cell is
+#: 34/d7, named below with the state it landed in and argued in the note on
+#: :data:`LEDGER_AS_MEASURED` above. This is the first drift this inventory
+#: caught AFTER the fact rather than recorded alongside its own cause: the -3
+#: above was written by the same commit that added the inventory, whereas here
+#: the count alone would have read as a bare 479 -> 478 with nothing to say
+#: which of 504 cells moved, or in which direction.
+LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
+    # ── dimension 2 ───────────────────────────────────────────────────
+    ("1", 2, "WAIVED"),
+    ("35", 2, "WAIVED"),
+    ("P0", 2, "NA"),
+    # ── dimension 3 ───────────────────────────────────────────────────
+    ("6", 3, "WAIVED"),
+    ("39", 3, "WAIVED"),
+    ("40", 3, "NA"),
+    ("41", 3, "NA"),
+    ("42", 3, "NA"),
+    ("43", 3, "NA"),
+    ("44", 3, "NA"),
+    ("FS1", 3, "NA"),
+    ("M1", 3, "NA"),
+    # M2-M4/d3: ENFORCED -> NA on 2026-08-14 (#1159), the -3 above.
+    ("M2", 3, "NA"),
+    ("M3", 3, "NA"),
+    ("M4", 3, "NA"),
+    ("P0", 3, "NA"),
+    # 15.5ic/26.5ic/37.5ip/37.5ic d3: the four path-specific steps that arrived
+    # 2026-08-20 with a step-level `condition: files_exist:
+    # [input/submission_template/...]` and `condition_kind: design_dependent`.
+    # No admissible run root satisfies it, so dimension 3 re-derives
+    # NA_DORMANT_CONDITION live for each. They are NOT "left ENFORCED" — they
+    # were never ENFORCED: they entered the grid in this state, which is why
+    # the +36 above is 36 and not 40. Publish a run tree carrying the condition
+    # file and all four go ENFORCED and this inventory reddens in the other
+    # direction, naming them.
+    ("15.5ic", 3, "NA"),
+    ("26.5ic", 3, "NA"),
+    ("37.5ip", 3, "NA"),
+    ("37.5ic", 3, "NA"),
+    # 37.5self/d3 STOOD HERE and is STRUCK, at smrg/retire-37p5self. It was
+    # added at v1.11.5 on exactly the same reading as the four above —
+    # `condition: {files_exist: [input/submission_template/SELF_TAPEOUT.txt]}`,
+    # `condition_kind: design_dependent`, no admissible run root satisfying it
+    # — and it entered the grid NA and was never ENFORCED.
+    #
+    # IT IS NOT REMOVED BECAUSE ITS STATE CHANGED. Its STEP was retired: the
+    # general precheck is now the first ARM of 37.5ic rather than a route of
+    # its own, so `37.5self` is not a step of this flow and `37.5self/d3` is
+    # not a cell of this grid. That distinction is the one this inventory
+    # exists to keep: a cell that LEFT ENFORCED and a cell that LEFT THE GRID
+    # are different facts, and `grid_findings` reports them with different
+    # words ("LEFT ENFORCED" vs "is no longer a cell of this grid"). It said
+    # the second one, by name, before this line was struck.
+    #
+    # 37.5ic/d3 above is UNCHANGED and still NA. It gained the `SELF_TAPEOUT.txt`
+    # marker as a second `any_of` alternative in its condition, so a run tree
+    # carrying EITHER router file now sends it ENFORCED — a wider door to the
+    # same state, not a different state.
+    # ── dimension 5 ───────────────────────────────────────────────────
+    ("12", 5, "WAIVED"),
+    # ── dimension 6 ───────────────────────────────────────────────────
+    ("DT2", 6, "WAIVED"),
+    # ── dimension 7 ───────────────────────────────────────────────────
+    ("7", 7, "WAIVED"),
+    ("23", 7, "WAIVED"),
+    # 34/d7: ENFORCED -> WAIVED on 2026-08-15 (`9167b162`, #1215), the -1 above.
+    ("34", 7, "WAIVED"),
+    ("FS1", 7, "WAIVED"),
+    ("M1", 7, "WAIVED"),
+    ("P0", 7, "NA"),
+    # ── dimension 8 ───────────────────────────────────────────────────
+    ("FS1", 8, "NA"),
+    ("P0", 8, "NA"),
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2020,19 +2470,57 @@ class ReplayResult:
         return self.verdict == ALREADY_RED
 
 
+def _decoded(chunk) -> str:
+    """Whatever a killed child left behind, as text.
+
+    ``TimeoutExpired`` carries the output accumulated before the kill, and it
+    carries it as BYTES even when the call asked for ``text=True`` — CPython
+    builds the exception inside ``_check_timeout``, before any decoding. A
+    partial tail is still worth showing the reader, so it is decoded here with
+    ``replace`` rather than dropped for being ragged.
+    """
+    if chunk is None:
+        return ""
+    if isinstance(chunk, bytes):
+        return chunk.decode("utf-8", "replace")
+    return chunk
+
+
 def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
     """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
 
-    ``0``/``1`` is the CELL's colour. ``None`` means the report did not carry
-    exactly one testcase, and the reason is returned rather than folded into a
-    colour — a replay that could not read its cell must be NOT_REPLAYABLE, never
-    a quiet ALREADY_RED.
+    ``0``/``1`` is the CELL's colour. ``None`` means the cell has no colour to
+    read, and the reason is returned rather than folded into one — a replay that
+    could not read its cell must be NOT_REPLAYABLE, never a quiet ALREADY_RED
+    and never a quiet STAYED_GREEN.
 
-    A ``skipped`` testcase maps to 0, which is what the exit status already
-    said: the two locks that consume this ask whether the cell went PASS ->
-    FAIL, and a skip is not a fail. It is only ever a witness's BASELINE that
-    could be skipped, and LOCK 2's `proved` still requires the mutant arm to go
-    non-zero with the declared signal, so a skip cannot manufacture a red.
+    A ``skipped`` testcase is one of those, and it was the LAST unreadable path
+    still being given a colour (vibe-ic#1421). It used to map to 0, on this
+    argument:
+
+        "the two locks that consume this ask whether the cell went PASS ->
+        FAIL, and a skip is not a fail. It is only ever a witness's BASELINE
+        that could be skipped ... so a skip cannot manufacture a red."
+
+    The last sentence is false, and the conclusion only ever covered ONE of the
+    two ways to be wrong. The skip conditions in a cell test are properties of
+    the CHECKOUT, not of the mutation — dimension 3's cell skips when the
+    published corpus is not in this tree — so they hold on BOTH arms, and the
+    mutant arm skips too. `replay` then reads baseline 0, mutant 0, and scores
+    the pair STAYED_GREEN, whose meaning in LOCK 2's own words is "the ledger
+    says this edit reddens the cell; re-running it says otherwise, so the
+    recorded proof no longer holds". Measured on ``ee849c19e``:
+
+        D3-UNDECLARED-ARTEFACT @ D1  ->  STAYED_GREEN, baseline_rc=0,
+        mutant_rc=0, not_replayable=''      (both arms: `1 skipped`)
+
+    That is the headline claim of vibe-ic#1421 — "a recorded mutation stopped
+    reddening its witness" — asserted over a cell nobody looked at. A skip
+    cannot manufacture a red; it manufactures the FALSE NEGATIVE instead, which
+    is the expensive direction and the one this ledger exists to refuse. It is
+    the same conflation already removed from a fired bound (#1403), a session
+    exit status read as the cell's colour (#1412) and an already-red witness
+    (#1432); this is the fourth and it is the one that pointed the wrong way.
     """
     if not junit.is_file():
         return None, (f"pytest wrote no report (process rc={proc_rc}) — the "
@@ -2047,7 +2535,23 @@ def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]
                       f"(process rc={proc_rc}) — the nodeid selected nothing, "
                       f"or collection produced more than the cell")
     bad = [c for c in cases[0] if c.tag in ("failure", "error")]
-    return (1 if bad else 0), ""
+    if bad:
+        return 1, ""
+    skipped = [c for c in cases[0] if c.tag == "skipped"]
+    if skipped:
+        said = (skipped[0].get("message") or skipped[0].get("type")
+                or "").strip().replace("\n", " ")
+        return None, (
+            f"pytest SKIPPED the cell (process rc={proc_rc}), so this arm was "
+            f"NOT MEASURED: {said or 'no reason recorded'}. A skipped cell has "
+            f"no colour. Scored 0 it makes a mutant arm nobody ran read as "
+            f"STAYED_GREEN — a recorded mutation that stopped reddening its "
+            f"witness — and a baseline arm nobody ran read as a green witness. "
+            f"That is not evidence the gate stopped catching, and it is not a "
+            f"reason to re-record the ledger or re-pick the witness. Give the "
+            f"cell what it needs to answer (the skip reason names it) and "
+            f"re-run the pair")
+    return 0, ""
 
 
 def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
@@ -2088,12 +2592,45 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
     holder = Path(tempfile.mkdtemp(prefix="matmut_cellreport_"))
     junit = holder / "cell.xml"
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
-             "-q", "-p", "no:randomly", "--no-header", "-rN",
-             "--junit-xml", str(junit)],
-            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-            env=env)
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
+                 "-q", "-p", "no:randomly", "--no-header", "-rN",
+                 "--junit-xml", str(junit)],
+                cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                env=env)
+        except subprocess.TimeoutExpired as exc:
+            # THE BOUND FIRING IS A MEASUREMENT FAILURE, NOT A COLOUR
+            # (vibe-ic#1403).
+            #
+            # Every other way this cell can be unreadable already returns a
+            # REASON and lets `replay` score it NOT_REPLAYABLE — that is the
+            # doctrine `_cell_rc_from_report` is written to, in as many words:
+            # "a replay that could not read its cell must be NOT_REPLAYABLE,
+            # never a quiet ALREADY_RED". The bound firing was the ONE
+            # unreadable path that did not obey it, because `subprocess.run`
+            # raises instead of returning, and the exception escaped through
+            # `replay` -> `replay_many`'s `pool.map` to the caller.
+            #
+            # The consequence is the one this issue is about. LOCK 2 died with
+            # a `TimeoutExpired` traceback and no verdict, which reads to a
+            # harness — and to a reader in a hurry — exactly like the red that
+            # means "a gate stopped catching". It is the opposite: nothing was
+            # measured on this arm at all.
+            #
+            # rc is None, so the arm has NO COLOUR and cannot be scored. It is
+            # not folded into ALREADY_RED (which would say the witness was
+            # pre-reddened, a claim this has no evidence for) and not into
+            # STAYED_GREEN (which would say the gate lost its teeth, the
+            # expensive wrong answer). `not_replayable` makes `proved` and
+            # `as_recorded` both False, so this can never buy a pass.
+            return None, _decoded(exc.stdout) + _decoded(exc.stderr), (
+                f"the cell exceeded its {timeout}s bound and was killed, so "
+                f"pytest never recorded it — this arm was NOT MEASURED. That "
+                f"is not evidence the gate stopped catching, and it is not a "
+                f"reason to re-record the ledger or re-pick the witness. "
+                f"Re-run the pair; if it is genuinely this slow, raise the "
+                f"bound in a change that states the measurement")
         out = (proc.stdout or "") + (proc.stderr or "")
         rc, why = _cell_rc_from_report(junit, proc.returncode)
         return rc, out, why
@@ -2392,10 +2929,104 @@ def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
 
 
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
-                timeout: int = 900) -> Tuple[ReplayResult, ...]:
+                timeout: int = 900,
+                progress_callback: Optional[Callable[[int, int], None]] = None,
+                budget: Optional[float] = None,
+                ) -> Tuple[ReplayResult, ...]:
+    """Re-execute every pair in ``plan``, optionally under a TOTAL wall budget.
+
+    ``timeout`` bounds ONE cell and ``budget`` bounds the WHOLE plan, and the
+    second is not a refinement of the first — it is the only bound that exists
+    at the level where this function can outlive its caller. ``timeout`` is
+    per-cell, so the aggregate cost of a plan was ``len(frozen)`` cells deep and
+    UNDECLARED: nothing anywhere stated how long ``replay_many`` may take, and
+    no amount of lowering ``timeout`` states it.
+
+    WHY AN UNDECLARED AGGREGATE IS NOT MERELY SLOW (vibe-ic#1410). The landing
+    harness pins ``--timeout=180 --timeout-method=thread``
+    (``tools/ci/repo_hygiene_gates.sh``). The thread method cannot unwind a
+    thread blocked in ``as_completed``, so when the aggregate exceeds the bound
+    pytest takes the whole PROCESS down rather than failing the test. MEASURED
+    on clean ``7c376e348``, default ``witness`` mode, whole file, that harness
+    with ``--timeout`` lowered to a bound this plan cannot afford::
+
+        REALEXIT=1
+        lines matching passed|failed|error in the whole output:   0
+        FAILED lines:                                             0
+
+    Ninety-odd tests had already reached a verdict and not one of them is
+    reported. A script grepping that output for failures reads ZERO, and zero
+    is what it reads whether the run was clean or never happened. AN EMPTY
+    RESULT IS NOT A ZERO, and this parameter is what stops one being produced.
+
+    ``budget=None`` (the default, and what the audit lane and every existing
+    caller uses) is exactly the previous behaviour: no deadline, every pair runs
+    however long it takes, and the population is asserted complete.
+
+    With a budget, pairs are run until the deadline and pairs that were never
+    STARTED are OMITTED from the return value — never fabricated, never scored,
+    never given a colour they were not measured to have. Omission is right HERE
+    and wrong for a cell that was attempted: a pair the pool never picked up was
+    not a replay at all, so there is no arm to report and nothing to call
+    NOT_REPLAYABLE. A pair that WAS started and whose cell blew its clamp keeps
+    the module's existing doctrine — ``_run_cell`` returns a REASON and
+    :func:`replay` scores it ``NOT_REPLAYABLE`` — and stays in the results.
+
+    The shortfall is therefore visible to the caller as
+    ``len(results) < len(plan)``, which is precisely what
+    ``test_the_replay_actually_ran_and_is_not_starved`` already asserts on. A
+    replay that was cut off reports itself as STARVED; it does not report the
+    mutations it never reached as having stopped reddening anything.
+
+    ``progress_callback`` is called only for pairs that actually produced a
+    result, and its denominator stays ``len(frozen)`` in every case. A cut-off
+    run therefore stops short of its own total, which is the disclosure — the
+    denominator must never shrink to match what was achieved.
+    """
+    import time
+    frozen = tuple(plan)
+    if not frozen:
+        return ()
+    deadline = (None if budget is None
+                else time.monotonic() + max(0.0, float(budget)))
+
+    def _one(pair: Tuple[str, str]) -> Optional[ReplayResult]:
+        if deadline is None:
+            return replay(mutation(pair[0]), pair[1], timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # NEVER STARTED. Returning None omits it; see the docstring for why
+            # omission is the honest answer for this case and only this case.
+            return None
+        # Halved because :func:`replay` runs TWO cells back to back (baseline
+        # then mutant) under this same bound, so an unhalved clamp lets a single
+        # pair overrun the whole-plan deadline by an entire cell.
+        cell = min(timeout, max(1, int(remaining // 2)))
+        return replay(mutation(pair[0]), pair[1], cell)
+
+    results: List[Optional[ReplayResult]] = [None] * len(frozen)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        return tuple(pool.map(
-            lambda pair: replay(mutation(pair[0]), pair[1], timeout), plan))
+        pending = {
+            pool.submit(_one, pair): index
+            for index, pair in enumerate(frozen)
+        }
+        completed = 0
+        try:
+            for future in as_completed(pending):
+                outcome = future.result()
+                results[pending[future]] = outcome
+                if outcome is None:
+                    continue
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback(completed, len(frozen))
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
+    if deadline is None:
+        assert all(result is not None for result in results)
+    return tuple(result for result in results if result is not None)
 
 
 # ══════════════════════════════════════════════════════════════════════

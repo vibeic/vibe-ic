@@ -67,6 +67,9 @@ import pytest
 
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 from _plugin_tree import repo_path_or_missing  # noqa: E402
+# The env var that points at a clone of vibeic/benchmark-data. Taken from
+# `_published_corpus` so there is ONE name for it across the suite.
+from _published_corpus import CORPUS_ENV  # noqa: E402
 # The canonical program for this matrix: it owns the ordering model and the
 # order-sensitivity classifier so the guard and the CLI cannot drift apart
 # (vibe-ic#1444 was exactly that drift — the program sorted, the guard did not).
@@ -77,14 +80,64 @@ _this = sys.modules[__name__]
 # flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
 # the flattened cache; resolve defensively (non-existent path there) so the
 # synthetic-fixture fallback / skipif guards take over instead of IndexError.
-# The real private corpus, when present.
-_REAL_BP = repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
+# The real corpus, wherever it is. The phase-1 parity documents this sweep reads
+# are PUBLISHED RESULTS and moved to vibeic/benchmark-data, so an explicit
+# pointer at a clone wins; the in-repo path is the fallback.
+_ENV_ROOT = os.environ.get(CORPUS_ENV)
+_ENV_BP = (Path(_ENV_ROOT) / "evaluation" / "phase1_parity") if _ENV_ROOT else None
+_REPO_BP = repo_path_or_missing("benchmark-data", "evaluation", "phase1_parity")
 # A small, self-contained synthetic corpus committed under tests/fixtures/ so this
-# guard ACTUALLY RUNS (fires-on-own + no-misfire-on-foreign) without the private
-# benchmark_phase1/. The real dir wins when it exists; otherwise we fall back to the
-# synthetic one (a handful of representative protocols, chip-AGNOSTIC structural specs).
+# guard ACTUALLY RUNS (fires-on-own + no-misfire-on-foreign) without the published
+# corpus. A real corpus wins when it CARRIES DOCUMENTS; otherwise we fall back to
+# the synthetic one (a handful of representative protocols, chip-AGNOSTIC
+# structural specs).
 _SYNTHETIC_BP = Path(__file__).resolve().parent / "fixtures" / "synthetic_benchmark_phase1"
-BP = _REAL_BP if _REAL_BP.is_dir() else _SYNTHETIC_BP
+
+
+def _carries_documents(root) -> bool:
+    """Does `root` hold a phase-1 benchmark DOCUMENT, not merely a directory?
+
+    THE PROBE THIS REPLACES WAS `.is_dir()`, AND IT MEASURED THE WRONG THING.
+    `benchmark-data/evaluation/phase1_parity/<b>/` is still here after the
+    results moved out — it carries the design INPUT (`<b>/input/docs/*.txt`, 54
+    files) while `<b>/phase1/input_doc/` and `<b>/phase1/generated_docs/`, which
+    are what this sweep reads, went to vibeic/benchmark-data. So `.is_dir()`
+    stayed True, the synthetic fallback never fired, and every sweep item failed
+    on "no benchmark blob could be built" — a vacuity report dressed as a
+    detector regression.
+    """
+    if root is None or not Path(root).is_dir():
+        return False
+    for d in sorted(Path(root).iterdir()):
+        if not d.is_dir():
+            continue
+        p1 = d / "phase1"
+        if any((p1 / "input_doc").glob("*")):
+            return True
+        if any((p1 / "generated_docs").glob("*.json")):
+            return True
+    return False
+
+
+def _ensure_synthetic_corpus():
+    """Materialize the committed synthetic corpus if it was cleaned (defensive)."""
+    if _carries_documents(_ENV_BP) or _carries_documents(_REPO_BP):
+        return
+    if _carries_documents(_SYNTHETIC_BP):
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+        from synthetic_protocol_blobs import build_synthetic_benchmark_phase1
+        build_synthetic_benchmark_phase1(_SYNTHETIC_BP)
+    except Exception:
+        pass
+
+
+_ensure_synthetic_corpus()
+
+#: The corpus this sweep actually reads: the first candidate that has documents.
+BP = next((c for c in (_ENV_BP, _REPO_BP, _SYNTHETIC_BP)
+           if _carries_documents(c)), _SYNTHETIC_BP)
 
 
 def _discover_detectors():
@@ -255,22 +308,6 @@ def test_every_detector_is_callable_and_empty_safe():
         assert fn(None) is False, f"is_{stem}(None) should be False"  # type: ignore[arg-type]
 
 
-def _ensure_synthetic_corpus():
-    """Materialize the committed synthetic corpus if it was cleaned (defensive)."""
-    if _REAL_BP.is_dir() or _SYNTHETIC_BP.is_dir():
-        return
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
-        from synthetic_protocol_blobs import build_synthetic_benchmark_phase1
-        build_synthetic_benchmark_phase1(_SYNTHETIC_BP)
-    except Exception:
-        pass
-
-
-_ensure_synthetic_corpus()
-
-
 def _all_blobs(reverse: bool = False):
     """{benchmark: blob} for every benchmark that has any content.
 
@@ -353,8 +390,9 @@ def test_sweep_shards_partition_every_discovered_detector():
     assert len(set(covered)) == len(covered), "a detector is swept twice"
 
 
-@pytest.mark.skipif(not BP.is_dir(),
-                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
+@pytest.mark.skipif(not _carries_documents(BP),
+                    reason="neither the published phase-1 parity corpus nor the "
+                           "committed synthetic fixtures carry a document here")
 @pytest.mark.parametrize("ordering", CANONICAL_BLOB_ORDERINGS)
 @pytest.mark.parametrize("shard", range(SWEEP_SHARDS))
 def test_no_detector_fires_on_a_foreign_benchmark(shard, ordering):
@@ -383,8 +421,9 @@ def test_no_detector_fires_on_a_foreign_benchmark(shard, ordering):
     )
 
 
-@pytest.mark.skipif(not BP.is_dir(),
-                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
+@pytest.mark.skipif(not _carries_documents(BP),
+                    reason="neither the published phase-1 parity corpus nor the "
+                           "committed synthetic fixtures carry a document here")
 def test_every_detector_fires_on_its_own_benchmark():
     """Each detector whose own benchmark dir is present must self-fire — in
     force for EVERY discovered detector, ordering-dependent or not.
@@ -485,9 +524,42 @@ def test_order_sensitive_classifier_is_live_and_conservative():
         "bracket below would pass by examining nothing")
 
 
-@pytest.mark.skipif(not BP.is_dir(),
-                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
-def test_no_order_sensitive_detector_fires_under_any_reachable_leading_document():
+def _multi_candidate_head_exists() -> bool:
+    """Is any benchmark in the CURRENT corpus bracket-eligible at all?
+
+    Eligible means "more than one document could legally lead the blob". On the
+    real corpus that is every benchmark with no ``input_doc``, so its generated
+    L-docs ARE the head group; the committed synthetic fixture gives each
+    benchmark exactly one ``input_doc``, so none of them is eligible.
+    """
+    return any(len(_doc_groups(b)[0]) >= 2 for b in _present_benchmarks())
+
+
+def _head_group_only_fixture(dest: Path) -> Path:
+    """The synthetic corpus rewritten into the shape the bracket exists for.
+
+    Same blobs as the committed fixture — this only drops ``input_doc`` so the
+    generated L-docs become the head group, which is exactly the on-disk shape
+    of the real corpus's bracket-eligible benchmarks. Without it the bracket had
+    NOTHING to examine once the published documents left this checkout, and it
+    said so by FAILING — a report about the corpus dressed as a detector defect.
+    """
+    import shutil
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+    from synthetic_protocol_blobs import build_synthetic_benchmark_phase1
+    build_synthetic_benchmark_phase1(dest)
+    for b in sorted(dest.iterdir()):
+        idir = b / "phase1" / "input_doc"
+        if idir.is_dir():
+            shutil.rmtree(idir)
+    return dest
+
+
+@pytest.mark.skipif(not _carries_documents(BP),
+                    reason="neither the published phase-1 parity corpus nor the "
+                           "committed synthetic fixtures carry a document here")
+def test_no_order_sensitive_detector_fires_under_any_reachable_leading_document(
+        tmp_path, monkeypatch):
     """No head-window detector may fire on a foreign benchmark under ANY
     document order a directory read could produce.
 
@@ -495,9 +567,19 @@ def test_no_order_sensitive_detector_fires_under_any_reachable_leading_document(
     globs are always concatenated in the same GROUP order, so the only thing a
     readdir can change about the blob head is which member of the head group
     comes first — and every one of them is tried.
+
+    Runs on the published corpus when it is readable — that is where the two
+    enumerated misfires below are reachable, 4 of 24 and 12 of 24 leading
+    documents. When it is not, the bracket does NOT go quiet: it builds the
+    head-group-only fixture above and runs the identical sweep over that, so
+    the head-window family stays under test in a checkout that carries no
+    published documents.
     """
     sensitive = _order_sensitive_detectors()
     assert sensitive, "classifier found nothing — bracket would be vacuous"
+    if not _multi_candidate_head_exists():
+        monkeypatch.setattr(
+            _this, "BP", _head_group_only_fixture(tmp_path / "headgroup"))
     reachable = {}
     examined = 0
     for b in _present_benchmarks():
@@ -576,7 +658,9 @@ def test_blob_layout_is_independent_of_directory_iteration_order(tmp_path,
         "input_doc must still lead the blob — the runner's auto-dispatch order")
 
 
-@pytest.mark.skipif(not _REAL_BP.is_dir(), reason="private corpus absent")
+@pytest.mark.skipif(not _carries_documents(BP),
+                    reason="neither the published phase-1 parity corpus nor the "
+                           "committed synthetic fixtures carry a document here")
 def test_blob_matches_the_canonical_program_builder():
     """This guard and ``protocol_detector_no_misfire_matrix`` build the SAME
     blob — the program's docstring already claimed ``--blob superset`` "matches

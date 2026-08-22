@@ -1,5 +1,0 @@
-{
-  "ic_name": "Modbus Application Protocol V1.1b3 (Modbus.org)",
-  "otp_present": false,
-  "notes": "MODBUS is a protocol specification, not a silicon part — it has no OTP, fuse, configuration ROM, or persistent calibration store at the protocol level. Implementing devices may persist (a) the server's RTU address or MBAP Unit ID, (b) the four data tables' power-on defaults, (c) Read-Device-Identification objects (Vendor Name, Product Code, Major/Minor Revision, Vendor URL, Product Name, Model Name, User Application Name) in vendor-defined OTP / EEPROM / flash, and (d) the diagnostic-counter reset policy (volatile vs non-volatile). All of this is implementation-specific and outside the scope of this Modbus.org document."
-}
