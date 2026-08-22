@@ -252,7 +252,7 @@ def run_coverage(bundle_path: Path,
     # ALL THREE OF THOSE REFUSALS WERE PRODUCER DEFECTS, AND ALL THREE ARE
     # FIXED (v1.11.69). What the wired row reads is NOT: this bundle is the
     # frozen output of the producers as they were, and the run tree it was
-    # built from (`/home/reyerchu/_jxlayer/run/trials/b000`) no longer exists,
+    # built from (`$HOME/<work>/run/trials/b000`) no longer exists,
     # so it cannot be regenerated and hand-editing it would be composing the
     # answer after the exam. It therefore still refuses 54, identically to
     # before -- and that is the honest state, not a regression.

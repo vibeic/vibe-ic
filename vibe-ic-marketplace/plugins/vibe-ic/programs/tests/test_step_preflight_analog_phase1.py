@@ -61,12 +61,12 @@ import _published_corpus as PC                                 # noqa: E402
 #
 # The corpus then left this repository (c5d7f2d00, v1.10.56), so inside any
 # checkout the walk finds nothing and keeps climbing. MEASURED on this fleet,
-# 2026-08-22, from a worktree at `/home/reyerchu/_jredmisc/base`:
+# 2026-08-22, from a worktree at `$HOME/<work>/base`:
 #
 #     .../plugins/vibe-ic/benchmark-data/ic      no
 #     .../vibe-ic-marketplace/benchmark-data/ic  no
 #     <repo root>/benchmark-data/ic              no
-#     /home/reyerchu/benchmark-data/ic           HIT   <- a DIFFERENT repository
+#     $HOME/benchmark-data/ic                    HIT   <- a DIFFERENT repository
 #
 # The hit is a separate clone of the published-corpus repo that happens to sit in
 # a developer home directory, with the corpus pointer UNSET — nobody aimed
