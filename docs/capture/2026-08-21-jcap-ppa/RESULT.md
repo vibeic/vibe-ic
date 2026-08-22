@@ -3708,6 +3708,34 @@ route so the next reader can see it was asked rather than skipped.
 
 ## Next
 
+**This bundle ships in two pieces, and the split is a batch decision, not a
+technical one.** The branch that carries it into the current batch was FROZEN
+while the batch was being assembled — ten of sixteen member branches had moved
+within two hours, so every re-merge invalidated the report describing it. The
+frozen branch holds 44 records and 19 already-program claims, and it verifies
+`rc 0` on its own tree; that is what lands.
+
+Everything measured after the freeze is on **`next/ppa-capture-followups`**,
+which branches from the frozen tip and rides the following batch. It is not
+merged into the frozen branch:
+
+| after the freeze | |
+|---|---|
+| new records | **A-44** (a search reduced to one result without counting it), **A-45** (whichever proof group has data decides the verdict) |
+| new already-program claim | the twentieth — an empty value is not a value, because two empties compare equal |
+| refinements to frozen records | **two** — A-5 gains the demonstration its count was missing, A-36 gains a detector needing no second source |
+| new synthesis | the six-refusals family, and two classes checked and deliberately NOT recorded |
+
+The three staleness guards in the verifier — the introducing-sentence count, the
+stated check count, and the per-record reading cost — are **in the frozen
+branch**, not here. I wrote otherwise in the first draft of this paragraph and
+checked it against the frozen tip before shipping, which is the only reason it
+does not say so still.
+
+**If you are reading the frozen bundle, it does not know this branch exists**; if
+you are reading this one, the counts here are the larger set.
+
+
 **Before landing, run this — and read its exit code, not its output:**
 
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py            54 checks   exit 0 = every claim holds
