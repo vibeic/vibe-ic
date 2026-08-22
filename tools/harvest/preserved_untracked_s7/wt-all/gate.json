@@ -1,0 +1,123 @@
+{
+  "verdict": "REQUEST_CHANGES",
+  "gates": [
+    {
+      "name": "agent_checkin_scope_guard",
+      "rc": -1,
+      "summary": "skipped — no --role supplied"
+    },
+    {
+      "name": "version_bump_monotonic_check",
+      "rc": 1,
+      "summary": "version not bumped: current 1.10.96 == previous 1.10.96"
+    },
+    {
+      "name": "marketplace_version_sync_check",
+      "rc": 0,
+      "summary": "[PASS] marketplace_version_sync_check: 2 manifest(s), 2 plugin entr(ies) — all marketplace + plugin.json versions in sync ([/foss/designs/work/vibe-ic-marketplace/.claude-plugin/marketplace.json] vibe-ic=1.10.96, [/foss/designs/work/.claude"
+    },
+    {
+      "name": "source_chip_agnostic_check",
+      "rc": 0,
+      "summary": "PASS (1452 file(s) scanned): no forbidden chip / vendor / SKU tokens in plugin source (programs/ skills/ commands/); NDA panel read 4449 of 4449 file(s) tree-wide"
+    },
+    {
+      "name": "shipped_path_portability_check",
+      "rc": 0,
+      "summary": "shipped_path_portability_check: PASS (4451 file(s) scanned, git-tracked) — no personal absolute paths in shipped source"
+    },
+    {
+      "name": "commit_msg_nda_check",
+      "rc": 0,
+      "summary": "PASS: no NDA foundry / SKU / process token in 18 commit message(s)"
+    },
+    {
+      "name": "nda_diff_scan_check",
+      "rc": 0,
+      "summary": "PASS: no NDA foundry / SKU / process / IP-vendor token in the diff's added content or paths"
+    },
+    {
+      "name": "gatekeeper_stale_branch_check",
+      "rc": 0,
+      "summary": "PASS: FRESH: merge-base == 8e5e1fbf46 tip (8e5e1fbf4), and the tree rewinds none of the 11 path(s) it modifies. Searched all 2364 commit(s) of the base's first-parent history — its complete history, nothing bounded away."
+    },
+    {
+      "name": "landing_collateral_revert_check",
+      "rc": 0,
+      "summary": "PASS: CLEAN: 18 commit(s), 0 in-range predecessor pair(s) examined; no commit erases an earlier in-range commit's contribution to a file. NOTE: 0 pairs — this range has no in-range predecessor to revert, so this result is the ABSENCE of a question, not a pass. A revert of work from an EARLIER push is out of scope here; gatekeeper_stale_branch_check is the guard for that."
+    },
+    {
+      "name": "landing_is_one_commit_check",
+      "rc": 1,
+      "summary": "[FAIL] landing_is_one_commit: 18 commits ahead of 8e5e1fbf46 — a single landing must be ONE commit. `git commit --amend` after a rebase touches only the top commit and leaves the authoring commit underneath; run `git reset --soft 8e5e1fbf46` first, then a single `git commit`. If this is a deliberate BATCH of several PR landings, pass --batch, which checks the batch's own shape instead."
+    },
+    {
+      "name": "real_artefact_test_backing_check",
+      "rc": 0,
+      "summary": "ADVISORY — real_artefact_test_backing_check (ADVISORY): 2 of 276 test(s) driven by a checked-in artefact, across 10 changed test module(s)"
+    },
+    {
+      "name": "acceptance_control_check",
+      "rc": 0,
+      "summary": "ADVISORY — acceptance_control_check (ADVISORY): the control for this change is merge-base(8e5e1fbf46, HEAD) = 8e5e1fbf4"
+    },
+    {
+      "name": "loop_watchdog_compliance_check",
+      "rc": 1,
+      "summary": "loop_watchdog_compliance_check: FAIL — 1 offender(s): |   digital_hardmacro_gen.py:436  [subprocess]  direct host launch of long tool 'magic' not under run_supervised (subprocess.*) | Fix each: route the sub-process through _watchdog.run_su"
+    },
+    {
+      "name": "plugin_full_audit",
+      "rc": 0,
+      "summary": "=> deterministic audit PASS (D3 = run the full-test-audit skill for the skill-extractability dimension)"
+    },
+    {
+      "name": "git_prohibition_guard",
+      "rc": -1,
+      "summary": "skipped — no commit command strings supplied"
+    },
+    {
+      "name": "full_suite_run_check",
+      "rc": -1,
+      "summary": "skipped — no --pytest-cmd (cadence=TARGETED)"
+    },
+    {
+      "name": "ci_ran_at_all_check",
+      "rc": -1,
+      "summary": "NOT CHECKED (non-blocking): [NOT CHECKED] could not ask GitHub about e6370636c: gh not found. NOT a pass — 'I could not look' and 'I looked and it is fine' are different answers."
+    },
+    {
+      "name": "run_output_completeness_check",
+      "rc": -1,
+      "summary": "skipped — no run deliverable (RESULT.md) in change-set"
+    },
+    {
+      "name": "blindness_audit",
+      "rc": -1,
+      "summary": "skipped — no transcripts supplied"
+    },
+    {
+      "name": "control_substance_check",
+      "rc": -1,
+      "summary": "NO CONTROL EVIDENCE SUPPLIED and the diff changes 10 test file(s) — nothing graded whether the pre-fix control observed a value or only noticed an absence. Re-run with --control-junit <the control run's pytest --junitxml>"
+    },
+    {
+      "name": "repo_hygiene_gates",
+      "rc": 2,
+      "summary": "ERROR — tools/ci/repo_hygiene_gates.sh exited 2 without writing its coverage record; coverage unknown. Last line: [ERROR] could not create the pipelined fresh tree: fatal: could not create directory of '/home/reyerchu/vibe-ic/.git/worktrees/wt5': Read-only file system"
+    },
+    {
+      "name": "gate_red_since",
+      "rc": -1,
+      "summary": "skipped — 0 gate state(s) examined: the hygiene set produced no record to adjudicate"
+    }
+  ],
+  "cadence": "TARGETED",
+  "version_bump": "1.10.96->1.10.96",
+  "blocking": [
+    "version_bump_monotonic_check: version not bumped: current 1.10.96 == previous 1.10.96",
+    "landing_is_one_commit_check: [FAIL] landing_is_one_commit: 18 commits ahead of 8e5e1fbf46 — a single landing must be ONE commit. `git commit --amend` after a rebase touches only the top commit and leaves the authoring commit underneath; run `git reset --soft 8e5e1fbf46` first, then a single `git commit`. If this is a deliberate BATCH of several PR landings, pass --batch, which checks the batch's own shape instead.",
+    "loop_watchdog_compliance_check: loop_watchdog_compliance_check: FAIL — 1 offender(s): |   digital_hardmacro_gen.py:436  [subprocess]  direct host launch of long tool 'magic' not under run_supervised (subprocess.*) | Fix each: route the sub-process through _watchdog.run_su",
+    "repo_hygiene_gates: ERROR — tools/ci/repo_hygiene_gates.sh exited 2 without writing its coverage record; coverage unknown. Last line: [ERROR] could not create the pipelined fresh tree: fatal: could not create directory of '/home/reyerchu/vibe-ic/.git/worktrees/wt5': Read-only file system"
+  ]
+}
