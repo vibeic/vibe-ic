@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1185
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1185)
+- **Total programs (excluding helpers / shims):** 1186
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1186)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1176 |
+| `any` | 1177 |
 
 ## Alphabetical listing
 
@@ -179,6 +179,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate (v1.6.43). |
 | `changelog_metric_reproducibility_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `checker_execution_wiring_audit` | any | — | a checker only its own TEST runs has zero coverage of real inputs. |
+| `checker_population_is_structural_not_filename_shaped_census` | any | — | Programs that behave like checkers but are invisible to the wiring audit. |
 | `checkpoint_gate_check` | any | — | deterministic phase-transition checkpoint gate. |
 | `chip_clock_toggle_divider_when_master_already_target_check` | any | v0.119.30 | gate (LL-30) catching the antipattern of introducing a toggle-divider for the chip's core clock when the FPGA master clock is already at ... |
 | `chip_gds_canonical_real_file_check` | any | — | top-level chip GDS files at canonical paths must be REAL files, not symlinks pointing elsewhere. |
@@ -1257,7 +1258,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1176 programs)
+### `any` (1177 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1411,6 +1412,7 @@ _(no programs in this group)_
 - `changelog_command_reproducibility_check` — anti-fabrication gate (v1.6.43).
 - `changelog_metric_reproducibility_check` — anti-fabrication gate (v1.6.38).
 - `checker_execution_wiring_audit` — a checker only its own TEST runs has zero coverage of real inputs.
+- `checker_population_is_structural_not_filename_shaped_census` — Programs that behave like checkers but are invisible to the wiring audit.
 - `checkpoint_gate_check` — deterministic phase-transition checkpoint gate.
 - `chip_clock_toggle_divider_when_master_already_target_check` — gate (LL-30) catching the antipattern of introducing a toggle-divider for the chip's core clock when the FPGA master clock is already at ...  _[v0.119.30]_
 - `chip_gds_canonical_real_file_check` — top-level chip GDS files at canonical paths must be REAL files, not symlinks pointing elsewhere.

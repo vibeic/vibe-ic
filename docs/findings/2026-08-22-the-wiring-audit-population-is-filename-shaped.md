@@ -92,3 +92,22 @@ call; this document does not take it, and no code here is changed.
     allp = {f.name for f in P.glob("*.py")}
     print(len(allp), len(pop), len(allp - pop))
     PY
+
+## The numbers above decay; a census does not
+
+Every figure in this document is a measurement taken at one sha, which is the
+failure mode this whole capture exists to remove. It is therefore also shipped
+as a program:
+
+    programs/checker_population_is_structural_not_filename_shaped_census.py
+
+A CENSUS, not a gate: it reports and exits 0, `--strict` restores a refusal, and
+its docstring names the refusing instrument for the class. It reads the audit's
+`_CHECKER_SUFFIXES` tuple FROM THE AUDIT'S SOURCE rather than re-typing it, so
+widening that tuple shrinks the census with no edit here -- pinned by a test.
+
+Run on this tree it reports 1261 / 624 / 637 and **35** verdict-emitting
+programs outside the population that also refuse. That 35 sits inside the
+23-to-46 range this document predicted, and is above the literal-only 23 for
+exactly the stated reason: the census counts `rc = 1; return rc`, which a
+literal match never sees. The range was honest; the census narrows it.
