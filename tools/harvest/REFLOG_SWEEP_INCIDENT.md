@@ -9,14 +9,27 @@ uncapped result had three defects, and two of them reached other people's reposi
 stores it found, **49 were vibe-ic or benchmark-data and 40 were unrelated projects** — cal.com,
 documenso, a Papermark fork, ibex, nvm, several benchmark suites.
 
-It pushed `harvest/rescue-reflog-*` refs to **three of them**: `reyerchu/documenso`,
-`reyerchu/lex`, `rwanexus/doc`. A fourth push was refused by GitHub's push protection because
-cal.com's history contains a Google OAuth Client ID — **a secret-scanning rule caught my scope
-error before I did.**
+It pushed `harvest/rescue-reflog-*` refs to **15 repositories outside this brief**, across both
+hosts — the first check found 3 on .105 and stopped there; sweeping .102's store list too found 12
+more. A further push was refused by GitHub's push protection because cal.com's history contains a
+Google OAuth Client ID — **a secret-scanning rule caught my scope error before I did.**
 
-All three refs were checked and removed: `documenso` and `doc` each anchored one commit that was
-**already reachable from another branch on that repo**, and `lex`'s anchor was empty. Removing them
-restored those repositories exactly as they were. Verified gone.
+| repository | ref | held |
+|---|---|---|
+| `reyerchu/documenso` | `rescue-reflog-105-14` | 1 commit, already on another branch there |
+| `rwanexus/doc` | `rescue-reflog-105-13` | 1 commit, already on another branch there |
+| `reyerchu/lex` | `rescue-reflog-105-27` | nothing (parentless) |
+| `reyerchu/EMJ` | `rescue-reflog-102-14` | 1 commit, already on that repo |
+| `reyerchu/AI_IC_design`, `hackrail`, `hermes-agent`, `my_hermes` | `102-7/17/18/19` | nothing |
+| `vibeic/ALIGN-pdk-sky130`, `awesome-open-ic`, `benchmark-external`, `IP`, `open_pdks`, `yosys` | various | nothing |
+| `vibeic/vibeic-eda` | `102-77`, `102-95` | nothing |
+
+**All 16 refs removed, every one verified first to hold nothing that repository did not already
+have.** A ref whose parents were reachable only from it would have been kept — none was. Re-swept
+all 40 non-vibe-ic origins afterwards: **0 stray refs remain.**
+
+The first blast-radius check was itself too narrow: it used .105's store list only, because that is
+the host I was standing on.
 
 ## 2. Orphan detection read local refs and called the result "on no ref"
 
