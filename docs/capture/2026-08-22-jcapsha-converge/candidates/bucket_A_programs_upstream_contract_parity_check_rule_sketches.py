@@ -1,0 +1,13 @@
+# Bucket A — program-rule sketches for programs/upstream_contract_parity_check.py
+# Corpus-sweep REQUIRED before merging into programs/upstream_contract_parity_check.py.
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
+# Pattern: 
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_upstream_contract_parity_register(sample_text, ports):
+    """Where this plugin RE-IMPLEMENTS an upstream computation or configuration contract, a register must account for every upstream name in exactly one class — implemented, `declared_unperformed`, `omitted_by_design` (with a reason), or `known_gap` (with a reason AND a reference) — and a `known_gap` name that DOES appear in our module is a finding, not a pass. LADDER: not Bucket T — upstream's `pad_cfg`.tcl is CORRECT. It measures a cell in exactly two places and both read [[$inst `getMaster`] `getWidth`], on all four sides; there is no `getHeight` in its side arithmetic at all. The 4.4x error (19 x 350 = 6650 um summed against a 1500 um side) was entirely ours, from taking the extent off the ORIENTED footprint. Nothing to fix in a fork. Stop at A. THE EXACT INPUT: the register plus our module's source. THE EXACT DECISION: is every extracted upstream name in exactly one class, and does each class's claim hold against the source? Set arithmetic. The judgement — which class a name belongs in — is made ONCE by a human at registration and then pinned; that is what makes it a ratchet rather than a re-derivation."""
+    # Expected signal: ERROR
+    # Suggested fix action: Register {upstream artefact, `extract_regex`, snapshot of extracted names + file sha256, our module, classification}. Refuse any name not accounted for. CRITICAL PREDICATE FIX, measured: the existing implementation's _mentions() requires the name as a BARE QUOTED LITERAL, so it cannot see a name consumed through a regex — which is exactly how _pad_ring.py:490 consumes `PAD_FAKE_SITES`. Consequence measured on origin/main a4caccefe: the register still classifies `PAD_FAKE_SITES` as `known_gap` while the fix that closed that gap is on main (`parse_pad_site_declarations` :497, `discover_io_site_declarations` :550, `IoLibrary`.`resolve_site` :642), the guard's own staleness rule at :213 exists for precisely this, and it does not fire. The guard exits 0. That PASS is partly blind. GENERAL-CORE TEST: this is F1's class one level up — F1 read one PDK VIEW and said 'not found'; this reads one SOURCE FORM and says 'not implemented'. Both are a search space narrower than the claim made over it.
+    return []  # list of findings — TODO implement

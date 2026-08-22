@@ -239,6 +239,11 @@
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
+    },
+    "repo.upstream_parity": {
+      "description": "Where this plugin RE-IMPLEMENTS an upstream flow's computation or configuration contract, and what pins ours against theirs.",
+      "bucket_A_program": "programs/upstream_contract_parity_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     }
   },
   "default_routing": {

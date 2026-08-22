@@ -9,10 +9,14 @@ files), and the branch `origin/jpadsite/pad-site`.
 
 ## Answer in one line
 
-Three findings, three Bucket A verdicts, no Bucket T and no Bucket D — and the
-premise of the third is REFUTED by the report I was sent to capture, so the
-Bucket T question the brief asked me to think hardest about has a measured
-answer rather than a judged one: **there is no tool half.**
+Four Bucket A records, no Bucket T and no Bucket D. The premise of the third
+finding is REFUTED by the report I was sent to capture, so the Bucket T
+question the brief asked me to think hardest about has a measured answer
+rather than a judged one: **there is no tool half.** F2's rule is SHIPPED on
+this branch — checker, register and test, green, with three reds behind it.
+F1's is not, for a measured reason. And a fourth record exists because the
+refutation was published four times across four branches and **the identifier
+that asserts the refuted premise is still on main today.**
 
 ---
 
@@ -80,6 +84,58 @@ declares and does not honour"**, which is a claim about our own contract and is
 the one we can actually check.
 
 ---
+
+## Main still ships the refuted premise — measured, and it is live
+
+The report says the schema key was corrected in `c56b8e1b1`:
+`rotation_vertical_inert` → `rotation_vertical_not_honoured`, "because the KEY
+asserted inertness in the schema itself".
+
+    $ git merge-base --is-ancestor c56b8e1b1 origin/main
+    NOT an ancestor of main
+
+The object exists; the commit did not land. On `origin/main` at `a4caccefe`,
+today:
+
+| where | what it says |
+|---|---|
+| `pad_ring_gen.py`:246 | artefact key `"rotation_vertical_inert"` |
+| `pad_ring_gen.py`:185 | constant `ROTATION_VERTICAL_INERT`, `"honoured": False` |
+| `pad_ring_gen.py`:67 | heading: `PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD |
+| `pad_ring_gen.py`:68 | "The same measurement shows the placer does not read it" |
+| `pad_ring_gen.py`:313 | "does not reach this dict because it does not reach the tool either" |
+| `_pad_ring.py`:279 | "a CONSTANT of the placer, not a function of the declared rotation" |
+
+Every one asserts, in the schema and in the source, the proposition the
+branch's own re-measurement withdrew. **A retraction published in a report does
+not reach a reader who keys on a field name.** The behaviour is right — the
+step refuses rc 2 on a non-default value — and the name it refuses under says
+something false about why.
+
+### The consequence I am NOT confirming, and why it is written down anyway
+
+If the re-measured table is right — `-rotation_horizontal` steers WEST and
+EAST, `-rotation_vertical` steers SOUTH and NORTH — then main's side map is
+**transposed**:
+
+    pad_ring_gen.py:317-318
+        "S": cfg["rotation"]["PAD_ROTATION_HORIZONTAL"],
+        "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2),
+        "W": PR.VERTICAL_SIDE_ORIENT["W"],     # a constant, measured only at
+        "E": PR.VERTICAL_SIDE_ORIENT["E"],     # PAD_ROTATION_HORIZONTAL=R0
+
+SOUTH and NORTH are driven by the variable the table says drives WEST and EAST,
+and WEST and EAST are hard-coded from a sweep that held the variable that
+actually steers them at its default. A design declaring a non-default
+`PAD_ROTATION_HORIZONTAL` would then be emitted orientations the placer does
+not produce — and the rc 2 refusal guards the OTHER variable, so nothing stops
+it.
+
+**I have run no tool.** This follows from someone else's table, and a table is
+what the original mistake was made of. It needs ONE OpenROAD run to settle and
+must not be acted on before it has one. It is written down because a named
+unverified consequence can be checked and an unnamed one cannot — which is the
+same rule F1 states about search spaces, pointed at myself.
 
 ## The ladder, per finding
 
@@ -169,7 +225,10 @@ subjects is a green over nothing.
 
 So the deliverable for F2 is a **consolidation verdict** — keep the third, drop
 the other two — plus one predicate fix, not a fourth checker. That is the
-brief's own instruction applied to my own prior lanes.
+brief's own instruction applied to my own prior lanes. **It is shipped on this
+branch**: `upstream_contract_parity_check.py`, its register and its test, taken
+from the lane that had the only non-vacuous population, with the blind
+predicate fixed and the register corrected to match main.
 
 ### And the one that passes, passes partly over a blind predicate
 
@@ -281,16 +340,11 @@ arrivals at one missing entry is the entry being missing.
 
 ## What I did NOT do, and why
 
-* **Did not ship either checker.** F1's fires false on current main; F2's
-  passes over a blind predicate. Both reasons are measured and written above.
-  The brief's clause is that a NEW guard must run clean before it ships, and
-  neither does yet.
+* **Did not ship F1's checker.** It fires false on current main, for the reason
+  measured above. The brief's clause is that a NEW guard must run clean before
+  it ships, and it does not yet.
 * **Did not widen `_LOCUS_WORDS`** to clear F1's two hits. That would be
   relaxing an assertion to make a red go away.
-* **Did not fix `_mentions`** on this branch. It is a one-line predicate change
-  plus a register move (`known_gap` → `implemented`), but it belongs in the
-  same change that ships the checker, with its own red, and shipping the
-  checker is not this branch's call to make.
 * **Did not re-run the rotation probe.** No OpenROAD process backs the
   refutation from me; I am carrying its author's retraction and have said so.
 * **Did not emit a Bucket D record.** Nothing here is a non-generalisable
@@ -305,7 +359,7 @@ arrivals at one missing entry is the entry being missing.
 
 ## Files
 
-    recoveries.json                              3 records, all Bucket A
+    recoveries.json                              4 records, all Bucket A
     candidates/                                  1 sketch file, 3 rules, emitter rc 0
     evidence/F2_the_PASS_is_partly_blind.md      the false PASS + positive control
     evidence/RED_routing_entry.md                the red the routing entry ships with
@@ -313,5 +367,6 @@ arrivals at one missing entry is the entry being missing.
     evidence/F2_parity_PASS_on_current_main.txt  rc 0, the blind pass
     evidence/F2_candidate_UPSTREAM_PINS_vacuous.txt    rc 2, population 0
     evidence/F2_candidate_UPSTREAM_MIRROR_vacuous.txt  rc 2, population 0
+    evidence/F2_mutation_sweep.md                three reds, and one non-result
     evidence/enhancement_emit_run.txt            the emitter's own output
     evidence/MEASURED_AT_main.txt                the base sha every number above is against
