@@ -1,0 +1,6 @@
+path	judged_head	result	head_blobs	disk_blobs	only_in_head	only_on_disk	disk_only_eg	head_only_eg
+/home/reyerchu/_advkill_lgate	1c926d0c7a57795401f73de743fc31a60cd3cb84	DISK_EQUALS_HEAD_TREE	head_blobs=4685	disk_blobs=4685	only_in_head=0	only_on_disk=0	disk_only_eg=	head_only_eg=
+/home/reyerchu/_adv_lgate_unknown	fa7c1382660a8d08d979b53f996979c7cc84feb8	DISK_DIFFERS	head_blobs=4685	disk_blobs=4688	only_in_head=0	only_on_disk=3	disk_only_eg=tools/test_adv_round2.py|tools/test_adv_round3.py|tools/test_adv_unknown_buys_leniency.py|	head_only_eg=
+/home/reyerchu/_LRNdh	713f0209faa28b223da6bac121ef4a9ca6b3df44	DISK_EQUALS_HEAD_TREE	head_blobs=4726	disk_blobs=4726	only_in_head=0	only_on_disk=0	disk_only_eg=	head_only_eg=
+/home/reyerchu/wt_k3_dep	671f5a0b49c543f69c2e3e5c4ad15859903ca2f3	DISK_EQUALS_HEAD_TREE	head_blobs=4685	disk_blobs=4685	only_in_head=0	only_on_disk=0	disk_only_eg=	head_only_eg=
+/home/reyerchu/AI_IC_design/wt-all	e6370636c5eb77ed4c4a67435753341fd36161e9	DISK_DIFFERS	head_blobs=4808	disk_blobs=4809	only_in_head=0	only_on_disk=1	disk_only_eg=.gate.json|	head_only_eg=
