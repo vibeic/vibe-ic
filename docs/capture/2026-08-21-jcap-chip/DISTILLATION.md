@@ -786,7 +786,31 @@ evidence available that both rules are about something real, and it is worth mor
 than either verdict alone — the same lesson the drv disagreement taught, with the
 sign reversed.
 
-One thread left open rather than over-claimed: their run also holds
-`design.instance.count = 488` constant across the same 60 arms, and 488 is neither
-the 287 the pre-layout session linked nor the 3373 the routed netlist carries. I
-do not know what 488 counts. It is recorded here as a question, not a finding.
+**The open question about 488, answered.** `design.instance.count` is emitted at
+the FLOORPLAN stage from OpenROAD's `[INFO IFP-0105] Number of instances:` line
+(`_ppa/backends/openroad.py:554`, `ppa-e2e/tools/build_trials.py:62`). The 60 arms
+vary `die_um`, `placement_density` and `spare_cell_density` — none of which
+changes what synthesis produced, and spare cells are inserted after floorplan, so
+IFP-0105 cannot see them. **488 constant is legitimately invariant**, and it is a
+different design from the 287/3373 pair, which came from another run. No
+contradiction and no defect.
+
+That matters for how their 7 findings should be read, and their own docstring says
+so first: *"Some may be legitimately invariant — that is exactly the claim the
+artefact is currently unable to support."* The gate is right that the artefact
+cannot distinguish "invariant" from "unmeasured". It does not follow that all
+seven are defects. On inspection they separate:
+
+* `design.instance.count`, `area.instances.total.um2` — synthesis-derived, read
+  at floorplan, invariant under all three levers **by construction**;
+* `antenna.*.violation.count`, `placement.violation.count`,
+  `route.drc.violation.count` — all zero on every arm, which is what a clean
+  design looks like; constancy here is weak evidence of anything;
+* `power.total_w = 0.000306` — **the one confirmed defect**, independently
+  corroborated above by this lane's cause-side rule and by the capture's own
+  measurement of 0.306 mW against 0.573 mW post-route.
+
+So the seven need TRIAGE, not seven repairs, and exactly one of them is presently
+backed by independent evidence. I am reasoning about the other six from what the
+levers can reach; that is an argument, not a measurement, and it is offered as
+one.
