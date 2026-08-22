@@ -303,6 +303,14 @@ class TestRewriteFloorplanDie:
                 f"the {label} rewrite left the tcl byte-identical: a resize "
                 f"would be silently discarded")
             assert "-site unithd" in out, "the rewrite ate the -site line"
+            if rect is None:
+                # THE VALUES, not merely "it changed". `out != tcl` is satisfied
+                # by any edit at all, including one that writes the wrong
+                # rectangle. Carried over from
+                # next/floorplan-resize-guard-undark, whose weaker structural
+                # arm this tree already supersedes.
+                assert '-die_area "0 0 130 130"' in out, out
+                assert '-core_area "10 10 120 120"' in out, out
 
 
 # ---------------------------------------------------------------------------
