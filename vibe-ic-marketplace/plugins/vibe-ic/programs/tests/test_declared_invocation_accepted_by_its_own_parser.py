@@ -194,3 +194,23 @@ def test_it_shares_one_definition_of_accepted_with_the_umbrella_probe():
     src = PROG.read_text(encoding="utf-8")
     assert "import _gate_invocation" in src
     assert "_gate_invocation.classify_not_invocable" in src
+
+
+def test_the_shipped_tree_passes_its_own_rule():
+    """THE CORPUS SWEEP, AS A GUARD RATHER THAN A ONE-TIME MEASUREMENT.
+
+    "A guard that flags the very tree you are shipping is a bug, not a guard."
+    Every other instrument in this batch pins that with a test; this suite drove
+    the rule entirely on SYNTHETIC trees, so nothing here would notice if a
+    widening made it fire on the repository itself. The sweep was run by hand
+    and was rc 0 -- and a hand-run sweep is a claim taken at a sha.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True, timeout=1800)
+    assert r.returncode == 0, (
+        f"the rule now fires on the tree that ships it (rc={r.returncode}). "
+        f"Narrow it or record the finding -- do not relax the assertion.\n"
+        f"{r.stdout}")
