@@ -3,7 +3,7 @@
 
 Wave 83 — coverage for previously untested orchestrator.
 
-The runner shells out to Yosys / OpenROAD / KLayout inside an iic-eda
+The runner shells out to Yosys / OpenROAD / KLayout inside an vibeic-eda
 Docker container. The test environment has no Docker, so we exercise
 the orchestrator's control-flow paths only:
 
@@ -25,11 +25,56 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+#: EVERY test here launches `phase3_one_shot_runner.py`, and that launch does
+#: not fit the harness's 180 s item bound reliably. MEASURED: quiet, the six
+#: tests are `6 passed in 103.05 s` with a worst single call of 21.04 s; under
+#: ordinary fleet contention the SAME call ran past 60 s. So the two numbers
+#: this file must declare are different from the defaults:
+#:
+#:   * the ITEM bound, here: 600 s, a CEILING and not a target, so a slow run
+#:     completes or fails on its own instead of taking every other file's
+#:     verdict down with it (`--timeout-method=thread` kills the SESSION);
+#:   * the INNER bound, `_run` below: 150 s, which `ci_harness_timeout_ceiling_
+#:     check` holds to 600 // 3 = 200 s.
+#:
+#: WHY `pytestmark` AND NOT A PER-TEST DECORATOR: the bound being declared
+#: lives in `_run`, a module-level helper all six tests share. A decorator on
+#: one test cannot govern a helper the other five also call; a module-level
+#: mark bounds every item in the file, so every call in it really does run
+#: inside a 600 s item. Verified rather than assumed --
+#: `pytestmark = pytest.mark.timeout(30)` under `--timeout=2
+#: --timeout-method=thread` yields `2 passed`, not a killed session.
+#:
+#: WHY NOT SIMPLY LOWER `_run` TO 60: measured, that is a FALSE RED under
+#: contention -- the trade `test_matrix_63x8_census_freshness.py` already
+#: refused for the same reason.
+pytestmark = pytest.mark.timeout(600)
+
 PROG = Path(__file__).resolve().parent.parent / \
     "phase3_one_shot_runner.py"
 
 
-def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
+# v1.4.62 — these control-flow tests exercise the DEFAULT (`--pdk auto`)
+# resolution, which lands on the container's OSS enablement. On a host that has
+# a commercial PDK configured, `commercial_pdk_fallback_guard` now REFUSES that
+# silent fallback (it would emit VOID sign-off reports under a false PDK
+# belief). These tests are about orchestrator control flow, not PDK intent, so
+# they acknowledge the OSS fallback explicitly — which also makes them
+# deterministic regardless of the host's private commercial-PDK config.
+_ACK_OSS = "--allow-oss-pdk-fallback"
+
+
+#: 150 s against the 600 s item bound `pytestmark` declares above (ceiling
+#: 600 // 3 = 200). The old 90 s was measured against the wrong denominator:
+#: it was chosen when the item bound was the harness's 180 s, where 90 s is
+#: half the budget and two calls in one test would end the SESSION.
+#: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 --
+#: the bound is a parameter default, which the gate could not read.
+def _run(args: list, timeout: int = 150) -> subprocess.CompletedProcess:
+    if args and not args[0].startswith("-") and _ACK_OSS not in args:
+        args = args + [_ACK_OSS]
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
         capture_output=True, text=True, timeout=timeout,

@@ -73,7 +73,7 @@ def _fake_docker(netgen_transcript, lvs_rpt_body=None,
     writes lvs.rpt (body defaults to the transcript)."""
     import re as _re
 
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return (0, "", "")
         if "magic" in cmd and "SPICE_OUT=" in cmd:
@@ -132,7 +132,7 @@ def test_zero_byte_def_input_is_named_fail(tmp_path, monkeypatch):
     p = _proj(tmp_path, def_bytes=b"")  # 0-byte routed/layout DEF
     # Tools all "present"; the size guard must fire before any compare.
     monkeypatch.setattr(runner, "_docker_exec",
-                        lambda c, cmd, timeout=0: (0, "", ""))
+                        lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "FAIL", (r.status, r.detail)

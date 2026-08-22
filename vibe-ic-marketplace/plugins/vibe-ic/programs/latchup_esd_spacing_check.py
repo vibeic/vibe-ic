@@ -71,7 +71,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase3_one_shot_runner as _p  # noqa: E402  (shipped DEF parsers — single source)
@@ -169,10 +169,22 @@ def _parse_placed_geometry(def_text: str) -> List[Tuple[str, str, int, int]]:
     return out
 
 
-def _is_rated_tap(master: str) -> bool:
-    """A rated well/substrate-tap master (reuse the shipped allowlist)."""
+def _is_rated_tap(master: str,
+                  extra_masters: Optional[Sequence[str]] = None) -> bool:
+    """A rated well/substrate-tap master (reuse the shipped allowlist).
+
+    `extra_masters` is the PDK's OWN configured tap cell(s) (`pdk.tapcell_master`),
+    forwarded by the caller so this screen is CHIP-AGNOSTIC. gf180mcu names its
+    `CLASS core WELLTAP` cell `gf180mcu_fd_sc_mcu7t5v0__filltie` — no `tap` token
+    and not on the sky130-only shipped allowlist — so without this a run that
+    inserted 380 real tap cells (DRC DF.13/DF.14 clean) still reported
+    "0 rated tap cells" and false-FAILed the latch-up screen."""
     ml = master.lower()
-    return any(ml.startswith(r) for r in _p._WELLTAP_RATED)
+    if any(ml.startswith(r) for r in _p._WELLTAP_RATED):
+        return True
+    if extra_masters:
+        return any(e and ml.startswith(e.lower()) for e in extra_masters)
+    return False
 
 
 def _is_tap_tokened(master: str) -> bool:
@@ -255,8 +267,37 @@ def _count_within(query_pts: List[Tuple[float, float]],
 # --------------------------------------------------------------------------- #
 # 1) latch-up tap-SPACING screen — CONCLUSIVE-FAIL-ONLY                        #
 # --------------------------------------------------------------------------- #
+def _sparse_die_tap_skip_attested(def_file: Path) -> bool:
+    """#684 round-8 — True iff the runner attested a DELIBERATE sparse-die
+    tapcell skip for the project owning this DEF. Derives the project dir from
+    the canonical DEF path (phase3/stage3/pnr/<def> → 3 levels up) and reads
+    reports/phase3/sparse_die_skip.json. Read-only, fail-safe. chip-AGNOSTIC."""
+    try:
+        # routed.def lives at <project>/phase3/stage3/pnr/<file>. Use the
+        # path AS GIVEN (parents[3]) — NOT .resolve() — so the project dir is
+        # the one the gate was invoked against (a symlinked DEF must still
+        # find the project's own attestation, not the symlink target's).
+        cand = []
+        if len(def_file.parents) > 3:
+            cand.append(def_file.parents[3])
+        cand.append(def_file.absolute().parents[3]
+                    if len(def_file.absolute().parents) > 3 else None)
+        for project in cand:
+            if project is None:
+                continue
+            att = _p._load_sparse_die_skip(project)
+            if att and att.get("tapcell_skipped"):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _latchup_tap_spacing_check(def_file: Path,
-                               screen_um: float = _DEFAULT_SCREEN_UM) -> Dict[str, Any]:
+                               screen_um: float = _DEFAULT_SCREEN_UM,
+                               rated_tap_masters: Optional[Sequence[str]] = None,
+                               tapless_pdk: bool = False
+                               ) -> Dict[str, Any]:
     """Screen well/substrate-tap SPATIAL coverage of the std-cell field from the
     routed DEF. CONCLUSIVE-FAIL-ONLY per the anti-over-claim rule.
 
@@ -285,9 +326,11 @@ def _latchup_tap_spacing_check(def_file: Path,
     die = _parse_diearea_um(text, units)
     geom = _parse_placed_geometry(text)
     std = [(x / units, y / units) for _i, m, x, y in geom if _is_std_cell(m)]
-    taps = [(x / units, y / units) for _i, m, x, y in geom if _is_rated_tap(m)]
+    taps = [(x / units, y / units) for _i, m, x, y in geom
+            if _is_rated_tap(m, rated_tap_masters)]
     unknown_taps = sorted({m for _i, m, _x, _y in geom
-                           if _is_tap_tokened(m) and not _is_rated_tap(m)})
+                           if _is_tap_tokened(m)
+                           and not _is_rated_tap(m, rated_tap_masters)})
     base.update({"n_std": len(std), "n_tap": len(taps),
                  "unknown_taps": unknown_taps, "units_per_um": units,
                  "diearea_um": list(die) if die else None})
@@ -303,6 +346,51 @@ def _latchup_tap_spacing_check(def_file: Path,
     if len(std) >= 1 and not taps:
         extra = (f" ({len(unknown_taps)} 'tap'-token master(s) seen but none rated: "
                  + ", ".join(unknown_taps[:4]) + ")") if unknown_taps else ""
+        # #684 round-8 — §4.05 NO-LEAK: a genuine 0-tap break STILL FAILs.
+        # Only when the runner ATTESTED a deliberate sparse-die tapcell skip
+        # (sparse_die_skip.json) is this downgraded to a documented REVIEW
+        # item (non-GAP status) — tap insertion over the occupied region is
+        # deferred to the real foundry max-tap-distance rule, not a silent
+        # break. A non-sparse design with 0 taps has no attestation → GAP.
+        if _sparse_die_tap_skip_attested(def_file):
+            return {**base, "status": "WELLTAP_SPARSE_DIE_DEFERRED",
+                    "reason": "ZERO_TAPS_SPARSE_DIE_ATTESTED",
+                    "note": (f"{len(std)} placed std cell(s) and 0 rated taps, but the "
+                             f"runner ATTESTED a deliberate sparse-die tapcell skip "
+                             f"(#684){extra} — full-die tapcell tiling was bounded on a "
+                             "sub-threshold fixed wrapper. Tap insertion over the "
+                             "occupied region is a REVIEW open item against the real "
+                             "foundry tap-distance rule, NOT a conclusive structural "
+                             "GAP. (A non-sparse 0-tap design still FAILs ZERO_TAPS.)")}
+        # TAPLESS-CELL PDK: 0 tap COMPONENTS in the DEF is EXPECTED, not a gap —
+        # the well/substrate ties are INSIDE every std cell, so there is no
+        # tapcell master to insert and nothing was "skipped". Without this the
+        # DEF-component count produces a CONCLUSIVE false FAIL on every such
+        # PDK (measured twice on the IHP SG13 family: sg13g2 "452 placed std
+        # cell(s) but no well taps" and sg13cmos5l "364 placed std cell(s) but
+        # 0 rated well/substrate-tap cell(s)" — both designs' ties are present
+        # and measurable in the sign-off GDS).
+        #
+        # `rated_tap_masters=None` ALONE cannot carry this: it means both "the
+        # PDK declares no tapcell" and "the caller passed nothing", which is
+        # exactly why the guard could not live here before. `tapless_pdk` is
+        # the explicit, caller-supplied signal (pdk.tapcell_master is None).
+        #
+        # This is INCOMPLETE, never a PASS: presence is confirmed positively by
+        # the GDS tap-diffusion measurement (pdk.tap_geom_layers) and real
+        # spacing by the foundry DRC deck's latch-up rules. No over-claim.
+        if tapless_pdk:
+            return {**base, "status": "INCOMPLETE",
+                    "reason": "ZERO_TAPS_TAPLESS_PDK",
+                    "note": (f"{len(std)} placed std cell(s) and 0 tap COMPONENTS"
+                             f"{extra} — but this PDK declares NO tapcell master "
+                             "(tapless-cell library: well/substrate ties are "
+                             "internal to every std cell), so the DEF-component "
+                             "count CANNOT conclude and 0 is the EXPECTED value. "
+                             "Confirm the ties positively via the sign-off-GDS "
+                             "tap-diffusion measurement (set `tap_geom_layers` in "
+                             "the PDK registry entry) and the foundry DRC deck's "
+                             "latch-up rules. NOT a conclusive structural GAP.")}
         return {**base, "status": "WELLTAP_SPACING_GAP", "reason": "ZERO_TAPS",
                 "note": (f"{len(std)} placed std cell(s) but 0 rated well/substrate-tap "
                          f"cell(s){extra} — every logic transistor is infinitely far "
@@ -542,7 +630,10 @@ FOUNDRY_DATA_RESIDUAL = (
 
 def run_geometry_layer(def_file: str,
                        netlist_file: Optional[str] = None,
-                       screen_um: float = _DEFAULT_SCREEN_UM) -> Dict[str, Any]:
+                       screen_um: float = _DEFAULT_SCREEN_UM,
+                       rated_tap_masters: Optional[Sequence[str]] = None,
+                       tapless_pdk: bool = False
+                       ) -> Dict[str, Any]:
     """Run the open-source PERC GEOMETRY layer on a routed DEF (and optional
     extracted netlist). Returns ONE aggregate report dict.
 
@@ -550,7 +641,9 @@ def run_geometry_layer(def_file: str,
     Returns keys: spacing, guardring, [clamp_netlist], any_conclusive_gap,
     foundry_data_residual."""
     dp = Path(def_file)
-    spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um)
+    spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um,
+                                         rated_tap_masters=rated_tap_masters,
+                                         tapless_pdk=tapless_pdk)
     guardring = _guardring_topology_check(dp)
     report: Dict[str, Any] = {
         "def": str(def_file),

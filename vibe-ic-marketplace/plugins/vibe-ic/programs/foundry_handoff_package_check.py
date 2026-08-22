@@ -1,17 +1,35 @@
 #!/usr/bin/env python3
 """
 foundry_handoff_package_check.py — gate (v1.6.13 Wave 88, integerised
-in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91).
+in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91, and
+Step 35 → 38 by the later renumbering the flow yaml already carries).
 
-Step 35 — foundry-handoff kit completeness
+Step 38 — foundry-handoff kit completeness
 
 Behaviour
 ---------
-* SKIP (rc=2) — required artefacts missing AND step not waived.
 * WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
-* PASS (rc=0) — required files present; gate-specific predicate is a
-  stub in v1.6.13 (PASS-on-presence).
-* FAIL (rc=1) — files present but predicate fails (not used in v1.6.13).
+* FAIL (rc=1) — a 0-byte member, a TODO/TBD placeholder, an invalid
+  cell_count / pdk=unknown, or no chip GDS matching the design's own name.
+* SKIP (rc=2) — required kit members missing, step not waived, AND no
+  substance defect found in what WAS present.
+* PASS (rc=0) — every required kit member present AND every substance
+  predicate below satisfied.
+
+PRECEDENCE: FAIL outranks SKIP. rc=2 is NOT CHECKED (the flow runner reads it
+as VACUOUS_PASS), so a substance ERROR the gate has already proved is never
+downgraded to it by an incomplete kit — the members that are absent are named
+in the FAIL report instead. See the ladder comment in `main`.
+
+"Completeness" is measured against `_REQUIRED_FILES`, which now covers the
+FOUR kit members the pack generator emits, not two of them. It previously
+listed only mask_spec.json and wat_plan.json, so corner_test_vectors.json
+could be absent and the scribe-line frame unaccounted for while the gate
+reported "all required artefacts present" — measured on a real run where
+scribe_line_layout.gds was absent and the PASS never mentioned it.
+The fifth entry the flow yaml declares for Step 38,
+reports/phase3/foundry_handoff_audit.json, is THIS gate's own output and is
+deliberately not self-required here.
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 
@@ -28,6 +46,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def _load_waivers(project):
@@ -51,8 +70,41 @@ def _step_waived(project, step_label):
 
 _GATE_NAME = 'foundry_handoff_package_check'
 _GATE_LABEL = 'foundry_handoff'
-_REQUIRED_FILES = ['phase3/stage4/foundry_handoff/mask_spec.json', 'phase3/stage4/foundry_handoff/wat_plan.json']
+# Each entry is ONE required kit member. A tuple means "any ONE of these
+# spellings satisfies this member" — used only for the scribe-line frame,
+# which the flow cannot generate: foundry_handoff_pack_gen deliberately writes
+# a plainly-named `.PENDING_FOUNDRY.txt` note instead of a file wearing the
+# .gds name (#446), and the flow yaml declares exactly the same either-form
+# requirement. NEITHER present is still a real gap — then nothing at all states
+# where the frame is coming from.
+_REQUIRED_FILES = [
+    'phase3/stage4/foundry_handoff/mask_spec.json',
+    'phase3/stage4/foundry_handoff/wat_plan.json',
+    'phase3/stage4/foundry_handoff/corner_test_vectors.json',
+    ('phase3/stage4/foundry_handoff/scribe_line_layout.gds',
+     'phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt'),
+]
+# The scribe-line note satisfies the requirement but is NOT a delivered
+# artefact — when it is what satisfied the member, the open item is surfaced
+# in `pending_foundry_fields` under this name so the tapeout checklist
+# (tapeout_checklist_gen reads exactly that list) carries it as a reviewer
+# to-do. Before this, the generator's honest disclosure was written to disk and
+# read by nobody: the PENDING_FOUNDRY_* scan only inspects dict keys inside
+# .json members, so a sibling .txt note could never appear in it.
+_SCRIBE_PENDING_NOTE = (
+    'phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt')
+_SCRIBE_PENDING_FIELD = 'PENDING_FOUNDRY_scribe_line_layout'
 _WAIVER_RATIONALE = 'Foundry-handoff kit assembler not shipped.'
+
+
+def _member_alternatives(entry):
+    """Normalise a _REQUIRED_FILES entry to its tuple of accepted spellings."""
+    return entry if isinstance(entry, tuple) else (entry,)
+
+
+def _member_label(entry):
+    """Human/report label for a required-kit member."""
+    return " OR ".join(_member_alternatives(entry))
 
 # v1.6.162 (#60 P2-7) — explicit chip-GDS requirement. Field agent
 # observed Step 35 PASS on a project whose only foundry-handoff GDS
@@ -114,7 +166,82 @@ def _read_l9_top_module(project):
     return None
 
 
-def _chip_basename_variants(ic_name, top_module=None):
+_DEF_DESIGN_RE = re.compile(r"^\s*DESIGN\s+([A-Za-z_]\w*)\s*;")
+# Anchored to statement position (line start, after optional whitespace) so a
+# `link_design` mentioned in TCL *comment prose* ("... link_design followed by
+# a read_def ...") is never mistaken for the actual command.
+_LINK_DESIGN_RE = re.compile(r"^\s*link_design\s+([A-Za-z_]\w*)", re.M)
+
+
+def _read_pnr_physical_top(project):
+    """Resolve the ACTUAL physical top module the backend placed, routed and
+    streamed the chip GDS from — independent of L1.ic_name / L9.top_module.
+
+    Why this is needed (field: caravel step-35 GDS naming): L1.ic_name and L9.top_module both record
+    the DESIGN-INTENT / project name, which can legitimately differ from the
+    synthesizable RTL top. The runner resolves the real top structurally (the
+    RTL instantiation-graph root — `_resolve_asic_top_structural`) and names
+    every backend artefact (netlist / DEF / GDS) after it. Standard caravel is
+    the canonical case: ic_name=`caravel_user_project` but the hardened top is
+    `user_project_wrapper`, so the deliverable is `user_project_wrapper.gds`.
+    Deriving the expected GDS basename from L-doc values alone therefore FAILs
+    a correctly-named chip GDS with FOUNDRY_HANDOFF_CHIP_GDS_MISSING.
+
+    chip-AGNOSTIC: reads only physical backend outputs, no chip literals —
+      (a) the `DESIGN <name> ;` record of a DEF (the top cell of the physical
+          database the GDS is streamed from; a universal, tool-agnostic DEF
+          keyword). Only the DEF header is scanned (DESIGN is emitted early),
+          never the multi-MB body;
+      (b) `link_design <name>` in the PnR script (corroboration / fallback for
+          flows that leave a script but no DEF).
+
+    Returns an ordered, de-duplicated list of candidate physical-top names
+    (possibly empty). A non-empty, non-scribe GDS whose basename matches one
+    of these is a real chip deliverable — an EXACT identity match against the
+    routed database's top cell, so this widens recognition WITHOUT weakening
+    the gate: a genuinely missing chip GDS still matches nothing and FAILs."""
+    names: list = []
+
+    def _add(n):
+        if isinstance(n, str):
+            n = n.strip()
+            if n and n not in names:
+                names.append(n)
+
+    # (a) DEF DESIGN line — prefer the final routed / signoff / pnr / eco DEF
+    # (the physical database the chip GDS is streamed from). Scan only the DEF
+    # header (first lines): DESIGN is emitted right after VERSION/UNITS.
+    def _def_rank(p):
+        s = str(p).lower()
+        return 0 if any(k in s for k in ("routed", "signoff", "/pnr/",
+                                         "/eco/")) else 1
+    defs = sorted(project.glob("phase3/**/*.def"), key=_def_rank)
+    for dpath in defs[:64]:
+        try:
+            with dpath.open(errors="replace") as fh:
+                for _i, line in enumerate(fh):
+                    if _i > 200:
+                        break
+                    m = _DEF_DESIGN_RE.match(line)
+                    if m:
+                        _add(m.group(1))
+                        break
+        except OSError:
+            continue
+
+    # (b) link_design <top> in the PnR TCL (fallback / corroboration).
+    for tcl in sorted(project.glob("phase3/**/*.tcl"))[:64]:
+        try:
+            txt = tcl.read_text(errors="replace")[:200000]
+        except OSError:
+            continue
+        for m in _LINK_DESIGN_RE.finditer(txt):
+            _add(m.group(1))
+
+    return names
+
+
+def _chip_basename_variants(ic_name, top_module=None, extra_tops=None):
     """v1.6.174 (#72 P0-3) — full chip-named GDS basename set.
     Covers: `<id>`, `<id>_top`, `<id>_asic`, `<id>_chip`,
     `chip_<id>` for both `ic_name` AND `top_module`, PLUS
@@ -132,7 +259,7 @@ def _chip_basename_variants(ic_name, top_module=None):
     chip-AGNOSTIC: built from L1.ic_name + L9.top_module values
     read from generated_docs, never chip-class string literals."""
     seeds = set()
-    for s in (ic_name, top_module):
+    for s in (ic_name, top_module, *(extra_tops or [])):
         if s and isinstance(s, str) and s.strip():
             seeds.add(s.strip())
     # v1.6.189 (#76 P1) — always include the canonical runner
@@ -165,8 +292,11 @@ def _find_chip_gds(project, ic_name):
     literals.
     """
     if not ic_name:
-        return None, False
+        return None, False, []
     top_module = _read_l9_top_module(project)
+    # field (caravel step-35 GDS naming) — the ACTUAL physical top the backend hardened (may differ from
+    # both L1.ic_name and L9.top_module; e.g. caravel → `user_project_wrapper`).
+    physical_tops = _read_pnr_physical_top(project)
     roots = [
         project / "phase3/stage4/foundry_handoff/gds",
         project / "phase3/stage4/gds",
@@ -177,9 +307,9 @@ def _find_chip_gds(project, ic_name):
         if root.is_dir():
             all_gds.extend(sorted(root.glob("*.gds")))
     if not all_gds:
-        return None, False
-    chip_basenames = _chip_basename_variants(ic_name, top_module)
-    seed_prefixes = [s.lower() for s in (ic_name, top_module)
+        return None, False, physical_tops
+    chip_basenames = _chip_basename_variants(ic_name, top_module, physical_tops)
+    seed_prefixes = [s.lower() for s in ([ic_name, top_module] + physical_tops)
                      if s and isinstance(s, str)]
     chip_gds = None
     real_files = []
@@ -190,16 +320,25 @@ def _find_chip_gds(project, ic_name):
             scribe_files.append(f)
             continue
         real_files.append(f)
+        # field (caravel step-35 GDS naming) — a real chip GDS must be NON-EMPTY. A 0-byte GDS is a
+        # broken/placeholder deliverable and must never be accepted as the
+        # chip GDS (the gate then FAILs as CHIP_GDS_MISSING, honestly). This
+        # keeps the widened top-name matching from ever passing vacuously.
+        try:
+            if f.stat().st_size <= 0:
+                continue
+        except OSError:
+            continue
         if stem in chip_basenames:
             chip_gds = chip_gds or f
             continue
-        # Fallback: prefix-match on either ic_name or top_module.
+        # Fallback: prefix-match on ic_name / top_module / physical top.
         for seed in seed_prefixes:
             if stem.startswith(seed):
                 chip_gds = chip_gds or f
                 break
     scribe_only = bool(scribe_files) and not real_files
-    return chip_gds, scribe_only
+    return chip_gds, scribe_only, physical_tops
 
 
 def main(argv=None):
@@ -214,12 +353,21 @@ def main(argv=None):
         print(f"[{_GATE_NAME}] project dir not found: {project}", file=sys.stderr)
         return 2
 
-    found = [p for p in _REQUIRED_FILES if list(project.glob(p))]
-    missing = [p for p in _REQUIRED_FILES if p not in found]
+    found, missing = [], []
+    scribe_satisfied_by_note = False
+    for entry in _REQUIRED_FILES:
+        hit = next((alt for alt in _member_alternatives(entry)
+                    if list(project.glob(alt))), None)
+        if hit is None:
+            missing.append(_member_label(entry))
+        else:
+            found.append(hit)
+            if hit == _SCRIBE_PENDING_NOTE:
+                scribe_satisfied_by_note = True
 
     # v1.6.162 (#60 P2-7) — chip-GDS gate.
     ic_name = _read_l1_ic_name(project)
-    chip_gds, scribe_only = _find_chip_gds(project, ic_name)
+    chip_gds, scribe_only, physical_tops = _find_chip_gds(project, ic_name)
     chip_gds_finding = None
     if ic_name and chip_gds is None:
         if scribe_only:
@@ -239,7 +387,9 @@ def main(argv=None):
                 "severity": "ERROR",
                 "rule": "FOUNDRY_HANDOFF_CHIP_GDS_MISSING",
                 "message": (
-                    f"no chip GDS matching L1.ic_name={ic_name!r} "
+                    f"no non-empty chip GDS matching L1.ic_name={ic_name!r}, "
+                    f"L9.top_module, or the physical PnR top "
+                    f"{physical_tops or '(none resolved)'} "
                     f"under phase3/stage4/foundry_handoff/gds/ or "
                     f"phase3/stage4/gds/ or gds/. Step 35 PASS "
                     f"requires the chip-named GDS deliverable."
@@ -270,7 +420,7 @@ def main(argv=None):
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.json).write_text(out)
+            atomic_write_text(Path(args.json), out)
         print(out)
         return rc
 
@@ -341,6 +491,15 @@ def main(argv=None):
                                     f"submittable (#437b)."),
                     })
 
+    # #446/#449 — the scribe-line frame is accounted for by a plainly-named
+    # disclosure note rather than a delivered .gds. That is an OPEN FOUNDRY
+    # ITEM, so it joins the same list the JSON-key scan feeds and reaches the
+    # tapeout checklist. Prepended so it is never truncated out of the finding
+    # message's first-12 slice.
+    if scribe_satisfied_by_note:
+        pending_foundry_fields.insert(
+            0, f"{_SCRIBE_PENDING_NOTE}:{_SCRIBE_PENDING_FIELD}")
+
     waiver = _step_waived(project, args.step_label)
     if substance_findings and not waiver:
         verdict, rc = "FAIL", 1
@@ -350,24 +509,47 @@ def main(argv=None):
         out = json.dumps(report, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.json).write_text(out)
+            atomic_write_text(Path(args.json), out)
         print(out)
         return rc
-    if missing and not waiver:
+
+    # THE ORDER OF THIS LADDER IS LOAD-BEARING. Every SUBSTANCE verdict the
+    # gate has already reached — the 0-byte scan, the placeholder/pdk scan
+    # above, and `chip_gds_finding` here — is evaluated BEFORE the
+    # `missing -> SKIP` branch, because rc=2 is NOT CHECKED (flow_compliance_
+    # check reads it as VACUOUS_PASS) and an incomplete kit must never
+    # SILENCE a defect the gate has proved on the artefacts it DID have.
+    #
+    # This ordering was inverted while `_REQUIRED_FILES` named only 2 members
+    # and the inversion was latent; widening it to the 4 members the pack
+    # generator emits armed it. Anti-scribe control (#60 P2-7) — mask_spec +
+    # wat_plan present, L1.ic_name set, and the only GDS under
+    # phase3/stage4/gds/ being the foundry frame `scribe_line_layout.gds`:
+    # with `missing` first that kit exited rc=2 SKIP and the SCRIBE_ONLY /
+    # CHIP_GDS_MISSING ERROR disappeared from the report that
+    # `tapeout_checklist_gen` reads, so the chip-GDS defect dropped off the
+    # tape-out checklist. It is rc=1 FAIL here, kit complete or not.
+    #
+    # An incomplete kit is NOT silently forgiven by this reordering: the flow
+    # yaml declares all four members as Step-38 `required_outputs`, so their
+    # absence is reported as MISSING by the step-level check independently of
+    # this rc, and the members that are absent are named in the FAIL report
+    # below as well.
+    if waiver and (missing or chip_gds_finding is not None):
+        verdict, rc = "WAIVED", 0
+        findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
+                      "message": f"waiver={waiver.get('ticket','?')}: {waiver.get('reason','?')}"}]
+    elif chip_gds_finding is not None:
+        verdict, rc = "FAIL", 1
+        findings = [chip_gds_finding]
+        if missing:
+            findings.append({
+                "severity": "INFO", "rule": "REQUIRED_FILES_MISSING",
+                "message": f"missing: {missing}"})
+    elif missing:
         verdict, rc = "SKIP", 2
         findings = [{"severity": "INFO", "rule": "REQUIRED_FILES_MISSING",
                       "message": f"missing: {missing}"}]
-    elif missing and waiver:
-        verdict, rc = "WAIVED", 0
-        findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
-                      "message": f"waiver={waiver.get('ticket','?')}: {waiver.get('reason','?')}"}]
-    elif chip_gds_finding is not None and not waiver:
-        verdict, rc = "FAIL", 1
-        findings = [chip_gds_finding]
-    elif chip_gds_finding is not None and waiver:
-        verdict, rc = "WAIVED", 0
-        findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
-                      "message": f"waiver={waiver.get('ticket','?')}: {waiver.get('reason','?')}"}]
     else:
         verdict, rc = "PASS", 0
         ok_msg = (f"all {len(_REQUIRED_FILES)} required artefacts present"
@@ -391,10 +573,13 @@ def main(argv=None):
         "gate": _GATE_NAME,
         "verdict": verdict,
         "step_label": args.step_label,
-        "required_files": _REQUIRED_FILES,
+        # Report the LABELS (tuple entries flattened to "A OR B") so the JSON
+        # stays a list of strings for downstream readers.
+        "required_files": [_member_label(e) for e in _REQUIRED_FILES],
         "found": found,
         "missing": missing,
         "ic_name": ic_name,
+        "physical_top_candidates": physical_tops,  # actual PnR top(s)
         "chip_gds": str(chip_gds) if chip_gds else None,
         "scribe_only": scribe_only,
         "waiver": waiver,
@@ -405,7 +590,7 @@ def main(argv=None):
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+        atomic_write_text(out_path, json.dumps(out, indent=2, ensure_ascii=False) + "\n")
     print(f"=== {_GATE_NAME} ({project.name}) ===")
     print(f"  verdict: {verdict}")
     if missing:

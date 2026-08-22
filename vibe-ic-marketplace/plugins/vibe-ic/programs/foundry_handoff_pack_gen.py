@@ -32,6 +32,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import _published_tree  # noqa: E402
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 
 def _read_text(p: Path) -> str:
@@ -80,7 +84,23 @@ def _count_netlist_instances(synth_dir: Path):
     """#446 fallback — count cell instantiations in the gate netlist
     when synth.log lacks the Yosys summary. Yosys names instances
     `_N_`; generic instantiations are `<cell> <inst> (`. Returns None
-    when no netlist / no instances found (never a fabricated count)."""
+    when no netlist / no instances found (never a fabricated count).
+
+    The count is the MAXIMUM over the candidate netlists, not the first
+    one that yields a hit. `sorted(glob("*.v"))` is FILESYSTEM ORDER, and
+    the synth directory holds more than the mapped netlist: yosys drops
+    techmap helper libraries (`_dlatch_map.v`, 192 bytes, ONE
+    instantiation) beside the design's own netlist, and `_` (0x5F) sorts
+    ahead of every lowercase letter. First-hit-wins therefore returned
+    `1` for a design whose routed DEF declares 79499 components, and that
+    `1` was written into `mask_spec.json` + the handoff `README.txt` as
+    the chip's cell count — the number a foundry reads.
+
+    MAX is the right reducer here and needs no threshold: a helper file
+    can only ever contribute FEWER instantiations than the netlist that
+    instantiates the design, so taking the largest candidate is monotone
+    in the real answer and stays `None` when nothing parses."""
+    best = None
     for nl in sorted(synth_dir.glob("*.v")):
         text = _read_text(nl)
         if not text:
@@ -89,9 +109,9 @@ def _count_netlist_instances(synth_dir: Path):
                            text, re.MULTILINE))
         # subtract module headers (they match the same shape)
         n -= len(re.findall(r"^\s*module\s+\w+\s*\(", text, re.MULTILINE))
-        if n > 0:
-            return n
-    return None
+        if n > 0 and (best is None or n > best):
+            best = n
+    return best
 
 
 def _detect_pdk_name(pdk_dir: Path):
@@ -218,15 +238,148 @@ def _resolve_design_top(project: Path, top_arg):
     return _detect_top_name(project)
 
 
+# The PnR script OpenROAD actually executed names the PDK tree every liberty /
+# tech-LEF / cell-LEF it read came from. That is GROUND TRUTH for "which PDK
+# produced this GDS" — it is the files, not a statement about the files.
+_SIGNOFF_PDK_RE = re.compile(r"/foss/pdks/([A-Za-z0-9._-]+)/")
+
+
+# The flow's own generated artefacts live under phase2/ and phase3/. phase1 is
+# excluded ON PURPOSE and the exclusion is load-bearing: phase1 holds the SPEC,
+# and letting a spec document contribute to the sign-off signal would collapse
+# the very distinction this resolver exists to draw. MEASURED over the tracked
+# corpus: no phase1 document carries a `/foss/pdks/` path at all — the
+# aspiration is stated in prose, never as an asset path — so the exclusion
+# costs nothing today and prevents the collapse if that ever changes.
+_FLOW_DIRS = ("/phase2/", "/phase3/")
+
+
+def _signoff_flow_texts(project: Path):
+    """The flow-generated artefacts to read the PDK off, PUBLISHED ones only.
+
+    Restricted to what git tracks whenever `project` is a published tree, and
+    to what is on disk when it is not (a live run directory, or the tmp trees
+    the tests build). That distinction is `_published_tree`'s whole contract,
+    and it is the #447 class: reading the disk answers a question about THIS
+    MACHINE when the question is what a reader RECEIVES."""
+    tracked = _published_tree.published_paths(project)
+    if tracked is None:                       # not a published tree → the disk
+        for d in ("phase2", "phase3"):
+            base = project / d
+            if base.is_dir():
+                for p in sorted(base.rglob("*")):
+                    if p.is_file():
+                        yield p
+        return
+    for rel in sorted(tracked):
+        if any(("/" + rel).find(d) >= 0 for d in _FLOW_DIRS):
+            yield project / rel
+
+
+def _pdk_from_signoff_flow(project: Path):
+    """The PDK that ACTUALLY produced the shipped GDS, read off the sign-off
+    flow's own asset paths. Returns None when nothing names a PDK tree, or when
+    more than one is named (ambiguous → never guess).
+
+    WHY THIS READS THE WHOLE FLOW AND NOT `pnr.tcl` (vibe-ic#376)
+    =============================================================
+    It used to read exactly one file, `phase3/stage3/pnr/pnr.tcl`, off the
+    disk. `PUBLISHING.md` does not ship `phase3/stage3/pnr/`, so on a published
+    cell that file is simply absent: of 15 published cells carrying an L19,
+    **2** track a `pnr.tcl` while 15 have one on the author's disk. The
+    sign-off-wins mechanism — the entire point of #467 — was therefore INERT
+    exactly where a cross-PDK matrix needs it, and the pack fell back to the
+    spec target it exists to override.
+
+    MEASURED, published tree, flow artefacts only:
+
+        resolves to one PDK        10 of 15   (was 2)
+        two PDKs named → None       1         (u_hawaii_adc — correctly refused)
+        no PDK path at all          4
+
+    and the three genuine divergences it now surfaces include the two cells
+    #376 named: `spm/v1.5.58_ihp-sg13g2` and `spm/v1.5.66_gf180mcuD`, each
+    signed off on a different foundry's PDK than the `sky130` their L19 states.
+
+    chip-AGNOSTIC: pure path grammar over the flow's own generated files."""
+    names = set()
+    for p in _signoff_flow_texts(project):
+        try:
+            names.update(_SIGNOFF_PDK_RE.findall(p.read_text(errors="replace")))
+        except OSError:
+            continue
+        if len(names) > 1:                    # ambiguous — stop reading
+            return None
+    return next(iter(names)) if len(names) == 1 else None
+
+
+def _pdk_statements_diverge(signoff: str, spec: str) -> bool:
+    """Do these two PDK statements describe DIFFERENT processes?
+
+    A plain `signoff != spec` was the test, and it reported a divergence for
+    three things that are not one. MEASURED over the published corpus:
+
+        case only            sky130A vs sky130a          1 cell
+        family vs variant    sky130A vs sky130           5 cells
+        no PDK stated        'N/A (protocol spec, not a tapeout)'
+                                                        12 of 194 L19 docs
+
+    Nine of twelve reports were noise, and noise in a divergence channel is
+    worse than silence: it trains a reader to skip the one line that says a
+    130 nm IHP die is about to ship described as sky130.
+
+    The three real ones survive. `sky130A` vs `sky130B` also survives — they
+    share a family but neither contains the other, so the variant rule cannot
+    swallow a genuine disagreement."""
+    a, b = (signoff or "").strip(), (spec or "").strip()
+    if not a or not b:
+        return False
+    # A spec that does not state a PDK IDENTIFIER states nothing to disagree
+    # with. Prose is a non-statement, not a conflicting statement.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", b):
+        return False
+    la, lb = a.lower(), b.lower()
+    if la == lb:                              # case only
+        return False
+    if la.startswith(lb) or lb.startswith(la):  # family vs variant
+        return False
+    return True
+
+
 def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
-    """#467 — pdk / process node fallback chain. Upstream spec facts win
-    over PDK-file derivation:
-      pdk        : L19 pdk_target → L1 tapeout PDK statement → PDK files;
-      process_nm : PDK-file derivation → node parsed from the spec PDK text.
-    Honest null preserved only when ALL sources are empty."""
+    """#467 — pdk / process node fallback chain.
+
+    pdk: the PDK that PRODUCED the GDS → L19 pdk_target → L1 tapeout PDK
+         statement → PDK files.
+    process_nm : PDK-file derivation → node parsed from the spec PDK text.
+    Honest null preserved only when ALL sources are empty.
+
+    SIGN-OFF PDK WINS OVER THE SPEC TARGET. #467 put the spec facts first
+    ("Upstream spec facts win over PDK-file derivation"), which is right for a
+    requirements document and WRONG for a manufacturing hand-off: this pack
+    ships a GDS, and that GDS was made by exactly one PDK. When the design is
+    built on a PDK its spec does not name — which is the entire point of a
+    cross-PDK benchmark matrix, and routine whenever a design is ported — the
+    pack declared the ASPIRATION and the foundry would receive the wrong
+    process for the silicon in the same directory.
+
+    MEASURED (spm x ihp-sg13cmos5l, plugin 1.6.4, image vibeic-eda:0.2.30
+    id sha256:4182c63b10d1): every asset in phase3/stage3/pnr/pnr.tcl resolved
+    under /foss/pdks/ihp-sg13cmos5l and the DRC ran the IHP deck, yet L19
+    pdk_target was "sky130" (extracted from the spec's "target PDK family"
+    prose), so mask_spec.json, wat_plan.json, corner_test_vectors.json,
+    README.txt and scribe_line_layout all recorded `"pdk": "sky130"` beside an
+    IHP GDS — and foundry_handoff_package_check returned PASS, because it
+    checks that the files EXIST, never that they agree with the flow.
+
+    The spec target is not discarded: when the two disagree the caller records
+    it as `spec_pdk_target` so the divergence is visible rather than silently
+    resolved either way."""
     l19 = _l19_pdk_target(project)
     l1 = _l1_tapeout_pdk(project)
-    pdk = l19 or l1 or pdk_from_files
+    signoff = _pdk_from_signoff_flow(project)
+    spec = l19 or l1
+    pdk = signoff or spec or pdk_from_files
     # process node: trust the PDK-file derivation first (it knows the real
     # library), else parse a node out of the spec PDK text — L19 target
     # string, then the dedicated L1 tapeout process_node/foundry fields.
@@ -234,7 +387,10 @@ def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
     if node is None:
         node = (_process_nm_from_pdk_text(l19)
                 or _l1_tapeout_node_nm(project))
-    return pdk, node
+    # Surface a spec-vs-silicon divergence instead of resolving it silently.
+    mismatch = (spec if (signoff and spec
+                         and _pdk_statements_diverge(signoff, spec)) else None)
+    return pdk, node, mismatch
 
 
 def _l10_test_pattern_ids(project: Path):
@@ -259,6 +415,23 @@ def _l10_test_pattern_ids(project: Path):
     return out[:200]
 
 
+def _routing_incomplete(project: Path):
+    """True / False / None — the fact the antenna step RECORDED (#654).
+
+    None means it was never recorded, which is NOT False: the caller must not
+    read a missing key as a routed design."""
+    try:
+        f = _pl.reports_phase3_dir(project) / "antenna.json"
+        if not f.is_file():
+            return None
+        data = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "routing_incomplete" not in data:
+        return None
+    return bool(data.get("routing_incomplete"))
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("project", type=Path)
@@ -272,6 +445,24 @@ def main(argv=None) -> int:
     if not project.is_dir():
         print(f"VACUOUS_PASS: project dir missing: {project}",
               file=sys.stderr)
+        return 2
+
+    # ORGANIC #654 — a handoff pack for a layout the router never finished is
+    # the most expensive form this failure takes. The fact is already on disk:
+    # the antenna step records `routing_incomplete` beside `net_violations: 0`,
+    # and that pair on one line IS the trap. `grep -c routing_incomplete` over
+    # this file used to return 0.
+    #
+    # A MISSING key is not False — a run whose antenna step never reached the
+    # in-session post-repair path records nothing, and reading that as "routing
+    # is fine" would rebuild the defect one level up. Only an explicit True
+    # refuses.
+    _ri = _routing_incomplete(project)
+    if _ri is True:
+        print("VACUOUS_PASS: detailed routing is INCOMPLETE (recorded by the "
+              "antenna step in reports/phase3/antenna.json). Refusing to write "
+              "a foundry handoff pack for a layout with no realized "
+              "interconnect. Finish routing, then re-run.", file=sys.stderr)
         return 2
 
     handoff_dir = _pl.foundry_handoff_dir(project)
@@ -313,7 +504,7 @@ def main(argv=None) -> int:
     # projects genuinely missing the value still get null (corpus-sweep
     # guard). PENDING_FOUNDRY_* semantics unchanged (#449).
     design_top = _resolve_design_top(project, args.top)
-    pdk_name, process_nm = _resolve_pdk_and_node(
+    pdk_name, process_nm, spec_pdk_target = _resolve_pdk_and_node(
         project, pdk_from_files, node_from_files)
     # #484: per-design identity stamp — the project NAME is always present
     # (design_top / pdk can both resolve null), so two designs never emit a
@@ -324,12 +515,18 @@ def main(argv=None) -> int:
         _ident["top"] = str(design_top)
     if pdk_name:
         _ident["pdk"] = str(pdk_name)
+    # The design was built on a PDK its own spec does not name. `pdk` above is
+    # the one that made the GDS in this pack; keep the spec target visible so
+    # the divergence is a recorded fact rather than a silent resolution.
+    if spec_pdk_target:
+        _ident["spec_pdk_target"] = str(spec_pdk_target)
+        _ident["pdk_source"] = "signoff_flow"
 
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "process_node_nm": process_nm,
@@ -352,7 +549,7 @@ def main(argv=None) -> int:
             "Author: stepper field size, alignment marks, kerf width."
         ),
     }
-    (handoff_dir / "mask_spec.json").write_text(
+    _aa.write_text(handoff_dir / "mask_spec.json",
         json.dumps(mask_spec, indent=2, ensure_ascii=False) + "\n")
 
     # Step 2: wat_plan.json — Wafer Acceptance Test plan.
@@ -361,7 +558,7 @@ def main(argv=None) -> int:
     # genuinely foundry-supplied content.
     wat_plan = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,
@@ -381,7 +578,7 @@ def main(argv=None) -> int:
             "Author: pass/fail thresholds for each WAT parameter."
         ),
     }
-    (handoff_dir / "wat_plan.json").write_text(
+    _aa.write_text(handoff_dir / "wat_plan.json",
         json.dumps(wat_plan, indent=2, ensure_ascii=False) + "\n")
 
     # Step 3: corner_test_vectors.json — ATE corner test kit.
@@ -391,7 +588,7 @@ def main(argv=None) -> int:
     l10_ids = _l10_test_pattern_ids(project)
     corner_kit = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,
@@ -409,7 +606,7 @@ def main(argv=None) -> int:
             "Author: ATE loadboard part number + revision."
         ),
     }
-    (handoff_dir / "corner_test_vectors.json").write_text(
+    _aa.write_text(handoff_dir / "corner_test_vectors.json",
         json.dumps(corner_kit, indent=2, ensure_ascii=False) + "\n")
 
     # Step 4: scribe line — ORGANIC-20260606 #446: NO file wearing the
@@ -427,7 +624,7 @@ def main(argv=None) -> int:
         if head.startswith(b"# PLACEHOLDER"):
             scribe_path.unlink()  # remove the old fabricated placeholder
     if not scribe_path.is_file():
-        (handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt").write_text(
+        _aa.write_text(handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt",
             "scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures "
             "+ alignment marks) and is NOT generated here (#446). Obtain "
             "it from the shuttle/foundry kit and place it beside this "

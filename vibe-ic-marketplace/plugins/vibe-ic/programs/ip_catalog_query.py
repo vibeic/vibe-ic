@@ -3,7 +3,7 @@
 ip_catalog_query.py — IP catalog query + match + pull engine.
 
 Plugin pipeline hooks:
-  - phase2_one_shot_runner.step_rtl_gen → query catalog when rtl_gen=null
+  - design_one_shot_runner.step_rtl_gen → query catalog when rtl_gen=null
   - ic_class_profile.detect_ic_class → annotate profile with catalog hits
   - catalog-glue-author skill → consume CatalogMatch list to pull RTL
 
@@ -22,6 +22,9 @@ import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _shape_refusal  # noqa: E402  (#991)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,22 @@ class CatalogMatch:
     # when instantiating the IP for synthesis (sim-only generate blocks
     # with PLI/system tasks are the canonical case).
     synth_safe_params: List[Dict[str, Any]] = field(default_factory=list)
+    # #187 (BENCHMARK INTEGRITY) — set when this catalog entry would hand back
+    # the IC-under-test's OWN reference design (its top/name intersects the IC
+    # identity) rather than a leaf COMPONENT IP. Such an entry is REFUSED by
+    # query_catalog unless self-match is explicitly acknowledged; offering it
+    # would leak the answer key through the front door (§4.05).
+    self_match: bool = False
+    self_match_reason: str = ""
+    # #991 — every list field above that was PRESENT in the manifest and was
+    # not a JSON array. Recorded on the match rather than dropped, because the
+    # three coercions that built them (`x if isinstance(x, list) else []`) made
+    # a manifest that declares a dependency indistinguishable from one that
+    # declares none: MEASURED, a `depends_on` keyed BY DEPENDENCY NAME caused
+    # the required IP to be silently absent from the offered set, with no
+    # diagnostic anywhere. A match carrying any of these is REFUSED by
+    # `query_catalog` — see `_shape_refusals_in`.
+    shape_refusals: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_audit_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -109,13 +128,21 @@ def find_catalog_dir() -> Optional[Path]:
         candidate = ancestor / "ip-catalog"
         if candidate.is_dir() and (candidate / "_schema").is_dir():
             return candidate
-    # Hard fallbacks
-    for fallback in [
-        Path("~/AI_IC_design/opensource_repo/vibe-ic-marketplace/plugins/vibe-ic/ip-catalog"),
-        Path("~/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/ip-catalog"),
-    ]:
-        if fallback.is_dir():
-            return fallback
+    # Explicit override, then a walk-up sibling layout. The previous fallbacks
+    # hardcoded this project's INTERNAL workspace directory name under `~` —
+    # which was doubly wrong: it is not a sensible location on anyone else's
+    # machine, and `Path("~/...")` is never expanded, so `.is_dir()` was always
+    # False and the fallback could not fire at all.
+    env = os.environ.get("VIBE_IC_IP_CATALOG_DIR")
+    if env:
+        cand = Path(env).expanduser()
+        if cand.is_dir():
+            return cand
+    for ancestor in [here] + list(here.parents):
+        cand = (ancestor / "opensource_repo" / "vibe-ic-marketplace"
+                / "plugins" / "vibe-ic" / "ip-catalog")
+        if cand.is_dir() and (cand / "_schema").is_dir():
+            return cand
     return None
 
 
@@ -448,6 +475,206 @@ _INTEGER_ONLY_MARKERS = (
     "without fpu", "without floating point", "no float",
     "soft-float", "soft float",
 )
+
+
+# ---------------------------------------------------------------------------
+# v1.0.51 — for #681. GENERIC optional/negation phrase-grammar (chip-AGNOSTIC).
+# A free-text 'mentions' hit on a term that sits inside an OPTIONAL or an
+# EXPLICIT-NEGATION / NOT-constrained window is NOT evidence the design
+# actually uses that thing — it is a "you may add it but it is not required"
+# or "we do NOT use it" mention. This mirrors (and generalises) the
+# asymmetric suppression `_extension_optional_only` / `_extension_excluded`
+# already apply to the cpu_extensions/cpu_isa `contains` branch, but here
+# the vocabulary is term-agnostic so it is reusable by the 'mentions' rules.
+# Bilingual (EN + zh-Hant) because real spec docs mix both. NO chip literal.
+# Qualifiers that PRECEDE the term ("may add foo", "without foo",
+# "must not use foo", "可自行加 foo"). Checked in a tight BACKWARD window.
+_PRECEDING_QUALIFIER_MARKERS = (
+    # optional (precede)
+    "optional", "optionally", "may add", "may include", "may also add",
+    "can add", "could add", "可自行加", "可自行", "選用", "可選",
+    # negation (precede)
+    "must not use", "must not", "does not use", "do not use", "don't use",
+    "without", "excludes", "excluding", "no use of", "not in scope",
+    "out of scope", "不使用", "未使用", "排除", "不採用", "不納入", "❌",
+)
+# Qualifiers that TRAIL the term as a TERMINAL existence assertion about
+# the term itself ("foo (optional)", "foo is optional", "foo，但不強制").
+# Matched in a tight FORWARD window within the term's own clause. NOTE: a
+# bare adjacent "optionally" is NOT here — "foo optionally supports X" says
+# foo does X optionally, NOT that foo itself is optional (that genuine case
+# must still fire); only copula-bound trailing patterns suppress, see
+# _TRAILING_GOVERNOR_RE below.
+_TRAILING_QUALIFIER_MARKERS = (
+    "(opt)", "(optional)",
+)
+# Reference / comparison markers that PRECEDE the term: a comparative or
+# referential mention ("regarding X", "such as X", "compared to X", "對 X
+# 級 protocol" — "regarding the X-level protocol") is NOT an assertion that
+# the design USES X; it is a reference. Checked in a tight backward window.
+_REFERENCE_QUALIFIER_MARKERS = (
+    "regarding", "such as", "compared to", "compared with", "relative to",
+    "as opposed to", "instead of", "rather than", "similar to", "like the",
+    "對", "類似", "相較", "相對", "而非", "而不是",
+)
+# Tight bounded windows (chars) — small enough that a qualifier attached to
+# a DIFFERENT occurrence cannot bleed onto a genuine one (further bounded by
+# the term's clause).
+_PRECEDE_WINDOW = 24
+_TRAIL_WINDOW = 24
+# Clause separators (hard punctuation) — used to bound a clause around the
+# term so a qualifier/marker in a DIFFERENT clause cannot bleed onto a
+# genuine one.
+_CLAUSE_SEPARATORS = ".。!！?？;；,，、\n"
+# Coordinating conjunctions are SOFT clause boundaries: "X is mandatory but
+# an optional Y can be added" — the 'but'/'and'/'while'/... separates the X
+# assertion from the Y qualifier even with no comma. They must NOT be used
+# as a hard split (they can appear inside a single term clause), but they DO
+# bound the term-anchored governor search so a qualifier on the far side of
+# a conjunction never governs the term. v1.0.51-r2 — for #681 review leak.
+_SOFT_BOUNDARY_RE = re.compile(
+    r"\b(?:and|but|while|with|although|though|whereas|plus|yet|however|"
+    r"as\s+well\s+as)\b")
+
+
+def _term_anchored_governor(term_l: str, segment: str) -> bool:
+    """v1.0.51-r2 — for #681 review. TERM-ANCHORED optional/negation
+    governor. Return True ONLY when an optional/negation qualifier is
+    grammatically bound to THE TERM (not merely co-present in the clause):
+
+      preceding:  optional/optionally <term> ; an optional <term>
+      trailing :  <term> is/are optional ; <term> is/are not
+                  required|mandatory|used|supported|present ;
+                  <term> may/might/can be added|omitted|included ;
+                  <term> (optional)
+
+    A naive ±N proximity window is INSUFFICIENT — it wrongly suppresses
+    "the <term> optionally supports burst transfers" (verified by the
+    reviewer). Hence the trailing form requires a COPULA ("is/are") or a
+    modal-existence phrase between the term and the qualifier.
+
+    chip-AGNOSTIC: pure grammar; no chip/IP literal.
+    """
+    t = re.escape(term_l)
+    pats = (
+        # preceding qualifier directly modifying the term
+        rf"\boptional(?:ly)?\s+{t}\b",
+        rf"\ban?\s+optional\s+{t}\b",
+        # trailing copula-bound existence assertion about the term
+        rf"\b{t}\b[^.;:,!?]{{0,30}}?\b(?:is|are|remains?|stays?)\s+optional\b",
+        rf"\b{t}\b[^.;:,!?]{{0,30}}?\b(?:is|are)\s+not\s+"
+        rf"(?:required|mandatory|used|supported|present|needed)\b",
+        # modal existence ("<term> may be added/omitted")
+        rf"\b{t}\b[^.;:,!?]{{0,20}}?\b(?:may|might|can|could)\s+be\s+"
+        rf"(?:added|omitted|included|present|left\s+out|removed)\b",
+        # parenthetical
+        rf"\b{t}\b\s*\((?:opt|optional)\)",
+    )
+    return any(re.search(p, segment) for p in pats)
+
+
+def _term_optional_or_negated(term: str, text: str) -> bool:
+    """v1.0.51 — GENERIC suppression test for a free-text term.
+
+    Return True when EVERY occurrence of `term` in `text` sits inside an
+    OPTIONAL ('optional'/'可自行加'/'不強制'/'may add'/'(opt)'…) or an
+    EXPLICIT-NEGATION / NOT-constrained ('must not use'/'without'/'不在…
+    約束的事'/'❌'…) window — i.e. there is no genuine, unqualified mention
+    of the term anywhere. A single unqualified occurrence anywhere defeats
+    the suppression (mandatory/plain mention wins), so a real constrained
+    spec section still fires.
+
+    Direction-aware AND TERM-ANCHORED: a preceding qualifier ("may add foo",
+    "without foo", "optional foo") is checked in a tight BACKWARD window; a
+    trailing qualifier is COPULA-bound to the term ("foo is optional", "foo
+    is not required") via _term_anchored_governor — never a bare clause-wide
+    keyword. Both are bounded by hard clause separators AND coordinating
+    conjunctions (soft boundaries), so a qualifier modifying a DIFFERENT
+    noun ("foo is mandatory but an optional bar...") cannot leak onto the
+    term. v1.0.51-r2 removed the unsound whole-clause governor branch that
+    dropped genuine mandatory-term mentions (#681 review leak).
+
+    chip-AGNOSTIC: pure bilingual phrase grammar; no chip/IP literal.
+    """
+    term_l = term.strip().lower()
+    if not term_l or not text:
+        return False
+    blob = text.lower()
+    found_any = False
+    start = 0
+    while True:
+        idx = blob.find(term_l, start)
+        if idx < 0:
+            break
+        found_any = True
+        end = idx + len(term_l)
+
+        # CLAUSE-bound the term on hard punctuation: a qualifier in a
+        # DIFFERENT clause must not leak (e.g. "interconnect is optional; a
+        # real crossbar fabric" — 'is optional' governs the interconnect
+        # clause only).
+        c_lo = idx
+        while c_lo > 0 and blob[c_lo - 1] not in _CLAUSE_SEPARATORS:
+            c_lo -= 1
+        c_hi = end
+        while c_hi < len(blob) and blob[c_hi] not in _CLAUSE_SEPARATORS:
+            c_hi += 1
+
+        # Further bound the term-anchored governor search by coordinating
+        # conjunctions (soft boundaries) so "X is mandatory but an optional
+        # Y" cannot let the Y-qualifier govern the X-term. The governor
+        # segment is the largest conjunction-free span around the term.
+        seg_lo = c_lo
+        for mm in _SOFT_BOUNDARY_RE.finditer(blob, c_lo, idx):
+            seg_lo = mm.end()  # last conjunction before the term
+        seg_hi = c_hi
+        mm = _SOFT_BOUNDARY_RE.search(blob, end, c_hi)
+        if mm:
+            seg_hi = mm.start()  # first conjunction after the term
+        segment = blob[seg_lo:seg_hi]
+
+        # Backward sub-window inside the segment (adjacent preceding marker).
+        back = blob[max(seg_lo, idx - _PRECEDE_WINDOW):idx]
+        # Forward sub-window inside the segment (adjacent trailing marker).
+        fwd = blob[end:min(seg_hi, end + _TRAIL_WINDOW)]
+
+        suppressed = (
+            any(mk in back for mk in _PRECEDING_QUALIFIER_MARKERS)
+            or any(mk in back for mk in _REFERENCE_QUALIFIER_MARKERS)
+            or any(mk in fwd for mk in _TRAILING_QUALIFIER_MARKERS)
+            # TERM-ANCHORED governor (copula-bound), conjunction-scoped.
+            or _term_anchored_governor(term_l, segment)
+            # bare 'no <term>' immediately preceding the occurrence
+            or re.search(rf"\bno\s+{re.escape(term_l)}\b",
+                         blob[max(0, idx - 6):end]) is not None
+        )
+        if not suppressed:
+            # A genuine unqualified occurrence — the term IS real evidence.
+            return False
+        start = end
+    # Only reach here when the term occurred at least once and EVERY
+    # occurrence was inside an optional/negation window.
+    return found_any
+
+
+# Match a JSON-serialised metadata key whose value is EMPTY: "key": [],
+# "key": {}, "key": "", "key": null. A bare key name with an empty value is
+# NOT evidence the design mentions that thing (the field exists but carries
+# nothing). chip-AGNOSTIC structural match on the serialised L*.json blob.
+_RE_EMPTY_JSON_VALUE = re.compile(
+    r'"([^"]+)"\s*:\s*(?:\[\s*\]|\{\s*\}|""|null)', re.IGNORECASE)
+
+
+def _strip_empty_metadata_keys(text: str) -> str:
+    """Return `text` with every JSON "<key>": <empty> pair removed, so a
+    'mentions' substring search cannot be satisfied by a key NAME whose
+    value is empty (e.g. `"interconnect_rules": []`). Non-JSON text and
+    keys with non-empty values are left untouched.
+
+    chip-AGNOSTIC: pure structural JSON-shape strip; no chip/IP literal."""
+    if not text or '"' not in text:
+        return text
+    return _RE_EMPTY_JSON_VALUE.sub(" ", text)
 
 
 def _extension_excluded(ext: str, field_str: str, scoped_text: str,
@@ -918,13 +1145,55 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
             return (True, 1.0)
         return (False, 0.0)
 
-    # "X mentions 'Y'" — alias for free-text search
-    m = re.match(r"^(L\d+R?(?:\.[a-zA-Z0-9_\[\]]+)?)\s+mentions\s+['\"]([^'\"]+)['\"]\s*$", p)
+    # "X mentions 'Y'" or "X mentions 'Y' or 'Z' or ..." — alias for
+    # free-text search. The multi-alternative form ("'X' or 'Y' or 'Z'",
+    # alternatives joined by lowercase `or` inside one clause) is a
+    # DISJUNCTION: a record mentioning ANY alternative is a hit. This
+    # mirrors the sibling "contains 'X' or 'Y'" handler (which re.findall's
+    # all quoted values and ORs them) — without this, the multi-alternative
+    # 'mentions' form fell through to the AND-all free-text fallback below
+    # and silently dropped legitimately-matching records (ORGANIC #666,
+    # field-agent round-4 v1.0.42). Single quoted value + EOL kept its
+    # original semantics as the 1-alternative special case.
+    #
+    # v1.0.51 — for #681. Three asymmetric guards (chip-AGNOSTIC) the raw
+    # whole-doc substring search above lacked:
+    #   (1) SCOPE the search to the LAYER named in the rule ("L8 mentions
+    #       'interconnect'" must look in the L8 section, not L18 metadata)
+    #       — use _scoped_section_text; fall back to whole-doc only when no
+    #       per-layer text is captured (e.g. unit-test fixtures with only
+    #       `_full_text`), so existing behaviour is preserved.
+    #   (2) EMPTY-metadata-key non-evidence: a key NAME whose value is empty
+    #       (`"interconnect_rules": []`) must not satisfy a mention.
+    #   (3) OPTIONAL / EXPLICIT-NEGATION suppression: a term that occurs only
+    #       inside an optional ('可自行加…但不強制', 'may add', '(opt)') or a
+    #       NOT-constrained / negated ('must NOT use', '不在…約束的事', '❌')
+    #       window is not real evidence of use — same asymmetry the ext_field
+    #       'contains' branch already applies via _extension_optional_only /
+    #       _extension_excluded.
+    m = re.match(r"^(L\d+R?(?:\.[a-zA-Z0-9_\[\]]+)?)\s+mentions\s+(.+)$", p)
     if m:
-        value = m.group(2)
-        if value.lower() in full_text.lower():
-            return (True, 0.7)
-        return (False, 0.0)
+        field_ref = m.group(1)
+        values = re.findall(r"['\"]([^'\"]+)['\"]", m.group(2))
+        if values:
+            # (1) Scope to the declared layer; fall back to whole-doc only
+            # when no per-layer text map exists for this layer.
+            scoped = _scoped_section_text(facts, field_ref)
+            search_src = scoped if scoped else full_text
+            # (2) Drop empty-value metadata key NAMES so they are not
+            # mistaken for evidence.
+            search_src = _strip_empty_metadata_keys(search_src)
+            ft = search_src.lower()
+            for value in values:
+                v_l = value.lower()
+                if v_l not in ft:
+                    continue
+                # (3) Suppress when this term occurs ONLY inside an
+                # optional / explicit-negation window (no genuine mention).
+                if _term_optional_or_negated(value, search_src):
+                    continue
+                return (True, 0.7)
+            return (False, 0.0)
 
     # Free-text fallback: check if ALL quoted phrases appear in full_text
     quoted = re.findall(r"['\"]([^'\"]+)['\"]", p)
@@ -1003,9 +1272,42 @@ def _is_soc_top(manifest: Dict[str, Any]) -> bool:
     return False
 
 
+#: The manifest fields this module reads as lists. Each one, when present in
+#: another shape, was silently emptied — and each empty has a different and
+#: entirely silent consequence downstream:
+#:   rtl_files          `ip_catalog_pull` copies nothing AND `find_local_mirror`
+#:                      stops testing candidate dirs for RTL (its `if
+#:                      rtl_files:` guard), so it can bind the wrong mirror.
+#:   depends_on         the transitive auto-include loop in `query_catalog`
+#:                      never runs, so a required IP is simply not offered.
+#:   synth_safe_params  `synth_param_overrides()` returns `{}`, so the glue
+#:                      author instantiates the IP with none of the pins the
+#:                      manifest says synthesis needs.
+_MANIFEST_LIST_FIELDS = ("rtl_files", "depends_on", "synth_safe_params")
+
+
+def _shape_refusals_in(m: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every list field PRESENT in this manifest in a shape this module cannot
+    read, each NAMING what arrived. Empty list = nothing to refuse; a field
+    that is absent, or is a declared `[]`, is not a refusal."""
+    out: List[Dict[str, Any]] = []
+    for key in _MANIFEST_LIST_FIELDS:
+        _, mismatch = _shape_refusal.read_list_from(m, key)
+        if mismatch is not None:
+            out.append(mismatch)
+    return out
+
+
 def _manifest_to_match(m: Dict[str, Any], pattern: str,
                        confidence: float) -> CatalogMatch:
-    """Build a CatalogMatch from a manifest dict + firing pattern."""
+    """Build a CatalogMatch from a manifest dict + firing pattern.
+
+    #991 — the three list fields keep their empty-on-unreadable behaviour so
+    every existing reader is unchanged, but the refusal is now RECORDED on the
+    match instead of discarded. `query_catalog` reads it and refuses the entry;
+    a direct caller of this function that ignores `shape_refusals` behaves
+    exactly as before rather than silently gaining a new failure mode.
+    """
     return CatalogMatch(
         ip_name=m.get("ip_name", "<unknown>"),
         category=m.get("_category", ""),
@@ -1023,7 +1325,28 @@ def _manifest_to_match(m: Dict[str, Any], pattern: str,
             m.get("synth_safe_params", [])
             if isinstance(m.get("synth_safe_params"), list) else []
         ),
+        shape_refusals=_shape_refusals_in(m),
     )
+
+
+def _refuse_unreadable_shape(mt: CatalogMatch) -> Optional[str]:
+    """The stderr sentence for a manifest whose list fields cannot be read, or
+    `None` when there is nothing to refuse.
+
+    REFUSED, not repaired and not offered-with-a-warning, for the same reason
+    the #187 self-match guard refuses rather than flags: what follows a match
+    is an automatic pull, and an IP pulled without the files, dependencies or
+    synthesis pins its own manifest declares fails several steps later with an
+    error that names none of this. The remedy is one edit to the manifest, and
+    `ip_catalog_validate.py` already states the same requirement — it is simply
+    not wired to run before a query.
+    """
+    if not mt.shape_refusals:
+        return None
+    parts = "; ".join(_shape_refusal.sentence(r) for r in mt.shape_refusals)
+    return (f"manifest {mt.manifest_path or mt.ip_name} declares "
+            f"{[r['field'] for r in mt.shape_refusals]} in a shape this "
+            f"module cannot read, so this IP is NOT offered: {parts}")
 
 
 # ---------------------------------------------------------------------------
@@ -1036,15 +1359,124 @@ def _manifest_to_match(m: Dict[str, Any], pattern: str,
 _SOC_TOP_RANK_BIAS = 0.05
 
 
+# ---------------------------------------------------------------------------
+# #187 (BENCHMARK INTEGRITY) — SELF-MATCH GUARD
+# ---------------------------------------------------------------------------
+# A catalog entry whose upstream repo / module set IS the IC-under-test's own
+# reference design must never be offered as a pull candidate: doing so hands the
+# generation the answer key through the front door (§4.05 forbids reading the
+# oracle; the catalog can hand it over just the same). The guard keys on the
+# IC's TOP-LEVEL identity (its ic-name / L1 part identity / top_module) — a
+# legitimate COMPONENT IP supplies only a LEAF and its tokens never intersect
+# the IC's own top. chip-AGNOSTIC: pure name/repo normalization, no chip literal.
+
+# Generic tokens that are NOT design-identifying (the runner's auto wrapper name,
+# family words) — dropped from BOTH the IC identity and the entry token set so a
+# shared generic word can never trigger a false self-match.
+_GENERIC_IDENT_STOP = frozenset({
+    "chip_top", "chip", "top", "soc", "soc_top", "top_level", "toplevel",
+    "core", "design", "ip", "rtl", "wrapper", "dut", "module", "tb",
+    "src", "hdl", "verilog"})
+
+# L1/L3/L9 fields that carry a SPECIFIC design name (never a family/category).
+_IC_IDENT_KEYS = frozenset({
+    "part_number", "part_name", "part", "product_name", "design_name",
+    "ip_name", "chip_name", "module_name", "top_module", "top", "top_level"})
+
+
+def _norm_ident(x: Any) -> str:
+    """Normalize a name / path / URL to a bare identity token: basename, `.git`
+    and HDL extension stripped, lowercased."""
+    if not isinstance(x, str):
+        return ""
+    s = x.strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    if not s:
+        return ""
+    base = s.replace("\\", "/").rstrip("/").split("/")[-1]
+    low = base.lower()
+    for suf in (".git", ".sv", ".svh", ".vhdl", ".vhd", ".sva", ".v"):
+        if low.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    return base.strip().lower()
+
+
+def _ic_identity_tokens(project: Path, facts: Dict[str, Any],
+                        ic_name: Optional[str] = None) -> set:
+    """The TOP-LEVEL identity tokens of the IC UNDER TEST (#187) — the run's
+    ic-name, the project dir name, and the SPECIFIC design-name fields of L1/L3/L9
+    — normalized, with generic tokens dropped. chip-AGNOSTIC."""
+    toks: set = set()
+
+    def _add(x: Any) -> None:
+        t = _norm_ident(x)
+        if t and t not in _GENERIC_IDENT_STOP:
+            toks.add(t)
+
+    _add(ic_name)
+    _add(project.name)
+    for k, v in (facts or {}).items():
+        if isinstance(k, str) and isinstance(v, str) \
+                and k.rsplit(".", 1)[-1].lower() in _IC_IDENT_KEYS:
+            _add(v)
+    return toks
+
+
+def _entry_identity_tokens(mt: CatalogMatch,
+                           manifest: Dict[str, Any]) -> set:
+    """The module / repo identity tokens a catalog entry SUPPLIES (#187): its
+    ip_name, declared top_module, the basenames of its rtl_files, and its
+    upstream (canonical_url) repo basename — normalized, generic tokens dropped."""
+    toks: set = set()
+
+    def _add(x: Any) -> None:
+        t = _norm_ident(x)
+        if t and t not in _GENERIC_IDENT_STOP:
+            toks.add(t)
+
+    _add(mt.ip_name)
+    _add(mt.canonical_url)
+    if isinstance(manifest, dict):
+        _add(manifest.get("top_module"))
+        _add(manifest.get("upstream") or manifest.get("upstream_repo"))
+    for f in (mt.rtl_files or []):
+        _add(f)
+    return toks
+
+
+def _self_match_reason(mt: CatalogMatch, manifest: Dict[str, Any],
+                       ic_ident: set) -> str:
+    """Non-empty reason when the catalog entry would hand back the IC's OWN
+    design (its top/name identity intersects the IC identity); "" for a
+    legitimate leaf COMPONENT IP. #187 benchmark integrity."""
+    if not ic_ident:
+        return ""
+    inter = sorted(_entry_identity_tokens(mt, manifest) & ic_ident)
+    if not inter:
+        return ""
+    return ("catalog entry supplies the IC-under-test's OWN design (shared "
+            f"top/identity token(s): {', '.join(inter)}) — offering it would "
+            "hand back the reference design; REFUSED (#187 benchmark integrity)")
+
+
 def query_catalog(project: Path,
                   catalog_dir: Optional[Path] = None,
-                  min_confidence: float = 0.4) -> List[CatalogMatch]:
-    """Top-level API. Returns ranked list of catalog matches for project."""
+                  min_confidence: float = 0.4,
+                  ic_name: Optional[str] = None,
+                  allow_self_match: bool = False) -> List[CatalogMatch]:
+    """Top-level API. Returns ranked list of catalog matches for project.
+
+    #187 — a catalog entry that would hand back the IC-under-test's OWN reference
+    design (its top/name intersects the IC identity — see `_self_match_reason`)
+    is REFUSED by default (never returned), so the flow can never pull the answer
+    key. Pass `allow_self_match=True` to instead RETURN such entries flagged
+    (`self_match=True`, with a reason) for an explicit-acknowledgement caller."""
     manifests = load_manifests(catalog_dir)
     if not manifests:
         return []
 
     facts = load_project_facts(project)
+    ic_ident = _ic_identity_tokens(project, facts, ic_name)
     by_name: Dict[str, Dict[str, Any]] = {
         m.get("ip_name", ""): m for m in manifests if m.get("ip_name")
     }
@@ -1069,7 +1501,21 @@ def query_catalog(project: Path,
                 best_pattern = pattern
 
         if best_confidence >= min_confidence:
-            matches.append(_manifest_to_match(m, best_pattern, best_confidence))
+            mt = _manifest_to_match(m, best_pattern, best_confidence)
+            _shape_reason = _refuse_unreadable_shape(mt)
+            if _shape_reason:
+                print(f"ip_catalog_query: REFUSED unreadable manifest shape "
+                      f"{ip_name!r} — {_shape_reason}", file=sys.stderr)
+                continue
+            reason = _self_match_reason(mt, m, ic_ident)
+            if reason:
+                mt.self_match = True
+                mt.self_match_reason = reason
+                print(f"ip_catalog_query: REFUSED self-match {ip_name!r} — "
+                      f"{reason}", file=sys.stderr)
+                if not allow_self_match:
+                    continue          # never offer the IC's own design
+            matches.append(mt)
             matched_names.add(ip_name)
             if _is_soc_top(m):
                 soc_top_names.add(ip_name)
@@ -1090,6 +1536,24 @@ def query_catalog(project: Path,
         matched_names.add(dep)
         dep_match = _manifest_to_match(
             dm, "depends_on(auto-included)", max(min_confidence, 0.4))
+        # #991 — and so does the shape refusal. A dependency pulled in
+        # automatically gets no human read at all, so an unreadable manifest
+        # here is if anything less likely to be noticed than one that matched.
+        _dep_shape = _refuse_unreadable_shape(dep_match)
+        if _dep_shape:
+            print(f"ip_catalog_query: REFUSED unreadable manifest shape for "
+                  f"dependency {dep!r} — {_dep_shape}", file=sys.stderr)
+            continue
+        # #187 — the self-match guard applies to auto-included dependencies too:
+        # a dependency that is itself the IC's own design is refused.
+        _dep_reason = _self_match_reason(dep_match, dm, ic_ident)
+        if _dep_reason:
+            dep_match.self_match = True
+            dep_match.self_match_reason = _dep_reason
+            print(f"ip_catalog_query: REFUSED self-match dependency {dep!r} — "
+                  f"{_dep_reason}", file=sys.stderr)
+            if not allow_self_match:
+                continue
         matches.append(dep_match)
         if _is_soc_top(dm):
             soc_top_names.add(dep)
@@ -1128,6 +1592,13 @@ def main(argv: List[str]) -> int:
                     help="Override ip-catalog/ location")
     ap.add_argument("--min-confidence", type=float, default=0.4,
                     help="Minimum confidence to include in results (default 0.4)")
+    ap.add_argument("--ic-name", default=None,
+                    help="IC-under-test name (strengthens the #187 self-match "
+                         "guard; L1/L3/L9 identity is used when omitted)")
+    ap.add_argument("--allow-self-match", action="store_true",
+                    help="Return (flagged) instead of refusing a catalog entry "
+                         "that supplies the IC's OWN design (#187 — requires "
+                         "explicit acknowledgement)")
     ap.add_argument("--list-only", action="store_true",
                     help="List all manifests (no project query)")
     ap.add_argument("--json", action="store_true",
@@ -1151,6 +1622,8 @@ def main(argv: List[str]) -> int:
         project,
         Path(args.catalog_dir) if args.catalog_dir else None,
         min_confidence=args.min_confidence,
+        ic_name=args.ic_name,
+        allow_self_match=args.allow_self_match,
     )
 
     if args.json:

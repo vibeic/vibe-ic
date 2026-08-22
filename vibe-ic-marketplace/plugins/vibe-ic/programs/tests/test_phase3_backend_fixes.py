@@ -11,6 +11,7 @@ violation must still be classified user-routing (→ FAIL), and a vacuous
 Magic 0-count must never be reported as a clean pass.
 """
 import importlib
+import pathlib
 
 import pytest
 
@@ -400,6 +401,72 @@ class TestSiliconCriticalPnrBlocks:
         assert "define_pdn_grid" not in tcl
         assert "pdngen" not in tcl
 
+    # ---- PDK-adaptive PDN (commercial VDD/VSS) -------------------------
+    _COMMERCIAL_LEF = (
+        "MACRO INVD1\n"
+        "  SIZE 1.32 BY 5.04 ;\n"
+        "  PIN VDD\n    USE POWER ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0 4.64 1.32 5.44 ;\n    END\n  END VDD\n"
+        "  PIN VSS\n    USE GROUND ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0 -0.4 1.32 0.4 ;\n    END\n  END VSS\n"
+        "  PIN A\n    DIRECTION INPUT ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0.2 1.0 0.4 1.4 ;\n    END\n  END A\n"
+        "END INVD1\n")
+
+    # A minimal multi-metal stack so the adaptive PDN can derive its straps.
+    # Names/values are generic — this fixture stands for ANY PDK reaching the
+    # adaptive path, not a particular one.
+    _STACK_TLEF = "".join(
+        f"LAYER MET{i}\n  TYPE ROUTING ;\n  DIRECTION {d} ;\n"
+        f"  PITCH 0.5 ;\n  WIDTH 0.2 ;\nEND MET{i}\n"
+        for i, d in enumerate(
+            ["HORIZONTAL", "VERTICAL", "HORIZONTAL", "VERTICAL"], 1))
+
+    def _commercial_pdk(self, lef_path):
+        # A non-sky130 PDK (VDD/VSS rails, no tapcell_master) — the commercial PDK
+        # shape. tapcell_master None → adaptive PDN path. A real tech LEF is
+        # written next to the cell LEF because the adaptive PDN now DERIVES its
+        # upper-metal straps from the routing stack; a PDK that cannot be
+        # strapped is reported PDN_NO_STRAPS rather than passing hollow, which
+        # is covered separately below.
+        tlef = pathlib.Path(lef_path).parent / "tech.lef"
+        tlef.write_text(self._STACK_TLEF)
+        return mod.PdkConfig(
+            name="custom:commercial_pdk", liberty="/p/l.lib",
+            tech_lef=str(tlef), cell_lef=str(lef_path), cell_gds=None,
+            site="unit", drc_deck=None, metal_prefix="met",
+            tapcell_master=None)
+
+    def test_discover_pg_from_lef_commercial_vdd_vss(self, tmp_path):
+        lef = tmp_path / "cells.lef"
+        lef.write_text(self._COMMERCIAL_LEF)
+        pg = mod._discover_pg_from_lef(str(lef))
+        assert pg == ("VDD", "VSS", "MET1", 0.8), pg
+
+    def test_discover_pg_from_lef_none_without_pg_pins(self, tmp_path):
+        lef = tmp_path / "nopg.lef"
+        lef.write_text("MACRO X\n  SIZE 1 BY 1 ;\n  PIN A\n    DIRECTION "
+                       "INPUT ;\n  END A\nEND X\n")
+        assert mod._discover_pg_from_lef(str(lef)) is None
+
+    def test_pdn_adaptive_on_commercial_pdk(self, tmp_path):
+        # The commercial PDK must get a REAL met1 follow-pins PDN using the
+        # DISCOVERED rail names (VDD/VSS) — not the sky130 VPWR/VGND hardcode,
+        # which matches nothing → no PDN → TritonRoute ignores the bare power
+        # rails → signal routes land <min-space (commercial PDK M1.S.1). Follow-pins
+        # turns each rail into routed PG geometry the router keeps clear of.
+        lef = tmp_path / "cells.lef"
+        lef.write_text(self._COMMERCIAL_LEF)
+        tcl = mod._build_pdn_tcl(self._commercial_pdk(lef))
+        assert "PDN_INSERTED_ADAPTIVE" in tcl
+        assert 'add_global_connection -net VDD -pin_pattern "^VDD$" -power' in tcl
+        assert 'add_global_connection -net VSS -pin_pattern "^VSS$" -ground' in tcl
+        assert "add_pdn_stripe -grid grid -layer MET1 -width 0.8 -followpins" in tcl
+        assert "pdngen" in tcl
+        assert "PDN_NONFATAL" in tcl
+        # Must NOT emit the sky130-only pin names (they match no commercial PDK pin).
+        assert "VPWR" not in tcl and "VGND" not in tcl
+
     def test_pdn_block_pins_VPB_and_VNB_for_sky130(self):
         # SKY130 std cells expose well-tap pins as VPB / VNB (not VPWR/VGND).
         # If global_connect misses these, every cell's bulk floats →
@@ -458,3 +525,232 @@ class TestSiliconCriticalPnrBlocks:
         # falls back to 0.30 on nonnumeric input; pin that.
         u, _ = mod._normalize_util("default")
         assert u == 0.30
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC E2E (GAP-E2E-4/10) — die AUTO-SIZING from synth cell count
+# Validated against the end-to-end campaign's empirical data points:
+#   sha256 (22,786 cells) stranded at 4% util on a fixed 1500x1500 → route
+#   plateau; aes (39,180 cells) converged only at 1400x1400 (~15% util).
+# ---------------------------------------------------------------------------
+class TestDieAutoSizing:
+    _SITE_AREA = 1.2512  # sky130_fd_sc_hd unithd: 0.46 x 2.72
+
+    def test_parse_site_area_from_lef(self):
+        lef = ("SITE unithd\n  SYMMETRY Y ;\n  CLASS CORE ;\n"
+               "  SIZE 0.46 BY 2.72 ;\nEND unithd\n")
+        assert mod._parse_site_area_um2(lef) == pytest.approx(1.2512, rel=1e-3)
+
+    def test_parse_site_area_missing_returns_none(self):
+        assert mod._parse_site_area_um2("no site here") is None
+        assert mod._parse_site_area_um2("") is None
+        assert mod._parse_site_area_um2(None) is None
+
+    def test_auto_die_sizes_to_target_util(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        side = mod._auto_die_side_um(22786, 0.40, avg)
+        # design lands near the requested 40% util (not the fixed-die 4%)
+        util = 22786 * avg / (side * side)
+        assert 0.30 <= util <= 0.50
+        assert 500 <= side <= 800   # NOT 1500 (the stranding fixed default)
+
+    def test_auto_die_matches_aes_empirical_converge(self):
+        # aes converged at 1400x1400 (~15% util); the helper reproduces it.
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        side = mod._auto_die_side_um(39180, 0.15, avg)
+        assert 1350 <= side <= 1450
+
+    def test_auto_die_monotonic_in_cell_count(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert (mod._auto_die_side_um(1000, 0.4, avg)
+                < mod._auto_die_side_um(50000, 0.4, avg))
+
+    def test_auto_die_clamps_tiny_to_floor(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert mod._auto_die_side_um(1, 0.4, avg) == mod._AUTO_DIE_MIN_SIDE_UM
+
+    def test_auto_die_clamps_huge_to_max(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert (mod._auto_die_side_um(10_000_000, 0.4, avg)
+                == mod._DEFAULT_DIE_MAX_UM)
+
+    def test_auto_die_bad_util_falls_back(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        # util 0 / >1 / negative → the default target util, never a crash
+        assert mod._auto_die_side_um(1000, 0.0, avg) > 0
+        assert mod._auto_die_side_um(1000, -1.0, avg) > 0
+
+    def test_resolve_passes_explicit_die_through_unchanged(self):
+        import pathlib
+        out, note = mod._resolve_auto_die_um(
+            "900x900", pathlib.Path("/nonexistent"), 0.4, None)
+        assert out == "900x900" and note is None
+
+    def test_resolve_auto_zero_cells_falls_back_safely(self, tmp_path):
+        # 'auto' with an unreadable/empty netlist must not crash → safe fixed die
+        nl = tmp_path / "empty_synth.v"
+        nl.write_text("// no instances\n")
+
+        class _Pdk:
+            cell_lef = "/nonexistent.lef"
+        out, note = mod._resolve_auto_die_um("auto", nl, 0.4, _Pdk())
+        assert "x" in out and note is not None  # a real WxH + a disclosure note
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC E2E (GAP-E2E-2) — CONTAINER corner-liberty discovery
+# The runner runs on the host but the built-in PDK's ss/tt/ff libs live in the
+# container fs (invisible to a host glob) → a false single_corner_stance on
+# every sky130A run (spm/aes/subservient/caravel/sha256). Discover via docker.
+# ---------------------------------------------------------------------------
+class TestContainerCornerDiscovery:
+    _SKY130_LIBS = [
+        ("sky130_fd_sc_hd__ss_100C_1v40",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib"),
+        ("sky130_fd_sc_hd__ss_100C_1v60",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v60.lib"),
+        ("sky130_fd_sc_hd__ss_n40C_1v28",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_n40C_1v28.lib"),
+        ("sky130_fd_sc_hd__tt_025C_1v80",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+        ("sky130_fd_sc_hd__ff_n40C_1v95",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_n40C_1v95.lib"),
+        ("sky130_fd_sc_hd__ff_100C_1v65",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_100C_1v65.lib"),
+    ]
+
+    def test_select_one_representative_per_label(self):
+        corners = mod._select_signoff_corners(self._SKY130_LIBS)
+        labels = [c["label"] for c in corners]
+        assert labels == ["SS", "TT", "FF"]          # ordered, one each
+        assert len(corners) == 3                      # ≥2 ⇒ multi-corner
+
+    def test_select_prefers_canonical_signoff_names(self):
+        corners = {c["label"]: c["name"]
+                   for c in mod._select_signoff_corners(self._SKY130_LIBS)}
+        assert corners["TT"] == "sky130_fd_sc_hd__tt_025C_1v80"
+        assert corners["SS"] == "sky130_fd_sc_hd__ss_100C_1v60"   # sky130 ref slow (-10%)
+        assert corners["FF"] == "sky130_fd_sc_hd__ff_n40C_1v95"   # fast-cold
+
+    def test_select_falls_back_to_any_lib_of_label(self):
+        # only an ss lib whose name is NOT the canonical preference → still picked
+        corners = mod._select_signoff_corners(
+            [("sky130_fd_sc_hd__ss_n40C_1v28",
+              "/x/sky130_fd_sc_hd__ss_n40C_1v28.lib")])
+        assert len(corners) == 1 and corners[0]["label"] == "SS"
+
+    def test_select_empty_on_no_libs(self):
+        assert mod._select_signoff_corners([]) == []
+
+    def test_select_follows_pdk_reference_sta_corners(self, monkeypatch):
+        """AUTHORITATIVE: the SS representative FOLLOWS the PDK's own librelane
+        STA_CORNERS, not a hardcode. Differential control: a config declaring
+        ss_100C_1v60 picks 1v60; a config declaring ss_100C_1v40 picks 1v40 —
+        from the SAME lib list — proving the pick tracks the reference config."""
+        libs = [
+            ("sky130_fd_sc_hd__ss_100C_1v40", "/p/sky130_fd_sc_hd__ss_100C_1v40.lib"),
+            ("sky130_fd_sc_hd__ss_100C_1v60", "/p/sky130_fd_sc_hd__ss_100C_1v60.lib"),
+            ("sky130_fd_sc_hd__tt_025C_1v80", "/p/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+            ("sky130_fd_sc_hd__ff_n40C_1v95", "/p/sky130_fd_sc_hd__ff_n40C_1v95.lib"),
+        ]
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+
+        def _cfg(text):
+            return lambda c, cmd, timeout=60, **_: (0, text, "")
+
+        libdir = "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib"
+
+        # reference declares ss_100C_1v60 -> pick 1v60
+        monkeypatch.setattr(mod, "_docker_exec", _cfg(
+            "set ::env(STA_CORNERS) nom_tt_025C_1v80 nom_ss_100C_1v60 "
+            "nom_ff_n40C_1v95 max_ss_100C_1v60 max_tt_025C_1v80"))
+        got = {c["label"]: c["name"]
+               for c in mod._select_signoff_corners(libs, "ct60", libdir)}
+        assert got["SS"] == "sky130_fd_sc_hd__ss_100C_1v60"
+
+        # NEGATIVE CONTROL: reference declares ss_100C_1v40 -> pick 1v40
+        # (the pick TRACKS the config, it is not hardcoded)
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        monkeypatch.setattr(mod, "_docker_exec", _cfg(
+            "set ::env(STA_CORNERS) nom_tt_025C_1v80 nom_ss_100C_1v40 "
+            "nom_ff_n40C_1v95"))
+        got2 = {c["label"]: c["name"]
+                for c in mod._select_signoff_corners(libs, "ct40", libdir)}
+        assert got2["SS"] == "sky130_fd_sc_hd__ss_100C_1v40"
+
+    def test_reference_corner_stems_failsafe_empty(self, monkeypatch):
+        """No container / docker failure -> empty stem set -> selection degrades
+        to the hardcoded preference (byte-identical to pre-fix)."""
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        assert mod._pdk_reference_signoff_corner_stems("", "/x/libs.ref/y/lib") == set()
+        def _boom(c, cmd, timeout=60, **_):
+            raise RuntimeError("docker down")
+        monkeypatch.setattr(mod, "_docker_exec", _boom)
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        assert mod._pdk_reference_signoff_corner_stems(
+            "ct", "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib") == set()
+
+    def test_discover_parses_container_ls(self, monkeypatch):
+        out = ("/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib\n"
+               "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__tt_025C_1v80.lib\n"
+               "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_n40C_1v95.lib\n"
+               "some_noise_line\n")
+        monkeypatch.setattr(mod, "_docker_exec",
+                            lambda c, cmd, timeout=60, **_: (0, out, ""))
+        libs = mod._discover_container_corner_libs(
+            "vibeic-eda", "/foss/pdks/sky130A/.../lib")
+        assert len(libs) == 3                      # only *.lib lines
+        assert all(p.endswith(".lib") for _, p in libs)
+        corners = mod._select_signoff_corners(libs)
+        assert [c["label"] for c in corners] == ["SS", "TT", "FF"]
+
+    def test_discover_empty_on_no_container(self):
+        assert mod._discover_container_corner_libs("", "/x/lib") == []
+        assert mod._discover_container_corner_libs("iic", "") == []
+
+    def test_discover_safe_on_docker_failure(self, monkeypatch):
+        def _boom(c, cmd, timeout=60, **_):
+            raise RuntimeError("docker down")
+        monkeypatch.setattr(mod, "_docker_exec", _boom)
+        assert mod._discover_container_corner_libs("iic", "/x/lib") == []
+
+
+class TestShipSignoffSpefRepairPromotion:
+    """#527 estimate-vs-SPEF — the SHIPPED post-route real-SPEF repair promotes the
+    repaired route as sign-off ONLY when it reaches non-negative setup AND the
+    reroute is DRC-clean; otherwise the base route is kept (no DRC regression)."""
+
+    _CLEAN = ("SHIP_WNS_BEFORE: -16.65\nSHIP_WNS_AFTER_REPAIR: 0.027\n"
+              "[INFO DRT-0199] Number of violations = 0.\nSHIP_SIGNOFF_REPAIR_DONE\n")
+
+    def test_parse_extracts_markers_and_violations(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert p["wns_before"] == -16.65
+        assert p["wns_after_repair"] == 0.027
+        assert p["route_violations"] == 0
+        assert p["done"] is True
+
+    def test_promote_when_met_and_drc_clean(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert mod._ship_repair_should_promote(p, True, True) is True
+
+    def test_no_promote_when_reroute_dirty(self):
+        log = ("SHIP_WNS_AFTER_REPAIR: 0.5\nNumber of violations = 7000\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_setup_still_negative(self):
+        log = ("SHIP_WNS_AFTER_REPAIR: -3.0\nNumber of violations = 0\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_no_violation_count_reported(self):
+        # a reroute that never reported a violation count is NOT trusted clean
+        log = ("SHIP_WNS_AFTER_REPAIR: 0.5\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_artifacts_missing(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert mod._ship_repair_should_promote(p, False, True) is False
+        assert mod._ship_repair_should_promote(p, True, False) is False

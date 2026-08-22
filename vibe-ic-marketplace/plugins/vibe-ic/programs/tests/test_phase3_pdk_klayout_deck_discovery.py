@@ -75,12 +75,12 @@ def test_discovery_does_not_pick_calibre_deck(tmp_path: Path) -> None:
     p = _project_with_pdk(tmp_path)
     cd = p / "input" / "pdk" / "calibre"
     cd.mkdir(parents=True, exist_ok=True)
-    (cd / "Calibre_HP18E80_DRC.rule").write_text("# calibre deck")
+    (cd / "Calibre_commercial_pdk_DRC.rule").write_text("# calibre deck")
     cfg = _detect_pdk(p)
     assert cfg.drc_deck is None
     # But the Calibre deck IS surfaced separately for WAIVED messaging.
     assert cfg.calibre_drc is not None
-    assert cfg.calibre_drc.endswith("Calibre_HP18E80_DRC.rule")
+    assert cfg.calibre_drc.endswith("Calibre_commercial_pdk_DRC.rule")
 
 
 def test_klayout_and_calibre_decks_both_recognised(tmp_path: Path) -> None:

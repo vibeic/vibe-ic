@@ -28,33 +28,115 @@ sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 
 
-# Each entry: (item, glob-relative-to-project, severity)
+# Each entry: (item, glob-relative-to-project, severity, gate)
+# `gate` names the AUTHORITATIVE sign-off gate program (or None for a
+# presence-only inventory row). For a row with a gate, the checklist is a
+# reminder that PRESENCE alone is NOT a pass — the named gate (run by
+# `signoff_ladder_run --mode tapeout`) verifies substance (e.g. the LVS row
+# requires a GENUINE netgen match, not a POWER_PIN_ONLY waiver).
 # Severity is reviewer guidance — not a blocking gate (the upstream
 # substance check is the blocker).
 _CHECKLIST_ITEMS = [
-    ("gds",                "phase3/stage4/gds/*.gds",                  "blocker"),
-    ("netlist",            "phase2/stage2/synth/*.v",                 "blocker"),
-    ("post_route_def",     "phase3/stage3/pnr/*.def",                  "blocker"),
-    ("sta_report",         "phase3/stage3/pnr/sta.rpt",                "blocker"),
-    ("sta_per_corner",     "phase3/stage3/sta/per_corner/sta_*.rpt",   "advisory"),
-    ("drc_report",         "reports/phase3/drc_signoff.rpt",           "blocker"),
-    ("lvs_report",         "reports/phase3/lvs.rpt",                   "blocker"),
-    ("erc_report",         "reports/phase3/erc.rpt",                   "advisory"),
-    ("ir_drop_report",     "reports/phase3/ir_drop.rpt",               "advisory"),
-    ("em_report",          "reports/phase3/em.rpt",                    "advisory"),
-    ("antenna_report",     "reports/phase3/antenna.rpt",               "advisory"),
-    ("density_report",     "reports/density.rpt",                      "advisory"),
-    ("power_report",       "reports/phase3/power.rpt",                 "advisory"),
-    ("metal_fill",         "phase3/stage3/pnr/filled.def",             "advisory"),
-    ("metal_fill_flag",    "phase3/stage3/pnr/metal_fill.done",        "advisory"),
-    ("spef",               "phase3/stage3/extracted/*.spef",           "advisory"),
-    ("post_layout_sim",    "phase3/stage3/sim_postlayout/pass.flag",   "advisory"),
-    ("eco_status",         "phase3/stage3/eco/no_eco_needed.flag",     "advisory"),
-    ("foundry_mask_spec",  "phase3/stage4/foundry_handoff/mask_spec.json", "blocker"),
-    ("foundry_wat_plan",   "phase3/stage4/foundry_handoff/wat_plan.json",  "blocker"),
-    ("foundry_corner_kit", "phase3/stage4/foundry_handoff/corner_test_vectors.json", "blocker"),
-    ("fpga_attestation",   "reports/phase2/fpga/on_board_pass.json",  "blocker"),
+    ("gds",                "phase3/stage4/gds/*.gds",                  "blocker",  None),
+    ("netlist",            "phase2/stage2/synth/*.v",                 "blocker",  None),
+    ("post_route_def",     "phase3/stage3/pnr/*.def",                  "blocker",  None),
+    ("sta_report",         "phase3/stage3/pnr/sta.rpt",                "blocker",  None),
+    ("sta_per_corner",     "phase3/stage3/sta/per_corner/sta_*.rpt",   "advisory", None),
+    ("sta_rigor",          "phase3/stage3/pnr/post_route_timing.rpt",  "advisory", "sta_signoff_rigor_check"),
+    ("drc_report",         "reports/phase3/drc_signoff.rpt",           "blocker",  None),
+    # LVS is genuine-match-required, NOT presence-only: a POWER_PIN_ONLY netgen
+    # waiver does NOT count as a tapeout LVS pass (lvs_tapeout_signoff_check).
+    ("lvs_report",         "reports/phase3/lvs.rpt",                   "blocker",  "lvs_tapeout_signoff_check"),
+    ("erc_report",         "reports/phase3/erc.rpt",                   "advisory", None),
+    ("ir_drop_report",     "reports/phase3/ir_drop.rpt",               "advisory", None),
+    ("em_report",          "reports/phase3/em.rpt",                    "advisory", None),
+    # EM current-density is the REAL J-vs-Jmax gate (replaces the decap-count
+    # proxy); the per-segment CSV is the artifact its gate consumes.
+    ("em_density",         "reports/phase3/em_segments.csv",           "advisory", "em_current_density_check"),
+    ("antenna_report",     "reports/phase3/antenna.rpt",               "advisory", None),
+    ("density_report",     "reports/density.rpt",                      "advisory", None),
+    ("power_report",       "reports/phase3/power.rpt",                 "advisory", None),
+    ("metal_fill",         "phase3/stage3/pnr/filled.def",             "advisory", None),
+    ("metal_fill_flag",    "phase3/stage3/pnr/metal_fill.done",        "advisory", None),
+    ("spef",               "phase3/stage3/extracted/*.spef",           "advisory", None),
+    # MBIST — every writable on-chip RAM needs a March-test wrapper (N/A when
+    # the design is RAM-less). mbist_wrapper_gen is the authority.
+    ("mbist_wrapper",      "phase3/**/mbist_manifest.json",            "advisory", "mbist_wrapper_gen"),
+    # DYNAMIC (transient) IR-drop — di/dt droop vs a %-of-Vdd budget. Distinct
+    # from the STATIC ir_drop above; dynamic_ir_drop_check is the authority
+    # (absent report → SKIP, never the static report as a dynamic pass).
+    ("dynamic_ir_report",  "reports/phase3/dynamic_ir.json",           "advisory", "dynamic_ir_drop_check"),
+    # PER-LAYER metal density (foundry CMP / Efabless met_min_ca_density) —
+    # distinct axis from the row/core-util density.rpt above. metal_layer_
+    # density_check is the authority.
+    ("metal_layer_density","reports/phase3/metal_density.json",         "advisory", "metal_layer_density_check"),
+    # Aging-corner STA (NBTI/PBTI/HCI Vt-drift over lifetime) — aging_derate_
+    # sta_check is the authority (no foundry aging Liberty → honest SKIP).
+    ("aging_sta_report",   "reports/phase3/aging_sta.json",             "advisory", "aging_derate_sta_check"),
+    # Thermal power-density screen (W/mm² + Tj) — thermal_screen_check is the
+    # authority (power not_computed / no die area → honest SKIP).
+    ("thermal_screen",     "reports/phase3/thermal_screen.json",        "advisory", "thermal_screen_check"),
+    # DFT sign-off (stuck-at + at-speed transition + BSDL) — dft_signoff_check
+    # is the authority (recomputes coverage vs the foundry floor).
+    ("dft_signoff",        "reports/phase2/dft/coverage.json",          "advisory", "dft_signoff_check"),
+    # POST-LAYOUT LEC — the FINAL routed/ECO netlist re-proven == synth/RTL
+    # (Step-13 LEC only proved RTL==synth). lec_post_layout_check is the
+    # authority (a non-proof is a FAIL, not a pass; no routed netlist → SKIP).
+    ("lec_post_layout",    "reports/phase3/lec_post_layout.json",       "advisory", "lec_post_layout_check"),
+    ("post_layout_sim",    "phase3/stage3/sim_postlayout/pass.flag",   "advisory", None),
+    ("eco_status",         "phase3/stage3/eco/no_eco_needed.flag",     "advisory", None),
+    ("foundry_mask_spec",  "phase3/stage4/foundry_handoff/mask_spec.json", "blocker", None),
+    ("foundry_wat_plan",   "phase3/stage4/foundry_handoff/wat_plan.json",  "blocker", None),
+    ("foundry_corner_kit", "phase3/stage4/foundry_handoff/corner_test_vectors.json", "blocker", None),
+    ("fpga_attestation",   "reports/phase2/fpga/on_board_pass.json",  "blocker",  None),
+    # Caravel / Open-MPW shuttle rows (N/A for non-Caravel designs — absent is
+    # not a failure there). The gate is the authority, not file presence.
+    ("mpw_precheck",       "**/mpw_precheck/**/*.log",                 "advisory", "mpw_precheck_result_gate"),
+    ("layout_xor",         "reports/**/xor_report.json",               "advisory", "xor_layout_check"),
 ]
+
+# Human-readable "why the gate, not presence" note per authoritative gate.
+_GATE_NOTES = {
+    "lvs_tapeout_signoff_check":
+        "genuine netgen `Circuits match uniquely` required — a POWER_PIN_ONLY "
+        "waiver is NOT a tapeout LVS pass.",
+    "em_current_density_check":
+        "real per-segment J vs the PDK Jmax limit — replaces the decap-count "
+        "proxy; absent Jmax reference → SKIP, never a pass.",
+    "sta_signoff_rigor_check":
+        "sign-off STA must carry OCV derate + recovery/removal + "
+        "min-pulse-width — a bare setup/hold-MET report is optimistic.",
+    "mbist_wrapper_gen":
+        "every writable on-chip RAM needs a March-test MBIST wrapper "
+        "(N/A when the design is RAM-less).",
+    "mpw_precheck_result_gate":
+        "Efabless/chipIgnite shuttle verdict — every required precheck stage "
+        "must carry an explicit PASS (Caravel/Open-MPW only).",
+    "xor_layout_check":
+        "computed GDS-vs-golden XOR with an EXPLICIT blackbox-macro waiver "
+        "allow-list — replaces the hardcoded 2/7 floor.",
+    "dynamic_ir_drop_check":
+        "transient (di/dt) IR droop vs a %-of-Vdd budget — distinct from the "
+        "static IR row; absent dynamic report → SKIP, never the static report "
+        "read as a dynamic pass.",
+    "metal_layer_density_check":
+        "PER-LAYER metal density within the foundry CMP window (Efabless "
+        "met_min_ca_density) — the row/core-util density.rpt is a different "
+        "axis and is NOT a substitute.",
+    "aging_derate_sta_check":
+        "aging-derated STA (NBTI/PBTI/HCI Vt-drift) worst slack >= margin — no "
+        "foundry aging Liberty → honest SKIP, never a fabricated aging number.",
+    "thermal_screen_check":
+        "first-order power-density screen (W/mm², + Tj when available) — power "
+        "not_computed / no die area → honest SKIP.",
+    "dft_signoff_check":
+        "aggregate DFT sign-off: stuck-at recomputed vs the foundry floor + a "
+        "real/documented-engine-limited at-speed transition record + a BSDL "
+        "for a padded design.",
+    "lec_post_layout_check":
+        "the FINAL routed/ECO netlist re-proven logically == synth/RTL "
+        "(Step-13 only proved RTL==synth) — a non-proof is a FAIL, not a pass.",
+}
 
 
 def _glob_first(project: Path, pattern: str):
@@ -107,7 +189,7 @@ def main(argv=None) -> int:
     items = []
     blockers_present = 0
     blockers_total = 0
-    for name, pattern, severity in _CHECKLIST_ITEMS:
+    for name, pattern, severity, gate in _CHECKLIST_ITEMS:
         f = _glob_first(project, pattern)
         present = f is not None
         size = _file_size(f) if f else 0
@@ -122,6 +204,12 @@ def main(argv=None) -> int:
             "path": str(f.relative_to(project)) if f else None,
             "size_bytes": size,
             "severity": severity,
+            # AUTHORITATIVE sign-off gate for this row (None = presence-only).
+            # When set, PRESENCE is NOT a pass — the named gate verifies
+            # substance (run via `signoff_ladder_run --mode tapeout`).
+            "gate": gate,
+            "gate_note": _GATE_NOTES.get(gate) if gate else None,
+            "presence_is_pass": gate is None,
         })
 
     # flow v2.3.1 (review P1-5) — PENDING_FOUNDRY tracking closes here: the
@@ -181,6 +269,14 @@ def main(argv=None) -> int:
             else "BLOCKER_MISSING"
         ),
         "items": items,
+        # The authoritative sign-off gate per checklist row (row -> gate
+        # program). Rows here are substance-gated, not presence-only: the LVS
+        # row requires a genuine netgen match (not a POWER_PIN_ONLY waiver),
+        # EM is real J-vs-Jmax, etc. These gates run in
+        # `signoff_ladder_run --mode tapeout`.
+        "gate_references": {
+            it["name"]: it["gate"] for it in items if it.get("gate")
+        },
         "open_waivers": waivers,
         "pending_foundry_items": pending_foundry,   # flow v2.3.1 P1-5
         "reviewer_todo": [
@@ -194,11 +290,17 @@ def main(argv=None) -> int:
         "notes": (
             "This checklist is a derived inventory of present artefacts. "
             "BLOCKER items missing here MUST be authored before tape-out. "
-            "Substance verification (DRC/LVS/STA/IR-drop) is performed by "
-            "the dedicated upstream gates — this generator does not "
-            "re-validate their content. Foundry-side acceptance of mask "
-            "spec, WAT plan, scribe layout, corner test kit is also "
-            "enforced by foundry_handoff_package_check (Step 38, v2.3)."
+            "Rows carrying a `gate` are SUBSTANCE-gated, not presence-only: "
+            "the LVS row requires a GENUINE netgen match (a POWER_PIN_ONLY "
+            "waiver is NOT a tapeout pass), EM is real J-vs-Jmax (not the "
+            "decap-count proxy), STA must carry OCV+recovery/removal+MPW "
+            "rigor, every writable RAM needs an MBIST wrapper, and Caravel "
+            "shuttle submissions must pass the mpw-precheck + a computed XOR. "
+            "Those gates run in `signoff_ladder_run --mode tapeout` (see each "
+            "row's `gate` / `gate_note`); this generator does not re-validate "
+            "their content. Foundry-side acceptance of mask spec, WAT plan, "
+            "scribe layout, corner test kit is also enforced by "
+            "foundry_handoff_package_check (Step 38, v2.3)."
         ),
     }
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
