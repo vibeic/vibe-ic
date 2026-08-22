@@ -960,3 +960,19 @@ this whole file is about.
 The 21 are the pre-existing reds §2b names.  The conclusion rests on the ID
 diff; the totals are reported beside it because a total is the one number that
 moves for reasons unrelated to the change.
+
+**And the correction did not stop at the record.**  Having measured that either
+guard alone refuses, the honest next sentence is that the pin was therefore
+blind to *either one being relaxed* — it only bit once both had fallen.  §7 now
+carries the closing of that: `_shipped_authorizer` polices the two guards
+individually, all four mutations are red, the unmutated shipped bytes pass, and
+the residual hole (an indirection that avoids naming `NO_CORPUS`) is stated
+rather than left to be found.  A record that measures a weakness and leaves it
+written down is half the job.
+
+**Whole-branch footprint**, so the claim above can be checked rather than taken:
+`tools/` is **byte-identical to `origin/main`** across the entire branch, the
+only change to a shipped program is docstring and comment text in
+`repo_hygiene_parallel.py`, and everything else is this file and
+`test_routed_def_corpus_dispatch.py`.  The fix these sections adjudicate is
+already on `main`; what the branch adds is the record and the pins.
