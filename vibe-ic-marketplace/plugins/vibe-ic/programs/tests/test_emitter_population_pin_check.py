@@ -27,11 +27,14 @@ IF THIS AREA GOES RED FOR A REVIEWER OR A RE-MEASURE, READ THIS FIRST
 bounds its subprocess at `timeout=55` -- WALL CLOCK, at three call sites -- and
 its subject is `prose_polarity_consulted_check.py` over the whole corpus.
 
-That subject is not a fixed cost. Measured on this machine: about 10s idle, 19.4s
-under a load average near 20, and it has been OBSERVED failing at 58.25s under a
-load average of 71 and passing on the next run with nothing changed. So a red
-there can mean the census is broken, or it can mean the machine was busy, and
-the two are not distinguishable from the failure alone.
+That subject is not a fixed cost, and the spread is not a smooth function of
+load. Measured on this machine: 10.8s to 13.0s across most runs, one run of
+19.4s at a load average near 20 with three runs of 10.9-11.3s at the SAME load
+minutes later, and it has been OBSERVED failing at 58.25s under a load average
+of 71 and passing on the next run with nothing changed. So a red there can mean
+the census is broken, or it can mean the machine was busy at that moment, and
+the two are not distinguishable from the failure alone. Do not read a single
+timing as the cost; the 19.4s figure was an outlier and is quoted as one.
 
 To tell them apart, run the gate DIRECTLY:
 
