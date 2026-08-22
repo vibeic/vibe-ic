@@ -328,13 +328,23 @@ def build(space_path: Path, trials_path: Optional[Path], budget: S.Budget,
                 f"was declared for it. Nothing in this manifest says whether "
                 f"its layout could be repaired by a metal-only ECO.")
         elif eco_state == feas.ECO_NOT_DECLARED and not project:
+            # The warning names the CONSEQUENCE, not just the condition. It
+            # fires whenever the stance is undeclared; `audit_manifest` refuses
+            # only when a candidate is actually published ELIGIBLE on that
+            # stance, so the two are not the same set and this says "any", not
+            # "this manifest". A warning that stopped at "no finding was made"
+            # reads as informational, and the reader would not learn that
+            # `--verify` is about to refuse what they just built.
             lines.append(
                 f"{MARK_CANNOT_CHECK} no design-for-ECO requirement was "
                 f"declared and no --project was given, so the route this "
                 f"design took was not established and this search made NO "
                 f"ECO-readiness finding. A candidate that deleted this "
-                f"design's spare/ECO population is published ELIGIBLE by it. "
-                f"Pass --project to have the flow's own route decide.")
+                f"design's spare/ECO population is published ELIGIBLE by it, "
+                f"and `--verify` REFUSES this manifest "
+                f"(ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE) if any candidate is. "
+                f"Pass --project to have the flow's own route decide, or "
+                f"declare the requirement.")
     else:
         ledger.evaluate_feasibility(None)   # the stub: never ELIGIBLE
         toolchain = SF.stub_toolchain_record()
