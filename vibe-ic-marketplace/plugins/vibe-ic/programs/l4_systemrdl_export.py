@@ -96,7 +96,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # --------------------------------------------------------------------------
 # The standard this targets.
@@ -361,7 +361,17 @@ alternate bit inside onreadtype onwritetype
 # --------------------------------------------------------------------------
 # small helpers
 # --------------------------------------------------------------------------
+import _corpus_location            # sibling program, one seam for all gates
 import _published_tree
+import _semantic_child_progress as _semantic_progress
+
+PROGRESS_SCOPE = "issue1710:l4-systemrdl-audit-corpus"
+_ACTIVE_PROGRESS = None
+
+
+def _checkpoint(unit: str) -> None:
+    if _ACTIVE_PROGRESS is not None:
+        _ACTIVE_PROGRESS.checkpoint(unit)
 
 def _sanitise_ident(raw: str, fallback: str) -> Tuple[str, bool]:
     """Return (identifier, changed). SystemRDL identifiers are C-like."""
@@ -1396,8 +1406,48 @@ def _structural_self_check(rdl_text: str) -> Dict[str, Any]:
 _L4_GLOB = "L4_REGMAP.json"
 
 
+def _l4_documents(root: Path, *,
+                  semantic_strict: bool = False) -> Tuple[List[Path], int, bool]:
+    """`(published documents, raw hits on disk, root is a published tree)`.
+
+    The two numbers are returned together because the DIFFERENCE between them is
+    the thing this program has already been wrong about once: `audit-corpus`
+    found "0 of 201 documents" and printed PASS. A caller that receives only the
+    kept list cannot tell "there are none" from "I dropped them all".
+
+    `root is a published tree` is False when git cannot answer for `root` — a
+    tarball fetch, an archive export or a loose directory. `_published_tree`
+    rules that presence on disk is then the honest answer (nothing has been
+    published there, so tracked-ness is not a question that applies), and this
+    function returns the raw walk with the flag saying so, rather than silently
+    presenting a disk walk as a statement about a published corpus.
+    """
+    hits = list(_iter_l4(root))
+    if semantic_strict:
+        # A loose run directory is an explicitly supported population: there
+        # is no published index, so its disk is the only possible answer.  A
+        # semantic caller first classifies that state with an unbounded Git
+        # probe.  Only a real checkout reaches strict index enumeration; probe
+        # launch/stall/protocol failure raises and becomes NORECORD instead of
+        # silently selecting the loose-directory branch.
+        loose = _corpus_location.not_a_checkout_reason(
+            root, f"published {_L4_GLOB} paths", timeout=None, strict=True)
+        if loose:
+            return hits, len(hits), False
+    published = _published_tree.published_paths(
+        root, timeout=None if semantic_strict else 180,
+        strict=semantic_strict)
+    if published is None:
+        return hits, len(hits), False
+    # The filter itself stays in `_published_tree`: a second copy of "is this
+    # path in the published set" here would be a predicate that looks
+    # authoritative and tracks nothing.
+    return _published_tree.filter_to_published(
+        root, hits, published=published), len(hits), True
+
+
 def _iter_l4(root: Path) -> Iterable[Path]:
-    """Walk the PUBLISHED L4 documents under `root`.
+    """Walk the L4 documents on disk under `root`.
 
     The skip set is matched against the path RELATIVE TO ROOT, never against
     the absolute path. Matching absolutely is the bug this repo has already
@@ -1420,25 +1470,117 @@ def _iter_l4(root: Path) -> Iterable[Path]:
     # The corpus is what the tree PUBLISHES, not what this machine has run.
     # 299 L4 documents on disk here vs 201 tracked; the docstring's own "0 of
     # 201" is a worktree count, which is why audit-corpus passed there and
-    # fails in a working checkout. See `_published_tree`.
-    yield from _published_tree.filter_to_published(root, hits)
+    # fails in a working checkout. See `_published_tree` and `_l4_documents`,
+    # which is where the tracked filter is now applied so the DROPPED count
+    # survives to the report.
+    yield from hits
 
 
-def audit_corpus(root: Path) -> Tuple[int, Dict[str, Any]]:
-    root = root.resolve()
-    files = sorted(_iter_l4(root))
+def _progress_document_unit(path: Path, roots: Sequence[Path]) -> str:
+    for index, root in enumerate(roots, 1):
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        return f"document:{index}:{rel}"
+    raise ValueError(f"L4 progress document is outside every declared root: {path}")
+
+
+def semantic_progress_units(root: Path,
+                            extra_roots: Sequence[Path] = ()) -> List[str]:
+    """Exact finite work manifest for a trusted audit-corpus parent."""
+    roots: List[Path] = []
+    for candidate in [root, *extra_roots]:
+        candidate = candidate.resolve()
+        if candidate not in roots:
+            roots.append(candidate)
+    units: List[str] = []
+    files: List[Path] = []
+    for index, candidate in enumerate(roots, 1):
+        kept, _found, _published = _l4_documents(
+            candidate, semantic_strict=True)
+        units.append(f"root:{index}")
+        files.extend(kept)
+    for path in sorted(set(files)):
+        units.extend(_semantic_progress.file_progress_units(
+            path, _progress_document_unit(path, roots)))
+    return units
+
+
+def audit_corpus(root: Path,
+                 extra_roots: Sequence[Path] = ()) -> Tuple[int, Dict[str, Any]]:
+    """Is the disposition table still TOTAL over the published L4 corpus?
+
+    `extra_roots` is where a corpus that no longer lives in `root` is ADDED —
+    $VIBE_IC_BENCHMARK_DATA after v1.10.56 moved the published cells out. Added,
+    never swapped in: an L4 document that comes home to this repository must not
+    stop being audited because a pointer is set.
+    """
+    roots: List[Path] = []
+    for r in [root, *extra_roots]:
+        r = r.resolve()
+        if r not in roots:
+            roots.append(r)
+
+    files: List[Path] = []
+    per_root: List[Dict[str, Any]] = []
+    for index, r in enumerate(roots, 1):
+        kept, found, is_published = _l4_documents(
+            r, semantic_strict=(_ACTIVE_PROGRESS is not None
+                                and _ACTIVE_PROGRESS.enabled))
+        per_root.append({"root": str(r), "documents_on_disk": found,
+                         "documents_published": len(kept),
+                         "published_tree": is_published})
+        files.extend(kept)
+        _checkpoint(f"root:{index}")
+    files = sorted(set(files))
+
     if not files:
-        return 2, {"verdict": "SKIP", "reason": "no %s under %s"
-                   % (_L4_GLOB, root)}
+        # WHY IT IS EMPTY IS THE CALLER'S DECISION, and it needs the numbers to
+        # make it: "no L4 document anywhere" and "N on disk, none of them
+        # tracked" are different facts and only the second is a defect in the
+        # tree. `main` maps this to NO_CORPUS or UNDETERMINED; it is never a PASS.
+        return 2, {"verdict": "NO_DOCUMENTS",
+                   "reason": "no %s under %s" % (
+                       _L4_GLOB, ", ".join(str(r) for r in roots)),
+                   "roots": per_root,
+                   "l4_documents_on_disk": sum(p["documents_on_disk"]
+                                               for p in per_root),
+                   "l4_documents_published": 0}
+    def _rel(p: Path) -> str:
+        """`p` relative to whichever root it came from — a document from the
+        pointed-at corpus is not under `root`, and `relative_to` would raise."""
+        for r in roots:
+            try:
+                return str(p.relative_to(r))
+            except ValueError:
+                continue
+        return str(p)
+
     unclassified: Dict[str, Dict[str, Any]] = {}
     seen = {"register": set(), "field": set()}
     parsed = 0
+    unreadable: List[str] = []
     for p in files:
+        identity = _progress_document_unit(p, roots)
         try:
-            d = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            text = _semantic_progress.read_text_chunks(
+                p, identity, _ACTIVE_PROGRESS)
+        except OSError:
+            if (_ACTIVE_PROGRESS is not None
+                    and _ACTIVE_PROGRESS.enabled):
+                raise
+            unreadable.append(_rel(p))
+            continue
+        try:
+            d = json.loads(text)
         except Exception:
+            unreadable.append(_rel(p))
+            _checkpoint(_semantic_progress.file_judged_unit(p, identity))
             continue
         if not isinstance(d, dict):
+            unreadable.append(_rel(p))
+            _checkpoint(_semantic_progress.file_judged_unit(p, identity))
             continue
         parsed += 1
         for reg in d.get("registers") or []:
@@ -1449,23 +1591,44 @@ def audit_corpus(root: Path) -> Tuple[int, Dict[str, Any]]:
                 if ("register", k) not in DISPOSITION:
                     unclassified.setdefault("register:%s" % k, {
                         "scope": "register", "key": k,
-                        "first_seen": str(p.relative_to(root))})
+                        "first_seen": _rel(p)})
             for f in _reg_fields(reg):
                 for k in f.keys():
                     seen["field"].add(k)
                     if ("field", k) not in DISPOSITION:
                         unclassified.setdefault("field:%s" % k, {
                             "scope": "field", "key": k,
-                            "first_seen": str(p.relative_to(root))})
+                            "first_seen": _rel(p)})
+        _checkpoint(_semantic_progress.file_judged_unit(p, identity))
     report = {
         "verdict": "FAIL" if unclassified else "PASS",
         "l4_documents_scanned": parsed,
+        # THE POPULATION, beside what was read out of it. `l4_documents_scanned`
+        # alone cannot distinguish an empty corpus from an unreadable one, and
+        # this program's own history is exactly that confusion ("0 of 201 -> PASS").
+        "l4_documents_published": len(files),
+        "l4_documents_unreadable": len(unreadable),
+        "unreadable": sorted(unreadable)[:20],
+        "roots": per_root,
         "register_keys_seen": len(seen["register"]),
         "field_keys_seen": len(seen["field"]),
         "disposition_rows": len(DISPOSITION),
         "unclassified": sorted(unclassified.values(),
                                key=lambda r: (r["scope"], r["key"])),
     }
+    if parsed == 0:
+        # EVERY DOCUMENT FOUND, NONE OF THEM READ. Before this the loop simply
+        # `continue`d past each one, `seen` stayed empty, nothing was
+        # unclassified, and the program printed "[PASS] every register/field key
+        # in the published corpus has a recorded disposition" over a corpus it
+        # had not parsed a single byte of. An empty result is not a zero.
+        report["verdict"] = "UNREADABLE"
+        report["reason"] = (
+            "%d published %s found and NONE of them parsed as a JSON object, "
+            "so 0 register/field keys were examined. That is 'I could not read "
+            "the corpus', not 'the disposition table covers it'."
+            % (len(files), _L4_GLOB))
+        return 2, report
     return (1 if unclassified else 0), report
 
 
@@ -1523,6 +1686,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "published L4 corpus?")
     a.add_argument("--root", type=Path)
     a.add_argument("--json", dest="json_out", type=Path)
+    a.add_argument("--corpus-may-be-absent", action="store_true",
+                   help="the caller asserts this repo need not carry the "
+                        "published corpus. Turns 'no L4 document anywhere' from "
+                        "UNDETERMINED into NO_CORPUS (rc 0), which STATES that "
+                        "nothing was scanned. It does NOT excuse a pointer that "
+                        "is set and broken: $%s aimed at something unreadable, "
+                        "or at a tree carrying no %s, stays UNDETERMINED."
+                        % (_corpus_location.CORPUS_ENV, _L4_GLOB))
 
     args = ap.parse_args(argv)
 
@@ -1543,15 +1714,83 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.cmd == "audit-corpus":
         root = args.root or _repo_root(Path(__file__).resolve())
-        rc, rep = audit_corpus(root)
+
+        # THE CORPUS IS ADDED, NOT SWAPPED IN, AND THE POINTER IS ANNOUNCED
+        # (#1710). All 199 tracked `L4_REGMAP.json` lived under `benchmark-data/`
+        # and left with it in v1.10.56, so `--root <repo>` — what the CI call
+        # site passes — now finds none and the gate refused on every landing.
+        # `_corpus_location.resolve` cannot decide this one: it answers "the
+        # NAMED path is missing, may I use the pointer instead?", and the named
+        # path here is the repository, which always exists. So the pointer
+        # supplies an ADDITIONAL root, and a document that comes home to this
+        # repo keeps being audited.
+        extra: List[Path] = []
+        env_tree = _corpus_location.env_pointer()
+        if env_tree:
+            print("note: %s adds a corpus to audit -> %s"
+                  % (_corpus_location.CORPUS_ENV, env_tree), file=sys.stderr)
+            corpus = Path(env_tree)
+            if not corpus.is_dir():
+                # SET AND WRONG IS NOT ABSENT: a mistyped path, a failed clone
+                # or a no-op CI fetch step must never come out green.
+                print("UNDETERMINED: %s=%s is set and is not a readable "
+                      "directory, so no L4 document was read there. A pointer "
+                      "that is set and wrong is a broken configuration, not an "
+                      "absent corpus, and --corpus-may-be-absent does not "
+                      "excuse it." % (_corpus_location.CORPUS_ENV, env_tree),
+                      file=sys.stderr)
+                return 2
+            extra.append(corpus)
+
+        rc, rep = audit_corpus(root, extra)
         if args.json_out:
             args.json_out.write_text(json.dumps(rep, indent=2, ensure_ascii=False),
                                      encoding="utf-8")
-        if rep.get("verdict") == "SKIP":
-            print("[SKIP] %s" % rep["reason"])
+        if rep.get("verdict") == "NO_DOCUMENTS":
+            on_disk = rep.get("l4_documents_on_disk", 0)
+            if env_tree:
+                # The pointer was SET and led somewhere carrying none of this
+                # gate's subject. The opt-in must not reach that.
+                print("UNDETERMINED: %s and %s=%s together carry no %s (%d found "
+                      "on disk, %d of them published). A corpus that was NAMED "
+                      "and carries none of this gate's subject is a wrong "
+                      "pointer, not an absent one."
+                      % (root, _corpus_location.CORPUS_ENV, env_tree, _L4_GLOB,
+                         on_disk, 0), file=sys.stderr)
+                return 2
+            if args.corpus_may_be_absent:
+                # rc 0, and it must never read as an audit that happened.
+                print("NO_CORPUS: no %s under %s and %s is unset. The published "
+                      "L4 corpus moved to its own repository in v1.10.56 and "
+                      "this repo is not required to carry it. NOTHING WAS "
+                      "SCANNED — 0 L4 document(s) parsed, 0 register/field "
+                      "key(s) examined and the disposition table was NOT "
+                      "exercised. Point %s at a clone to make this gate check "
+                      "something."
+                      % (_L4_GLOB, root, _corpus_location.CORPUS_ENV,
+                         _corpus_location.CORPUS_ENV), file=sys.stderr)
+                return 0
+            print("[NOT CHECKED] %s — nothing was audited, which is not a clean "
+                  "result. Point %s at a clone, or pass --corpus-may-be-absent "
+                  "if this repo need not carry one."
+                  % (rep["reason"], _corpus_location.CORPUS_ENV),
+                  file=sys.stderr)
+            return 2
+        if rep.get("verdict") == "UNREADABLE":
+            print("[NOT CHECKED] %s" % rep["reason"], file=sys.stderr)
+            for u in rep.get("unreadable", [])[:10]:
+                print("   unreadable: %s" % u, file=sys.stderr)
             return 2
         print("=== L4 -> SystemRDL disposition coverage ===")
-        print("  L4 documents scanned : %d" % rep["l4_documents_scanned"])
+        for r in rep.get("roots", []):
+            print("  root %s: %d on disk, %d published%s"
+                  % (r["root"], r["documents_on_disk"], r["documents_published"],
+                     "" if r["published_tree"] else
+                     "  (NOT a git checkout — the disk walk IS the answer here, "
+                     "nothing has been published in it)"))
+        print("  L4 documents scanned : %d of %d published (%d unreadable)"
+              % (rep["l4_documents_scanned"], rep["l4_documents_published"],
+                 rep["l4_documents_unreadable"]))
         print("  register keys seen   : %d" % rep["register_keys_seen"])
         print("  field keys seen      : %d" % rep["field_keys_seen"])
         print("  disposition rows     : %d" % rep["disposition_rows"])
@@ -1637,5 +1876,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _entrypoint() -> int:
+    global _ACTIVE_PROGRESS
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        _ACTIVE_PROGRESS = progress
+        try:
+            return main()
+        finally:
+            _ACTIVE_PROGRESS = None
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entrypoint())
