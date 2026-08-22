@@ -102,6 +102,33 @@ class Finding:
 # ---------------------------------------------------------------------------
 # Comment stripping (shared pattern with rtl_hygiene_lint.py)
 # ---------------------------------------------------------------------------
+def strip_preproc_directives(src: str) -> str:
+    """Blank out `` `ifdef`` / `` `endif`` / `` `else`` style lines, keeping the
+    line count so reported line numbers stay right.
+
+    A conditional block INSIDE a port list broke the parser completely. The
+    directive lines take part in the comma split, produce fragments the anchored
+    port pattern cannot match, and every port after the block disappears from
+    the module's declared set — so each instantiation connecting one reports
+    `Port '.x' … does not exist`.
+
+    MEASURED on `ibex_core.sv`, which opens an `` `ifdef RVFI`` block at line 101:
+    `parse_port_list_ansi` returned ONE port (`clk`) out of the whole header, and
+    `.fetch_enable_i` — declared at line 104 — read as missing.
+
+    Blanked rather than deleted: the CONDITIONAL ports are kept (they are real
+    ports under some configuration, and this audit compares NAMES, not the
+    active configuration), only the directive lines themselves go. Evaluating
+    the conditions would need a define set this program does not have and must
+    not invent — taking both arms is the conservative reading for a check whose
+    finding is "this name is not declared anywhere".
+    """
+    out = []
+    for line in src.split('\n'):
+        out.append('' if line.lstrip().startswith('`') else line)
+    return '\n'.join(out)
+
+
 def strip_comments(src: str) -> str:
     """Remove // line comments and /* block */ comments, preserving newlines."""
     out = []
@@ -137,26 +164,85 @@ def strip_comments(src: str) -> str:
 # ---------------------------------------------------------------------------
 # Width expression evaluation
 # ---------------------------------------------------------------------------
+#: One bracketed dimension, e.g. `[7:0]`. Used to walk a packed range list.
+_DIM_RE = re.compile(r'\[[^\]]*\]')
+#: A dimension whose bounds are both literal, so its size is known statically.
+_NUMERIC_DIM_RE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
+
+
 def eval_width_expr(expr: str) -> int:
     """
     Evaluate a Verilog width expression like [7:0] -> 8, [15:0] -> 16.
     Returns 1 for scalar (no range). Returns -1 if the expression contains
     parameters or cannot be evaluated.
+
+    MULTI-DIMENSIONAL packed ranges multiply: `[3:0][3:0][7:0]` is 128 bits, as
+    on `aes_sub_bytes.data_i`. This used `re.match`, which reads the FIRST
+    dimension and stops — so widening the port pattern to accept the extra
+    dimensions without this would have traded a MISSING port for a port carried
+    at 4 bits instead of 128, and a wrong width is a false width-mismatch
+    rather than a false does-not-exist. Same class of bogus finding, different
+    message.
+
+    A single non-literal dimension makes the whole product unknown, so it
+    returns -1 rather than the product of the dimensions it could read.
     """
     expr = expr.strip()
     if not expr:
         return 1
-    m = re.match(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]', expr)
-    if m:
+    dims = _DIM_RE.findall(expr)
+    if not dims:
+        # Not a range at all — parameterized or complex expression.
+        return -1
+    total = 1
+    for dim in dims:
+        m = _NUMERIC_DIM_RE.fullmatch(dim.strip())
+        if not m:
+            return -1
         hi, lo = int(m.group(1)), int(m.group(2))
-        return abs(hi - lo) + 1
-    # Parameterized or complex expression — can't evaluate statically
-    return -1
+        total *= abs(hi - lo) + 1
+    return total
 
 
 # ---------------------------------------------------------------------------
 # Verilog parser (regex-based, general purpose)
 # ---------------------------------------------------------------------------
+#: A module-level package import. Its `;` must not be read as the end of the
+#: module header — see the comment at the header scan.
+_IMPORT_LINE_RE = re.compile(r'\s*import\s+[\w:]+\s*(?:::\s*\*)?\s*;')
+
+#: A package-import clause anywhere on a line, including the comma list form
+#: `import a::*, b::pkg;`. Anchored on the `import` KEYWORD rather than on the
+#: start of the line, because SystemVerilog permits the clause to sit on the
+#: same line as the module name.
+_IMPORT_CLAUSE_RE = re.compile(r'\bimport\s+[\w:*]+(?:\s*,\s*[\w:*]+)*\s*;')
+
+
+def header_ends_on(line: str) -> bool:
+    """Does this line carry the `;` that CLOSES a module header?
+
+    A package import ends in `;` too, and that `;` does not close the header.
+    `_IMPORT_LINE_RE` recognised the clause only when it OPENED the line:
+
+        module aes_core
+          import aes_pkg::*;      <- recognised, header continues
+        #( ... ) ( ... );
+
+        module aes_cipher_control_fsm import aes_pkg::*;   <- NOT recognised
+        #( ... ) ( ... );                                     header stopped here
+
+    The second form is equally legal and appears on 81 files in the tracked
+    corpus. Its header ended on the module line, which declares no ports, so
+    every connection in every instantiation of it reported
+
+        does not exist in module '…' port declarations. Available ports: []
+
+    — an empty parse rendering as a wall of design findings. Deciding on the
+    CLAUSE rather than on the line handles both placements and the comma list.
+    """
+    return ';' in _IMPORT_CLAUSE_RE.sub('', line)
+
+
 def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[str, PortDecl]:
     """
     Parse ANSI-style port declarations from a module header.
@@ -219,6 +305,16 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[st
     # Split by commas but respect nested brackets
     parts = _split_by_comma(port_text)
 
+    # NOTE: `header` is expected to be comment-free. Both production entry
+    # points (`scan_rtl_directory`, `scan_rtl_files`) call `strip_comments` on
+    # the whole file first, so a comment never reaches the comma split here.
+    #
+    # I added a second comment strip at this point and measured its effect by
+    # ablation: ibex 1 -> 1, opentitan_aes 241 -> 241. Zero. It was duplicating
+    # work already done upstream, and the story I had attached to it — that
+    # ibex_core lost 8 ports to comments — was an artifact of my probe calling
+    # this function on RAW text. Removed rather than kept as defence in depth,
+    # because a fix that changes nothing still has to be read by everyone after.
     for part in parts:
         part_stripped = part.strip()
         if not part_stripped:
@@ -230,9 +326,39 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[st
         # Try to match a full port declaration: direction [width] name
         m = re.match(
             r'(?:(?P<dir>input|output|inout)\s+)?'
-            r'(?:(?:wire|reg|logic|signed|unsigned)\s+)*'
-            r'(?P<width>\[[^\]]+\]\s*)?'
-            r'(?P<name>\w+)\s*$',
+            # `\s*`, not `\s+`: `output reg[7:0] q` is legal Verilog and
+            # common in real RTL — the width bracket binds to the net type
+            # without needing a space. Requiring one made the whole anchored
+            # match fail, the port vanished from the module's declared set,
+            # and EVERY instantiation connecting it read as
+            #     Port '.q' ... does not exist in module port declarations
+            #
+            # MEASURED by a minimal pair — the same file, one space moved:
+            #     output  reg[7:0] data_out   -> ERROR mismatch
+            #     output reg [7:0] data_out   -> clean
+            # and over the 107-directory corpus this accounts for 7 of the
+            # 7 rc=1 results: every failure this gate reported was its own
+            # parser, not a design defect.
+            r'(?:(?:wire|reg|logic|signed|unsigned)\s*)*'
+            # A user-defined or package-qualified type, e.g.
+            # `input ibex_pkg::pc_sel_e pc_mux_i`. Optional and non-greedy by
+            # construction: on `input clk` there is no space-separated word
+            # after it, so this group does not participate and `clk` is the
+            # name. Without it ibex dropped 43 ports whose types come from a
+            # package, and every instantiation of them read as a mismatch.
+            r'(?:(?P<type>[A-Za-z_]\w*(?:::\w+)+|[A-Za-z_]\w*_[te])\s+)?'
+            # PACKED dimensions, one or more. `input logic [3:0][3:0][7:0]
+            # data_i` is a 128-bit port on aes_sub_bytes; with a single group
+            # the anchored match failed and the port vanished, so all 5
+            # multi-dimensional ports of that module read as "does not exist"
+            # while its 7 scalar ones parsed. The unpacked group after the name
+            # was already `*` — this is the same list on the other side.
+            r'(?P<width>(?:\[[^\]]+\]\s*)+)?'
+            r'(?P<name>\w+)'
+            # An unpacked dimension after the name, e.g.
+            # `input logic [33:0] imd_val_d_ex_i[2]`. Legal SystemVerilog, and
+            # without it the anchored match fails and the port disappears.
+            r'(?:\s*\[[^\]]+\])*\s*$',
             part_stripped
         )
         if m:
@@ -308,8 +434,24 @@ def parse_non_ansi_ports(body: str, file_path: str, base_line: int) -> Dict[str,
             continue
         m = re.match(
             r'\s*(input|output|inout)\s+'
-            r'(?:(?:wire|reg|logic|signed|unsigned)\s+)*'
-            r'(\[[^\]]+\]\s*)?'
+            # `\s*`, not `\s+`: `output reg[7:0] q` is legal Verilog and
+            # common in real RTL — the width bracket binds to the net type
+            # without needing a space. Requiring one made the whole anchored
+            # match fail, the port vanished from the module's declared set,
+            # and EVERY instantiation connecting it read as
+            #     Port '.q' ... does not exist in module port declarations
+            #
+            # MEASURED by a minimal pair — the same file, one space moved:
+            #     output  reg[7:0] data_out   -> ERROR mismatch
+            #     output reg [7:0] data_out   -> clean
+            # and over the 107-directory corpus this accounts for 7 of the
+            # 7 rc=1 results: every failure this gate reported was its own
+            # parser, not a design defect.
+            r'(?:(?:wire|reg|logic|signed|unsigned)\s*)*'
+            # Packed dimensions, one or more — see the ANSI site. Outer group
+            # captures, inner does not, so the numbered groups below keep their
+            # positions.
+            r'((?:\[[^\]]+\]\s*)+)?'
             r'([^;]+?)\s*;',
             line
         )
@@ -520,12 +662,25 @@ def parse_modules(src: str, file_path: str) -> List[ModuleDef]:
         if m:
             mod_name = m.group(1)
             start_line = i
-            # Find the end of module header (first ;)
+            # Find the end of module header (first ; that is not an import)
+            #
+            # SystemVerilog allows a package import list between the module name
+            # and the parameter list:
+            #
+            #     module aes_core
+            #       import aes_pkg::*;        <- the first `;` in the file
+            #       import aes_reg_pkg::*;
+            #     #( ... ) ( input logic clk_i, ... );
+            #
+            # Stopping at the first `;` made the header those two lines, which
+            # contain no ports at all — so every instantiated port "did not
+            # exist in the module". Measured on the corpus: 920 errors on
+            # opentitan_aes alone, every one of them false (#559).
             header_lines = []
             j = i
             while j < len(lines):
                 header_lines.append(lines[j])
-                if ';' in lines[j]:
+                if header_ends_on(lines[j]):
                     break
                 j += 1
             header_end = j
@@ -545,7 +700,7 @@ def parse_modules(src: str, file_path: str) -> List[ModuleDef]:
         header_lines = []
         for j in range(start_line, min(end_line + 1, len(lines))):
             header_lines.append(lines[j])
-            if ';' in lines[j]:
+            if header_ends_on(lines[j]):
                 break
         header = '\n'.join(header_lines)
 
@@ -731,10 +886,31 @@ def _infer_connection_width(wire_expr: str, parent_def: ModuleDef) -> int:
     if m:
         return int(m.group(1))
 
-    # Bit-select: signal[3] -> 1 bit
+    # Single-index select: `signal[3]`.
+    #
+    # 1 bit ONLY when `signal` is a one-dimensional packed vector. On a
+    # multi-dimensional or unpacked signal the same syntax selects a whole
+    # ELEMENT: `aes_cipher_core.state_q[0]` is one 128-bit share of
+    # `logic [3:0][3:0][7:0] state_q [NumShares]`, and calling it 1 bit made a
+    # correct connection to a 128-bit port read as a width mismatch.
+    #
+    # The dimension count is knowable only when the base is a port of the
+    # parent module — this parser does not carry local signal declarations. So
+    # the answer is UNKNOWN when it cannot be looked up, rather than 1 by
+    # assumption. That drops the finding instead of inventing it; a stated
+    # number nobody measured is the more expensive of the two errors, because
+    # it reads exactly like a measured one.
     m = re.match(r'(\w+)\s*\[\s*\d+\s*\]$', wire_expr)
     if m:
-        return 1
+        base = parent_def.ports.get(m.group(1))
+        if base is None:
+            return -1
+        dims = _DIM_RE.findall(base.width_expr or '')
+        if len(dims) > 1:
+            # An element of a packed multi-dimensional port: total / outermost.
+            outer = eval_width_expr(dims[0])
+            return base.width // outer if base.width > 0 and outer > 0 else -1
+        return 1 if base.width != 1 else -1
 
     # Part-select: signal[7:0] -> 8 bits
     m = re.match(r'(\w+)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]$', wire_expr)
@@ -774,7 +950,7 @@ def scan_rtl_directory(rtl_dir: Path) -> Dict[str, ModuleDef]:
             print(f"WARNING: cannot read {fpath}: {e}", file=sys.stderr)
             continue
 
-        src_clean = strip_comments(src)
+        src_clean = strip_preproc_directives(strip_comments(src))
         modules = parse_modules(src_clean, str(fpath))
         for mod in modules:
             if mod.name in module_defs:
@@ -800,7 +976,7 @@ def scan_rtl_files(file_list: List[str]) -> Dict[str, ModuleDef]:
             print(f"WARNING: cannot read {fpath}: {e}", file=sys.stderr)
             continue
 
-        src_clean = strip_comments(src)
+        src_clean = strip_preproc_directives(strip_comments(src))
         modules = parse_modules(src_clean, str(fpath))
         for mod in modules:
             module_defs[mod.name] = mod

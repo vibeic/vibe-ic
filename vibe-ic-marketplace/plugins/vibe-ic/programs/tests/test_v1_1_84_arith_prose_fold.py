@@ -99,5 +99,5 @@ def test_host_pass(design, top):
         ce = subprocess.run(["iverilog", "-g2012", "-o", str(vvp), "testbench.v", str(dut)],
                             capture_output=True, text=True, cwd=str(d))
         assert ce.returncode == 0, ce.stderr[:300]
-        r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=90, cwd=str(d))
+        r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True, timeout=60, cwd=str(d))
         assert "passed" in (r.stdout + r.stderr).lower()
