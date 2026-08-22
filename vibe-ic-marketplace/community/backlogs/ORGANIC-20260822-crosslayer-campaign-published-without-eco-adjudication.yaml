@@ -51,11 +51,19 @@ evidence: |
     z23 FEASIBLE / p08 FEASIBLE / p04 INFEASIBLE / z21 INFEASIBLE.
 
 repro: |
+  # Narrowed to the two facts the item is about, because the raw verdict line is
+  # a wall of unrelated axis codes and the marker sits at the end of it.
   for t in z23 p04; do
-    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_feasibility_check.py \
-      --candidates ppa-crosslayer/records/trials/$t/candidates.json | grep "$t:"
-    python3 -c "import json;print('  spares:', json.load(open('ppa-crosslayer/records/trials/$t/spare_cells.json'))['count'])"
+    n=$(python3 -c "import json;print(json.load(open('ppa-crosslayer/records/trials/$t/spare_cells.json'))['count'])")
+    e=$(python3 vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_feasibility_check.py \
+          --candidates ppa-crosslayer/records/trials/$t/candidates.json 2>/dev/null \
+        | grep "$t:" | grep -o "\[eco_readiness [A-Z_]*\]")
+    echo "$t  spares=$n  $e"
   done
+
+  # expected, and the whole point -- same axis status for 10 kept and 0 kept:
+  #   z23  spares=10  [eco_readiness NOT_APPLICABLE]
+  #   p04  spares=0   [eco_readiness NOT_APPLICABLE]
 
 suggested_fix: |
   Two independent halves; the second is the one that matters for published
