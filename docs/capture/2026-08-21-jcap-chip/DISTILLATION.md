@@ -810,7 +810,33 @@ seven are defects. On inspection they separate:
   corroborated above by this lane's cause-side rule and by the capture's own
   measurement of 0.306 mW against 0.573 mW post-route.
 
-So the seven need TRIAGE, not seven repairs, and exactly one of them is presently
-backed by independent evidence. I am reasoning about the other six from what the
-levers can reach; that is an argument, not a measurement, and it is offered as
-one.
+So the seven need TRIAGE, not seven repairs.
+
+**That triage was an argument when first written; it is now a measurement.** Two
+checks over the same 60 arms:
+
+    distinct synthesis-input signatures across all 60 arms : 1
+        every arm cites phase2/stage2/synth/spm_synth.v
+
+    status of all seven axes, all 60 arms : MEASURED 60/60, NOT_MEASURED 0
+
+The first settles the synthesis-derived pair: the arms do not re-synthesize, they
+all consume ONE netlist, so `design.instance.count` and `area.instances.total.um2`
+cannot vary under `die_um` / `placement_density` / `spare_cell_density`. Invariant
+by construction, now shown rather than asserted.
+
+The second settles the zeros AND sharpens the power finding, in opposite
+directions:
+
+* the four violation counts are MEASURED on every arm and are genuinely 0 — real
+  measured zeros, not absences read as zeros, which is the distinction this whole
+  capture exists for. A clean design measured 60 times stays clean 60 times;
+* `power.total_w` is ALSO MEASURED on all 60 arms. So the finding is NOT that the
+  axis "was not measured under the lever" — it was measured, sixty times. It is
+  that all sixty measurements are of a subject the lever cannot reach, because
+  every arm's power session links the pre-PnR netlist and loads no parasitics.
+
+**The measurement is real; its SUBJECT is wrong.** That is a sharper statement
+than either lane had: their gate infers "not measured" from constancy, mine infers
+"cannot move" from the session's declared inputs, and the records show it was
+measured every time, of the wrong thing, sixty times over.
