@@ -170,6 +170,35 @@ def main(argv=None) -> int:
                          "configuration. It is a fact about the run, not a "
                          "convenience: the gate refuses a baseline we tuned.")
     a = ap.parse_args(argv)
+    # REFUSED AT WRITE TIME, and this is where it always could have been.
+    # `--baseline-tuned` is this project stating, in its own invocation, that it
+    # chose the baseline's configuration -- and the flag's own help text says
+    # the gate refuses a baseline we tuned. So the producer knew the document it
+    # was about to write could not be a head-to-head, wrote it anyway into the
+    # head-to-head corpus, and left the contradiction to be found months later
+    # by `ppa_head_to_head_check` over a comparison that had already been
+    # published (BASELINE_TUNED_BY_US on `h2h_F`).
+    #
+    # THE COMPARISON IS NOT THE PROBLEM. Ranking two configurations we both
+    # chose is an ablation, and an informative one: it isolates what the
+    # cross-layer search adds over a place-and-route-only search. What it is not
+    # is a head-to-head, whose entire claim is "against an opponent we did not
+    # tune". `vibeic.ppa.comparison.v2` carries that claim, so this tool refuses
+    # to stamp it on an ablation. Filing the ablation needs a document kind that
+    # does not carry the claim, and no schema for one exists yet -- naming that
+    # is the honest disposition, not writing the wrong kind in the meantime.
+    if a.baseline_tuned:
+        raise SystemExit(
+            "[REFUSE] --baseline-tuned means THIS project chose the baseline's "
+            "configuration, and `vibeic.ppa.comparison.v2` is the document kind "
+            "whose claim is a comparison against a baseline we did NOT tune. "
+            "ppa_head_to_head_check refuses exactly this record "
+            "(BASELINE_TUNED_BY_US) and the schema's `arm.allOf` clause now "
+            "states it too, so writing one here only defers the refusal past "
+            "the point where the number gets quoted. What you have is a "
+            "WITHIN-PROJECT ABLATION; file it as one. No schema for that "
+            "document kind ships yet -- that is the first landable step, and it "
+            "is a record schema, not a number.")
     b = arm(a.baseline, a.baseline_label, "baseline", a.baseline_source,
             a.baseline_tuned, a.power, a.timing_corner)
     s = arm(a.subject, a.subject_label, "subject", a.subject_source,

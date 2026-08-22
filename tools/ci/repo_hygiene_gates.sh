@@ -294,14 +294,31 @@ run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pa
 #   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
 #   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
 uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+# `--baseline` IS GONE, and dropping it is what makes this row decide anything.
+# MEASURED on a758f4adc, exactly as the line below was written:
+#
+#   [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
+#   and --corpus were both given. ... Give exactly one. rc=3.
+#
+# So both of these rows had stopped examining ANY pair. `--corpus` mode was
+# rewritten to GROUP contracts by their problem identity and pair within each
+# group, which needs no baseline, and the refusal of the two-flag form is
+# deliberate and argued in the program. The wiring was not updated with it.
+# rc 3 is a bad invocation: the row decided nothing, and it is a different and
+# quieter failure than the rc 2 the rest of this block is about, because nothing
+# in the roll-up distinguishes a gate the caller mis-invoked from one that ran.
+#
+# MEASURED with the flag removed:
+#   cross-layer  21 contract(s), 1 problem group,  210 pair(s)  -> rc 0
+#   end-to-end   61 contract(s), 1 problem group, 1830 pair(s)  -> rc 0
+# The audit's Part 7 recorded 20 and 60 pairs for the baseline-against-each form;
+# grouping compares every pair inside the group, which is the stronger question.
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --baseline "$ROOT/ppa-crosslayer/records/trials/b000/contract.json" \
     --corpus "$ROOT/ppa-crosslayer"
 uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
-    --baseline "$ROOT/ppa-e2e/records/baseline/contract.json" \
     --corpus "$ROOT/ppa-e2e"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"

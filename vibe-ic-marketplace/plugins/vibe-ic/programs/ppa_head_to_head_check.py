@@ -486,6 +486,33 @@ def evaluate(path: Path) -> Tuple[int, Dict[str, Any]]:
         report["ok"] = False
         report["refusal"] = {"code": r.code, "message": r.message}
         return r.rc, report
+    except Exception as exc:
+        # AN INTERNAL ERROR IS NOT A FINDING, and with no guard it became one.
+        # MEASURED: an arm whose `design` is written as a bare digest STRING
+        # instead of a mapping raises out of `check_same_problem`; the traceback
+        # escaped and the interpreter exited 1 -- and 1 is reserved for a finding
+        # about the comparison, and through it about silicon. `ppa_contract_check`
+        # has carried this guard from the start and `ppa_problem_integrity_check`
+        # gained it after the identical crash; this checker did not have it.
+        #
+        # 2 AND NOT 3, and the distinction is corpus mode. The INVOCATION was
+        # correct -- a corpus of fifty records where one is badly shaped is not a
+        # bad invocation, and returning 3 would let one malformed document decide
+        # a row about forty-nine well-formed ones. rc 2 says "this record could
+        # not be read", joins the same severity roll-up as an unparseable file,
+        # and NAMES the record and the exception rather than a stack.
+        report["ok"] = False
+        report["refusal"] = {
+            "code": "INTERNAL_ERROR",
+            "message": (f"{type(exc).__name__}: {exc}. This record was not "
+                        f"validated and nothing here is a finding about it. "
+                        f"WHAT IS MISSING: a record of the shape "
+                        f"schemas/ppa/comparison.v2.schema.json declares. The "
+                        f"document parsed as JSON, so a field it carries is not "
+                        f"the type that schema gives it -- validate against the "
+                        f"schema and the offending field is named there, which "
+                        f"is more than a stack trace can say.")}
+        return RC_UNDETERMINED, report
 
 
 def format_report(rc: int, report: Dict[str, Any]) -> str:
@@ -551,7 +578,18 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
     else:
         tag = "[FAIL]" if rc == RC_REFUSED else "[UNDETERMINED]"
         r = report["refusal"]
-        lines.append(f"{tag} ppa_head_to_head_check: {r['code']}")
+        # THE RECORD IS NAMED ON THIS BRANCH TOO, and it was not.
+        # The PASS branch above prints `report['record']`; this one printed the
+        # CODE alone. Over a corpus that is the difference between a verdict and
+        # a rumour: `--corpus ppa-e2e` printed two byte-identical
+        # `[UNDETERMINED] ... SCOPE_SENTINEL` blocks over two different records,
+        # and nothing in the output said which document either was about — or
+        # even that they were two documents rather than one reported twice. An
+        # rc 2 whose subject is unnamed cannot be acted on, which is the whole
+        # failure mode this family exists to end.
+        lines.append(f"{tag} ppa_head_to_head_check: "
+                     f"{report.get('record', '<record path not recorded>')}: "
+                     f"{r['code']}")
         lines.append(f"  {r['message']}")
         if rc == RC_UNDETERMINED:
             # `[CANNOT CHECK]` is the marker `docs/PPA_INTERFACES.md` section 1
@@ -786,4 +824,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # The same rule one level up, for anything OUTSIDE the per-record loop:
+        # there the invocation itself is what failed, so §1's 3 is right and
+        # `ppa_contract_check` already words it this way.
+        print(f"{cli_exit.MARK_REFUSE} ppa_head_to_head_check: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was validated. rc=3 "
+              f"(NOT a finding about any record).", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)
