@@ -1,6 +1,6 @@
 # The lander kept the review and gave away the no-skip guarantee
 
-> ## READ THIS FIRST — the document is 38 sections and LATER SECTIONS SUPERSEDE EARLIER ONES
+> ## READ THIS FIRST — LATER SECTIONS SUPERSEDE EARLIER ONES
 >
 > Fifteen claims in here were corrected by measurement after they were written,
 > and the corrections are APPENDED rather than edited in (deleting what a later
@@ -35,8 +35,16 @@
 > 15% of the tests tree reaches its subject by a route that analysis cannot
 > follow.
 >
-> §32 is the register of all 16 corrected claims and all 12 instruments that
-> answered the wrong question. If you are auditing this work, start there.
+> §32 is the register of every corrected claim and every instrument that
+> answered the wrong question. If you are auditing this work, start there — it
+> is maintained as a list, so it does not need a total to be read.
+>
+> *(This header deliberately carries no section count and no correction count.
+> It went stale twice by carrying them — the numbers live in sections that keep
+> growing, so a copy of them here is a cache, and caches go stale. Counts that
+> ARE quoted above are one-off measurements that cannot move: 18 files run for
+> the first time, 17 reds examined, 15% of the tests tree. The fix is to remove
+> the moving numbers, not to keep re-syncing them.)*
 
 
 **Subject.** `origin/land/batch67-assembled` at `546487a8a` (v1.11.67), two
