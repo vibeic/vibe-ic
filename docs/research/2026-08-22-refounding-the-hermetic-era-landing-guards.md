@@ -1,9 +1,29 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: A and C are IMPLEMENTED and verified on this branch. B is fully
-specified — both channels confirmed from source, with a safety bound — and
-deliberately NOT built. D's mechanism is fully described and NOT built, for a
-doctrinal reason stated with it.**
+**Status: A and C are IMPLEMENTED and verified on this branch — and C is the only
+one of the four that actually works, for the reason this document spends its
+length arriving at: its control is a COMMIT, and the tree crosses where the
+environment refuses. B was BUILT, RUN, and REVERTED. D's premise was FALSE.**
+
+> **THIS LINE USED TO SAY:** *"B is fully specified — both channels confirmed from
+> source, with a safety bound — and deliberately NOT built. D's mechanism is fully
+> described and NOT built, for a doctrinal reason."* **Three claims, all wrong,
+> each corrected hundreds of lines below where a reader would never look first:**
+>
+> * *"both channels confirmed"* — the label EXISTS but a test cannot learn its
+>   VALUE, and `refs/gk-verify` exists ONLY on the `--pr` path while these tests
+>   use `--ref`. **The channel failed twice over.**
+> * *"deliberately NOT built"* — **it was built and run.** The sentinel-commit
+>   fixture WORKS; the stub took the routed-transition path on both arms for the
+>   first time since the migration. It was reverted at the NEXT layer, whose
+>   files are all protected.
+> * D *"NOT built for a doctrinal reason"* — **the doctrine was a stale blocker.**
+>   A real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with
+>   `routed.def`), and the sandbox fixture already publishes one. Authoring
+>   remains forbidden AND unnecessary.
+>
+> **Every one of those was corrected in place below and left standing here, at the
+> top, where the status line is the only thing some readers will read.**
 
 **Effect, measured in both lanes** (authority: **M65** in the findings document —
 this is a reference, re-derive there): host `9 failed -> 6 failed` (134 collected,
@@ -159,6 +179,17 @@ safety property than an env flag, since an env flag can be set by accident and a
 committed sentinel cannot.
 
 ### C. The three tamper guards
+
+> **C IS THE ONLY ONE OF THE FOUR THAT WORKS, AND LISTING IT THIRD WAS BACKWARDS
+> (M112).** Its control is a **COMMIT** — the test clones, plants a test file,
+> commits, and the tamper reaches the arm through the SUBJECT TREE. A, B and D all
+> try to reach the arm through its ENVIRONMENT, which is an exact-set contract
+> that REFUSES (M107). **C is the working proof of the thesis this whole document
+> argues toward, and it was already passing in both lanes while I wrote four
+> designs around it.** Its `new_failures` assertion is a self-delivering mutation
+> arm: a tamper that silently failed to apply cannot satisfy it — the exact defect
+> that left G4's injected hang unreachable for the entire hermetic era. **Read C
+> first; the other three are variations on a channel that does not carry.**
 
 The tamper is already defeated structurally. Two changes make the guards say so:
 
@@ -339,8 +370,8 @@ verified in both lanes, with dependants checked. **Nine remain**, and the earlie
 |---|---|---|
 | **A** | **DONE** — 1 test, RED→GREEN, full-file verified | — |
 | **C** | **DONE** — 3 tests, RED→GREEN, specification verified against a live run BEFORE editing | — |
-| **D** | designed, mechanism fully traced | a REAL published cell in the fixture's benchmark-data. ~~a fixture supplying two corpora~~ — **that model was wrong twice** (the arms enumerate for themselves; the verifier audits). Authoring a cell to turn a test green is the move this campaign forbids. |
-| **B** | designed, both channels confirmed, safety bound documented | a sentinel-commit fixture plus a rewiring of the stub's hang guard, inside the protected closure. Hazard is BOUNDABLE; the reason it is unbuilt is sequencing and my measured error rate, not danger. |
+| **D** | designed, mechanism fully traced | ~~a REAL published cell in the fixture's benchmark-data~~ — **FALSE.** One IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, 211 paths, carrying `routed.def`), and the sandbox fixture already creates `ic/tiny/v1/phase3/stage3/pnr/routed.def` — the producer's exact cell predicate. **Nothing needs authoring.** What blocks it is the same layer that blocks B. |
+| **B** | **BUILT, RUN, REVERTED** — the channel works | ~~sequencing and my measured error rate~~ — **that is no longer the reason.** The sentinel crosses and the arm hangs; it fails at container IDENTIFICATION, needing **one line in `gatekeeper-verify-merge.sh` (PROTECTED)** to announce `RUN_ID`. Reverted rather than ship a test whose final assertion would pass vacuously. |
 
 **Revised order for what REMAINS: D before B.** D is blocked on evidence somebody
 else can supply; B is blocked on a decision plus the largest edit of the four. The
@@ -368,9 +399,16 @@ green test already asserts for exactly this purpose. The hedge was on the wrong
 sentence — the thing I should have checked was not whether receipts were
 *sufficient* but whether they were *reachable*, and they are not.
 
-What remains genuinely unverified, and stands: **none of this is implemented or
-run.** B and D still need new fixture scaffolding (a sentinel commit; a two-corpus
-fixture), and neither is sketched here beyond the mechanism.
+**THIRD RETRACTED CAVEAT — this said "none of this is implemented or run".**
+True when written, false in both halves now. **A and C are implemented, run, and
+pass in BOTH lanes** (including the configured image lane, M90). **B was BUILT and
+RUN** (M92): the sentinel-commit fixture works — the stub took the routed-transition
+path on both arms for the first time since the migration — and it was reverted at
+the NEXT layer, not this one.
+
+What genuinely remains unverified is narrower: **whether anything downstream of the
+trusted-parent-evidence integrity check also blocks B and D.** Two layers appeared
+where I had reasoned about one, so I will not predict a third.
 
 
 # ===== A: IMPLEMENTED =====
@@ -400,11 +438,16 @@ rename. A set-difference over test IDs cannot tell "renamed" from "fixed" and
 will happily report the first as the second — worth knowing before anyone uses
 that diff on a rename again.
 
-**The assertions discriminate** — this is not a green that cannot fail.
+**The assertions are NON-VACUOUS BY CONSTRUCTION — "discriminate" was the wrong
+word (M111).**
 `base_total == 0` is an explicitly guarded and disclosed condition
 (`landing_merge_verdict.py:121`, `:848`), and `base_land is None` is a real
 branch (`:1213`) that the document emits as `null` (`:1838`). All four read
-values that genuinely take the failing value.
+values that genuinely take the failing value, and every one is a BARE SUBSCRIPT, so
+a missing key is a `KeyError` rather than a pass. Measured: `base_total > 0` is
+asserted against **6**. **What is NOT established is a live mutation arm** —
+suppressing a wave needs a control injected into the arm, which the exact-set env
+contract refuses (M107): the same wall blocking four of the six surviving reds.
 
 **What I did NOT restore, and said so in the docstring:** ordering. The old name
 promised "B1/B2 finish before A artifacts exist; A1/A2 then run in parallel", and
@@ -430,8 +473,17 @@ the bound should ship with the design rather than be rediscovered.**
 
 1. kills the recorded verifier process group by PID — the helper already does
    exactly this on its failure path;
-2. force-removes any container carrying this run's label, using the run id
-   captured from `refs/gk-verify/*` inside the existing poll loop (above).
+2. force-removes any container carrying this run's label — **BUT NOT BY THE ROUTE
+   THIS LINE USED TO GIVE.** It said *"using the run id captured from
+   `refs/gk-verify/*` inside the existing poll loop"*. **Those refs are created
+   ONLY on the `--pr` path** (`gatekeeper-verify-merge.sh:925`); these tests run
+   `--ref probe --no-fetch`, so the poll loop finds nothing and the cleanup has no
+   target. **Measured, not reasoned:** the run failed with `no container ever
+   appeared for run(s) ['NONE ANNOUNCED']` (M83). The label's VALUE is also
+   unlearnable — `run_id` is `os.urandom(12).hex()` minted inside the runner and
+   written only into a receipt a COMPLETED run produces (M82). **Whoever builds B
+   needs the verifier to announce its `RUN_ID`, which is one line in a PROTECTED
+   file.** Do not follow the ref route; it is the trap I walked into.
 
 Both targets are recorded values, not patterns, which satisfies the standing rule
 against `pkill` on anything that could match one's own command line. Residual risk
