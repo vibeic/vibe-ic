@@ -203,6 +203,21 @@ def _entry_typed_ok(entry: dict) -> List[str]:
     return missing
 
 
+def _canonical_clock_name(entry: dict) -> Optional[str]:
+    """ORGANIC-20260531 — extract a clock's canonical name from an
+    entry using _REQUIRED_NAME_KEYS, case-normalized. Returns None
+    when no name field is present or it is blank. chip-AGNOSTIC."""
+    if not isinstance(entry, dict):
+        return None
+    for k in _REQUIRED_NAME_KEYS:
+        v = entry.get(k)
+        if isinstance(v, str):
+            norm = v.strip().lower()
+            if norm:
+                return norm
+    return None
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: l8_clock_domains_typed_check <project_dir>",
@@ -247,13 +262,36 @@ def main() -> int:
               f"clock_domains[] / clocks[] array.")
         return 1
 
+    # ORGANIC-20260531 — evaluate typed-ness PER CLOCK NAME, not per
+    # raw entry. The same physical clock can legitimately appear in
+    # more than one L doc: fully typed in L8.clock_domains and again
+    # as a bare structural mirror in L9.clocks (name + edge only) so
+    # STA / CDC have a port handle. Pre-compute the set of clock names
+    # that are fully typed by SOME entry, then suppress a shallow
+    # finding only when a same-named typed sibling exists. Purely
+    # additive: every entry the per-entry loop accepted is still
+    # accepted, and a clock that NO entry ever fully types stays
+    # flagged. chip-AGNOSTIC: key on the clock name only.
+    typed_names: Set[str] = set()
+    for e in entries:
+        if not _entry_typed_ok(e):
+            cname = _canonical_clock_name(e)
+            if cname is not None:
+                typed_names.add(cname)
+
     bad: List[str] = []
     for i, e in enumerate(entries):
         missing = _entry_typed_ok(e)
-        if missing:
-            label = (e.get("name") or e.get("clock")
-                     or f"clock[{i}]")
-            bad.append(f"{label}: missing {','.join(missing)}")
+        if not missing:
+            continue
+        cname = _canonical_clock_name(e)
+        if cname is not None and cname in typed_names:
+            # A same-named sibling fully types this clock; the bare
+            # mirror here is structurally fine — suppress.
+            continue
+        label = (e.get("name") or e.get("clock")
+                 or f"clock[{i}]")
+        bad.append(f"{label}: missing {','.join(missing)}")
 
     if bad:
         print(f"[FAIL] l8_clock_domains_typed_check: "

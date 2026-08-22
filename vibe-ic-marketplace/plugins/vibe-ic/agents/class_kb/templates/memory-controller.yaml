@@ -62,14 +62,14 @@ facts:
 # Memory controllers are wide and shallow — many configurable ports, modest
 # protocol opcode count (READ / WRITE / READMOD / REFRESH-class).
 spec_floor:
-  # Phase 2a extension layers (v0.50)
+  # Phase 1 extension layers (v0.50)
   L10_test_cases_min: 6                # READ / WRITE / page-cross / refresh / error / reset
   L10_cmd_response_min: 3              # READ-ack / WRITE-ack / status
   L11_calibration_tables_min: 1        # at least the timing-prescaler table
   L12_sequences_min: 1                 # init / training sequence
   L12_required_sequence_categories:
     - initialization_sequence
-  # Original L1-L9 floors
+  # Original L1-L23 floors
   # v0.57 D1: removed L3_opcode_count_min — memory-controller ICs
   # (especially I²C/SPI EEPROMs) use the no-protocol sentinel; an
   # opcode-count floor contradicts that and is caught by

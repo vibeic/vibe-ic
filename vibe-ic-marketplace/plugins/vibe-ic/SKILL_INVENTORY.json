@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 60,
+  "total": 69,
   "by_tier": {
-    "debug": 12,
-    "judgment": 6,
-    "nl_primary": 27,
-    "unclassified": 9,
-    "verification": 6
+    "debug": 13,
+    "judgment": 7,
+    "nl_primary": 33,
+    "unclassified": 8,
+    "verification": 8
   },
   "skills": [
     "ams-sim",
@@ -25,7 +25,6 @@
     "analog-spec-extract",
     "analog-topology-select",
     "architecture-explore",
-    "atpg-name-harmonize",
     "benchmark-enhancement-capture",
     "benchmark-verify",
     "catalog-glue-author",
@@ -38,14 +37,19 @@
     "eco-plan",
     "equivalence-check",
     "field-agent-loop",
+    "flow-change-acceptance",
+    "fork-gatekeeper-loop",
     "formal-verify",
     "fpga-hps-bridge",
     "fpga-led-probe-allocation",
     "fpga-signaltap",
+    "full-test-audit",
+    "gatekeeper-loop",
     "hls-c2rtl",
     "hold-fix",
     "hw-debug-loop",
     "ir-drop-triage",
+    "layer-contract-doctrine",
     "lvs-triage",
     "mixed-signal-cosim",
     "open-benchmark-methodology",
@@ -55,9 +59,13 @@
     "phase1-output-verify",
     "phase2-rtl-verify",
     "phase3-backend-verify",
+    "ppa-benchmark",
+    "ppa-diagnose",
+    "ppa-distill",
+    "ppa-measure",
+    "ppa-optimize",
     "ppa-predict",
-    "protocol-timeline-assert",
-    "protocol-turnaround-audit",
+    "ppa-recover",
     "regression-issue-fix",
     "regression-manage",
     "rtl-repair",
@@ -69,6 +77,7 @@
     "sta-review",
     "synth-doctor",
     "tapeout-checklist",
+    "testbench-gen",
     "yield-diagnostic"
   ],
   "detail": [
@@ -148,14 +157,9 @@
       "tier": "judgment"
     },
     {
-      "name": "atpg-name-harmonize",
-      "frontmatter_name": "atpg-name-harmonize",
-      "tier": "nl_primary"
-    },
-    {
       "name": "benchmark-enhancement-capture",
       "frontmatter_name": "benchmark-enhancement-capture",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "benchmark-verify",
@@ -165,7 +169,7 @@
     {
       "name": "catalog-glue-author",
       "frontmatter_name": "catalog-glue-author",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "checkpoint-gate",
@@ -185,7 +189,7 @@
     {
       "name": "core-agent-loop",
       "frontmatter_name": "core-agent-loop",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "design-for-eco",
@@ -210,6 +214,16 @@
     {
       "name": "field-agent-loop",
       "frontmatter_name": "field-agent-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "flow-change-acceptance",
+      "frontmatter_name": "flow-change-acceptance",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "fork-gatekeeper-loop",
+      "frontmatter_name": "fork-gatekeeper-loop",
       "tier": "unclassified"
     },
     {
@@ -233,6 +247,16 @@
       "tier": "debug"
     },
     {
+      "name": "full-test-audit",
+      "frontmatter_name": "full-test-audit",
+      "tier": "verification"
+    },
+    {
+      "name": "gatekeeper-loop",
+      "frontmatter_name": "gatekeeper-loop",
+      "tier": "nl_primary"
+    },
+    {
       "name": "hls-c2rtl",
       "frontmatter_name": "hls-c2rtl",
       "tier": "nl_primary"
@@ -253,6 +277,11 @@
       "tier": "debug"
     },
     {
+      "name": "layer-contract-doctrine",
+      "frontmatter_name": "layer-contract-doctrine",
+      "tier": "judgment"
+    },
+    {
       "name": "lvs-triage",
       "frontmatter_name": "lvs-triage",
       "tier": "debug"
@@ -265,7 +294,7 @@
     {
       "name": "open-benchmark-methodology",
       "frontmatter_name": "open-benchmark-methodology",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "phase1",
@@ -275,12 +304,12 @@
     {
       "name": "phase1-completeness-deep-review",
       "frontmatter_name": "phase1-completeness-deep-review",
-      "tier": "unclassified"
+      "tier": "verification"
     },
     {
       "name": "phase1-coverage-loop",
       "frontmatter_name": "phase1-coverage-loop",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "phase1-output-verify",
@@ -298,24 +327,44 @@
       "tier": "verification"
     },
     {
+      "name": "ppa-benchmark",
+      "frontmatter_name": "ppa-benchmark",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-diagnose",
+      "frontmatter_name": "ppa-diagnose",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-distill",
+      "frontmatter_name": "ppa-distill",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-measure",
+      "frontmatter_name": "ppa-measure",
+      "tier": "unclassified"
+    },
+    {
+      "name": "ppa-optimize",
+      "frontmatter_name": "ppa-optimize",
+      "tier": "unclassified"
+    },
+    {
       "name": "ppa-predict",
       "frontmatter_name": "ppa-predict",
       "tier": "judgment"
     },
     {
-      "name": "protocol-timeline-assert",
-      "frontmatter_name": "protocol-timeline-assert",
-      "tier": "nl_primary"
-    },
-    {
-      "name": "protocol-turnaround-audit",
-      "frontmatter_name": "protocol-turnaround-audit",
-      "tier": "nl_primary"
+      "name": "ppa-recover",
+      "frontmatter_name": "ppa-recover",
+      "tier": "unclassified"
     },
     {
       "name": "regression-issue-fix",
       "frontmatter_name": "regression-issue-fix",
-      "tier": "unclassified"
+      "tier": "debug"
     },
     {
       "name": "regression-manage",
@@ -345,7 +394,7 @@
     {
       "name": "spec-to-rtl",
       "frontmatter_name": "spec-to-rtl",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "spec-validator",
@@ -366,6 +415,11 @@
       "name": "tapeout-checklist",
       "frontmatter_name": "tapeout-checklist",
       "tier": "judgment"
+    },
+    {
+      "name": "testbench-gen",
+      "frontmatter_name": "testbench-gen",
+      "tier": "unclassified"
     },
     {
       "name": "yield-diagnostic",

@@ -50,7 +50,7 @@ Exit codes
 
 # For the FPGA burn tool
 
-Call from `mcp-eda-server/src/devices/terasic-de10lite/driver.py` in
+Call from `mcp-eda/src/devices/terasic-de10lite/driver.py` in
 `--mode program`:
 
     # Pseudocode

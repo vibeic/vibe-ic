@@ -57,13 +57,27 @@ def test_fix1_pathb_input_doc_dir_triggers_docs(tmp_path):
     assert mode == "docs"
 
 
-def test_fix1_pathA_structured_yaml_uses_prompt(tmp_path):
+def test_fix1_pathA_structured_yaml_uses_docs(tmp_path):
+    # Unified DOC->JSON backend (2026-06-20): a dialogue convergence fact-graph
+    # is render-bridged into a freestyle document and flows through the doc
+    # track, so the orchestrator resolves it to docs mode (not the legacy
+    # engine "prompt" path).
     proj = tmp_path / "proj"
     (proj / "input").mkdir(parents=True)
     (proj / "input" / "phase1_structured.yaml").write_text("ic_name: x")
     run, mode = orch._phase1_decision(proj, force_skip=False)
     assert run is True
-    assert mode == "prompt"
+    assert mode == "docs"
+
+
+def test_fix1_pathA_prompt_md_uses_docs(tmp_path):
+    # A free-text prompt is itself a document -> doc track (unified backend).
+    proj = tmp_path / "proj"
+    (proj / "input").mkdir(parents=True)
+    (proj / "input" / "phase1_prompt.md").write_text("Design a 4-bit counter.")
+    run, mode = orch._phase1_decision(proj, force_skip=False)
+    assert run is True
+    assert mode == "docs"
 
 
 def test_fix1_existing_l_docs_skip(tmp_path):
@@ -264,7 +278,7 @@ def test_fix4b_soc_top_preferred_over_leaf(tmp_path, monkeypatch):
     SoC-top ranks first."""
     proj = tmp_path / "p"
     _write_l2(proj, {"cpu_family": "risc-v"})
-    cat_dir = tmp_path / "ip_catalog"
+    cat_dir = tmp_path / "ip-catalog"
     (cat_dir / "_schema").mkdir(parents=True)
     (cat_dir / "_schema" / "x.json").write_text("{}")
     leaf_dir = cat_dir / "cpu" / "leaf"
@@ -291,7 +305,7 @@ def test_fix4b_depends_on_auto_included(tmp_path):
     independently match."""
     proj = tmp_path / "p"
     _write_l2(proj, {"cpu_family": "risc-v"})
-    cat_dir = tmp_path / "ip_catalog"
+    cat_dir = tmp_path / "ip-catalog"
     (cat_dir / "_schema").mkdir(parents=True)
     (cat_dir / "_schema" / "x.json").write_text("{}")
     main_dir = cat_dir / "cpu" / "main"

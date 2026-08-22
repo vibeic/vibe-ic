@@ -8,7 +8,7 @@ extracted by the auto-discovery patterns, the agent MUST add a
 project-level `extraction_patterns.json` to teach the extractor how
 to find it. There is NO "we'll skip this doc" option. The legacy
 `extraction_evidence_schema_alternative` waiver has been removed,
-and the soft/hard distinction has been removed — every L1-L13 doc
+and the soft/hard distinction has been removed — every L1-L23 doc
 that exists must carry a schema-valid `extraction_evidence` field.
 
 BACKLOG-v13 Wave 7. The Wave 2 / Wave 5 / Wave 7 SKILL.md updates
@@ -49,10 +49,10 @@ This gate fixes that:
 
 Required L docs (must have `extraction_evidence` to PASS)
 =========================================================
-Wave 23 (v0.119.55): every L1-L13 doc that exists in
+Wave 23 (v0.119.55): every L1-L23 doc that exists in
 `generated_docs/` must carry a schema-valid `extraction_evidence`
 field — no soft prefixes, no WARN-only path. Missing field or
-malformed shape on any L1-L13 doc → HARD FAIL.
+malformed shape on any L1-L23 doc → HARD FAIL.
 
 Usage
 -----
@@ -73,7 +73,7 @@ if _PROG_DIR not in sys.path:
     sys.path.insert(0, _PROG_DIR)
 
 
-# Wave 23 (v0.119.55) — every L1-L13 doc is hard-required. The
+# Wave 23 (v0.119.55) — every L1-L23 doc is hard-required. The
 # soft-prefix WARN tier and the
 # `extraction_evidence_schema_alternative` waiver are gone; the
 # legacy waiver is now actively forbidden by
@@ -88,7 +88,7 @@ def _classify(name: str) -> str | None:
     """Return 'required'|None for a given L*.json basename.
 
     Wave 23 collapses the previous 'required'|'soft'|None tri-state
-    into 'required'|None: every L1-L13 doc that exists is hard-
+    into 'required'|None: every L1-L23 doc that exists is hard-
     required.
     """
     for pref in _REQUIRED_PREFIXES:
@@ -319,7 +319,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
             return 1, [
                 "FAIL — Wave 30 (v0.119.62): generated_docs/ absent "
                 "but input/docs/ has vendor docs. Phase 1 (doc-extraction) was not "
-                "run; required L1-L13 docs cannot carry "
+                "run; required L1-L23 docs cannot carry "
                 "extraction_evidence. NO waiver allowed."
             ]
         return 0, [
@@ -342,7 +342,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
             "(bare-skeleton project)"
         ]
 
-    # Wave 23 (v0.119.55) — every L1-L13 is hard-required; no WARN
+    # Wave 23 (v0.119.55) — every L1-L23 is hard-required; no WARN
     # tier; no waiver path.
     # v1.6.94 (issue #25 Bug 3) — every failure is now emitted as a
     # structured per-doc per-field marker line of shape:
@@ -428,19 +428,19 @@ def _check(project: Path) -> tuple[int, list[str]]:
 
     if checked == 0:
         # Wave 30 (v0.119.62) — fail-closed when vendor input docs
-        # exist but no L1-L13 doc was produced.
+        # exist but no L1-L23 doc was produced.
         if has_input_docs:
             out.insert(
                 0,
                 "FAIL — Wave 30 (v0.119.62): no L*.json matched "
-                "required L1-L13 prefixes but input/docs/ has vendor "
+                "required L1-L23 prefixes but input/docs/ has vendor "
                 "docs. Phase 1 (doc-extraction) generators were not run. NO waiver "
                 "allowed.")
             return 1, out
         out.insert(
             0,
             "extraction_evidence_schema_check: SKIP — no L*.json "
-            "files matched required L1-L13 prefixes")
+            "files matched required L1-L23 prefixes")
         return 0, out
 
     out.insert(0, "PASS — extraction_evidence schema valid for all "

@@ -8,7 +8,7 @@ This is a focused per-topic guide. For the umbrella partner-plugin layout
 | File (in your partner plugin) | Role |
 |---|---|
 | `programs/<class>_rtl_gen.py` | Deterministic RTL generator |
-| `tools/protocol_tb/<class>_reference_tb.v` | Reference TB used by phase2b runner |
+| `tools/protocol_tb/<class>_reference_tb.v` | Reference TB used by the Phase 2 runner |
 | (optional) `programs/<class>_class_profile.py` | Detection rules |
 
 ## Register the class
@@ -33,11 +33,11 @@ Append to `plugins/vibe-ic/programs/ic_class_registry.json`:
 }
 ```
 
-`phase2b_one_shot_runner` consults this registry at runtime — adding the entry is the only cross-plugin change needed.
+`phase2_one_shot_runner` consults this registry at runtime — adding the entry is the only cross-plugin change needed.
 
 ## chip-AGNOSTIC requirement
 
-Your generator MUST emit RTL parameterised by L1-L13 docs only. NO references to specific vendor PDFs / xlsx columns / pin numbers in the generator code. Encode chip-specific values in the L docs themselves.
+Your generator MUST emit RTL parameterised by L1-L27 docs only. NO references to specific vendor PDFs / xlsx columns / pin numbers in the generator code. Encode chip-specific values in the L docs themselves.
 
 ## Testing
 

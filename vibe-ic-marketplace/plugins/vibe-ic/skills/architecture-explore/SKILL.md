@@ -24,16 +24,33 @@ The decisions with the biggest PPA impact happen before a line of RTL is written
 
 ## Workflow
 
-1. **Define the parameter space** — typically 3–5 knobs with 2–4 levels each
-2. **Build analytic model** per candidate:
-   - Throughput = f(parallelism, frequency)
-   - Area ~ Σ(units × unit_area) + memory × bit_area
-   - Power ~ activity × C × Vdd² × f
-   - Latency = depth × cycle_time
-3. **Prune** obviously-dominated points
-4. **Spot-check** top candidates with `/ppa-predict`
-5. **Plot** (or tabulate) Pareto frontier
-6. **Recommend** 1–2 architectures with rationale
+1. **Define the parameter space** — typically 3–5 knobs with 2–4 levels each.
+   *This is an AI-judgment step:* pick the knobs and levels that matter for
+   THIS block and workload (you know the design; the program does not).
+2. **Build analytic model + prune** — do NOT hand-compute the PPA math or
+   eyeball dominance. Encode each candidate as a knob row with the per-unit
+   coefficients and run the deterministic program. It applies the four
+   formulas (Throughput = parallelism × frequency, Area = Σ(units × unit_area)
+   + memory × bit_area, Power = activity × C × Vdd² × f, Latency = depth ×
+   cycle_time) and returns the Pareto frontier (area-minimise, power-minimise,
+   latency-minimise, throughput-maximise) via a dominance filter:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/arch_dse_pareto.py knobs.json --json arch/dse.json
+   ```
+
+   `knobs.json` is a list of candidates, each giving its knob values plus the
+   coefficients the formulas need (`unit_area`, `activity`, `cap`, `vdd`, …).
+   The program is chip-AGNOSTIC and hard-codes no process numbers — you supply
+   the coefficients. It degrades gracefully (reports `status: MISSING` /
+   per-candidate `notes`) on partial input rather than crashing or
+   over-flagging. The `pareto_frontier` list in the output is the set of
+   non-dominated points to carry forward.
+3. **Spot-check** the frontier candidates with `/ppa-predict`
+4. **Plot** (or tabulate) the Pareto frontier from `arch/dse.json`
+5. **Recommend** 1–2 architectures with rationale. *This is an AI-judgment
+   step:* the program tells you WHICH points are Pareto-optimal; you decide
+   WHICH of those best fits the PPA target priorities, risk, and roadmap.
 
 ## Output format
 
@@ -54,19 +71,18 @@ Classic DSE references: Patterson & Hennessy quantitative approach. Industry ref
 - PPA cross-check → `/ppa-predict`
 - Risk list → `/regression-manage`
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/architecture-explore/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/architecture-explore/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

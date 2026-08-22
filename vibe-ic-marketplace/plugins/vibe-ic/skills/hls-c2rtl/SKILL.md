@@ -5,7 +5,31 @@ description: Translate C / C++ / SystemC algorithmic descriptions into synthesiz
 
 # HLS (C/C++ → RTL)
 
-High-Level Synthesis is the entry point for DSP / AI accelerator / image-processing blocks where the algorithm is already written in C/C++. This skill guides the lowering from algorithm to RTL with pragmas / directives and hands off to `/rtl-review`.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> The HLS tool is the source of RTL; AI is the backstop on pragma narrative.
+
+High-Level Synthesis is the entry point for DSP / AI accelerator /
+image-processing blocks where the algorithm is already written in
+C/C++. This skill guides the lowering from algorithm to RTL with
+pragmas / directives and hands off to `/rtl-review`.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# 1. After HLS emits RTL, the standard plugin gates apply IMMEDIATELY:
+python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
+    --rtl-dir <hls-output-dir>     # see skills/rtl-review for backing
+python3 plugins/vibe-ic/programs/rtl_hygiene_lint.py \
+    <hls-output-dir>/*.v
+python3 plugins/vibe-ic/programs/reset_discipline_check.py \
+    --rtl-dir <hls-output-dir>
+```
+
+HLS-emitted RTL is NOT exempt from plugin gates — many HLS tools emit
+RTL with subtle latch / reset-discipline issues that downstream
+synthesis catches only after wasted hours. **Refuse to claim "HLS RTL
+is correct" without running the same gates a hand-authored RTL would
+face.**
 
 ## When to use
 
@@ -55,19 +79,18 @@ HLS is a mature commercial flow. XLS is Google's open-source DSL-based HLS. Key 
 - Golden C model → reuse as reference in `/testbench-gen`
 - PPA → `/ppa-predict` for cross-check
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/hls-c2rtl/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/hls-c2rtl/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

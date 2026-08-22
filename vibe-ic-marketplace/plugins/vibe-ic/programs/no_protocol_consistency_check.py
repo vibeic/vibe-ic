@@ -224,7 +224,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("docs_dir")
     ap.add_argument("--class-kb", default=None,
-                    help="path to plugins/vibe-ic-core/agents/class_kb "
+                    help="path to plugins/vibe-ic/agents/class_kb "
                          "(autodetected if omitted)")
     ap.add_argument("--json", default=None, help="output JSON report path")
     args = ap.parse_args(argv)

@@ -6,21 +6,30 @@ correlate with SPICE simulation predictions within acceptable tolerance.
 
 For each measurement in hw_measurements.json that has a matching SPICE
 measurement in corner_results.json:
+  - <10 % discrepancy → INFO (IDEAL — HW_SPICE_IDEAL)
   - ≤20 % discrepancy → INFO (acceptable)
   - >20 % discrepancy → WARNING
   - >30 % discrepancy → ERROR (model accuracy critical)
 
-Self-skips (exit 0 + INFO) when:
-  - No analog/*/hw_measurements.json files found
+The IDEAL tier is INFO-only granularity: <10 % was already acceptable, so
+adding it does NOT change the PASS/FAIL verdict.
+
+Self-skips when:
+  - No analog/ directory, or no analog/*/hw_measurements.json files found
 
 Usage:
     python3 analog_hw_spice_correlation_check.py <project_dir>
     python3 analog_hw_spice_correlation_check.py <project_dir> --json reports/gates/hw_spice_corr.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: bench data was read and every measurement correlates with its
+        SPICE prediction inside tolerance
     1 = FAIL (critical discrepancy)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no bench
+        measurement at all, so no hardware number was correlated against any
+        model. #521: both used to be rc 0, which is the shape that makes a
+        simulation-only close read as a bench-verified one. Also rc 2 for an
+        IO / parse error.
 """
 from __future__ import annotations
 
@@ -31,6 +40,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -45,7 +56,7 @@ class Finding:
 @dataclass
 class AuditResult:
     program: str = "analog_hw_spice_correlation_check"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     passed: bool = True
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
@@ -85,6 +96,7 @@ def run_audit(project: Path) -> AuditResult:
 
     total_compared = 0
     errors = 0
+    ideal = 0
     max_discrepancy = 0.0
 
     for hw_path in hw_files:
@@ -149,6 +161,17 @@ def run_audit(project: Path) -> AuditResult:
                             f"({pct:.1f}% discrepancy)"
                         ),
                     ))
+                elif pct < 10:
+                    ideal += 1
+                    result.findings.append(Finding(
+                        rule="HW_SPICE_IDEAL",
+                        severity="INFO",
+                        message=(
+                            f"Block '{block}' measurement '{name}': "
+                            f"HW={hw_val} vs SPICE={spice_val} "
+                            f"({pct:.1f}% — ideal correlation). OK."
+                        ),
+                    ))
                 else:
                     result.findings.append(Finding(
                         rule="HW_SPICE_CORRELATED",
@@ -189,11 +212,30 @@ def run_audit(project: Path) -> AuditResult:
     if errors:
         result.passed = False
 
+    # ORGANIC-20260606 #438(c): a COMPARISON gate cannot PASS having
+    # compared NOTHING. hw_measurements.json existed (we are past the
+    # self-skip) but zero HW/SPICE key overlaps were found — that is a
+    # broken comparison, not a clean one.
+    if total_compared == 0:
+        result.passed = False
+        result.findings.append(Finding(
+            rule="HW_SPICE_ZERO_COMPARED",
+            severity="ERROR",
+            message=("hw_measurements.json present but 0 measurements "
+                     "were compared against SPICE — a comparison gate "
+                     "must FAIL (or self-skip), never PASS, with "
+                     "items_compared==0 (#438c)"),
+        ))
+
+    ideal_pct = (ideal / total_compared * 100) if total_compared else 0.0
+
     result.summary = {
         "skipped": False,
         "hw_files_found": len(hw_files),
         "measurements_compared": total_compared,
         "max_discrepancy_pct": max_discrepancy,
+        "ideal_count": ideal,
+        "ideal_pct": ideal_pct,
         "errors": errors,
         "pass": result.passed,
     }
@@ -218,16 +260,22 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
+
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
 
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_hw_spice_correlation_check")
+        print(_vx.verdict_line("analog_hw_spice_correlation_check",
+                               result.passed, skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

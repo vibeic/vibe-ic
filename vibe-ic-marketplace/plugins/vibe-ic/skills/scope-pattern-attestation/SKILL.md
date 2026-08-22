@@ -5,6 +5,32 @@ description: Layer-3 hardware attestation — talk to an oscilloscope via SCPI t
 
 # scope-pattern-attestation — Layer-3 hardware attestation
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs run the pattern-match; AI is the backstop on waveform interpretation.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# 1. Capture the scope trace via MCP-EDA:
+device_scope_capture({ channel: 1, duration_ms: 100 })
+
+# 2. Then run the pattern-specific check:
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
+    --trace <trace.csv> --strict        # forbidden-pattern absence
+python3 plugins/vibe-ic/programs/scope_reply_preamble_check.py \
+    --trace <trace.csv> --strict        # required-pattern presence
+python3 plugins/vibe-ic/programs/scope_response_byte_decode_check.py \
+    --trace <trace.csv>
+python3 plugins/vibe-ic/programs/scope_long_decode.py \
+    --trace <trace.csv>                 # long-frame decode
+```
+
+The MCP captures the trace; the 4 programs decide pattern PASS / FAIL
+deterministically. **Refuse to attest a pattern by visual inspection
+of the scope screenshot** when the program can decide it.
+
+---
+
 This skill closes the third layer of the v0.65 three-layer defense. Sim
 PASS and static-RTL PASS together are still not proof; the only proof
 that an IC exhibits (or does not exhibit) a behavioral pattern in
@@ -63,11 +89,11 @@ wrong is shipping a defective IC.
 ### CLI
 
 The deterministic implementation is
-`plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py`. Typical
+`plugins/vibe-ic/programs/scope_periodic_pulse_check.py`. Typical
 hardware-side invocation:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py \
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
     --channel 4 \
     --span-ms 50 \
     --period-ms 5 --period-tol-ms 1 \
@@ -80,7 +106,7 @@ For CI / regression without any USB hardware, feed a previously
 captured waveform CSV:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py \
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
     --mock-samples-csv capture.csv \
     --period-ms 5 --period-tol-ms 1 \
     --pulse-min-us 10 --pulse-max-us 100
@@ -91,7 +117,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` argument / scope / capture error.
 ### MCP alternative
 
 When this skill is invoked through Claude Code with the
-`mcp-eda-server` MCP server attached, prefer the equivalent MCP tool
+`mcp-eda` MCP server attached, prefer the equivalent MCP tool
 **`device_scope_periodic_pulse_check`** over the bare CLI. The MCP
 tool wraps the same program with permission scoping for the USB device
 and returns a structured JSON verdict, which makes the result easy for
@@ -140,19 +166,18 @@ downstream skills to consume programmatically.
 * **Not a sim replacement.** Sim and static checkers run before silicon
   exists; this is an after-silicon attestation layer.
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/scope-pattern-attestation/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/scope-pattern-attestation/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

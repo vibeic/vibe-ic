@@ -40,10 +40,33 @@ Shape vocabulary:
   OR a flat JSON array (legacy). Empty is permitted (`min_entries=0`)
   because the sidecar may legitimately have no AI patches to apply.
 
+Honest zero-unpromoted N/A (ORGANIC-20260606 #494)
+--------------------------------------------------
+`phase1/extraction_patterns.auto.json` is the *unpromoted remainder*
+written by phase1's `_seed_canonical_from_backfilled_subset`. When EVERY
+auto-discovered literal got backfilled into typed L*.json (zero
+unpromoted), the writer LEGITIMATELY emits an otherwise-empty companion
+carrying ONLY its explicit zero-unpromoted marker `_comment`:
+
+    {"_comment": "Auto-discovered extraction patterns NOT yet backfilled
+                  into typed L*.json fields. v1.6.7 keeps these out of
+                  the canonical denominator ..."}
+
+That is the runner's own honest output — there is nothing to populate.
+A hard `min_entries:1` here would make a clean run FAIL its own gate, so
+the runner would be pressured to stuff fake patterns. The substance gate
+therefore recognises the WRITER'S explicit STRUCTURAL marker (not mere
+emptiness) as honest-N/A → a named SKIP (exit 0). The marker is required
+verbatim-substring; an empty companion WITHOUT it, or one whose entries
+lack substance, still FAILs.
+
 Verdict tiers
 -------------
 PASS         — every existing whitelisted file meets its substance
                threshold (or has `min_entries=0` and is empty).
+SKIP         — a companion whose only content is the writer's explicit
+               zero-unpromoted marker (honest N/A; exit 0), and no other
+               file fails.
 VACUOUS_PASS — none of the whitelisted files exist (project has not
                reached Phase 1 (doc-extraction) yet).
 FAIL         — at least one file exists but is below its minimum or
@@ -63,7 +86,7 @@ Usage
                                                  [--json <out>]
 
 Exit codes
-    0  PASS / VACUOUS_PASS
+    0  PASS / VACUOUS_PASS / SKIP (honest zero-unpromoted N/A)
     1  one or more files fail the substance check
     2  argument or I/O error
 
@@ -78,6 +101,68 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+# ORGANIC-20260606 #494 — honest zero-unpromoted N/A marker.
+#
+# `extraction_patterns.auto.json` is the *unpromoted remainder* the phase1
+# writers stamp: it is first written by `_autodiscover_patterns`
+# (phase1_coverage_report_gen) and then REWRITTEN by
+# `_seed_canonical_from_backfilled_subset` (phase1_doc_one_shot_runner) on
+# every run with whatever literals were NOT backfilled into typed L*.json.
+# When zero literals remain unpromoted (all backfilled), the companion is
+# emitted with ONLY a writer-authored provenance `_comment` and no entries.
+#
+# BOTH writers stamp that `_comment` with the SAME stable, distinctive
+# provenance prefix, so we key the honest-N/A SKIP on that STRUCTURAL marker
+# — a required verbatim-substring of the `_comment` value — NOT on mere
+# emptiness. A file empty WITHOUT this writer signature still FAILs.
+#
+# Writer source of truth (verbatim `_comment` prefixes):
+#   * phase1_coverage_report_gen._autodiscover_patterns:
+#       "Auto-discovered extraction patterns (Wave 5). ..."
+#   * phase1_doc_one_shot_runner._seed_canonical_from_backfilled_subset:
+#       "Auto-discovered extraction patterns NOT yet backfilled into typed ..."
+# Their common, distinctive prefix is the structural signature below.
+#
+# The marker maps {whitelisted rel path → required `_comment` substring}.
+_ZERO_UNPROMOTED_MARKER: Dict[str, str] = {
+    "phase1/extraction_patterns.auto.json":
+        "Auto-discovered extraction patterns",
+}
+
+
+def _has_zero_unpromoted_marker(rel: str, data: Any) -> bool:
+    """True iff `data` is the writer's honest zero-unpromoted companion for
+    `rel`: a JSON object whose `_comment` carries the explicit marker
+    substring AND which declares NO real (non-underscore) pattern entries.
+
+    Requiring BOTH (the structural marker AND zero substantive entries)
+    means an attacker cannot smuggle a substance-missing file past the gate
+    by pasting the marker onto a half-populated file — if any real entry
+    exists this returns False and the normal min_entries path runs.
+    """
+    needle = _ZERO_UNPROMOTED_MARKER.get(rel)
+    if needle is None:
+        return False
+    if not isinstance(data, dict):
+        return False
+    comment = data.get("_comment")
+    if not isinstance(comment, str) or needle not in comment:
+        return False
+    # No real (non-underscore) keys carrying pattern entries.
+    for k, v in data.items():
+        if k.startswith("_"):
+            continue
+        # Any non-metadata key with a non-empty list is a real entry; a
+        # marker on top of real content is NOT honest-N/A.
+        if isinstance(v, list) and len(v) > 0:
+            return False
+        if not isinstance(v, list):
+            # Unexpected non-list payload alongside the marker — let the
+            # normal shape handler classify it (don't grant the SKIP).
+            return False
+    return True
 
 
 # Per-file substance requirements. Add a new whitelisted phase1 JSON
@@ -212,6 +297,7 @@ def audit(project: Path) -> Tuple[str, List[SubstanceFinding], Dict[str, Any]]:
     findings: List[SubstanceFinding] = []
     summary: Dict[str, Any] = {}
     files_present = 0
+    skipped: List[str] = []
 
     for rel, spec in _SUBSTANCE_REQUIREMENTS.items():
         f = project / rel
@@ -231,6 +317,27 @@ def audit(project: Path) -> Tuple[str, List[SubstanceFinding], Dict[str, Any]]:
                 min_entries=spec["min_entries"],
                 rationale=f"json parse error: {e.msg} at line {e.lineno}"))
             summary[rel] = {"present": True, "valid_json": False}
+            continue
+
+        # ORGANIC-20260606 #494 — honest zero-unpromoted N/A. The phase1
+        # writer rewrites this companion on every run; when EVERY auto
+        # literal was backfilled into typed L*.json the remainder is empty
+        # and the file carries ONLY the writer's explicit marker `_comment`.
+        # That is the runner's own honest output, so a hard min_entries:1
+        # must not FAIL it. Recognise the STRUCTURAL marker (not mere
+        # emptiness) → named SKIP, exit 0.
+        if _has_zero_unpromoted_marker(rel, data):
+            skipped.append(rel)
+            summary[rel] = {
+                "present": True, "valid_json": True,
+                "shape_ok": True, "entries": 0,
+                "skipped": "ZERO_UNPROMOTED_MARKER",
+                "skip_reason": (
+                    "writer's explicit zero-unpromoted marker present and "
+                    "no substantive entries — honest N/A (every "
+                    "auto-discovered literal was backfilled into typed "
+                    "L*.json; nothing remains unpromoted)."),
+            }
             continue
 
         handler = _SHAPE_HANDLERS.get(spec["shape"])
@@ -291,7 +398,13 @@ def audit(project: Path) -> Tuple[str, List[SubstanceFinding], Dict[str, Any]]:
 
     if files_present == 0:
         return "VACUOUS_PASS", [], summary
-    return ("FAIL" if findings else "PASS"), findings, summary
+    if findings:
+        return "FAIL", findings, summary
+    # No failures. If any file was honest-N/A SKIPed, surface SKIP so the
+    # caller knows a clean run's own marker was honoured (still exit 0).
+    if skipped:
+        return "SKIP", [], summary
+    return "PASS", [], summary
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -321,6 +434,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         report["reason"] = ("none of the whitelisted phase1 metadata "
                             "files present; project has not reached "
                             "Phase 1 (doc-extraction) yet.")
+    if verdict == "SKIP":
+        skipped = [k for k, v in summary.items()
+                   if v.get("skipped") == "ZERO_UNPROMOTED_MARKER"]
+        report["skipped"] = skipped
+        report["reason"] = (
+            "honest N/A: companion(s) carry the phase1 writer's explicit "
+            "zero-unpromoted marker with no substantive entries (every "
+            "auto-discovered literal was backfilled into typed L*.json). "
+            "A clean run's own honest output is not a substance failure.")
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +450,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")
+        return 0
+    if verdict == "SKIP":
+        skipped = report.get("skipped", [])
+        print(f"SKIP: {len(skipped)} companion(s) are honest zero-"
+              f"unpromoted N/A (writer's explicit marker, no entries).")
+        for k in skipped:
+            print(f"  - {k}  (ZERO_UNPROMOTED_MARKER)")
+        # Any non-skipped present file that passed substance, list it too.
+        for k, v in summary.items():
+            if (v.get("present") and not v.get("skipped")
+                    and v.get("shape_ok") and v.get("entries") is not None):
+                print(f"  - {k}  entries={v.get('entries')}")
         return 0
     if verdict == "PASS":
         present = [k for k, v in summary.items() if v.get("present")]

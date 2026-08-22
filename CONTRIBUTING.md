@@ -13,27 +13,63 @@ By participating you agree to uphold it. Report violations to
 ## Where things live
 
 ```
-mcp-eda-server/           Node.js MCP server (24 tool wrappers + device fw)
 vibe-ic-marketplace/
-└── plugins/vibe-ic/      Claude Code plugin (skills, programs, agents)
+└── plugins/vibe-ic/      Claude Code plugin — one install = everything
     ├── skills/           One folder per skill — SKILL.md + assets
     ├── programs/         Deterministic checks / gates / generators
-    ├── agents/           PM Agent, IC Expert Agent, lessons, defaults
+    ├── agents/           IC Expert Agent, lessons, defaults
+    ├── mcp-eda/              Bundled MCP server — 55 tools, auto-registered
+    ├── ip-catalog/       Open-source IP catalogue (manifests)
+    ├── benchmark/        Benchmark harness + registry
     ├── flow/             Canonical Phase 1/2/3 flow YAML
-    ├── tests/            Unit + integration tests
-    └── ip_catalog/       Open-source IP catalogue
-tools/                    CLI utilities (phase1 engine, regression)
-docs/                     Architecture, design, tutorial notes
+    └── tests/            Unit + integration tests
+IP/                       Open-core git submodules (serv · ibex · sha256 · opentitan)
+benchmark-data/           Benchmark inputs + results (ic/<6 ICs> + evaluation/)
+tools/                    Repo dev / CI utilities
 ```
 
 ## How to contribute
 
-### 1. File an issue first
+Vibe-IC's **public contribution model has two intake paths**, and both are
+valid — pick by whether you are carrying a fix. Either way the merged
+**repo-gatekeeper / maintainer** role reviews and **lands the change into the
+next version**; external contributors do **not** push to `main` themselves. (The
+maintainer's own in-house fixes land by direct push with every gate retained —
+that internal shortcut is *not* part of the external contribution path.)
 
-For anything more than a typo fix, please open an issue describing
-**what** is broken or missing and **why**. Use the issue templates
-under `.github/ISSUE_TEMPLATE/`. Wait for a maintainer to triage before
-sinking time into a PR — we'll save you rework.
+### 1. File a backlog first (report-only) — or open a PR (report-with-fix)
+
+- **Backlog (a report, no code).** Found a bug or a gap but not a fix? File a
+  **backlog item** describing **what** is broken or missing and **why**. It is
+  filed as a GitHub issue using the templates under `.github/ISSUE_TEMPLATE/`
+  (the plugin's `community-backlog-submit` skill can draft a chip-AGNOSTIC one
+  for you). A maintainer triages it into the plugin.
+- **PR (a proposed fix, with code).** Carrying a fix? Open a PR directly
+  (steps 2-7 below). For anything more than a typo, filing a linked backlog
+  first still saves you rework — wait for a maintainer to triage before sinking
+  time into a large PR.
+
+> **Looking for open issues? Ask GraphQL (`gh issue list`), not the REST
+> listing and not the search index.** Measured on this repository on
+> 2026-08-15, at a moment when 33 issues were open:
+>
+> ```
+> gh issue list --repo vibeic/vibe-ic --state open --limit 200  ->  33  (GraphQL)
+> gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=100'  ->   0  (REST)
+> gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open' ->   0  (search index)
+> gh api repos/vibeic/vibe-ic --jq .open_issues_count           ->   0
+> gh api repos/vibeic/vibe-ic/issues/1645 --jq .state           -> "open"
+> gh api 'repos/vibeic/vibe-ic/pulls?state=open&per_page=100'   ->   6  (REST is fine here)
+> ```
+>
+> The REST **listings** and the search index answer HTTP 200 with an empty set
+> for a repository whose issues are intact over GraphQL and readable one at a
+> time over REST. An empty listing and an empty backlog are byte-identical:
+> anyone looking for work through `gh api .../issues` or `search/issues` sees
+> nothing to claim and cannot tell that apart from a queue that is genuinely
+> clear. See vibe-ic#1645; `skills/core-agent-loop/programs/poll.py`,
+> `programs/open_issue_claim_scan.py` and `programs/open_organic_issue_count.py`
+> all enumerate over GraphQL for this reason.
 
 ### 2. Fork + branch
 
@@ -47,11 +83,11 @@ git checkout -b fix/<issue-number>-<short-description>
 
 ```bash
 # MCP server
-cd mcp-eda-server
+cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
 npm install
 
 # Plugin tests
-cd ../vibe-ic-marketplace/plugins/vibe-ic
+cd ..            # -> vibe-ic-marketplace/plugins/vibe-ic
 pip install pytest
 pytest -q
 ```
@@ -86,23 +122,27 @@ The two hard gates that **must** pass before any PR is mergeable:
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
         vibe-ic-marketplace/plugins/vibe-ic
 
-# (b) Full test suite — BOTH plugin test trees + the MCP server
+# (b) Full test suite — `run_tests.sh` IS the full suite. Bare `pytest` is NOT.
 #
-#     HARD RULE: validate with bare `pytest` from the plugin root. The plugin has TWO
-#     test trees and you MUST run both:
-#       - programs/tests/ : unit tests for the deterministic programs
-#       - tests/          : integration/regression GATES (INDEX.md freshness,
-#                           every-skill-has-compliance.yaml + test_compliance.py,
-#                           orchestrator input-branch regressions, end-to-end skill audit)
-#     pytest.ini pins `testpaths = programs/tests tests`, so bare `pytest` runs both.
-#     NEVER validate with only `pytest programs/tests/` (or only `tests/`) — that silently
-#     skips the other tree. A real on-main regression once slipped through exactly this way
-#     (an orchestrator fix verified only against programs/tests/).
-( cd vibe-ic-marketplace/plugins/vibe-ic && pytest -q )   # collects programs/tests/ + tests/
-pytest -q mcp-eda-server/test
+#     `pytest.ini` declares ONE testpath (`programs/tests`) on purpose, and
+#     `single_testpath_guard.py` pins it there. Every other tree is discovered by
+#     `run_tests.sh` and NOWHERE else:
+#       - programs/tests/            unit tests for the deterministic programs
+#       - tools/phase1_engine/tests/ the Phase-1 gap/render engine
+#       - mcp-eda/test/              the MCP EDA server sub-project
+#       - skills/*/tests/            per-skill compliance regression
+#
+#     WHAT USED TO BE HERE was a HARD RULE saying the plugin had two trees,
+#     `programs/tests/` and `tests/`, that `testpaths` listed both, and that bare
+#     `pytest` therefore ran both. All three were false. `testpaths` has only ever
+#     listed one, and `tests/` HAS NEVER EXISTED in this repository — pytest does not
+#     fail on a path that is not there, it collects nothing. So the reader who obeyed
+#     the rule got a clean-looking ZERO from the tree they were told to be most careful
+#     about. See `pytest.ini` and vibe-ic#1391.
+( cd vibe-ic-marketplace/plugins/vibe-ic && ./run_tests.sh )
 ```
 
-> Adding a program or skill? The `tests/` gates enforce registration: every new program
+> Adding a program or skill? The `programs/tests/` gates enforce registration: every new program
 > must be in `programs/INDEX.md` (`python3 tools/gen_programs_index.py`), and every new
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
@@ -147,15 +187,15 @@ We will run CI on merge to a temp branch first.
 3. Add a deterministic check under `programs/` if the skill produces
    verifiable artefacts.
 4. Add tests under `tests/`.
-5. Document the skill in `docs/skills/<skill-name>.md`.
+5. Document the skill in its `SKILL.md` (the skill's own doc is canonical).
 
 ## Adding a new EDA tool wrapper (MCP)
 
-1. Implement under `mcp-eda-server/src/index.js` following the existing
+1. Implement under `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/index.js` following the existing
    `server.tool("eda_<name>", …)` pattern.
-2. Add a manifest entry to `mcp-eda-server/devices_registry.json` if
+2. Add a manifest entry to `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/devices_registry.json` if
    it's a device wrapper rather than a software tool.
-3. Add tests under `mcp-eda-server/test/`.
+3. Add tests under `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test/`.
 4. **Add the entry to the [awesome-open-ic](https://github.com/vibeic/awesome-open-ic)
    list** under the appropriate category, marked with the green
    "MCP wrapped" badge.
@@ -165,7 +205,7 @@ We will run CI on merge to a temp branch first.
 Use the bug-report issue template. Please include:
 
 - Vibe-IC version (`vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json`)
-- mcp-eda-server version
+- bundled MCP server version
 - OS + Python + Node versions
 - Minimal reproduction (a `tests/fixtures/real_benchmark/` shape if possible)
 - Expected vs actual output
@@ -175,7 +215,47 @@ Use the bug-report issue template. Please include:
 
 **Do not open a public issue.** See [SECURITY.md](SECURITY.md).
 
-## License
+## License, DCO, and patent pledge
 
 By contributing you agree that your contributions are licensed under
 the [Apache License 2.0](LICENSE) along with the rest of the project.
+Apache-2.0 §5 makes this automatic (inbound = outbound), and §3 grants
+every downstream user an explicit **patent license** covering your
+contribution — with the built-in defensive termination clause.
+
+**DCO (Developer Certificate of Origin).** Every commit must carry a
+`Signed-off-by:` trailer certifying you have the right to submit the
+work under Apache-2.0 (the [DCO 1.1](https://developercertificate.org/)
+text):
+
+```bash
+git commit -s -m "your message"
+```
+
+**Patent non-assertion pledge.** In addition to the Apache-2.0 §3 grant,
+by contributing you pledge that:
+
+1. you retain the copyright in your contribution;
+2. you grant the Vibe-IC project and its users a perpetual, worldwide,
+   irrevocable, royalty-free patent license covering your contribution
+   (this restates Apache-2.0 §3 — nothing extra to do);
+3. you will not assert, against any user of Vibe-IC, any patent claim
+   that reads on your contribution as integrated into the project.
+
+This mirrors the practice of patent-sensitive open-hardware communities
+(RISC-V International's non-assertion covenants; the Linux Foundation's
+DCO).
+
+### Employer patent reminder (advisory, in the DCO spirit)
+
+If you are employed, please confirm BEFORE signing off:
+
+1. your employer agrees to you contributing code on your own time;
+2. your employer agrees not to assert, against the Vibe-IC community,
+   patents that read on your contribution;
+3. if your contribution used employer resources (equipment, work time,
+   confidential information), you have obtained written authorization.
+
+These are **advisory**, not enforced — the DCO stays lightweight.
+Corporate contributors may optionally use the one-page employer
+consent template kept in the project's docs archive.

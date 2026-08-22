@@ -236,7 +236,7 @@ def main():
     print("    (2) the final iteration actually produced byte[6]=0xF2;")
     print("    (3) every oracle-referenced delta is backed by a captured")
     print("        oracle dump or scope artifact.")
-    print("  Without all three, the L1-L13 → RTL → SOF flow is not")
+    print("  Without all three, the L1-L23 → RTL → SOF flow is not")
     print("  reproducible — the next fresh agent reading the spec will")
     print("  re-introduce the bug because the silicon-vs-spec delta wasn't")
     print("  documented.")
