@@ -2046,6 +2046,99 @@ def test_the_incident_this_guard_was_built_for_is_still_caught(tmp_path):
             f"does the job it was built for:\n{r.stdout}{r.stderr}")
 
 
+def test_the_verdict_is_byte_identical_across_runs(tmp_path):
+    """A gate whose verdict is not reproducible is worth less than no gate --
+    `test_issue712_prose_polarity` puts it as "a verdict nobody can reproduce
+    green is the thing this repo is closing". Nothing here checked that.
+
+    It is structural: every iteration is over a `sorted(...)` or an `ast.walk`,
+    and the sets that do exist are consumed through `sorted`. Structural is not
+    the same as verified -- one unsorted `set` iteration in a report list would
+    make the ORDER of `denied_by_polarity`, `not_determined` or `unparsed` vary
+    between runs, which is invisible on a PASS and maddening on a diff.
+
+    The tree is SYNTHETIC on purpose. The property is about the algorithm, not
+    the corpus, and pinning it against the real tree would cost two more
+    full-corpus sweeps -- reintroducing the duplication this module just
+    removed. It is built to populate every list that could reorder: a denial, a
+    helper-assembled counter, an unreadable source, and a live pin.
+
+    MEASURED on the real tree as well, once, by hand: json, stdout and rc all
+    byte-identical over three runs."""
+    progs = tmp_path / "p"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "aa_denial.py").write_text(
+        'def s():\n    return (\n'
+        '        "  # the retry path does not incr _a; it re-issues\\n"\n'
+        '        "  if {[catch {x}]} { incr _a }\\n"\n'
+        '        "  if {[catch {y}]} { incr _a }\\n"\n'
+        '        "  puts \\"PARTIAL: $_a of 2 repairs refused\\"\\n"\n'
+        '        "  if {$_a >= 2} { puts A }\\n")\n', encoding="utf-8")
+    (progs / "mm_helper.py").write_text(
+        'def _r(name):\n    return "  if {[catch {%s}]} { incr _m }\\n" % name\n\n\n'
+        'def s():\n    return ("  set _m 0\\n" + _r("a") + _r("b") + _r("c")\n'
+        '            + "  if {$_m >= 3} { puts M }\\n")\n', encoding="utf-8")
+    # TWO unreadable sources, and two denials, and two undecidable counters --
+    # every report list must hold at least TWO entries or it cannot REORDER, and
+    # a control that cannot reorder proves nothing. Measured: with one entry
+    # each, replacing a report list with `list(set(...))` passed this test three
+    # times running.
+    (progs / "zz_broken.py").write_text(
+        'def s():\n    return "  incr _z\\n"\n\ndef q(  :::\n', encoding="utf-8")
+    (progs / "yy_broken.py").write_text(
+        'def s():\n    return "  incr _y\\n"\n\ndef w(  :::\n', encoding="utf-8")
+    (progs / "xx_broken.py").write_text(
+        'def s():\n    return "  incr _x\\n"\n\ndef v(  :::\n', encoding="utf-8")
+    (progs / "nn_helper.py").write_text(
+        'def _r(name):\n    return "  if {[catch {%s}]} { incr _n }\\n" % name\n\n\n'
+        'def s():\n    return ("  set _n 0\\n" + _r("a") + _r("b") + _r("c")\n'
+        '            + "  if {$_n >= 3} { puts N }\\n")\n', encoding="utf-8")
+    (progs / "bb_denial.py").write_text(
+        'def s():\n    return (\n'
+        '        "  # the retry path does not incr _b; it re-issues\\n"\n'
+        '        "  if {[catch {x}]} { incr _b }\\n"\n'
+        '        "  if {[catch {y}]} { incr _b }\\n"\n'
+        '        "  if {$_b >= 2} { puts B }\\n")\n', encoding="utf-8")
+    (tests / "test_aa_denial.py").write_text(
+        'from aa_denial import s\n\n\ndef test_p():\n'
+        '    assert "of 2 repairs refused" in s()\n', encoding="utf-8")
+
+    seen = set()
+    for i in range(3):
+        out = tmp_path / f"r{i}.json"
+        r = _run(progs, tests, "--json", out)
+        seen.add((r.returncode, out.read_text(), r.stdout))
+    assert len(seen) == 1, (
+        "the guard's verdict is not reproducible across runs -- a report list "
+        "is being built from an unordered set:\n"
+        + "\n---\n".join(sorted(s[1] for s in seen)))
+
+    # and the run really did populate every list that could reorder
+    doc = json.loads((tmp_path / "r0.json").read_text())
+    for key in ("denied_by_polarity", "not_determined", "unparsed"):
+        assert len(doc[key]) >= 2, (
+            f"{key} holds {len(doc[key])} entry -- a list of one cannot REORDER, "
+            f"so this fixture cannot detect the defect the test exists for")
+    # `unparsed` carries THREE, not two, because the control's strength depends
+    # on it. n entries give at most n! orderings, so three runs agreeing by luck
+    # costs (1/n!)^2 -- 1/4 at two entries. MEASURED rather than trusted, by
+    # replacing a report list with `list(set(...))` and running the control
+    # repeatedly:
+    #
+    #     two entries     fired 2 of 3
+    #     three entries   fired 4 of 5
+    #
+    # The second is better than 1/36 would predict, which says CPython realises
+    # fewer than 3! orderings for three short strings -- so the arithmetic is an
+    # upper bound on the control's strength, not its value. It is a
+    # PROBABILISTIC control either way, and that is written down rather than
+    # rounded up to "it fires": the TEST is deterministic on correct code (every
+    # iteration here is over a sorted sequence), only the mutation's detection
+    # is chancy.
+    assert len(doc["unparsed"]) >= 3, doc["unparsed"]
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
