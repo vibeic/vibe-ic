@@ -4845,3 +4845,52 @@ and applied my deletion of the five.
 Neither changes what my branch does — a gate at rc 2 is not PASS, so neither row
 is stale and both correctly stay. But §64's account of *why* they are red is now
 superseded on the first one, and the fix it points at is the wrong fix.
+
+## 71. "The dispatch is wrong" is off by one layer — and the real fix is doubly not mine
+
+§70 quoted the landing's superseding note on `L-doc field producer`: the corpus
+moved, the gate now answers rc 2 UNDETERMINED over a zero denominator, *"which is
+correct behaviour; what is wrong is the DISPATCH recording rc 2 as FAIL."*
+
+**The first half is right and the attribution is one layer off.** The row is
+declared with plain `run`:
+
+    run "L-doc field producer"  "$ROOT" python3 "$PG/l_doc_field_producer_check.py" \
+        --corpus-may-be-absent
+
+and `_gate_dispatch.sh` says what that means, in its own comment above the
+alternative wrapper:
+
+    # Same as `run`, but rc 2 means "could not check" rather than "found a
+    # defect" … rc 1 (a real finding) still fails; rc 2 is LOUD …
+    # the wrapper exists so that wiring one is a visible, reviewable act
+
+So the dispatch is doing exactly what the declaration asks. What is wrong is the
+DECLARATION: a gate whose corpus has legitimately gone to zero is still wired
+with the wrapper that treats "could not look" as a defect.
+
+### Why that distinction is worth making rather than nitpicking
+
+It moves the item between owners. "The dispatch records rc 2 as FAIL" reads as a
+bug in shared machinery that anyone may fix. The truth is that swapping the
+wrapper is gated twice over, and both gates are deliberate:
+
+* `repo_hygiene_gates.sh` is one of the 47 PROTECTED paths, so the change needs
+  the PREPARE of §63 — the same one §58 and §60 need.
+* The dispatcher REFUSES a tolerant wrapper with no dated exemption beside it:
+  *"tolerance has to be bought, not defaulted into."* So the change is
+  necessarily `uncheckable_until <YYYY-MM-DD> <why>` — **adding an exemption**,
+  which this brief forbids me outright and which the wrapper's own comment
+  designs to be "a visible, reviewable act".
+
+**A third item for the one PREPARE, then**, and the only one of the three that
+also needs a dated judgement rather than just an authorisation. §58's selector
+rule and §60's `--repo` arguments are mechanical once authorised; this one asks
+someone to name a date by which the corpus question gets answered.
+
+**And the note itself is a model of the thing this document keeps asking for.**
+It did not delete the superseded reasoning — it appended `|| SUPERSEDED 2026-08-22,
+kept because it was true when measured`, and left `since` and `max_commits`
+untouched. That is the append-only correction discipline, applied by someone else,
+to a row I had just measured and written up. The only thing it got wrong is which
+layer to hand the defect to.
