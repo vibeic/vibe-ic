@@ -737,10 +737,18 @@ def test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND(tmp_path)
 #
 # MEASURED 2026-08-22, this host, real producer through real `_gate_dispatch.sh`:
 #
-#     origin/main   corpus ABSENT      -> _summary_rc 0    <- a PASS
+#     origin/main   corpus ABSENT      -> _summary_rc 0    <- waived
 #     origin/main   corpus read-empty  -> _summary_rc 0    <- intended bootstrap
 #     this branch   corpus ABSENT      -> _summary_rc 2    <- refused
 #     this branch   corpus read-empty  -> _summary_rc 0    <- unchanged
+#
+# LATENT, NOT LIVE, and this test does not pretend otherwise: the only
+# production caller of `repo_hygiene_parallel` binds the corpus before the set
+# and refuses rc 2 if it cannot, so state A never reached the waiver in a real
+# review or landing. What is pinned here is that the waiver no longer DEPENDS on
+# that binding to be right. The full hygiene tier, run to completion with the
+# pointer unset, is byte-identical on both trees (87/77/71/6/10, exit 1) apart
+# from this row's wording -- so nothing new fires on the shipped repository.
 #
 # This is the assertion that makes "do not make either state a pass" true, so it
 # is driven end to end. A hand-built record cannot show it: on `origin/main` the

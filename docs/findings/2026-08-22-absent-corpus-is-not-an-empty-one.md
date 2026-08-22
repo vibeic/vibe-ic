@@ -1,4 +1,4 @@
-# An ABSENT corpus is not an EMPTY one — and calling it one closed the gate GREEN
+# An ABSENT corpus is not an EMPTY one — the ruling, the measurement, and its bound
 
 _Measured 2026-08-22 on host `8HD-6`, against `origin/main` at `81cd5321b` and
 against `fix/j1764-absent-is-not-empty`, with the SHIPPED
@@ -46,63 +46,78 @@ that state:
                    and it publishes no */*/phase3/stage3/pnr/routed.def. This IS
                    a measurement …
 
-## The part that was not cosmetic: `main` closed GREEN over state A
+## A second, LATENT collapse in the waiver — and an honest bound on it
 
-#1764 reads as a wording defect because both states already refuse at
-`gate_dispatch_finish` (rc 2), and they do. But `gate_dispatch_finish` is not
-the closing verdict of the hygiene tier. `repo_hygiene_parallel._summary_rc` is,
-and it **waives exactly one unexempted NOT_CHECKED**: the phase-1 bootstrap row
-for a corpus that was READ and publishes nothing.
-
+There is one place a population refusal can become a pass:
+`repo_hygiene_parallel._summary_rc` waives exactly one unexempted NOT_CHECKED,
+the phase-1 bootstrap row for a corpus that was READ and publishes nothing.
 An absent corpus reached that waiver wearing the same label and the same
-`expansion`, so it was waived too. Measured on real wiring — the real producer
-through the real `_gate_dispatch.sh`, then the real `_summary_rc`:
+`expansion`, so the waiver answered for it too. Measured, real producer through
+the real `_gate_dispatch.sh`, then the real `_summary_rc`:
 
-| tree | state | `expansion` | `gate_dispatch_finish` | **`_summary_rc`** |
-|---|---|---|---|---|
-| `origin/main` | A absent | `EXPANDED` | 2 | **0 — a PASS** |
-| `origin/main` | B read-empty | `EXPANDED` | 2 | 0 — intended bootstrap |
-| this branch | A absent | `NO_CORPUS` | 2 | **2 — refused** |
-| this branch | B read-empty | `EXPANDED` | 2 | 0 — **unchanged** |
+| tree | state | `expansion` | `_summary_rc` |
+|---|---|---|---|
+| `origin/main` | A absent | `EXPANDED` | **0** |
+| `origin/main` | B read-empty | `EXPANDED` | 0 — intended bootstrap |
+| this branch | A absent | `NO_CORPUS` | **2** |
+| this branch | B read-empty | `EXPANDED` | 0 — unchanged |
 
-So a bare checkout with no pointer ran the hygiene tier, reported enforcement,
-and closed green over a corpus nothing had opened. **The row wording was the
-symptom; this was the cost.** It is also exactly what the brief forbids: *do not
-make either state a pass.*
+**How far that actually reaches, stated against my own finding.** I first wrote
+this up as "`main` closes the hygiene DAG green over a corpus nothing opened",
+which is stronger than what is true. `repo_hygiene_parallel` has exactly one
+production caller, `gatekeeper_review.repo_hygiene_gate`, and it binds the
+corpus **before** the set (line 1230) and returns rc 2 with a named remedy if it
+cannot:
 
-Both the label and `expansion == "EXPANDED"` are now load-bearing in
-`_legacy_empty_without_process`, and the source says so, so an absent corpus
-fails the shape check even if some future caller hands it the EMPTY label.
+    if script is None:
+        corpus_env_or_none, corpus_refusal = _published_corpus_binding()
+        if corpus_refusal is not None:
+            return GateResult(name, 2, corpus_refusal)
 
-## What this changes operationally, stated plainly
+`_published_corpus_binding` tries `VIBE_IC_BENCHMARK_DATA`, then
+`VIBEIC_BENCHMARK_DATA_CHECKOUT`, then `$HOME/_matrix_benchmark_data`, and
+refuses unless the result is the ROOT of a git checkout — measured against a
+directory that is not one, it refuses rather than binding. And a pointer that is
+**set and wrong** makes the producer rc 2 UNDETERMINED, not absent. So the only
+way into `_summary_rc` is with a corpus that resolved: **state A cannot reach
+the waiver on the production path.**
 
-This is a behaviour change, not only a wording change, so here is who feels it.
+So this is a **latent** defect, not a live one, and the earlier phrasing in this
+file and in commit `24a09728` overstated it. It is still worth fixing: the
+binding is the single guard standing between an unmeasured corpus and a waived
+refusal, and "one guard is enough" is not how the rest of this repository is
+built. What the fix buys is that the waiver no longer *depends* on that binding
+to be correct.
 
-* **The review / landing path: nothing changes.**
-  `gatekeeper_review._published_corpus_binding()` resolves
-  `VIBE_IC_BENCHMARK_DATA`, then `VIBEIC_BENCHMARK_DATA_CHECKOUT`, then falls
-  back to `$HOME/_matrix_benchmark_data`, and **refuses with a named remedy if
-  it cannot** — it never returns rc 0 unbound. That path is therefore always in
-  state B, and state B is byte-identical before and after. #1763 is untouched.
-* **A hand-run `tools/ci/repo_hygiene_gates.sh`, or `gatekeeper-land.sh`'s
-  `lane_hygiene`, on a machine with no pointer exported: `full:repo-hygiene`
-  now returns rc 2 where it used to return 0.** `lane_hygiene` (line 1347)
-  passes only `VIBEIC_SUBJECT_ROOT` and `GATEKEEPER_HYGIENE_JOBS` and inherits
-  whatever the operator happens to have exported, so it can be in state A.
+## What this changes operationally: nothing, measured
 
-The second bullet is the point, not a regression: that rc 0 was a pass over a
-corpus nothing opened. The remedy is one line and the producer's own message
-already prints it — point `VIBE_IC_BENCHMARK_DATA` at a clone. An honest
-refusal naming a missing input beats a green run that measured nothing.
+The real, complete `tools/ci/repo_hygiene_gates.sh` run to completion with the
+pointer UNSET — the state a bare checkout of this repository is in — on both
+trees:
 
-Worth noting that `gatekeeper_review.py` already states this exact rule one
-layer up, at the binding it performs:
+| | declared | decided | passed | failed | NOT CHECKED | unexempted | exit |
+|---|---|---|---|---|---|---|---|
+| `origin/main` | 87 | 77 | 71 | 6 | 10 | 1 | **1** |
+| this branch | 87 | 77 | 71 | 6 | 10 | 1 | **1** |
 
-> SET AND WRONG IS NOT ABSENT (`_corpus_location.py:26-29`), and NOTHING
-> ANYWHERE is not a pass either. The two are different states with different
-> remedies, so they get different sentences; neither is rc 0.
+Byte-for-byte the same verdict counts and the same exit code. The **only**
+difference in the whole record is the routed-DEF row:
 
-#1764 is that same rule missing one layer down.
+    origin/main   expansion EXPANDED   'corpus "…" is EMPTY — nothing was checked over it'
+    this branch   expansion NO_CORPUS  'corpus "…" was NOT FOUND — nothing was opened to check'
+
+This is the answer to *"whatever you change must run clean on the current repo;
+a guard that fires on the state we just shipped is not a guard"*: **nothing new
+fires.** The row was blocking before and is blocking now, at the same severity,
+in the same run, with the same closing rc. What changed is that it now tells the
+truth about which state it is in.
+
+(This corrects a claim in an earlier revision of this file that `lane_hygiene`
+would begin returning 2 where it returned 0. It does not: `lane_hygiene` runs
+`repo_hygiene_gates.sh`, whose closing rc is `gate_dispatch_finish`, and that
+refused this row on `origin/main` already. The 6 failures above are pre-existing
+on `origin/main` and are not touched by this change.)
+
 
 ## The ruling: which is blocking
 

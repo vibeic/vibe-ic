@@ -1012,17 +1012,25 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
         # corpus/gate shape must prove it is the no-process bootstrap row.
         #
         # THIS IS THE ONE PLACE A POPULATION REFUSAL CAN BECOME A PASS, so it
-        # is also the one place vibe-ic#1764 actually cost something. An absent
-        # corpus used to reach it wearing the EMPTY row's label and expansion
-        # and be waived. Measured 2026-08-22 on origin/main, real producer
-        # through the real dispatcher:
+        # is where vibe-ic#1764's collapse was worth closing even though the
+        # collapse could not reach it. An absent corpus wears the EMPTY row's
+        # label and expansion, so the waiver answered for it. Measured
+        # 2026-08-22 on origin/main, real producer through the real dispatcher:
         #
-        #     corpus ABSENT      -> _summary_rc 0   <- a PASS, nothing opened
+        #     corpus ABSENT      -> _summary_rc 0   <- waived, nothing opened
         #     corpus read-empty  -> _summary_rc 0   <- the intended bootstrap
         #
-        # `_legacy_empty_without_process` now refuses the first on `expansion`,
-        # and `test_an_absent_corpus_does_not_close_the_hygiene_dag_green`
-        # drives both states end to end so the pair cannot re-merge.
+        # LATENT, NOT LIVE, and the difference is worth stating rather than
+        # letting the comment imply the stronger thing: this module's only
+        # production caller is `gatekeeper_review.repo_hygiene_gate`, which
+        # binds the corpus BEFORE the set and returns rc 2 with a named remedy
+        # if it cannot, so an absent corpus never arrived here on that path.
+        # The fix is defence in depth -- it stops the waiver DEPENDING on that
+        # binding being correct, which is the only thing that made it safe.
+        #
+        # `_legacy_empty_without_process` refuses an absent corpus on
+        # `expansion`, and `test_an_absent_corpus_does_not_close_the_hygiene_
+        # dag_green` drives both states end to end so the pair cannot re-merge.
         if not (unexempted == [_LEGACY_ROUTED_EMPTY_LABEL]
                 and _legacy_empty_without_process(
                     doc, _LEGACY_ROUTED_EMPTY_LABEL)):
