@@ -1721,3 +1721,60 @@ someone asked, and every number in this document would have silently become a
 statement about a superseded head — the failure mode §19 pinned pairs to avoid
 and §20 had to correct for anyway. Scoping the watch to refs I do not write is
 what made the one real event legible instead of the fifth false alarm.
+
+## 30. My remedy is not on the critical path, and the version was never the blocker
+
+Two corrections, both to things I asserted in §23 and §26 without measuring, and
+the second one inverts the recommendation those sections implied.
+
+### The version was not the blocker
+
+§26 said the re-assembly is mechanical but blocked because resolving six
+version-declaration conflicts requires CHOOSING A VERSION, which the brief
+forbids me. Measured, by taking the merge to the conflict:
+
+```
+marketplace.json  (x2)   ours "1.11.67"   theirs "1.11.68"
+plugin.json              ours "1.11.67"   theirs "1.11.68"
+README.md         (x3)   version line + DERIVED COUNT rows
+                         (1232 vs 1238 programs, 2721 vs 2727 test files)
+INDEX.md, PROGRAM_INVENTORY.json   generated
+```
+
+Resolving the three JSON sites to `1.11.68` is not ASSIGNING a version — it is
+taking a value that already exists on `main`, and which the current batch head
+`2d98cacd4b` already declares. And the README rows are derived counts with an
+in-tree generator (`gen_program_inventory.py`, which produces the README counts,
+`INDEX.md` and `PROGRAM_INVENTORY.json` together). So the whole re-assembly is
+mechanical and tooled. My stated blocker was wrong.
+
+### But the re-assembly would not clear the gate anyway
+
+Before building a candidate I asked what it would buy, and the answer is: not
+the thing §23 implied. The batch BASE `546487a8a3`, which predates my branch
+entirely, ALREADY fails the gate on its own:
+
+```
+a00f53f20..546487a8a3
+FAIL: COLLATERAL REVERT: 1 finding(s) in 28 commit(s)
+  7a9ccd0bb  ppa-crosslayer/eco-readjudication/MANIFEST.json  81/145 (56%)
+```
+
+That is `jrows`'s finding, sitting in the batch base. So a re-assembly that
+swaps my multi-commit form for the squashed one takes the batch from **2
+findings to 1** — and `rc 1` either way. **`landing_collateral_revert_check`
+cannot pass until `jrows`'s lane is re-landed from its own delta, and no act of
+mine reaches that.**
+
+**So the priority is the reverse of what §23 set up.** Mine is additive noise on
+top of a gate that already fails for a reason that has nothing to do with me.
+Re-assembling for my sake alone would be work that changes a count and not a
+verdict. The squashed branch stays available — it is the right form to take
+WHENEVER the batch is next assembled, and it costs nothing to prefer it — but
+nobody should schedule an assembly on my account.
+
+**The pattern, one last time.** Both errors here are the same one: §26 asserted
+a blocker and §23 asserted a benefit, and neither was measured. Measuring
+dissolved the blocker and dissolved the benefit with it. A decline and a
+recommendation are both claims, and this document has now had to correct one of
+each.
