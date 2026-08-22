@@ -6861,3 +6861,92 @@ inside the thing it was measuring.**
 
 **No verdict, no number and no tier moves.** What moves is one row's predicate, from a
 literal that could not survive its own maintenance to an invariant that can.
+
+---
+
+## J88 — two probes, one argument different: 2 042 illegal cells against 8
+
+J86 settled the mechanism from a census. This measures what it costs, by running the
+flow's own post-hold path twice from the same `placed.def` with **one argument**
+different — `-root_buf clkbuf_16` (50 sites, what the flow names today) against
+`-root_buf clkbuf_8` (26 sites, inside the 48-site inter-tap run). Everything else is
+byte-identical; `diff` of the two generated files is **three lines, two of them
+comments**. Registered at **18:03:53**, before either ran.
+
+```
+                              rootbig (clkbuf_16)   rootfit (clkbuf_8)
+CTS census                    2054 x clkbuf_16      2052 x clkbuf_8, 2 x clkbuf_16
+                               683 x clkbuf_4        683 x clkbuf_4
+hold violations found              2595                  1522        -41.3 %
+hold buffers inserted               262                   149        -43.1 %
+post-hold movable            5 957 992.32 um^2     5 847 894.26 um^2  -110 098.06
+post-hold utilisation              46.0 %                45.2 %
+POST-HOLD RESIDUAL                 2 042                     8
+runtime                    still running at 7 min      2 min 35 s
+```
+
+**P11 HELD, by a factor of 60.** It predicted the fitting root would leave a residual
+below 500 against ~2 350. It leaves **8**. *The residual five arms have been unable to
+clear for up to thirteen hours is created by which master the flow names as
+`-root_buf`, not by the design.*
+
+**P12 HELD.** The movable-area delta is **110 098.06 µm²**, inside the registered
+97 000–119 000 band and 1.8 % from the figure the census predicted before either probe
+ran (108 109.21 = `2052 × (28.000 − 14.560) × 3.920`).
+
+**P14 FAILED — and it was written down in advance that it would.** `rootfit` does **not**
+legalize outright: `PROBE_PRESWAP_OK=0`, residual 8 across all four rungs. Recording the
+expectation is what makes that a result rather than a shrug.
+
+**Unpredicted, and favourable**: hold violations fall by **41 %** and hold buffers by
+**43 %**. The 50-site root buffer was creating hold violations of its own; nothing in the
+registration anticipated that, and it is marked as unpredicted rather than folded in.
+
+### The ENTRY CONTROL FAILED, and the registration says what that costs
+
+E4 required `rootbig` to land within ±0.5 % of the arm's post-hold movable and inside the
+2 296–2 418 residual band. It is **1.59 % off** (5 957 992 vs 6 054 419) and its residual
+is **2 042**, outside the band. **E4 FAILS.** `placed.def` predates spare insertion — the
+3 833 tie-low drivers that J70 measured sitting inside `M` are absent — and the hold
+repair differs too (262 buffers against 222).
+
+The registration wrote the consequence down before the answer: *"both probes are still
+reported and compared to EACH OTHER, which is the controlled comparison; only the tie to
+the arm's absolute numbers is lost."* That is what stands. **2 042 against 8 is a
+controlled result** — same base, same everything, one argument. The tie to the arm's
+absolute die number is not, and P13 below is stated accordingly.
+
+### P13 — and it does NOT revise the published headline
+
+**P13 HELD**: applying the measured delta to the published M puts the build-to die below
+the published low end.
+
+```
+              published M     die    x pad   |   M - 110 098      die    x pad
+low          5 995 578.53   6138.8   2.145   |   5 885 480.47   6089.9   2.128
+mean         6 037 963.02   6157.5   2.151   |   5 927 864.96   6108.8   2.134
+high         6 069 060.66   6171.2   2.156   |   5 958 962.60   6122.6   2.139
+```
+
+**The published 6.139–6.171 mm STANDS UNCHANGED.** It is what the flow **as it is today**
+would build, and option E is not adopted. The right-hand column is a **conditional**:
+*if* a fitting root buffer were named, the die would be **6.090–6.123 mm**. It is a
+published M minus a delta measured on a different base — **not a measured die** — and it
+is presented as a column beside the real one rather than substituted for it. Quietly
+revising a headline to a number no run produced is the failure mode this report exists
+to avoid.
+
+### The sentence that matters for the adjudication
+
+**The verdict survives the decision either way.** `edge_llm_matmul_accel` is
+**2.145×–2.156×** its pad floor as the flow stands and **2.128×–2.139×** under option E.
+**Core-limited at both ends, pad-limited at neither.** So the adjudication does not hinge
+on an unresolved flow question — which is the property that had to be checked, because a
+verdict that moves with a decision nobody has taken is not a verdict.
+
+### And the cleanest demonstration is the one nobody designed
+
+`rootfit` finished in **2 minutes 35 seconds**. `rootbig` — the same probe, one argument
+different — was still inside its first rung's diamond search seven minutes later, on
+`2 042 remaining illegal cells`, which is exactly where five arms have been for up to
+thirteen hours. **Nothing was configured to show that; it is what the pair did.**

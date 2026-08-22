@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J87). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J88). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -3252,6 +3252,35 @@ clock buffers` / `Max level 11`, so the tree is the same shape in each:
 | narrow root | `{clkbuf_4}` | `clkbuf_8` (26 sites) | **2 052 × clkbuf_8; only 2 at the bound** |
 
 | **E. name a `-root_buf` that fits the measured bound** | **none measured — skew 4.86 → 4.50 (−7.4 %), max network latency 7.61 → 6.92 (−9.1 %), same 2 363 buffers, same 11 levels** | **the 2 055 never exist; nothing at the bound to legalize** | **none** |
+
+**★ AND OPTION E IS NOW MEASURED END TO END, NOT JUST AT CTS (J88).** Two full
+post-hold probes from the same `placed.def`, differing in **one argument** (`diff` = three
+lines, two of them comments):
+
+| | `-root_buf clkbuf_16` (today) | `-root_buf clkbuf_8` |
+|---|---|---|
+| post-hold residual | **2 042**, still searching at 7 min | **8**, done in **2 m 35 s** |
+| hold violations found | 2 595 | 1 522 (**−41 %**) |
+| hold buffers inserted | 262 | 149 (**−43 %**) |
+| post-hold movable | 5 957 992.32 µm² | 5 847 894.26 µm² (**−110 098.06**) |
+
+**The residual five arms have been unable to clear for up to thirteen hours is created
+by which master the flow names as `-root_buf`, not by the design.** The area delta lands
+1.8 % from what the census predicted before either probe ran. *(The entry control
+FAILED — `placed.def` predates spare insertion, so neither probe reproduces the arm's
+absolute numbers — and the registration said in advance that the two are then compared
+to each other, which is the controlled result. `rootfit` does NOT legalize outright
+either: residual 8, `PROBE_PRESWAP_OK=0`, exactly as predicted.)*
+
+**This does NOT revise the published die.** 6.139–6.171 mm is what the flow **as it is**
+would build and option E is not adopted; *if* it were, the same fixed point gives
+**6.090–6.123 mm = 2.128×–2.139×**. That is a published M minus a delta measured on a
+different base — a column beside the real number, never substituted for it.
+
+**★ AND THE VERDICT SURVIVES THE DECISION EITHER WAY: 2.145×–2.156× as the flow stands,
+2.128×–2.139× under option E — core-limited at both ends, pad-limited at neither.** The
+adjudication does not hinge on an unresolved flow question, which is the property that
+had to be checked.
 
 **Option E is not merely cheaper than A–D; on this design it is better on every number
 measured.** At 2 052 instances the clock net's load is mostly the buffers themselves, so
