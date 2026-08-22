@@ -15,6 +15,29 @@ wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
 regression, and one structural invariant that held before as well. None is
 vacuous.
 
+MUTATION, TWO SWEEPS
+====================
+Guards: every `if ...: continue` in the program deleted in turn -- 20 sites, 8
+survived, 4 of which were real gaps and are now covered (see "guards a mutation
+sweep found nothing was holding"). Three of the remaining four are fast paths,
+not guards: deleting them leaves the shipped tree's --json byte identical. The
+fourth, `if isinstance(up, ast.stmt)`, has no input I could construct that
+distinguishes it.
+
+Boundaries: every comparison operator flipped to its neighbour -- `>=`<->`>`,
+`<`<->`<=`, `==`<->`!=`. 12 sites, ZERO survivors, including the two that carry
+the semantics: `value < MIN_POPULATION` (the population floor) and
+`sites > value` (the lower-bound rule, where an equality false-PASS was fixed
+earlier on this branch). Reproduce by rewriting the file through `ast.unparse`
+with one op flipped; the un-mutated round trip passes, so the harness itself is
+not what fails.
+
+NOT DONE, and not to be read as done: the integer-constant arm. Constants inside
+f-strings carry bogus `lineno`/`col_offset` on this interpreter, so the mutator
+edited sites other than the ones it named, and the run hit a ten-minute cap
+before finishing. Its four "survivors" are artefacts and were discarded rather
+than reported.
+
 THE SWAP RUN THE OTHER WAY, because "my tests pass" is not the same claim as
 "the author's contract still holds": 3c3c51aee's ORIGINAL test file, unmodified,
 against this program -- 10 passed. Exactly one of the author's test bodies
