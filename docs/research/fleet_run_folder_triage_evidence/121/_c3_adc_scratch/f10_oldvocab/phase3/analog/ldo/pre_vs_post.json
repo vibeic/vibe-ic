@@ -1,0 +1,3 @@
+{"block":"ldo","comparisons":[
+ {"name":"PSRR_DC_dB","pre_layout":22.74,"post_layout":22.65},
+ {"name":"Vout_V","pre":1.19426,"post":1.19401}]}
