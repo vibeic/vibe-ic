@@ -452,6 +452,34 @@ print(record["payload"]["result_exit_code"])
 PY
 }
 
+# WHY THE VALIDATOR'S OWN LOG IS NOT ENOUGH.
+#
+# When the arm never wrote a receipt, the validator can only report the SYMPTOM
+# -- "cannot resolve runner receipt: [Errno 2] No such file or directory" -- and
+# that one line is what a reader sees for every distinct cause. MEASURED, three
+# different causes reduced to that same sentence in one evening:
+#
+#   * "subject would expose the host HOME to the candidate"  (TMPDIR under $HOME)
+#   * "cannot start Docker CLI: ..."                          (no engine here)
+#   * "candidate ended without the exact semantic terminal record"
+#
+# The runner writes its refusal to `$RUN/<arm>-runner.log` and then exits; that
+# file is deleted with the run directory, so unless it is quoted HERE the cause
+# is gone. "I could not run it" and "I ran it and it failed" must not read the
+# same. The launchers above own that pathname, so it is derived from the arm id
+# rather than threaded through this function's already-long parameter list.
+arm_norecord_diagnosis() {
+  local arm="$1" record_log="$2" runner_log
+  runner_log="$RUN/$(printf '%s' "$arm" | tr 'A-Z' 'a-z')-runner.log"
+  if [ -s "$runner_log" ]; then
+    echo "      --- $arm runner said (this is the CAUSE; the lines below are the symptom):" >&2
+    tail -n 20 -- "$runner_log" | sed 's/^/      /' >&2
+  else
+    echo "      --- $arm runner left no log at $runner_log — the arm did not even start" >&2
+  fi
+  sed 's/^/      /' "$record_log" >&2
+}
+
 validate_hermetic_arm_record() {
   local runner_rc="$1" receipt="$2" output="$3" arm="$4" subject="$5"
   local corpus="$6" selection="$7" plan="$8" command="$9" record="${10}"
@@ -468,7 +496,8 @@ validate_hermetic_arm_record() {
            --head "$expected_head" --hygiene hygiene.json)
   fi
   python3 -B "$helper" "${args[@]}" >"$record.log" 2>&1 \
-    || { sed 's/^/      /' "$record.log" >&2; die "$arm arm receipt is NORECORD"; }
+    || { arm_norecord_diagnosis "$arm" "$record.log"
+         die "$arm arm receipt is NORECORD"; }
   receipt_rc="$(validated_arm_exit "$helper" "$record")" \
     || die "$arm validation record cannot be re-read"
   case "$runner_rc:$receipt_rc" in

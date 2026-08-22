@@ -967,6 +967,30 @@ class _ProgressStreamSet:
         try:
             current = os.stat(self.directory)
             held = os.fstat(self.dir_fd)
+            # REWIND FIRST.  `os.listdir(fd)` is `fdopendir(dup(fd))`, and a
+            # dup SHARES the file offset, so the second listing of the same
+            # directory fd resumes where the first one stopped -- at
+            # end-of-directory.  On ext4 the kernel re-seeds the readdir cursor
+            # and the defect is invisible; on TMPFS it is not, and the hermetic
+            # candidate profile mounts `/tmp` as a tmpfs.
+            #
+            # MEASURED inside that container: `os.listdir(self.dir_fd)` -> []
+            # at the same instant `os.listdir(self.directory)` ->
+            # ['m.7.1.jsonl'].  Every re-list ran ONE CALL BEHIND, so a pytest
+            # arm that finished inside two poll intervals had its stream
+            # admitted only by `complete()` -- after the last observer sample.
+            # The hermetic relay therefore emitted no checkpoint and no
+            # terminal record, `hermetic_candidate_runner` refused with
+            # "candidate ended without the exact semantic terminal record",
+            # no B1 receipt was written, and `gatekeeper-verify-merge.sh`
+            # answered rc=2 to a known-GOOD branch and a known-BAD one alike:
+            # 22 reds in `test_landing_merge_verdict`, and a merge gate that
+            # could not discriminate.  A green fast arm and a hung arm are not
+            # allowed to look the same.
+            #
+            # The fd still pins the directory INODE (the identity clause
+            # below), so rewinding relaxes no property this class enforces.
+            os.lseek(self.dir_fd, 0, os.SEEK_SET)
             names = sorted(os.listdir(self.dir_fd))
         except OSError as exc:
             self._fail(f"progress directory unavailable: {exc}")

@@ -335,9 +335,25 @@ def _corpus_producer_failures(doc: dict) -> List[str]:
             if c.get("expansion") == "PRODUCER_FAILED"]
 
 
+#: `gate_dispatch_over`'s expansion state for a corpus that was never opened
+#: (vibe-ic#1764).  Its `items` is 0 like an empty corpus's is, and that is
+#: exactly why it needs its own name here: `items: 0` off a corpus that WAS
+#: read is a measured population, and off this one it is the absence of a
+#: measurement.  Reporting them under one sentence is the defect the
+#: dispatcher stopped doing; a consumer that re-collapses them downstream has
+#: only moved it.
+NO_CORPUS_EXPANSION = "NO_CORPUS"
+
+
+def _absent_corpora(doc: dict) -> List[str]:
+    return [str(c.get("name", "?")) for c in (doc.get("corpora") or [])
+            if c.get("expansion") == NO_CORPUS_EXPANSION]
+
+
 def _empty_corpora(doc: dict) -> List[str]:
     return [str(c.get("name", "?")) for c in (doc.get("corpora") or [])
-            if int(c.get("items") or 0) == 0]
+            if int(c.get("items") or 0) == 0
+            and c.get("expansion") != NO_CORPUS_EXPANSION]
 
 
 def _exact_int(value: object, what: str, *, minimum: int = 0) -> int:
@@ -584,7 +600,13 @@ def _validate_record(doc: dict, arm: str) -> Dict[str, dict]:
                            f"the {arm} corpus {name!r} items")
         gate_count = _exact_int(meta.get("gates"),
                                 f"the {arm} corpus {name!r} gates")
-        if meta.get("expansion") not in ("EXPANDED", "PRODUCER_FAILED"):
+        # NO_CORPUS is vibe-ic#1764's third state and it is ACCEPTED, not
+        # refused: the dispatcher already blocks on its row, and refusing the
+        # whole delta here would replace one true sentence ("nothing was
+        # opened") with a false one about a malformed record. It is NOT folded
+        # into EXPANDED — `items: 0` under EXPANDED is a measured population.
+        if meta.get("expansion") not in (
+                "EXPANDED", "PRODUCER_FAILED", NO_CORPUS_EXPANSION):
             raise Refusal(
                 f"the {arm} corpus {name!r} has unknown expansion state")
         associated = [row for row in gates if row.get("corpus") == name]
@@ -1009,6 +1031,10 @@ def delta(base: dict, cand: dict,
         # A loop that expanded over nothing declares no gate, so it is invisible
         # in `gates` by construction — the case a reader most needs told.
         "empty_corpora": sorted(set(_empty_corpora(base)) | set(_empty_corpora(cand))),
+        # NOT folded into `empty_corpora` above: one of these was READ and
+        # holds none, the other was never opened (vibe-ic#1764).
+        "absent_corpora": sorted(
+            set(_absent_corpora(base)) | set(_absent_corpora(cand))),
         "base_findings": sum(b_find.values()),
         "candidate_findings": sum(c_find.values()),
         "declared": len(cg),
@@ -1054,7 +1080,8 @@ def compare(base_path: Path, cand_path: Path, base_host: str,
     except Refusal as exc:
         return {"status": REFUSED, "refusal": str(exc), "introduced": [],
                 "carried": [], "cleared": [], "no_verdict_either_side": [],
-                "empty_corpora": [], "base_findings": None,
+                "empty_corpora": [], "absent_corpora": [],
+                "base_findings": None,
                 "candidate_findings": None, "declared": None}
 
 

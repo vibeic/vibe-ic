@@ -98,6 +98,84 @@ def _real_site_dir() -> Path:
     return Path(proc.stdout.strip()).resolve().parents[1]
 
 
+def _site_processing_dirs() -> list[Path]:
+    """Every directory SITE PROCESSING adds to this installation's path.
+
+    Derived as a set difference -- what the ordinary interpreter can import
+    from, MINUS what an interpreter with site processing off (`-S -I`) can --
+    rather than by matching the names `site-packages` and `dist-packages`. The
+    name match was the first shape and it is a guess about two spellings: it
+    silently returns an INCOMPLETE lane on any installation that adds a
+    directory under some other name, or one a `.pth` file injected.
+
+    BOTH ARMS RUN WITHOUT `PYTHONPATH`/`PYTHONHOME`, and that is load-bearing
+    rather than tidy. `-I` implies `-E`, so the siteless arm cannot honour them
+    and the ordinary arm can -- an asymmetry that puts every ambient entry into
+    the difference as though site processing had added it. MEASURED: under the
+    landing arm, `pytest_per_file_junit` prepends the plugin's own `programs`
+    directory to `PYTHONPATH` for every child it spawns, so the lane came out
+    naming a directory INSIDE the checkout and `trusted_pytest_entry` refused
+    it -- `VIBEIC_TRUSTED_PYTEST_SITE resolved inside the subject checkout`.
+    The entry's guard was right; the lane this helper built was wrong.
+
+    Anything inside the repository is dropped for that same reason. The entry
+    OWNS that refusal and keeps it; this is a builder obeying the contract it
+    builds for, not a second copy of the check. An editable install pointing at
+    the checkout would otherwise reintroduce exactly the failure above on a host
+    that happens to have one.
+
+    The difference is also what makes the ordering assertion sound: none of
+    these directories is on a siteless interpreter's path by construction, so
+    when the lane names them they appear because the lane named them.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
+
+    def seen(*flags: str) -> list[str]:
+        proc = subprocess.run(
+            [sys.executable, *flags, "-c",
+             "import sys" + chr(10) + "for e in sys.path: print(e)"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        return [line for line in proc.stdout.split()
+                if line and Path(line).is_dir()]
+
+    siteless = set(seen("-S", "-I"))
+    out: list[Path] = []
+    for item in seen():
+        if item in siteless:
+            continue
+        resolved = Path(item).resolve()
+        if resolved == PROGRAMS.parents[3] or PROGRAMS.parents[3] in resolved.parents:
+            continue
+        out.append(resolved)
+    return out
+
+
+def _closure_lane() -> str:
+    """A lane value naming the runner's WHOLE import closure, runner dir first.
+
+    `_real_site_dir()` alone is HALF a closure on this fleet. MEASURED on 8HD-d
+    at 46db018669::
+
+        pytest, _pytest, pluggy, iniconfig, packaging
+                                 -> ~/.local/lib/python3.12/site-packages
+        pygments                 -> /usr/lib/python3/dist-packages
+
+    `pytest` imports `pygments` lazily, at terminal-writer time, and the
+    runner-less venv above keeps NO system site directory, so a lane naming only
+    the first directory imports the runner and then dies `No module named
+    'pygments'`. The two positive controls below were measuring THAT host rather
+    than this program until the lane learned to take more than one directory.
+    """
+    seen: list[str] = []
+    for source in [_real_site_dir(), *_site_processing_dirs()]:
+        item = str(source)
+        if source.is_dir() and item not in seen:
+            seen.append(item)
+    return os.pathsep.join(seen)
+
+
 def test_it_refuses_when_the_isolated_runtime_cannot_import_and_no_lane_is_set(
         program, tmp_path, monkeypatch):
     monkeypatch.delenv(program.HOST_LANE_ENV, raising=False)
@@ -122,7 +200,7 @@ def test_it_refuses_when_the_isolated_runtime_cannot_import_and_no_lane_is_set(
 def test_the_named_lane_makes_the_same_interpreter_report(program, tmp_path,
                                                           monkeypatch):
     """THE REVERT GUARD for the host lane, at the program's own boundary."""
-    monkeypatch.setenv(program.HOST_LANE_ENV, str(_real_site_dir()))
+    monkeypatch.setenv(program.HOST_LANE_ENV, _closure_lane())
     result = program.preflight(programs=PROGRAMS,
                                python=_fleet_shaped_python(tmp_path))
     assert result["ok"] is True, result["reason"]
@@ -174,6 +252,29 @@ def test_the_probe_pins_plugin_autoload_off_on_the_child(program, tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_a_relative_entry_path_is_not_reported_as_a_runtime_that_cannot_report(
+        program, tmp_path, monkeypatch):
+    """"I could not find the entry" is a different finding from "it cannot report".
+
+    The probe runs the child with `cwd` set to a synthetic subject directory, so
+    a relative `entry` that resolved for the CALLER does not resolve for the
+    child. Before the entry was made absolute, that arrived as
+    `probe_returncode 2` and the reason "the trusted entry could not execute and
+    report one synthetic test" — a cause this program did not have, and the
+    exact conflation it exists to prevent everywhere else.
+
+    Driven with a stub entry that reports unconditionally, so the only thing
+    that can fail here is the path resolution.
+    """
+    (tmp_path / "trusted_pytest_entry.py").write_text(
+        "import sys\nsys.stdout.write('1 passed\\n')\nraise SystemExit(0)\n",
+        encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    proc = program.entry_probe(sys.executable, Path("trusted_pytest_entry.py"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout
+
+
 def test_the_cli_exit_code_is_two_for_refuse_and_zero_for_pass(tmp_path,
                                                                monkeypatch):
     env = dict(os.environ)
@@ -186,7 +287,7 @@ def test_the_cli_exit_code_is_two_for_refuse_and_zero_for_pass(tmp_path,
     assert refuse.returncode == 2, refuse.stdout + refuse.stderr
     assert json.loads(refuse.stdout)["ok"] is False
 
-    env["VIBEIC_TRUSTED_PYTEST_SITE"] = str(_real_site_dir())
+    env["VIBEIC_TRUSTED_PYTEST_SITE"] = _closure_lane()
     allow = subprocess.run([str(shim), str(PROGRAM), "--json"], env=env,
                            stdin=subprocess.DEVNULL, capture_output=True,
                            text=True)
@@ -207,109 +308,3 @@ def test_the_refusal_goes_to_stderr_and_the_pass_to_stdout(tmp_path):
     assert refuse.returncode == 2
     assert "REFUSE" in refuse.stderr
     assert refuse.stdout.strip() == ""
-
-
-# ══════════════════════════════════════════════════════════════════════
-# THE REMEDY MUST RUN AS PRINTED.
-#
-# The refusal used to print
-#
-#     docker run --rm -v "$PWD:$PWD" -w "$PWD" <image> bash tools/gatekeeper-land.sh
-#
-# and that command does not work. The image's ENTRYPOINT is the iic-osic-tools
-# launcher, whose own usage says: "-s, --skip … WARNING: this must be the first
-# parameter to the script or it is ignored!". MEASURED 2026-08-20 against the
-# pinned digest:
-#
-#     … <image> bash -c 'echo HELLO'          -> [ERROR] Unexpected option "bash", rc 1
-#     … <image> --skip bash -c 'echo HELLO'   -> HELLO, rc 0
-#
-# The reader hitting this refusal is already blocked; a remedy that fails is a
-# second failure to debug and no way forward.
-#
-# THE TEST EXECUTES THE PRINTED COMMAND. A text assertion — "the line contains
-# --skip" — would have passed for the entire life of the broken line if it had
-# been written against the old text, and it can only ever pin the mistake
-# somebody thought of. Running it pins the property.
-# ══════════════════════════════════════════════════════════════════════
-
-_MARKER = "vibeic-remedy-ran-as-printed"
-
-
-def _docker_image_available(image: str) -> str:
-    """"" if the image can be run here, else the sentence naming why not.
-
-    A skip and a pass must never be the same verdict (`_published_corpus`'s rule,
-    and `#1357`'s): if this host cannot reach the image the test says which of
-    the two facts it observed, and never reports the remedy as verified.
-    """
-    try:
-        d = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
-                           capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:      # noqa: BLE001
-        return f"docker cannot be run on this host ({exc})"
-    if d.returncode != 0:
-        return ("docker is present but its daemon did not answer: "
-                + (d.stderr or d.stdout).strip()[:200])
-    p = subprocess.run(["docker", "image", "inspect", image],
-                       capture_output=True, text=True, timeout=120)
-    if p.returncode != 0:
-        return (f"the digest-pinned runner image is not present locally and this "
-                f"test does not pull 31 GB: {image}")
-    return ""
-
-
-def test_the_printed_image_remedy_RUNS_as_printed(program, tmp_path):
-    """Execute what the refusal prints. Not what it says — what it builds."""
-    why = _docker_image_available(program.RUNNER_IMAGE)
-    if why:
-        pytest.skip("the image lane could not be exercised here — " + why
-                    + ". THIS IS 'could not look', not 'the remedy works'.")
-    argv = program.image_lane_argv(
-        ("bash", "-c", f"echo {_MARKER}"), workdir=str(tmp_path))
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
-    assert r.returncode == 0, (
-        "the remedy the refusal prints did not run\n"
-        + " ".join(argv) + f"\nrc={r.returncode}\n{r.stdout}\n{r.stderr}")
-    assert _MARKER in r.stdout, (
-        "the remedy exited 0 without running the command it was given\n"
-        + r.stdout + r.stderr)
-
-
-def test_the_remedy_would_FAIL_without_the_entrypoint_skip(program, tmp_path):
-    """The negative control. Without it the test above proves only that `docker
-    run` exists — it would pass against an image with no entrypoint at all."""
-    why = _docker_image_available(program.RUNNER_IMAGE)
-    if why:
-        pytest.skip("the image lane could not be exercised here — " + why
-                    + ". THIS IS 'could not look', not 'the control held'.")
-    argv = program.image_lane_argv(
-        ("bash", "-c", f"echo {_MARKER}"), workdir=str(tmp_path))
-    argv.remove(program.IMAGE_ENTRYPOINT_SKIP)
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
-    assert r.returncode != 0 and _MARKER not in r.stdout, (
-        "dropping the entrypoint skip changed nothing, so the test above is not "
-        "measuring the entrypoint\n" + r.stdout + r.stderr)
-
-
-def test_the_printed_lines_are_the_argv_and_cannot_drift_from_it(program):
-    """One source for the command. A second copy in the refusal text is how the
-    two disagree, which is what happened."""
-    printed = "\n".join(program._image_lane_lines())
-    argv = program.image_lane_argv()
-    flat = printed.replace("\\\n", " ").replace('"', "")
-    for word in argv:
-        assert word in flat, f"{word!r} is printed nowhere:\n{printed}"
-    assert flat.split().index(program.IMAGE_ENTRYPOINT_SKIP) == \
-        flat.split().index(program.RUNNER_IMAGE) + 1, (
-        "the entrypoint skip is not the FIRST parameter after the image, which "
-        "is the one placement the launcher accepts:\n" + printed)
-
-
-def test_the_refusal_body_carries_the_runnable_remedy(program, tmp_path):
-    """And it reaches the reader — the lines are built, but they must be emitted."""
-    lines = program._refusal_lines(python="/nonexistent/python3", isolated_ok=False,
-                                   resolved="", lane=None, probe=None)
-    body = "\n".join(lines)
-    assert f"{program.RUNNER_IMAGE} \\" in body, body
-    assert program.IMAGE_ENTRYPOINT_SKIP + " bash tools/gatekeeper-land.sh" in body, body

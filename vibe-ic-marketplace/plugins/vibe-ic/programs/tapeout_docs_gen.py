@@ -1,6 +1,64 @@
 #!/usr/bin/env python3
 """tapeout_docs_gen.py — emit the release documents for a tape-out candidate.
 
+ENFORCEMENT: advisory — no runner spawns this program inline, so its exit status
+cannot stop step 37.5ic while step 37.5ic is running. That is the ONLY axis this
+token names and the one `flow_gate_enforcement_audit` measures. Its peer clause
+on the same step, `tapeout_precheck`, carries the same token for the same reason
+and about the same channel. The other two axes are unchanged:
+
+  * FLOW SLOT — unchanged and BLOCKING. Step 37.5ic wires this in
+    `program_exit_zero`, inside an `all_of` with `tapeout_precheck`.
+  * VERDICT SEVERITY — unchanged. rc 1 when the run is NOT RELEASABLE.
+
+A GENERATOR *AND* A CHECKER, WHICH IS WHY IT STAYS IN THE GATE POPULATION
+========================================================================
+The name says generator, so the third answer — "this is not a gate, take it out
+of the flow's gate population" — has to be considered and is REFUTED by
+measurement on this tree, from one metrics file differing in one number:
+
+    every sign-off property clean                 -> rc 0, both documents written
+    the same file, timing__setup__ws = -1.53      -> rc 1, NOT RELEASABLE, and
+                                                     no document written at all
+
+`release_blockers()` IS that verdict, over the 17 declared sign-off properties
+in `MANUFACTURABILITY + ELECTRICAL`, decided from artefacts. rc 1 rather than
+rc 2 is deliberate — see the comment at the `SystemExit(1)` below, which records
+a MEASURED false VACUOUS_PASS on origin/main 69ce9260d for exactly a
+`timing__setup__ws = -1.53` run. Dropping this clause from the gate population
+would delete the only place that verdict is consumed and reinstate the defect
+that comment was written to remove. So it stays, and it declares.
+
+WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
+=====================================================
+Two things, and the first is structural rather than a decision:
+
+  1. THE INLINE WIRING CANNOT CALL THIS PROGRAM AS IT STANDS.
+     `phase3_one_shot_runner._run_declared_signoff_gate` invokes every entry of
+     `_DECLARED_SIGNOFF_GATES` as `<prog> <project> [extra argv] --json <out>` —
+     a POSITIONAL project and a `--json` verdict artefact, which `_gate_detail`
+     then reads back for the reason line. This program takes `--project`, has no
+     positional, and emits HTML and no verdict JSON at all. It would first have
+     to emit its `release_blockers()` result as a machine-readable verdict
+     artefact beside the documents and accept that call shape.
+  2. SOMEONE MUST MEASURE THE BLAST RADIUS AND ACCEPT IT. A NOT_MEASURED
+     property is a blocker here exactly like a violated one, so every run that
+     does not carry all 17 metrics returns rc 1 — which, wired inline, stops the
+     run at 37.5ic. `_DECLARED_SIGNOFF_GATES` was wired only after its blast
+     radius was measured over 14 published phase-3 run roots under
+     `benchmark-data/ic`. That corpus is no longer in this repository at all,
+     and `step_internal_fail_bubble_up_baseline.json` records what became of it
+     — measured at both ends by that gate's own `check_corpus`: 16 run trees at
+     the commit that last recorded it, 4 at `vibeic/benchmark-data` 146d665,
+     "12 run trees left, 0 arrived". So the measurement that licensed the last
+     inline wiring cannot currently be repeated for this one. Wiring on an
+     unmeasured blast radius is what that table's own comment refuses, and this
+     declaration does not do it by another route.
+
+Both preconditions are re-measured by `test_two_gates_declare_where_their_
+verdict_is_consumed.py`, which fails when either stops holding. This is NOT a
+claim that the program is audit-only forever.
+
 WHAT THIS IS FOR
 ================
 Step 37.5ic (submission precheck) already produces every fact these documents
@@ -369,7 +427,47 @@ def from_project(project: Path):
             run_id = json.loads(pre.read_text()).get("run_id", NOT_MEASURED)
         except Exception:
             pass
-    return m, run_id
+    design, pdk = identity(project)
+    return m, design, pdk, run_id
+
+
+# `input/project.json` is where this flow already records which design and which
+# PDK a run is for -- `pdk_consistency_check` and `declared_pdk_is_the_pdk_used_check`
+# both read exactly these keys. Reading them here is what lets the gate clause be
+# the chip-AGNOSTIC `--project .` the flow yaml declares: the two identities are
+# properties OF the run, so demanding them on the command line made the only
+# declared invocation one this program refuses (rc=2, which
+# `flow_compliance_check` reads as the input-missing skip -- a gate that passes
+# vacuously forever).
+_DESIGN_KEYS = ("design", "design_name", "top", "top_module")
+_PDK_KEYS = ("pdk", "target_pdk", "pdk_target")
+
+
+def identity(project: Path) -> tuple[str, str]:
+    """Read (design, pdk) off the project, or NOT_MEASURED. Never a default.
+
+    A guessed design name is the same failure as a guessed number: it makes a
+    document that names the wrong chip, and nothing in the file says it was a
+    guess.
+    """
+    doc = {}
+    pj = project / "input" / "project.json"
+    if pj.is_file():
+        try:
+            loaded = json.loads(pj.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                doc = loaded
+        except Exception:
+            doc = {}
+
+    def pick(keys):
+        for k in keys:
+            v = doc.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return NOT_MEASURED
+
+    return pick(_DESIGN_KEYS), pick(_PDK_KEYS)
 
 
 def main():
@@ -377,8 +475,10 @@ def main():
     ap.add_argument("--metrics", type=Path)
     ap.add_argument("--project", type=Path,
                     help="resolve metrics + run id from ONE project tree")
-    ap.add_argument("--design", required=True)
-    ap.add_argument("--pdk", required=True)
+    ap.add_argument("--design", default=None,
+                    help="design name; read off --project when not given")
+    ap.add_argument("--pdk", default=None,
+                    help="PDK name; read off --project when not given")
     ap.add_argument("--plugin-version", default=NOT_MEASURED)
     ap.add_argument("--run-id", default=NOT_MEASURED)
     ap.add_argument("--summary", default="")
@@ -391,9 +491,17 @@ def main():
     a = ap.parse_args()
 
     if a.project and not a.metrics:
-        a.metrics, rid = from_project(a.project)
+        a.metrics, design, pdk, rid = from_project(a.project)
         if a.run_id == NOT_MEASURED:
             a.run_id = rid
+        if a.design is None:
+            a.design = design
+        if a.pdk is None:
+            a.pdk = pdk
+    if a.design is None:
+        a.design = NOT_MEASURED
+    if a.pdk is None:
+        a.pdk = NOT_MEASURED
     if not a.metrics:
         raise SystemExit('--metrics or --project is required')
     m = load_metrics(a.metrics)
@@ -411,7 +519,15 @@ def main():
         print("\nA release document for a run that did not pass is worse than no "
               "document: it becomes a file that outlives the run it came from. "
               "Fix the run, or pass --allow-incomplete to write a DRAFT.", file=sys.stderr)
-        raise SystemExit(2)
+        # rc=1, NOT 2. In this flow rc==2 is the "input-missing skip" convention
+        # and `flow_compliance_check` promotes it to VACUOUS_PASS -- a PASS tier.
+        # Exiting 2 here meant step 37.5ic's gate reported a pass on precisely
+        # the runs this program had just refused to document: MEASURED on
+        # origin/main 69ce9260d, a project whose only defect was
+        # timing__setup__ws = -1.53 returned `ok = True` from
+        # `_check_program_exit_zero`, tagged `__VACUOUS_HINT__`. A run that is
+        # NOT RELEASABLE is a content-earned FAIL and must be scored as one.
+        raise SystemExit(1)
 
     a.out_dir.mkdir(parents=True, exist_ok=True)
     so = a.out_dir / f"SIGNOFF_{a.design}_{a.pdk}.html"
