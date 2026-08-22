@@ -87,10 +87,45 @@ def test_multi_only_layer_not_in_single_cut_set():
     assert mod.cut_layers_with_single_cut(_MULTI_CUT_VIA) == set()
 
 
-def test_routing_upper_bound_stops_at_gap():
-    # only single-cut VIA1 present -> safe to route M1..M2 (first uncovered
-    # cut is VIA2).
-    assert mod.routing_layer_upper_bound(_SINGLE_CUT_VIA) == 2
+# GAP#1 (round-7) corrected semantics: None == no restriction (route all);
+# an integer is returned ONLY when a real gap exists (a multi-cut-only
+# transition above met1). A fully-covered PDK — even one with a single
+# transition — must NOT restrict (the via covers met1↔met2, no gap).
+def test_routing_upper_bound_none_when_fully_covered():
+    # only single-cut VIA1 present and met1↔met2 IS covered → no gap →
+    # no restriction (route all present layers). Pre-GAP#1 this wrongly
+    # returned 2 (off-by-one "first uncovered index") which, fed to the
+    # consumer's `routing_upper < mtotal`, collapsed routing.
+    assert mod.routing_layer_upper_bound(_SINGLE_CUT_VIA) is None
+
+
+# A genuine middle gap: single-cut M1↔M2 and M2↔M3, but M3↔M4 multi-cut-only.
+_GAP_AT_M3M4 = """
+VIA M1M2 DEFAULT
+  LAYER met1 ;
+  LAYER via ;
+    RECT 0 0 1 1 ;
+  LAYER met2 ;
+END M1M2
+VIA M2M3 DEFAULT
+  LAYER met2 ;
+  LAYER via2 ;
+    RECT 0 0 1 1 ;
+  LAYER met3 ;
+END M2M3
+VIA M3M4 DEFAULT
+  LAYER met3 ;
+  LAYER via3 ;
+    RECT 0 0 1 1 ;
+    RECT 2 2 3 3 ;
+  LAYER met4 ;
+END M3M4
+"""
+
+
+def test_routing_upper_bound_restricts_at_real_gap():
+    # M1↔M2, M2↔M3 single-cut; M3↔M4 multi-cut-only → restrict to met1-met3.
+    assert mod.routing_layer_upper_bound(_GAP_AT_M3M4) == 3
 
 
 def test_routing_upper_bound_none_when_no_single_cut():
