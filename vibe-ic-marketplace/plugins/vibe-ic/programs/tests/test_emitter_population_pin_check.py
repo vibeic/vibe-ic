@@ -7,13 +7,19 @@ HOW MUCH OF THIS SUITE ACTUALLY COVERS THE FIX
 one commit at a time and easy to stop satisfying. Measured by swapping in
 3c3c51aee's 326-line program and running this file against it:
 
-    67 of 83 RED, 16 green.
+    77 of 94 RED, 17 green.
 
-Ten of the sixteen are the author's originals, which test behaviour that already
-worked. The other six are: two that read files other than the program (the CI
-wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
-regression, and one structural invariant that held before as well. None is
-vacuous.
+Ten of the seventeen are the author's originals, which test behaviour that
+already worked. The other seven are: two that read files other than the
+program (the CI wiring, the polarity baseline), four that pin PRE-EXISTING
+behaviour against regression, and one structural invariant that held before as
+well. None is vacuous.
+
+(Re-measured at this branch's tip. The figure read 67 of 83 for several
+commits after the suite had grown past 83 -- a count of the tests that exist
+goes stale the moment one is added, which is the same fault this file records
+against the program's own docstring. Re-derive it, never re-read it: swap
+3c3c51aee's program in and run this file.)
 
 MUTATION, TWO SWEEPS
 ====================
