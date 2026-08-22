@@ -697,3 +697,28 @@ consequence is the same kind of noise as a finding count without a denominator.
 
 The remaining 46 clones will add to this. Whatever they add, the number will be reported —
 including if it is zero.
+
+## "Proven in both directions" was weaker than I said
+
+I wrote that `evidence_contract.py` was proven red → green → red. jharv3 then found that their own
+self-test asserted only that *some* check went red: they **deleted an entire check** and it still
+passed, because a different one fired on the same synthetic row. A control that cannot name its
+target cannot tell "the check works" from "something else happened to shout".
+
+Applied here. Each guarantee gets a case only **it** catches, and must pass **both** arms:
+
+> unblinded must CATCH the case (exit non-zero) **and** blinded must MISS it (exit 0)
+
+Passing only the first arm proves nothing — a checker that fails on everything passes it.
+
+| guarantee | unblinded | blinded | |
+|---|---|---|---|
+| hash comparison | 1 | 0 | LOAD-BEARING |
+| absent-file branch | 1 | 0 | LOAD-BEARING |
+| non-empty assertion | 1 | 0 | LOAD-BEARING |
+
+The absent-file branch had **no case at all** until this — nothing in the red→green→red proof
+ever exercised it. It is load-bearing now because a case was built for it: a row falsely claiming
+main lacks a file main has.
+
+Shipped as `bin_jharv2/evidence_selftest.sh` so the claim is repeatable rather than asserted.
