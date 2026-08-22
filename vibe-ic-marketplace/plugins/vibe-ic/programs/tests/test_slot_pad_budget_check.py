@@ -962,7 +962,11 @@ def test_help_is_a_success_not_a_failure():
 def test_the_undecided_line_carries_the_disclosed_skip_marker():
     """`docs/PPA_INTERFACES.md` §1: "Use rc=2, and print a marker
     (`[CANNOT CHECK]` or `[REFUSE]`) so a 2 can never be read as a silent
-    skip." 66 gates in this tree already spell it `[CANNOT CHECK]`.
+    skip." Measured 2026-08-22: 22 programs in this tree already spell
+    it `[CANNOT CHECK]`. (The count is of PROGRAMS; an earlier draft of this
+    comment said "66 gates", which was neither — it was a raw occurrence
+    count, and a number stated in prose that nothing re-derives is exactly
+    what this branch keeps finding wrong.)
 
     This program is not a `ppa_*` module, so that section does not formally
     bind it — but rc 2 here IS the silent-skip shape (no slots ingested, or no
