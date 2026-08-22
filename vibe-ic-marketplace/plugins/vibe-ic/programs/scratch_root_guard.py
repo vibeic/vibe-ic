@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """scratch_root_guard.py — the suite's scratch root is part of its verdict, so
-the run states it, and refuses when it is a root that manufactures failures.
+every run states it, and refuses a root that manufactures failures.
 
 WHY THIS EXISTS (vibe-ic#1446)
 ==============================
@@ -18,40 +18,47 @@ and, from the re-measurement:
     scratch OUTSIDE         145 reds
     only in the inside run   74      <- environment, not main
 
-MEASURED HERE on 3d13e2c59, same tree, same commit, same host, only the pytest
-scratch root moved:
+RE-MEASURED ON 75776dbbb (v1.10.40), same tree, same commit, same host, one
+pytest invocation each, ONLY `--basetemp` different:
 
-    --basetemp outside any repository        57 passed
-    --basetemp inside a git repository       35 failed, 22 passed
-                       (test_published_record_staleness_check.py)
+    --basetemp <outside any repository>   86 passed in 140.48s
+    --basetemp <inside a git work tree>   46 failed, 40 passed in 49.78s
 
-    and 11 more across test_issue905_ic_level_layout_contract.py and
-    test_issue967_empty_ic_unit_examined_nothing.py, for 46 in total.
+over exactly three files —
+
+    programs/tests/test_published_record_staleness_check.py
+    programs/tests/test_issue905_ic_level_layout_contract.py
+    programs/tests/test_issue967_empty_ic_unit_examined_nothing.py
+
+— which is the same 46 the reporter's own correction names, two months and
+one hundred and sixty merged PRs later. The artefact did not go away; nothing
+had ever been aimed at it.
 
 THE MECHANISM, AND WHY IT IS NOT A DEFECT IN THE PROGRAMS
 =========================================================
 `git -C D ls-files` cannot FAIL while any ancestor of D is a work tree: it
 succeeds and answers about that ENCLOSING repository, scoped to D, which is
-zero paths for a directory nobody committed. The gates that enumerate a corpus
-this way therefore see an empty population and say so — `VACUOUS_PASS: 0 JSON
-file(s) enumerated (git-tracked)`, `examined nothing — 0 published entries`.
+zero paths for a directory nobody committed. Gates that enumerate a corpus
+this way therefore meet an empty population and correctly say so —
+`VACUOUS_PASS: 0 JSON file(s) enumerated (git-tracked)`, `examined nothing —
+0 published entries`.
 
-That is CORRECT behaviour and it is deliberate. `published_means committed` is
+That behaviour is deliberate and load-bearing. `published means committed` is
 the contract (`published_record_staleness_check._tracked_paths`: "adjudicating
 scratch output would report a defect nobody published"), and #967 pins it as a
 property with its own test: an IC whose only entry is a developer's local
 scratch "published NOTHING, so it is a skip, not a pass". Widening the
 enumeration to walk the disk whenever the tracked set came back empty makes
-those 46 green and BREAKS that property — measured, not assumed: it turns
-`test_bug_an_ic_holding_only_untracked_scratch_published_nothing` red.
+those 46 green and BREAKS that property — which is why this guard does not
+touch a single gate. No program's behaviour is changed by this file.
 
-So the programs are right, the tests are right, and the RUN is what was wrong:
-a fixture that builds an untracked corpus in `tmp_path` is only discoverable
-when `tmp_path` is not inside a repository, and nothing in the harness pinned
-or recorded that. pytest's own default lands in `/tmp` and is fine; an operator
-who exports `TMPDIR` into a checkout — which #1446's author did, following
-their own since-corrected advice about the EDA mount — silently converts 46
-honest passes into 46 failures that then get published as main's redness.
+So the programs are right and the tests they fail are right. What was wrong is
+the RUN: a fixture that builds an untracked corpus in `tmp_path` is only
+discoverable when `tmp_path` is not inside a repository, and nothing in the
+harness pinned or recorded that. pytest's own default lands in `/tmp` and is
+fine; an operator who exports `TMPDIR` into a checkout silently converts 46
+honest passes into 46 failures that then get published as main's redness. Grep
+`tools/` on 75776dbbb: no `--basetemp`, no `TMPDIR`, nowhere.
 
 WHAT THIS GUARD DOES
 ====================
@@ -59,9 +66,9 @@ Two things, and deliberately not a third:
 
   DECLARES  every run prints the scratch root it used and whether that root is
             inside a git work tree. A count is only re-derivable if the run
-            that produced it says what it ran under; #1446's five irreconcilable
-            numbers are what a suite whose verdict depends on an unrecorded
-            environment variable looks like from outside.
+            that produced it says what it ran under; #1446's five
+            irreconcilable numbers are what a suite whose verdict depends on
+            an unrecorded environment variable looks like from outside.
   REFUSES   a session whose scratch root IS inside a work tree stops with ONE
             named error instead of producing dozens of failures whose cause is
             nowhere in their output. A run that cannot be trusted must not
@@ -74,15 +81,11 @@ BLOCKING (declared, per flow-change-acceptance §5)
 ==================================================
 BLOCKING. A scratch root inside a work tree stops the session in
 `pytest_configure` with `pytest.UsageError` — rc 4, nothing collected, no
-passed/failed tally. Proven by run rather than inferred from the code:
-
-    --basetemp <inside a repo>    pytest rc=4, no tally printed
-    --basetemp <outside>          86 passed, unchanged
-
-Advisory would be the wrong choice, for the criterion's own reason: the thing
-this guard exists to stop is a run that LOOKS like a measurement of the tree.
-A warning printed beside 46 red tests is a warning nobody reads — which is
-exactly what happened, and the count was published off the back of it.
+passed/failed tally. Advisory would be the wrong choice for the criterion's
+own reason: the thing this guard exists to stop is a run that LOOKS like a
+measurement of the tree, and a warning printed beside 46 red tests is a
+warning nobody reads. That is not hypothetical — it is what happened, and a
+count was published off the back of it.
 
 The DECLARATION half is advisory by nature: it prints on every run, passing or
 failing, and never changes an outcome.
@@ -106,10 +109,11 @@ from typing import Optional, Tuple
 
 import pytest
 
-#: Well under the 180s session bound the landing harness runs at. An inner
-#: bound longer than the session's lets a hang kill the SESSION rather than one
-#: test, and every other result in that run is then lost unnamed — which is the
-#: other half of why #1446 could not be counted.
+#: Well under the 180 s session bound `tools/gatekeeper-land.sh` runs at, and
+#: under the 60 s inner ceiling `ci_harness_timeout_ceiling_check` enforces. An
+#: inner bound at or above the harness's does not fail a test — it outlives the
+#: harness and takes the whole session down, losing every other result in the
+#: run unnamed, which is the other half of why #1446 could not be counted.
 _GIT_TIMEOUT = 20
 
 _ENV_ALLOW = "VIBE_IC_ALLOW_SCRATCH_ROOT_IN_REPO"
@@ -120,8 +124,9 @@ def scratch_root(config) -> Path:
     """The directory pytest will put `tmp_path` under, as pytest picks it.
 
     `--basetemp` when given, otherwise the platform temp root — which is what
-    `TMPDIR` moves. Reported rather than inferred by the caller, so the guard
-    and the fixture cannot disagree about which directory is at issue.
+    `TMPDIR` moves. Read from pytest's own resolved option rather than
+    recomputed by the caller, so the guard and the fixture cannot disagree
+    about which directory is at issue.
     """
     given = getattr(config.option, "basetemp", None)
     return Path(given).resolve() if given else Path(tempfile.gettempdir()).resolve()
@@ -138,11 +143,12 @@ def _nearest_existing(p: Path) -> Path:
 def enclosing_work_tree(d: Path) -> Optional[str]:
     """Toplevel of the git work tree containing `d`, or None.
 
-    None also covers "git is not installed" and "git errored": this guard
+    None also covers "git is not installed" and "git errored". This guard
     exists to stop a run being MISREAD, and a run it could not classify is not
-    one it should refuse. That absence is stated in the declaration rather than
-    reported as a clean "outside", because "I could not look" and "I looked and
-    there is nothing" are the two the rest of this repo keeps apart.
+    one it should refuse — refusing on "I could not look" would make an absent
+    `git` unable to run the suite at all. That absence is stated in the
+    declaration rather than reported as a clean "outside", because "I could not
+    look" and "I looked and there is nothing" are the two this repo keeps apart.
     """
     try:
         r = subprocess.run(["git", "-C", str(_nearest_existing(d)),
@@ -175,9 +181,9 @@ measured from there.
 answers about that checkout, scoped to <dir>, which is ZERO paths for a
 directory nobody committed. Fixtures that build an untracked corpus under
 `tmp_path` are then enumerated as empty, and the gates correctly report
-"published nothing". 46 tests measured red this way on a tree whose real
-count is 0 (vibe-ic#1446), and each one names its own subject rather than
-this root, so the cause is nowhere in the failure output.
+"published nothing". 46 tests measure red this way on a tree whose real
+count for them is 0 (vibe-ic#1446), and each one names its own subject
+rather than this root, so the cause is nowhere in the failure output.
 
 FIX: put the scratch root outside any repository. pytest's own default
 already is — the usual cause is an exported TMPDIR.
@@ -216,16 +222,17 @@ def declaration(config, verdict=None) -> str:
 
 
 def pytest_report_header(config):
-    """The verbose header. Not sufficient on its own — see below."""
+    """The verbose header. Not sufficient on its own — see `pytest_configure`."""
     return declaration(config)
 
 
 def pytest_configure(config):
     """Declare FIRST, then refuse if the root is one that falsifies the run.
 
-    The declaration is printed here rather than left to `pytest_report_header`
-    because `-q` SUPPRESSES that header — and `-q` is the shape the landing
-    harness runs. Measured before this line existed:
+    The declaration is PRINTED here rather than left to `pytest_report_header`
+    because `-q` SUPPRESSES that header — and `-q` is the shape
+    `tools/gatekeeper-land.sh` runs on every landing. Measured on this branch
+    before this line existed:
 
         pytest -q  ... | grep -c scratch_root_guard   ->  0
         pytest     ... | grep -c scratch_root_guard   ->  2
@@ -262,7 +269,8 @@ def _main(argv=None) -> int:
 
     It also gives the check a machine runner. A checker that only its own unit
     test executes is one `checker_execution_wiring_audit` names as an orphan:
-    "a fixture the author wrote proves the logic, never the artefacts."
+    "its own unit test proves the logic works on a fixture the author wrote. It
+    proves nothing about production artefacts, because it never sees one."
 
     rc 0  scratch root is outside any work tree, or git could not be asked
     rc 2  scratch root is INSIDE a work tree — the disclosed-refusal

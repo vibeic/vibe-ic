@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "CAN 2.0 does not specify DFT / scan / BIST. Protocol-level self-checking (CRC + bit monitoring + bit stuffing + frame check + ACK) plus fault confinement counts provide system-level diagnostics. SoC-integrated CAN controller IP from modern vendors (Bosch C_CAN / M_CAN, Microchip MCP2515, Xilinx XLN_CAN) adds standard scan insertion at the integrator level."
-  }
-}

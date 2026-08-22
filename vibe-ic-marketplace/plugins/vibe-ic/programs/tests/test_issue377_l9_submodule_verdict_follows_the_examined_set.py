@@ -26,7 +26,8 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 import l9_submodule_conformance_check as C  # noqa: E402
 
-from _hostpaths import repo_path_opt  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -187,24 +188,51 @@ def test_the_cli_exit_code_is_unchanged_for_the_new_vacuous_arm(tmp_path):
 # 5. corpus guard — the population that motivated this, read not re-derived
 # --------------------------------------------------------------------------
 
-_BENCH = repo_path_opt("benchmark-data")
+def _published_l9_docs(root: Path) -> list:
+    """Every published `L9_INTEGRATION_SPEC.json` under `root`, root-relative.
+
+    TRACKED where tracked-ness is a question that can be asked — the population
+    a fresh clone would receive, not whatever this machine's working tree
+    happens to hold — and the disk otherwise, which is the same rule
+    `step_internal_fail_bubble_up_check._published_run_trees` states for a run
+    tree handed over on its own.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                             capture_output=True, text=True, timeout=60)
+        if out.returncode == 0 and out.stdout:
+            return sorted(p for p in out.stdout.split("\0")
+                          if p.endswith("L9_INTEGRATION_SPEC.json"))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sorted(p.relative_to(root).as_posix()
+                  for p in root.rglob("L9_INTEGRATION_SPEC.json"))
 
 
-@pytest.mark.skipif(not _BENCH.is_dir(),
-                    reason="tracked corpus not present in this checkout")
+@needs_corpus
 def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
-    """Reads tracked L9 documents with a PURE function. Writes nothing."""
-    tracked = subprocess.run(
-        ["git", "-C", str(_BENCH.parent), "ls-files", "benchmark-data"],
-        capture_output=True, text=True, check=True).stdout.split()
-    docs = [d for d in tracked if d.endswith("L9_INTEGRATION_SPEC.json")]
-    assert docs, "corpus guard would be vacuous: no tracked L9 documents"
+    """Reads published L9 documents with a PURE function. Writes nothing.
+
+    The subject is a PUBLISHED CELL. Those moved to `vibeic/benchmark-data`, so
+    an absent corpus is "I could not look" and SKIPS naming it — vibe-ic#1357's
+    rule for an absent TOOL, applied to absent DATA. Nothing is weakened: every
+    assertion below, including the four denominator floors (`nonempty > 0`,
+    `declared > 0`, `driven > 0`, `new_arm > 0`), still runs verbatim whenever a
+    corpus IS readable, so a corpus that stopped exercising the vacuous arm is
+    still a failure.
+    """
+    root = corpus_root()
+    assert root is not None, "the marker admitted a run with no corpus to read"
+    docs = _published_l9_docs(root)
+    assert docs, (
+        f"corpus guard would be vacuous: {root} is readable but publishes no "
+        f"L9_INTEGRATION_SPEC.json")
 
     declared = examined = 0
     nonempty = all_skipped = 0
     driven = new_arm = 0
     for rel in docs:
-        raw = json.loads((_BENCH.parent / rel).read_text())
+        raw = json.loads((root / rel).read_text())
         doc = raw.get("fields") if isinstance(raw.get("fields"), dict) else raw
         subs = doc.get("submodules")
         if not isinstance(subs, list) or not subs:
@@ -222,7 +250,7 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
         marker = "/phase1/generated_docs/"
         if marker not in rel:
             continue                      # load_l9 would resolve elsewhere
-        proj = _BENCH.parent / rel[:rel.index(marker)]
+        proj = root / rel[:rel.index(marker)]
         verdict, findings, live, reason = C.audit_report(proj)
         driven += 1
         assert verdict == "VACUOUS_PASS" and findings == [], (
@@ -242,11 +270,52 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # Pinned separately from `all_skipped`: these are the documents that
     # USED to reach PASS. If this reaches 0 the regression is invisible in
     # every other number here.
-    assert new_arm == 6, (
-        f"expected 6 tracked projects to reach the examined-set-empty arm, "
-        f"saw {new_arm}")
-    # Pinned so a silent vocabulary drift in the producer shows up as a diff
-    # rather than as a quietly shrinking denominator.
+    # `new_arm == 6` was the corpus' size, and the comment above says what it
+    # was FOR in its own words: "if this reaches 0 the regression is invisible
+    # in every other number here". Zero is the condition; six was the day's
+    # weather. Asserted as the condition, so publishing or withdrawing a cell
+    # no longer breaks it and reaching zero still does.
+    assert new_arm > 0, (
+        "no tracked project reaches the examined-set-empty arm any more, so "
+        "the arm this landing added is exercised by nothing and a regression "
+        "in it would be invisible in every other number here")
+    # THE DENOMINATOR RELATION, not the census.
+    #
+    # What stood at the end of this block was
+    # `(nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)`, and
+    # the paragraphs below are its own maintenance record: (36,130,62,16) ->
+    # (37,132,64,16) -> (35,130,64,14), re-typed three times, each time with an
+    # essay explaining that the CORPUS moved and the reader did not. That is
+    # the tell. The tuple never once caught a reader regression; every firing
+    # it ever had was a publish or a retirement, and each cost a
+    # re-measurement to prove innocence.
+    #
+    # It is also a shape a `len(...) == <int>` sweep does not find — it was
+    # missed by the scan that produced this batch and surfaced only when a
+    # two-arm control on a withdrawn cell went red. `programs/
+    # corpus_cardinality_pin_scan.py` now looks for the tuple form too.
+    #
+    # The sentences it was standing in for, both true at any corpus size:
+    #   * no non-empty L9 document is silently dropped — `all_skipped` is a
+    #     strict subset of `nonempty`, so the reader resolves SOMETHING
+    #     somewhere;
+    #   * the reader examines a real share of what the corpus declares, so a
+    #     vocabulary drift that quietly stops the port layer resolving shows
+    #     up as a collapsed ratio rather than as a smaller number nobody can
+    #     tell apart from a withdrawal.
+    #
+    # The ratio floor is deliberately loose (a third). It is not a target: it
+    # is the level below which "the reader still reads this corpus" stops
+    # being true. Measured at 64/130 = 49% on the tree this landed against.
+    assert examined <= declared, (examined, declared)
+    assert all_skipped < nonempty, (
+        f"every one of the {nonempty} non-empty L9 document(s) is now FULLY "
+        f"skipped — the reader resolves nothing anywhere, which is the "
+        f"vocabulary drift this guard exists for")
+    assert examined * 3 >= declared, (
+        f"the reader now examines {examined} of {declared} declared "
+        f"submodule(s) — under a third. A drift in the producer's vocabulary "
+        f"that stops the port layer resolving looks exactly like this.")
     #
     # 2026-08-04, vibe-ic#744: (36, 130, 62, 16) -> (37, 132, 64, 16). The
     # reader learned three further spellings of the L9 port layer, so it now
@@ -277,4 +346,3 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     #
     # `new_arm` is deliberately NOT moved: it holds at 6 across the retirement,
     # so the arm this landing added is still reached by every project it was.
-    assert (nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)
