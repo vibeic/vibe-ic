@@ -560,6 +560,42 @@ def test_integrity_baseline_against_an_empty_corpus_is_rc2_not_rc0(
     assert "VACUOUS" in r.stderr and str(c) in r.stderr
 
 
+def test_integrity_baseline_mode_one_bad_pair_does_not_decide_the_row(tmp_path,
+                                                                     contract_doc):
+    """A malformed pair is rc 2 and NAMED — it does not take the whole row.
+
+    THE SIBLING LOOP ALREADY HAD THIS and this one did not. `check_corpus`'s
+    all-pairs loop guards `compare_contracts` per pair; the baseline mode was
+    added later with the identical call and no guard, so an exception reached
+    `__main__` and the row became rc 3 "Nothing was compared" — which is false
+    when 20 or 60 other pairs were about to be, and which lets ONE badly shaped
+    document decide a verdict about an entire campaign.
+
+    rc 2 AND NOT 3, for the reason the all-pairs arm gives: the INVOCATION was
+    correct. A corpus where one document is the wrong shape is not a bad
+    command line.
+    """
+    c = corpus(tmp_path, "badpair")
+    base = put(c / "contract.json", contract_doc)
+    # A well-formed `problem` so the pair FORMS, and an `analysis` written as a
+    # bare digest string instead of a record so `identity.compare` raises.
+    broken = json.loads(json.dumps(contract_doc))
+    broken["run_label"] = "t1"
+    ids = broken.setdefault("identities", {})
+    ids["analysis"] = "a" * 8
+    put(c / "t1" / "contract.json", broken)
+
+    r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "CANNOT CHECK" in r.stderr
+    # the pair is NAMED on both sides, and so is what is missing
+    assert "t1" in r.stderr and "contract.json" in r.stderr
+    assert "NOT a finding about either run" in r.stderr
+    assert "WHAT IS MISSING" in r.stderr
+    # and it is reported as a pair, not as a dead run
+    assert "1 undetermined" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
 def test_integrity_baseline_against_corpus_keeps_the_unreadable_verdict(
         tmp_path, contract_doc, second_contract_doc):
     """UNREADABLE IS NOT ABSENT, in the baseline mode too. A file nobody could
