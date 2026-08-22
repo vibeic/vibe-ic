@@ -1896,3 +1896,61 @@ closest thing to an end-to-end demonstration this host can currently produce.
 The review's wiring therefore remains proven by the extracted chain (§5, §6) and
 by the batch head's 148 passing tests, and the end-to-end run remains open —
 now with a named blocker that is a package on a disk rather than a busy host.
+
+## 32. The tally, counted rather than quoted
+
+I have quoted "five", "seven" and "nine" for my own corrections in different
+places across this work. Three different numbers for one countable thing is the
+same defect as the rest of the document, so here it is enumerated. Two
+registers, because they fail differently.
+
+**CLAIMS I PUBLISHED AND MEASUREMENT OVERTURNED — 15.**
+
+| # | the claim | what measurement said | §|
+|---|---|---|---|
+| 1 | the ten handover tests "drive" `review()`'s kwargs | they call `hygiene_gate_from_record` one layer down; no caller passes those kwargs | 3 |
+| 2 | "at 721 s the review had not yet returned" | it returned at 631.5 s; the poll matched its own waiters | 6 |
+| 3 | "the FIRST of this branch's ELEVEN commits" | thirteen; eleven was true two heads earlier | 9 |
+| 4 | binding decides whether the hygiene run completes | binding is *a* cause; peer's bound runs still errored | 16→17 |
+| 5 | load explains the survivors | peer's quiet run: same 302 s, same 15 errors | 17 |
+| 6 | duration is the cause | duration is a correlate; the watchdog is the mechanism | 17→18 |
+| 7 | "the set alone costs ~550 s on this host" | 188–193 s; 551 s was the contended run | 3 |
+| 8 | "the decision is cheap for whoever holds it" | eight conflicts, and the cheap route does not help | 23 |
+| 9 | eight conflicts are risky lane code | six version sites + two generated files; none substantive | 26 |
+| 10 | the version assignment is the blocker | resolves to `1.11.68`, a value `main` already carries | 30 |
+| 11 | "re-assemble — clears it" | base already fails on `jrows`'s finding: 2 → 1, rc 1 either way | 30 |
+| 12 | the fix clears SIX nodes | seven; my selection could not see an import edge | 22 |
+| 13 | a quiet host closes the end-to-end run | this host cannot run the tier at all | 31 |
+| 14 | the argparse backport shadows stdlib | backwards — stdlib wins unless a site dir is prepended | 31 |
+| 15 | "nothing on this host breaks" (from n=1) | measured: exactly one stdlib name collision, no others | 31 |
+
+Two of those — 11 and 13 — were published and refuted within the hour. Two more
+— 9 and 10 — were a DECLINE and its stated blocker, which is the register I had
+not been auditing at all until §30.
+
+**INSTRUMENTS THAT ANSWERED THE WRONG QUESTION — 9.**
+
+1. `pgrep -f drive_real_review.py` matched the shells waiting for it.
+2. The ref watch fired on my own pushes.
+3. `pgrep -cf` matched my own checking shell — *while checking for exactly this*.
+4. `git log origin/<b>..HEAD` read a tracking ref two pushes stale.
+5. `rev-parse --short` (10) compared against `cut -c1-9` — every row read STALE.
+6. `grep "stalled"` matched the substring in "in**stalled** PDK" — 20 hits, 0 real.
+7. `grep '\bwiring error'` over a LOG returned 0 where the JSON carried 7.
+8. `env VAR=1 -u NAME` died instantly; a poll watching only for the output file
+   could not tell that from "still running" — ten minutes lost.
+9. `git merge <branch>` silently did nothing ("not something we can merge"); the
+   measurement that followed described the wrong tree.
+
+**What the two registers have in common.** Every instrument failure produced a
+CONFIDENT wrong reading, and every one was caught only because two readings in
+the same output disagreed — a count beside a name, a tracking ref beside
+`ls-remote`, an elapsed time beside a log line. That is the whole practical
+lesson: **print both sides even when you expect them to agree**, because the
+disagreement is the only alarm you get.
+
+And the claims register says the thing I would least have predicted at the
+start: the errors were not concentrated in the hard technical findings. They
+were in the cheap connective sentences — a cost, a count, a "cheap", a
+"clears it" — written quickly between measurements, and carried forward because
+nothing in a document re-measures its own prose.
