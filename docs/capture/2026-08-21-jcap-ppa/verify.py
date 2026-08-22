@@ -691,6 +691,36 @@ check("the bundle's directory date and its summary date agree, or the gap is dec
       f"directory {_dirdate.group(1) if _dirdate else '-'}, summary {_sumdate}, "
       f"declared in the report: {_declared}")
 
+# 46. two of the brief's own requirements, neither of which was checked.
+#   (a) "a rule's docstring states the general PATTERN, not the war story" -- a
+#       docstring ships INTO a program, so a reference to this batch travels with
+#       it. One said "Two defects already recorded in this batch", and it also
+#       carried a characterisation of a sibling record that had since been
+#       corrected in the report but not here: the same fact in two places, fixed
+#       in one.
+#   (b) "Each one carries the MEASUREMENT" -- one Bucket-A record described its
+#       measurement in words and carried no figure at all.
+_war = re.compile(r"\b(I |my |this batch|this lane)\b")
+_nowar = [r["rule_name"] for r in RECS
+          if r["bucket"] == "A" and _war.search(r.get("docstring", ""))]
+control("docstring-war-story", bool(_war.search("a defect this lane found")))
+check("no Bucket-A docstring tells the war story", not _nowar,
+      f"{sum(1 for r in RECS if r['bucket'] == 'A')} docstrings"
+      + (f"; offenders: {_nowar}" if _nowar else ""))
+
+# Bucket T keeps its measurement in `problem` and `bad_sample`, which is where the
+# ladder puts it -- screening T on the fix field reports a false gap, as it did.
+_nofig = []
+for r in RECS:
+    txt = (r.get("fix_action") or "") + (r.get("suggested_fix") or "")
+    if r["bucket"] == "T":
+        txt += (r.get("problem") or "") + (r.get("bad_sample") or "")
+    if not re.search(r"\d", txt):
+        _nofig.append(r.get("rule_name") or r.get("title"))
+control("record-figure", not re.search(r"\d", "a sentence with no figure in it"))
+check("every record's fix text carries a figure", not _nofig,
+      f"{len(RECS)} records" + (f"; without: {_nofig}" if _nofig else ""))
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")

@@ -59,6 +59,7 @@ Accepted with no refusal and no unrouted record.
 - [Buildability — the deliverable's stated purpose, checked](#buildability--the-deliverables-stated-purpose-checked)
 - [No near-duplicates — and the first number I published from a broken instrument](#no-near-duplicates--and-the-first-number-i-published-from-a-broken-instrument)
 - [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
+- [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -1865,6 +1866,32 @@ this batch already records what an unnoticed tree write costs. The procedure is
 written down here so it can be repeated by hand; the three commands are in the
 list above.
 
+## The brief's own requirements, audited against the finished records
+
+Every method used on this deliverable so far examined it on its own terms. The
+last one available is to read the brief as a checklist and test the records
+against it. The ladder's field requirements pass — the Bucket-T record carries
+all five it demands, and both Bucket-C records carry theirs. Two requirements did
+not:
+
+- *"a rule's docstring states the general PATTERN, not the war story."* One
+  Bucket-A docstring opened its last sentence with *"Two defects already recorded
+  in this batch reduce to it"*. A docstring ships **into a program**, so that
+  sentence would have travelled into the tree and outlived the batch it names.
+  Worse, it characterised a sibling record in terms that had already been
+  corrected in this report and not here — **the same fact in two places, fixed in
+  one**, which is the defect A-9 and A-17 are both about, committed while
+  correcting A-17.
+- *"Each one carries the MEASUREMENT."* One Bucket-A record described its
+  measurement in prose and carried **no figure at all**. It now states that the
+  layer presents 19 commands, that exactly 2 were driven to a real verdict, and
+  that the other 17 are not measured and not claimed.
+
+A third flag was my screen's fault, not the records': the Bucket-T record looked
+figure-free because I searched the field the Bucket-A records use, and the ladder
+puts a T record's measurement in `problem` and `bad_sample`, where it is dense
+with them. Check 46 encodes that exemption rather than repeating my mistake.
+
 ## The honest sentences, checked verbatim against the records
 
 The deliverable owes, *"for each Bucket B/C/D, the one honest sentence the ladder
@@ -2208,7 +2235,7 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 16 ALREADY-PROGRAM claims examined, 15 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (45 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (47 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
@@ -2388,7 +2415,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            45 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            47 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -2408,7 +2435,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     45 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     47 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
