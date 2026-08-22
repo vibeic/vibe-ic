@@ -1,0 +1,366 @@
+# ==========================================================================
+# PPA actuator registry v1 — what a closure controller is AUTHORISED to do.
+#
+# Schema: schemas/ppa/actuator_registry.v1.schema.json
+# Loader: programs/_ppa/closure.py  (load_registry)
+# CLI:    programs/ppa_closure_run.py
+#
+# WHY THIS FILE IS NOT A LIST OF TOOL NAMES
+# =========================================
+# "OpenROAD is allowed" is not an authorisation. It says nothing about what may
+# be changed, how far the change reaches, what bounds the parameters, what has
+# to be true before it runs, how it is undone, or what must be re-measured
+# afterwards. Every one of those is a field below, and every one of them is
+# enforced by the loader rather than remembered by an author.
+#
+# THE MEASURED STATE OF THE FLOW, WHICH IS WHAT THIS FILE HAS TO BE HONEST ABOUT
+# =============================================================================
+# The canonical flow declares TWENTY-TWO `closed_loop:` blocks:
+#
+#     $ python3 -c "import yaml;d=yaml.safe_load(open('flow/phase1_phase2_phase3.yaml'));
+#                   print(len([s for s in d['steps'] if s.get('closed_loop')]))"
+#     22
+#
+# `closed_loop_edge_check.py` proves each declaration is HONEST — the fallback
+# resolves, the trigger is non-empty, the edge closes a loop, the declaring step
+# has a gate — and states in its own words that nothing executes them:
+#
+#     "It does not verify that a runner ACTUALLY re-executes the fallback step.
+#      No runner reads `closed_loop` today."
+#
+# So all 22 are DECLARED_ONLY, and every one of them is written down that way
+# below. `edges:` is a complete enumeration, not a list of the interesting ones:
+# an edge that is missing from this file would be invisible rather than honest.
+#
+# WHY ZERO EDGES ARE BOUND TODAY, MEASURED RATHER THAN ASSUMED
+# ============================================================
+# Binding an edge needs a pair: an actuator that really changes the
+# implementation and a measurement whose number really moves when it does. The
+# shipped `programs/` population was searched for such a pair (78 generator- and
+# repair-shaped programs). Exactly one real actuator and one real measurement
+# were found, and they are both declared below as EXECUTABLE — but the actuator
+# cannot improve the measurement, because `openroad_hold_repair_tcl_gen --out`
+# REPLACES its target where amending an existing deck requires APPEND. Measured:
+#
+#     write the block to a separate include file -> the include, audited alone,
+#       IS the hold-only anti-pattern, so the aggregate verdict gets WORSE
+#     write the block to the main deck            -> the setup-repair chain is
+#       overwritten, so `missing_required` goes 0 -> 3
+#
+# That is the finding, not an excuse: the gap is not an unwired runner, it is a
+# missing per-domain actuator. The controller `pnr.deck.hold_block_emission`
+# below is declared and EXECUTABLE and is deliberately bound to NO edge, because
+# it discovers that defect rather than repairing anything. It is exercised
+# end-to-end by `programs/tests/test_ppa_closure_real_programs.py`, where the
+# correct terminal state is HANDOFF_REQUIRED with the residual violation VISIBLE.
+# ==========================================================================
+schema: vibeic.ppa.actuator_registry.v1
+description: >-
+  Authorised closure actions, the measurements that judge them, and the binding
+  of each declared flow closed_loop edge to a controller or to nothing.
+
+# --------------------------------------------------------------------------
+# DOMAINS — one re-measurable question each, with the command that answers it.
+# --------------------------------------------------------------------------
+domains:
+
+  pnr.repair_deck.required_completeness:
+    summary: >-
+      How many of the three MANDATORY OpenROAD repair commands (set_wire_rc,
+      repair_design, repair_timing -setup) are absent from the P&R deck. A deck
+      that runs only `repair_timing -hold` is the silicon-DOA shape: without
+      set_wire_rc, STA ignores interconnect delay and repair_timing -setup
+      aborts with RSZ-0089.
+    metric: pnr.repair_deck.missing_required_commands
+    unit: count
+    direction: minimize
+    binding: EXECUTABLE
+    flow_steps: ["17", "19", "20", "21"]
+    measure:
+      program: pnr_timing_repair_completeness_check
+      argv_template: ["{glob:*.tcl}", "--json", "{json_out}"]
+      extract: {kind: list_length, pointer: "/summary/missing_required"}
+      # rc=1 from this program is a real finding WITH a written artefact, so it
+      # is a measurement and not a refusal. rc=2 is its own honest
+      # "no Tcl flow to audit" and must stay NOT_MEASURED.
+      undetermined_rcs: [2, 3]
+    satisfied_when: {op: "<=", value: 0}
+
+  pnr.repair_deck.expected_completeness:
+    summary: >-
+      How many of the two EXPECTED-with-setup commands (estimate_parasitics,
+      repair_timing -hold) are absent. Same artefact, same parse, different
+      question — kept as its own domain because a controller that optimised the
+      union could trade a required command for an expected one and call it
+      progress.
+    metric: pnr.repair_deck.missing_expected_commands
+    unit: count
+    direction: minimize
+    binding: EXECUTABLE
+    flow_steps: ["19", "20"]
+    measure:
+      program: pnr_timing_repair_completeness_check
+      argv_template: ["{glob:*.tcl}", "--json", "{json_out}"]
+      extract: {kind: list_length, pointer: "/summary/missing_expected"}
+      undetermined_rcs: [2, 3]
+    satisfied_when: {op: "<=", value: 0}
+
+  # ---- DECLARED_ONLY domains: the shape the per-domain lanes plug into. ----
+  # Each names no program, because a DECLARED_ONLY entry that named one would
+  # let the label and the tree disagree. `_ppa/closure.py` refuses that at load.
+
+  timing.setup:
+    summary: Worst negative setup slack at the signed-off corner.
+    metric: timing.setup.wns_ns
+    unit: ns
+    direction: maximize
+    binding: DECLARED_ONLY
+    flow_steps: ["19", "20", "21", "23"]
+    satisfied_when: {op: ">=", value: 0.0}
+
+  timing.hold:
+    summary: Worst negative hold slack at the signed-off corner.
+    metric: timing.hold.wns_ns
+    unit: ns
+    direction: maximize
+    binding: DECLARED_ONLY
+    flow_steps: ["19", "20", "23"]
+    satisfied_when: {op: ">=", value: 0.0}
+
+  power.total:
+    summary: Total power against the design's DECLARED budget (L19.power_budget_uw).
+    metric: power.total_uw
+    unit: uW
+    direction: minimize
+    binding: DECLARED_ONLY
+    flow_steps: ["17", "21", "22", "33"]
+    satisfied_when: {op: "<=", value: 0.0}
+
+  area.physical:
+    summary: Post-route physical instance area against the DECLARED ceiling.
+    metric: area.instance_um2
+    unit: um2
+    direction: minimize
+    binding: DECLARED_ONLY
+    flow_steps: ["9", "17", "21"]
+    satisfied_when: {op: "<=", value: 0.0}
+
+  ir.static:
+    summary: Static IR drop as a percentage of the supply.
+    metric: ir.static_drop_pct
+    unit: percent
+    direction: minimize
+    binding: DECLARED_ONLY
+    flow_steps: ["15", "24"]
+    satisfied_when: {op: "<=", value: 5.0}
+
+  antenna.violations:
+    summary: Antenna-rule violation count after routing.
+    metric: antenna.violation_count
+    unit: count
+    direction: minimize
+    binding: DECLARED_ONLY
+    flow_steps: ["21", "26"]
+    satisfied_when: {op: "<=", value: 0}
+
+  drc.violations:
+    summary: Sign-off DRC violation count.
+    metric: drc.violation_count
+    unit: count
+    direction: minimize
+    binding: DECLARED_ONLY
+    flow_steps: ["21", "31", "34"]
+    satisfied_when: {op: "<=", value: 0}
+
+# --------------------------------------------------------------------------
+# ACTUATORS — one bounded, undoable, re-measured action each.
+# --------------------------------------------------------------------------
+actuators:
+
+  pnr.deck.emit_hold_repair_block:
+    summary: >-
+      Emit the guardrail-correct `repair_timing -hold` block into a P&R deck.
+      The wrapper's own hard guardrails are the reason this action is
+      authorisable at all: -allow_setup_violations is always false (never trade
+      setup for hold) and -max_buffer_percent is capped at 5% (a runaway hold
+      buffer budget is a real area and IR hazard). The bounds below are the
+      SAME bounds, restated where the loader can enforce them, so a proposal is
+      refused before a process starts rather than after it fails.
+    binding: EXECUTABLE
+    wrapper:
+      program: openroad_hold_repair_tcl_gen
+      argv_template:
+        - "--margin-ps"
+        - "{margin_ps}"
+        - "--max-buffer-percent"
+        - "{max_buffer_percent}"
+        - "--out"
+        - "{out_path}"
+    parameters:
+      margin_ps:
+        type: number
+        unit: ps
+        minimum: 0
+        maximum: 500
+        description: >-
+          Hold slack margin. Bounded above because margin buys buffers and
+          buffers cost area and leakage; an unbounded margin is a blank cheque
+          drawn on the area budget.
+      max_buffer_percent:
+        type: number
+        unit: percent
+        exclusiveMinimum: 0
+        maximum: 5
+        description: >-
+          Hold-buffer area budget. 0 would insert nothing; above 5 breaches the
+          skill guardrail. The ceiling is the authorisation, so a request above
+          it is REFUSED, not clamped.
+      out_path:
+        type: path
+        description: >-
+          The deck to write, relative to the implementation root. Resolved
+          inside that root and refused if it escapes — the blast radius the
+          registry declares is the blast radius the action gets.
+    preconditions:
+      # The action AMENDS a deck. If there is no deck, this is not the action
+      # to take, and saying so is the difference between HANDOFF_REQUIRED and a
+      # controller that quietly creates a file nobody asked for.
+      - {kind: file_exists, path: "{out_path}"}
+    blast_radius: DECK
+    resource_ceilings:
+      wall_seconds: 60
+      max_invocations_per_run: 8
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains:
+      - pnr.repair_deck.expected_completeness
+      - pnr.repair_deck.required_completeness
+
+  # ---- DECLARED_ONLY actuators: the authorisations the later lanes will fill.
+  # They name no program. Each still declares its bounds, its blast radius, its
+  # ceilings, its rollback kind and what must be re-measured, because those are
+  # decisions about the ACTION and they do not become easier by being deferred.
+
+  timing.repair_setup:
+    summary: >-
+      Resize, buffer and legalise to close setup paths (OpenROAD
+      set_wire_rc + repair_design + repair_timing -setup). Not bound: no
+      shipped program emits or applies this chain as a parameterised action.
+    binding: DECLARED_ONLY
+    wrapper: {}
+    parameters:
+      setup_margin_ns: {type: number, unit: ns, minimum: 0, maximum: 1.0}
+      max_utilization_pct: {type: number, unit: percent, minimum: 1, maximum: 95}
+    blast_radius: BLOCK
+    resource_ceilings: {wall_seconds: 3600, max_invocations_per_run: 4}
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains: [timing.setup, timing.hold, area.physical, power.total]
+
+  timing.repair_hold:
+    summary: >-
+      Insert delay cells / re-balance CTS to close hold. Not bound: the shipped
+      emitter writes a deck, it does not apply one.
+    binding: DECLARED_ONLY
+    wrapper: {}
+    parameters:
+      hold_margin_ps: {type: number, unit: ps, minimum: 0, maximum: 500}
+      max_buffer_percent: {type: number, unit: percent, exclusiveMinimum: 0, maximum: 5}
+    blast_radius: BLOCK
+    resource_ceilings: {wall_seconds: 3600, max_invocations_per_run: 4}
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains: [timing.hold, timing.setup, area.physical, power.total]
+
+  pdn.strengthen:
+    summary: Widen or add PDN straps to cut static IR drop. Not bound.
+    binding: DECLARED_ONLY
+    wrapper: {}
+    parameters:
+      strap_width_um: {type: number, unit: um, exclusiveMinimum: 0, maximum: 20}
+      strap_pitch_um: {type: number, unit: um, exclusiveMinimum: 0, maximum: 200}
+    blast_radius: FULL_IMPLEMENTATION
+    resource_ceilings: {wall_seconds: 3600, max_invocations_per_run: 3}
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains: [ir.static, area.physical, drc.violations, timing.setup]
+
+  routing.antenna_diode_insert:
+    summary: Insert antenna diodes / re-route offending nets. Not bound.
+    binding: DECLARED_ONLY
+    wrapper: {}
+    parameters:
+      max_diodes: {type: integer, unit: count, minimum: 1, maximum: 100000}
+    blast_radius: INSTANCE
+    resource_ceilings: {wall_seconds: 3600, max_invocations_per_run: 3}
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains: [antenna.violations, drc.violations, area.physical, timing.setup]
+
+  placement.reduce_switching_capacitance:
+    summary: >-
+      Re-place to cut the switching capacitance that dominates dynamic power —
+      the lever step 33's declared edge falls back to (33 -> 17). Not bound.
+    binding: DECLARED_ONLY
+    wrapper: {}
+    parameters:
+      target_density: {type: number, unit: fraction, exclusiveMinimum: 0, maximum: 1.0}
+    blast_radius: FULL_IMPLEMENTATION
+    resource_ceilings: {wall_seconds: 7200, max_invocations_per_run: 3}
+    rollback: SNAPSHOT_RESTORE
+    remeasure_domains: [power.total, timing.setup, timing.hold, area.physical, drc.violations]
+
+# --------------------------------------------------------------------------
+# CONTROLLERS — an edge binding: one objective, one actuator, one declared
+# ladder of proposals, one declared stop condition.
+# --------------------------------------------------------------------------
+controllers:
+
+  pnr.deck.hold_block_emission:
+    summary: >-
+      Amend a P&R deck that is missing its hold-repair block. Bound to NO flow
+      edge on purpose: it does not repair hold TIMING, it repairs a DECK, and
+      calling it a hold-closure loop would be the overclaim this whole lane
+      exists to prevent. It runs end-to-end against real programs and its
+      honest terminal state on today's tree is HANDOFF_REQUIRED, because the
+      wrapper's `--out` replaces where an amendment needs to append.
+    objective_domain: pnr.repair_deck.expected_completeness
+    actuator: pnr.deck.emit_hold_repair_block
+    plan:
+      # A declared ladder, smallest authorised action first. Two rungs is not a
+      # search: it is "try the guardrail default, then the tightest area budget
+      # that still inserts something", and re-running takes the same two steps.
+      - {margin_ps: 0, max_buffer_percent: 5, out_path: "pnr.tcl"}
+      - {margin_ps: 20, max_buffer_percent: 1, out_path: "pnr.tcl"}
+    stop:
+      max_iterations: 2
+      plateau_patience: 1
+      wall_seconds: 300
+
+# --------------------------------------------------------------------------
+# EDGES — every `closed_loop:` the flow declares, and what executes it.
+#
+# A COMPLETE ENUMERATION. 22 declared, 22 listed, 0 bound. `fallback_to` is
+# copied from the flow so this file can be diffed against it by eye; the
+# authority for the edge remains flow/phase1_phase2_phase3.yaml, which this
+# lane does not edit. Step ids are RAW — `1.6x`, `A7`, `A9` are strings and
+# normalising them is how `blocks_on` lost edges before (D5-EDGE-UNRESOLVED).
+# --------------------------------------------------------------------------
+edges:
+  "1.6x": {controller: null, fallback_to: 1,   note: "Cross-layer rewrite discarded; the actuator is a HUMAN decision to keep step 1's RTL. Nothing to automate."}
+  "2":    {controller: null, fallback_to: 1,   note: "Lint above threshold -> RTL change. No bounded RTL-repair actuator exists."}
+  "3":    {controller: null, fallback_to: 1,   note: "CDC/RDC -> RTL change. Synchroniser insertion is a design decision, not a parameterised action."}
+  "4":    {controller: null, fallback_to: 1,   note: "Test failure traceable to RTL. Diagnosis is not an actuator."}
+  "5":    {controller: null, fallback_to: 1,   note: "SVA failure -> RTL change."}
+  "8":    {controller: null, fallback_to: 7,   note: "SDC syntax/semantic error. sdc_gen is board-scoped (FPGA), not a general constraint actuator."}
+  "9":    {controller: null, fallback_to: 1,   note: "Area above the DECLARED ceiling. Needs area.physical measured; that domain is DECLARED_ONLY."}
+  "10":   {controller: null, fallback_to: 7,   note: "Setup violation -> constraint or synthesis redo. Needs timing.setup; DECLARED_ONLY."}
+  "13":   {controller: null, fallback_to: 9,   note: "Non-equivalence after synthesis/DFT. A repair here would be a correctness change, never automatic."}
+  "A7":   {controller: null, fallback_to: "A3", note: "Analog performance degradation > 10% post-extraction. No analog actuator is declared."}
+  "A9":   {controller: null, fallback_to: "A3", note: "Analog HW mismatch -> netlist or hardmacro fix."}
+  "14":   {controller: null, fallback_to: 9,   note: "Synthesis script missing required options. A script edit, not a bounded action."}
+  "20":   {controller: null, fallback_to: 19,  note: "Hold violation -> delay cell or re-CTS. timing.hold is DECLARED_ONLY; pnr.deck.hold_block_emission repairs a DECK, not hold timing, and binding it here would overclaim."}
+  "23":   {controller: null, fallback_to: 32,  note: "Setup/hold -> ECO loop. Hands forward to the ECO aggregator."}
+  "24":   {controller: null, fallback_to: 15,  note: "IR drop > 5% -> PDN strengthen. pdn.strengthen is DECLARED_ONLY."}
+  "25":   {controller: null, fallback_to: 21,  note: "EM violation -> widen wire or re-route. No EM domain is declared yet."}
+  "26":   {controller: null, fallback_to: 21,  note: "Antenna violation -> diode or re-route. routing.antenna_diode_insert is DECLARED_ONLY."}
+  "27":   {controller: null, fallback_to: 21,  note: "Crosstalk/noise -> shielding or spacing."}
+  "28":   {controller: null, fallback_to: 15,  note: "ESD/well-tap/cross-domain gap -> floorplan change."}
+  "31":   {controller: null, fallback_to: 32,  note: "DRC/LVS/ERC fail -> ECO. drc.violations is DECLARED_ONLY."}
+  "32":   {controller: null, fallback_to: 32,  note: "ECO aggregator: re-run 21-28. A SCHEDULER, not an actuator; it re-enters itself."}
+  "33":   {controller: null, fallback_to: 17,  note: "Power above the DECLARED budget -> re-place. placement.reduce_switching_capacitance is DECLARED_ONLY."}

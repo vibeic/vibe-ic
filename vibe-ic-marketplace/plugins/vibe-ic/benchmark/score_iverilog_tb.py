@@ -6,10 +6,12 @@ Generalizes the two scorers used in the 2026-05-28 sweep
 Driven by the per-benchmark entry in BENCHMARK_REGISTRY.json so a new plugin user
 runs `/vibe-ic-benchmark <bench>` and gets the right scoring without writing code.
 
-Substitution disclosure: this scorer uses iverilog 12 -g2012 in place of Synopsys
-VCS or Cadence Xcelium (per open-benchmark-methodology skill § 3). It runs vvp
-with cwd=design_dir so the official TB's relative-path `$readmemh(...)` resolves
-(per § 3 cwd-rule).
+Substitution disclosure: this scorer uses the detected host iverilog (``-g2012``)
+in place of Synopsys VCS or Cadence Xcelium (per open-benchmark-methodology
+skill § 3) and records the probed host version in ``pass_at_1.json``. Only a
+detected SV-2012 tool gap escalates: Shape B uses container Verilator 5.x and
+Shape C uses the vibeic-eda fork-iverilog-14. It runs vvp with cwd=design_dir so
+the official TB's relative-path `$readmemh(...)` resolves (per § 3 cwd-rule).
 
 LAYOUTS supported (BENCHMARK_REGISTRY.layout):
 
@@ -41,7 +43,7 @@ Honesty: this scorer ONLY touches the hidden testbench/ref/golden at scoring tim
 The generation step must be blind (per the skill's absolute-blindness rule).
 """
 from __future__ import annotations
-import argparse, atexit, json, subprocess, tempfile, os, re, shutil, sys
+import argparse, atexit, json, shlex, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -65,6 +67,34 @@ if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
 
 def _registry_path() -> Path:
     return Path(__file__).resolve().parent / "BENCHMARK_REGISTRY.json"
+
+
+_TOOL_GAP_FALLBACK_DISCLOSURE = (
+    "tool-gap only: Shape B escalates to container Verilator 5.x; "
+    "Shape C escalates to vibeic-eda fork-iverilog-14"
+)
+
+
+def _host_iverilog_version() -> str:
+    """Probe the host Icarus version, returning ``unknown`` on any failure.
+
+    Icarus exposes its version through ``-V`` (``--version`` returns nonzero on
+    supported releases).  Never infer a version from repository prose or the
+    fallback container: this value describes the host binary actually used by
+    the scorer's primary compile path.
+    """
+    try:
+        probe = subprocess.run(
+            ["iverilog", "-V"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if probe.returncode != 0:
+        return "unknown"
+    output = (probe.stdout or "") + "\n" + (probe.stderr or "")
+    match = re.search(
+        r'\bIcarus\s+Verilog\s+version\s+([0-9]+(?:\.[0-9]+)+)\b',
+        output, re.IGNORECASE)
+    return match.group(1) if match else "unknown"
 
 
 # benchmark-enhancement-capture (2026-06-01): canonical power-up gate.
@@ -91,6 +121,136 @@ def _power_up_fixed(sample: Path, td: str) -> str:
         return fixed if os.path.isfile(fixed) and os.path.getsize(fixed) else str(sample)
     except Exception:
         return str(sample)
+
+
+# ── vibe-ic#1745 (1/2) — the submission must not be able to write the verdict ─
+#
+# PASS is decided by matching `pass_regex` against the SIMULATION's stdout, and
+# the DUT shares that stdout with the testbench. So the thing being measured can
+# print the sentence the instrument reads. MEASURED upstream: two submissions
+# carrying IDENTICAL WRONG LOGIC scored 50% because the second added one
+# `initial $display(<the harness's own pass sentence>)`; the simulator reported a
+# nonzero mismatch count for BOTH. The honest-wrong control FAILS, so the check
+# was not vacuous — it was FORGEABLE, which is worse: it discriminates correctly
+# right up until someone forges it.
+#
+# The gate runs BEFORE the sample is compiled or run, so a forged submission
+# never reaches the regex at all. Its result is a COUNTED FAIL (an attempted,
+# wrong answer), never a SKIP: taking it out of the denominator would pay the
+# forger exactly what the forgery was for.
+
+
+def harness_verdict_forgery(sample_path, args: dict) -> Optional[dict]:
+    """The forgery-gate verdict for one submitted file, or None when it is clean.
+
+    Also None when the gate itself could not run (module absent, no pass_regex).
+    That direction is deliberate and disclosed: an unavailable gate must not
+    MANUFACTURE a FAIL. This gate can only ever remove a forged PASS.
+    """
+    if not args.get("pass_regex"):
+        return None
+    try:
+        import harness_verdict_forgery_gate as _hvfg
+    except Exception:
+        return None
+    res = _hvfg.gate_file(sample_path, args["pass_regex"], args.get("fail_regex"))
+    if res.get("verdict") != _hvfg.FORGERY:
+        return None
+    return {"detail": res["reason"], "findings": res["findings"]}
+
+
+# ── vibe-ic#1745 (2/2) — THREE states, never two ─────────────────────────────
+#
+# attempted-and-passed / attempted-and-failed / NEVER ATTEMPTED. Upstream
+# reported two, and the missing one was the FAVOURABLE state: not-attempted
+# silently became not-counted rather than not-passed (measured: 1 real attempt +
+# 3 unattempted reported a pass rate of 50.00 over a denominator of 1 — no row,
+# no warning). Same defect class as an absent baseline counted as a zero.
+NEVER_ATTEMPTED_REASON = "no_sample"
+ATTEMPT_STATES = ("attempted_passed", "attempted_failed",
+                  "skipped_tool_gap", "never_attempted")
+
+
+def attempt_state(r: dict) -> str:
+    """The ONE state a result row is in. Never-attempted is tested FIRST, so a
+    row that produced nothing can never be re-labelled into a state that leaves
+    the denominator."""
+    if r.get("reason") == NEVER_ATTEMPTED_REASON:
+        return "never_attempted"
+    if r.get("verdict") == "PASS":
+        return "attempted_passed"
+    if r.get("verdict") == "SKIP":
+        return "skipped_tool_gap"
+    return "attempted_failed"
+
+
+def attempt_census(results, ident: str = "design") -> dict:
+    """The three-state census, emitted UNCONDITIONALLY — including all-zero, so
+    `never_attempted: 0` is a MEASUREMENT rather than the absence of one.
+
+    The four buckets are disjoint and exhaustive by construction (one pure
+    function of a row), so the identity below is an accounting statement about
+    the emitted numbers, not a hope. `accounting_violations` lists any row that
+    produced NO submission yet carries a verdict that would take it OUT of the
+    denominator — the exact silent drop this restores. A caller that finds one
+    must refuse to publish rather than print the flattered rate.
+    """
+    buckets = {k: [] for k in ATTEMPT_STATES}
+    for r in results:
+        buckets[attempt_state(r)].append(str(r.get(ident, "?")).split("/")[-1])
+    counts = {k: len(v) for k, v in buckets.items()}
+    total = len(results)
+    violations = [str(r.get(ident, "?")).split("/")[-1] for r in results
+                  if r.get("reason") == NEVER_ATTEMPTED_REASON
+                  and r.get("verdict") in ("PASS", "SKIP")]
+    return {
+        "total": total,
+        "attempted": total - counts["never_attempted"],
+        **counts,
+        "never_attempted_ids": buckets["never_attempted"],
+        "identity": ("attempted_passed + attempted_failed + skipped_tool_gap + "
+                     "never_attempted == total"),
+        "identity_holds": sum(counts.values()) == total,
+        "accounting_violations": violations,
+    }
+
+
+def apply_scorer_substitution_gap(results, gap_ids, ident: str,
+                                  host_iverilog_version: str) -> list:
+    """Flip registry-declared tool-gap FAILs to SKIP — but NEVER a row that was
+    never attempted (vibe-ic#1745).
+
+    A tool gap is a statement about the SIMULATOR's coverage of the testbench. It
+    cannot be a statement about a submission that does not exist: there is nothing
+    for the simulator to have failed on. Flipping a `no_sample` row did two things
+    at once — it took the problem OUT of the denominator (`n_eff = n - nskip`),
+    and it OVERWROTE the `reason` the never-attempted disclosure is derived from,
+    so the problem also vanished from the partially-authored warning. The
+    unfavourable state disappeared and the rate went up, with nothing printed.
+
+    Returns the ids actually flipped.
+    """
+    flipped = []
+    for r in results:
+        leaf = str(r.get(ident, "")).split("/")[-1]
+        if leaf not in gap_ids or r.get("verdict") == "PASS":
+            continue
+        if r.get("reason") == NEVER_ATTEMPTED_REASON:
+            r["scorer_substitution_gap_refused"] = (
+                "never attempted — a tool gap cannot excuse a submission that "
+                "does not exist; stays a counted FAIL, stays in the denominator")
+            continue
+        r["scorer_substitution_gap"] = True
+        r["original_verdict"] = r["verdict"]
+        r["original_reason"] = r.get("reason", "")
+        r["verdict"] = "SKIP"
+        r["reason"] = (
+            "scorer_substitution_gap — TB uses an SV-2012 feature "
+            f"unavailable in host iverilog {host_iverilog_version}; "
+            "not counted against pass rate per "
+            "open-benchmark-methodology § 3")
+        flipped.append(leaf)
+    return flipped
 
 
 def _load_bench(name: str) -> dict:
@@ -151,7 +311,7 @@ def _resolve_sample_b(design: str, samples: Path, dataset: Path,
 
 
 # Scorer fix: Verilator escalation for SV-2012 testbench tool-gaps.
-# The host iverilog 12 (AND container iverilog 13) internal-error on some SV-2012
+# Host Icarus releases can internal-error on some SV-2012
 # testbench constructs — array-aggregate/array-literal initializers (`{8'd1,...}`)
 # and `break;` in for-loops. These are a TOOL-GAP in the open *simulator*, NOT a
 # candidate-RTL bug. Verilator 5.x supports both constructs, so it is the correct
@@ -225,8 +385,14 @@ def _designs_root_undecided(detail: str = "") -> dict:
     }
 
 
-def _container_mount_sources(container: str) -> "List[Path]":
-    """Host-side sources of the container's bind mounts. [] if unknowable."""
+def _container_mounts(container: str) -> "List[tuple[Path, str]]":
+    """Return resolved ``(host source, container destination)`` bind mounts.
+
+    The destination is load-bearing.  A host root discovered from ``Source``
+    cannot safely be rewritten to the historical ``/foss/designs`` default:
+    users may mount the same tree at any container path.  Keep the pair intact
+    so path translation follows the container's actual namespace.
+    """
     try:
         out = subprocess.check_output(["docker", "inspect", container],
                                       text=True, stderr=subprocess.DEVNULL,
@@ -236,15 +402,21 @@ def _container_mount_sources(container: str) -> "List[Path]":
         return []
     if not data:
         return []
-    srcs = []
+    mounts = []
     for m in (data[0].get("Mounts") or []):
         s = m.get("Source")
-        if s:
+        d = m.get("Destination")
+        if s and d:
             try:
-                srcs.append(Path(s).resolve())
+                mounts.append((Path(s).resolve(), str(d)))
             except OSError:
                 pass
-    return srcs
+    return mounts
+
+
+def _container_mount_sources(container: str) -> "List[Path]":
+    """Host-side sources of the container's bind mounts. [] if unknowable."""
+    return [src for src, _dst in _container_mounts(container)]
 
 
 def _host_designs_root(design_dir: "Optional[Path]" = None) -> Optional[Path]:
@@ -290,7 +462,43 @@ def _to_container(p: str, design_dir: "Optional[Path]" = None) -> str:
     root = _host_designs_root(design_dir)
     if root is None:
         return p
-    return p.replace(str(root), _CONT_DESIGNS_ROOT)
+    try:
+        host_path = Path(p).resolve()
+    except OSError:
+        host_path = Path(p)
+
+    # An explicitly configured destination remains authoritative for CI and
+    # power users who intentionally decouple scoring from docker inspection.
+    explicit_dst = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT")
+    if explicit_dst:
+        try:
+            rel = host_path.relative_to(root)
+        except ValueError:
+            return p
+        return explicit_dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
+
+    # Normal zero-config path: translate through the exact Source/Destination
+    # pair reported by docker.  Nested mounts are legal, so the longest source
+    # prefix wins (the same rule the kernel applies to the visible namespace).
+    matches = []
+    for src, dst in _container_mounts(_IV13_CONTAINER):
+        try:
+            rel = host_path.relative_to(src)
+        except ValueError:
+            continue
+        matches.append((len(src.parts), dst, rel))
+    if matches:
+        _depth, dst, rel = max(matches, key=lambda item: item[0])
+        return dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
+
+    # Docker may be absent/down during a unit check.  Preserve the documented
+    # offline fallback, but use a true prefix-relative join rather than global
+    # string replacement (which could rewrite a coincidental substring).
+    try:
+        rel = host_path.relative_to(root)
+    except ValueError:
+        return p
+    return _CONT_DESIGNS_ROOT.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
 
 
 # CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the
@@ -347,6 +555,148 @@ def _strip_waveform_dumps(text: str) -> str:
 
 
 _FORK_IV_COUNTER = [0]
+
+# ─── ORGANIC #643 — the timeout has to reach the SIMULATION, not the client ───
+#
+# Every scored simulation below is bounded the ordinary way:
+#
+#     subprocess.run(["vvp", binp], timeout=N)
+#
+# which kills its DIRECT CHILD. When `vvp` on PATH is a host binary that child IS
+# the simulation and the bound is exactly right. When it is a shim —
+#
+#     #!/usr/bin/env bash
+#     exec docker exec -w "$PWD" <container> /foss/tools/bin/vvp "$@"
+#
+# — the direct child is the docker CLIENT, and `docker exec` has no
+# kill-on-disconnect. The client dies; the simulation inside the container runs
+# to completion or forever. MEASURED on `.114`, ~4 h after the RTLLM run that
+# started them had already written its RESULT: four `vvp` at 99.9 % CPU,
+# ELAPSED 03:5x, parented by `containerd-shim`, their `TemporaryDirectory()`
+# roots long since removed from the host.
+#
+# The waste is the smaller half. `sim_timeout` is a SCORED verdict, so a leak
+# feeds itself: a hung TB steals a core, the next design is scored on a smaller
+# machine, a design near the bound now exceeds it and is scored `sim_timeout`,
+# which leaks another core. By the end of a sweep the designs scored last were
+# measured under conditions the ones scored first never saw, the verdict depends
+# on ordering, and a re-score is not idempotent — it starts with the previous
+# run's leaks still burning.
+#
+# WHY NOTHING CAUGHT IT: `programs/container_exec_deadline_check.py` exists for
+# precisely this defect, and its population is "an argv literal that STARTS a
+# `docker exec`". These call sites say `vvp`. The containerization is in PATH,
+# not in the argv, so the gate could not see them — the fix belongs at the call,
+# where the routing is discoverable at run time.
+#
+# So: ask what `vvp` on PATH actually IS, and put the bound where the work is.
+
+# Cache: "unresolved" | None (a real binary) | (container, remote_vvp_path).
+_VVP_ROUTE = ["unresolved"]
+# `docker exec` flags that CONSUME the next token — needed to find the container
+# name, which is the first token that is neither a flag nor a flag's value.
+_DOCKER_EXEC_VALUE_FLAGS = {"-w", "--workdir", "-u", "--user", "-e", "--env",
+                            "--env-file", "--detach-keys"}
+
+
+def _resolve_vvp_route(which=None):
+    """(container, remote_vvp) when `vvp` on PATH routes into a container, else
+    None. Reads the resolved file rather than assuming any particular harness —
+    the shim is written by the benchmark host, not by this repo, so the only
+    honest way to know is to look at the one actually on PATH."""
+    if _VVP_ROUTE[0] != "unresolved":
+        return _VVP_ROUTE[0]
+    _VVP_ROUTE[0] = _vvp_route_of(which or shutil.which("vvp"))
+    return _VVP_ROUTE[0]
+
+
+def _vvp_route_of(path):
+    """The pure half of `_resolve_vvp_route`, so it is testable without PATH."""
+    if not path:
+        return None
+    try:
+        head = Path(path).read_bytes()[:8192].decode("utf-8", "replace")
+    except OSError:
+        return None
+    if not head.startswith("#!"):          # a real ELF binary — the bound is fine
+        return None
+    m = re.search(r"\bdocker\s+exec\b(.*)$", head, re.M)
+    if not m:
+        return None
+    try:
+        toks = shlex.split(m.group(1), comments=True)
+    except ValueError:
+        return None
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in _DOCKER_EXEC_VALUE_FLAGS:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        container = t
+        remote = toks[i + 1] if i + 1 < len(toks) else "vvp"
+        if remote.startswith("-") or remote.startswith("$"):
+            remote = "vvp"
+        return (container, remote)
+    return None
+
+
+_CONTAINER_HAS_TIMEOUT = {}
+
+
+def _container_has_timeout(container: str) -> bool:
+    """Whether GNU `timeout` exists in the container. Probed once per container;
+    a container without it still runs, just unbounded — the same behaviour as
+    before this fix, never worse."""
+    if container not in _CONTAINER_HAS_TIMEOUT:
+        try:
+            ok = subprocess.run(["docker", "exec", container,
+                                 "timeout", "--version"],
+                                capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        _CONTAINER_HAS_TIMEOUT[container] = ok
+    return _CONTAINER_HAS_TIMEOUT[container]
+
+
+def _bounded_vvp(binp, *, timeout, cwd, route=None):
+    """`vvp binp`, bounded where the SIMULATION lives.
+
+    Raises `subprocess.TimeoutExpired` on either route, so every call site's
+    existing `except subprocess.TimeoutExpired` keeps its meaning unchanged —
+    the container rung reports its deadline through rc 124/137 (GNU `timeout`,
+    137 when it had to escalate to KILL), translated back here.
+
+    `timeout --kill-after=5` puts the simulation in its own process group and
+    signals the GROUP, so a tool that spawns children is torn down whole; it
+    fires 5 s BEFORE the host bound, so the container side is already dead when
+    the host would have given up. Same shape `_docker_watchdog.
+    wrap_with_container_timeout` uses for every other supervised tool.
+
+    NO SHELL, deliberately — not even the `bash -lc` that wrapper needs. The
+    container's login profile PRINTS (`[INFO] Final PATH variable: …`), and this
+    call's stdout is the exact text `pass_regex`/`fail_regex` are matched
+    against; a banner in there is a scoring hazard, not a cosmetic one. The
+    remote path comes out of the shim already absolute, so no profile is needed
+    to resolve it — and running the tool directly is also what the shim itself
+    does."""
+    route = _resolve_vvp_route() if route is None else route
+    if route is None:
+        return subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
+                              timeout=timeout, cwd=cwd)
+    container, remote = route
+    argv = ["docker", "exec", "-w", str(cwd), container]
+    if _container_has_timeout(container):
+        argv += ["timeout", "--kill-after=5", str(max(1, int(timeout) - 5))]
+    argv += [remote, str(binp)]
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    if r.returncode in (124, 137):
+        raise subprocess.TimeoutExpired(cmd=["vvp", str(binp)], timeout=timeout)
+    return r
+
 
 # Fork-rung vvp wall-clock cap (seconds). Module-level so tests can shrink it.
 _FORK_VVP_TIMEOUT = 120
@@ -449,6 +799,66 @@ def _iverilog_toolgap_signature(text: str) -> bool:
             or "i don't know how to elaborate" in low)
 
 
+def _tb_side_verilog_dialect_error(log: str, tb: Path, sources) -> bool:
+    """Whether a failed SV-mode compile is narrowly retryable as Verilog-2005.
+
+    Some legacy benchmark testbenches are ``.v`` files written for Verilog but
+    contain an identifier that became reserved in SystemVerilog (for example an
+    instance named ``checker``).  Compiling those files with ``-g2012`` changes
+    the language they were authored in and can reject both the candidate and the
+    untouched golden.  A retry is safe only when every source is ``.v`` and the
+    syntax diagnostic is attributed to the benchmark-owned testbench itself.
+
+    Candidate-attributed syntax errors and any real SystemVerilog source remain
+    failures; this must never become a general "try an older parser" escape.
+    """
+    if not sources or any(Path(s).suffix.lower() != ".v" for s in sources):
+        return False
+    low = (log or "").lower()
+    if "syntax error" not in low:
+        return False
+    diagnostic_paths = []
+    for line in (log or "").splitlines():
+        m = re.match(r"^(.+?\.(?:v|sv|vh)):\d+(?::\d+)?:", line.strip(), re.I)
+        if m:
+            diagnostic_paths.append(m.group(1))
+    if not diagnostic_paths:
+        return False
+    try:
+        tb_resolved = tb.resolve()
+        return all(Path(p).resolve() == tb_resolved for p in diagnostic_paths)
+    except OSError:
+        return all(Path(p).name == tb.name for p in diagnostic_paths)
+
+
+def _compile_with_tb_dialect(sources, tb: Path, binp: str,
+                             top: "Optional[str]" = None):
+    """Compile in SV-2012, with one narrow benchmark-TB Verilog-2005 retry.
+
+    Returns ``(CompletedProcess, dialect)``.  This helper decides compilation
+    only; callers still run the official simulation and require its pass marker,
+    so a successful fallback compile cannot turn functional garbage into PASS.
+    """
+    sources = [str(s) for s in sources]
+
+    def _cmd(dialect: str):
+        cmd = ["iverilog", f"-{dialect}"]
+        if top:
+            cmd += ["-s", top]
+        return cmd + ["-o", binp] + sources
+
+    c = subprocess.run(_cmd("g2012"), capture_output=True, text=True, timeout=120)
+    if c.returncode == 0 or not _tb_side_verilog_dialect_error(
+            c.stdout + c.stderr, tb, sources):
+        return c, "g2012"
+    try:
+        Path(binp).unlink()
+    except OSError:
+        pass
+    return (subprocess.run(_cmd("g2005"), capture_output=True, text=True,
+                           timeout=120), "g2005")
+
+
 def _build_zero_stub(sample_text: str) -> Optional[str]:
     """From an ANSI-header module, synthesize a trivially-WRONG stub with the same
     name + ports but every output driven to constant 0 (reg stripped so `assign`
@@ -530,8 +940,16 @@ def _tb_is_non_discriminating(sample_text: str, tb: Path, design_dir: Path,
         sp = Path(td) / "zstub.v"
         sp.write_text(stub)
         binp = os.path.join(td, "zb")
-        c = subprocess.run(["iverilog", "-g2012", "-o", binp, str(sp), str(tb)],
-                           capture_output=True, text=True, timeout=60)
+        try:
+            c = subprocess.run(["iverilog", "-g2012", "-o", binp, str(sp), str(tb)],
+                               capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            # #1437 — an ABSENT iverilog raised before returning, so this probe
+            # crashed the scorer instead of reaching the "inconclusive" outcome
+            # its own contract declares. No compiler ran, so nothing was learned
+            # about whether the TB discriminates: None, and the design stays
+            # counted (never silently excluded from the denominator).
+            return None
         clow = (c.stdout + c.stderr).lower()
         if "sorry:" in clow or "internal error" in clow or "i don't know how to elaborate" in clow:
             built, stub_pass = _verilator_run_text(
@@ -540,8 +958,7 @@ def _tb_is_non_discriminating(sample_text: str, tb: Path, design_dir: Path,
         if c.returncode != 0 or not os.path.exists(binp):
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=30, cwd=str(design_dir))
+            r = _bounded_vvp(binp, timeout=30, cwd=str(design_dir))
         except subprocess.TimeoutExpired:
             return None  # stub hangs the TB ⇒ TB depends on outputs ⇒ inconclusive→leave counted
         return bool(pass_re.search(r.stdout + r.stderr))
@@ -660,9 +1077,12 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
     standalone Shape-B benchmark can have a golden that compiles cleanly yet
     FAILs its own official TB at RUNTIME — a desc<->TB contradiction or a
     handshake race (e.g. a TB holding res_ready tied high for the whole run, or
-    a clock-generator whose golden never prints the pass marker). Such a design
-    is unsatisfiable by ANY spec-compliant submission, so a model FAIL on it must
-    be DISCLOSED as a dataset defect, not charged to the model.
+    a clock-generator whose golden never prints the pass marker). Such a golden may
+    OR MAY NOT indicate an unsatisfiable TB — a wrong reference implementation fails
+    its own TB exactly as an unsatisfiable TB would. So a model FAIL here is DISCLOSED
+    as a SUSPECTED defective golden (non-excluding), never auto-charged as an
+    irreducible dataset defect. (Runtime is unsound for irreducibility; only the
+    COMPILE-level audit — a TB port neither golden nor spec provides — is sound.)
 
     Resolves the golden via `layout.ref_glob` (e.g. `verified_*.v`) in the design
     dir, iverilog -g2012 compiles it with `layout.tb_filename`, runs vvp with
@@ -672,7 +1092,14 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
 
     Returns:
       True  — golden COMPILES but FAILs its own TB at runtime (no pass marker, or
-              a fail_regex match) → irreducible dataset defect.
+              a fail_regex match) → the shipped GOLDEN is buggy. This is DISCLOSURE-
+              ONLY (suspected), NOT proof of irreducibility: a runtime functional
+              mismatch cannot distinguish "TB unsatisfiable by anyone" from "the
+              reference is a wrong implementation while a correct submission passes"
+              (measured: radix2_div — golden fails 3/8 of its own TB, yet a correct
+              signed/unsigned divider passes all 8). The caller therefore routes this
+              to the non-excluding `dataset_defect_suspected` channel; it must NEVER
+              be auto-excluded from the denominator.
       False — golden PASSes its own TB at runtime → the design IS satisfiable;
               a candidate FAIL stays a real model FAIL (no flag).
       None  — no determination (no ref_glob, no glob match, no TB, golden fails to
@@ -714,8 +1141,7 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
             return None
         srcs = aliased_srcs + [str(tb)]
         try:
-            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
-                               capture_output=True, text=True, timeout=120)
+            c, _dialect = _compile_with_tb_dialect(srcs, tb, binp)
         except subprocess.TimeoutExpired:
             return None
         if c.returncode != 0 or not os.path.exists(binp):
@@ -724,9 +1150,7 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
             # not a runtime defect. Don't double-count; leave it to the main path.
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             # Golden's own TB hangs — treat as no determination (could be a TB
             # that waits forever); don't flip a model FAIL into a defect on a
@@ -823,8 +1247,7 @@ def _golden_ref_compiles_with_tb_shape_b(design: str, dataset: Path, layout: dic
             return (None, golden_ports)
         srcs = aliased_srcs + [str(tb)]
         try:
-            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
-                               capture_output=True, text=True, timeout=120)
+            c, _dialect = _compile_with_tb_dialect(srcs, tb, binp)
         except (subprocess.TimeoutExpired, OSError):
             return (None, golden_ports)
         return (c.returncode == 0 and os.path.exists(binp), golden_ports)
@@ -1170,9 +1593,7 @@ def _score_side_port_permutation_rescue_shape_b(
         if c.returncode != 0 or not os.path.exists(binp):
             return None  # the permutation did NOT rescue the compile → keep FAIL.
         try:
-            r = subprocess.run(
-                ["vvp", binp], capture_output=True, text=True, timeout=120,
-                cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None  # permuted candidate hangs → not a rescue → keep FAIL.
     out = r.stdout + r.stderr
@@ -1337,9 +1758,7 @@ def _param_passthrough_retry_shape_b(
     if c.returncode != 0 or not os.path.exists(binp):
         return None  # the injection did NOT clear the elaboration → keep FAIL.
     try:
-        r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                           timeout=120,
-                           cwd=str(dataset / design) if use_cwd else _VVP_SCRATCH_CWD)
+        r = _bounded_vvp(binp, timeout=120, cwd=str(dataset / design) if use_cwd else _VVP_SCRATCH_CWD)
     except subprocess.TimeoutExpired:
         return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
     out = r.stdout + r.stderr
@@ -1373,6 +1792,12 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     res = _score_shape_b_impl(design, samples, dataset, layout, args)
     if res.get("verdict") != "FAIL":
         return res
+    # vibe-ic#1745: a forged submission was refused BEFORE any simulation, so
+    # there is no failure here for the dataset to be blamed for. Skip the
+    # golden-audit entirely — running it would only invite a dataset_defect
+    # annotation onto a verdict about the submitter.
+    if res.get("reason") == "harness_verdict_forgery":
+        return res
     if res.get("reason") == "compile_error":
         defect, reason = _unsatisfiable_tb_compile_audit_shape_b(
             design, dataset, layout, res.get("log", ""))
@@ -1384,7 +1809,26 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     else:
         gref = _golden_ref_fails_own_tb_runtime(design, dataset, layout, args)
         if gref is True:
-            res["dataset_defect"] = True
+            # DISCLOSURE-ONLY (suspected), NOT auto-exclude. A golden that COMPILES
+            # but FAILs its own TB at RUNTIME proves only that the shipped GOLDEN is
+            # buggy — it is NOT sound proof that the design is unsatisfiable by
+            # anyone. A runtime functional mismatch has two indistinguishable causes:
+            # (a) the TB is genuinely unsatisfiable, or (b) the reference is simply a
+            # wrong implementation while a CORRECT submission still passes. Only (a)
+            # is irreducible, and a golden failing its own TB cannot tell them apart.
+            # MEASURED counter-example: RTLLM `radix2_div`'s golden fails 3/8 of its
+            # own TB (e.g. unsigned 123/123 -> quotient 0x00 instead of 0x01), yet a
+            # correct signed/unsigned radix-2 divider passes all 8 — the design is
+            # satisfiable, so auto-excluding it removed a real, fixable design from
+            # the denominator (a FALSE certificate that inflates the effective rate).
+            # Route to the suspected (non-excluding) channel — the same contract the
+            # comparable golden-disagreement audit (_canonical_disagrees_with_golden)
+            # already obeys: FLAG, never EXCLUDE. Auto-exclusion stays reserved for
+            # the COMPILE-level proven-irreducible class (tb_requires_spec_absent_port
+            # / golden_ref_fails_own_tb_compile), where the TB binds a port neither
+            # the golden nor the spec provides and NO spec-faithful author can satisfy
+            # it. The verdict is unchanged either way (never inflate the pass rate).
+            res["dataset_defect_suspected"] = True
             res["dataset_defect_reason"] = "golden_ref_fails_own_tb_runtime"
     return res
 
@@ -1395,6 +1839,14 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
     tb = dataset / design / layout["tb_filename"]
     if sample is None:
         return {"design": design, "verdict": "FAIL", "reason": "no_sample"}
+    # vibe-ic#1745 — BEFORE the compile, so a forged submission never reaches
+    # the pass_regex at all.
+    forged = harness_verdict_forgery(sample, args)
+    if forged:
+        return {"design": design, "verdict": "FAIL",
+                "reason": "harness_verdict_forgery",
+                "forgery_detail": forged["detail"],
+                "forgery_findings": forged["findings"]}
     if not tb.is_file():
         return {"design": design, "verdict": "FAIL", "reason": "no_testbench"}
     with tempfile.TemporaryDirectory() as td:
@@ -1420,9 +1872,21 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             pass
         pass_re = re.compile(args["pass_regex"])
         fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
-        c = subprocess.run(["iverilog", "-g2012", "-o", binp, sample_c, str(tb)],
-                           capture_output=True, text=True, timeout=120)
-        # iverilog-12 prints "sorry: <feature> not supported" for SV-2012 TB
+        try:
+            c, dialect = _compile_with_tb_dialect(
+                [sample_c, str(tb)], tb, binp)
+        except FileNotFoundError as e:
+            # #1437 — an ABSENT iverilog raised here. It must NOT fall through to
+            # the `returncode != 0` arm below: that arm returns
+            # {"verdict": "FAIL", "reason": "compile_error"}, a claim ABOUT THE
+            # CANDIDATE, and scoring a submission as FAILED on a compiler that
+            # never ran is a fabricated finding — strictly worse than the
+            # traceback, which at least announced itself. SKIP is the existing
+            # verdict for "not scoreable here"; the log names the absent tool.
+            return {"design": design, "verdict": "SKIP",
+                    "reason": "iverilog_absent",
+                    "log": f"COMMAND_NOT_FOUND: {e}"}
+        # Host iverilog may print "sorry: <feature> not supported" for SV-2012 TB
         # constructs but STILL EXITS 0 (e.g. asyn_fifo's `break;`), so a tool-gap
         # must be detected on the OUTPUT, not just the return code. ring_counter's
         # array-literal init exits non-zero ("internal error … elaborate"). Catch
@@ -1463,12 +1927,10 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             if rescued is not None:
                 return rescued
             return {"design": design, "verdict": "FAIL", "reason": "compile_error",
-                    "log": c.stderr[-400:]}
+                    "log": c.stderr[-400:], "tool": f"iverilog-{dialect}"}
         try:
             # cwd=design dir so the TB's relative-path $readmemh works (skill §3)
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
@@ -1478,10 +1940,13 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             if fail_re and fail_re.search(out):
                 m = re.search(r"(\d+)\s*/\s*\d+\s*failures", out)
                 return {"design": design, "verdict": "FAIL",
-                        "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})"}
-            return {"design": design, "verdict": "PASS"}
+                        "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})",
+                        "tool": f"iverilog-{dialect}"}
+            return {"design": design, "verdict": "PASS",
+                    "tool": f"iverilog-{dialect}"}
         return {"design": design, "verdict": "FAIL",
-                "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else "")}
+                "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else ""),
+                "tool": f"iverilog-{dialect}"}
 
 
 def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
@@ -1602,8 +2067,7 @@ def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
         else:
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120, cwd=_VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=_VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None
         out = r.stdout + r.stderr
@@ -1619,6 +2083,34 @@ def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
                 f"{mism}/{tot} samples")
 
 
+def _semantic_prompt_oracle_evidence(prob: str, dataset: Path,
+                                     layout: dict) -> Optional[str]:
+    """Return prompt-vs-golden contradiction evidence for a Shape-C problem.
+
+    This scorer adapter deliberately owns no semantic rules.  It routes the
+    prompt and golden reference through the general, fail-closed semantic floor
+    program used by the benchmark tier pipelines.  Unsupported or ambiguous
+    prompt classes return ``None``; scorer operation must never depend on this
+    advisory audit being available.
+    """
+    prompt_suffix = layout.get("prompt_suffix")
+    ref_suffix = layout.get("ref_suffix")
+    if not prompt_suffix or not ref_suffix:
+        return None
+    prompt = dataset / f"{prob}{prompt_suffix}"
+    ref = dataset / f"{prob}{ref_suffix}"
+    if not (prompt.is_file() and ref.is_file()):
+        return None
+    try:
+        from semantic_spec_floor_check import semantic_floor_evidence
+        return semantic_floor_evidence(
+            prompt.read_text(errors="replace"),
+            ref.read_text(errors="replace"),
+        )
+    except Exception:
+        return None
+
+
 def _score_shape_c(prob: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-C scorer wrapper: run the core scorer, then on a FAIL annotate
@@ -1627,19 +2119,35 @@ def _score_shape_c(prob: str, samples: Path, dataset: Path,
     silently charged to the model. Verdict is NOT changed — flag only (dual
     report in main()); never inflate the pass rate."""
     res = _score_shape_c_impl(prob, samples, dataset, layout, args)
+    if res.get("reason") == "harness_verdict_forgery":
+        return res      # vibe-ic#1745 — see the Shape-B wrapper for why
     if res.get("verdict") == "FAIL":
         gref = _golden_ref_self_compiles(prob, dataset, layout)
         if gref is False:
             res["dataset_defect"] = True
             res["dataset_defect_reason"] = "golden_ref_fails_own_tb"
-        elif args.get("_bench"):
-            # second audit class (disclosure-only; see helper docstring)
-            ev = _canonical_disagrees_with_golden(prob, dataset, layout,
-                                                  args, args["_bench"])
+        elif str(res.get("reason", "")).startswith("functional_mismatch"):
+            # Semantic prompt↔oracle contradiction (disclosure-only).  This is
+            # stronger and more general than a curated canonical sample: it
+            # cites an independently extracted prompt truth and uses the shared
+            # semantic-floor program.  Raw verdict/pass@1 remain unchanged.
+            ev = _semantic_prompt_oracle_evidence(prob, dataset, layout)
             if ev:
                 res["dataset_defect_suspected"] = True
-                res["dataset_defect_reason"] = "suspected_defective_golden"
+                res["dataset_defect_reason"] = \
+                    "semantic_prompt_oracle_contradiction"
+                res["semantic_floor_evidence"] = ev
                 res["canonical_evidence"] = ev
+            elif args.get("_bench"):
+                # Curated canonical disagreement remains the fallback for
+                # semantic classes the general floor program cannot extract.
+                ev = _canonical_disagrees_with_golden(
+                    prob, dataset, layout, args, args["_bench"])
+                if ev:
+                    res["dataset_defect_suspected"] = True
+                    res["dataset_defect_reason"] = \
+                        "suspected_defective_golden"
+                    res["canonical_evidence"] = ev
     return res
 
 
@@ -1650,6 +2158,14 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
     ref = dataset / f"{prob}{layout['ref_suffix']}" if layout.get("ref_suffix") else None
     if not sample.is_file():
         return {"problem": prob, "verdict": "FAIL", "reason": "no_sample"}
+    # vibe-ic#1745 — BEFORE the compile, so a forged submission never reaches
+    # the pass_regex at all.
+    forged = harness_verdict_forgery(sample, args)
+    if forged:
+        return {"problem": prob, "verdict": "FAIL",
+                "reason": "harness_verdict_forgery",
+                "forgery_detail": forged["detail"],
+                "forgery_findings": forged["findings"]}
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
@@ -1692,9 +2208,7 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
                 return {"problem": prob, "verdict": "FAIL", "reason": "compile_error",
                         "log": c.stderr[-400:]}
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(dataset) if args.get("cwd_design_dir", False) else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(dataset) if args.get("cwd_design_dir", False) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"problem": prob, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
@@ -1703,6 +2217,42 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
         m = re.search(r"Mismatches:\s*(\d+)\s+in\s+(\d+)", out)
         return {"problem": prob, "verdict": "FAIL",
                 "reason": f"functional_mismatch ({m.group(0) if m else 'no summary'})"}
+
+
+def no_sample_disclosure(results, total, npass, ident="design"):
+    """`(count, problems, pct_of_authored, partially_authored)`. vibe-ic#637.
+
+    NEVER AUTHORED is not ANSWERED WRONGLY. Every other way a problem fails to
+    be a real measurement already carries a count and a rate in this summary;
+    the one that means THE RUN WAS NOT FINISHED carried neither.
+
+    MEASURED on two PUBLISHED runs, whose summaries say none of this:
+
+        verilogeval_human/run_kimi_k3_20260718  149/156 = 95.51%
+                                                2 no_sample -> 149/154 = 96.75%
+        verilogeval_v2/run_kimi_k3_20260718     147/156 = 94.23%
+                                                4 no_sample -> 147/152 = 96.71%
+
+    Six problems across two published numbers counted as submissions that were
+    wrong, when nothing was submitted.
+
+    It misleads most exactly when it matters most: `no_sample` is the signature
+    of an INCOMPLETE run — an agent that died, hit a quota, or was stopped —
+    which is the state someone opens this file to discover. A scorer invocation
+    over a run that had barely started produced a fully-formed result claiming
+    2.0%; re-scored after it finished, 79.59%.
+
+    DERIVED from the per-result `reason` both shapes already write, so there is
+    no second detector to keep in sync, and the rate EXCLUDES rather than
+    REPLACES the headline.
+    """
+    nosamp = [r for r in results if r.get("reason") == "no_sample"]
+    n_ns = len(nosamp)
+    authored = total - n_ns
+    return (n_ns,
+            [str(r.get(ident, "?")).split("/")[-1] for r in nosamp],
+            round(100.0 * npass / authored, 2) if authored else 0.0,
+            bool(n_ns))
 
 
 def main():
@@ -1755,20 +2305,21 @@ def main():
         results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
         ident = "problem"
 
-    # an earlier release — designs flagged as scorer_substitution_gap (iverilog 12 lacks an
+    # Metadata-only probe after every scoring verdict is already derived: tool
+    # disclosure can never influence compilation, fallback selection, verdicts,
+    # or denominators.
+    host_iverilog_version = _host_iverilog_version()
+
+    # an earlier release — designs flagged as scorer_substitution_gap (host iverilog lacks an
     # SV-2012 feature the TB uses, e.g. array-literal init or `break;` in loops)
     # don't count against pass rate, per open-benchmark-methodology § 3. The
     # field lives in BENCHMARK_REGISTRY.json. Empty list (= no gap) is the default.
     gap_ids = set(entry.get("scorer_substitution_gap", []))
     if gap_ids:
-        for r in results:
-            leaf = r[ident].split('/')[-1]
-            if leaf in gap_ids and r["verdict"] != "PASS":
-                r["scorer_substitution_gap"] = True
-                r["original_verdict"] = r["verdict"]
-                r["original_reason"] = r.get("reason", "")
-                r["verdict"] = "SKIP"
-                r["reason"] = "scorer_substitution_gap — TB uses an SV-2012 feature iverilog 12 doesn't implement; not counted against pass rate per open-benchmark-methodology § 3"
+        # vibe-ic#1745: the flip REFUSES a never-attempted row — see
+        # apply_scorer_substitution_gap.
+        apply_scorer_substitution_gap(results, gap_ids, ident,
+                                      host_iverilog_version)
 
     # Honesty audit (opt-in via scorer_args.verify_discriminating): flag any PASS
     # whose TB is non-discriminating (a constant-0 stub also passes it). These are
@@ -1819,10 +2370,50 @@ def main():
     dsus = [r for r in results if r.get("dataset_defect_suspected")]
     n_dsus = len(dsus)
     n_eff_unsuspected = n_eff_satisfiable - n_dsus
+    # NEVER AUTHORED is not ANSWERED WRONGLY (vibe-ic#637). Every other way a
+    # problem fails to be a real measurement already has a count and a rate in
+    # this summary; the one that means THE RUN WAS NOT FINISHED had neither, so
+    # `39/50 = 79.59%` read as "39 of 50 designs solved" when it was "39 of the
+    # 48 that were authored", with two designs that produced nothing counted as
+    # submissions that were wrong.
+    #
+    # It misleads most exactly when it matters most. `no_sample` is the
+    # signature of an INCOMPLETE run — an agent that died, hit a quota, or was
+    # stopped — which is precisely the state someone opens this file to discover.
+    # Measured: a scorer invocation over a run that had barely started wrote a
+    # fully-formed `pass_at_1.json` claiming 2.0%, and nothing in the file said
+    # the run was still going. Re-scored after it finished: 79.59%.
+    #
+    # DERIVED from the per-result `reason` the scorer already writes, in both
+    # shapes, so there is no second detector to keep in sync.
+    #
+    # The rate EXCLUDES them rather than replacing the headline, symmetric with
+    # the dual reports above: "39 of 48 authored" beside "39 of 50 in scope",
+    # neither hiding the other.
+    n_nosamp, nosamp_problems, pct_authored, partially = \
+        no_sample_disclosure(results, n, npass, ident)
+    n_authored = n - n_nosamp
+    # vibe-ic#1745 — the three-state census, computed BEFORE anything is written
+    # and REFUSED rather than published if a never-attempted row has been given a
+    # verdict that takes it out of the denominator.
+    census = attempt_census(results, ident)
+    n_forged = sum(1 for r in results
+                   if r.get("reason") == "harness_verdict_forgery")
+    forged_ids = [str(r.get(ident, "?")).split("/")[-1] for r in results
+                  if r.get("reason") == "harness_verdict_forgery"]
+    if census["accounting_violations"] or not census["identity_holds"]:
+        raise SystemExit(
+            "REFUSING TO PUBLISH A RATE (vibe-ic#1745): a problem that produced "
+            "NO submission carries a verdict that removes it from the "
+            "denominator, so the headline would count it as not-measured rather "
+            "than not-passed. Offending ids: "
+            f"{census['accounting_violations']}; census={census}")
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
-        "tool": "iverilog 12 (host) substituting for Synopsys VCS / Cadence Xcelium",
+        "tool": (f"iverilog {host_iverilog_version} (host) substituting for "
+                 "Synopsys VCS / Cadence Xcelium"),
+        "tool_gap_fallback": _TOOL_GAP_FALLBACK_DISCLOSURE,
         "tool_substitution_note": "Functional pass@1 only. PPA stage (DC) not scored — would not be apples-to-apples vs the upstream methodology. See open-benchmark-methodology skill § 3.",
         "total": n, "passed": npass, "skipped_scorer_gap": nskip,
         "pass_at_1_pct": round(100.0 * npass / n_eff, 2) if n_eff else 0.0,
@@ -1838,9 +2429,20 @@ def main():
         "suspected_defective_golden_count": n_dsus,
         "suspected_defective_golden_problems": [
             {"problem": r[ident].split('/')[-1],
+             "reason": r.get("dataset_defect_reason", ""),
              "evidence": r.get("canonical_evidence", "")} for r in dsus],
         "pass_at_1_excluding_suspected_defects_pct": round(
             100.0 * npass / n_eff_unsuspected, 2) if n_eff_unsuspected else 0.0,
+        "no_sample_count": n_nosamp,
+        "no_sample_problems": nosamp_problems,
+        "pass_at_1_excluding_no_sample_pct": pct_authored,
+        # The one bit a reader most needs and currently has to reconstruct by
+        # counting the `results` array by hand.
+        "partially_authored": partially,
+        # vibe-ic#1745 — the third state, always present, with its own identity.
+        "attempt_census": census,
+        "harness_verdict_forgery_count": n_forged,
+        "harness_verdict_forgery_problems": forged_ids,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -1850,6 +2452,27 @@ def main():
               f"{summary['pass_at_1_pct_no_skip_excluded']}%)  [Shape {shape}]")
     else:
         print(f"{entry['title']}  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%  [Shape {shape}]")
+    if n_nosamp:
+        # Printed AND in the file. A disclosure that does not travel with the
+        # number is not a disclosure: stdout is gone by the time anyone reads
+        # the artefact, and the JSON is what survives, gets copied and quoted.
+        print(f"  ⚠ PARTIALLY-AUTHORED RUN — {n_nosamp} of {n} problem(s) produced "
+              f"no sample at all and are counted as FAIL in the headline. "
+              f"Of the {n_authored} authored: "
+              f"{summary['pass_at_1_excluding_no_sample_pct']}%. "
+              f"Missing: {summary['no_sample_problems']}")
+    # UNCONDITIONAL (vibe-ic#1745): a three-state line printed only when the
+    # third state is non-zero is a line whose absence means two different things.
+    print(f"  attempts: {census['attempted_passed']} passed, "
+          f"{census['attempted_failed']} failed, "
+          f"{census['never_attempted']} NEVER ATTEMPTED, "
+          f"{census['skipped_tool_gap']} tool-gap skipped "
+          f"(of {census['total']} in scope)")
+    if n_forged:
+        print(f"  ⚠ {n_forged} submission(s) REFUSED BEFORE SCORING — the RTL "
+              f"prints the scorer's own PASS verdict text, so its simulation "
+              f"output is not evidence about the circuit. Counted as attempted "
+              f"FAILs, never excluded: {forged_ids}")
     if nd_pass:
         print(f"  ⚠ discriminating-TB audit: {nd_pass} PASS have a NON-DISCRIMINATING TB "
               f"(a constant-0 stub also passes — benchmark TB defect, counted under the "
@@ -1862,10 +2485,10 @@ def main():
         print(f"  pass@1 excluding dataset defects = {npass}/{n_eff_satisfiable} = "
               f"{summary['pass_at_1_excluding_dataset_defects_pct']}%")
     if n_dsus:
-        print(f"  ⓘ {n_dsus} SUSPECTED defective golden(s) — the vetted canonical "
-              f"sample fails the hidden golden at a high mismatch rate "
-              f"(disclosure-only; counted in pass@1): " +
-              ", ".join(f"{d['problem']} ({d['evidence']})"
+        print(f"  ⓘ {n_dsus} SUSPECTED benchmark-oracle defect(s) — independent "
+              f"prompt semantics or a vetted canonical sample contradicts the "
+              f"golden (disclosure-only; counted in pass@1): " +
+              ", ".join(f"{d['problem']} [{d['reason']}] ({d['evidence']})"
                         for d in summary['suspected_defective_golden_problems']))
         print(f"  advisory pass@1 excluding suspected defects = "
               f"{npass}/{n_eff_unsuspected} = "

@@ -262,6 +262,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if findings:
         _print_findings(findings, scanned)
         return 1
+    if scanned == 0:
+        # An EMPTY range is not a clean range (vibe-ic#447/#449). Measured
+        # before wiring this into CI: `HEAD..HEAD` returned rc 0 PASS having
+        # read zero commit messages, byte-indistinguishable from a real clean
+        # scan of 33. A malformed or already-merged range would have silenced
+        # the guard this repo added after a real SKU leak.
+        #
+        # The other bad ranges already refuse: an all-zero SHA (force-push /
+        # first push of a branch) and an unknown ref both exit 2.
+        print("NOTHING_SCANNED: the range names 0 commit(s) — a clean result "
+              "over an empty range is not a clean result; check the range.",
+              file=sys.stderr)
+        return 2
     print(f"PASS: no NDA foundry / SKU / process token in {scanned} "
           f"commit message(s)")
     return 0
