@@ -1,7 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "reason": "real scan-chain insertion did not produce a publishable netlist (rc=2): netlist is a technology-GENERIC yosys netlist ($_DFF_/$_NAND_ \u2026).  `fault chain` needs Liberty cell names to build the chain; scan insertion must run after technology mapping.",
-  "tool_attempted": true,
-  "skips_required_output": "phase2/stage2/dft/scan_netlist.v",
-  "scan_chain_report": "reports/phase2/dft/scan_chain.json"
-}

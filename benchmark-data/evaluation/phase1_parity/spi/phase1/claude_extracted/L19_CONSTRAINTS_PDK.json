@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."
-  }
-}

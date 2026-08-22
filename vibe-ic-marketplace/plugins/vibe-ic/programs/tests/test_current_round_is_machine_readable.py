@@ -46,6 +46,7 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import run_output_completeness_check as R  # noqa: E402
 import result_md_audit_provenance_check as P  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 AMBIG = "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
 
@@ -539,14 +540,7 @@ def test_a_run_that_produced_only_inputs_keeps_its_own_diagnosis(tmp_path):
 # ---------------------------------------------------------------------------
 # CORPUS SWEEP — the guard must not flag the state the repo already shipped.
 # ---------------------------------------------------------------------------
-def _repo_root() -> Path:
-    p = Path(__file__).resolve()
-    for anc in p.parents:
-        if (anc / "benchmark-data").is_dir() and (anc / ".git").exists():
-            return anc
-    return p.parents[6]
-
-
+@needs_corpus
 def test_no_published_result_md_is_flagged(tmp_path):
     """Swept through ``check()`` — the shipped verdict, not a helper — with each
     published deliverable presented as a complete run's RESULT.md.
@@ -555,12 +549,18 @@ def test_no_published_result_md_is_flagged(tmp_path):
     deliverable trips this, that is either a real ambiguous report (fix the
     report) or the rule is too wide (narrow the rule) — never a reason to
     weaken the assertion.
+
+    SWEPT OVER THE CORPUS, NOT OVER THIS CHECKOUT. Every one of the 56 is a
+    PUBLISHED deliverable and they now live in `vibeic/benchmark-data`; walking
+    the repository root found ONE unrelated `RESULT.md` and tripped the
+    too-thin floor. That floor is the assertion doing its job — a sweep of 1 is
+    not the sweep this test claims to be — so the fix is to walk the tree that
+    holds the deliverables, and to SKIP naming the corpus when no such tree is
+    readable. The floor itself is untouched.
     """
-    root = _repo_root()
+    root = corpus_root()
     files = sorted(root.rglob("RESULT.md"))
     files = [f for f in files if ".git" not in f.parts]
-    if not files:
-        pytest.skip("no RESULT.md files in this checkout")
     run = tmp_path / "sweep"
     (run / "reports").mkdir(parents=True)
     (run / "reports" / "final_summary.md").write_text("verdict: FAIL\n")
