@@ -73,6 +73,10 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 
 # xor_layout_check lives beside this file; import both flat + packaged.
 try:
@@ -192,6 +196,7 @@ def build_harden_command(project_dir: Path, design: str, image: str,
     proj = str(project_dir.resolve()) if project_dir.exists() else str(project_dir)
     return [
         "docker", "run", "--rm",
+        *_dmem.docker_memory_flags(),
         "-v", f"{proj}:/work",
         "-v", f"{resolved}:/pdk",
         "-e", "PDK_ROOT=/pdk",

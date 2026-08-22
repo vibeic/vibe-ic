@@ -234,14 +234,46 @@ def runner():
     return r
 
 
+def _tree_unreachable_reason(runner):
+    """Why can this runner not drive the vendored engines from THIS tree?
+
+    Returns a reason string, or None when the tree is reachable.
+
+    The scratch dir is not the only path that must be inside the runner's
+    mounts — the ENGINE SCRIPTS must be too. A container runner opens them by
+    HOST path, so a tree it does not cover fails with
+
+        ERROR: Unable to open file: /tmp/.../metal_fill/gen_fixtures.py (errno=2)
+
+    on the SCRIPT, before the output path is ever consulted. That matters
+    because it makes the failure un-rescuable by scratch-dir choice: picking a
+    covered scratch (e.g. under $HOME, the sole mount of `vibeic-eda`) converts
+    seven honest skips into seven FALSE FAILURES, which is strictly worse than
+    not running them. Diagnose the tree, do not re-home the output.
+    """
+    if not runner.covers(PROGRAMS):
+        return (
+            f"the KLayout runner covers no path containing this tree, so it "
+            f"cannot read the vendored engines under {PROGRAMS} (a container "
+            f"opens them by host path). This is a property of WHERE THIS TREE "
+            f"SITS, not of the host: the same runner passes these tests from a "
+            f"covered checkout. Re-run from a covered path — choosing a "
+            f"different scratch dir cannot fix it.")
+    return None
+
+
 @pytest.fixture(scope="module")
 def workdir(runner, tmp_path_factory):
     """A scratch dir the runner can actually see.
 
     pytest's tmp_path lives under /tmp, which the EDA container does not bind
     mount, so container runs would fail on an unreachable path. Fall back to a
-    dir beside the plugin, which is inside the mounted tree.
+    dir beside the plugin — which is inside the mounted tree only when the
+    CHECKOUT is, so the tree itself is checked first and named as the cause.
     """
+    reason = _tree_unreachable_reason(runner)
+    if reason:
+        pytest.skip(reason)
     cand = tmp_path_factory.mktemp("geomsignoff")
     if runner.covers(cand):
         return cand
@@ -250,6 +282,44 @@ def workdir(runner, tmp_path_factory):
     if not runner.covers(local):
         pytest.skip("no scratch dir reachable by the KLayout runner")
     return local
+
+
+class _FakeRunner:
+    """Covers exactly the prefixes it is given. No container required."""
+
+    def __init__(self, covered):
+        self._covered = [str(Path(p)) for p in covered]
+
+    def covers(self, host_path):
+        return any(str(Path(host_path)).startswith(c) for c in self._covered)
+
+
+def test_a_tree_outside_every_mount_is_named_as_the_cause():
+    reason = _tree_unreachable_reason(_FakeRunner([]))
+    assert reason is not None
+    assert str(PROGRAMS) in reason, "the reason must name the unreachable tree"
+    assert "WHERE THIS TREE SITS" in reason
+
+
+def test_a_covered_tree_is_not_reported_unreachable():
+    assert _tree_unreachable_reason(_FakeRunner([PROGRAMS])) is None
+
+
+def test_a_covered_scratch_does_not_rescue_an_unreachable_tree():
+    """The trap this guard exists for, measured 2026-08-13 on 8HD-9.
+
+    `vibeic-eda` binds exactly one path, $HOME. A worktree under /tmp is
+    therefore uncovered while $HOME is covered — so "find a scratch dir the
+    runner covers" succeeds and the seven geometry tests then FAIL on the
+    unreadable engine script instead of skipping. Same host, same commit:
+    26 passed from a covered checkout, 19 passed + 7 skipped from /tmp.
+    """
+    runner = _FakeRunner([Path.home()])
+    if runner.covers(PROGRAMS):
+        pytest.skip("this tree is inside $HOME, so it is not the trap case")
+    assert runner.covers(Path.home() / ".cache"), "premise: scratch IS covered"
+    assert _tree_unreachable_reason(runner) is not None, \
+        "a covered scratch must not be mistaken for a reachable tree"
 
 
 def _antenna_project(runner, workdir, name, met1_len, met2_len=0.0,
@@ -404,3 +474,69 @@ def test_density_fill_raises_a_sparse_layer_to_target(runner, workdir):
     again = _run(FILL_GATE, proj, "--verify-only")
     assert again.returncode == 0
     assert gds.stat().st_size == size_after, "an audit mutated the GDS"
+
+
+# ---------------------------------------------------------------------------
+# $VIBEIC_KLAYOUT_TOOLS — the documented route by which a NEWER fork engine
+# overrides the vendored copy.
+#
+# `test_engines_are_vendored` above calls find_engine with NO env var set, so it
+# validates the vendored FALLBACK and never the override. The override itself
+# had never been exercised, and it was broken: the KLayout fork names its engine
+# directories with hyphens (`metal-fill/`, `gds-antenna/`, and likewise
+# `mp-color/`, `perc-latchup/`, ...) while every caller here passes the
+# underscored plugin spelling (`metal_fill`, `gds_antenna`). Pointing the
+# variable at a fork checkout — which is exactly what the fork's
+# plugin-wiring/README.md instructs — resolved to nothing and fell through to
+# the vendored copy SILENTLY, so a maintainer who set it believed the fork
+# engine was running when it was not.
+# ---------------------------------------------------------------------------
+
+def _fork_shaped_tools_root(root: Path) -> Path:
+    """A tree with the fork's OWN directory spelling (hyphens)."""
+    for fork_dir, name in (("metal-fill", "metal_fill.py"),
+                           ("gds-antenna", "antenna_check.py"),
+                           ("gds-antenna", "xcheck_router.py")):
+        d = root / fork_dir
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("# fork engine\n", encoding="utf-8")
+    return root
+
+
+def test_env_override_reaches_the_forks_own_directory_spelling(tmp_path, monkeypatch):
+    """The documented override must resolve against a real fork checkout."""
+    root = _fork_shaped_tools_root(tmp_path / "klayout-fork")
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(root))
+    for sub, fork_dir, name in (("metal_fill", "metal-fill", "metal_fill.py"),
+                                ("gds_antenna", "gds-antenna", "antenna_check.py"),
+                                ("gds_antenna", "gds-antenna", "xcheck_router.py")):
+        got = klaunch.find_engine(sub, name)
+        assert got == root / fork_dir / name, (
+            f"$VIBEIC_KLAYOUT_TOOLS did not reach {fork_dir}/{name}; "
+            f"find_engine returned {got}")
+
+
+def test_env_override_still_prefers_the_underscored_spelling(tmp_path, monkeypatch):
+    """A tools root that already uses the plugin spelling keeps working, and
+    wins over the hyphenated one when both are present."""
+    root = _fork_shaped_tools_root(tmp_path / "both")
+    (root / "metal_fill").mkdir(parents=True)
+    (root / "metal_fill" / "metal_fill.py").write_text("# exact\n", encoding="utf-8")
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(root))
+    assert klaunch.find_engine("metal_fill", "metal_fill.py") == \
+        root / "metal_fill" / "metal_fill.py"
+
+
+def test_env_override_that_resolves_to_nothing_is_not_silent(tmp_path, monkeypatch, capsys):
+    """Falling through to the vendored copy is legitimate; doing it silently is
+    not — that is what made the spelling mismatch survive."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(empty))
+    got = klaunch.find_engine("metal_fill", "metal_fill.py")
+    assert got is not None and str(empty) not in str(got), \
+        "precondition: this root carries no engine, so the vendored copy is used"
+    err = capsys.readouterr().err
+    assert "VIBEIC_KLAYOUT_TOOLS" in err and "metal_fill.py" in err, \
+        ("the override was set, resolved to nothing and said nothing; a silent "
+         f"fall-through is the defect. stderr was: {err!r}")
