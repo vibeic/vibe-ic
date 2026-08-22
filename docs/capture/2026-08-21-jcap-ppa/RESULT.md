@@ -3555,12 +3555,23 @@ different screens is the error this batch has already recorded twice. It is
 proof of something else — **I could not tell**, because the record states the
 number and not the question.
 
-    records                                47
-      fix text quotes a figure             35
-      fix text names the command           11   (6 before this section was written)
+    records                                            47
+      fix text quotes a figure                         35
+        names a literal command                         6
+        describes HOW the count was taken              23
+        neither — a bare number                        12
 
 The brief is explicit about this: *the command, the number, the before and
-after.* On the strict reading, 28 figure-bearing records fall short.
+after.* On the strict reading, 29 figure-bearing records fall short.
+
+**That strict figure is the one I first reported, and it was wrong by half.** I
+counted records "carrying a screen" by searching for the marker phrases I had
+been writing — so the detector measured *my own vocabulary* and missed every
+record that stated its screen in other words, including one that already carried
+a full re-run *"with the screen stated above"*. Measured on the property instead
+of the phrasing, the records with a bare number are **12**, not the 24 I
+reported one commit ago. That is the same error this batch has now recorded
+about a dozen times, committed inside the audit whose entire subject is it.
 
 **The strict reading overstates it, and saying so is not a defence.** The
 brief's operative test is what a record must let a reader do — *what it
@@ -3611,7 +3622,7 @@ deliberately: an independent count would have to re-derive what counts as a
 gate, and a second definition of one population is exactly how two figures about
 one thing begin to disagree.
 
-The remaining 24 are work for whoever continues, and it is the first thing I
+The remaining 12 are work for whoever continues, and it is the first thing I
 would do: a figure without its question is a memory, which is the brief's own
 word for what this loop exists to stop producing.
 
