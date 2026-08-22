@@ -73,12 +73,23 @@ def _fake_docker(netgen_transcript, lvs_rpt_body=None,
     writes lvs.rpt (body defaults to the transcript)."""
     import re as _re
 
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return (0, "", "")
         if "magic" in cmd and "SPICE_OUT=" in cmd:
             m = _re.search(r"SPICE_OUT=(\S+)", cmd)
             Path(m.group(1)).write_text(spice_body)
+            # A REAL extraction always writes the feedback dump: the recipe ends
+            # `feedback save $env(FEEDBACK_OUT)` (phase3_one_shot_runner.py:27902,
+            # lvs_power_aware_extract_tcl.py:333) and magic writes a 0-byte file when
+            # `feedback count` is 0. Modelling the netlist but not the feedback channel
+            # made this stub an extraction that cannot happen, and
+            # magic_illegal_overlap_check correctly refused it (EXTRACTION_FEEDBACK_ABSENT:
+            # "an absent file is not a measured zero, it is an unmeasured nothing").
+            _fb = _re.search(r"FEEDBACK_OUT=(\S+)", cmd)
+            if _fb:
+                Path(_fb.group(1)).parent.mkdir(parents=True, exist_ok=True)
+                Path(_fb.group(1)).write_text("")
             # The runner tees ext2spice.log into the extracted dir; the
             # extracted dir is the cd target (SPICE_OUT's parent).
             ext_dir = Path(m.group(1)).parent
@@ -132,7 +143,7 @@ def test_zero_byte_def_input_is_named_fail(tmp_path, monkeypatch):
     p = _proj(tmp_path, def_bytes=b"")  # 0-byte routed/layout DEF
     # Tools all "present"; the size guard must fire before any compare.
     monkeypatch.setattr(runner, "_docker_exec",
-                        lambda c, cmd, timeout=0: (0, "", ""))
+                        lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "FAIL", (r.status, r.detail)

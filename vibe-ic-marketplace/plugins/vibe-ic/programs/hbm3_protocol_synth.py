@@ -64,6 +64,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 # Canonical ic_name for this protocol class.
 HBM3_IC_NAME = "High Bandwidth Memory 3 (JEDEC JESD238)"
@@ -111,7 +114,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 # ----------------------------------------------------------------------
@@ -890,7 +895,7 @@ def _l9(gd: Path) -> None:
         "host SoC contains an HBM3 controller + PHY that masters per-channel "
         "command/address, clock, write data + WDQS, and sinks read data + "
         "RDQS for all 16 independent channels.")
-    d["top_module"] = "HBM3_stack_on_interposer"
+    _ptm.apply(d, "HBM3_stack_on_interposer")
     d["integration_overview"] = {
         "interface_width_bits": 1024,
         "channels": 16,

@@ -36,12 +36,19 @@ def _rec(rec_type: int, payload: bytes = b"") -> bytes:
 def build_gds(width_um: float, height_um: float,
               dbu_per_um: float = 1000.0,
               with_header: bool = True,
-              with_geometry: bool = True) -> bytes:
+              with_geometry: bool = True,
+              origin_um: tuple = (0.0, 0.0)) -> bytes:
     """Build a minimal but VALID binary GDSII stream whose single
-    boundary polygon spans exactly width_um × height_um.
+    boundary polygon spans exactly width_um × height_um, with its
+    lower-left corner at `origin_um`.
 
     UNITS record carries [user_per_dbu, meters_per_dbu]; we set
     meters_per_dbu = 1e-6 / dbu_per_um so 1 dbu = (1/dbu_per_um) um.
+
+    `origin_um` defaults to (0, 0) — i.e. a pair that is REGISTERED with a
+    LEF whose `ORIGIN` is 0 0. It used to be a hardcoded (10, 20) dbu, which
+    was harmless while the gate only compared width and height and would
+    now be an off-by-0.02um registration defect in every fixture.
     """
     out = b""
     if with_header:
@@ -61,7 +68,9 @@ def build_gds(width_um: float, height_um: float,
         out += _rec(0x0E02, struct.pack(">h", 0))              # DATATYPE
         w = int(round(width_um * dbu_per_um))
         h = int(round(height_um * dbu_per_um))
-        pts = [(10, 20), (10 + w, 20), (10 + w, 20 + h), (10, 20 + h), (10, 20)]
+        ox = int(round(origin_um[0] * dbu_per_um))
+        oy = int(round(origin_um[1] * dbu_per_um))
+        pts = [(ox, oy), (ox + w, oy), (ox + w, oy + h), (ox, oy + h), (ox, oy)]
         xy = b"".join(struct.pack(">ii", x, y) for x, y in pts)
         out += _rec(0x1003, xy)                                # XY
         out += _rec(0x1100)                                    # ENDEL
@@ -77,13 +86,17 @@ def _block_list(project: Path, blocks: list) -> None:
 
 
 def _lef(project: Path, block: str, w: float, h: float,
-         size_line: bool = True) -> None:
+         size_line: bool = True, origin: tuple = (0.0, 0.0),
+         foreign: tuple = None) -> None:
     h_dir = project / "phase3" / "analog" / "hardmacro" / block
     h_dir.mkdir(parents=True, exist_ok=True)
     size = f"  SIZE {w} BY {h} ;\n" if size_line else ""
+    orig = f"  ORIGIN {origin[0]} {origin[1]} ;\n" if origin is not None else ""
+    fgn = (f"  FOREIGN {block} {foreign[0]} {foreign[1]} ;\n"
+           if foreign is not None else "")
     (h_dir / f"{block}.lef").write_text(
         "VERSION 5.8 ;\n"
-        f"MACRO {block}\n  CLASS BLOCK ;\n{size}"
+        f"MACRO {block}\n  CLASS BLOCK ;\n{orig}{fgn}{size}"
         "  PIN VDD DIRECTION INOUT ; END VDD\n"
         f"END {block}\n")
 
@@ -258,3 +271,185 @@ def test_edge_micron_unit_scaling(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_an_absent_project_is_not_reported_as_a_digital_one(tmp_path):
+    """The verdict was right and the REASON was a fabricated conclusion.
+
+    Found by sweeping every project-dir gate against a path that does not
+    exist. This one returned:
+
+        VACUOUS_PASS: no analog_block_list.json — digital-only project
+
+    VACUOUS_PASS is correct — nothing was checked and it says so. But the
+    reason is what lands in the sign-off report, and "digital-only project" is
+    a claim about a design nobody opened. A reader records it as an examined
+    fact; the truth was a path that is not there.
+
+    Absence of the manifest supports exactly one statement, so the reason may
+    not assert anything beyond it.
+    """
+    import analog_lef_gds_outline_check as M
+    rc, rep = M.build_report(tmp_path / "no-such-project", None, 10.0)
+    assert rc == 0
+    assert rep["verdict"] == "VACUOUS_PASS"
+    assert "digital-only project" not in rep["reason"], \
+        "the gate is again concluding 'digital-only' from a project it never opened"
+    assert "nothing was examined" in rep["reason"]
+
+
+# ───────────────────── REGISTRATION (LEF frame vs GDS origin) ──────
+#
+# The defect these cover, MEASURED on IHP SG13G2 2026-08-01: a hardmacro
+# whose LEF SIZE is EXACT and whose GDS is 30.32 um out of frame. Magic's
+# `lef write` normalises the abstract to the cell bounding box; `gds write`
+# keeps the layout's own coordinates. Every test below FAILS against the
+# pre-registration gate (it had no offset to compare and reported PASS).
+
+_OFF = (-0.620, -30.320)   # the measured GDS bbox lower-left
+
+
+def test_fail_registration_offset_with_exact_size(tmp_path):
+    """SIZE exact, frame wrong — the case the width/height gate could not see."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 556.810, 158.400)          # ORIGIN 0 0
+    _gds(tmp_path, "ds", build_gds(556.810, 158.400, origin_um=_OFF))
+    rc, rep, err = _run(tmp_path)
+    assert rc == 1
+    assert rep["verdict"] == "FAIL"
+    b = rep["blocks"][0]
+    # The outline halves agree EXACTLY — that is the whole point.
+    assert b["width_delta_pct"] == 0.0
+    assert b["height_delta_pct"] == 0.0
+    rules = [f["rule"] for f in b["findings"]]
+    assert "A8_LEF_GDS_REGISTRATION_MISMATCH" in rules
+    assert "A8_LEF_GDS_OUTLINE_MISMATCH" not in rules
+    assert b["registration_offset_um"] == [-0.62, -30.32]
+    assert b["gds_bbox_ll_um"] == [-0.62, -30.32]
+    assert b["lef_frame_ll_um"] == [0.0, 0.0]
+    assert "A8_LEF_GDS_REGISTRATION_MISMATCH" in err
+
+
+def test_pass_when_foreign_declares_the_offset(tmp_path):
+    """A declared offset is not a defect — FOREIGN is how LEF says it."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 556.810, 158.400, foreign=_OFF)
+    _gds(tmp_path, "ds", build_gds(556.810, 158.400, origin_um=_OFF))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 0
+    assert rep["verdict"] == "PASS"
+    b = rep["blocks"][0]
+    assert b["lef_frame_source"] == "FOREIGN"
+    assert b["registration_offset_um"] == [0.0, 0.0]
+
+
+def test_pass_when_origin_declares_the_offset(tmp_path):
+    """ORIGIN x y puts the macro origin inside the box, so the box starts
+    at (-x, -y). Declaring it that way is equally valid."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 556.810, 158.400, origin=(0.620, 30.320))
+    _gds(tmp_path, "ds", build_gds(556.810, 158.400, origin_um=_OFF))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 0
+    assert rep["verdict"] == "PASS"
+    assert rep["blocks"][0]["lef_frame_source"] == "ORIGIN"
+
+
+def test_fail_when_foreign_has_the_wrong_sign(tmp_path):
+    """A declaration that does not match the measurement explains nothing.
+    Guards the direction a lenient sign rule would open."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 556.810, 158.400, foreign=(0.620, 30.320))
+    _gds(tmp_path, "ds", build_gds(556.810, 158.400, origin_um=_OFF))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 1
+    assert [f["rule"] for f in rep["blocks"][0]["findings"]] == [
+        "A8_LEF_GDS_REGISTRATION_MISMATCH"]
+
+
+def test_foreign_without_a_point_declares_nothing(tmp_path):
+    """`FOREIGN <cell> ;` carries no offset — it must fall through to
+    ORIGIN and NOT be read as consent to any displacement."""
+    _block_list(tmp_path, ["ds"])
+    h_dir = tmp_path / "phase3" / "analog" / "hardmacro" / "ds"
+    h_dir.mkdir(parents=True, exist_ok=True)
+    (h_dir / "ds.lef").write_text(
+        "VERSION 5.8 ;\nMACRO ds\n  CLASS BLOCK ;\n  FOREIGN ds ;\n"
+        "  ORIGIN 0 0 ;\n  SIZE 556.81 BY 158.4 ;\n"
+        "  PIN VDD DIRECTION INOUT ; END VDD\nEND ds\n")
+    _gds(tmp_path, "ds", build_gds(556.810, 158.400, origin_um=_OFF))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 1
+    assert rep["blocks"][0]["lef_frame_source"] == "ORIGIN"
+
+
+def test_lef_with_no_origin_at_all_defaults_to_zero(tmp_path):
+    """LEF's default macro origin is 0 0; a MACRO that omits ORIGIN still
+    promises the box starts there."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 80.0, 60.0, origin=None)
+    _gds(tmp_path, "ds", build_gds(80.0, 60.0, origin_um=(0.0, 0.0)))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 0
+    assert rep["blocks"][0]["lef_frame_source"] == "LEF-default"
+
+
+def test_registration_tolerance_band(tmp_path):
+    """Inside --tol-um is a grid artefact; outside it is a displacement."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 80.0, 60.0)
+    _gds(tmp_path, "ds", build_gds(80.0, 60.0, origin_um=(0.0, 0.005)))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 0 and rep["verdict"] == "PASS"
+    rc, rep, _ = _run(tmp_path, "--tol-um", "0.001")
+    assert rc == 1
+    assert [f["rule"] for f in rep["blocks"][0]["findings"]] == [
+        "A8_LEF_GDS_REGISTRATION_MISMATCH"]
+    assert rep["tol_um"] == 0.001
+
+
+def test_outline_and_registration_are_reported_together(tmp_path):
+    """Two independent defects → two findings, neither masking the other."""
+    _block_list(tmp_path, ["ds"])
+    _lef(tmp_path, "ds", 100.0, 100.0)
+    _gds(tmp_path, "ds", build_gds(250.0, 80.0, origin_um=(-5.0, -7.0)))
+    rc, rep, _ = _run(tmp_path)
+    assert rc == 1
+    rules = sorted(f["rule"] for f in rep["blocks"][0]["findings"])
+    assert rules == ["A8_LEF_GDS_OUTLINE_MISMATCH",
+                     "A8_LEF_GDS_REGISTRATION_MISMATCH"]
+
+
+# ─────────────────────────── unit: parsers ─────────────────────────
+
+def test_parse_gds_bbox_extent_keeps_the_origin(tmp_path):
+    raw = build_gds(80.0, 60.0, origin_um=(-1.5, -2.5))
+    assert mod.parse_gds_bbox_extent(raw) == pytest.approx(
+        (-1.5, -2.5, 78.5, 57.5), abs=1e-6)
+    # the width/height projection is unchanged — old callers keep working
+    assert mod.parse_gds_bbox(raw) == pytest.approx((80.0, 60.0), abs=1e-6)
+
+
+def test_parse_gds_bbox_extent_none_on_garbage():
+    assert mod.parse_gds_bbox_extent(b"not a gds") is None
+    assert mod.parse_gds_bbox(b"not a gds") is None
+
+
+@pytest.mark.parametrize("text,expected,src", [
+    ("MACRO m\n ORIGIN 0 0 ;\n", (0.0, 0.0), "ORIGIN"),
+    ("MACRO m\n ORIGIN 0.62 30.32 ;\n", (-0.62, -30.32), "ORIGIN"),
+    ("MACRO m\n FOREIGN m -0.62 -30.32 ;\n ORIGIN 0 0 ;\n",
+     (-0.62, -30.32), "FOREIGN"),
+    ("MACRO m\n SIZE 1 BY 1 ;\n", (0.0, 0.0), "LEF-default"),
+])
+def test_parse_lef_frame_ll(text, expected, src):
+    x, y, s = mod.parse_lef_frame_ll(text)
+    assert (x, y) == pytest.approx(expected, abs=1e-9)
+    assert s == src
+
+
+def test_parse_lef_frame_ll_never_returns_negative_zero():
+    """-0.0 renders as "-0.000" in the finding text and reads as a real
+    displacement to anyone triaging the report."""
+    x, y, _ = mod.parse_lef_frame_ll("MACRO m\n ORIGIN 0 0 ;\n")
+    assert str(x) == "0.0" and str(y) == "0.0"
