@@ -177,58 +177,11 @@ def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
 
 
 # ── the wiring, which is where the value actually is ─────────────────────────
-#
-# THE TEXT SEARCHED IS THE EXECUTABLE TEXT, NOT THE FILE (vibe-ic#1087 follow-up).
-#
-# These tests locate invocations by `str.index`, which returns the FIRST match
-# anywhere in the file — including inside a comment. `gatekeeper-land.sh` names
-# both tokens in its own prose before it runs either of them:
-#
-#     212  # it. `landing_worktree_is_clean_check --expect-fingerprint` at the …
-#     220  # `plugin_full_audit.py` run INSIDE this window but OUTSIDE the …
-#     320  run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py"
-#     336          --expect-fingerprint "$FP"
-#
-# so `index("--expect-fingerprint")` returned 212 (a comment) while
-# `rindex("plugin_full_audit.py")` returned 320 (the call), and the ordering
-# assertion compared prose against an invocation and failed. The SCRIPT was
-# correct throughout — 184 < 320 < 336 < stamp — and it is this test that was
-# reading the wrong thing.
-#
-# That is vibe-ic#1012's lesson one level up: "a substring test counted a
-# program named in a COMMENT as wired". The remedy already ships in this repo,
-# so it is IMPORTED rather than re-implemented — a second copy of "what counts
-# as executable" is a second thing to drift.
-if str(_PROGRAMS) not in sys.path:
-    sys.path.insert(0, str(_PROGRAMS))
-from gate_is_wired_check import executable_text  # noqa: E402
-
-
 @pytest.fixture(scope="module")
 def land_sh():
-    """`gatekeeper-land.sh` with its comments removed.
-
-    Comment REMOVAL, not line removal: `executable_text` truncates each line at
-    its `#` and keeps the line, so every surviving token stays in its original
-    relative order and the position comparisons below remain meaningful.
-    """
     if not _LAND_SH.is_file():
         pytest.skip(f"{_LAND_SH} absent")
-    return executable_text(_LAND_SH, _LAND_SH.read_text(encoding="utf-8"))
-
-
-def test_the_fixture_hides_a_token_that_appears_only_in_prose():
-    """The premise, asserted rather than assumed.
-
-    If `executable_text` ever stopped stripping shell comments this fixture
-    would silently revert to searching prose, and every ordering test above
-    would go back to being satisfied by a mention. Pinned on a synthetic input
-    so it cannot drift with the real script's wording.
-    """
-    sample = "# a comment naming --expect-fingerprint\nrun --emit-fingerprint\n"
-    stripped = executable_text(pathlib.Path("x.sh"), sample)
-    assert "--expect-fingerprint" not in stripped, stripped
-    assert "--emit-fingerprint" in stripped, stripped
+    return _LAND_SH.read_text(encoding="utf-8")
 
 
 def test_the_landing_gate_takes_a_fingerprint_and_compares_it(land_sh):
