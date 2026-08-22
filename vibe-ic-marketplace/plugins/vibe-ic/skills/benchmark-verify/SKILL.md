@@ -29,7 +29,7 @@ Read `benchmark_clean/METHODOLOGY.md` first. Non-negotiable:
 ## The five pillars (== report sections == hard gates)
 
 ### Pillar 1 — Functional Verification Coverage  ▸ gate: **== 100%**
-**LLM judgment (irreducible):** walk L1–L23 (functional spec, interface, register map,
+**LLM judgment (irreducible):** walk L1–L27 (functional spec, interface, register map,
 command/protocol, timing, behavioral sequences, test cases) and enumerate **every requirement** —
 a program cannot reliably know that a prose timing sentence in L8 is a distinct *testable*
 requirement (vs a restatement) nor author the directed test that covers it. For each requirement,
@@ -41,6 +41,45 @@ confirm it PASSES against the generated RTL.
 - **Closed-loop:** if < 100%, write the missing tests and/or fix the RTL (use `rtl-repair`)
   and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
   untestable, that is a spec defect to record, not a pass.
+
+> **Spec-first coverage attribution (ORGANIC #697, BINDING — program-first):** before claiming
+> Pillar-1 PASS, run `programs/spec_coverage_check.py` to make our self-verification as complete as
+> the hidden scorer. Both derive from the SAME spec — where "spec" is the WHOLE input chain
+> (prompt → fact graph → L1-L27):
+> ```bash
+> python3 programs/spec_coverage_check.py --prompt input/prompt.md \
+>     [--fact-graph input/fact_graph.json] --ldocs generated_docs/ \
+>     --rtl <rtl> --tb <self_tb> --strict --json reports/gates/spec_coverage.json
+> ```
+> Every spec-derived checklist item (ports, reset, latency, table rows, worked examples, **every
+> ENUMERATED SET + its outside-the-set/default boundary**, signed-ness, byte order, overflow,
+> handshake) must be COVERED by the self-TB. A `--strict` BLOCK means our TB is weaker than the
+> hidden one — close the gap (write the missing assertion) before PASS. On any FAIL, run with
+> `--failure "<behavior>"`: a `coverage-gap` ⇒ enhance our TB; an `extraction-gap` ⇒ the program
+> names the `route_to:` station (ic-expert-agent / spec-to-rtl) that dropped the
+> requirement; only a `spec-absent` (nowhere in the chain, with the searched stations cited) is a
+> genuine floor and never a Pillar-1 fail. (The structural extraction + per-station routing is
+> deterministic; deciding whether a prose sentence is a distinct *testable* requirement is the LLM
+> step above.)
+
+> **Independent differential self-verification (ORGANIC #700, BINDING — N-version):** #697 makes
+> the self-TB as *complete* as the hidden scorer, but a single agent that derives BOTH the RTL and
+> the self-TB from ONE reading still self-verifies **circularly** — a misread bakes into both
+> surfaces. Break the circularity by deriving a **reference model INDEPENDENTLY** (fresh reasoning,
+> not reusing the RTL derivation; explicitly enumerate + example-pin every ambiguous quantity —
+> latency / registered-vs-comb / off-by-one / packing / encoding) and cross-checking it against the
+> RTL every cycle:
+> ```bash
+> python3 programs/diff_verify_harness.py --rtl <rtl> --ref <independent_ref.py> \
+>     --top <module> --vectors directed+random+boundary
+> ```
+> `AGREE` ⇒ the two independent derivations match every cycle; a first-mismatch line ⇒ a
+> designer-vs-reference DIFF — adjudicate by re-reading the spec, fix the wrong derivation, re-run.
+> Emit only after they AGREE. **Honest scope:** it catches OVERSIGHT misreads (one derivation
+> noticed a clause the other missed; empirically caught an hmac live-vs-latched read, 3471 diffs →
+> 0), NOT genuine ambiguity that biases all blind readings the same way nor benchmark spec↔TB
+> contradictions (FLOOR per #697; 0/8 on the hardest CVDP ambiguity residual). It is a COMPLEMENT to
+> #697 + #699, run BEFORE the scorer on fresh runs.
 
 ### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
 For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
@@ -109,7 +148,7 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
 2. **Pillar 2:** dispatch the per-step cross-check (split phase1/2 and phase3 to keep tool
-   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `iic-eda`; close gaps.
+   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
 5. **Pillar 4:** test patterns + FPGA/BFM run → `reports/hw_test.json`.

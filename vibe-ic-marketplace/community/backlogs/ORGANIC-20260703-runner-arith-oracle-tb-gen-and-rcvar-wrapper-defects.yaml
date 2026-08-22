@@ -1,0 +1,64 @@
+type: bug
+severity: P2
+component: program:design_one_shot_runner
+
+title: >-
+  Two runner TB/alias defects surfaced by the unified-entry CVDP run: (a)
+  arith_oracle_tb_gen fires on NON-arithmetic / sequential-FSM modules and builds
+  a bogus combinational multiply oracle; (b) the reset_clock_variant_aliases
+  wrapper references the inner module's localparam-derived port widths without
+  declaring them, so the generated wrapper is uncompilable
+
+plugin_version: "1.2.96"
+
+pattern: |
+  (a) arith_oracle_tb_gen (#643) misfire — reproduced on cache_lru (LRU/NMRU
+      policy), dot_product (sequential FSM), modified_booth_mul, gaussian_div,
+      cont_adder. The generator classifies the design as digital_arithmetic_primitive
+      and emits a closed-form oracle `golden = a OP b` (multiply/add) with NO clock
+      driven and start/valid never asserted, OR declares the design's extra outputs
+      as `reg` in an initial block AND wires them to module outputs ("Unable to
+      assign to unresolved wires"). It also instantiates a phantom top name taken
+      from the L9 mis-extraction (see the companion L9 backlog): `Data_Latency`,
+      `Step_9`, `Interface_Signals`. Net: reference_tb FAILs on correct RTL that
+      passes yosys_synth + determinism_gates + the author's own worked-example TB.
+
+  (b) reset_clock_variant_aliases wrapper defect — MEASURED on
+      cvdp_copilot_pipeline_mac_0017. The gate renames the author module to
+      `pipeline_mac__rcvar_inner` (which declares `localparam DWIDTH_ACCUMULATOR =
+      2*DWIDTH + $clog2(N)` and uses it for `result`'s width) and generates a
+      wrapper `module pipeline_mac` whose OWN port list also uses
+      `[DWIDTH_ACCUMULATOR-1:0] result` — but the wrapper does not declare or
+      inherit that localparam, so it fails to elaborate:
+        error: Unable to bind parameter `DWIDTH_ACCUMULATOR' in `pipeline_mac';
+        error: Dimensions must be constant.
+      The wrapper only copies scalar/param-free port widths correctly; a port whose
+      width is a FUNCTION of the inner's localparam breaks.
+
+suggested_fix: |
+  (a) Gate arith_oracle_tb_gen on a real arithmetic-primitive signature (single
+      combinational data output that is a pure function of data inputs, no clock/
+      start/valid handshake, no state) — do NOT fire it on a module with a clock +
+      handshake + internal state, or with multiple status outputs. When it cannot
+      build a sound oracle, SKIP (WAIVE) reference_tb rather than emitting a bogus
+      multiply oracle that guarantees a false FAIL.
+  (b) In reset_clock_variant_aliases wrapper synthesis: when a port width expression
+      references a localparam of the inner module, either (i) resolve the width to a
+      constant at wrapper-gen time, or (ii) re-declare the needed localparam in the
+      wrapper, or (iii) hoist such widths to real `parameter`s the wrapper passes
+      through. Add a regression fixture from pipeline_mac_0017 (a localparam-derived
+      output width).
+
+evidence:
+  run: benchmark_external/cvdp/run_hard94_unified_20260703
+  confirmations: arith-oracle misfire ~5 authors; rcvar wrapper defect 1 (pipeline_mac,
+    blocked the gate until the inner module was emitted directly)
+  filed_by: benchmark-agent (unified-entry CVDP hard-94 on v1.2.96, RULE 0 path)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b396f801 — fix(runner): arith-oracle sequential gate + rcvar wrapper localparam hoist (PR #100)"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — fix-landed (b396f801/ac7755cc); test_organic_20260703_runner_arith_oracle_and_rcvar_wrapper green
