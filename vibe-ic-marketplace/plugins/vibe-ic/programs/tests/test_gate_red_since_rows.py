@@ -216,9 +216,34 @@ def test_a_gate_not_named_by_any_row_does_not_stop_a_landing(rows, age):
 def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     """The mutation arm on the SHIPPED rows.
 
-    Every row is driven red, then the SAME row is driven red again with its
-    bound raised to the ceiling. If a row refuses in both arms, something other
-    than the deadline is failing it and the row's number is decorative.
+    Every row is driven red at an age one commit PAST the bound it typed for
+    itself, and then again at an age exactly AT it. The first must report
+    `expired` and the second must report nothing at all -- so what decides is
+    the comparison between the red's age and this row's own number, and nothing
+    else about the row.
+
+    WHY THE AGE IS VARIED AND NOT THE BOUND. Until v1.11.70 this held the real
+    age fixed and raised the bound to `MAX_BOUND_COMMITS`, expecting `expired`
+    to stop. That is the same question only while every shipped row is YOUNGER
+    than the ceiling. The ceiling is 500 commits, and MEASURED on 2026-08-22 this
+    repo took 539 commits in the 5.69 days from c5d7f2d00e1d (2026-08-16 19:07)
+    to a4caccefe -- 94.7 a day, which makes that ceiling a 5.3-DAY deadline. So
+    two rows citing c5d7f2d00e1d -- 'L-doc field producer' (bound 210, itself
+    2.2 days) and 'evidence citation resolves' (bound 140, 1.5 days) -- stood
+    539 commits back, 39 PAST the ceiling. For a row in that state no
+    legal bound clears the deadline, so the old loose arm asked `adjudicate`
+    for a verdict it is designed never to give, and then read the refusal as
+    evidence that "something other than the deadline is failing it". That is
+    precisely backwards: it was the deadline, and only the deadline. The bound
+    had not become decorative; it had been overtaken. Varying the AGE asks the
+    intended question at any repo age and never has to name a number past the
+    ceiling, so it cannot expire on its own the way the old form did.
+
+    The at-bound arm asserts NO findings rather than merely no `expired` one.
+    `adjudicate` returns early for `stale`, `unresolvable` and `incomplete`, so
+    a row failing for one of those produces no `expired` finding either and
+    "not any expired" would have passed on it -- green because the row was
+    broken in a different way, which is the one thing this arm must not do.
     """
     # COLLECTED, then asserted once. `assert` inside this loop stopped at the
     # first offending row, so the failure could only ever say "a row" and never

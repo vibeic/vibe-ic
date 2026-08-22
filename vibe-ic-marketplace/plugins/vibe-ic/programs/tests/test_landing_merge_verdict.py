@@ -2226,7 +2226,33 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
 
 def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
         sandbox, tmp_path):
-    """Clean porcelain is not proof that B1 tested the requested commit."""
+    """Clean porcelain is not proof that B1 tested the requested commit.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved.
+
+    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
+    and required rc 2 plus the shell text "candidate worktree raw attestation
+    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
+    which answers the same question by PREVENT-DURING: every parent-owned input
+    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
+    refused if writable, and the inputs are digested before and after the arm.
+    That verifier never emits the old text, so the assertion could not pass --
+    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
+    was asserting detection of something that can no longer occur.
+
+    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
+    exactly as before and the branch must be REFUSED -- but the refusal must be
+    because the tamper FAILED, not because it succeeded and was noticed. So the
+    candidate's own tampering test is required to appear as a NEW FAILURE the
+    branch owns. If prevention were ever removed, that test would do its work
+    and PASS, it would vanish from the new-failure list, and this assertion goes
+    red. The verified tree is separately required to equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+
+    The post-attestation half -- the digest comparison that catches a tamper
+    which somehow got through -- is guarded directly at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "wrong-head-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2272,7 +2298,33 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
 
 def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
         sandbox, tmp_path):
-    """The subject index is not evidence that the subject bytes stayed fixed."""
+    """The subject index is not evidence that the subject bytes stayed fixed.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved.
+
+    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
+    and required rc 2 plus the shell text "candidate worktree raw attestation
+    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
+    which answers the same question by PREVENT-DURING: every parent-owned input
+    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
+    refused if writable, and the inputs are digested before and after the arm.
+    That verifier never emits the old text, so the assertion could not pass --
+    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
+    was asserting detection of something that can no longer occur.
+
+    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
+    exactly as before and the branch must be REFUSED -- but the refusal must be
+    because the tamper FAILED, not because it succeeded and was noticed. So the
+    candidate's own tampering test is required to appear as a NEW FAILURE the
+    branch owns. If prevention were ever removed, that test would do its work
+    and PASS, it would vanish from the new-failure list, and this assertion goes
+    red. The verified tree is separately required to equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+
+    The post-attestation half -- the digest comparison that catches a tamper
+    which somehow got through -- is guarded directly at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "hidden-dirty-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2322,7 +2374,24 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
 
 def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         sandbox, tmp_path):
-    """Mutable refs/replace cannot redefine the literal tree B1 must attest."""
+    """Mutable refs/replace cannot redefine the literal tree B1 must attest.
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED; only the interface it is asked through has moved. Authored
+    2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier and required rc 2 plus
+    "candidate worktree raw attestation failed"; 7c376e3481 replaced that with
+    PREVENT-DURING -- read-only parent-owned binds, the reported mount table
+    re-read and refused if writable, and the inputs digested before and after
+    the arm. The old text is never emitted, and the planted tamper can no longer
+    succeed, so the old shape asserted detection of something that cannot occur.
+
+    Now: the branch must be REFUSED, and refused because the tamper FAILED. The
+    candidate's own tampering test must appear as a NEW FAILURE it owns -- if
+    prevention were removed it would do its work, PASS, leave that list, and
+    this goes red. The verified tree must separately equal the expected tree, so
+    a tamper that redefined what was under test cannot read as a clean refusal.
+    The digest half is guarded at its seam in
+    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
+    """
     repo = tmp_path / "replace-ref-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -2486,15 +2555,71 @@ def test_end_to_end_relinked_parent_selection_is_norecord(
 
 def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
         sandbox, tmp_path):
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_MUTATE_BENCHMARK_ARM": "B2"},
-    )
+    """PROPERTY (unchanged): a candidate cannot mutate the published corpus
+    during its own arm and have that pass unnoticed.
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "snapshot is NORECORD after the arm" in r.stdout
-    assert "changed or could not re-attest" in r.stderr
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN, AND THE STIMULUS IS THE REASON.
+    This used to inject through `GATEKEEPER_MUTATE_BENCHMARK_ARM`, read by a
+    stub `gatekeeper-land.sh`. MEASURED 2026-08-22 on a4caccefe: that name occurs
+    ZERO times in `tools/gatekeeper-verify-merge.sh`, and the hermetic launcher
+    forwards an explicit `--env` allow-list, so inside the arm the switch is
+    EMPTY and the stub's branch never fires. `VIBE_IC_BENCHMARK_DATA` is not
+    forwarded from the host either. The mutation was therefore never attempted:
+    the verifier returned 0 correctly, and the property was neither violated nor
+    upheld -- it was UNOBSERVED. A probe that only read the corpus bytes
+    afterwards would call that "prevented" and be wrong; "unchanged" has a third
+    reading, and it is "nobody tried".
+
+    So the tamper is now planted the way the B1 tamper tests plant theirs: as
+    COMMITTED CANDIDATE CODE, which does run in the arm. The runner sets
+    `VIBE_IC_BENCHMARK_DATA=/corpus` for both the land and the test process, so
+    the candidate can name the corpus; it is bind-mounted READ-ONLY, so it
+    cannot write it. The write therefore fails, the candidate's own test goes
+    red, and the branch is refused -- and if the read-only prevention were ever
+    removed, that test would succeed and stay GREEN, leave the new-failure list,
+    and the assertion below fires.
+
+    The post-attestation that would catch a mutation which somehow got through
+    the read-only bind is guarded at its own seam, per-clause and red-on-break,
+    in tools/ci/test_hermetic_candidate_runner.py.
+    """
+    repo = tmp_path / "corpus-tamper-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "corpus_tamper")
+    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
+                 / "test_thing.py")
+    test_file.write_text(
+        "import os\n"
+        "import pathlib\n"
+        "def test_mutates_the_published_corpus_but_stays_green():\n"
+        "    root=pathlib.Path(os.environ['VIBE_IC_BENCHMARK_DATA'])\n"
+        "    p=root/'ic/tiny/v1/phase3/stage3/pnr/routed.def'\n"
+        "    with p.open('a') as fh:\n"
+        "        fh.write('MUTATED BY THE CANDIDATE\\n')\n")
+    _git(repo, "add", str(test_file))
+    assert _git(repo, "commit", "-qm", "mutate the corpus").returncode == 0
+
+    corpus_file = (_BENCHMARK_TEST["checkout"]
+                   / "ic/tiny/v1/phase3/stage3/pnr/routed.def")
+    before = corpus_file.read_bytes()
+    r, doc = _verify(repo, "corpus_tamper", tmp_path)
+
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "test_mutates_the_published_corpus_but_stays_green" in r.stdout, (
+        "the candidate's corpus-mutating test is not reported as a failure this "
+        "branch owns -- which means it SUCCEEDED and stayed green, and a "
+        "candidate can now write the published corpus:\n" + r.stdout)
+    # and the bytes themselves, because an exit code is not a statement about
+    # the corpus. This is the assertion whose absence let an earlier reading of
+    # this same scenario be published as a security hole.
+    assert corpus_file.read_bytes() == before, (
+        "the published corpus changed during the candidate's arm")
     listed = _git(
         _BENCHMARK_TEST["checkout"], "worktree", "list", "--porcelain").stdout
     assert "gkverify." not in listed, listed
@@ -2571,9 +2696,15 @@ def _assert_interruption_cleans_every_parallel_arm(
     land = repo / "tools/gatekeeper-land.sh"
     text = land.read_text()
     needle = 'echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="\n'
-    hang = r'''if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
-  echo "$$" > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/__HUNG_ARM__.pid"
+    # KEYED ONLY ON `GATEKEEPER_VERIFY_ARM`, and that is the whole repair. This
+    # block used to require `GATEKEEPER_CONCURRENCY_PROBE_DIR` as well, and to
+    # announce itself by writing `<ARM>.pid` into it. MEASURED on a4caccefe: the
+    # hermetic launcher forwards an explicit `--env` allow-list and that name is
+    # not on it, so inside the arm the variable is EMPTY, the branch never
+    # fired, nothing ever hung, and this test failed waiting for a pid file that
+    # could not be written. `GATEKEEPER_VERIFY_ARM` IS forwarded, so keying on
+    # it alone makes the arm hang for real under this repository's design.
+    hang = r'''if [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
   trap '' TERM
   while :; do sleep 30; done
 fi
@@ -2667,11 +2798,10 @@ fi
         # A failed cleanup test must clean up its own control process; leaving
         # the intentionally TERM-ignoring arm behind would contaminate every
         # later timing measurement in the same suite.
-        for pgid in (proc.pid, arm_pid):
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         stdout, stderr = proc.communicate()
         pytest.fail(
             "verifier exited or reached the suite safety ceiling without the "
@@ -2681,8 +2811,12 @@ fi
     assert cleanup_started.is_file(), "cleanup never announced its start"
     assert cleanup_reaped.is_file(), "cleanup did not reap its process groups"
     assert _git(repo, "worktree", "list").stdout.count("\n") == 1
-    with pytest.raises(ProcessLookupError):
-        os.kill(arm_pid, 0)
+    # `cleanup.reaped` IS the proof that the TERM-ignoring arm died, and it is a
+    # stronger one than polling a pid the arm had to publish for itself: the
+    # parent writes that event only after WAITING on every arm process group it
+    # started. An arm that ignored TERM and was never escalated would leave that
+    # wait outstanding for ever, the event would never appear, and this test
+    # fails on the deadline above rather than passing quietly.
 
 
 def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
