@@ -5911,6 +5911,51 @@ between those two is the entire subject of this document.
 take on trust.
 
 
+## M112 — design C has the mutation arm design A cannot, and the reason is the whole thesis
+
+M111 found design A's discrimination claim was an argument. **Design C's is not,
+and auditing why turns out to explain the entire branch.**
+
+**All three tamper guards verified line by line, and section A describes them
+accurately:**
+
+    assert r.returncode == 1
+    assert doc["verdict"] == "REFUSE"
+    assert doc["expected_tree"] == doc["verified_tree"]      # tamper did not redefine
+    assert doc["candidate_test_worktree_status"] == "clean"  # never reached real work
+    assert any("test_moves_the_detached_subject_but_stays_green"
+               in f for f in doc["delta"]["new_failures"])   # <- DELIVERY PROOF
+
+**Each names a DIFFERENT planted test** — `..._moves_the_detached_subject...`,
+`..._hides_changed_subject_bytes...`, `..._redefines_head...` — **and requires it
+to appear in `new_failures`.**
+
+**That last assertion is the mutation arm, built in.** It is not "the verifier
+refused, so presumably the tamper happened". It is *the tamper's own planted test
+was observed as a new failure*. **A tamper that silently failed to apply cannot
+satisfy it** — which is exactly the defect that made G4's injected hang
+unreachable for the entire hermetic era while its test reported nothing.
+
+**AND HERE IS WHY DESIGN C HAS THIS AND DESIGN A CANNOT.** Design C's control is
+**a commit**: the test clones, plants a test file, commits, and the tamper crosses
+into the arm **through the subject tree**. Design A's would need to suppress a
+wave, which means reaching the arm through its environment — and that is the
+exact-set contract that refuses (M107).
+
+**Design C is the working proof of M91's thesis, and it has been passing the whole
+time.** I spent this branch establishing that *the tree crosses and the environment
+does not*, built a sentinel to demonstrate it (M92), reverted it at the next
+layer — **while three tests already in the file were doing precisely that, every
+run, in both lanes.** The pattern I proposed as a remedy was sitting in the same
+file as the tests that need it.
+
+**So the ranking in the proposal was upside down.** C was listed third and is the
+only one of the four with a complete, self-delivering mutation arm. **A, B and D
+are all attempts to reach the arm by a channel that refuses; C simply commits the
+control.** That is not a design insight I brought — it is one I could have read
+off the passing tests before writing four designs.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
