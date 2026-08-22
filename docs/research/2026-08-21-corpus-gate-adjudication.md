@@ -101,6 +101,40 @@ renewed; both remain expired and both therefore refuse a landing.
 > That is a smaller change than the one I first proposed and it does not
 > reopen #1710.
 >
+> ### A THIRD THING ABOUT `evidence citation resolves`, FOUND WHILE CHECKING
+> ### SOMETHING ELSE
+>
+> Its own controls do not fire, and have not for at least 247 commits.
+>
+> `programs/tests/test_evidence_citation_resolves_check.py` has four tests that
+> plant a defect and require the gate to refuse it:
+>
+>     test_dangling_citation_fails
+>     test_resolution_never_escapes_the_scan_root
+>     test_untracked_artifact_does_not_satisfy_a_citation
+>     test_a_citation_pointing_at_a_symlink_is_not_shipped_content
+>
+> All four fail on main today, in BOTH worktree locations (so this is not the
+> $HOME artefact above), and all four already failed at `0095513a0` — the last
+> commit that matched an authorised protected state, 247 commits back.
+>
+> The mechanism, from the first one: the control plants a dangling citation and
+> asserts rc 1. The gate answers rc 0 with
+>
+>     OUT OF SCOPE : 1 citation(s) resolve against the repository but ABOVE
+>                    this gate's scan root
+>     WARNING      : git-tracked file set unavailable — falling back to plain
+>                    filesystem existence
+>
+> So the OUT-OF-SCOPE narrowing absorbs the very defect the control exists to
+> plant, and the control can no longer fail the gate for the reason it was
+> written. That is the same shape as `liar census controls still fire`: a
+> control that cannot fire is not a control.
+>
+> This is NOT in the 75-file targeted selection either — `ci_targeted_test_
+> select --base origin/main` routes 0 of these — so no two-arm measurement of
+> any branch has ever seen them.
+>
 > ### Consequence for the two ledger rows
 >
 > Both rows have aged past `MAX_BOUND_COMMITS = 500` (549 behind), so no legal
