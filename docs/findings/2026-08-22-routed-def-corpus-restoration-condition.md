@@ -287,6 +287,37 @@ missing is not a change to the gate but a written restoration condition, and the
 condition the earlier record wrote is incomplete: it names what must be
 published and omits the shape it must be published in.
 
+### Why THIS row is the unexempted one, structurally rather than by accident
+
+**[re-measured @ a4caccefe]** The brief's framing — nine exempted NOT CHECKED
+rows and one that is not — is not a property of one run. It falls out of the
+wiring, and that is checkable without running the 3750-second suite:
+
+| counted in `tools/ci/repo_hygiene_gates.sh` @ `a4caccefe` | n |
+|---|---|
+| `run_tolerating_uncheckable` call sites (gates allowed to report NOT CHECKED) | 25 |
+| `uncheckable_until <date> <why>` declarations | 25 |
+| `gate_dispatch_over` call sites (loop-driven corpora) | **1** |
+| of those, opting into `GATE_DISPATCH_ATTEST_POPULATION=1` | **1** |
+
+The 25/25 is exact and the dispatcher enforces it: a
+`run_tolerating_uncheckable` without an adjacent `uncheckable_until` is a wiring
+error, and so is an `uncheckable_until` on a plain `run`. So every gate that may
+answer NOT CHECKED carries a dated reason — by construction, not by diligence.
+
+The single `gate_dispatch_over` call site is the routed-DEF corpus, and it is
+the only one in the file that opts into the process-attested population mode.
+That mode is the one thing an exemption cannot reach
+(`_gate_dispatch.sh:668-669`: *"a dispatcher-owned population refusal … cannot
+consume an uncheckable exemption — an unknown denominator must remain
+blocking"*).
+
+So the row is not the one nobody got around to exempting. **It is the only row
+in the suite that is structurally inexemptible**, and it is that because the
+thing it reports is a missing denominator rather than a missing tool. That is
+the strongest available argument that the declaration is already correct: the
+mechanism was chosen for this case, and this is the case.
+
 ## What is fixed here, and what is only filed
 
 **Fixed (this branch):** `benchmark_evidence_structure_check.py` gains a
@@ -447,6 +478,52 @@ Neither branch touches a protected path.
 `benchmark_evidence_structure_check.py` does not appear in
 `REQUIRED_AUTHORITY_PATHS` at all — checked at `a4caccefe` — so this change is
 landable from one candidate commit.
+
+## Named and NOT taken: the same shape, one gate over
+
+Running both checkers over the live corpus (above) turned up something that is
+not this row and is worth writing down where the next reader will find it.
+
+Over `benchmark-data` @ `3b58ccd42` — a corpus with **zero published cells** —
+`benchmark_evidence_structure_check --tree` prints:
+
+```
+benchmark_evidence_structure_check: 9/9 conformant, 0 nonconformant
+```
+
+rc 0. Its own `USAGE` calls that invocation *"validate every published cell in a
+tree (the CI shape)"*, and `gatekeeper-land.sh` runs it on the landing path. The
+nine units are all IC-level layout units; the number of published cells examined
+is **0** and appears nowhere in that line.
+
+The per-unit rows are not wrong — each says `IC-level layout: 1 published entry
+examined, all allowed`, which is true and is the #967 disclosure working. Nor is
+the machine-readable output wrong: `--json` carries a `kind` field per unit, and
+it separates them exactly.
+
+| tree | `kind` histogram from `--json` | printed line |
+|---|---|---|
+| `3b58ccd42` (today) | `{ic-root: 9}` | `9/9 conformant, 0 nonconformant` |
+| `146d665` (pre-withdrawal) | `{ic-root: 9, cell: 4}` | `13/13 conformant, 0 nonconformant` |
+
+Both lines are true. Neither states the cell count, and the two trees differ by
+*every published cell in the repository*. A reader of the CI log gets the same
+sentence shape from a corpus with four cells and from a corpus with none — which
+is the sentence this whole record is about, one gate over.
+
+**Not taken tonight, and the reason is not that it is small.** The remedy is
+small and the mechanism already exists: `main()` builds a `tail` string for
+exactly this purpose (#967, for skipped units) and a kind-split clause belongs
+there. What stops it is blast radius I cannot measure at this hour — that
+summary line is read by 25 test files under `programs/tests/` and parsed by both
+`tools/gatekeeper-land.sh` and `tools/gatekeeper-verify-merge.sh`, and the suite
+that would tell me whether an added clause breaks any of them is the one this
+work is not allowed to run. Changing a string the landing path parses, without
+being able to run the landing path, is how a fix becomes an outage.
+
+So it is measured, named, and left. It is a disclosure defect, not a false
+verdict: no gate says PASS over something it failed, and nothing here is
+weakened by leaving it.
 
 ## What this deliberately does not do
 
