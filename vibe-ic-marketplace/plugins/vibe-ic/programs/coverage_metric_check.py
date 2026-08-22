@@ -159,6 +159,22 @@ def main(argv: list = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
 
+    # vibe-ic#1080 — emit the per-step metric HERE, where the number was
+    # computed, rather than leaving it to be re-parsed out of this report or
+    # out of a log. A log regex is a proxy for the measurement, not the
+    # measurement. Best-effort: a metrics-sink failure must not change this
+    # gate's verdict, which is about coverage, not about bookkeeping.
+    try:
+        import step_metrics as _sm  # noqa: PLC0415
+        _m = {"passed": bool(result.passed),
+              "findings_count": len(result.findings)}
+        for _k, _v in (result.summary or {}).items():
+            if isinstance(_v, (int, float)) and not isinstance(_v, bool):
+                _m[str(_k)] = _v
+        _sm.emit(Path(args.project_dir), "11", _m, domain="coverage")
+    except Exception:  # noqa: BLE001  — see above
+        pass
+
     print(report_json)
     return 0 if result.passed else 1
 
