@@ -265,3 +265,27 @@ git included -- compares its entries positionally or by whole value. A change to
 an identity field inside such a list is indistinguishable from delete+add, and a
 "conflict" of that shape is worth re-measuring by CONTENT before anyone is asked
 to adjudicate it. Here it turned twelve authorial decisions into one.
+
+### The mechanical part, performed
+
+Not asserted. Reconstructing the merge -- take `jdistmat`'s rows, map each renamed
+row to its base original by exact content on
+`(pattern, docstring, expected_signal)`, carry `jcap-ppa`'s edit onto it, then
+append `jcap-ppa`'s new rows:
+
+    merged rows                                   44
+    jcap-ppa content edits carried onto renames   13   (fix_action 11, docstring 2)
+    rows withheld pending the one decision         1
+    JSON valid                                    yes
+
+    => 44 rows if jcap-ppa's deletion stands, 45 if jdistmat's rename does.
+
+The withheld row is the only one whose fate is not determined by the data:
+
+    base    : an optional import is guarded by capability not by exception type
+    renamed : optional_import_is_guarded_by_capability_not_exception_type
+
+This reconstruction was performed to VERIFY that eleven rows are mechanical, and
+the result is deliberately not shipped here. The file belongs to its authors, and
+a merged register handed over by a third party is exactly the artefact nobody
+audits. What is offered is the finding: the work is one decision, not twelve.
