@@ -68,6 +68,80 @@ def declares_si_signoff(blob: str, data: dict | None = None) -> bool:
     return any(m in low for m in _SIGNOFF_TEXT_MARKERS)
 
 
+
+# ── D9: the artefact must be COHERENT WITH ITSELF ──────────────────────────
+# vibe-ic D9 census scored step 27 EXISTENCE-ONLY: every number in
+# si_crosstalk.json could be scaled and sign-flipped and this gate's verdict
+# did not move. It read `violations_count` and asked only whether it was > 0,
+# so a count of -7 sailed through.
+#
+# NO ORACLE, and none is needed. Nothing below knows what any value SHOULD be
+# for any design — a real run ships no answer key. Every rule here is either a
+# DOMAIN bound that holds for any circuit ever built, or an arithmetic relation
+# the document asserts BETWEEN ITS OWN FIELDS:
+#
+#   * a coupling ratio is Cc/(Cc+Cg), a fraction of a capacitance by a larger
+#     capacitance, so it lies in [0, 1] for every net in every technology;
+#   * a mean cannot exceed the max of the same population;
+#   * a count of nets cannot be negative;
+#   * nets with ratio > 0.9 are a SUBSET of nets with ratio > 0.5, which are a
+#     subset of the nets analysed. That containment is exact, not a heuristic:
+#     it follows from the thresholds the field NAMES carry.
+#
+# A document that breaks one of these was not produced by measuring a circuit,
+# so every conclusion drawn from it — including this gate's own — is about
+# numbers nobody computed.
+_RATIO_FIELDS = ("max_coupling_ratio", "mean_coupling_ratio")
+_COUNT_FIELDS = ("nets_analyzed", "nets_elevated_coupling_gt0p5",
+                 "nets_coupling_dominated_gt0p9", "violations_count")
+#: widest-to-narrowest; each must contain the next
+_CONTAINMENT = ("nets_analyzed", "nets_elevated_coupling_gt0p5",
+                "nets_coupling_dominated_gt0p9")
+
+
+def _num(data: dict, key: str):
+    """The value at `key` iff it is a real number. `bool` is excluded on
+    purpose: it is an int subclass, and reading True as 1 would invent a
+    measurement out of a flag."""
+    v = data.get(key)
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _incoherent(data: dict) -> List[Finding]:
+    """Every self-consistency / domain violation the document commits."""
+    out: List[Finding] = []
+    if not isinstance(data, dict):
+        return out
+
+    for key in _RATIO_FIELDS:
+        v = _num(data, key)
+        if v is not None and not (0.0 <= v <= 1.0):
+            out.append(Finding("ERROR", "SI_RATIO_OUT_OF_DOMAIN",
+                               f"{key}={v} is not a ratio: Cc/(Cc+Cg) lies in "
+                               f"[0,1] for every net in every technology"))
+
+    lo, hi = _num(data, "mean_coupling_ratio"), _num(data, "max_coupling_ratio")
+    if lo is not None and hi is not None and lo > hi:
+        out.append(Finding("ERROR", "SI_MEAN_EXCEEDS_MAX",
+                           f"mean_coupling_ratio={lo} exceeds "
+                           f"max_coupling_ratio={hi} over the same population"))
+
+    for key in _COUNT_FIELDS:
+        v = _num(data, key)
+        if v is not None and v < 0:
+            out.append(Finding("ERROR", "SI_NEGATIVE_COUNT",
+                               f"{key}={v}: a count of nets cannot be negative"))
+
+    for wide, narrow in zip(_CONTAINMENT, _CONTAINMENT[1:]):
+        a, b = _num(data, wide), _num(data, narrow)
+        if a is not None and b is not None and a >= 0 and b >= 0 and b > a:
+            out.append(Finding("ERROR", "SI_SUBSET_EXCEEDS_SUPERSET",
+                               f"{narrow}={b} exceeds {wide}={a}, but the "
+                               f"first names a strictly narrower threshold "
+                               f"than the second"))
+    return out
+
+
 def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     findings: List[Finding] = []
     rpt = _pl.report_path(project_dir, "si_crosstalk.rpt")
@@ -89,6 +163,8 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             if key not in data:
                 findings.append(Finding("ERROR", "MISSING_FIELD",
                                         f"si_crosstalk.json missing '{key}'"))
+
+        findings.extend(_incoherent(data))
 
         violations = data.get("violations_count", 0)
         stats["violations"] = violations
