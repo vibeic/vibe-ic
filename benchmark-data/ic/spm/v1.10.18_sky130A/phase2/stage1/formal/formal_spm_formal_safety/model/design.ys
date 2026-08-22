@@ -1,8 +1,0 @@
-# running in formal_spm_formal_safety/src/
-read_verilog -formal -DSPM_SAFETY_ONLY formal_spm.sv spm.v
-prep -top formal_spm
-
-hierarchy -smtcheck
-rename -witness
-write_jny -no-connections ../model/design.json
-write_rtlil ../model/design.il
