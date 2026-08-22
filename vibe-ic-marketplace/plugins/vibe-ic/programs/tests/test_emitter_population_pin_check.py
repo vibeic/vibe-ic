@@ -2714,6 +2714,49 @@ def test_the_documented_vacuous_reasons_are_the_ones_emitted():
         f"  documented but not emitted: {sorted(documented - emitted)}")
 
 
+# ── the wiring the exit codes depend on ─────────────────────────────────────
+
+def _ci_wiring_file():
+    """Searched upward rather than counted: `parents[4]` is true today and is a
+    fact about where the plugin sits, not about this program."""
+    for parent in PROG.parents:
+        cand = parent / "tools" / "ci" / "repo_hygiene_gates.sh"
+        if cand.is_file():
+            return cand
+    return None
+
+
+def test_ci_wires_this_gate_so_that_a_vacuous_run_fails():
+    """rc 2 says "nothing was compared, this is NOT a pass". That sentence is
+    only true if the harness treats rc 2 as a failure, and the harness has a
+    wrapper that does NOT: `run_tolerating_uncheckable` exists for probes that
+    need a clean tree and reads rc 2 as "could not check".
+
+    Rewire this gate to that wrapper and every VACUOUS verdict this file works
+    to produce becomes a green run, silently. The docstring claims the wiring;
+    this checks it."""
+    wiring = _ci_wiring_file()
+    if wiring is None:
+        pytest.skip("tools/ci/repo_hygiene_gates.sh is not in this checkout, so "
+                    "the wiring claim cannot be checked from here")
+    lines = [ln.strip() for ln in wiring.read_text(errors="replace").splitlines()
+             if "emitter_population_pin_check" in ln
+             and not ln.lstrip().startswith("#")]
+    assert lines, (
+        "no line in the CI script runs this gate: it is not wired, and a gate "
+        "nothing runs cannot refuse anything")
+    for ln in lines:
+        # The specific consequence FIRST. Checked the other way round, every
+        # rewiring reported only "not plain `run`", which names the symptom and
+        # not what it costs.
+        assert not ln.startswith("run_tolerating_uncheckable"), (
+            "wired as tolerating-uncheckable: rc 2 stops failing the suite and "
+            f"every VACUOUS verdict becomes a silent green: {ln!r}")
+        assert ln.startswith("run "), (
+            "this gate is wired through a wrapper that is not plain `run`, so "
+            f"its exit codes may not mean what its docstring says: {ln!r}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
