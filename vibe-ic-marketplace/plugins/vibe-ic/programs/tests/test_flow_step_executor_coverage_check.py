@@ -152,15 +152,33 @@ def _phase3_runner_ast():
     return ast.parse(src)
 
 
-def _called_from(tree, caller: str):
-    """Names called anywhere inside the body of the top-level function `caller`."""
+def _used_from(tree, caller: str):
+    """Names USED anywhere inside the body of the top-level function `caller` —
+    called, or passed by reference.
+
+    A CALL IS NOT THE ONLY WAY A RUNNER DISPATCHES A STEP, and requiring one
+    would break on this repo's dominant idiom. MEASURED across the seven runner
+    modules: `step_gds` is never called by name anywhere in
+    `phase3_one_shot_runner`; it is handed to a gate wrapper as a VALUE —
+
+        phase3_one_shot_runner.py:41648
+            step_gds, project, effective_top, pdk, args.container))
+
+    and `design_one_shot_runner` dispatches `step_dft_lec_chain` the same way
+    through `_spf.gate(...)`. A call-graph that follows only `ast.Call` marked
+    282 of 789 top-level runner defs "unreachable" for exactly this reason, and
+    two steps (13, 26.5ic) came out as false orphans; pairwise confirmation
+    found both genuinely invoked. So this reads NAME USE, not call shape.
+
+    It is still far stronger than the gate's own text search, which cannot
+    distinguish a dead function body — or a comment — from a live reference."""
     import ast
     fn = next((n for n in tree.body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                and n.name == caller), None)
     assert fn is not None, f"{caller}() is not a top-level function any more"
-    return {n.func.id for n in ast.walk(fn)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    return {n.id for n in ast.walk(fn)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def test_the_two_newly_wired_producers_are_invoked_and_not_merely_defined():
@@ -172,11 +190,11 @@ def test_the_two_newly_wired_producers_are_invoked_and_not_merely_defined():
     tree = _phase3_runner_ast()
     defined = {n.name for n in tree.body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    called = _called_from(tree, "main")
+    used = _used_from(tree, "main")
     for step in ("step_pad_ring_gen", "step_tapeout_docs_gen"):
         assert step in defined, f"{step}() is gone from phase3_one_shot_runner"
-        assert step in called, (
-            f"{step}() is defined but never called from main() — the step is "
+        assert step in used, (
+            f"{step}() is defined but never used from main() — the step is "
             f"declared, the coverage gate reads its producer names out of the "
             f"dead body and says WIRED, and nothing runs it. This is the "
             f"orphan shape the wiring was supposed to end.")
