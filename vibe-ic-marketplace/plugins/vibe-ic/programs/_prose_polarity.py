@@ -150,6 +150,32 @@ def is_denied(span: str, *, ignore_bracketed: bool = True) -> Optional[str]:
 #:        it through `extra_breaks` rather than every prose reader paying for it.
 SENTENCE_BREAKS: Tuple[str, ...] = (". ", "! ", "? ", "\n\n", "\n- ")
 
+#: A SENTENCE MAY END AT A LINE END, and `SENTENCE_BREAKS` does not say so: it
+#: breaks on ". " -- a full stop followed by a SPACE -- and on a blank line.
+#: Prose that is wrapped, or written a line at a time, ends sentences with ".\n",
+#: and a scope that does not stop there reaches back over the full stop into the
+#: sentence above.
+#:
+#: MEASURED, three times, on three different readers. A spec:
+#:
+#:     The path from 8-bit to 16-bit is no longer supported.
+#:     Data is packed from 8-bit to 32-bit words.
+#:
+#: The live pair's scope reached into the denial beside it and refused it -- for
+#: a document that plainly states 8 to 32, the reader returned NOTHING. The same
+#: shape appeared in a prompt reading generator polynomials, and again in five
+#: readers of parameter defaults.
+#:
+#: EXPORTED RATHER THAN ADDED TO `SENTENCE_BREAKS`. Adding it there would change
+#: the scope every one of this module's consumers computes, silently, and they
+#: did not ask. A caller that reads line-wrapped prose passes this as
+#: `extra_breaks`; one that does not is unaffected.
+#:
+#: NOT `("\n",)`. Breaking on every newline would bound a scope mid-sentence, so
+#: a denial written across two lines would be missed -- an under-reach that
+#: publishes a denied value, which is the failure this module exists to prevent.
+LINE_END_BREAKS: Tuple[str, ...] = (".\n", "!\n", "?\n")
+
 
 def sentence_scope(text: str, start: int, end: int,
                    *, before: int = 240, after: int = 240,
