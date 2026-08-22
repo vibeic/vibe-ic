@@ -579,3 +579,138 @@ got there. Pairing each exemption with the line immediately after it gave "20
 Skipping comments gave "24 + 1 `gate_serial`". Only the third pass was the
 answer. My first pass produced the number 20 as well, from a different mistake
 than the one that produced the landed 20.*
+
+## Re-verified 673 commits later, at `ae78abb28` (v1.11.70)
+
+`main` moved from `a4caccefe` to `ae78abb28` while this record was being written
+— 673 commits. Evidence attaches to a sha, so every load-bearing figure was taken
+again at the new tip rather than carried forward.
+
+| | at `a4caccefe` | at `ae78abb28` |
+|---|---|---|
+| `uncheckable_until` declarations | 25 | **25** |
+| dated `2026-11-30` | 3 | **3** |
+| dated `2027-02-28` | 22 | **22** |
+| expired (date ≤ 2026-08-22) | 0 | **0** |
+| exemptions inside `_per_published_cell_gates` | 4 | **4** |
+| routed-DEF producer, pointer bound | rc 0, 0 items | **rc 0, 0 items** |
+
+Nothing moved. `docs/findings/2026-08-21-routed-def-corpus-is-empty-adjudication.md`
+and `tools/ci/repo_hygiene_gates.sh` are both untouched across those 673 commits,
+and so are all four source files this work edits — so the corrections above still
+describe the tree they will land into.
+
+### Why this branch is NOT rebased onto that tip
+
+It was rebased, and the rebase was reverted, because pushing it fired a real
+gate:
+
+```
+pre-push: FAILED — no collateral revert within the push
+  FAIL: COLLATERAL REVERT: 25 finding(s) in 687 commit(s). 2be4c0b42 removes 52
+  of the 68 line(s) 7027c15ce added to …/test_f3d_opposite_side_is_a_mirror.py
+```
+
+Neither commit is mine — both are another agent's `capture(padring)` work,
+already on `main`. **687 = my 14 + main's 673.** A force-push of a rebased branch
+makes the hook's range `<old remote tip>..<new tip>`, which sweeps in every
+commit `main` gained by a different route, and the gate then audits `main`'s own
+history as though this push introduced it.
+
+That is not a defect in the gate — for a non-rebasing push the range is exactly
+right, and the check it performs is one this repository needs. It is a property
+of force-pushing a rebase, and the correct response is not to argue with it:
+the branch sits at `813c61783`, based on `a4caccefe`, exactly as it was pushed
+and verified. The merge queue rebases onto current `origin/main` and re-runs the
+required checks on the rebased tree at merge time, which is where that work
+belongs and where the range is computed correctly.
+
+**So "673 behind" is the intended state of a candidate, not staleness** — and the
+table above is the evidence that being behind costs nothing here: every figure
+reproduces at the tip it will be merged onto.
+
+## Verified on the merged tree, not just on the branches
+
+A clean merge proves nothing about semantics — zero textual conflicts and a red
+merged tree is a shape this repository has hit repeatedly — so both branches were
+merged onto the moved `main` and the result was **run**.
+
+`origin/main` @ `ae78abb28` + `next/corpus-pointer-measured-empty` +
+`next/citation-routing-named-corpus-is-not-wrong`, merged in that order:
+**0 conflicts**, each also merging cleanly on its own.
+
+Both branches' tests on that merged tree (loadavg 45.05, nproc 32):
+
+| configuration | merged tree | clean `ae78abb28` |
+|---|---|---|
+| no pointer | **52 passed, 1 skipped** | — |
+| `VIBE_IC_BENCHMARK_DATA` at the real empty corpus | **52 passed, 1 skipped** | **2 errors during collection** |
+
+The second row is the whole point. That configuration — the one
+`gatekeeper_review._published_corpus_binding` creates by default — cannot collect
+`test_published_corpus_helper.py` or `test_citation_routing_is_true.py` on
+today's `main`, and runs both clean once these two branches are applied. The
+defect is still live on `main`; the repair holds on the tree that will exist
+after landing.
+
+**And the two land together without interacting badly**, which was not a given:
+branch 2 edits a module that imports the helper branch 1 repairs. Merged, that
+pair is 52 green in both pointer states.
+
+## The brief's row, measured machine-readably — and a precondition nobody has stated
+
+`repo_hygiene_gates.sh --list --summary-json` declares every gate without running
+one. It costs seconds, not the 3750 a full sweep does, and it emits the corpus
+metadata as a record. That is a direct measurement of the row the brief quotes.
+
+**With `VIBE_IC_BENCHMARK_DATA` bound at a real clone of the publisher:**
+
+```json
+"corpora": [{"name": "published cells carrying a routed DEF",
+             "items": 0, "gates": 1, "expansion": "EXPANDED"}]
+```
+
+**With no pointer, on a checkout that carries no corpus:**
+
+```json
+"corpora": [{"name": "published cells carrying a routed DEF",
+             "items": 0, "gates": 1, "expansion": "NO_CORPUS"}]
+```
+
+Same `items: 0`; **different `expansion`**. This is #1764's rc 0 / rc 3
+distinction — *the index was read and holds none* versus *nothing was opened* —
+surviving all the way into the machine-readable record, which is where it has to
+survive if any consumer is to act on it. The stderr says the same in prose:
+*"1 blocking population gate(s) report that absence."*
+
+### And that turns into a landing precondition nobody has written down
+
+`hygiene_finding_delta._corpus_transition` — the sole sanctioned EMPTY→expanded
+path — requires of the BASE arm, in as many words, *"the exact structural EMPTY
+shape (`items=0`, `gates=1`, `expansion=EXPANDED`)"*, and refuses anything else.
+
+Only the first record above satisfies that. A base arm run **without** the corpus
+pointer produces `expansion: "NO_CORPUS"` and would be refused as *"not the exact
+structural EMPTY shape"*.
+
+**So publishing a cell is necessary and not sufficient.** The restoration also
+requires that the base arm was run with the pointer bound — otherwise the
+transition cannot be sanctioned no matter what is published. The landed
+adjudication states the publishing condition; the record above adds the one that
+is a property of how the *base* was measured, not of what exists. It is satisfied
+today only because `gatekeeper_review._published_corpus_binding` defaults to
+`$HOME/_matrix_benchmark_data`; a host without that checkout and without the
+variable would produce a base arm that can never transition.
+
+### Corroborated cheaply, and what it still does not settle
+
+The same record confirms by machine what was derived by `grep` above:
+`wiring_errors: []`, `exemptions_expired: []`, `today: "2026-08-22"`, and **93
+gates declared** at `a4caccefe` — worth stating because
+`programs/hygiene_gate_profile.json`, a committed record of an older run, still
+says `declared: 74`.
+
+What it does **not** settle is unchanged: `not_checked_unexempted` is `[]` here
+because `--list` runs nothing, so this cannot show the routed-DEF EMPTY row being
+*registered* as unexempted NOT_CHECKED — that needs verdicts, and verdicts need
+the full sweep. The declaration is measured; the run is not.
