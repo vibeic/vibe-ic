@@ -18,7 +18,7 @@ is hard-excluded from cross_design_identity_check's honest-N/A exemption, so no
 exemption can save them.
 
 ROUND-2 FIX (caller-side, the field agent explicitly allows '呼叫端 stamp'):
-phase2_one_shot_runner gains a generic post-write sweep
+design_one_shot_runner gains a generic post-write sweep
 (`_stamp_gate_report_dirs`, wired as `step_stamp_gate_reports` AFTER
 step_final_audit) that folds the SAME #484 identity field shape into EVERY
 *.json under reports/phase2/gates/ + reports/phase2/lint/ — guaranteeing
@@ -45,7 +45,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 CDI_PROG = PROGRAMS / "cross_design_identity_check.py"
@@ -109,7 +109,7 @@ def _run_real_gate_checkers(project: Path) -> None:
     for inv in invocations:
         subprocess.run(
             [sys.executable, str(PROGRAMS / inv[0])] + inv[1:],
-            cwd=project, capture_output=True, text=True, timeout=120)
+            cwd=project, capture_output=True, text=True, timeout=60)
 
 
 def _regen_with_gate_audit(project: Path, ic_name: str,
