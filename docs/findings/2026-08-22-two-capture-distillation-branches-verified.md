@@ -108,9 +108,11 @@ nothing else, and neither `main` nor either verified branch was touched.
   WHAT I COULD NOT BREAK: all 32 checkers reproduce their defect from a fixture
   I wrote myself, in both directions, with the finding naming the site and no
   traceback; all 32 negative controls fail on CONTENT when the checker is
-  blinded; zero duplicate any existing program, checked four ways including a
-  calibrated sweep of all 1240; and 1824 cross-runs found no rule that reddens
-  another rule's remedy.
+  blinded; zero duplicate any existing program, checked four ways — on the
+  EMPIRICAL probe's authority, 25 adjacent programs driven over defect and
+  remedy arms, not on the docstring sweep's, which I re-derived on 2026-08-22
+  and found separates twins from strangers by only 0.02; and 1824 cross-runs
+  found no rule that reddens another rule's remedy.
 
 
 SUBJECTS, AND THEY MOVED UNDER ME
@@ -1240,6 +1242,63 @@ adjacent main programs over the defect and remedy arms:
   against anything already on main, and no contradictions. The only duplicates
   anywhere in this report are the four the two branches create between
   THEMSELVES, which is F13.
+```
+
+## THE DUPLICATE SWEEP, RE-DERIVED — AND IT IS WEAKER EVIDENCE THAN I IMPLIED
+
+```text
+Question 4 re-checked at main a4caccefe / mat facc28860 / chip c0e19ace9. The
+answer does not change — ZERO duplicates — but WHICH evidence carries it does,
+and that is worth correcting.
+
+A BETTER CALIBRATION EXISTS NOW THAN WHEN I FIRST RAN THIS, and it exists
+because of F13. The four filename collisions were the same rule written twice by
+two authors who had not read each other — a same-rule twin set that is not
+hand-picked and not mine. Docstring-token Jaccard over them:
+
+    0.282  only_the_declaring_step_writes_its_output
+    0.298  provenance_value_is_resolved_not_constant
+    0.291  local_clone_does_not_borrow_objects
+    0.254  explicit_argument_outranks_the_environment_pointer
+    -> same-rule twins land at 0.254 - 0.298
+
+SWEEPING ALL 32 NEW CHECKERS AGAINST ALL 1240 MAIN PROGRAMS WITH THAT SAME
+TOKENISATION, the maximum is 0.234 — TWO HUNDREDTHS below the twin floor.
+
+    0.234  explicit_argument_outranks_the_environment_pointer vs _corpus_location
+    0.225  signoff_report_states_its_stage      vs post_route_signoff_corner_check
+    0.221  local_clone_does_not_borrow_objects  vs landing_tier_checkout_preflight
+
+I RECORDED THIS SWEEP AS HAVING COMFORTABLE SEPARATION — "twins 0.21-0.27
+against a sweep max of 0.17". Re-derived here with the tokenisation stated
+above, the margin is a fifth of that. I am NOT claiming the number moved: a
+different stopword list and minimum token length give different absolute
+values, and I no longer hold the first one to compare against. The claim is
+narrower and worse: THIS METRIC'S SEPARATION IS TOKENISATION-DEPENDENT, so a
+threshold calibrated on one tokenisation is not evidence under another, and I
+presented it as though it were a clean discriminator. It is not. It is a way of
+generating CANDIDATES.
+
+SO THE CANDIDATES GET CLOSED INDIVIDUALLY, which is what the evidence actually
+supports:
+
+  * `_corpus_location` — the top score, and it CANNOT be a duplicate gate: no
+    `main()`, no `__main__` block, a leading underscore. It is a library helper
+    answering "where is the published corpus". The highest number in the sweep
+    is against something that is not a checker.
+  * `post_route_signoff_corner_check` — a real gate, a different predicate. It
+    is a Step-23 multi-corner SLACK gate; the new rule is about whether a report
+    STATES which side of place-and-route it came from. High token overlap
+    because both live in signoff vocabulary; no shared verdict.
+  * `landing_tier_checkout_preflight` — the genuinely adjacent one, and the
+    reason the empirical probe exists. It was already DRIVEN over that rule's
+    defect and remedy arms and found non-discriminating.
+
+WHAT ACTUALLY CLOSES QUESTION 4 IS THE EMPIRICAL PROBE, not the sweep: 25
+adjacent main programs driven over defect and remedy arms, positive-controlled
+against programs known to catch those fixtures, ZERO discriminating. The sweep's
+job is to make sure the probe's 25 were the right 25 — and re-run today it
+nominates the same neighbourhoods, which is the useful thing it does.
 ```
 
 ## THE TWO CLAIMS THE BRIEF ASKED TO BE CHECKED HARDEST
