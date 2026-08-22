@@ -1546,6 +1546,48 @@ def test_the_real_tree_has_no_undecidable_population(tmp_path):
     assert doc["counters_examined"] == 3, doc
 
 
+EMITTER_DENIED_INCR_IN_A_HELPER = (
+    'def _unused(name):\n'
+    '    return "  # the fallback does not incr _n; it re-issues %s\\n" % name\n\n\n'
+    'def script():\n    return ("  set _n 0\\n"\n'
+    '            + _unused("a") + _unused("b")\n'
+    '            + "  if {[catch {x}]} { incr _n }\\n"\n'
+    '            + "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def test_a_DENIED_incr_cannot_excuse_a_real_disagreement(tmp_path):
+    """TWO READERS OF ONE SCRIPT MUST NOT DISAGREE ABOUT A DENIAL -- which is
+    #711 itself, and it was live in the first revision of `multiplied_counters`
+    on this branch.
+
+    The emitter has ONE real increment and a denominator of 2: a genuine
+    disagreement that must be REFUSED. Beside it sits a helper, called twice,
+    whose only `incr _n` is DENIED by its own comment. `counters_of` refused
+    that increment as a member -- correctly -- while `multiplied_counters`
+    counted it as evidence of a multiplier, marked the counter a LOWER BOUND,
+    and excused the disagreement as NOT DECIDABLE.
+
+    MEASURED: rc went 1 -> 0. A real disagreement silently excused, by the
+    second reader of the same text being polarity-blind -- the exact defect
+    class this file was written to answer, introduced by the fix for the
+    limitation two commits earlier.
+
+    The honest helper emitter must still be NOT DECIDABLE, which the companion
+    test asserts: the repair is polarity, not a retreat from the lower-bound
+    rule."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_INCR_IN_A_HELPER,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "a denied `incr` was read as evidence of a multiplier and excused a "
+        "real disagreement:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], doc
+    assert len(doc["findings"]) == 1, doc
+    # and the denial is still reported by the reader that DOES honour it
+    assert any(d["what"] == "increment" for d in doc["denied_by_polarity"]), doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

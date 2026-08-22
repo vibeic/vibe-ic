@@ -611,6 +611,12 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     `_rrc` and others), and `_prr_refused` -- the only counter that reaches a
     comparison at all -- is NOT among them. So no verdict this guard reaches
     today moves.
+
+    IT ASKS POLARITY, for the reason `counters_of` does and about the same text.
+    A denied `incr` must not count as evidence of a multiplier here while being
+    refused as a member there; two readers of one script that disagree about a
+    denial is #711's divergence, and it was live in the first revision of this
+    function.
     """
     parent: Dict[int, ast.AST] = {}
     for n in ast.walk(tree):
@@ -623,6 +629,22 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for node in _emitted_nodes(tree):
         for m in INCR.finditer(node.value):
+            # POLARITY, THE SAME QUESTION `counters_of` ASKS OF THE SAME TEXT.
+            # Without this the two readers disagree about one script: a denied
+            # `incr` is refused as a member there and counted as evidence of a
+            # multiplier here, so a GENUINE `sites < denominator` disagreement is
+            # excused as NOT DECIDABLE -- the silent direction. Measured, rc went
+            # 1 -> 0 on a real disagreement. That divergence-by-second-reader is
+            # #711 exactly, which is the defect this whole file exists to answer.
+            #
+            # Scoped WITHIN the node, which is provably the same answer
+            # `counters_of` gets: it scopes over the nodes joined by "\n" and
+            # declares "\n" a record break, so no scope there crosses a node
+            # boundary either.
+            lo, hi = sentence_scope(node.value, m.start(), m.end(),
+                                    extra_breaks=_RECORD_BREAKS)
+            if is_denied(node.value[lo:hi]):
+                continue
             cur, host = node, None
             while id(cur) in parent:
                 cur = parent[id(cur)]
