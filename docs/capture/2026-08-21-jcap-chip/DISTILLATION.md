@@ -1917,3 +1917,46 @@ all 366 records, which reads as "the records are empty". The key is `status`. A
 wrong key returns a plausible answer rather than an error — the same failure as
 counting NOT_MEASURED rows as MEASURED, which cost 408 phantom rows in this repo
 once before. The gate uses the right key; the cross-check I wrote did not.
+
+## Is any gate silently reading nothing? Every key it looks for, checked
+
+Five times in this lane a cross-check returned a PLAUSIBLE wrong answer rather than
+an error: a wrong dict key, a wrong grep, a timeout bound read as a regression, a
+stale merge-base, a scope-level heuristic applied to a whole function. The same
+failure inside a shipped gate is worse than in a cross-check, because nothing
+downstream would notice: **a key that never occurs means the gate reads nothing and
+passes.** That is how 408 phantom rows were once counted here.
+
+So every dict key the twelve read was extracted by AST and checked against the
+corpus each gate actually walks.
+
+    declared_basis_...          rpt, tcl
+    every_required_metric_...   metric, records, schema, state, status
+    measurement_only_...        metric, outcomes, state, status
+    only_the_declaring_step_... id, required_outputs, steps
+    signoff_report_...          id, required_outputs, steps
+    pytest_aggregate_...        kind, runtime
+
+    flow yaml            steps 1    id 77    required_outputs 67
+    1236 JSON files      metric 28506  schema 24329  status 31332
+                         state 721     outcomes 336  records 478
+
+**Every key occurs. No gate is reading a key that is never there.** The two gates
+that read BOTH `state` and `status` are not carrying a dead branch — both keys are
+live in this tree, which is why reading only one of them was the historical defect.
+
+### I made the error I was hunting, twice, in the turn that hunted it
+
+Worth writing down because it is the actual lesson.
+
+* `grep -c "^\s*id:"` on the flow returned **0**, and "the gates read a key the flow
+  never declares" is a dramatic finding. The flow writes `- id: 23`; the pattern
+  cannot match a list item. Corrected: **77**.
+* The first record scan covered `ppa-crosslayer/records` and `ppa-e2e` — 400 files —
+  and reported `state`, `outcomes` and `records` as NEVER OCCURRING. The gates walk
+  the whole tree. Corrected over 1236 files: 721, 336, 478.
+
+Both would have been confident, specific, wrong findings against my own gates, and
+both were caught by the same habit that caught the others: state what the instrument
+should return on a known case, then check it did. The zero is never the evidence —
+the denominator beside it is.
