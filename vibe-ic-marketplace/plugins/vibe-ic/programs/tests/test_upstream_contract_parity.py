@@ -378,3 +378,43 @@ def test_a_supplied_project_path_is_announced_not_silently_ignored(tmp_path):
     assert p.returncode == 0, out
     assert "is not read" in out
     assert "upstream_names=" in out
+
+
+# ── the verdict must say what it was measured against ───────────────────────
+
+def test_a_pass_without_a_distribution_says_it_compared_against_its_own_record():
+    """The rule this register exists for, turned on its own verdict.
+
+    Absent a distribution root, what is compared is our code against OUR OWN
+    RECORD of upstream — the snapshot in the register. That is a useful check
+    and it is NOT a statement about upstream, and the two print identically
+    unless the verdict says which. This was missing until someone asked what
+    the PASS was over.
+    """
+    rc, out = run(SHIPPED)
+    assert rc == 0, out
+    assert "BASIS:" in out, out
+    assert "NOT re-read" in out, out
+    assert "our own record" in out, out
+
+
+def test_a_pass_with_a_distribution_says_how_many_entries_it_re_read(tmp_path):
+    doc = shipped_doc()
+    ent = contract_entry(doc)
+    root = _fake_root(tmp_path, _minimal_upstream(ent["snapshot"]["names"]))
+    for e in doc["entries"]:          # the shas are of the REAL upstream files
+        e.get("snapshot", {})["file_sha256"] = ""
+    rc, out = run_against(write(tmp_path, doc), root)
+    assert "BASIS:" in out, out
+    assert "re-read under" in out, out
+    assert f"for {len(doc['entries'])} of {len(doc['entries'])}" in out, out
+
+
+def test_the_basis_is_printed_at_a_failing_verdict_too(tmp_path):
+    """A disclosure present only on the happy path is not a disclosure."""
+    doc = shipped_doc()
+    impl = contract_entry(doc)["classification"]["implemented"]
+    impl.remove(sorted(impl)[0])
+    rc, out = run(write(tmp_path, doc))
+    assert rc == 1, out
+    assert "BASIS:" in out, out
