@@ -2511,10 +2511,25 @@ tooling. The sweep row above now reads that way.
 ### Which rules have actually been swept, and what happened to them
 
 A record's measurement is of the DEFECT. A sweep measures the RULE — its false
-positives. **22 of the 31 rules in the table below carry a sweep; 9 do not**, and
-those nine are the ones the handoff tells the implementing lane to sweep before
-building. Of the sweeps actually run early in this lane, **four were the first
-four, and not one survived unchanged.**
+positives. **Every row in the table below now carries a sweep.** The last nine
+were run at the end of this lane, and the tally over the whole batch is that
+**not one rule has ever survived its own sweep unchanged.**
+
+**What the last nine changed, as a checklist for building.** They did not find
+nine new defects; they found nine ways the rule as recorded would have produced
+the wrong check, and those fall into four shapes worth handing over:
+
+| shape | rules | what the sweep caught |
+|---|---|---|
+| **The check would be born vacuous** | A-19, and A-23 conditionally | the artefact the rule reads is empty in all 21 trials, so the check would open every file, compare nothing and report success. A-23's clean result holds only because this branch adds the routing entries; without them it fires nine times on a tree that was merely uninformed |
+| **The check would over-flag** | A-16, A-6, A-10 | a site count demanded from a tool-scoped lever that has no sites; a static scan for relative defaults that flags correct generators; a screen for unhandled choices that flags every value passed to a callee |
+| **The stated reason for exemption was false** | A-1, A-2 | both claimed freedom from false positives *by construction*, and in both one input to the set difference is derived rather than declared |
+| **An objection blocking the fix dissolved** | A-17, A-18 | no absolute path is forced, so the convention can be declared without rewriting provenance; and the deleted property is outside BOTH judges, not merely unpriced |
+
+The generalisation for whoever builds these: **a record measures a defect, and
+that is not yet a buildable rule.** The gap between the two is where the check
+acquires its population, its exemptions and its refusal — and on this batch that
+gap was non-empty every single time it was measured.
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
