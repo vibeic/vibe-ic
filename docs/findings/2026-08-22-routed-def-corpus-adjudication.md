@@ -204,3 +204,51 @@ checkout is rc 2 with the missing input named, and `EMPTY` is only ever printed
 over a corpus that was actually read. **It moves rc 0 to rc 2 — strictly harder
 to satisfy, never a pass** — but it edits two protected authority files, so it
 belongs to a base-authorised transition and not to this commit.
+
+## A second defect, found by writing the guard this adjudication rests on
+
+The argument above leans on one structural fact: an `uncheckable_until` armed in
+front of an attested-population loop **cannot** be consumed by the population
+refusal, because `_dispatch` mode 2 rejects it. That fact was **unpinned** —
+every existing empty-corpus test drives the loop with no exemption armed
+(`test_empty_corpus_gate_keeps_the_array_invariant`,
+`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`), so all of
+them stay green if the branch that rejects it is deleted.
+
+`test_population_refusal_cannot_be_bought_off.py` pins it. Measured by deleting
+that one `elif` from a **copy** of the dispatcher (the tracked file was not
+touched; `sha256 bc52987b…` unchanged before and after):
+
+| | guard present | `elif` deleted |
+|---|---|---|
+| exit code | **2** | **0** |
+| `wiring_errors` | 1 entry | `[]` |
+| roll-up says | `NOT a pass` | `(exempt until 2999-01-01)` |
+| `not_checked_unexempted` | `[]` | `[]` |
+| row `exempt_until` | `2999-01-01` | `2999-01-01` |
+
+One deleted `elif` turns the only blocking row on the board into a silent
+exit-0 pass with a date on it.
+
+**And look at the bottom two rows: they are identical in both columns.** The
+dispatcher raises the wiring error and then appends the date to `GATE_EX_UNTIL`
+anyway, so even in the guarded run the record states the *refused* exemption as
+a *granted* one — `exempt_until: "2999-01-01"`, `exemption_expired: false`, and
+`not_checked_unexempted: []` for the row it had just declared unexemptable. The
+printed line for that same row says `BLOCKING; no exemption`. The console and
+the record give opposite answers about the same gate.
+
+Nothing is unsafe today only because `gatekeeper_review`, `repo_hygiene_parallel`
+and `hygiene_finding_delta` each independently refuse on `wiring_errors`. But
+`not_checked_unexempted` is the field NAMED for this question, and
+`gatekeeper_review`'s own comment documents it as the **fail-safe** derivation —
+"every NOT_CHECKED in it reads as UNEXEMPTED and refuses … the opposite default
+would make 'hand a record in the old format' the way to buy silence". Here it
+fails the other way: a date that was never granted defeats the fail-safe, and
+the whole refusal rests on one unrelated field staying fatal in every consumer
+forever.
+
+The fix is one line — append `""` instead of `$ex_until` on the refused branch,
+which is strictly tightening and cannot turn any red green. `_gate_dispatch.sh`
+is a protected authority file, so it is **filed, not fixed**, and pinned as a
+`strict` xfail that will go RED (XPASS) the day it is repaired.
