@@ -50,9 +50,11 @@ nothing else, and neither `main` nor either verified branch was touched.
          discrimination tests. The predicate is "writes metric records".
     F9   A gate's docstring claims a predicate its code does not have: 31 live
          sites of its own class are invisible to it, and its PASS line asserts
-         something untrue of this tree. REMEDY TESTED: ~35 lines takes findings
-         10 -> 96 and inventory keys 8 -> 52, and its shipped-tree test then
-         fails for the right reason. Budget the 44 new rows, or fix the sites.
+         something untrue of this tree. REMEDY TESTED: ~60 lines takes findings
+         10 -> 50 and inventory keys 8 -> 31, and its shipped-tree test then
+         fails for the right reason. Budget the 23 new rows, or fix the sites.
+         (Published as 96/52 and corrected downward on 2026-08-22 — the 96
+         double-counted sites in nested functions. Half the price I quoted.)
     F12  THREE of its sixteen non-census gates answer PASS on an empty scan,
          where all twelve of the sibling branch refuse. CORRECTED DOWNWARD on
          2026-08-22 from "nine of fourteen" — the nine came from driving the
@@ -2196,11 +2198,38 @@ F9  BLOCKING (matrix) — `declaration_searched_only_inside_a_truncated_window`
 
     I IMPLEMENTED THE FIX RATHER THAN COSTING IT BY EYE, and the price is
     higher than I said. Adding one level of name-binding resolution to `scan()`
-    is about 35 lines and the gate still runs. Measured on the merged tree with
+    is about 60 lines with its comments and the gate still runs. Measured on the merged tree with
     an empty inventory:
 
-        slice-then-search sites      10  ->  96
-        distinct inventory keys       8  ->  52
+          slice-then-search sites      10  ->  50
+          distinct inventory keys       8  ->  31
+
+      CORRECTED 2026-08-22, DOWNWARD, AND THE INFLATION MECHANISM IS IDENTIFIED.
+      This read "10 -> 96" and "8 -> 52" until I rebuilt the remedy at today's tip and
+      could not reproduce it. The honest figures are 50 sites and 31 keys — so 23 new
+      inventory rows, not 44. Roughly half the price I quoted the author.
+
+      WHY THE 96 WAS TOO HIGH, and I know because my first attempt today reproduced
+      it: `ast.walk(tree)` yields nested FunctionDefs, and walking the outer function
+      already covers the inner, so every site inside a nested function was recorded
+      TWICE. That first attempt gave 60 sites.
+
+      THE SECOND DEFECT WAS A MISS, NOT A DOUBLE-COUNT, and only a positive control
+      found it. I checked the remedy against the six sites F9 names as missed. Five
+      were found and `gen_program_inventory.py:131` was not, because the searched
+      object there is `head.upper()` — a Call, not a bare Name — and I had required a
+      Name. Looking for the bound name ANYWHERE in the searched expression fixes it.
+      After both fixes all six are found:
+
+          _signoff_drc_format 110      mpw_precheck_cleanup 159
+          floorplan_contract 367,368,369   phase3_one_shot_runner 17326
+          gen_program_inventory 134    gen_programs_index 206
+
+      AND THE TWO IMPLEMENTATIONS NOW AGREE. 50 = the checker's own 10 direct forms
+      plus 40 name-bound — and 40 is exactly what my separate, separately
+      positive-controlled scanner reports. Two implementations written on different
+      days from different directions landing on the same 40 is the strongest support
+      this number has. The 96 never had it, and I published it anyway.
 
     Its own suite: 9 of 10 tests still pass. The one that fails is
     `test_the_shipped_tree_passes_its_own_rule`, and it fails for the RIGHT
@@ -2209,13 +2238,14 @@ F9  BLOCKING (matrix) — `declaration_searched_only_inside_a_truncated_window`
     a real design distinction; here the test is simply reporting that the
     inventory has to grow with the predicate.
 
-    So the true cost is: the resolution, PLUS 44 new inventory rows each with a
-    written reason (this branch's own convention, and it holds 38 such rows
-    elsewhere), OR repairing the sites. Not the "8 rows to ~39" I first
-    estimated, and not free. Acceptable alternative: state the limit in the
-    docstring AND in the verdict line, and add a test pinning it, so the PASS
-    stops claiming more than it measured. Either is fine; shipping the current
-    docstring against the current implementation is what is not.
+      So the true cost is: the resolution, PLUS 23 new inventory rows each with
+      a written reason (this branch's own convention, and it holds 38 such rows
+      elsewhere), OR repairing the sites. Not the "8 rows to ~39" I first
+      estimated, not the 44 I corrected that to, and not free. Acceptable
+      alternative: state the limit in the docstring AND in the verdict line, and
+      add a test pinning it, so the PASS stops claiming more than it measured.
+      Either is fine; shipping the current docstring against the current
+      implementation is what is not.
 
 F12 FIX WITH F9 (matrix) — matrix checkers answer PASS on an EMPTY SCAN where
     every chip checker refuses. Measured against a tree holding nothing but
