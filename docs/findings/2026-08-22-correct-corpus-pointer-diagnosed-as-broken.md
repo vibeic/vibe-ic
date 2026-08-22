@@ -504,32 +504,62 @@ the run on an expired exemption, and since the dispatcher refuses an exemption o
 a population refusal at all, the routed-DEF EMPTY row remains **the only
 unexempted blocking refusal in the file**.
 
-### The figure is stale in a record that has not landed
+### CORRECTION: the stale figure is on MAIN, not in the unlanded branch
 
-`origin/fix/jdefcorpus-routed-def-restoration-condition-v2` states *"all **20**
-of them"*, quotes `grep -c '^[[:space:]]*uncheckable_until '` returning `20`, and
-splits them *"**9** dated 2026-11-30, **11** dated 2027-02-28"*. Those are
-exactly the values at `81cd5321b` — its first draft's base — and that record
-carries the header *"RE-MEASURED end to end … on a clean worktree of
-`origin/main` @ `a4caccefe` … every load-bearing claim below was taken again
-rather than carried forward."*
+**My first version of this section named the wrong document, and the retraction
+matters more than the finding.** It said
+`origin/fix/jdefcorpus-routed-def-restoration-condition-v2` prints *"all 20 of
+them"*. It does not — that string appears **zero** times in it, and its own
+table, marked `[re-measured @ a4caccefe]`, reads:
 
-This claim was not taken again. It is `81cd5321b`'s number presented as
-`a4caccefe`'s, in a document whose own thesis is that evidence attaches to a sha
-and not to a branch name. It is load-bearing there: the table is what argues the
-routed-DEF row *"really is the only unexempted blocking refusal in the file
-today, rather than one red among several of its class"* — a conclusion that
-survives, on the numbers above, but not on the numbers it prints. Its adjacent
-remark that the 9-vs-9 match is *"a coincidence, not an identity"* is moot: the
-count is 3.
+| counted in `tools/ci/repo_hygiene_gates.sh` @ `a4caccefe` | n |
+|---|---|
+| `run_tolerating_uncheckable` call sites | 25 |
+| `uncheckable_until <date> <why>` declarations | 25 |
 
-**For whoever lands that branch:** the verdict stands, the arithmetic beside it
-does not. Correct 20 → 25, 9 → 3, 11 → 22, or drop the table for the property it
-was there to establish, which is re-measured above and holds.
+which matches my own measurement exactly. **The unlanded branch is right.** I had
+read the passage in a different file and attributed it to the branch, which is
+the same "which tree did this come from" error this document is about, committed
+by me, about a document about that error.
 
-*Two refinements were needed before my own number was right, so it is worth
-saying how. Pairing each exemption with the line immediately after it gave
-"20 `run_tolerating_uncheckable`, 5 `#`" — the wrapper is not always adjacent.
+**Where it actually is:** `docs/findings/2026-08-21-routed-def-corpus-is-empty-adjudication.md`
+— **landed on `main`**. It states *"all **20** of them"*, quotes
+`grep -c '^[[:space:]]*uncheckable_until '` returning `20`, annotates
+`run_tolerating_uncheckable x20  run x0  gate_dispatch_over x0`, and splits them
+*"**9** dated 2026-11-30, **11** dated 2027-02-28"*.
+
+**And it was wrong when it landed, not merely aged.** That distinction is the
+whole finding, so it was measured rather than assumed. The file arrived in
+`fed57f213` (2026-08-22 08:40 +0800). At that exact commit:
+
+| | at `fed57f213`, the landing commit | at `a4caccefe`, now | as the doc prints |
+|---|---|---|---|
+| `uncheckable_until` | **25** | **25** | 20 |
+| `2026-11-30` | **3** | **3** | 9 |
+| `2027-02-28` | **22** | **22** | 11 |
+
+Nineteen commits separate the two shas and none of the counts moved. The figure
+never described the tree it landed in; it is `81cd5321b`'s value — the first
+draft's base, 214 commits earlier — carried forward under a re-measurement
+heading.
+
+**The conclusion is unaffected and independently re-derived above:** all 25
+attach to `run_tolerating_uncheckable`, none to a plain `run`, none expired, so
+the routed-DEF EMPTY row remains the only unexempted blocking refusal. What is
+wrong is the arithmetic printed beside a correct verdict — which is the more
+dangerous shape, because a reader checking the sums finds them self-consistent
+and stops.
+
+**What should happen to it.** The newer record already carries the right numbers,
+so the repair is to correct the landed file's three figures — 20 → 25, 9 → 3,
+11 → 22 — and drop its "9-vs-9 coincidence" remark, which is moot at 3. That is
+an edit to a landed document on `main`, which this branch may not make, so it is
+recorded here rather than performed.
+
+*Three passes were needed before my own count was right, and it is worth saying
+how, because a one-pass `grep` beside a structured file is how the landed figure
+got there. Pairing each exemption with the line immediately after it gave "20
+`run_tolerating_uncheckable`, 5 `#`" — the wrapper is not always adjacent.
 Skipping comments gave "24 + 1 `gate_serial`". Only the third pass was the
-answer. A one-pass `grep` beside a structured file is how the stale figure got
-there in the first place.*
+answer. My first pass produced the number 20 as well, from a different mistake
+than the one that produced the landed 20.*
