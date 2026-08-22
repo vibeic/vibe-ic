@@ -18,6 +18,9 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROGRAMS))
+
+from not_verified_tier import skip_not_verified  # noqa: E402
 _spec = importlib.util.spec_from_file_location(
     "_die_fin_pin", PROGRAMS / "die_finishing_gen.py")
 DF = importlib.util.module_from_spec(_spec)
@@ -60,11 +63,12 @@ def test_upstream_sealring_contract_is_the_one_this_module_drives():
     rel = DF.UPSTREAM_MIRROR["upstream"]
     src = _upstream(rel)
     if src is None:
-        pytest.skip(
+        skip_not_verified(
             f"upstream {rel} is not on this host: $VIBEIC_LIBRELANE_ROOT is "
             f"unset or does not carry it and `librelane` is not importable. "
             f"The question could not be put here; it is put in the container "
-            f"image that ships the flow.")
+            f"image that ships the flow.",
+            "set $VIBEIC_LIBRELANE_ROOT to a LibreLane checkout that carries it, or run in the container image that ships the flow")
     body = _sealring_body(src.read_text(errors="replace"))
 
     for flag in ("--input", "--output", "--die-width", "--die-height"):
