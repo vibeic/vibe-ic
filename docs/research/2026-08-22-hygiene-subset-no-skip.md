@@ -1435,6 +1435,15 @@ That leaves the holder of batch 67 a genuine trade, and it is theirs, not mine:
   BLOCKING, so this needs an explicit decision rather than silence.
 * **re-assemble** — clears it, costs eight conflict resolutions plus a re-run.
 
+**[BOTH BULLETS SUPERSEDED — see §30.** Two things here are now measured and
+wrong. The eight conflicts are mechanical and tooled, not a cost worth weighing:
+version sites resolve to `1.11.68`, a value `main` already carries, and the
+derived rows have an in-tree generator. And "re-assemble — CLEARS IT" is false:
+the batch BASE `546487a8a3` already fails this gate on `jrows`'s finding alone,
+so a re-assembly takes it from 2 findings to 1 and `rc 1` either way. There is
+no trade here to hold. The binding constraint is `jrows`'s lane, and neither
+bullet is an action anyone should take on my account.**]**
+
 I have no view on which is right and it would be presumptuous to offer one; the
 point of this subsection is that §23 understated the cost and somebody choosing
 between them should not inherit my optimism.
