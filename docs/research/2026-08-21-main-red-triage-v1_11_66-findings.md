@@ -4290,6 +4290,66 @@ harder to catch than a blocker that is simply false, because checking it feels
 like confirming it.
 
 
+## M81 — G4 ROOT-CAUSED from a live run: the injected hang is unreachable, so both tests measure nothing
+
+B was filed *"unbuilt on sequencing, not hazard"* — my own words for deferring it.
+Ran the two tests instead. **Host load 3.56, 114Gi free, so the load-276 constraint
+was not binding; I had simply not looked.**
+
+Both fail, and the failure is the diagnostic I built earlier doing its job:
+
+> the verifier EXITED rc=0 without ever running the A2 control arm: the injected
+> hang was unreachable, so this test measured NOTHING about interrupt cleanup
+
+The verifier ran to completion — `LAND OK`, `arm A2/B2: base rc=0 candidate rc=0
+(hermetic gates)`. **The hang never fired.**
+
+**WHY, confirmed from source.** The injected hang is guarded:
+
+    [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ] && [ "$GATEKEEPER_VERIFY_ARM" = "A2" ]
+
+and the arm now runs INSIDE the container, where the environment is a closed
+7-name allowlist:
+
+    grep -c GATEKEEPER_CONCURRENCY_PROBE_DIR hermetic_candidate_runner.py  ->  0
+    GATEKEEPER_VERIFY_ARM in _LAND_REVIEWED_ENV_NAMES                     ->  yes (:106,:115,:275)
+
+**The probe directory cannot cross. The first conjunct is therefore false in
+every container, always.** The hang is dead code in the hermetic era.
+
+**This is the same root cause as the other 20 (M27), reaching G4 by a third
+mechanism** — not the absent Docker CLI, not a re-pointed assertion, but a test
+control that used to cross as an env var and no longer can. **One migration,
+three mechanisms.**
+
+**The severity is worse than "2 red".** Had the probe directory happened to be on
+the allowlist for an unrelated reason, these tests would pass — and still measure
+nothing, because the thing they assert about is:
+
+    with pytest.raises(ProcessLookupError):
+        os.kill(arm_pid, 0)
+
+`arm_pid` is `$$` written by a shell **inside the container**, so it is a
+container-namespace PID read on the host. Against a host it almost never names,
+`ProcessLookupError` is what you get whether cleanup worked or not. **A green here
+would have been worth nothing**, which is why B's replacement is a container-label
+assertion and not a repaired PID check.
+
+**B is now fully unblocked and every channel is verified from source:**
+
+    RUN_ID="$(basename "$RUN")"              gatekeeper-verify-merge.sh:327
+    refs/gk-verify/$RUN_ID/{head,merge}                              :328-329
+    those refs deleted during cleanup                                :897-898
+    --label ai.vibeic.hermetic-run=<run_id>  hermetic_candidate_runner.py:1889
+    label VALIDATED back from inspect                                :751
+    distinct provision/export labels                                 :1086,:1147
+
+The replacement control is a **committed sentinel file** plus `GATEKEEPER_VERIFY_ARM`
+— the tree crosses, the allowlist carries the arm name, and **a real base cannot
+carry the sentinel**, which is a stronger safety property than an env flag because
+a flag can be set by accident and a committed file cannot.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
