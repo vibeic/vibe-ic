@@ -64,20 +64,31 @@ strength of those two sources, not because a ring then fits. On a real ring it
 happened to be a 4.4x error: 19 x 350 = 6650 um against a 1500 um side, which
 refused a ring upstream places.
 
-`PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD
-======================================================
-The same measurement shows the placer does not read it. Silently honouring an
-inert variable is a lie; silently ignoring a declared one is the defect. So it
-degrades loudly in BOTH directions:
+`PAD_ROTATION_VERTICAL` IS NOT HONOURED BY THIS STEP, AND SAYS SO OUT LOUD
+=========================================================================
+THE VARIABLE IS NOT INERT, AND AN EARLIER VERSION OF THIS HEADING SAID IT WAS.
+The probe that produced the four-process table above varied
+`PAD_ROTATION_VERTICAL` while watching only WEST and EAST, and those two sides
+are steered by `-rotation_horizontal`; `-rotation_vertical` steers SOUTH and
+NORTH. The parameters are named for the ROW AXIS, not the side. So the table is
+correct and the inference drawn from it was not.
+
+The ruling is unchanged and better founded. The weak version was "an author who
+sets a knob is entitled to be told the knob does nothing". The true one: the
+knob HAS an effect -- it rotates the N/S pads -- and THIS STEP does not
+implement it, so honouring the declaration silently would hand an author
+geometry they did not ask for. So it degrades loudly in BOTH directions:
 
     at librelane's default `R0`   — indistinguishable from never having set it
                                     — PROCEED, and carry
-                                    `rotation_vertical_inert` in the report,
+                                    `rotation_vertical_not_honoured` in the
+                                    report,
                                     with the measurement, in EVERY report
                                     including the skips. A disclosure only
                                     present on the happy path is not one.
     declared non-default          — refuse **rc 2, NOT DETERMINED**, naming the
-                                    variable and saying the placer ignores it.
+                                    variable and saying this step does not
+                                    implement it.
                                     Never rc 0 and never rc 1: "I cannot
                                     honour what you asked" is neither a pass
                                     nor a finding about the design. An author
@@ -180,19 +191,26 @@ UPSTREAM_REFUSALS_MADE_MACHINE_READABLE: Tuple[Tuple[str, str], ...] = (
 )
 
 
-#: `PAD_ROTATION_VERTICAL` is INERT, and this is the evidence, carried in the
-#: report so a reader is told rather than left to find out.
-ROTATION_VERTICAL_INERT: Dict[str, Any] = {
+#: `PAD_ROTATION_VERTICAL` is NOT HONOURED BY THIS STEP -- it is not inert, and
+#: the key must not say it is. A proposition asserted in an identifier cannot be
+#: retracted by prose somewhere else: every reader keys on the identifier and
+#: none of them reads the retraction. Carried in the report so a reader is told
+#: rather than left to find out.
+ROTATION_VERTICAL_NOT_HONOURED: Dict[str, Any] = {
     "variable": "PAD_ROTATION_VERTICAL",
     "honoured": False,
     "reason": (
-        "the placer does not read it. MEASURED in four SEPARATE OpenROAD "
+        "this step does not implement it. MEASURED in four SEPARATE OpenROAD "
         "processes, one per value so no row from an earlier pass could be "
         "reused by a later one: PAD_ROTATION_VERTICAL = R0 / R90 / R180 / MX "
         "all produced WEST orient=MXR90 and EAST orient=R90, 75 um along the "
-        "row and 350 um into the die, IDENTICAL in all four. The vertical-side "
-        "orientation is a constant of the placer, not a function of this "
-        "variable."),
+        "row and 350 um into the die, IDENTICAL in all four. THAT TABLE IS "
+        "ABOUT THE WRONG SIDE PAIR AND WAS ONCE READ AS INERTNESS: "
+        "-rotation_horizontal steers WEST and EAST, -rotation_vertical steers "
+        "SOUTH and NORTH, so watching W and E while varying this variable "
+        "correctly sees nothing change. The variable HAS an effect -- it "
+        "rotates the N/S pads -- and this step does not implement it, which is "
+        "why a declared non-default is refused rather than quietly ignored."),
     "measured_orientation": {"W": "MXR90", "E": "R90"},
     "librelane_default": PR.ROTATION_DEFAULT,
     "what_this_step_does": (
@@ -243,7 +261,7 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "fillers_placed": None,
         "spacing": None,
         "unperformed": dict(UNPERFORMED),
-        "rotation_vertical_inert": dict(ROTATION_VERTICAL_INERT),
+        "rotation_vertical_not_honoured": dict(ROTATION_VERTICAL_NOT_HONOURED),
         "bterms": None,
         "findings": [],
     }
@@ -615,7 +633,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # pass and it is not a finding about the design — it is the flow's
     # could-not-measure tier, which is exactly what this is. A run that leaves
     # the variable at librelane's default is indistinguishable from a run that
-    # never set it, so it proceeds and is TOLD, in `rotation_vertical_inert`.
+    # never set it, so it proceeds and is TOLD, in
+    # `rotation_vertical_not_honoured`.
     declared_rotv = PR.normalise_orient(
         cfg["rotation"]["PAD_ROTATION_VERTICAL"])
     if declared_rotv != PR.normalise_orient(PR.ROTATION_DEFAULT):
@@ -624,14 +643,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         reason = (
             f"NOT DETERMINED: this run DECLARES PAD_ROTATION_VERTICAL={raw!r}, "
             f"a value other than librelane's default "
-            f"{PR.ROTATION_DEFAULT!r}, and the placer does not read it. "
-            f"{ROTATION_VERTICAL_INERT['reason']} Placing the ring anyway "
+            f"{PR.ROTATION_DEFAULT!r}, and this step does not implement it. "
+            f"{ROTATION_VERTICAL_NOT_HONOURED['reason']} Placing the ring "
+            f"anyway "
             f"would silently give you the orientation you did not ask for, "
             f"and reporting PASS would say the declaration was honoured. "
             f"Neither is true, so no ring is placed and no verdict is claimed. "
             f"Remove the declaration, or set it to {PR.ROTATION_DEFAULT!r}, to "
             f"proceed on the placer's own measured orientation "
-            f"({ROTATION_VERTICAL_INERT['measured_orientation']}).")
+            f"({ROTATION_VERTICAL_NOT_HONOURED['measured_orientation']}).")
         rep = _report("SKIP", reason, inputs=inputs,
                       io_cell_library=lib.as_dict(), die=die_rec,
                       missing_inputs=[{
@@ -646,7 +666,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"=== {PROGRAM} ({project.name}) ===")
         print("  verdict: SKIP (NOT DETERMINED)")
         print(f"  PAD_ROTATION_VERTICAL_NOT_HONOURED: declared {raw!r}, "
-              f"placer ignores it")
+              f"this step does not implement it")
         return 2
 
     cfg_rec = {

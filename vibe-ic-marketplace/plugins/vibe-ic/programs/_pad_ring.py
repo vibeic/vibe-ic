@@ -272,8 +272,20 @@ _ROTATED = ("E", "W", "FE", "FW")
 #:                                        75 um along the row, 350 um into the
 #:                                        die, IDENTICAL in all four
 #:
-#: The vertical-side orientation is a CONSTANT of the placer, not a function of
-#: the declared rotation. Written here in the placer's own spelling
+#: THE TABLE IS ABOUT THE WRONG SIDE PAIR TO SUPPORT THE CONCLUSION IT ONCE
+#: CARRIED, which was "a CONSTANT of the placer, not a function of the declared
+#: rotation". `-rotation_vertical` steers SOUTH and NORTH; WEST and EAST are
+#: steered by `-rotation_horizontal`. The parameters are named for the ROW
+#: AXIS, not the side, so varying this variable while watching W and E
+#: correctly sees nothing change and says nothing about whether the sides are
+#: constant.
+#:
+#: WHAT THESE VALUES ARE, THEN: the orientation the placer produces on the
+#: vertical sides AT THE DEFAULT of `PAD_ROTATION_HORIZONTAL`, which is the
+#: only rotation state this step places under. Whether they should instead be
+#: DERIVED from a declared non-default `PAD_ROTATION_HORIZONTAL` is an open
+#: question that needs one OpenROAD run to settle and MUST NOT be acted on
+#: before it has one. Written here in the placer's own spelling
 #: (`MXR90` -> `FW`, `R90` -> `W`) so the DEF this step emits says what the tool
 #: would have said. Emitting the DECLARED orientation instead produced an
 #: artefact that contradicted its own geometry.

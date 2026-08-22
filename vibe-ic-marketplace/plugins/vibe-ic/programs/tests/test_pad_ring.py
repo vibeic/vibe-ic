@@ -1207,30 +1207,30 @@ def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
     assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
 
 
-def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
+def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_not_honoured(
         tmp_path):
     """The other half of the rule, and the half that keeps it honest. A run at
     librelane's default is indistinguishable from a run that set nothing, so it
-    proceeds — and the report SAYS the variable is inert, with the measurement,
-    rather than leaving a reader to find out."""
+    proceeds — and the report SAYS this step does not honour the variable, with
+    the measurement, rather than leaving a reader to find out."""
     root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
     assert _gen(root) == 0
     rep, _ = CHK._unwrap(_report(root))
-    inert = rep["rotation_vertical_inert"]
-    assert inert["variable"] == "PAD_ROTATION_VERTICAL"
-    assert inert["honoured"] is False
-    assert inert["measured_orientation"] == {"W": "MXR90", "E": "R90"}
-    assert "four SEPARATE OpenROAD processes" in inert["reason"]
-    assert inert["librelane_default"] == PR.ROTATION_DEFAULT
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["variable"] == "PAD_ROTATION_VERTICAL"
+    assert rec["honoured"] is False
+    assert rec["measured_orientation"] == {"W": "MXR90", "E": "R90"}
+    assert "four SEPARATE OpenROAD processes" in rec["reason"]
+    assert rec["librelane_default"] == PR.ROTATION_DEFAULT
 
 
-def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
+def test_the_not_honoured_disclosure_is_in_every_report_including_the_skip(tmp_path):
     """A disclosure only present on the happy path is not a disclosure."""
     for cfg in (None, _config(), _config(PAD_ROTATION_VERTICAL="R90")):
         root = _project(tmp_path / f"p{id(cfg)}", config=cfg)
         _gen(root)
         rep, _ = CHK._unwrap(_report(root))
-        assert rep["rotation_vertical_inert"]["honoured"] is False
+        assert rep["rotation_vertical_not_honoured"]["honoured"] is False
 
 
 def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
@@ -1416,3 +1416,43 @@ def test_no_real_pdk_declares_one_site_at_two_sizes():
         # its IO libraries.
         assert not getattr(lib, "site_declaration_conflicts", {}), (
             f"{tree}: {lib.site_declaration_conflicts}")
+
+
+# --------------------------------------------------------------------------- #
+# a refuted finding must lose its identifier
+# --------------------------------------------------------------------------- #
+def test_the_report_key_does_not_assert_the_refuted_premise(placed):
+    """`PAD_ROTATION_VERTICAL` is NOT inert; it steers the SOUTH and NORTH rows,
+    and this step does not implement it. The distinction is not cosmetic: the
+    old key `rotation_vertical_inert` asserted the refuted proposition IN THE
+    SCHEMA, where every consumer keys on it and none of them reads the
+    retraction published elsewhere."""
+    rep, _ = CHK._unwrap(_report(placed))
+    assert "rotation_vertical_not_honoured" in rep, sorted(rep)
+    assert "rotation_vertical_inert" not in rep, (
+        "the report still carries a key asserting the variable is inert")
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["honoured"] is False
+    assert "does not implement it" in rec["reason"], rec["reason"]
+    assert "the placer does not read it" not in rec["reason"], (
+        "the reason still says the tool ignores the variable, which is the "
+        "claim that was measured false")
+
+
+def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
+    """The general rule, not the one variable: a proposition the project has
+    recorded as FALSE may not survive in an identifier. Prose may discuss it —
+    and does, in three places that deny it — but no NAME may assert it."""
+    src = (PROGRAMS / "pad_ring_gen.py").read_text(encoding="utf-8")
+    tree = __import__("ast").parse(src)
+    ast = __import__("ast")
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and "INERT" in node.id.upper():
+            offenders.append(node.id)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "inert" in node.value.lower() and "not inert" not in node.value.lower() \
+                    and "READ AS INERTNESS" not in node.value:
+                offenders.append(f"string literal: {node.value[:60]!r}")
+    assert not offenders, (
+        f"identifiers or emitted strings still assert inertness: {offenders}")
