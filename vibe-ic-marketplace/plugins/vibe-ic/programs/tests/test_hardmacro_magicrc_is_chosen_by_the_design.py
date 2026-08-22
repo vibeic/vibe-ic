@@ -135,3 +135,68 @@ def test_an_empty_or_absent_root_is_still_absent_not_a_crash(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# the runner half: the producer can only refuse less often if it is TOLD
+# ---------------------------------------------------------------------------
+def _runner():
+    sys.path.insert(0, str(_PROGRAMS))
+    import phase3_one_shot_runner as r
+    return r
+
+
+def test_the_runner_hands_the_producer_the_designs_own_pdk(tmp_path, monkeypatch):
+    """The other half of the fix.
+
+    Making the producer REFUSE an ambiguous PDK_ROOT is only half a repair: on
+    its own it converts a silently-wrong abstract into a step that always
+    skips. The step has the run's `PdkConfig` in scope, so it can say which PDK
+    the design is on — and then the refusal is the exception rather than the
+    rule.
+    """
+    r = _runner()
+    root = tmp_path / "pdks"
+    (root / "somepdk" / "libs.tech" / "magic").mkdir(parents=True)
+    (root / "otherpdk" / "libs.tech" / "magic").mkdir(parents=True)
+    monkeypatch.setenv("PDK_ROOT", str(root))
+
+    pdk = type("P", (), {"name": "somepdk"})()
+    got = r._hardmacro_pdk_dir(pdk)
+    assert got == str(root / "somepdk"), (
+        f"the design is on 'somepdk' and the runner resolved {got!r}; if this "
+        f"is None the producer sees only PDK_ROOT, which holds two "
+        f"technologies, and refuses on every run")
+
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        import subprocess as sp
+        return sp.CompletedProcess(cmd, 0, "ok\n", "")
+
+    monkeypatch.setattr(r.subprocess, "run", fake_run)
+    r.step_digital_hardmacro_gen(tmp_path, pdk)
+    assert "--pdk-root" in seen["cmd"], (
+        f"the producer was invoked without --pdk-root, so it falls back to "
+        f"$PDK_ROOT: {seen['cmd']}")
+    assert seen["cmd"][seen["cmd"].index("--pdk-root") + 1] == str(root / "somepdk")
+
+
+def test_an_unrecognisable_layout_degrades_to_a_refusal_not_a_guess(tmp_path, monkeypatch):
+    """If the standard layout does not hold, resolve NOTHING.
+
+    The producer then sees the bare `$PDK_ROOT` and refuses with its own stated
+    reason. What must never happen is this function inventing a directory: a
+    reconstructed path that happens to exist is how the wrong technology got
+    chosen in the first place.
+    """
+    r = _runner()
+    root = tmp_path / "pdks"
+    (root / "somepdk").mkdir(parents=True)          # no libs.tech/magic
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    assert r._hardmacro_pdk_dir(type("P", (), {"name": "somepdk"})()) is None
+    assert r._hardmacro_pdk_dir(type("P", (), {"name": ""})()) is None
+    assert r._hardmacro_pdk_dir(None) is None
+    monkeypatch.delenv("PDK_ROOT", raising=False)
+    assert r._hardmacro_pdk_dir(type("P", (), {"name": "somepdk"})()) is None
