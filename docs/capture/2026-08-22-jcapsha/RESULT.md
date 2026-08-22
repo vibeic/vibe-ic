@@ -323,24 +323,51 @@ host load was 42 at entry. The landed rc=2 refusal and the ruling behind it were
 left exactly as they are, and the case for re-reading them is filed rather than
 taken.
 
-**One thing worth a flow owner's eye that I did not fix.** The `pre-push` hook
-runs two gates as `--tree benchmark-data`, and that tree left this repository
-at v1.10.56. Measured on a clean checkout of current `main`, the two answer
-DIFFERENTLY to the same absent tree:
+**RETRACTED, AND REPLACED BY WHAT WAS ACTUALLY WRONG.** An earlier version of
+this report said the `pre-push` hook still runs two gates as
+`--tree benchmark-data`, that the tree left this repository at v1.10.56, and
+that a flow owner should look at the wiring. **That is false for `main`, and I
+published it after measuring a stale artefact.** Measured properly:
 
-    benchmark_evidence_structure_check   rc 2  UNDETERMINED, and it blocks
-    benchmark_run_manifest               rc 0  PASS — "0 run director(y/ies)
-                                               touched", a disclosed zero
+    the hook that RAN on my pushes ....... 9 gates, two of them --tree benchmark-data
+    the hook TRACKED at current main ..... 7 gates, ZERO occurrences of benchmark-data
 
-Both are defensible on their own terms and the pair is what is odd: one refuses
-because it could not look, the other passes because there was nothing to look
-at, and neither is wrong. The blocking one only runs against anything at all
-for a pusher who happens to have the corpus cloned and
-`$VIBE_IC_BENCHMARK_DATA` pointed at it — which is how this lane pushed, and it
-means the gate has been answering about a tree most pushers do not have. The
-gate is right to refuse; the wiring is what moved. Same shape as everything
-above — a check reading a location the thing no longer lives in — and not this
-brief's to change.
+The repository had already removed those two gates when the corpus moved. My
+"finding" was the absence of a fix that was in fact present.
+
+**WHAT WAS ACTUALLY WRONG IS THE HOOK RESOLUTION, and it is general.**
+`core.hooksPath` is set to the SHARED `.git/hooks`, and that directory's
+`pre-push` is a symlink into the **primary checkout's working tree**:
+
+    core.hooksPath = /home/reyerchu/vibe-ic/.git/hooks
+    .git/hooks/pre-push -> /home/reyerchu/vibe-ic/tools/git-hooks/pre-push
+    that checkout is on a branch at 886bb4a14 — before the corpus move
+
+So a push from ANY worktree runs whatever version of the hook the primary
+checkout happens to have checked out, not the version its own commits are
+based on. The gate set is a property of somebody else's working tree. Here it
+meant two retired gates ran against my push; it could equally mean a gate that
+`main` ADDED does not run at all, which is the direction that actually costs
+something.
+
+**AND MY WORKAROUND WAS COMPENSATING FOR THAT, NOT FOR A REPO GAP.** I pushed
+with `VIBE_IC_BENCHMARK_DATA` pointed at a local clone of the corpus so the
+retired gate could run for real rather than be bypassed. That was the right
+move in the moment — it never used `--no-verify` — but the reason I gave for
+needing it was wrong.
+
+**RE-VERIFIED against the gate set my commits are actually supposed to face.**
+Pushed through `-c core.hooksPath=<this worktree>/tools/git-hooks` to a
+throwaway ref, with **no** corpus environment variable set: all seven gates
+passed, the push succeeded, and the throwaway ref was deleted. So the branch
+satisfies current `main`'s real gates unaided.
+
+I did NOT change `core.hooksPath`. It lives in the shared config, so setting it
+would change hook resolution for every other worktree and every other agent
+pushing from this repository — a fleet-wide change, made from inside one lane,
+to fix a thing that is not this brief's. The correct invocation is recorded
+above for anyone who needs it, and it is `-c core.hooksPath=...`, never
+`--no-verify`.
 
 ## Files
 
@@ -371,6 +398,8 @@ status and never from a pipe:
     each pin against a MUTATED upstream ............................ red, per mutation
     the eight `ppa` backend suites ................................. 53 passed
     the three emitted backlog YAMLs vs backlog_sanitize_check ...... rc 0, rc 0, rc 0
+    the branch through current main's OWN 7-gate pre-push .......... all passed,
+                                                                     no corpus env var
 
 The full `programs/tests` suite was NOT run — standing measured load
 constraint; host load was 42 at entry and ~50 at exit.
