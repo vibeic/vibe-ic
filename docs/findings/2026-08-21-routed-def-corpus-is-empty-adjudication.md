@@ -222,31 +222,47 @@ dispatcher refuses one:
 turns the whole sweep rc 2 regardless.
 
 That the other NOT CHECKED rows are a different KIND of thing is measured, not
-assumed. Every `uncheckable_until` in `repo_hygiene_gates.sh` — all **20** of
+assumed. Every `uncheckable_until` in `repo_hygiene_gates.sh` — all **25** of
 them, dated `2026-11-30` or `2027-02-28` — attaches to a
 `run_tolerating_uncheckable`. Not one attaches to a plain `run`, and not one
 attaches to the population refusal:
 
     $ grep -c '^[[:space:]]*uncheckable_until ' tools/ci/repo_hygiene_gates.sh
-    20
-    # …and the wrapper on the gate line each one precedes:
-    #   run_tolerating_uncheckable  x20      run  x0      gate_dispatch_over  x0
+    25
+    # …and the wrapper each one precedes, following the declaration past any
+    # comment lines (24 are adjacent; one is separated by a `gate_serial`):
+    #   run_tolerating_uncheckable  x25      run  x0      gate_dispatch_over  x0
 
-And none of the 20 has expired. Measured 2026-08-22, ISO-8601 so a string
-compare is a date compare: **9** dated `2026-11-30`, **11** dated `2027-02-28`,
+And none of the 25 has expired. Measured 2026-08-22, ISO-8601 so a string
+compare is a date compare: **3** dated `2026-11-30`, **22** dated `2027-02-28`,
 **0** past their review date. That matters because `gate_dispatch_finish` fails
 the run on an expired exemption too — so the routed-DEF population refusal really
 is the only unexempted blocking refusal in the file today, rather than one red
 among several of its class.
 
-*A count that matches is not an identity.* Nine exemptions carry the earlier date
-and the brief observed nine exempted NOT CHECKED rows, which is a coincidence of
-integers and nothing more: four of the 20 sit inside `_per_published_cell_gates`
-and cannot fire at all while the population is 0, leaving at most 16 that could
-produce a row, and which of those actually returned rc 2 in a given run is a fact
-about that run. Without its record the nine cannot be mapped one to one, and
-asserting it because the numbers agree would be the "the count was true and the
-impression was false" error this file keeps repairing.
+> **CORRECTED 2026-08-22.** This passage previously read **20** / **9** / **11**
+> with `run_tolerating_uncheckable x20`. Those are the values at `81cd5321b`,
+> this record's first-draft base and 214 commits earlier. They were **already
+> wrong at `fed57f213`, the commit this file landed in** — measured there and at
+> `a4caccefe` nineteen commits later, both **25 / 3 / 22**, so the figure never
+> described the tree it shipped in and had not merely aged. The paragraph's
+> CONCLUSION is unchanged and was re-derived independently before this edit; only
+> the arithmetic beside it moved. Recorded in place rather than silently
+> rewritten, because a corrected number with no history is the next reader's
+> unverifiable claim. Counting method, since a one-pass `grep` is how the wrong
+> figure arose: the wrapper is not always the line after the declaration —
+> pairing on adjacency alone yields a spurious 20.
+
+*A count that matches is not an identity.* The brief observed nine exempted NOT
+CHECKED rows; **three** exemptions carry the earlier date, so the numeric
+coincidence that made the earlier version of this paragraph worth writing does
+not exist — and the caution it argued for stands on its own without it. Four of
+the 25 sit inside `_per_published_cell_gates` and cannot fire at all while the
+population is 0, leaving at most 21 that could produce a row, and which of those
+actually returned rc 2 in a given run is a fact about that run. Without its
+record the nine cannot be mapped one to one, and asserting it because the numbers
+agree would be the "the count was true and the impression was false" error this
+file keeps repairing.
 
 So every exemption in the file is bought by a GATE whose own process returned
 rc 2 — "I could not look at my subject". This row is not a gate's verdict at all;
