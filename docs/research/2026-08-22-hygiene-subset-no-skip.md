@@ -3475,3 +3475,56 @@ prefer a quiet edit.
 **Both of us now recommend the same one-line addition** to any batch measurement
 on this fleet: `pytest -q tools/test_*.py` on BOTH arms. 63–73 s, covers a region
 no plugin-scoped selection reaches, and would have caught all 16 pre-landing.
+
+## 53. `jmeas3`'s root cause, demonstrated — and it is edit-without-its-FIXTURE
+
+`jmeas3` named `d5646372f` as the mechanism for the 16 from a code reading. I
+have been verifying peers' claims rather than filing them all night, and this
+one is one scratch worktree and two runs.
+
+**Single-variable demonstration on `main` `a4caccefea`:**
+
+```
+main as-is                                                16 failed, 12 passed
++ tools/gatekeeper-land-differential.sh reverted to d5646372f^   28 passed
+  (that revert is 2 insertions / 73 deletions in ONE file; no other commit has
+   touched the script since, so it isolates cleanly)
+```
+
+Reverting exactly that one file's change takes the suite from 16 red to fully
+green. **The named cause is now a demonstrated cause.**
+
+**And the failure text names the mechanism, which is not what I expected:**
+
+```
+python3: can't open file '/tmp/gk_synthetic_repo.…/repo/vibe-ic-marketplace/
+         plugins/vibe-ic/programs/landing_noop_verdict_check.py'
+```
+
+The tests stand up a SYNTHETIC repo and run the differential script inside it.
+`d5646372f`'s +75 lines wire in a call to `landing_noop_verdict_check.py` — a
+program the same commit also modified (+55) and gave its own test — but the
+synthetic fixture was never extended to contain it. So the script invokes a file
+that does not exist in the world the tests build for it.
+
+**This is NOT the §9 defect and the distinction is the useful part.** §9 was an
+edit whose DIGEST PIN was left behind. This is an edit whose FIXTURE was left
+behind. Same family — a change made in one place with its counterpart elsewhere
+unupdated — different counterpart, and the counterparts fail differently: a
+stale pin says *"sha mismatch"* and points straight at itself, while a stale
+fixture says *"can't open file"* from inside a temp directory and points at
+nothing. **The pin tells you what is wrong; the fixture makes you find out.**
+
+**Remedy shape, for whoever takes it** — not applied here, since it is another
+lane's subsystem: either add `landing_noop_verdict_check.py` to the synthetic
+repo the fixture builds, or make the script degrade when the program it newly
+depends on is absent. Which is right depends on whether the differential should
+refuse or continue when a wired gate is missing, and that is a flow decision, not
+a test fix.
+
+**What this adds to `jmeas3`'s report.** It had the commit and the shape
+("wiring verified, suite never run"). It now also has: the causal link
+demonstrated by single-variable revert, the failure mechanism named, and a
+remedy with the flow question that decides between its two forms. Sent to it,
+since the finding belongs to its closed brief and it should not have to
+rediscover the mechanism if the owner reopens it.
