@@ -1580,7 +1580,7 @@ coverage of the input.** So the last passes audited the input instead:
 | `ppa-e2e/FINDINGS.md` | read in full — all 18 |
 | `ppa-e2e/RESULT.md` | read in full, including §1–7 |
 | `ppa-e2e/METHOD.md` | read in full |
-| `ppa-crosslayer/RESULT.md` | read: §5–§10 and the requests — **and §2 late, which is the control the brief named.** It yielded the seventeenth ALREADY-PROGRAM and the correction to `A-15`'s remedy. The coverage note above was accurate about what had been read and silent about the brief having asked for more |
+| `ppa-crosslayer/RESULT.md` | read: §5–§10 and the requests — **and §1–§2 late.** §2 is the control the brief named; §1 yielded `A-16`'s second clause. Between them: the seventeenth ALREADY-PROGRAM, the correction to `A-15`'s remedy, and a disclosure the published search space does not make. The coverage note above was accurate about what had been read and silent about the brief having asked for more |
 | six lane records | read: findings, *what I could not settle*, and every REQUESTS/HANDOFF section |
 
 The last section produced **no new record, and that is the correct outcome.** It
@@ -2673,7 +2673,7 @@ gap was non-empty every single time it was measured.
 | A-6 | 759 of 1238 take an output path | **7 relative defaults, not all defects** | **swept**: the offending property is where a path RESOLVES at runtime, not that its default is relative — a static scan reports 7 and several are correct. Confirms the check belongs in the shared writer |
 | A-10 | 29 choice sets | **0**, and 1 for the grammar form | **swept**: the rule does NOT widen to accepted-value sets generally — for a plain choice list, handled-ness is not statically decidable once a value is passed onward. Screen went 10 → 2 → 0, all mine |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
-| A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. The published `layer` field is the discriminator |
+| A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped; and 3 of 5 never searched** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. **Second clause**: the space publishes no field saying which admitted levers were exercised, so a consumer reads coverage of five where the run turned two |
 | A-17 | 6804 absolute, **2 roots** | **0 outside a run tree** | **swept**: no absolute path is forced, so the declared-convention check has an empty false-positive population and the "rewriting breaks provenance" objection does not apply. Earlier correction stands: mixed WITHIN producers, 6804/6804 host-prefixed |
 | A-18 | objective = **1 metric**; feasibility names **6** families | **spare cells in neither** | **swept**: removing them lowers the area the ranking optimises AND passes a gate that has no term for them — while the artefact carries a protection block asserting they cannot be stripped |
 | A-19 | 21 trials | **21 empty proxy files** | **swept**: a check keyed on the cheap rung's own artefact is born vacuous — it is empty in every trial. Build from the predicted and measured orders, and make emptiness a refusal |
