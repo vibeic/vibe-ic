@@ -1250,10 +1250,17 @@ read this cold.
    THE HOUR, AND THE REVERSAL IS THE PART WORTH READING.
    PUSHED as branch `jpadsite/capture-bundle`, NOT a PR and NOT on
    `jpadsite/pad-site`. It carries `docs/capture/2026-08-22-jpadsite/` with this
-   file and the evidence tree. (Head was a3f68ee0d; it is 19a2e23e1 after the
-   correction below. I pinned the first sha here and it went stale within the
-   hour, from my own next commit -- the same class this report documents, so it
-   is corrected rather than quietly updated.)
+   file and the evidence tree. (THE HEAD SHA IS WITHDRAWN, NOT UPDATED. I
+   pinned a3f68ee0d, corrected it to 19a2e23e1 an hour later, and the commit
+   carrying THAT correction made it 6df753937 -- because this file is IN the
+   bundle, so every publication of the sha changes the sha. That is the peer's
+   self-referential-figure class, and their resolution is the right one: stop
+   chasing, publish the INVARIANT and the command instead.
+       the branch exists and carries this bundle
+         git ls-remote origin refs/heads/jpadsite/capture-bundle
+         git show <head>:docs/capture/2026-08-22-jpadsite/RESULT.md | head -1
+   Any head you find there is the current one; none I could write here would
+   stay true past the writing of it.)
 
    AND THE REPO COPY IS A SUBSET, WHICH I ONLY LEARNED BY RETRIEVING IT.
    `git add` silently dropped EIGHT files -- `.gitignore:31` excludes `*.log`,
