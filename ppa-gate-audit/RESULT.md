@@ -1969,3 +1969,93 @@ being held for ONE walk instead of four.
     rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
 
 Unchanged from Part 14. Chip-agnostic guard PASS over 1553 files.
+
+---
+
+# Part 19 — the whole suite, both trees; and Part 14 said something false
+
+Every measurement in Parts 12–18 was a gate run BY HAND, one row at a time, plus
+targeted pytest. The suite those rows live in was never run. That is the gap this
+part closes, and closing it overturned a claim.
+
+Both runs: separate worktrees, `git clean -xdfq`, `PYTHONDONTWRITEBYTECODE=1`,
+nothing else touching either tree.
+
+|  | `a758f4adc` | this branch |
+|---|---|---|
+| gates declared | 93 | 93 |
+| decided | 83 | **84** |
+| passed | 76 | **78** |
+| failed | 7 | **6** |
+| NOT CHECKED | 10 | **9** |
+| seconds | 436 | 543 |
+
+    failures on this branch and not the base:
+      PPA measurement coverage
+    failures on the base and not this branch:
+      PPA arms solved one problem (cross-layer campaign)
+      PPA arms solved one problem (end-to-end campaign)
+
+**One red added, two removed, and both directions are earned.** The added one
+reports 54 record findings the gate had already computed and discarded. The two
+removed now compare 210 and 1830 real pairs where they previously compared none.
+
+The four reds present in both — `evidence citation resolves`, `gates are
+host-independent`, `L-doc field producer`, `liar census controls still fire` —
+are untouched by this branch, and three of them carry rows in
+`gate_red_since.json`. So does `PPA head-to-head records (cross-layer
+campaign)`, which is still red and still refusing `h2h_F`, exactly as the brief
+required.
+
+## PART 14 SAID SOMETHING FALSE, AND THIS IS THE CORRECTION
+
+Part 14 argued the two `PPA arms solved one problem` rows had been failing
+invisibly:
+
+> **rc 3 is quieter than rc 2 and that is why it survived.** ... nothing in the
+> roll-up distinguishes it from a row that ran
+
+**That is wrong.** Measured on the pristine base, the dispatcher rendered them:
+
+    ── PPA arms solved one problem (cross-layer campaign)
+    [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
+    and --corpus were both given. ... Give exactly one. rc=3.
+       ^^ FAILED: PPA arms solved one problem (cross-layer campaign) [0s]
+
+`^^ FAILED:`, with the program's refusal printed directly above it. Both rows
+were LOUD, they were counted in the failure total, and anyone reading the
+roll-up would have seen them. What was true is narrower and still worth fixing:
+they were red, they had stayed red, and while red they examined zero pairs. What
+was NOT true is that the roll-up hid them.
+
+The claim was reasoned from `run_tolerating_uncheckable`'s name — it tolerates
+rc 2, so rc 3 must fall through to something quieter — instead of from a run.
+Part 14's paragraph is left standing and superseded here, per this report's
+header rule. It is a good example of the failure this whole document is about
+pointing at its own author: **an assertion about what a reader would see, made
+without being a reader.**
+
+## What that changes about the fix, and what it does not
+
+Nothing about the repair. `--corpus` mode was rewritten to need no baseline, the
+wiring still passed one, and the rows decided nothing — that was true before this
+part and is true after it. Only the argument for urgency was overstated, and
+overstated in the direction that flatters the person making it.
+
+## The NOT CHECKED count, and what is behind it
+
+Ten before, nine after, and the one that moved is `PPA measurement coverage` —
+from NOT_CHECKED to FAILED, because it now reports findings instead of being
+silent about them. The nine that remain:
+
+    blocker list contract on committed reports   empty population, other repo
+    engineering evidence fresh                   artefact + producer NAMED
+    input-doc claims vs installed PDK            non-empty corpus, no decidable claim
+    PPA head-to-head records                     published corpus, other repo
+    PPA measurement contract                     published corpus, other repo
+    PPA head-to-head records (end-to-end)        2 records, both NAMED
+    PPA promotion feasibility (cross-layer)      21 sets, artefacts NAMED
+    PPA frontier recomputes                      both artefacts NAMED
+
+Eight rows, every one of which now says what it is missing. That is the whole
+point of the branch, measured in the suite rather than row by row.
