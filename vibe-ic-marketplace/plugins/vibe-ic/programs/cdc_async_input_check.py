@@ -28,6 +28,7 @@ from typing import List, Set, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rtl_scan_scope as _scan_scope  # noqa: E402
 import _vacuous_exit as _vx  # noqa: E402
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -380,7 +381,7 @@ def main():
         else:
             from pathlib import Path as _P
             _P(args.json).parent.mkdir(parents=True, exist_ok=True)
-            _P(args.json).write_text(payload)
+            atomic_write_text(_P(args.json), payload)
     else:
         for f in result.findings:
             loc = f"{f.file}:{f.line}" if f.line else f.file
