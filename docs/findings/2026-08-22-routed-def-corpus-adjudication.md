@@ -21,6 +21,17 @@ purpose two days ago.**
 Not "the producer is wrong" and not "the artefacts are under another name". Both
 were checked against the artefacts, not against the producer's intent.
 
+**CORRECTED 2026-08-22, later the same day.** The verdict above stands and the
+withdrawal is real, but it was only *half* the reason the population is zero, and
+the half it missed is the one that mattered. This document originally claimed the
+gate was "satisfied again by one publication … with nothing in this repository
+changed." That was never measured, and it is false: `benchmark_evidence_publish.py`
+— the program that publishes a cell — does not stage `phase3/stage3/` at all, so
+**no cell it has ever produced could be a member of this corpus.** The one member
+the corpus ever held was hand-staged. See
+[Correction: the satisfaction condition was unreachable](#correction-the-satisfaction-condition-was-unreachable),
+which supersedes the paragraphs marked below.
+
 ## What was measured
 
 ### 1. The producer resolves the right tree, and the tree is real
@@ -111,15 +122,14 @@ had. Concretely, all of:
 The moment one such cell lands in the corpus repository and the pointer is
 bound, this loop expands to a real population and the four per-cell gates
 (`macro OBS not crossed`, `DRC PASS is not vacuous`, `inner FAILs reach the
-verdict`, `new tool diagnostic id`) become live verdicts — with nothing in this
-repository changed.
+verdict`, `new tool diagnostic id`) become live verdicts.
 
-That is the load-bearing point: **the gate is currently unsatisfiable, but it is
-not structurally unsatisfiable.** It was satisfied two days ago and it is
-satisfied again by one publication. The brief's option (2) framing — "declared
-BLOCKING with no exemption while being structurally unsatisfiable" — does not
-hold on the measurement. Nothing about the declaration is unsatisfiable; the
-corpus is simply empty today.
+> **SUPERSEDED — the two paragraphs that stood here claimed this happened "with
+> nothing in this repository changed", and that the gate was "satisfied again by
+> one publication". Neither was measured and both are false. Read
+> [the correction](#correction-the-satisfaction-condition-was-unreachable)
+> instead; list items 1-4 above are still necessary, they were just not
+> sufficient.**
 
 ## Decision: BLOCKING stays, and it buys no exemption
 
@@ -261,3 +271,131 @@ The fix is one line — append `""` instead of `$ex_until` on the refused branch
 which is strictly tightening and cannot turn any red green. `_gate_dispatch.sh`
 is a protected authority file, so it is **filed, not fixed**, and pinned as a
 `strict` xfail that will go RED (XPASS) the day it is repaired.
+
+## Correction: the satisfaction condition was unreachable
+
+Everything above this heading was written without asking the one question that
+decides whether the row is honestly BLOCKING: **can the supported publishing path
+actually produce a member of this corpus?** It cannot, and could not on any day
+in the gate's history.
+
+### What the producer selects on
+
+`tools/ci/routed_def_corpus.py` builds the entire population from one path shape
+inside the published tree — `_index_paths` matches a path of exactly six
+components under `ic/` whose tail is `("phase3", "stage3", "pnr", "routed.def")`:
+
+```
+ic/<design>/<version>/phase3/stage3/pnr/routed.def
+```
+
+### What the publisher stages
+
+`benchmark_evidence_publish.py` is the program `PUBLISHING.md` names as the one
+that stages a converged run into a cell ("You do **not** hand-assemble an evidence
+folder"). Its `_COPY_SUBTREES` is:
+
+```python
+("phase1", "phase2", Path("phase3") / "reports", Path("phase3") / "analog", "reports")
+```
+
+`phase3/stage3` is not in it and never was. Its own docstring said so and named
+the consequence without connecting it to this gate:
+
+> Raw PnR scratch under phase3/stage3 is still not staged … NOTE that the three
+> hand-staged reference cells DO carry `phase3/stage3/pnr/routed.def` … so on that
+> subtree this program still publishes less than they do.
+
+### Measured, not read
+
+A synthetic converged run, published through the supported path with no flags,
+carrying a routed DEF of 38 bytes — six orders of magnitude under the 50 MB
+`_SIZE_CEILING`:
+
+```
+SOURCE   routed.def exists: True  38 bytes
+PUBLISHED routed.def exists: False
+any .def anywhere in the published cell: []
+phase3/ subtree actually staged: ['reports', 'stage4']
+
+LAYOUT_ROUTING.txt:
+phase3/stage3/pnr/routed.def  38B  sha256:fee7400…  NOT_PUBLISHED  source-run-only
+phase3/stage4/gds/top.gds    704B  sha256:b987ad6…  STAGED         in-cell
+```
+
+`NOT_PUBLISHED source-run-only` — not `ROUTED_AWAY`. It is not a size decision:
+the size rule never saw the file, because the directory it lives in is not
+published at any size. The GDS beside it, 704 bytes, staged.
+
+### So the corpus had exactly one member and it could not have had a second
+
+`ic/spm/v1.5.58_ihp-sg13g2/phase3/stage3/pnr/routed.def` entered the published
+repository in its initial `snapshot: vibe-ic benchmark results, no history`
+import — a hand-staged legacy cell, from before the publishing program — and left
+in `bcf2f94`. Across the whole history of that repository, `git log --all
+--diff-filter=A -- '*.def'` returns that one path and nothing else. No cell
+`benchmark_evidence_publish.py` has ever produced was a member, and none ever
+could have been.
+
+That is the brief's option (3) after all, arrived at from the publishing side
+rather than the producing side: **the artefacts exist under a path the supported
+publisher does not write.** The producer is asking the right question of the right
+repository — the writer was never able to answer it.
+
+### What this changes about the adjudication, and what it does not
+
+**It does not change the decision.** BLOCKING stays and it still buys no
+exemption, for every reason in the section above. Nothing here makes the gate
+pass: the corpus is still empty, the row is still `rc 2 NOT CHECKED`, and it still
+blocks.
+
+**It changes what the row is a statement about.** Before the repair, "NOT CHECKED,
+BLOCKING, no exemption" was a permanent verdict wearing a temporary one's clothes.
+Every list item in *What would have to exist* was necessary and none of them was
+sufficient, so a reader following that list to the letter — publish a converged
+cell, structure-check it, land it — would have produced a cell, bound the pointer,
+and watched the row stay `EMPTY`, with nothing in the record to say why.
+
+### The repair, and its exact boundary
+
+`_ROUTED_DEF_RELPATH` in `benchmark_evidence_publish.py` stages
+`phase3/stage3/pnr/routed.def`, size-routed exactly like the GDS. This is the same
+omission the GDS block already carries its own comment about, one artefact over:
+
+> `phase3/stage4` is not a copy subtree, so until this existed the GDS was omitted
+> at EVERY size — the size routing could not reach the one artefact the manifest
+> is actually about.
+
+**One artefact, not the subtree.** `placed.def`, `floorplan.def`, `post_cts.def`,
+the stage's `.tcl` and `phase3/stage3/extracted/*.spef` all stay `NOT_PUBLISHED`.
+Widening published scope to raw PnR scratch remains the evidence-policy call the
+docstring defers, and it is still deferred. A routed DEF over the ceiling is still
+`ROUTED_AWAY`, because the guard that blocks the commit is a size rule and a cell
+that ignored it would not land.
+
+It is a restoration rather than a new policy: the hand-staged reference cells
+carry this file, and on the rest of that subtree the program still publishes less
+than they do.
+
+### Pinned
+
+`programs/tests/test_routed_def_corpus_is_reachable_by_publishing.py`, four arms,
+all four RED before the repair:
+
+| arm | subject | before |
+|---|---|---|
+| A | the DEF reaches the cell at the path the producer selects on | cell held `[]` `.def` files |
+| B | CONTROL — an oversize DEF is `ROUTED_AWAY`, not staged | recorded `NOT_PUBLISHED`; the ceiling never saw it |
+| C | CONTROL — the rest of the PnR scratch stays unpublished | staged `.def` set was `[]`, not `['routed.def']` |
+| D | `routed_def_corpus.py` itself COUNTS the published cell | producer rc 0, stdout `[]` |
+
+ARM D is the load-bearing one, and the reason this is not a file-copying test: it
+runs the gate's own producer over a real git checkout of the published tree. A
+file at a path is not a population member until the producer says it is.
+
+### The condition, restated so it is now true
+
+One converged cell, meeting items 1-4 of *What would have to exist*, **published
+by a `benchmark_evidence_publish.py` that carries this repair**, with its routed
+DEF under the 50 MB ceiling. Cells published before it will not become members
+retroactively; the artefact was never staged, so there is nothing in them to find.
