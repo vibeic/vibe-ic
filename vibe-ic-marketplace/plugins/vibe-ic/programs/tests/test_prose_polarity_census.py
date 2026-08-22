@@ -202,3 +202,84 @@ def test_it_is_not_wired_as_a_blocking_gate():
     assert not blocking, (
         "the census is wired as a BLOCKING gate, which is the one thing it was "
         f"built not to be: {blocking}")
+
+
+# A blind extractor that ARGUES the omission in its own docstring. The reason
+# has to be long enough to be an argument -- `_DECLARED_REASON_MIN` -- because a
+# marker on a one-liner is an assertion.
+DECLARED = '''\
+import re
+
+PAT = re.compile(r"budget of (\\d+) um")
+
+
+def extract(text):
+    """NOT ASKED FOR POLARITY, and the omission is deliberate.
+
+    This set answers "what values does the document state anywhere", and a
+    value missing from it makes a correct downstream pin look stale. A sentence
+    that also says "no" still states the number, so suppressing it here would
+    refuse a correct reader -- the false refusal pointed the other way. The
+    polarity question belongs to the consumer that decides, not to this reader.
+    """
+    out = {}
+    for m in PAT.finditer(text):
+        out["die_area_budget_um"] = m.group(1)
+    return out
+'''
+
+# The same marker, with nothing behind it.
+BARE_MARKER = '''\
+import re
+
+PAT = re.compile(r"budget of (\\d+) um")
+
+
+def extract(text):
+    """NOT ASKED FOR POLARITY."""
+    out = {}
+    for m in PAT.finditer(text):
+        out["die_area_budget_um"] = m.group(1)
+    return out
+'''
+
+
+def test_a_declared_omission_is_counted_apart_from_the_debt(tmp_path):
+    """"Designed this way, and here is why" and "nobody looked" are different
+    facts and had one number."""
+    d = _tree(tmp_path, declared_emit=DECLARED)
+    r = _run(d, "--json", "-")
+    doc = json.loads(r.stdout)
+    assert doc["declared_in_place"] == ["declared_emit::extract"], doc
+    assert doc["newly_visible"] == [], doc
+
+
+def test_a_declared_omission_is_still_NAMED_on_every_run(tmp_path):
+    """Classified, never hidden. A census that stops printing a thing has
+    stopped recording it."""
+    d = _tree(tmp_path, declared_emit=DECLARED)
+    r = _run(d)
+    assert "[DECLARED] declared_emit::extract" in r.stdout, r.stdout
+    assert "1 DECLARE the omission in place" in r.stdout, r.stdout
+
+
+def test_the_marker_alone_does_not_buy_an_escape(tmp_path):
+    """A token on a one-line docstring is an assertion, not an argument. If
+    that cleared the floor, the classification would be a self-serve exemption
+    list with no reviewer -- which is what the GATE's register exists to avoid
+    and what this side must not reinvent."""
+    d = _tree(tmp_path, bare_emit=BARE_MARKER)
+    r = _run(d, "--json", "-")
+    doc = json.loads(r.stdout)
+    assert doc["declared_in_place"] == [], doc
+    assert "bare_emit::extract" in doc["newly_visible"], doc
+
+
+def test_declaring_it_cannot_change_the_verdict(tmp_path):
+    """The reason a self-declared reason is SAFE here: escaping the count buys
+    nothing, because the census cannot refuse either way. In a blocking gate the
+    same mechanism would be a loophole, which is why the gate keeps a reviewed
+    register instead."""
+    a = _run(_tree(tmp_path / "x", declared_emit=DECLARED))
+    b = _run(_tree(tmp_path / "y", bare_emit=BARE_MARKER))
+    assert a.returncode == RC_OK and b.returncode == RC_OK, (a.stdout, b.stdout)

@@ -60,6 +60,11 @@ USAGE
     gate_census          what the gate's own predicate finds (its baseline size)
     census               what the sharper predicate finds
     newly_visible        the difference, named -- the debt this file exists for
+    newly_visible        the debt: blind, and nothing says why
+    declared_in_place    blind, and the function's own docstring ARGUES that it
+                         is deliberate. Named on every run, never hidden --
+                         classified, because "designed this way" and "nobody
+                         looked" are different facts and had one number.
     unreadable           sources that would not parse: "<name>: <reason>"
 """
 from __future__ import annotations
@@ -71,10 +76,29 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+import re
+
 import prose_polarity_consulted_check as _gate
 
 #: Captured at import, BEFORE anything can patch the module attribute.
 _GATE_DERIVED_NAMES = _gate._match_derived_names
+
+#: A function may DECLARE, in its own docstring, that it deliberately does not
+#: consult polarity -- and the census then reports it separately from the
+#: extractors where nobody looked. Two entirely different facts had one number.
+#:
+#: THIS IS SAFE HERE AND WOULD NOT BE SAFE IN THE GATE, which is the whole
+#: reason it lives on this side. A self-declared reason is a loophole exactly
+#: when escaping the count buys something; this census cannot refuse, so it buys
+#: nothing. The gate keeps a REGISTER with a reviewed reason for the same job,
+#: because there the escape is worth having.
+#:
+#: The declared ones are still NAMED on every run. Classified, never hidden.
+_DECLARED_RE = re.compile(r"NOT ASKED FOR POLARITY|POLARITY IS NOT ASKED",
+                          re.I)
+#: A marker on a one-line docstring is an assertion, not an argument. The gate's
+#: exemption register sets its own floor at 80 characters for a reason.
+_DECLARED_REASON_MIN = 200
 
 TOOL = "prose_polarity_census"
 RC_OK, RC_UNDETERMINED, RC_USAGE = 0, 2, 3
@@ -122,6 +146,18 @@ def writes_a_declared_value(fn: ast.AST) -> bool:
                 and getattr(n.func.value.func, "attr", "") == "setdefault"):
             return True
     return False
+
+
+def declares_a_reason(fn: ast.FunctionDef) -> bool:
+    """True when this function ARGUES, in its own docstring, that it does not
+    consult polarity on purpose.
+
+    The reason lives with the code rather than in a register, so it cannot rot
+    separately from the function it describes -- and it has to be an argument,
+    not a marker: a bare token on a one-line docstring does not clear
+    `_DECLARED_REASON_MIN`."""
+    doc = ast.get_docstring(fn) or ""
+    return bool(_DECLARED_RE.search(doc)) and len(doc) >= _DECLARED_REASON_MIN
 
 
 def blind_in(tree: ast.Module, stem: str, *, sharp: bool) -> List[str]:
@@ -198,7 +234,20 @@ def main(argv: List[str] | None = None) -> int:
 
     sources = sorted(args.programs.glob("*.py"))
     sharp, narrow, unreadable = census_of(args.programs)
-    newly = sorted(set(sharp) - set(narrow))
+    newly_all = sorted(set(sharp) - set(narrow))
+    declared: List[str] = []
+    for name in newly_all:
+        stem, _, fname = name.partition("::")
+        src = args.programs / f"{stem}.py"
+        try:
+            tree = ast.parse(src.read_bytes().decode("utf-8", errors="replace"))
+        except (SyntaxError, OSError):
+            continue
+        fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                   and n.name == fname), None)
+        if fn is not None and declares_a_reason(fn):
+            declared.append(name)
+    newly = [n for n in newly_all if n not in declared]
 
     report: Dict[str, object] = {
         "tool": TOOL,
@@ -206,6 +255,7 @@ def main(argv: List[str] | None = None) -> int:
         "gate_census": len(narrow),
         "census": len(sharp),
         "newly_visible": newly,
+        "declared_in_place": declared,
         "unreadable": unreadable,
     }
     to_stderr = False
@@ -232,13 +282,19 @@ def main(argv: List[str] | None = None) -> int:
     for u in unreadable:
         print(f"  [UNPARSED] {u} — not examined, so it is not in the count "
               f"below", file=out)
+    for n in declared:
+        print(f"  [DECLARED] {n} — blind, and its own docstring argues that "
+              f"this is deliberate. Counted apart from the debt, not hidden "
+              f"from it", file=out)
     for n in newly:
         print(f"  [DEBT] {n} — reads prose, writes a declared value and "
               f"consults no polarity. Invisible to the gate because of how the "
               f"write is SPELLED, not because it is safe", file=out)
     print(f"[CENSUS] {TOOL}: {len(sharp)} polarity-blind extractor(s) under the "
           f"sharper predicate, {len(narrow)} under the gate's own, so "
-          f"{len(newly)} the gate cannot see [{len(sources)} program(s) "
+          f"{len(newly_all)} the gate cannot see, of which {len(declared)} "
+          f"DECLARE the omission in place and {len(newly)} say nothing "
+          f"[{len(sources)} program(s) "
           f"SCANNED; {len(unreadable)} NOT examined because they would not "
           f"parse]. THIS RECORDS DEBT AND NEVER REFUSES.", file=out)
     return RC_OK
