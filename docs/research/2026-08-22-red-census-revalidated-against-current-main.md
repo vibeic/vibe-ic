@@ -71,3 +71,69 @@ mutation ledger, magic). **They were not re-run against `a4caccefe`**, so their
 status on current main is UNKNOWN rather than assumed unchanged. Naming that
 because a census that quietly re-uses old numbers for the parts nobody re-ran is
 the exact defect the frozen branch spent its length cataloguing.
+
+---
+
+# Part 2 — the remaining 12, now measured. **Three are CLOSED upstream.**
+
+Part 1 said the other 12 reds were NOT re-run and their status was UNKNOWN. Run
+now, same clean checkout of `a4caccefe`, same corpus pointer:
+
+    9 failed, 256 passed   (332s)
+
+| file | census | main @ a4caccefe |
+|---|--:|--:|
+| `test_matrix_mutation_ledger.py` | 3 | 3 |
+| `test_issue901_structured_vacuity...py` | 3 | 3 |
+| `test_v0_2_96_issue460_coverage_bridge.py` | 2 | 2 |
+| `test_digital_hardmacro_gen.py` (`magic`) | 1 | 1 |
+| `test_organic900_901_ratchet_and_json_vacuity.py` | 1 | **0** |
+| `test_issue490_drc_report_check_argv.py` | 1 | **0** |
+| `test_issue306_register_paydown.py` | 1 | **0** |
+
+**The three that closed are exactly the three the census attributed to
+`flow_gate_enforcement_audit` exiting 1.** Not a coincidence and not an
+inference — verified directly:
+
+    flow_gate_enforcement_audit.py   ->  exit 0   (was 1)
+    declared intent                  ->  44       (was 41)
+    [PASS] no NEW enforcement contradiction
+    area_total_vs_budget_check       ->  declares ENFORCEMENT
+    tapeout_docs_gen                 ->  declares ENFORCEMENT
+
+**THE DECISION THE CENSUS ASKED FOR HAS BEEN MADE — and made better than either
+option I offered.**
+
+The census (M80) argued that `advisory` was the wrong answer for
+`area_total_vs_budget_check`, because a gate written *because nothing read the
+area number* would then be declaring that the number still need not be read. The
+options I named were **wire it**, or **declare `blocking` and stay red until
+wired**.
+
+The author chose `advisory` **and removed the implication I objected to**, by
+scoping the token in the declaration itself:
+
+> *"ENFORCEMENT: advisory — no runner spawns this gate inline, so its exit status
+> cannot stop step 9 while step 9 is running. **That is the ONLY axis this token
+> names** and the one `flow_gate_enforcement_audit` measures. The other two axes
+> are [...]"*
+
+**My objection was to what `advisory` would IMPLY. The fix was to delete the
+implication, not the value** — a third option, and a better one than either of
+mine. **The census's analysis was right about the hazard and wrong about the
+remedy space**, which is the same shape as its "publish a run tree" error: the
+diagnosis held and the list of available moves was too short.
+
+## Revised standing of the 34
+
+    11  D3 cells                     unchanged on current main
+     6  landing-verdict              confirmed, accounting closes exactly
+     4  63x8 coverage                one FIXED upstream (was 5)
+     3  flow-gate audit              **CLOSED UPSTREAM** — decision made
+     5  vacuity conditional          unchanged
+     3  mutation ledger              unchanged
+     1  magic                        unchanged
+    ---
+    30 of the 34 still stand on `a4caccefe`; **4 are closed**, 3 of them by a
+    decision the census asked for and one by an independent fix that agreed with
+    the census's diagnosis.
