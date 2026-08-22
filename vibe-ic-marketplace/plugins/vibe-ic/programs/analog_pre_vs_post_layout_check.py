@@ -81,6 +81,7 @@ from typing import List, Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
 import _analog_a_check_common as _acc
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ── accepted pre_vs_post.json schema ──────────────────────────────────────
@@ -110,6 +111,18 @@ import _analog_a_check_common as _acc
 _CONTAINER_KEYS: tuple = ("comparisons", "specs")
 _PRE_KEYS: tuple = ("pre_layout", "pre", "pre_value")
 _POST_KEYS: tuple = ("post_layout", "post", "post_value")
+#: The artefact states the delta as well as the two values it is derived from,
+#: so the document can be checked AGAINST ITSELF (vibe-ic D9, criterion 1:
+#: self-consistency). Same disjoint-vocabulary hazard as the pair above, so the
+#: spellings are listed rather than assumed.
+_DELTA_KEYS: tuple = ("delta_pct", "delta_percent", "delta_pc", "change_pct")
+
+#: Tolerance on the stated-vs-implied delta, in percentage POINTS. Wide on
+#: purpose: this rule exists to catch a delta that does not describe its own
+#: pair at all, never to police rounding. The published artefact states
+#: `delta_pct` to 4 decimal places and agrees to ~1e-4, so 0.5 points is three
+#: orders of magnitude of headroom.
+_DELTA_TOLERANCE_PP = 0.5
 
 
 def _first_key(item: dict, keys: tuple):
@@ -248,6 +261,38 @@ def run_audit(project: Path) -> AuditResult:
             block_pairs.append((pre_val, post_val))
             pct = abs(post_val - pre_val) / abs(pre_val) * 100
             max_degradation = max(max_degradation, pct)
+
+            # ── SELF-CONSISTENCY (D9). NO ORACLE, and that is the point ──
+            # The document states `delta_pct` next to the two values it is
+            # derived from. Nothing here knows what the delta OUGHT to be — a
+            # real project ships no answer key — it only asks whether the
+            # document agrees with itself. A stated delta that does not
+            # describe its own (pre, post) pair means the three numbers did
+            # not come from one measurement, and every degradation tier above
+            # is then reasoning about a pair no one computed.
+            #
+            # Measured cause: this gate read `pre_value`/`post_value` and never
+            # read `delta_pct` at all, so scaling every number in the artefact
+            # left the verdict at PASS — the D9 census's EXISTENCE-ONLY verdict
+            # for step A7.
+            stated = _first_key(item, _DELTA_KEYS)
+            if isinstance(stated, (int, float)) and not isinstance(stated, bool):
+                if abs(abs(stated) - pct) > _DELTA_TOLERANCE_PP:
+                    errors += 1
+                    block_errors += 1
+                    result.findings.append(Finding(
+                        rule="PRE_VS_POST_DELTA_INCONSISTENT",
+                        severity="ERROR",
+                        message=(
+                            f"Block '{block}' spec '{name}': the artefact states "
+                            f"delta {stated} but pre={pre_val} and post={post_val} "
+                            f"imply {pct:.4f} (tolerance "
+                            f"{_DELTA_TOLERANCE_PP} points). The document does not "
+                            f"agree with itself, so the three numbers did not come "
+                            f"from one measurement"
+                        ),
+                        file=str(pvp_path),
+                    ))
 
             if pct > 30:
                 errors += 1
@@ -444,7 +489,7 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
     skipped = _vx.summary_is_skipped(result.summary)

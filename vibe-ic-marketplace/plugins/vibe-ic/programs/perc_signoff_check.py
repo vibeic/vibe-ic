@@ -61,6 +61,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 #: The human-readable projections step 28 declares, exactly as the flow yaml
 #: spells them, paired with the regex that extracts the verdict each states.
@@ -186,13 +187,48 @@ def audit(project: Path) -> dict:
             "declared human-readable PERC sign-off artefact(s) contradict it, "
             "so the machine record and the signed record cannot both be "
             "trusted: " + "; ".join(proj_errors)))
+    elif not automated:
+        # "ALL AUTOMATED CATEGORIES CONCLUSIVE PASS" OVER ZERO OF THEM (#1115).
+        #
+        # `perc_equivalent.json` is PRESENT and carries no AUTOMATED category,
+        # so the producer ran and emitted nothing to judge. Every branch above
+        # is empty by construction -- no FAIL, no INCOMPLETE, no contradiction
+        # -- and the tail landed on the sentence "all AUTOMATED PERC categories
+        # conclusive PASS" with `automated_total: 0` sitting in the same report.
+        # That is LibreLane's `klayout.py:486-490` shape: the producer emits
+        # nothing and the checker reads the absence as consent.
+        #
+        # rc 2, NOT rc 0, and NOT a new convention: this gate ALREADY answers
+        # rc 2 / SKIP when `perc_equivalent.json` is absent. A file that is
+        # present and carries zero categories is the same epistemic state --
+        # nothing to judge -- so it gets the same answer. A project with no
+        # PERC run was already rc 2 by the branch above, so this reddens
+        # nothing that was green.
+        #
+        # The projection disclosures ride along, because they were computed and
+        # then dropped: they lived in the report dict and never reached the
+        # verdict line a reader sees.
+        why = ("perc_equivalent.json is present but declares 0 AUTOMATED PERC "
+               "categor(ies) — there is nothing to judge, so this is NOT "
+               "'all categories conclusive PASS'")
+        if proj_disclosures:
+            why += "; " + "; ".join(proj_disclosures)
+        rep.update(verdict="VACUOUS_PASS", rc=2, reason=why)
     elif open_items:
         rep.update(verdict="PASS_WITH_OPEN_ITEMS", rc=0, reason=(
             f"no conclusive reliability defect; {len(open_items)} named "
             f"open item(s) pending review before tapeout"))
     else:
-        rep.update(verdict="PASS", rc=0, reason=(
-            "all AUTOMATED PERC categories conclusive PASS"))
+        # The disclosures are named HERE too. They were computed, stored in the
+        # report and never surfaced in the sentence that decides how a reader
+        # feels about this gate -- "cannot be compared with
+        # perc_equivalent.json's None" is not a detail, it is the reason the
+        # corroboration this gate exists for did not happen.
+        reason = (f"all {len(automated)} AUTOMATED PERC categor(ies) "
+                  f"conclusive PASS")
+        if proj_disclosures:
+            reason += ("; UNCORROBORATED: " + "; ".join(proj_disclosures))
+        rep.update(verdict="PASS", rc=0, reason=reason)
     return rep
 
 
@@ -210,8 +246,13 @@ def main(argv=None) -> int:
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     print(out)
+    if rep.get("verdict") == "VACUOUS_PASS":
+        # `flow_compliance_check._stdout_signals_vacuous` matches this prefix at
+        # line start. The JSON above carries the same fact and no consumer
+        # reads it.
+        print(f"VACUOUS_PASS: {rep.get('reason')}")
     return rc
 
 
