@@ -171,3 +171,39 @@ stand unchanged, and why this one needed content measurement before I could say 
 origin tip on `origin/jmatrix/63x8-main-reds`. **jharv3's ABANDON is safe.** The 122 differing files
 belong to `base-mml`, which is named in no verdict file and is therefore not scheduled for deletion —
 but it holds unjudged uncommitted work, which is worth someone's attention.
+
+## The five pruned ABANDONs, and why the obvious measurement said the opposite
+
+Five of my ABANDON rows are pruned checkouts: no registration, so no HEAD, no merge-base, no index
+to scope by. The guard fails closed on them (`no git dir`), correctly, so they needed a method of
+their own. Each row claims *"byte-identical to main commit X, changed nothing"*.
+
+Measured against **current** main, they look catastrophic — `/tmp/qm` reads 891 differing files and
+19,238 absent. Measured against **the commit each row names**, which is the actual claim:
+
+| checkout | base | same | differ | extra (ignored) | extra (real) |
+|---|---|---|---|---|---|
+| `/tmp/qm` | 0def59e5ee5 | 20295 | **0** | 2726 | 1 |
+| `/tmp/qv` | f7b9c7fa0e3 | 20296 | **0** | 2727 | 1 |
+| `/tmp/vibeic-fix-pr1716-macro` | f6b0e77dd81 | 4682 | **0** | 44 | 0 |
+| `/tmp/xdf/base116` | 116bcb5a82e | 4685 | **0** | 88 | 0 |
+| `wt_refute` | 7c376e34811 | 4719 | **0** | 108 | 0 |
+
+`differ=0` everywhere: every file present in the base commit matches byte-for-byte. The 891 was main
+moving on — the third time this session that measure produced a confident wrong answer.
+
+The one "real extra" in `qm`/`qv` is `reports/phase3/antenna.json`, 188 bytes of EDA report stub.
+It is **explicitly gitignored** — `.gitignore:129` covers `plugins/vibe-ic/reports/` — and its blob
+is reachable from an origin ref regardless.
+
+**My hardcoded pattern list is what called it real.** `__pycache__`, `.pytest_cache`, `*.pyc` and
+friends are a guess at what the repo considers generated; `git check-ignore` is the repo's own
+answer. `pruned_claim_check.sh` now asks the repo instead of guessing. All five claims hold.
+
+## Closing my own denominator
+
+| set | count | resolved | outcome |
+|---|---|---|---|
+| my ABANDON rows | 29 | 29 | 20 contained in main, 5 pruned claims verified vs their named base, 4 twin-justified with twins verified identical and kept |
+| my LANDED rows | 163 | 163 | 0 holding content not on main |
+| joined deletion-bound | 48 | 48 | 34 ALLOW, 14 REFUSE — all 14 preserved on origin |
