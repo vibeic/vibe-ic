@@ -64,9 +64,14 @@ and stand.
 
 ## What this does not claim
 
-- 35 of the 1571 refs origin advertises could not be resolved in this clone, so containment was
-  tested against 1536 of them. A commit reachable *only* from one of those 35 would be reported as
-  orphaned here. That direction is safe -- it over-preserves -- but it is stated rather than hidden.
+- ~~35 of the 1571 refs origin advertises could not be resolved in this clone.~~ **CLOSED, same
+  session.** Those refs (and the 24 origin had gained since) were fetched, so all **1590** advertised
+  shas now resolve locally and the containment test is over the complete set. Re-run with my own
+  rescue ref excluded, the 7 `wt-j63x8c` commits are reachable from **no other live origin ref** --
+  the claim is exact, not an over-preserving approximation. The same test over the 4 preserved
+  files, with the deliverable branch and its mirror excluded, finds **none of their blobs anywhere
+  else on origin** across 146772 objects reachable from the other 1588 refs: they were single-copy,
+  and this branch is now the only thing holding them.
 - The 74 RECOVER rows were checked for recovery-instruction resolution and citation, not re-probed
   for on-disk drift. A drifted RECOVER still says keep.
 - This is a decision, not an action. Nothing on any host was deleted, moved, or fetched.
