@@ -116,6 +116,56 @@ clean.
 
 Raw: `raw_drift_sweep_all110_s5_jharv3.tsv` — every row's head, tree and disk state as read.
 
+## 7. 86 rows were correct and still unusable: the recovery instruction had rotted
+
+Content and preservation are only half of a verdict row. The other half is the command a
+reader runs, and this file's rows were written when the `harvest/rescue-*` anchors existed.
+Origin has since deleted them.
+
+Measured against `git ls-remote` (1574 refs advertised): **86 of 110 rows named only refs origin
+no longer has**, so every `git fetch origin ...` instruction in them fails today. The content was
+never at risk — every judged head is on this branch — but a reader following the row gets an
+error and no way to tell that from real loss.
+
+All 110 rows now carry an instruction that resolves, each verified by *walking* the ref after
+fetching it, never from `refs/remotes`. The two rows that needed more than a re-point:
+
+- `vibe-ic-wt-caravel-slew-drv3`, whose whole value is an **untracked** handoff file that was on
+  no ref at all. Its rescue commit `33d256659929` is contained by this branch, and the file read
+  back through the branch hashes to `f05e08482acbcffc…`, the exact sha256 the row cites. The
+  04:52Z note saying it survives only via `pull/333/head` is superseded.
+- `AI_IC_design/wt_jwire2`, whose head had moved to the current tip of a branch that was
+  force-pushed today (section 6).
+
+Everything each of those rows names as single-copy — the displaced prior heads
+(`fdab9b592c22`), the three clone-wide stash commits (`c73e489c17cf`, `fd9d3f64e599`,
+`522fd1562983`), the rescue commits — was checked individually: **270 of the 273 commit shas
+this file names resolve here and are contained by the branch.** The three that are not are not
+content this file preserves: two are the same head that is the live tip of
+`fix/jwire2-hygiene-wiring`, and one is a branch tip the prose quotes in passing.
+
+### The gate that reported a pass over nothing
+
+`bin_jharv2/live_ref_citation_check.py` reported **0 dead, 0 moved-off over 1948 citations**,
+and shard C was in its glob. It matches the backticked form ``reachable from `X` ``.
+**`verdicts_shard_c.tsv` contains zero backticked citations.** It walked this file, examined
+none of its 445 recovery citations, and its clean report covered a file where 86 rows were
+broken. Nothing was wrong with its arithmetic; its universe was empty.
+
+`bin_jharv3_s5/recovery_resolves.py` is the replacement for this file: it parses the
+`git fetch origin X` instruction as well as the prose form, requires that a named ref both live
+*and still contain* the row's head, and **exits 2 rather than reporting a pass when it parses no
+citations at all**. `--self-test` drives all six of its guarantees, three of them to RED
+(dead ref; live ref that no longer contains the head; and the same two again in the second
+spelling of the head marker), and refuses if `origin` is unreachable.
+
+Its head-marker pattern was widened once, from `worktree HEAD when judged:` to also accept
+`worktree HEAD at re-verification:`. That is a second spelling of the same field, not a relaxed
+assertion — the added self-test cases drive rows written in the new spelling to RED on a dead
+ref and on a live-but-not-containing ref.
+
+**Result: 110 rows examined, 445 citations parsed, 0 rows without an instruction that resolves.**
+
 ## What was not done
 
 Nothing was deleted, on any host. No working tree, index or HEAD was modified anywhere — the
