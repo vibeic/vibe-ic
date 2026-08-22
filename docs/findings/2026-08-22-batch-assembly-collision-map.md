@@ -4,6 +4,22 @@
 the sixteen branches named in the freeze. Nothing here modifies a frozen branch;
 it is a map for whoever assembles them.
 
+## OUTCOME: the batch LANDED as v1.11.70 -- this document is now history
+
+`main` moved `a4caccefe` -> `ae78abb28` (673 commits), whose subject is
+`landing: assign v1.11.70 at landing time` and whose parent is `e11626e28` --
+`land/one-assembled` itself. So the assembly this document maps is what shipped.
+
+Verified on the landed `main`: `checker_execution_wiring_audit` and
+`hdl_declaration_scan_strips_comments_check` both exit 0, `CAPTURE_ROUTING.json`
+holds the predicted **64** entries with no side dropped, and the rc-3 pair landed
+TOGETHER -- the gate emits it and the runner's `elif rc == _usage_rc()` arm reads
+it, which was the one hazard flagged throughout.
+
+Everything below was written while the batch was still being assembled. Read it as
+a record of how it got there, not as instructions. The §4 hygiene baseline in
+particular is stamped `a4caccefe` and main has moved past it.
+
 ## What this says, in short
 
 Read this first. The sections below are the working, in the order it happened, and
@@ -14,7 +30,8 @@ carries fifteen of the sixteen frozen branches; `land/batchbig-assembled` carrie
 `fix/jppafind-inert-ppa-gates` plus work the other lacks. Neither ships the whole
 batch, and they must be reconciled before either lands.
 
-**The one thing still open:** the two assemblies must be reconciled -- see §10.
+**The one thing still open:** the two assemblies must be reconciled -- and §11
+shows it costs ONE MERGE AND ONE REGENERATION, verified end to end.
 (§9 called `fix/jppafind-inert-ppa-gates` an unintended omission; §10 corrects
 that: it is assembled into `land/batchbig-assembled`.)
 
@@ -219,7 +236,7 @@ This assembly was built to MEASURE and was not pushed anywhere. Assembling and
 landing the batch belongs to whoever owns it; this section says only that the
 path is clear and where it is not.
 
-## 7. The one blocker, sized: 11 entries need their two authors
+## 7. [SUPERSEDED BY §8] The one blocker, sized as 11 entries -- it is one
 
 > **SUPERSEDED BY §8.** The count below is wrong: it was measured by KEY,
 > and the key is the field that moved. Measured by CONTENT, eleven of the
@@ -396,8 +413,9 @@ both exit 0, and the four modules that exercise this work pass 175 / 9 skipped.
 
 **FIFTEEN of the sixteen frozen branches are in it. The absent one is
 `fix/jppafind-inert-ppa-gates`** -- flagged here because it is on the freeze list
-and merged clean in every test this document ran, so its absence looks unintended
-rather than decided.
+and merged clean in every test this document ran. **§10 CORRECTS THE READING
+BELOW: the absence is real but not unintended -- `jppafind` is assembled into
+`land/batchbig-assembled`, and §11 reconciles the two in one merge.**
 
 The `jppafind` absence is stated with more care than the rest of this document,
 because acting on it means re-assembling. It was tested TWO independent ways, after
@@ -528,3 +546,88 @@ four of its distinctive added lines are present). A LOW ratio proves nothing on 
 own. What is load-bearing here is the column of ZEROS: fourteen branches at 0/N in
 `batchbig` is not a merge artefact, because merging leaves most files untouched and
 identical. Use the zeros; distrust the fractions.
+
+## 11. Reconciling the two assemblies is mechanical -- performed, not proposed
+
+    git checkout land/one-assembled
+    git merge land/batchbig-assembled
+    # conflicts, ALL of them generated indices:
+    #   vibe-ic-marketplace/README.md
+    #   vibe-ic-marketplace/plugins/vibe-ic/README.md
+    #   vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json
+    # resolve by taking either side, then:
+    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py
+
+No content file conflicts at all. The three that do conflict are the same generated
+indices §1 says to rebuild rather than merge, and regenerating afterwards changed
+exactly ONE file.
+
+Verified on the reconciled tree:
+
+    jppafind files identical to its branch   13 of 24   (3 of 24 in one-assembled alone)
+    CAPTURE_ROUTING.json "steps"             64 entries, both jwire2 keys present
+    checker_execution_wiring_audit           rc 0
+    hdl_declaration_scan_strips_comments     rc 0
+    five modules incl. gatekeeper_review     200 passed, 9 skipped
+
+So the split found in §10 costs one merge and one regeneration. Nothing has to be
+re-assembled, no branch has to be re-landed, and neither side loses work: the
+frozen batch and `batchbig`'s extras coexist in one tree that passes both gates
+this document is accountable for.
+
+## 12. Post-landing A/B: one new red, and it is the measurement, not the batch
+
+The §4 baseline finally used for what it was built for. Same corpus binding on both
+sides, so the denominators match:
+
+    a4caccefe  (pre-landing)  82 of 93 decided — 73 passed,  9 failed, 11 NOT CHECKED, 998s
+    ae78abb28  (v1.11.70)     83 of 93 decided — 73 passed, 10 failed, 10 NOT CHECKED, 947s
+
+    FAILED name-set diff:  + gates are host-independent      (one, and only one)
+
+NOT CHECKED fell 11 -> 10 while FAILED rose 9 -> 10: a gate that was exempt began to
+DECIDE. On the before side it read `NOT CHECKED ... exempt until 2027-02-28: needs a
+CLEAN checkout and a complete machine record`.
+
+**It is not attributable to the batch's content, and not to any program in this
+document's own change-set** -- none of the six gates it names is one of them. Its
+verdict is:
+
+    6 of 87 probed corpus gate(s) did not give one reproducible verdict across two
+    trees: 6 NON_DETERMINISTIC_VERDICT
+
+and every one of the six carries the SAME verdict on both arms -- `rc=2
+UNDETERMINED`, same meaning -- differing only in the corpus path:
+
+    checkout arm : <TREE>/ic is a directory but holds no L-doc this gate can read
+    worktree arm : /tmp/.../bench-data/ic is a directory but holds no L-doc ...
+
+WHAT IS ESTABLISHED, AND WHAT IS NOT. Established: the six differ only in the
+corpus path, one arm rendering `<TREE>` and the other an absolute path, while the
+VERDICT on both arms is the same `rc=2 UNDETERMINED`. So this is a text-comparison
+artefact of an externally-bound corpus, not a host-dependent verdict.
+
+NOT established: why one arm redacts it. An earlier revision of this section
+asserted that the corpus path "escapes the substitution" -- that explanation is
+WRONG and is retracted. Both redaction paths take the same roots:
+
+    gate_host_independence_check.py:352   semantic_record(..., roots=(repo_root, wt))
+    gate_host_independence_check.py:323   _norm(line, repo_root, wt)
+
+Neither includes the corpus root. If neither redacted it, BOTH arms would print the
+absolute path and they would compare EQUAL. Something normalises it on the checkout
+side and I did not find what. The gate's own docstring says the checkout arm is
+"the argv-bound machine record the outer sweep has already produced", so the two
+sides are produced by different code paths -- recorded versus freshly normalised --
+which is where the asymmetry must live, but I did not confirm it.
+
+I am leaving it there rather than authoring a fix on a partial diagnosis, in a
+1434-line gate I have read a fraction of. The owner has what is needed: the six
+lines, the two roots= call sites, and the recorded-versus-fresh asymmetry to check
+first.
+
+So: binding a corpus makes this gate report spurious non-determinism. That is a
+defect worth a ledger row, and it is the gate's, not the tree's. It also means the
+honest reading of this A/B is **the v1.11.70 landing introduced no red** -- which is
+exactly the misattribution §4 warned this baseline would cause if read naively, now
+demonstrated rather than predicted.
