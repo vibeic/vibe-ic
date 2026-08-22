@@ -43,6 +43,7 @@ def mod(monkeypatch):
     sys.modules["_score_iv"] = m
     spec.loader.exec_module(m)
     # Never let a real `docker inspect` make these tests environment-dependent.
+    monkeypatch.setattr(m, "_container_mounts", lambda c: [])
     monkeypatch.setattr(m, "_container_mount_sources", lambda c: [])
     return m
 
@@ -134,6 +135,57 @@ def test_rung2_translation_uses_the_derived_root(mod, tmp_path):
     (proj / "rtl").mkdir(parents=True)
     assert mod._to_container(str(proj / "rtl" / "top.v"), proj) == \
         "/foss/designs/rtl/top.v"
+
+
+def test_rung2_translation_uses_actual_mount_destination(mod, monkeypatch,
+                                                          tmp_path):
+    """The Source and Destination from docker inspect are one mapping.
+
+    Rewriting a discovered host Source to the historical /foss/designs default
+    produced paths that did not exist when the live container used a different
+    destination.
+    """
+    mount = tmp_path / "workspace"
+    proj = mount / "chips" / "my_chip"
+    rtl = proj / "rtl" / "top.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module top; endmodule\n")
+    pairs = [(mount.resolve(), "/workspace-live")]
+    monkeypatch.setattr(mod, "_container_mounts", lambda c: pairs)
+    monkeypatch.setattr(mod, "_container_mount_sources",
+                        lambda c: [src for src, _dst in pairs])
+
+    assert mod._to_container(str(rtl), proj) == \
+        "/workspace-live/chips/my_chip/rtl/top.v"
+
+
+def test_rung2_nested_mount_uses_longest_source_prefix(mod, monkeypatch,
+                                                        tmp_path):
+    outer = tmp_path / "workspace"
+    inner = outer / "runs"
+    proj = inner / "chip"
+    rtl = proj / "top.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module top; endmodule\n")
+    pairs = [(outer.resolve(), "/outer"), (inner.resolve(), "/active-runs")]
+    monkeypatch.setattr(mod, "_container_mounts", lambda c: pairs)
+    monkeypatch.setattr(mod, "_container_mount_sources",
+                        lambda c: [src for src, _dst in pairs])
+
+    assert mod._to_container(str(rtl), proj) == "/active-runs/chip/top.v"
+
+
+def test_rung2_explicit_container_destination_still_wins(mod, monkeypatch,
+                                                          tmp_path):
+    root = tmp_path / "workspace"
+    proj = root / "chip"
+    proj.mkdir(parents=True)
+    monkeypatch.setenv("VIBEIC_DESIGNS_HOST_ROOT", str(root))
+    monkeypatch.setenv("VIBEIC_DESIGNS_CONT_ROOT", "/ci/designs")
+    monkeypatch.setattr(mod, "_container_mounts",
+                        lambda c: [(root.resolve(), "/live-but-overridden")])
+
+    assert mod._to_container(str(proj / "top.v"), proj) == "/ci/designs/chip/top.v"
 
 
 # --------------------------------------------------------------------------
