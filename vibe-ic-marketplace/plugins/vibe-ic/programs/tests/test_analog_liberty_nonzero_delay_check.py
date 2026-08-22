@@ -87,11 +87,23 @@ def _mk(root, block, lib_text=None, corner=None, spec=True):
         (h / f"{block}.lib").write_text(lib_text)
 
 
+#: What the corner artefact these delays are derived from says its circuit
+#: contains. `_provenance` says a real simulator ran; `design_content` says
+#: what it was pointed at. Both PASS fixtures below now carry the second,
+#: because this gate stopped signing off a Liberty for integration STA when
+#: nothing on the tree names the circuit its delays model — and a fixture that
+#: omitted it would be asserting that silence still signs off.
+DESIGN_BOUND = "structure_and_geometry"
+
+
 def test_pass_real_liberty(tmp_path):
-    _mk(tmp_path, "ldo", LIB_REAL, corner={"_provenance": "real_ngspice"})
+    _mk(tmp_path, "ldo", LIB_REAL,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
     res = mod.run_audit(tmp_path)
     assert res.passed is True
     assert "ldo" in res.summary["passed_blocks"]
+    assert "ldo" in (res.summary.get("design_bound_blocks") or [])
 
 
 def test_fail_area_only_stub(tmp_path):
@@ -130,10 +142,53 @@ def test_skip_no_analog(tmp_path):
 
 
 def test_provenance_reported(tmp_path):
-    _mk(tmp_path, "ldo", LIB_REAL, corner={"_provenance": "real_ngspice"})
+    _mk(tmp_path, "ldo", LIB_REAL,
+        corner={"_provenance": "real_ngspice",
+                "design_content": DESIGN_BOUND})
     res = mod.run_audit(tmp_path)
     ok = [f for f in res.findings if f.rule == "LIB_NONZERO_OK"]
     assert ok and "real_ngspice" in ok[0].message
+    # ...and the finding says what the simulator was pointed AT, not only
+    # that a simulator ran. The first was always true and always silent
+    # about the subject, which is the defect one field along.
+    assert "design-bound" in ok[0].message
+
+
+def test_a_nondegenerate_liberty_that_names_no_circuit_does_not_sign_off(
+        tmp_path):
+    """The rule the two fixtures above now state, asserted rather than left
+    implicit. A non-zero delay taken from an unattributable circuit is a real
+    number about nothing this project can name, and integration STA will
+    consume it as this design's."""
+    _mk(tmp_path, "ldo", LIB_REAL, corner={"_provenance": "real_ngspice"})
+    res = mod.run_audit(tmp_path)
+    assert res.passed is False
+    assert "LIB_SUBJECT_UNDECLARED" in {f.rule for f in res.findings}
+
+
+def test_a_disclosed_library_default_still_signs_off_in_its_own_tier(
+        tmp_path, capsys):
+    """Only silence costs. A Liberty whose corner artefact records a library
+    default still signs off — in the structure-only tier, never as a
+    design-bound pass — because failing an honest ceiling teaches the next run
+    to stop being honest.
+
+    Asserted through the VERDICT WORD first, deliberately: the tier has to
+    reach the one line a reader reads, and a test whose first failure is a
+    missing JSON key would report a shape change where the defect is a wrong
+    certification.
+    """
+    _mk(tmp_path, "ldo", LIB_REAL,
+        corner={"_provenance": "real_ngspice",
+                "design_content": "structure_only"})
+    rc = mod.main([str(tmp_path)])
+    cap = capsys.readouterr()
+    assert rc == 0, cap.out + cap.err
+    assert "[PASS_STRUCTURE_ONLY]" in cap.out, cap.out
+    assert "STRUCTURE_ONLY:" in cap.err, cap.err
+    res = mod.run_audit(tmp_path)
+    assert res.summary.get("structure_only_blocks") == ["ldo"]
+    assert res.summary.get("design_bound_blocks") == []
 
 
 def test_main_cli_fail_exit_1(tmp_path):

@@ -295,7 +295,8 @@ def _sparse_die_tap_skip_attested(def_file: Path) -> bool:
 
 def _latchup_tap_spacing_check(def_file: Path,
                                screen_um: float = _DEFAULT_SCREEN_UM,
-                               rated_tap_masters: Optional[Sequence[str]] = None
+                               rated_tap_masters: Optional[Sequence[str]] = None,
+                               tapless_pdk: bool = False
                                ) -> Dict[str, Any]:
     """Screen well/substrate-tap SPATIAL coverage of the std-cell field from the
     routed DEF. CONCLUSIVE-FAIL-ONLY per the anti-over-claim rule.
@@ -361,6 +362,35 @@ def _latchup_tap_spacing_check(def_file: Path,
                              "occupied region is a REVIEW open item against the real "
                              "foundry tap-distance rule, NOT a conclusive structural "
                              "GAP. (A non-sparse 0-tap design still FAILs ZERO_TAPS.)")}
+        # TAPLESS-CELL PDK: 0 tap COMPONENTS in the DEF is EXPECTED, not a gap —
+        # the well/substrate ties are INSIDE every std cell, so there is no
+        # tapcell master to insert and nothing was "skipped". Without this the
+        # DEF-component count produces a CONCLUSIVE false FAIL on every such
+        # PDK (measured twice on the IHP SG13 family: sg13g2 "452 placed std
+        # cell(s) but no well taps" and sg13cmos5l "364 placed std cell(s) but
+        # 0 rated well/substrate-tap cell(s)" — both designs' ties are present
+        # and measurable in the sign-off GDS).
+        #
+        # `rated_tap_masters=None` ALONE cannot carry this: it means both "the
+        # PDK declares no tapcell" and "the caller passed nothing", which is
+        # exactly why the guard could not live here before. `tapless_pdk` is
+        # the explicit, caller-supplied signal (pdk.tapcell_master is None).
+        #
+        # This is INCOMPLETE, never a PASS: presence is confirmed positively by
+        # the GDS tap-diffusion measurement (pdk.tap_geom_layers) and real
+        # spacing by the foundry DRC deck's latch-up rules. No over-claim.
+        if tapless_pdk:
+            return {**base, "status": "INCOMPLETE",
+                    "reason": "ZERO_TAPS_TAPLESS_PDK",
+                    "note": (f"{len(std)} placed std cell(s) and 0 tap COMPONENTS"
+                             f"{extra} — but this PDK declares NO tapcell master "
+                             "(tapless-cell library: well/substrate ties are "
+                             "internal to every std cell), so the DEF-component "
+                             "count CANNOT conclude and 0 is the EXPECTED value. "
+                             "Confirm the ties positively via the sign-off-GDS "
+                             "tap-diffusion measurement (set `tap_geom_layers` in "
+                             "the PDK registry entry) and the foundry DRC deck's "
+                             "latch-up rules. NOT a conclusive structural GAP.")}
         return {**base, "status": "WELLTAP_SPACING_GAP", "reason": "ZERO_TAPS",
                 "note": (f"{len(std)} placed std cell(s) but 0 rated well/substrate-tap "
                          f"cell(s){extra} — every logic transistor is infinitely far "
@@ -601,7 +631,8 @@ FOUNDRY_DATA_RESIDUAL = (
 def run_geometry_layer(def_file: str,
                        netlist_file: Optional[str] = None,
                        screen_um: float = _DEFAULT_SCREEN_UM,
-                       rated_tap_masters: Optional[Sequence[str]] = None
+                       rated_tap_masters: Optional[Sequence[str]] = None,
+                       tapless_pdk: bool = False
                        ) -> Dict[str, Any]:
     """Run the open-source PERC GEOMETRY layer on a routed DEF (and optional
     extracted netlist). Returns ONE aggregate report dict.
@@ -611,7 +642,8 @@ def run_geometry_layer(def_file: str,
     foundry_data_residual."""
     dp = Path(def_file)
     spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um,
-                                         rated_tap_masters=rated_tap_masters)
+                                         rated_tap_masters=rated_tap_masters,
+                                         tapless_pdk=tapless_pdk)
     guardring = _guardring_topology_check(dp)
     report: Dict[str, Any] = {
         "def": str(def_file),

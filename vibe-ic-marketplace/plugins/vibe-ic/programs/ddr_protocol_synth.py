@@ -28,8 +28,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 from _incidental_mention import AnchoredBlob as _AnchoredBlob
 from _incidental_mention import subject_term as _subject_term
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
 
 
 def _empty(v) -> bool:
@@ -51,7 +54,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 # ----------------------------------------------------------------------
@@ -1220,7 +1225,7 @@ def apply_ddr_synth(generated_docs_dir: Path, is_ddr: bool,
     p = gd / "L9_INTEGRATION_SPEC.json"
     if p.is_file():
         d = _read(p)
-        d["top_module"] = "DDR3_SDRAM_component"
+        _ptm.apply(d, "DDR3_SDRAM_component")
         d.setdefault("module_role",
             "Source-synchronous parallel memory device intended to be paired "
             "with a DDR3 memory controller + PHY. JESD79-3C standardizes the "

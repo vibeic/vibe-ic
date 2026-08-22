@@ -9,6 +9,16 @@
 
 The fpga-signaltap skill auto-generates Quartus SignalTap II `.stp` configuration files. The skill was developed during CD4013B FPGA-test debugging to capture DUT internal signals when BIST fails.
 
+> **TWO PRODUCERS, AND THEY DISAGREE (measured 2026-08-03, vibe-ic#693).**
+> This document describes `tools/signaltap_gen.py`; `SKILL.md` names the MCP
+> tool `eda_rtl_signaltap_autogen`. They are not interchangeable. Validated with
+> `programs/signaltap_stp_completeness_check.py` against the same published RTL:
+> `signaltap_gen.py` **PASSES** (ports + BIST group + populated trigger + depth
+> + clock); `eda_rtl_signaltap_autogen` **FAILS** on its default invocation
+> (one heuristic signal, no ports, no BIST group, empty `<trigger_set/>`).
+> Whichever you use, run the validator on the output before you spend a
+> Quartus round-trip on it.
+
 ---
 
 ## 2. Port-parsing caveats
