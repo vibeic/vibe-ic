@@ -2008,3 +2008,56 @@ The tell that caught it: I *knew* three files contained the string, and the scan
 said zero. A scan whose output contradicts something you already know is not a
 surprising result — it is a broken instrument, and the right move is to test the
 instrument against the known case before believing anything else it says.
+
+## 34. The selector I named in §22, finally computed
+
+§22 diagnosed why my 17-file selection missed the seventh node and stated the
+correct rule: **not "tests mentioning the tokens I changed" but "tests that
+consult the pinning CHECKER, by any route"**. I named that rule and never ran
+it. Running it now, with the instrument checked against two known-positive files
+BEFORE trusting its output — the lesson from §33, applied one section later:
+
+```
+known-case check   test_ci_harness_timeout_ceiling_check.py  MATCH
+                   test_pytest_per_file_junit.py             MATCH
+
+importers of ci_harness_timeout_ceiling_check   5
+  test_ci_harness_timeout_ceiling_check.py          (run — inside the 148)
+  test_pytest_per_file_junit.py                     (only ONE node had been run)
+  test_fmeda_fault_injection_coverage.py            NEVER RUN
+  test_issue544_declared_signoff_gate_not_checked.py NEVER RUN
+  test_matrix_63x8_coverage.py                      NEVER RUN
+```
+
+So three files never run and a fourth run only one node deep, all of them
+consulting the checker this branch re-pins. Run in full: **5 failed, 179 passed**.
+
+**All five attributed against the batch base `546487a8a3`, which carries none of
+this branch's work — all five PRE-EXISTING:**
+
+| node | base |
+| --- | --- |
+| `test_matrix_63x8_coverage::test_every_na_cell_asserts_a_live_precondition` | fails |
+| `test_matrix_63x8_coverage::test_no_cell_is_counted_enforced_while_its_predicate_is_red` | fails |
+| `test_pytest_per_file_junit::test_finite_domain_checkpoints_keep_one_long_test_item_alive` | fails |
+| `test_pytest_per_file_junit::test_progressing_collection_may_outlive_many_stall_windows` | fails |
+| `test_pytest_per_file_junit::…_collect_import_activity_…[COLLECT_CHATTER]` | fails |
+
+**Nothing this branch does breaks any of them**, and the three
+`test_pytest_per_file_junit` nodes are visibly timing-shaped — "keep one long
+test item alive", "outlive many stall windows", a fixture with
+`deadline=time.monotonic()+3` — so they are also candidates for the load
+sensitivity §13 measured rather than settled defects. That distinction is left
+open rather than guessed: they fail on the base too, which is all this section
+claims.
+
+**What this changes about the headline.** "Clears seven, adds none" stands — the
+denominator it was measured over is still the right one for the CLEARS half, and
+the ADDS half is now checked against a strictly larger set than before: the 17
+files, plus the four repo-root files (§33), plus these five importers. Nothing
+new is attributable to this branch anywhere in that union.
+
+**And the honest shape of it:** I stated the correct selector in §22 and then
+went five sections without applying it. Naming the right denominator is not the
+same as computing it, which is the same gap in a different costume — §22 caught
+the first half of it, and only the enumeration habit from §33 caught the second.
