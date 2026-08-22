@@ -4945,3 +4945,46 @@ treatment as my own: re-run it before building on it, especially when it
 supersedes something and therefore arrives with authority. §71's conclusion —
 that the item needs the PREPARE plus a dated exemption — is *withdrawn*: it
 answers a question the tree does not pose.
+
+## 73. §72 was also too strong — this host cannot test the note, and that is measurable
+
+§71 reasoned from a quote. §72 withdrew it and said the note **does not
+reproduce**. That is the second overstatement in a row on the same item, and the
+evidence for it was one measurement short.
+
+**The missing measurement was sitting in the sibling row.** Its note says the
+corpus *"shrank from 1037 enumerated files to 70"*. Run the `evidence citation
+resolves` gate on this host and it reports:
+
+    149 contributing doc(s) of 1037 file(s) enumerated, 105 citation(s) checked
+
+**1037 — the PRE-shrink figure.** So `~/benchmark-data` on 8HD-9 (HEAD
+`146d6656`, 2026-08-18) predates the corpus move, and every measurement I took of
+both gates read the OLD corpus. The note may be exactly right about the new one.
+
+So the honest statement is not "the note is wrong" but **"nobody on this host can
+currently reproduce it, and here is the measured reason"** — which is what the
+ledger note now says, and what it should have said the first time.
+
+What survives unchanged: on the tree anyone here can measure, `L-doc field
+producer` exits **rc 1** over a denominator of **four**, matching this row's
+ORIGINAL `why` word for word. §71's wrapper argument stays withdrawn either way,
+because rc 1 fails under both wrappers.
+
+### Three passes on one claim, each tighter than the last
+
+    §71   quoted their premise and reasoned from it        WRONG
+    §72   measured, and called the premise refuted         TOO STRONG
+    §73   measured WHY the two disagree                    what I can defend
+
+The pattern is worth naming because the failure mode changed each time and the
+correction never came from being told. §71 fell to treating a peer's authority as
+evidence; §72 fell to the opposite reflex — my measurement contradicts theirs,
+therefore theirs is wrong — which is the same error with the roles swapped. Both
+skipped the question that settles it: *what would make both observations true?*
+Here, one clone being four days behind.
+
+**And the instrument that answered it was a gate I was not investigating.** The
+citation gate's summary line carries the corpus size, so it dates the corpus for
+free. Neither of my two attempts thought to ask a NEIGHBOURING gate what tree it
+was looking at.
