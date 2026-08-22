@@ -5644,6 +5644,44 @@ measuring my way toward** — the anti-skip gate, the #527 doctrine, and now #17
 **Each was in a docstring above the code I was reading.**
 
 
+## M106 — swept the remaining causes for a pre-written answer. There isn't one, and that is the useful result
+
+Three times the repository had already written down what I was measuring toward
+(M102 anti-skip, M104 #527, M105 #1703), **each in a docstring above the code I
+was reading.** So I read the rationale behind the two causes I am handing over as
+DECISIONS, to check whether they are decisions or just more unread prose.
+
+**They are decisions. Both, for stated reasons.**
+
+**The vacuity conditional (5 reds).** The tier's own definition explains why it
+exists: VACUOUS-PASS is *"counted as a PASS for verdict aggregation, but rendered
+as 'VACUOUS-PASS' in the per-step listing **so reviewers can see which steps
+actually executed vs. were vacuously satisfied**."* **That supports the code's
+current behaviour, not the tests'.** A step that examined nothing SHOULD say so,
+even holding a waiver — which is exactly what `not vacuous_hints` enforces.
+
+So the five reds are not the code being wrong. **The tests exist to cover the
+WAIVER path, and the fixture no longer reaches it** because it acquired a vacuous
+hint. That is M69's fixture conflict, confirmed from the other side: the tests are
+right about what they want to test, and the fixture drifted out from under them.
+**M46's warning stands and now has a reason behind it rather than an instinct:
+asserting `VACUOUS-PASS` would make the tests agree with the fixture's drift.**
+
+**The flow-gate audit (3 reds).** Its docstring has a heading — **"Silence is not
+a decision (#886)"** — and says the quiet part: *"UNDECLARED + AUDIT_ONLY was,
+until #886, the one state this audit could never fail on [...] saying nothing was
+the reliable way to stay clean."* **The audit was built to force exactly the call
+I am asking for.** It states no preferred answer because the answer is the gate
+author's, and that is by design.
+
+**Why a negative result is worth a section here.** Three of my "open questions"
+turned out to be answers I had not read. **Two are not**, and now I can say which
+is which on evidence rather than on how hard I happened to look. **The distinction
+between "nobody has decided this" and "I did not read the decision" is the whole
+difference between a request and an admission**, and I have filed enough of the
+second as the first in this document to want the line drawn explicitly.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
