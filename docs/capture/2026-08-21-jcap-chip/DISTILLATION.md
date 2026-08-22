@@ -1677,3 +1677,41 @@ programs whose names come from the capture's own rule sentences and which every
 other mechanism already handles correctly. A rename would trade a one-commit fix
 in one register for churn across the whole lane, and would lose the property the
 brief asked for: that each program is named for the rule it enforces.
+
+## Does the frozen branch change ANY wired gate's verdict? 52 of 52 say no
+
+The individual checks above answer one gate at a time. The batch's question is
+broader: does landing this change the verdict of anything already wired?
+
+Extracted every gate `tools/ci/repo_hygiene_gates.sh` invokes as a bare
+`$PG/<program>.py` on the checkout — 52 of them, no container and no network — and
+ran each against **bare main** and against **the merged tree** (frozen branch +
+current main, counters regenerated).
+
+    gates compared                                    52
+    verdicts differing between main and merged         0
+
+**No wired gate changes its verdict because of this branch.**
+
+### The one that looked like it did, and why it did not
+
+The first pass reported exactly one difference:
+
+    gate_discloses_denominator_check    main=124   merged=0
+
+`124` is `timeout`'s exit code, not a verdict. I had bounded each gate at 45s and
+that gate takes 42s on this host — the main arm crossed the bound and the merged
+arm did not. Re-run with room and with the arguments the dispatcher actually uses:
+
+    bare main   rc=0  elapsed=42s   all 66 probed CI gate(s) of 96 declared ...
+    merged      rc=0  elapsed=69s   all 66 probed CI gate(s) of 96 declared ...
+
+Identical verdict, identical population. The difference was my measurement bound,
+not the tree.
+
+That is the third time in this session that a raw reading accused this branch and
+a control cleared it — main's own progress charged to a stale branch, twelve
+programs called mis-named when the routing that matters already worked, and now a
+timeout read as a regression. **A finding without its control is a guess with a
+number attached**, and the number is what makes it persuasive.
+
