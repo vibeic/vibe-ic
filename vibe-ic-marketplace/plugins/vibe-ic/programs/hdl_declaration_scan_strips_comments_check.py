@@ -143,30 +143,55 @@ def stripped_locals(fn: ast.AST) -> Set[str]:
     """Locals whose value passed through a stripper, transitively.
 
     Per-NAME, which is the point: a sibling variable being stripped does not
-    make this one safe."""
+    make this one safe.
+
+    Three binding forms carry a value into a name, and all three propagate:
+    assignment, a `for` target, and a comprehension target. Handling only
+    assignment made `for line in stripped.splitlines():` read as unstripped,
+    because the loop variable never inherited the iterable's status -- a false
+    positive on correct code, and the common shape for a line-by-line scan.
+    """
     ok: Set[str] = set()
+
+    def _from_stripper(value: ast.AST) -> bool:
+        """Does this expression derive from a stripper, or from a safe name?"""
+        for sub in ast.walk(value):
+            if isinstance(sub, ast.Call):
+                try:
+                    fname = ast.unparse(sub.func)
+                except Exception:
+                    fname = ""
+                if _STRIPPER.search(fname) or _strips_comments_inline(sub):
+                    return True
+            if isinstance(sub, ast.Name) and sub.id in ok:
+                return True
+        return False
+
+    def _bindings(n: ast.AST):
+        """(names bound, expression bound from) for every binding form."""
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                and isinstance(n.targets[0], ast.Name):
+            return [n.targets[0].id], n.value
+        if isinstance(n, (ast.For, ast.AsyncFor)):
+            return [x.id for x in ast.walk(n.target)
+                    if isinstance(x, ast.Name)], n.iter
+        if isinstance(n, ast.comprehension):
+            return [x.id for x in ast.walk(n.target)
+                    if isinstance(x, ast.Name)], n.iter
+        return [], None
+
     grew = True
     while grew:
         grew = False
         for n in ast.walk(fn):
-            if not (isinstance(n, ast.Assign) and len(n.targets) == 1
-                    and isinstance(n.targets[0], ast.Name)):
+            names, value = _bindings(n)
+            if not names or value is None:
                 continue
-            t = n.targets[0].id
-            if t in ok:
+            if all(t in ok for t in names):
                 continue
-            for sub in ast.walk(n.value):
-                if isinstance(sub, ast.Call):
-                    try:
-                        fname = ast.unparse(sub.func)
-                    except Exception:
-                        fname = ""
-                    if _STRIPPER.search(fname) or _strips_comments_inline(sub):
-                        ok.add(t); grew = True
-                        break
-                if isinstance(sub, ast.Name) and sub.id in ok:
-                    ok.add(t); grew = True
-                    break
+            if _from_stripper(value):
+                ok.update(names)
+                grew = True
     return ok
 
 

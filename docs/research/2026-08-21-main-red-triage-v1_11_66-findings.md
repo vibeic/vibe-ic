@@ -4109,6 +4109,78 @@ repository's — which is the correct outcome to report, and the one I would hav
 missed had I let a round number pass.
 
 
+## M78 — I called this blocked; it was a fix I had already diagnosed. FIXED, with a mutation arm
+
+**M58 measured the mechanism and named the fix site, and then section C filed it
+as needing external input.** It never did. `hdl_declaration_scan_strips_comments_check.py`
+is NOT protected, the mechanism was already measured, and "a gate that is
+measuring the wrong thing" is explicitly mine to change. **I audited eight
+blockers earlier and found seven wrong (M34); I then wrote seven more without
+applying that base rate to my own list.**
+
+**The defect.** `stripped_locals` propagated "this value passed through a
+stripper" through **assignment only**. A value reaches a name three ways —
+assignment, a `for` target, a comprehension target — so the commonest shape for
+a declaration scan read as unstripped:
+
+    body = strip_comments(src)
+    for line in body.splitlines():     # `line` inherited nothing
+        DECL.search(line)              # -> flagged, wrongly
+
+**Fixed** by factoring the stripper test into one helper applied to all three
+binding forms.
+
+**A/B on a 10-case battery** (`For`, `AsyncFor`, comprehension, tuple target,
+two-hop nesting, each paired with the same code over RAW text):
+
+    before   5 wrong  (4 true positives correct, 5 false positives)
+    after    0 wrong  (ALL 10 correct)
+
+**Repo-wide**, against the real plugin tree:
+
+    before 175 sites   after 168 sites   removed 7   NEWLY flagged 0
+
+**The seven are verified false positives, not hidden defects.** Spot-checked two
+in source: `slot_pad_budget_check.parse_top_ports` strips `//` and `/* */` on its
+first two lines; `memory_read_pipeline_check.check_file` does
+`_strip_block_comments` then `_blank_line_comments`, and `combined` reaches the
+scan through `for mod_m in MODULE_HEAD_RE.finditer(scan_src)` — the exact
+for-target chain.
+
+**The result that matters is not the count.** The gate's BLOCKING list went from
+5 names to 3, and the two that left were false:
+
+    before: crosslayer(x2) + declared_clock_period + slot_pad_budget_check(x2)
+    after:  crosslayer(x2) + declared_clock_period
+
+**A blocking list that is 40% wrong is why nobody acted on it.** The surviving
+three split further, and only two are candidates:
+
+* `crosslayer_rewrite_equivalence::module_params/module_ports` — genuinely run a
+  `module` regex over raw `rtl_text`. A comment sentence mints a phantom module.
+  **Real candidates.**
+* `declared_clock_period::declared_io_delay_fraction` — **a SECOND false-positive
+  class this fix does not address.** Its subject is `d.read_text()` over **markdown
+  design documents**, and its regex matches `set_input_delay`, `input delay`,
+  `i/o delay` — SDC and prose tokens. `declares_hdl` flagged it because the word
+  `input` appears in the pattern. **Stripping Verilog comments from a design
+  document is a category error**: the gate assumes any regex naming an HDL keyword
+  is scanning HDL. Not fixed — the fix is a subject-kind test, and inventing one
+  to silence a single site is how a gate gets bent to its subject.
+
+**The suite could not see any of this.** All 11 existing tests passed identically
+before and after the fix. Five regression tests added; reverting the analyser
+turns **4 of the 5 red**. The fifth is `..._over_RAW_text_is_still_flagged`, which
+passes in BOTH arms **by design** — it is the anti-relaxation control, and a
+"fix" that merely stopped flagging would pass the other four.
+
+**Baseline: NOT written.** The gate prints `[NOTE] baseline shrank by 5. Re-run
+with --write-baseline.` **That is exactly the case the standing constraint names —
+"do not, including when the gate asks."** 168 against a 170 baseline does not FAIL
+(the gate fails on a NEW name or on growth); the exit stays 1 for the three
+surviving names, which is honest. Re-recording the baseline is the lander's call.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4201,7 +4273,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
 | **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. **M71: blocker VERIFIED** — `closed_loop_edge_check` is referenced in the flow yaml and the hygiene script, but both are COMMENTS, not invocations; the other two appear nowhere. All three genuinely unwired. | **wiring decision (verified)** |
-| **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
+| **`declaration scans strip comments`** | **FIXED (M78) — this row was WRONG to be here.** The analyser did not propagate stripped status through `for`/comprehension targets. Fixed: 10-case A/B 0 wrong, repo 175->168, **0 newly flagged**, 5 regression tests of which 4 go red on revert. Blocking list 5 -> 3 names, and the two that left are verified false. **Remaining: 2 real candidates** (`crosslayer` scans raw `rtl_text`) **+ 1 false positive of a SECOND class** (`declared_io_delay_fraction` scans MARKDOWN, not HDL — a subject-kind error). Baseline deliberately NOT written though the gate asks. | **fixed; 2 real candidates remain** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
 ## D. Corrections to my own earlier reports — 26 of them
