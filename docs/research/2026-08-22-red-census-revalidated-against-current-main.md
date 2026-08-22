@@ -5,6 +5,23 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
+> **⚠ SCOPE, STATED BEFORE ANY NUMBER: THIS IS NOT A SWEEP OF MAIN.**
+>
+>     test files in the plugin        2747
+>     test files this census measured   10
+>
+> Those ten are the files carrying the frozen branch's 34 reds, and that 34 came
+> from a CARRIED-FORWARD list — *"the 92 of v1.11.18 + the 5 that arrived at
+> v1.11.47 = 97"* — narrowed over successive triages. **So "33 on main" means
+> "33 of the inherited list still fail on main", NOT "main has 33 reds".**
+>
+> **A red in one of the other 2737 files would not appear here and was never
+> looked for.** I have not swept main and am not claiming to have. **Every count
+> in this document, and in the frozen branch it revalidates, sits on that
+> denominator** — which is exactly the class of omission this campaign spent its
+> length finding in other people's numbers, and I quoted mine for eighteen parts
+> without stating it.
+
 > **THIS DOCUMENT CITES A DOCUMENT THAT IS NOT ON THIS BRANCH.** It refers
 > throughout to the frozen branch's section C and its `M`-numbered findings. **That
 > file — `docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md` — lives on
