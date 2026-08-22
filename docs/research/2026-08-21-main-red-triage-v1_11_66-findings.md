@@ -13,7 +13,9 @@ host 8hd-3 · started 2026-08-21 · **read this header before M0**
 >
 > ```sh
 > P=docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md
-> grep -cE '^## M[0-9]+' $P                                   # sections
+> # sections — THREE heading conventions exist; matching only `^## M` UNDERCOUNTS
+> # by 5 (M14/M15/M16 are `### M{n}`, M17/M19 are `### Title (M{n})`).
+> grep -cE '^#{2,3} M[0-9]+ |^#{2,3} .*\(M[0-9]+\)' $P       # sections
 > grep -oE '^## M[0-9]+' $P | grep -oE '[0-9]+' | sort -n | tail -1   # highest M
 > sed -n '/^### .*instrument defects, consolidated/,/^\*\*The common shape/p' $P | grep -cE '^\| [0-9]+ \|'
 > sed -n "/^## D\. Corrections/,\$p" $P | grep -cE '^[0-9]+\. \*\*'   # corrections
@@ -6173,6 +6175,46 @@ offered-corpus route, M105), *"the allowlist means the control cannot cross"*
 (strengthened to a refusal, M107), and *"a skipped cell has no colour"* (narrowed
 to CELL tests, M103). **Every one was right and every one was imprecise, and the
 imprecision is only visible when you try to apply it somewhere new.**
+
+
+## M118 — the published re-derivation command UNDERCOUNTS, and M59 is a citation with no section
+
+The header's rule is *"a number that is wrong after every commit does not belong
+in a header; **the command below is the number**."* **So a command that is wrong
+is worse than a stale figure**, because the figure at least invites doubt. Ran all
+four as published:
+
+    sections           112
+    highest M          117      <- these two disagree, and a reader will see it
+
+**Three heading conventions exist in this document and the command matched one:**
+
+    ## M{n} — ...              113 sections
+    ### M{n} — ...               2  (M14, M15, M16 — cited 17, 11 and 8 times)
+    ### Title ... (M{n})         2  (M17, M19)
+
+**115 + 2 = 117, which equals the highest M exactly.** So of slots 0–117 exactly
+**one** is genuinely absent, and it is not a formatting variant.
+
+**M59 IS CITED TWICE AND HAS NO SECTION** — *"CORRECTION to my own blocker
+(M59)"* and *"the gate's own docstring says the set may only shrink (M59)"*. Both
+read as pointers to a numbered finding that a reader can go and check. **They
+point at nothing.** That is the dangling-ordinal defect: the citation names its
+referent perfectly and still resolves to nowhere.
+
+**Fixed the command rather than renumbering the headings** — renumbering would
+break 36 live citations to M14/M15/M16 alone, to make a regex simpler. The command
+now matches all three forms and returns **117**, which agrees with the highest-M
+command instead of contradicting it.
+
+**M59 is left standing and flagged rather than quietly deleted**, because I cannot
+tell from the citations whether a section was lost or the number was never
+allocated, and inventing either answer would be worse than naming the gap.
+
+**The lesson is narrow and sharp: I published a command as the antidote to a
+decaying number, and never ran it after the document grew.** The header says
+*"re-derive before quoting"* — I wrote that instruction and then quoted the
+section count from memory for a hundred sections.
 
 
 # ===== REQUESTS TO THE LANDER =====
