@@ -245,6 +245,22 @@ The record above was written by the run that made the change. Re-measured after
 it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
 `PYTHONDONTWRITEBYTECODE=1`, host load 70:
 
+* **The shipped gate list, diffed between the two trees.** The strongest form
+  of "nothing new fires", and it needs no fixture at all: run the real
+  `tools/ci/repo_hygiene_gates.sh --list` with `VIBE_IC_BENCHMARK_DATA` unset
+  on a clean `origin/main` worktree and on this branch, normalise the worktree
+  path, and diff. **87 declared gates on both trees, and the diff is exactly one
+  line:**
+
+      -corpus "…routed DEF" is EMPTY — nothing was checked over it  [population: producer rc 0, 0 item(s) over …]
+      +corpus "…routed DEF" was NOT FOUND — nothing was opened to check  [population: producer rc 3 — NO CORPUS RESOLVED, nothing was opened, over …]
+
+  No gate appeared, none disappeared, none changed severity. On `main` the same
+  log carries the contradiction in two adjacent lines — the producer prints
+  `NOTHING WAS SCANNED` and the dispatcher then reports the corpus `expanded
+  over 0 item(s)`. On this branch the producer adds `NOT FOUND (rc 3): … the
+  ABSENCE of a measurement, not a measurement of zero` and the rollup agrees
+  with it.
 * The 28 test files that name `gate_dispatch_over`, `_gate_dispatch.sh`,
   `GATE_CORPUS_STATE` or the routed-DEF producer: **597 passed, 6 skipped,
   1 red** — and the 1 is the `test_gate_process_attestation.py` ordering
