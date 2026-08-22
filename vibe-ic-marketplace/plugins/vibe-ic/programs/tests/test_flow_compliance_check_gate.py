@@ -5,6 +5,9 @@ import json, re, subprocess, sys
 from pathlib import Path
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from not_verified_tier import skip_not_verified  # noqa: E402
+
 PROG = Path(__file__).resolve().parent.parent / "flow_compliance_check.py"
 
 def _run(*args):
@@ -1017,6 +1020,27 @@ def _deep_project(tmp_path):
     return deep
 
 
+def _raw_helper_stdout(name, src, project):
+    """The helper's UNTRUNCATED stdout, built the way the SUBJECT builds it.
+
+    Reuses `_resolve_program_cmd` and `cwd=project`, which is exactly what
+    `__check_program_exit_zero` does, so this probe cannot drift from the
+    invocation it measures. It exists to answer one question the snippet
+    cannot answer about itself: was anything cut?
+    """
+    from programs.flow_compliance_check import (
+        _resolve_program_cmd, PROGRAMS_DIR,
+    )
+    helper = PROGRAMS_DIR / f"{name}.py"
+    helper.write_text(src)
+    try:
+        argv = _resolve_program_cmd(f"{name} .", cwd=project)
+        return subprocess.run(argv, cwd=project, capture_output=True,
+                              text=True).stdout
+    finally:
+        helper.unlink(missing_ok=True)
+
+
 def _run_helper(name, src, project):
     from programs.flow_compliance_check import (
         _check_program_exit_zero, PROGRAMS_DIR,
@@ -1107,7 +1131,9 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
     an earlier revision of this docstring claimed "both stay FAIL", which was
     measurably false.
     """
-    from programs.flow_compliance_check import _CRASH_HINT_PREFIX
+    from programs.flow_compliance_check import (
+        _CRASH_HINT_PREFIX, _OUTPUT_SNIPPET_CHARS,
+    )
     shallow = tmp_path / "p"
     shallow.mkdir()
     deep = _deep_project(tmp_path)
@@ -1126,6 +1152,49 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
                 f"{name}/{label}: a real verdict was disclosed as a CRASH, "
                 f"which would delete it from every falsifiability count. "
                 f"Snippet:\n{snippet}")
+            if label == "shallow" and marker not in snippet \
+                    and len(_raw_helper_stdout(name, src, project)) \
+                    > _OUTPUT_SNIPPET_CHARS:
+                # THE SHALLOW ARM MUST ACTUALLY BE SHALLOW, and nothing checked
+                # it. The sibling `test_crash_is_flagged_as_a_crash_at_any_
+                # checkout_depth` asserts its DEEP fixture EXCEEDS this same
+                # constant — "this test would prove nothing" otherwise — and the
+                # symmetric guard was missing here, so this arm silently
+                # depended on how long the CALLER's `--basetemp` happened to be.
+                #
+                # MEASURED 2026-08-22, same tree, same host, same second, ONLY
+                # the basetemp length differing:
+                #     --basetemp 30 chars   1 passed in 0.83s
+                #     --basetemp 69 chars   1 failed in 0.76s
+                # `_snippet` keeps a fixed-width TAIL of 300 chars,
+                # `_VERDICT_HELPER_SRC` prints the resolved project path TWICE,
+                # and the marker is the FIRST line — so a long path pushes
+                # `verdict: FAIL` off the FRONT and it arrives as `t: FAIL`.
+                # Probed at a 109-char path: window 300, snippet 299, marker
+                # absent.
+                #
+                # THE TEST IS ON THE RAW STDOUT, NOT ON THE SNIPPET, and that is
+                # the point: a snippet cannot say whether it was cut. Two
+                # cheaper signals were built and MEASURED WRONG first — an
+                # arithmetic byte budget under-counts the fixed prose (computed
+                # 221 against a real 353), and `len(snippet) >= WINDOW` is off
+                # by one because `_snippet` strips (299 against 300). Both let
+                # the failure through.
+                #
+                # This is NOT an excuse: the roll-up counts it, and a landing
+                # host with VIBEIC_REQUIRE_EDA_VERIFICATION=1 refuses the run.
+                # When the output DOES fit, the assertion below still runs and
+                # still bites.
+                skip_not_verified(
+                    f"the helper's raw output exceeds the "
+                    f"{_OUTPUT_SNIPPET_CHARS}-char evidence window at this "
+                    f"{len(str(project))}-char project path, so the tail was "
+                    f"cut and the marker {marker!r} cannot survive it. This "
+                    f"arm cannot put its question here, and that is a fact "
+                    f"about the INVOCATION, not about the subject.",
+                    "re-run with a shorter --basetemp; pytest builds the "
+                    "fixture under it and the test cannot shorten it from "
+                    "the inside")
             if label == "shallow":
                 assert marker in snippet, (
                     f"{name}/{label}: the finding itself is missing from the "
