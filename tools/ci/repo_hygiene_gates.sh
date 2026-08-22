@@ -161,6 +161,67 @@ uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over a NON-EMPTY po
 run_tolerating_uncheckable "PPA head-to-head records (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/ppa-e2e"
 
+# THE ABLATION KIND, WHICH UNTIL NOW HAD A SCHEMA AND NO GATE.
+#
+# `schemas/ppa/ablation.v1.schema.json` exists because a WITHIN-PROJECT
+# comparison was filed as `vibeic.ppa.comparison.v2` and `ppa_head_to_head_check`
+# refused it BASELINE_TUNED_BY_US. The record was honest; the document kind was
+# the lie. The new kind was the right repair -- and nothing that RUNS ever read
+# it. Measured on a4caccefe (v1.11.69): one pytest driving one hardcoded path,
+# and in this file the word `ablation` appeared in a comment and nowhere else.
+#
+# WHY THAT IS NOT A COSMETIC GAP. The three rows above refuse a comparison whose
+# baseline this project tuned. This kind is where such a document legitimately
+# goes -- and with no gate behind it, it is also where an ILLEGITIMATE one could
+# go to escape those same conditions. The schema closes that from the other side
+# (`tuned_by_this_project: const true` on EVERY arm, so a real head-to-head
+# cannot satisfy it), but a schema nothing applies refuses nothing.
+#
+# THE WRAPPER, AND IT WAS CHOSEN THE SECOND TIME BY MEASUREMENT RATHER THAN BY
+# TASTE. The gate PASSES today: 633 JSON file(s) opened under ppa-crosslayer,
+# 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted -> rc=0. So
+# plain `run` looked right and was written first. It is WRONG, and here is the
+# measurement that says so:
+#
+#   $ GATEKEEPER_BENCHMARK_DATA_SHA=... VIBE_IC_BENCHMARK_DATA=<clone> \
+#       ppa_ablation_check --corpus <repo>/ppa-crosslayer
+#   note: GATEKEEPER_BENCHMARK_DATA_SHA binds the landing corpus; forcing
+#         VIBE_IC_BENCHMARK_DATA=<clone> and refusing any candidate-local
+#         .../ppa-crosslayer shadow.
+#   VACUOUS: ... 0 ablation record(s) selected ... rc=2
+#
+# A BOUND LANDING REDIRECTS THIS ROW AWAY FROM THE NAMED ROOT. That is
+# `_corpus_location.resolve`'s bound branch working exactly as designed -- one
+# byte-attested external checkout, no candidate-local shadow -- and it means an
+# rc 2 here can be a fact about the LANDING ENVIRONMENT rather than about any
+# record. Failing a landing for that would be a gate answering a question
+# nobody asked, so rc 2 arrives as NOT CHECKED. rc 1 -- a record that WAS read
+# and does not hold -- still fails, which is the half that matters.
+#
+# AND THE EXEMPTION IS DECLARED, because the dispatcher refuses to let it be
+# defaulted into. Written first with no `uncheckable_until` -- on the reasoning
+# that rc 2 is not EXPECTED here and an undeclared row stays louder -- and
+# `_gate_dispatch.sh` rejected the whole run for it:
+#
+#   gate_dispatch: WIRING ERROR -- "PPA ablation records (within-project)" is
+#   wired with run_tolerating_uncheckable, so it can report NOT_CHECKED, but no
+#   `uncheckable_until <YYYY-MM-DD> <why>` line precedes it -- tolerance has to
+#   be bought, not defaulted into
+#   ... the set was not correctly declared, so this run certifies NOTHING
+#
+# That is the correct ruling and it cost nine test reds to learn. The routed-DEF
+# row that reports "BLOCKING; no exemption" is NOT a counter-example: it uses
+# the structural-refusal wrapper, a different mode, whose rc 2 is the only
+# truthful outcome it has.
+#
+# AIMED AT ppa-crosslayer AND NOT AT benchmark-data, deliberately: this is where
+# the kind lives (`records/ablations/`), and it is the directory a SECOND
+# ablation would be filed into tomorrow -- the case that was validated by
+# nothing before this row existed.
+uncheckable_until 2027-02-28 "rc 2 here is NOTHING OPENED or nothing of this kind found -- never a verdict about a record. Over THIS repository the gate DECIDES and PASSES today: 633 JSON file(s) opened under ppa-crosslayer, 1 ablation record selected, 0 refused, 0 undetermined, 1 accepted, rc 0. The reachable rc 2 is environmental and was MEASURED, not guessed: a landing that binds a corpus (GATEKEEPER_BENCHMARK_DATA_SHA) forces VIBE_IC_BENCHMARK_DATA and refuses the candidate-local ppa-crosslayer shadow, so this row then reads a clone that carries no ablation record and answers VACUOUS rc 2. A record that IS read and does not hold is rc 1 and still fails this row. WHAT THE REVIEW DATE IS FOR: if the corpus this repository carries ever stops holding an ablation record, this row goes NOT CHECKED and the exemption above becomes a false sentence -- that is the state to look for, not the date"
+run_tolerating_uncheckable "PPA ablation records (within-project)" "$ROOT" \
+    python3 "$PG/ppa_ablation_check.py" --corpus "$ROOT/ppa-crosslayer"
+
 # THE REST OF THE PPA RECORD FAMILY, wired on the ruling three lines above.
 #
 # The v1.11.19..v1.11.32 PPA stack landed five more gates over PPA campaign
