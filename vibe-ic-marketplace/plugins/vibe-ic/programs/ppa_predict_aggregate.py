@@ -17,6 +17,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # Area-per-cell (um^2) estimates per PDK. Conservative averages used as
@@ -51,7 +52,7 @@ class PpaEstimate:
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["emitted_by"] = "ppa_predict_aggregate v0.1.50"
+        d["emitted_by"] = _pmd.emitted_by("ppa_predict_aggregate")
         return d
 
 
@@ -102,7 +103,8 @@ def build_estimate(
 def estimate_to_markdown(est: PpaEstimate) -> str:
     out = ["# PPA pre-synthesis estimate",
            "",
-           f"_Emitted by `ppa_predict_aggregate.py` (v0.1.50). "
+           f"_Emitted by `ppa_predict_aggregate.py` "
+           f"(v{_pmd.running_plugin_version()}). "
            f"Refuse to overclaim — the estimate is a FLOOR derived from "
            f"cell-count tables, not signoff PPA._",
            "",

@@ -19,7 +19,7 @@ import pytest
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase2_one_shot_runner as P2  # noqa: E402
+import design_one_shot_runner as P2  # noqa: E402
 
 iverilog = shutil.which("iverilog")
 needs_iverilog = pytest.mark.skipif(iverilog is None,

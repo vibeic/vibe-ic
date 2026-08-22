@@ -1,6 +1,0 @@
-# Auto-staged by phase3_one_shot_runner v1.6.36
-# Source: OpenROAD report_checks (post-link, pre-floorplan slack
-# is approximated by the unconstrained slack in the post-PnR
-# report below — for production sign-off, run a separate
-# pre-floorplan STA pass).
-No paths found.
