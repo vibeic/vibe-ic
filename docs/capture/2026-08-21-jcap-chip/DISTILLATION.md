@@ -363,3 +363,34 @@ flow (step 18, `programs: [spare_cell_coverage_check]`), and the other five are
 declared by steps whose producer is a SKILL, so the decision there is which of
 two Python modules writes an output a skill declares.
 
+### A note on the brief itself: `git clean -xdfq` on a SHARED checkout
+
+The brief for this lane said "Clean tree: `git clean -xdfq`". This lane declined
+it — `~/vibe-ic` held 126 untracked files that were not this lane's to delete —
+and worked in throwaway worktrees cut from `origin/main` instead.
+
+Partway through the session those 126 files were deleted from `~/vibe-ic` by
+something outside this lane: all affected directories carry one mtime,
+2026-08-22 10:52:42, and `HEAD` never moved. Cause unproven; the likeliest is a
+sibling lane obeying the same sentence literally in the same checkout.
+
+**The damage was low and the lesson is not.** Of the 130 paths identified, ALL are
+tracked on `origin/main` — they were ordinary newer content sitting in a worktree
+whose branch (`fix/1444`, an old commit) does not carry them, which is exactly why
+git called them untracked. `git checkout origin/main -- tools vibe-ic-marketplace`
+restores them.
+
+Two things are worth carrying forward:
+
+* **The instruction is unsafe as written when several lanes share one checkout.**
+  `git clean -xdfq` deletes whatever any other lane happens to be holding. It
+  should either name a throwaway tree, or say "work in a worktree you created".
+  A brief that tells N agents to clean one shared directory is a race, and the
+  only reason it cost nothing here is that the casualties happened to be
+  recoverable from a remote.
+
+* **"Untracked" is not "yours", and it is not "junk".** On a checkout parked at an
+  old commit, most untracked files are simply the future. Reading the word as
+  permission to delete is the same error this whole file is about: acting on a
+  label instead of on the thing it labels.
+
