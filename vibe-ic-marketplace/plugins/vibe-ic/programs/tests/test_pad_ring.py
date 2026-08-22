@@ -1698,3 +1698,20 @@ def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
     assert "PAD_ORIENT_DISAGREES_WITH_DEF" in _rules(root)
     assert "a mirror is not a rotation" in " ".join(
         f["message"] for f in _report(root)["findings"])
+
+
+def test_the_doctrine_this_probe_broke_is_cited_by_a_name_that_exists():
+    """A CITATION THAT ROTS IS WORSE THAN NONE — it sends the next author to a
+    file that is not there, and prose cannot notice.
+
+    The docstring points at the program stating the rule the original probe
+    broke: an axis holding one value across differing arms is not evidence the
+    lever does nothing, it is evidence the axis was not measured under it. Cited
+    by PROGRAM NAME rather than by file:line, because a line-anchored citation
+    rots on any edit above it; this one rots only on a rename, which is exactly
+    what this test catches."""
+    cited = "metric_constant_across_differing_arms_is_not_measured"
+    assert cited in GEN.__doc__, "the cross-reference was dropped"
+    assert (PROGRAMS / f"{cited}.py").is_file(), (
+        f"pad_ring_gen cites {cited!r} and no such program exists — the "
+        f"citation was not updated when the program moved or was renamed")
