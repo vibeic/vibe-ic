@@ -4591,6 +4591,68 @@ deciding it was their job, and I had written the word "external" in a way that
 kept deciding it was not.
 
 
+## M86 — the matrix family is TWO groups, not one item, and 5 of the 6 share a single root
+
+Section C carried these as one row wanting *"a published run tree"*. **Measured by
+citation, they are two different problems, and the split changes who can close
+them.**
+
+**Each red's actual citation** (`test_d3_required_outputs_are_produced`):
+
+| step | wants | run root | kind |
+|---|---|---|---|
+| 15 | `pnr/floorplan.def` | `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721` | home |
+| 17 | `pnr/placed.def` | **same root** | home |
+| 19 | `pnr/post_cts.def` | **same root** | home |
+| 20 | `pnr/post_hold.def` | **same root** | home |
+| 32 | `eco/eco_trigger_decision.json` | **same root** | home |
+| 30 | `spice/critical_path.sp` | `AI_IC_design/4th_benchmark/cv32e40p_e2e` | home |
+| 30 | `spice/correlation.json` | `AI_IC_design/4th_benchmark/ibex_e2e` | home |
+
+**FIVE OF THE SIX ARE ONE ROOT.** Not five findings — one unreproducible run tree,
+cited five times. The module searches `("repo", "published")` only, so a `home`
+root is unreachable by design, not by accident.
+
+**GROUP 1 (steps 15/17/19/20/32) — a PUBLICATION gap, and the artefacts exist.**
+The cited root is absent from this host, but every artefact CLASS it names is
+present in other run trees here:
+
+    _c3_adc_scratch/dehand_lefonly/phase3/stage3/pnr/{floorplan,placed,post_cts,post_hold}.def
+    _c3_adc_scratch/dehand/phase3/stage3/pnr/...            (same four)
+    eco_trigger_decision.json  -- 10+ trees, incl. AI_IC_design/benchmark_clean/spm_*
+
+**So this is not "the flow does not produce these".** The flow produces all five;
+they live in `home`-kind trees that nothing searches. The gap is publication, and
+the trees that hold them are the same kind as the one cited — **re-pointing at
+another `home` root would change nothing.**
+
+**GROUP 2 (step 30) — different roots, and possibly a PRODUCTION gap.**
+Two DIFFERENT run roots, neither the group-1 one, and the artefacts do not behave
+like group 1's:
+
+    critical_path.sp     NOT FOUND anywhere on this host
+    correlation.json     found ONLY under /tmp/matrix_d6_*/proj/ -- TEST FIXTURE
+                         scratch from this suite's own runs, not a real run tree
+
+**A test fixture's output is not evidence that a flow produces something**, and I
+am not going to let it read as one. **I did NOT measure whether the flow can
+produce `critical_path.sp`** — absence on one host is not proof of that, and the
+honest label is UNKNOWN, not "never produced".
+
+**What each group needs, and they are not the same ask:**
+
+* **Group 1** — publish one of the run trees that already carries the artefacts
+  into a `repo`/`published` kind, or waive the five through the registry with
+  disclosure. **One decision closes five reds.**
+* **Group 2** — first establish whether step 30's outputs are produced at all.
+  If they are, it joins group 1; if not, it is a flow gap wearing a corpus gap's
+  clothes, and closing it by publishing would be the wrong fix.
+
+**Never by widening the skip** — the test says so itself, and it is right: the
+skip exists for records whose root the pointer can reach, and setting the pointer
+leaves these exactly as they are.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4677,7 +4739,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **REAL blocker, but REDESCRIBED — M80.** Audit exit 1: 172 gates, 19 can block, 153 AUDIT_ONLY (88%), 131 undeclared. Both named gates sit in the BLOCKING `program_exit_zero` slot and are still AUDIT_ONLY (no runner invokes them inline). **My note said `advisory` truthful for both; that is true of the WIRING and wrong as an action** — writing the line DECIDES rather than describes. For `area_total_vs_budget_check` `advisory` would ratify the exact defect it was written to remove (*'a figure produced and never compared'*): wire it, or declare `blocking` and stay red. `tapeout_docs_gen` is a GENERATOR, not a check — a classification question, same shape as (b) and as M70's hygiene gate. | **3 questions: 1 product, 2 classification** |
 | **Re-founding B and D** (2 + 2 reds) | **B: BUILT, RUN, REVERTED — M83.** The sentinel hang WORKS (33s -> 111s, reaches `hermetic Git subject PASS`), but the arm's container cannot be identified: label value is receipt-only, `refs/gk-verify` exists **only on the `--pr` path** and these tests use `--ref`, and every mount lives under an unannounced `mktemp -d`. **One line in `gatekeeper-verify-merge.sh` (PROTECTED) would fix it** — write `RUN_ID` into the probe dir it already writes cleanup markers to. Reverted rather than ship a vacuous pass. **D: blocker retired (M79)** — a real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with `routed.def`), and the sandbox fixture already publishes one. **A and C are DONE.** | **one line, in a protected file** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
-| **Matrix family** (8 of 11, one cause) | a published run tree carrying `floorplan/placed/post_cts/post_hold.def`, `eco_trigger_decision.json` and `critical_path.sp` — or a registry waiver with disclosure. Closing this layer should close the census layer with it (M34, M35). | **evidence or owner waiver** |
+| **Matrix family** (6 D3 reds measured) | **TWO GROUPS, not one — M86.** Measured by CITATION: **5 of the 6 (15/17/19/20/32) cite ONE root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`, kind `home`), so they are one unreproducible run tree cited five times. **Their artefacts EXIST on this host** in other `home` trees (`_c3_adc_scratch/dehand*` has all four PNR DEFs; 10+ trees have `eco_trigger_decision.json`) — a PUBLICATION gap, not a production one; **one decision closes five**. **Step 30 is separate**: two different roots, `critical_path.sp` absent host-wide and `correlation.json` present ONLY in `/tmp/matrix_d6_*` TEST FIXTURE scratch. Whether the flow produces them is UNKNOWN — not measured, and not to be closed by publishing until it is. | **1 publication decision + 1 open question** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
