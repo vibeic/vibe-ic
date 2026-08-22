@@ -960,9 +960,10 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
     returns True, the match is not a member of the vocabulary at all and is
     dropped before dedup, before the limit and before either drop predicate.
     This exists because polarity is NOT the only way a framed hit can be
-    spurious: `l20`'s ``m?bist`` matches the SATA ``BIST Activate`` FIS and the
-    USB-PD ``BIST`` message type, which are payloads a protocol defines on the
-    wire, sitting inside genuine ``shall`` sentences. No framing, denial or
+    spurious: `l20`'s ``m?bist`` matches a ``BIST Activate`` frame type in one
+    root's inputs and a ``BIST`` message type in another's, which are payloads
+    a protocol defines on the wire, sitting inside genuine ``shall``
+    sentences. No framing, denial or
     scope ruler can discriminate those, because nothing about them is
     mis-framed, denied or deferred — the TOKEN simply means something else in
     that document.

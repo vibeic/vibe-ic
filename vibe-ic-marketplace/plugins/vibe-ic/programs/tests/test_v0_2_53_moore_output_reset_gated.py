@@ -19,6 +19,7 @@ negated-reset conjunction → out of this structural rule's scope).
 chip-AGNOSTIC: fixtures use generic TopModule/clk/reset/shift_ena shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_comments  # noqa: E402
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: Without iverilog the gate refuses to run — correctly — and writes no report,
+#: so the read dies with FileNotFoundError on a path that was never meant to
+#: exist. A gate that REFUSED and a gate that produced a bad report are not the
+#: same result, and a traceback cannot tell them apart (#1430, #1433).
+#:
+#: Marked by CALL RELATIONSHIP, not by name. The `test_gate_*` prefix happens to
+#: select the right set in these two files, but #1430 records that the same
+#: shortcut would have silenced two tests needing no toolchain. The rule is
+#: "its body reaches `_run_gate(` or `_block_rules(`", derived with `ast`.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate refuses and writes nothing")
+
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -175,6 +195,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_auto_corrects_reset_gated_form(tmp_path):
     # v1.1.76: the registry's `behavioral_fsm` solver fires on this reset-pulse spec
     # ("assert shift_ena for 4 cycles then 0 forever") and emits the correct
@@ -196,6 +217,7 @@ def test_gate_auto_corrects_reset_gated_form(tmp_path):
     assert "reset-pulse counter" in emitted
 
 
+@_needs_gate
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CANONICAL_RTL)
     r = _run_gate(ds, run)

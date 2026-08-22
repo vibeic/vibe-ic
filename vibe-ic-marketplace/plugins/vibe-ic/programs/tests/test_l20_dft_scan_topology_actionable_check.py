@@ -627,7 +627,7 @@ _BIST_MESSAGE_DOCS = {
     "frame_types.txt": (
         "6.1 Frame Types\n"
         "The controller shall transport the following frame types: 0x27 "
-        "Register Host-to-Device, 0x39 Activate, 0x46 Data, 0x58 BIST "
+        "Register Downstream, 0x39 Activate, 0x46 Data, 0x58 BIST "
         "Activate, 0x5F Setup.\n"),
     "bit_definition.txt": (
         "6.2 Command Header\n"
