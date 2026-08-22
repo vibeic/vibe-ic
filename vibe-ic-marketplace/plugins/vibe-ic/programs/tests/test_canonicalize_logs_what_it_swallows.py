@@ -51,6 +51,20 @@ RUNNER = _PROGRAMS / "phase3_one_shot_runner.py"
 _STEP = "step_canonicalize_artefacts"
 _CHECKER = "sdc_syntax_check.py"
 
+#: Every spawn in this runner whose status was discarded, and the function it
+#: lives in. The first was found by hand; the other three were found by
+#: `spawned_gate_whose_status_is_declared`-class analysis on
+#: next/protected-tuple-drift-attribution, which reported them on main and does
+#: not repair them. All four are ADVISORY by design -- their verdict travels in
+#: an artefact -- so the remedy is the second one that instrument names: say so
+#: at the call site instead of leaving it inferred from silence.
+_SPAWNS = (
+    ("sdc_syntax_check.py", "step_canonicalize_artefacts"),
+    ("dfm_screen_check.py", "step_canonicalize_artefacts"),
+    ("thermal_screen_check.py", None),
+    ("flow_compliance_check.py", None),
+)
+
 
 def _step_node():
     tree = ast.parse(RUNNER.read_text(encoding="utf-8", errors="replace"))
@@ -140,6 +154,90 @@ def test_the_note_names_the_artefact_a_reader_must_open():
     assert "sdc_check_json.relative_to" in src or "sdc_check.json" in src, (
         "the findings note does not name the report holding the verdict, so a "
         "reader is told something is wrong and not where to look")
+
+
+def _spawn_block(program):
+    """The `try` anywhere in the runner that spawns `program`."""
+    tree = ast.parse(RUNNER.read_text(encoding="utf-8", errors="replace"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try) and program in ast.unparse(node):
+            return node
+    pytest.fail(f"nothing in {RUNNER.name} spawns {program} inside a try; this "
+                "arm has lost its subject and must be relocated, not deleted")
+
+
+def _spawn_scope(program):
+    """The FUNCTION that spawns `program`, not merely the `try`.
+
+    THIS GUARD'S OWN FIRST DRAFT WAS SCOPED TOO NARROWLY and said so out loud
+    rather than being quietly widened: it asserted `.returncode` appeared
+    inside the `try`, and for `thermal_screen_check` the status is read in the
+    `if not out_json.is_file():` branch DIRECTLY AFTER the try. The status was
+    read; the instrument was looking in the wrong place. A structural test that
+    reports "discarded" over code that consumes the value one line later is a
+    false finding, which is the thing this whole lane exists to remove.
+    """
+    tree = ast.parse(RUNNER.read_text(encoding="utf-8", errors="replace"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if program in ast.unparse(node):
+                return node
+    pytest.fail(f"no function in {RUNNER.name} spawns {program}; this arm has "
+                "lost its subject and must be relocated, not deleted")
+
+
+@pytest.mark.parametrize("program,_fn", _SPAWNS)
+def test_every_discarded_spawn_now_reads_its_status(program, _fn):
+    """The other three sites, which an independent instrument found first.
+
+    `next/protected-tuple-drift-attribution` ships
+    `spawned_gate_whose_status_is_discarded.py`, which reports these three on
+    main -- "result unbound, check off, inside a handler that swallows
+    everything" -- and does not repair them; that branch does not touch this
+    file at all. (It does NOT report the SDC site, because its clause requires
+    the result to be UNBOUND and that one was bound-and-never-read. The two
+    findings are complementary, which is why both live here.)
+
+    ALL FOUR ARE ADVISORY BY DESIGN and none is made blocking: each one's
+    verdict travels in an artefact a later reader opens. The remedy applied is
+    the second the instrument itself names -- say so at the call site, so the
+    decision is on the record rather than inferred from silence.
+    """
+    src = ast.unparse(_spawn_scope(program))
+    assert ".returncode" in src, (
+        f"the spawn of {program} still discards its status entirely, so a "
+        "reader cannot tell a crashed run from a clean one")
+
+
+@pytest.mark.parametrize("program,_fn", _SPAWNS)
+def test_no_discarded_spawn_hides_behind_a_bare_pass(program, _fn):
+    for handler in _spawn_block(program).handlers:
+        body = ast.unparse(handler.body).strip()
+        assert body != "pass", (
+            f"the spawn of {program} swallows its exception with a bare "
+            "`pass`; a failure there is indistinguishable from success")
+
+
+def test_the_refresh_no_longer_calls_itself_BLOCKING():
+    """The prose defect, which was the worst of the four.
+
+    The `flow_compliance_check` re-run described itself as "This direct,
+    BLOCKING flow_compliance re-run" while running with `check=False`, an
+    unbound result and `except Exception: pass`. Prose asserted a property the
+    code could not have, and a reader would believe a failed re-run stops the
+    verdict when nothing would even mention it.
+
+    The failure is material, which is why the silence mattered: without the
+    refresh, `_derive` reads a STALE phase23_completion_audit.json and the
+    headline can disagree with its own sign-off.
+    """
+    src = ast.unparse(_spawn_block("flow_compliance_check.py"))
+    assert "BLOCKING" not in src, (
+        "the flow_compliance refresh still calls itself BLOCKING while running "
+        "check=False; either it blocks or it does not say that it does")
+    assert "STALE" in src.upper(), (
+        "the failure path does not say what a missing refresh costs -- a stale "
+        "audit read by _derive -- so the note is a shrug rather than a warning")
 
 
 def test_the_step_does_not_start_blocking_on_it():
