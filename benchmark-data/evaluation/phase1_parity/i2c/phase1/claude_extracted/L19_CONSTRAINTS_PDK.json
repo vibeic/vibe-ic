@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "I2C is a wire-level protocol spec; no PDK / SDC / floorplan constraints at the protocol layer. Per-device integration constraints (pad type, pull-up sizing, clock-tree budget) live in the SoC-level integration spec, not in UM10204."
-  }
-}
