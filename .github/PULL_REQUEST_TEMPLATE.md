@@ -51,6 +51,20 @@
 
   See the module docstring of programs/ppa_pr_scope_check.py for the accepted
   evidence kinds and the exit-code contract.
+
+  IF YOU CITE A FILE'S sha256, IT GOES STALE THE NEXT TIME YOU EDIT THAT FILE.
+  That is the contract working — evidence that never went stale would not be
+  evidence — but it means a later commit touching the cited file turns the
+  merge gate red until you refresh the digest. Measured on the branch that
+  first adopted this file: a commit fixing two COMMENTS in the cited artefact
+  invalidated its hash, and the author reported the gate green for two more
+  commits without re-checking.
+
+  The guard that catches it is
+  `test_this_branchs_own_answers_document_is_still_valid`; CI's targeted
+  selector picks it for any change touching a cited path, so the recurrence
+  fails a test rather than a landing. Run it locally after editing anything you
+  have cited.
 -->
 
 ## Checklist
