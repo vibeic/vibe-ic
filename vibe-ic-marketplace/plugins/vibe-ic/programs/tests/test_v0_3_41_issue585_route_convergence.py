@@ -68,7 +68,15 @@ def test_step_pnr_wires_route_convergence_gate():
     """step_pnr must consult _drt_final_violations after the rc gate and
     FAIL with ROUTE_NOT_CONVERGED naming the knobs when N > 0."""
     src = inspect.getsource(R.step_pnr)
-    assert "_drt_final_violations" in src
+    # vibe-ic#1080 — the consultation moved INTO `_drt_reading`, which runs the
+    # prose parser AND cross-checks it against the tool's own metric. The
+    # original intent is unchanged and is asserted on both halves rather than
+    # relaxed: step_pnr must still consult the reading, and the reading must
+    # still run `_drt_final_violations`. Dropping the second assertion would
+    # let the prose parser be deleted without a test noticing, which is the
+    # opposite of what this test was written to protect.
+    assert "_drt_reading" in src
+    assert "_drt_final_violations" in inspect.getsource(R._drt_reading)
     assert "ROUTE_NOT_CONVERGED" in src
     assert "--die-um" in src and "--util" in src
     assert "non_signoff_outputs" in src

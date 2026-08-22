@@ -46,6 +46,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +286,7 @@ def main():
         if not out.is_absolute():
             out = Path(args.project_dir) / out
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(payload, encoding="utf-8")
+        atomic_write_text(out, payload, encoding="utf-8")
 
     if args.json != "-":
         for f in result.findings:
