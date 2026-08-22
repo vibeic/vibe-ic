@@ -49,5 +49,15 @@
     "bucket": "D",
     "title": "The downstream placer crosses its two axis arguments",
     "why_discard": "REFUTED BY MEASUREMENT, and recorded so it is not filed again. The prior lane observed that sweeping the vertical rotation argument left the east and west pads unchanged, and concluded the argument was inert; a row-level dump then showed the horizontal arguments feeding the east and west rows and the vertical arguments feeding the north and south rows, which reads as a transposition and was drafted here as a forked-tool defect. It is not one. The tool's own option table documents the horizontal argument as naming the site for the horizontal pads, east and west, and the vertical argument as naming the site for the vertical pads, north and south, and it further documents the vertical rotation default as belonging to the southern row. Every number measured is the documented behaviour of a tool that is self-consistent with its own contract. There is no defect to fix in the fork, and a fork-side change here would break every caller that reads the documentation. The defect is entirely on our side, and it is that our step bound the word vertical to the vertical SIDE while the tool binds it to the vertically-oriented PAD. That is not a discard: it is captured as the upstream-pinning rule and as the false-reason defect in this same batch."
+  },
+  {
+    "step": "phase3.pad_ring",
+    "design": "capture-lane",
+    "bucket": "A",
+    "rule_name": "a locus word naming the missing thing is not a locus",
+    "pattern": "A guard that requires a negative verdict to disclose where it looked accepts, as that disclosure, any word from its own vocabulary appearing anywhere in the message prose. Part of that vocabulary consists of the ordinary nouns for the thing whose absence is being reported, which an absence message can hardly avoid containing. The guard therefore passes verdicts that name no place at all, and would not notice if a real one stopped naming one.",
+    "docstring": "Words that disclose a PLACE and words that merely name the MISSING THING must not satisfy the same predicate. Only the first tells a reader where the search happened; the second is the subject of every absence message ever written, so accepting it makes the check unfalsifiable for the population it most needs to bind.",
+    "expected_signal": "ERROR",
+    "fix_action": "Partition the vocabulary. Only place-denoting words satisfy the prose branch; thing-denoting nouns continue to count when they are identifier names or appear beside a path-shaped literal, which is where they carry real information. The partition must be measured against the existing conformant population before it ships, because a guard that reddens on the state we just shipped is a bug rather than a guard."
   }
 ]

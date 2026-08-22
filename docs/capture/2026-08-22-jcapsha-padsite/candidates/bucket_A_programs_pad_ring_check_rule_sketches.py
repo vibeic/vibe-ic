@@ -33,3 +33,14 @@ def rule_no_effect_claim_states_the_population_swept(sample_text, ports):
     # Expected signal: ERROR
     # Suggested fix action: Require a no-effect disclosure to carry the observed population beside the varied one, so a reader can see when the two do not cover the same set. A claim whose observed set is narrower than the set the input is documented to govern is not a measurement of inertness.
     return []  # list of findings — TODO implement
+
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
+# Pattern: A guard that requires a negative verdict to disclose where it looked accepts, as that disclosure, any word from its own vocabulary appearing anywhere in the message prose. Part of that vocabulary consists of the ordinary nouns for the thing whose absence is being reported, which an absence message can hardly avoid containing. The guard therefore passes verdicts that name no place at all, and would not notice if a real one stopped naming one.
+# CORPUS-SWEEP REQUIRED before merging: zero false-positives across
+# the open-benchmark corpora used by `score_iverilog_tb.py`.
+
+def rule_a_locus_word_naming_the_missing_thing_is_not_a_locus(sample_text, ports):
+    """Words that disclose a PLACE and words that merely name the MISSING THING must not satisfy the same predicate. Only the first tells a reader where the search happened; the second is the subject of every absence message ever written, so accepting it makes the check unfalsifiable for the population it most needs to bind."""
+    # Expected signal: ERROR
+    # Suggested fix action: Partition the vocabulary. Only place-denoting words satisfy the prose branch; thing-denoting nouns continue to count when they are identifier names or appear beside a path-shaped literal, which is where they carry real information. The partition must be measured against the existing conformant population before it ships, because a guard that reddens on the state we just shipped is a bug rather than a guard.
+    return []  # list of findings — TODO implement

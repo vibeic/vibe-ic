@@ -4,7 +4,7 @@ Cut from `origin/main` @ `a4caccefe` (v1.11.69). Branch `jcapsha/capture-padsite
 Source report: the `jpadsite` lane's `RESULT.md` (1987 lines) and its `evidence/`.
 
 Deliverable: `recoveries.json` + `candidates/`, emitted by `enhancement_emit.py`.
-Five records: **A, A, A, C, D**. No Bucket T — and the absence of a Bucket T is
+Six records: **A, A, A, A, C, D**. No Bucket T — and the absence of a Bucket T is
 this lane's main finding.
 
 ## The ladder, per finding, and where each one stopped
@@ -141,6 +141,53 @@ in the record and re-emitted, not waived.
 `CAPTURE_ROUTING.json` gains one entry: step `15.5ic` ships two programs and had
 **no routing entry at all**, so a Bucket-A capture taken there was reported
 unrouted and its sketch silently skipped. Nine added lines, nothing else touched.
+
+## I verified the other lane's guards rather than re-writing them, and one has a hole
+
+Both were run against their own tree, in a detached worktree at `0c1a7b4c8`:
+
+    absence_verdict_names_its_search_space_check   rc 0
+      1278 files parsed, 31 absence verdicts, 31 naming a locus
+    upstream_mirror_is_pinned_check                rc 0
+      1278 files parsed, 3 declared mirrors, 0 undeclared candidates
+    their five test files                          31 passed, 7 skipped
+
+Real denominators on both, so neither is a gate that walked nothing. Load was
+92 on 32 cores throughout, so no timing conclusion is drawn from any of it.
+
+Then the check that fixtures cannot make: does the guard fire on the REAL tree.
+I stripped both path literals out of a shipped refusal in `erc_density_check.py`
+— the entire content that says where it looked — and re-ran.
+
+**It stayed green.** 31 of 31, PASS. Reproduced in isolation one word apart:
+`No density artefact was found` passes, `No widget was found` fails. `artefact`
+is in the guard's locus vocabulary, and a bare locus WORD anywhere in the
+message prose satisfies the predicate.
+
+The vocabulary mixes words that disclose a PLACE (`path`, `dir`, `tree`,
+`where`, `searched` — the code comment's own example, "no LEF view was opened",
+is one of these and is rightly accepted) with words that merely name the MISSING
+THING (`artefact`, `file`, `report`, `manifest`). An absence message can hardly
+avoid containing the second kind, so for that population the check cannot fail.
+
+This is NOT the generosity the guard discloses. Its docstring waives
+imprecision; this passes a verdict that says nothing, which is the state it
+exists to refuse. Filed as the sixth record, Bucket A — partitioning a word list
+is deterministic. I did NOT make the change: the guard belongs to the lane that
+wrote it, and the partition has to be measured against the existing 31 first,
+because a guard that reddens on what we just shipped is a bug not a guard.
+
+**Where that lane was right, and I checked before saying so.** Its scope section
+states plainly that it does not check the locus is COMPLETE, and names the exact
+decision it cannot make from its input — that whether both declaring views were
+opened is a property of the distribution, not of our Python. That is the ladder
+applied correctly, and it means the guard does not claim to catch the original
+defect. My finding is about the half it DOES claim.
+
+Evidence: `evidence/absence_guard_prose_noun_is_not_a_locus.md`,
+`evidence/absence_guard_mutation_stayed_green.txt`. The mutation was reversed by
+a reverse edit and `git status` re-verified clean; `__pycache__` was cleared
+before the run.
 
 ## Not done
 
