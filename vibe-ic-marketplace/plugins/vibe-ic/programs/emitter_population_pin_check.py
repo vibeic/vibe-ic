@@ -134,6 +134,31 @@ USAGE
 -----
     emitter_population_pin_check.py [--programs DIR] [--tests DIR] [--json OUT]
 
+--json, AND WHAT IT CARRIES
+---------------------------
+A machine-readable report with no written schema is a contract nobody can rely
+on, and this one grew three keys without gaining one. All seven, so a consumer
+need not read the source:
+
+    tool                 this program's name
+    counters_examined    emitted denominators actually COMPARED -- not "seen".
+                         A comparison this guard declined is not counted here
+    pins_examined        test pins actually compared, same rule
+    findings             the refusals. `check` is "emitter-self" (a counter's
+                         site count against its own printed denominator) or
+                         "pin-against-emitter" (a test pinning a value the
+                         emitter does not state). Non-empty <=> exit 1
+    denied_by_polarity   matches NOT counted because the statement denies them.
+                         `where` / `what` / `matched` / `denial`
+    not_determined       populations declined because K is a LOWER BOUND, not a
+                         count. `program` / `counter` / `increment_sites` /
+                         `denominator` / `denominator_kind` / `emitted_per_site`
+    unparsed             sources this guard could not read: "<name>:<line>: <msg>"
+
+The last three are REACH, not verdict: they say what was withheld. A consumer
+that reads `findings` alone and ignores them is reading exit 0 as "the tree is
+clean" when it may mean "what I could compare was clean".
+
 chip-AGNOSTIC: Python and Tcl text structure. No design, PDK, vendor or SKU.
 """
 from __future__ import annotations

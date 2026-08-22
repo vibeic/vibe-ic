@@ -2173,6 +2173,37 @@ def test_rc0_does_not_promise_the_whole_tree_was_checked(tmp_path):
         f"say so:\n{head}")
 
 
+def test_the_json_report_carries_exactly_the_documented_keys(tmp_path):
+    """`--json` is a machine-readable contract. This branch added THREE keys to
+    it -- `denied_by_polarity`, `unparsed`, `not_determined` -- and the module
+    docstring documented none of the seven until now.
+
+    A key added or removed silently breaks whatever reads it, and nothing here
+    would have noticed. The set is pinned against the docstring itself, so the
+    two cannot drift: adding a key without documenting it goes red, and so does
+    documenting one that is not emitted."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    emitted = set(json.loads((tmp_path / "r.json").read_text()))
+
+    import ast as _ast
+    import re as _re
+    doc = _ast.get_docstring(_ast.parse(PROG.read_text(encoding="utf-8")))
+    section = doc.split("--json, AND WHAT IT CARRIES", 1)[1]
+    # A schema row is: exactly four spaces, the key, two-or-more spaces, prose.
+    # Derived from the row SHAPE, never from a list of the keys expected -- a
+    # checker that already knows the answer cannot detect drift. (The first
+    # version required an underscore in the key and so missed `findings` and
+    # `unparsed`; the instrument was wrong, not the docstring.)
+    documented = set(_re.findall(r"^ {4}([a-z_]+) {2,}\S", section, _re.M))
+    assert emitted == documented, (
+        "the JSON report and its documented schema have drifted\n"
+        f"  emitted but undocumented: {sorted(emitted - documented)}\n"
+        f"  documented but not emitted: {sorted(documented - emitted)}")
+    assert len(emitted) == 7, sorted(emitted)
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
