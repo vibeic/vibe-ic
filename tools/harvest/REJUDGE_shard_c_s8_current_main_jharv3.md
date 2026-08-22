@@ -276,6 +276,35 @@ set built from it, all of `origin/main` must be inside it, and the null sha must
 because an empty set makes every head look lost, and a set built from `refs/remotes`
 makes deleted branches look alive.
 
+## The one ABANDON, re-verified at the blob
+
+Shard C has exactly one ABANDON, `/home/reyerchu/_v1126` on `.112`, and it is the only
+deletion-bound verdict in the shard that is **not** justified by "main already has it".
+So it was re-checked in full rather than stamped.
+
+Against current main the picture is the one session 6 recorded, and 673 commits did not
+change it: 21800 files, exactly **one** `(path,blob)` pair main's history has never
+held —
+`vibe-ic-marketplace/plugins/vibe-ic/programs/gate_host_independence_check.py` at blob
+`f8ffb71bfba1`, 45097 bytes. Main has held **thirteen** different blobs at that path and
+none of them is this one.
+
+The ABANDON is correct because the twin holds the same bytes — and that is now checked
+at the blob, not inferred from tree equality:
+
+* `/home/reyerchu/_i_solo_1126` HEAD `30ca1a916507` holds **the same blob**
+  `f8ffb71bfba1` at that same path
+* both directories re-read on `.112` today: HEADs unmoved, both trees
+  `f5f659f2a22a`, both `mod=0 untracked=0`
+* both heads contained by refs origin advertises **now** — this one by
+  `harvest/worktree-triage-jharvest`, the twin also by `harvest/rescue-reanchor-3`,
+  still among the 13 live `harvest/rescue-reanchor-*` branches
+
+So the exposure session 3 recorded — an ABANDON resting on a single other row — is
+still lifted. **The row is preservation-bound, not "already on main":** if both
+preservations lapse, that one file is what is lost, and the row now says so in those
+words.
+
 ## Shard C after session 8
 
 **110 rows — 73 RECOVER, 36 LANDED, 1 ABANDON.** Two rows moved, both RECOVER -> LANDED.
