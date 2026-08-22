@@ -135,7 +135,7 @@ def test_792_rescue_sequence_detector_canonical_binding_now_elaborates(tmp_path)
     rd = PL.rtl_dir(proj)
     srcs = [str(p) for p in sorted(rd.glob("*.v"))]
     r = subprocess.run([_IV, "-g2012", "-o", str(tmp_path / "b"), *srcs,
-                        str(tb)], capture_output=True, text=True, timeout=120)
+                        str(tb)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout + r.stderr)   # was: port 'rst_n' not found
     v = subprocess.run([_VVP, str(tmp_path / "b")], capture_output=True,
                        text=True, timeout=60)
@@ -176,7 +176,7 @@ def test_792_noregression_spec_binding_and_canon_rescue(
         srcs = [str(p) for p in sorted(rd.glob("*.v"))]
         return subprocess.run([_IV, "-g2012", "-o", str(tmp_path / f"{rbind}.b"),
                                *srcs, str(tb)], capture_output=True, text=True,
-                              timeout=120)
+                              timeout=60)
     # spec binding: NO REGRESSION (this is the #689 case that must stay green).
     r_spec = _elab(reset)
     assert r_spec.returncode == 0, (r_spec.stdout + r_spec.stderr)
@@ -241,7 +241,7 @@ def test_792_additive_wrapper_synth_reads_under_yosys(tmp_path):
         [_YOSYS, "-q", "-p",
          f"read_verilog {rd}/sequence_detector.v; "
          f"hierarchy -top sequence_detector; proc; opt; synth"],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout + r.stderr)   # tri1 never reaches yosys
 
 

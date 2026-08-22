@@ -1,4 +1,4 @@
-"""Unit tests for `erc_density_check.py` (Step-30 ERC + density substance).
+"""Unit tests for `erc_density_check.py` (Step-31 ERC + density substance).
 
 Covers the anti-fabrication contract:
   * PASS fixture   — real density artefact + clean ERC (substance good).
@@ -7,7 +7,9 @@ Covers the anti-fabrication contract:
                      (b) an ERC-dirty report with floating nets.
   * Honesty edges  — missing / empty / provenance-less / metric-less density
                      artefact => honest FAIL (rc=1), never a vacuous pass; and
-                     genuine "nothing to check" => explicit SKIP (rc=2).
+                     "examined nothing" => FAIL CLOSED (rc=1), never rc=2.
+                     No project CONTENT reaches a NOT-CHECKED exit; rc=2 is
+                     reserved for "project_dir is not a directory".
   * NON-fabrication — std-cell row utilization of 14% (the real OpenROAD
                      filler_placement metric) must NOT be mis-flagged as
                      out-of-range against the 20-80% per-LAYER rule.
@@ -213,18 +215,47 @@ class TestHonestyEdges:
         rc = mod.main([str(tmp_path)])
         assert rc == 1
 
-    def test_explicit_skip_when_audit_examines_nothing(self, tmp_path):
-        # Directly exercise the rc=2 branch: an audit() that examined
-        # nothing and recorded nothing yields SKIP. We simulate by pointing
-        # at a directory where _check_density is monkey-patched to be inert.
+    def test_empty_project_is_a_fail_not_a_skip(self, tmp_path):
+        """The exit-code contract, DRIVEN on the shape the comment describes.
+
+        A comment in `main` used to claim rc=2 was reachable "when the program
+        is invoked directly with literally nothing to check". Invoked directly
+        on a bare project directory, this is what it actually does.
+        """
+        assert mod.main([str(tmp_path)]) == 1
+
+    def test_examining_nothing_fails_closed(self, tmp_path):
+        """No real input reaches "examined nothing without an ERROR" —
+        `_check_density` records DENSITY_MISSING on every absent artefact. This
+        forces the state anyway (an inert density sub-check, as a future quiet
+        "not applicable" early return would produce) and pins that it is a
+        FAIL: not rc=0 (vacuous PASS) and not rc=2 (NOT CHECKED). This gate has
+        no not-applicable verdict to offer.
+        """
         import erc_density_check as m
         orig = m._check_density
         try:
-            m._check_density = lambda *a, **k: None  # examine nothing
+            m._check_density = lambda *a, **k: None  # examine nothing, say nothing
             rc = m.main([str(tmp_path)])  # no erc.rpt either
-            assert rc == 2
+            assert rc == 1
         finally:
             m._check_density = orig
+
+    def test_no_input_shape_reaches_a_not_checked_exit(self, tmp_path):
+        """rc=2 is reserved for "not a directory"; no project CONTENT reaches
+        it. Enumerated over the absence states the density sub-check can be in."""
+        shapes = {
+            "bare": lambda p: None,
+            "empty_reports": lambda p: _reports(p),
+            "empty_density_rpt": lambda p: _write_density_rpt(p, ""),
+            "erc_only": lambda p: _write_erc(p, _CLEAN_ERC),
+        }
+        for name, setup in shapes.items():
+            proj = tmp_path / name
+            proj.mkdir()
+            setup(proj)
+            assert mod.main([str(proj)]) != 2, (
+                f"{name} exited NOT CHECKED; absence must be an honest FAIL")
 
 
 # ── CLI contract: --json writes the report shape ────────────────────

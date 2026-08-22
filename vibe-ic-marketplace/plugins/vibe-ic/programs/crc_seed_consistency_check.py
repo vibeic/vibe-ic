@@ -19,8 +19,11 @@ single-wire / serial / packetised protocol. No chip / tester / PDK names.
 
 Usage:
     python3 crc_seed_consistency_check.py \\
-        --vectors-json ./tb/crc_vectors.json \\
-        --out-dir /tmp/crc_check
+        --vectors-json ./tb/crc_vectors.json
+
+`--out-dir` is OPTIONAL and has no default: omit it and the gate writes no
+file at all (verdict on stdout). Pass a project-relative directory —
+e.g. `--out-dir ./reports/` — when you want the JSON report on disk.
 
 `crc_vectors.json` schema:
     {
@@ -125,13 +128,22 @@ class Result:
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--vectors-json", required=True, type=Path)
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/crc_seed_consistency"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # See the sibling note in `sustained_vs_edge_check.py`: a hardcoded
+    # `/tmp/<gatename>` default made every invocation deposit a report at a
+    # fixed shared path, which concurrent runs overwrite without a trace and
+    # which is a standing symlink-hijack target on a multi-user host.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     args = ap.parse_args(argv)
 
     if not args.vectors_json.is_file():
         print(f"ERROR: vectors-json not found: {args.vectors_json}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
         spec = json.loads(args.vectors_json.read_text())
     except Exception as e:
@@ -179,8 +191,12 @@ def main(argv: List[str] | None = None) -> int:
         vectors_mismatch=len(results) - matches,
         vector_results=results,
     )
-    out_json = args.out_dir / "crc_seed_consistency_check.json"
-    out_json.write_text(json.dumps(asdict(final), indent=2))
+    # #494 — write only when asked; position preserved so stdout is
+    # byte-identical when --out-dir IS supplied.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "crc_seed_consistency_check.json"
+        out_json.write_text(json.dumps(asdict(final), indent=2))
     print(f"crc_seed_consistency_check: {status} — {matches}/{len(results)} vectors match")
     print(f"rtl_params: width={rtl.get('width')} init={rtl.get('init')} "
           f"poly={rtl.get('poly') or rtl.get('poly_reflected')+' (reflected)'} "
@@ -191,7 +207,8 @@ def main(argv: List[str] | None = None) -> int:
         print(f"  [{mark}] in={r.input_hex} expected={r.expected_hex} got={r.actual_hex}  ({r.source})")
         if r.note:
             print(f"          note: {r.note}")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 

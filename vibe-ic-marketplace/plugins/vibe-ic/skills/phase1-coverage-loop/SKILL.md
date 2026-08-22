@@ -80,12 +80,18 @@ List CLOSED ORGANIC issues authored by me that carry `core-closed`
 and LACK `field-verified` (these are the audit targets):
 
 ```bash
+# Title matched LOCALLY, not via --search (vibe-ic#554): the search index
+# returns 0 for this repository regardless of content, and here that reads as
+# "no audit targets" — the same substitution as the STOP clause below, with a
+# quieter consequence. `--label` and `--state` are server-side FILTERS rather
+# than index queries and are fine.
 gh issue list --repo vibeic/vibe-ic --state closed \
-    --author "@me" --label core-closed \
-    --search "ORGANIC-phase1 in:title" --json number,title,labels \
+    --author "@me" --label core-closed --limit 1000 \
+    --json number,title,labels \
   | python3 -c 'import sys,json; \
 print("\n".join(str(i["number"]) for i in json.load(sys.stdin) \
-  if "field-verified" not in [l["name"] for l in i["labels"]]))'
+  if "ORGANIC-phase1" in i["title"] \
+  and "field-verified" not in [l["name"] for l in i["labels"]]))'
 ```
 
 For each such issue, dispatch a fresh verify agent scoped to it,
@@ -143,7 +149,11 @@ If it wrapped to 0, increment `rotation_passes_completed`.
 When the review agent reports concrete systematic gaps:
 
 1. For the top gap, write
-   `<plugin_root>/community/backlogs/ORGANIC-phase1-<YYYYMMDD>-<slug>.yaml`
+   `<repo_root>/vibe-ic-marketplace/community/backlogs/ORGANIC-phase1-<YYYYMMDD>-<slug>.yaml`
+   (ORGANIC #794 — this used to read `<plugin_root>/community/backlogs/`,
+   which resolves to `plugins/vibe-ic/community/backlogs/` and does not
+   exist. That is the ONE directory `agent_checkin_scope_guard.ZONE_BACKLOG`
+   and the `--audit tracked` hygiene gate watch.)
    using the schema in the `community-backlog-submit` skill. The
    `severity` field is **enforced by
    `programs/backlog_severity_classify.py`** (HIGH iff any affected
@@ -217,8 +227,21 @@ zero OPEN `ORGANIC-phase1-*` issues AND last rotation all-PASS/SKIP) is
 `gh` query to get the open-issue count, then let the program decide:
 
 ```bash
-N=$(gh issue list --search "ORGANIC-phase1 in:title" --state open \
-      --json number -q 'length')
+# NOT `gh issue list --search` (vibe-ic#554). `--search` routes through
+# GitHub's search INDEX, which returns 0 for this repository regardless of
+# content. Positive control, measured:
+#     --search "Actions in:title" --state open  ->  0    WRONG (#550 is open
+#                                                          and has it in the title)
+#     list + filter locally                     ->  1    correct
+# A broken query and a finished job then produce the same number, and that
+# number IS the STOP decision.
+#
+# `|| exit 1` is load bearing: the counter exits 2 when it could not count,
+# and passing an empty or zero N on a FAILED measurement satisfies clause (2)
+# — the exact substitution this is about. CONTINUE is the safe direction; a
+# loop that runs one extra round costs a round, a loop that stops early
+# reports the work as finished.
+N=$(python3 programs/open_organic_issue_count.py "ORGANIC-phase1") || exit 1
 python3 programs/phase1_loop_stop_condition_check.py \
     --state <state.json> --open-organic-issues "$N"
 # exit 0 = STOP, exit 1 = CONTINUE, exit 2 = bad state
@@ -235,6 +258,27 @@ echo "STOP cron — Phase 1 coverage closed on rotation pass <N>."
 Set `state.step = "STOPPED"` and exit.
 
 ## Constraints (non-negotiable)
+
+- **KEEP YOUR TURN ALIVE TO COMPLETION.** Run any long tool through the
+  BLOCKING call (e.g. `_watchdog.run_supervised`, which returns only on exit or
+  stall), never a detached `timeout … &` fire-and-forget followed by yielding.
+
+  This skill had neither this rule nor the fact below, and it is a LOOP skill —
+  the shape most likely to invite "I'll yield and pick it up next round"
+  (vibe-ic#558). An agent did exactly that on a still-running Phase-3 flow,
+  saying it would "yield until the harness re-invokes me". Nothing did.
+  `claude -p` is one-shot, so all three of its justifications are impossible:
+
+  * *"the harness will re-invoke me when the background job exits"* — nothing
+    re-invokes a finished turn. There is no such mechanism.
+  * *"a background waiter is armed to fire"* — a waiter can only wake a turn
+    that is STILL ALIVE. It cannot start a new one.
+  * *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+    cannot resume you. Step 3 of this loop arms exactly such a monitor, which
+    is precisely why the belief is available here.
+
+  Yielding does not pause your turn; it ENDS it, and your "then write the
+  result" step never runs.
 
 - **NO RTL ORACLE**: never inspect `<ic>/rtl/` when scoring Phase 1
   coverage. The Phase 1 ingester must derive structure from the

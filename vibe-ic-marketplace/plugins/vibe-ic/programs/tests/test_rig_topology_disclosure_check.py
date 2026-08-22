@@ -122,3 +122,157 @@ def test_help():
     r = subprocess.run([sys.executable, str(PROG), "--help"], capture_output=True, text=True)
     assert r.returncode == 0
     assert "project_dir" in r.stdout
+
+
+# ── FPGA-skip disclosure exemption (#607 shared predicate) ─────────────
+# Measured on the real spm x ihp-sg13g2 campaign: rig_topology.json never
+# existed (no FPGA board was ever part of this ASIC PDK sign-off run), so
+# this gate hard-FAILed a project whose OWN run already discloses, in the
+# established #607 shape, that no hardware rig is involved at all. A
+# requirement for hardware wiring is meaningless when there is no hardware.
+
+def _write_fpga_audit(project: Path, verdict: str, sof_present,
+                      skip_reason: str = "not_attempted") -> None:
+    """GATEKEEPER NARROWING: the cause is now an explicit field. `verdict:
+    SKIP` alone is emitted for every non-PASS cause alike — including an FPGA
+    path that WAS attempted and was blocked by a missing prerequisite, which
+    is 12 of the 32 published audits and is somebody's bug, not an absence of
+    hardware. Fixtures that mean "no FPGA is part of this run" now say so."""
+    d = project / "reports" / "phase2" / "fpga"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quartus_map_audit.json").write_text(json.dumps(
+        {"verdict": verdict, "sof_present": sof_present,
+         "skip_reason": skip_reason}))
+
+
+def test_disclosed_fpga_skip_exempts_missing_topology(tmp_path: Path):
+    """DIRECTION 2 — the organic case: a genuine #607 disclosed skip."""
+    _write_fpga_audit(tmp_path, "SKIP", False)
+    rc, out = _run(str(tmp_path))
+    assert rc == 0, out
+    assert out["verdict"] == "PASS"
+    assert out["errors"] == 0
+    assert any(f["rule"] == "rig_topology_na_no_fpga_run" for f in out["findings"])
+
+
+def test_no_audit_file_at_all_still_fails(tmp_path: Path):
+    """DIRECTION 1 — no disclosure exists (the pre-existing default
+    behaviour, unchanged): still FAIL."""
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_fpga_genuinely_compiled_still_fails(tmp_path: Path):
+    """DIRECTION 1 — FPGA bring-up IS part of this run (sof_present=True):
+    the exemption must NOT fire, and a missing rig topology is a real gap."""
+    _write_fpga_audit(tmp_path, "PASS", True)
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_non_skip_verdict_still_fails(tmp_path: Path):
+    """DIRECTION 1 — an undisclosed/ambiguous state (verdict != SKIP) must
+    not be read as an exemption."""
+    _write_fpga_audit(tmp_path, "ERROR", False)
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_malformed_audit_json_still_fails(tmp_path: Path):
+    """DIRECTION 1 — an unreadable audit file must not be silently treated
+    as a disclosure; fail-closed, matching fpga_board_capability's own
+    contract."""
+    d = tmp_path / "reports" / "phase2" / "fpga"
+    d.mkdir(parents=True)
+    (d / "quartus_map_audit.json").write_text("{not valid json")
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+
+
+def test_a_declared_topology_still_validates_normally_when_fpga_skipped(tmp_path: Path):
+    """DIRECTION 1 sibling: if a project DOES declare a topology even while
+    FPGA is disclosed-skipped, the exemption must not short-circuit real
+    field validation — a present-but-broken declaration still fails on its
+    own merits."""
+    _write_fpga_audit(tmp_path, "SKIP", False)
+    (tmp_path / "rig_topology.json").write_text(json.dumps({"fpga_board": "x"}))
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+    assert any(f["rule"] == "rig_topology_missing_required" for f in out["findings"])
+
+
+# ── GATEKEEPER ADDITION (Step-2.7 adversarial review of the PR) ─────────────
+# The PR read `verdict: SKIP, sof_present: false` as "this run honestly
+# discloses no FPGA board is part of it". MEASURED against the writer and the
+# published corpus, that is not what the file means.
+#
+#   design_one_shot_runner:
+#       sof_present = bool(step and step.status == "PASS" and step.detail)
+#       "verdict": "PASS" if sof_present else "SKIP"
+#
+# so SKIP is emitted for EVERY non-PASS cause. Over the 32 published audits:
+#
+#       20  evidence "fpga_compile not run"                  never attempted
+#       12  evidence "qsf missing — caller must produce it"   ATTEMPTED, blocked
+#
+# The second group is somebody's bug. Waiving the rig-topology requirement on
+# it would waive a requirement on the strength of a defect — in 12 of 32
+# published cells. The cause is now a FIELD, and the predicate reads it.
+import json as _json                                            # noqa: E402
+import sys as _sys                                              # noqa: E402
+from pathlib import Path as _Path                               # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+import fpga_board_capability as _CAP                            # noqa: E402
+
+
+def _audit(tmp_path, **fields):
+    p = tmp_path / "reports" / "phase2" / "fpga" / "quartus_map_audit.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(fields))
+    return tmp_path
+
+
+def test_never_attempted_is_a_real_disclosure(tmp_path):
+    """THE LOAD-BEARING CASE the PR is for: no FPGA was part of this run."""
+    d = _audit(tmp_path, verdict="SKIP", sof_present=False,
+               skip_reason="not_attempted")
+    assert _CAP.fpga_absent_from_run(d) is True
+
+
+def test_attempted_but_blocked_is_NOT_a_disclosure(tmp_path):
+    """THE PAIRED HALF, and the whole reason for the narrowing. The FPGA path
+    ran and was blocked by a prerequisite the caller owed. That is a defect,
+    not an absence of hardware, and it must not waive anything."""
+    d = _audit(tmp_path, verdict="SKIP", sof_present=False,
+               skip_reason="attempted_incomplete")
+    assert _CAP.fpga_absent_from_run(d) is False
+
+
+def test_a_legacy_audit_without_a_reason_fails_closed(tmp_path):
+    """All 32 published audits predate the field. Not saying WHICH cause is
+    not a disclosure — the same rule the missing-file branch already
+    follows, applied to a file that exists but does not say enough."""
+    d = _audit(tmp_path, verdict="SKIP", sof_present=False)
+    assert _CAP.fpga_absent_from_run(d) is False
+
+
+def test_a_compiled_fpga_is_never_a_skip(tmp_path):
+    d = _audit(tmp_path, verdict="PASS", sof_present=True, skip_reason=None)
+    assert _CAP.fpga_absent_from_run(d) is False
+
+
+def test_the_writer_records_the_cause_it_actually_had():
+    """The field is only worth reading if the producer sets it correctly, and
+    it is derived from the SAME expression that decides `sof_present` — a step
+    object that is absent means never attempted, one that exists and did not
+    PASS means attempted."""
+    src = (_Path(__file__).resolve().parent.parent
+           / "design_one_shot_runner.py").read_text()
+    assert '"skip_reason": (None if sof_present' in src, "writer not wired"
+    assert 'else "not_attempted" if fpga_compile_step is None' in src
+    assert 'else "attempted_incomplete")' in src

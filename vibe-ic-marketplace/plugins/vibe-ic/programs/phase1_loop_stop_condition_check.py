@@ -43,6 +43,34 @@ This is intentionally NOT a PASS/FAIL gate — STOP and CONTINUE are both
 "healthy" outcomes. exit 1 means "keep looping", exit 0 means "done".
 A missing/garbage state file is an honest exit-2 error (we cannot
 decide to STOP a loop whose state we cannot read).
+
+WIRING — already wired, and it must NOT be wired into the flow
+--------------------------------------------------------------
+WHERE IT IS WIRED: `skills/phase1-coverage-loop/SKILL.md` (:222 names this
+file as what the STOP CONDITION is "enforced by"; :241 ships the runnable
+two-command invocation, including the load-bearing `|| exit 1` on the issue
+counter). That is its executable location. It is reached every time the
+`phase1-coverage-loop` cron agent evaluates whether to CronDelete itself.
+
+WHY IT LOOKS UNWIRED: an audit that enumerates executable locations as
+{flow yaml, CAPTURE_ROUTING.json, another program, hooks/, tools/ci/} does not
+count SKILL.md runnable command blocks, so this gate — and every other gate
+wired the same way — reads as "referenced from NO executable location". That is
+a gap in the enumeration, not a gap in the wiring. Sibling instances:
+`phase1_rotation_state_advance` and `open_organic_issue_count` (same SKILL.md),
+and `gameable_placeholder_scan` (`skills/compliance-gate-spot-check/SKILL.md`).
+
+WHY IT MUST NOT BE WIRED INTO `flow/phase1_phase2_phase3.yaml`:
+  1. EXIT-CODE COLLISION. `flow_compliance_check._check_program_exit_zero`
+     reads rc 1 as FAIL. Here rc 1 means CONTINUE — the NORMAL state of a
+     healthy loop that has not finished its rotations. Wiring it into any flow
+     step would paint every healthy run red for the loop still running.
+  2. IT COULD NOT RUN THERE ANYWAY. Its arguments are flag-only
+     (`--state`, `--open-organic-issues`); it takes no project dir, and the
+     `_field_agent_phase1_state.json` it reads lives with the cron agent, not
+     in a design project (measured: 0 copies anywhere in this repo).
+NOT MEASURED: whether the loop has ever actually run — the state file would
+live on whichever machine hosts the cron, which was not inspected.
 """
 from __future__ import annotations
 
