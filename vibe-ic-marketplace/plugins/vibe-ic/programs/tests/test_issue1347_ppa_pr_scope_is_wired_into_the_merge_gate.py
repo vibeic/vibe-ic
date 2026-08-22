@@ -509,3 +509,37 @@ def test_the_reader_actually_honours_the_named_window():
         A.DECL_WINDOW_BYTES = original
     # and the restore really restored it, or later tests inherit a broken audit
     assert A.declared_intent(probe.parent, "probe_check") == "blocking"
+
+
+def test_the_merge_gates_composed_programs_list_is_complete():
+    """`gatekeeper_review`'s docstring says it AGGREGATES existing programs and
+    then lists them: "The existing programs it COMPOSES (import or subprocess —
+    never re-implemented)". A list that claims that and omits entries is a
+    catalogue a reader cannot trust — and the merge gate is exactly where
+    someone goes to learn what a landing is checked against.
+
+    MEASURED on origin/main before this branch touched it: FOUR programs were
+    spawned by a gate and absent from the list. Wiring this branch's checker in
+    made it five. Adding only my own entry would have documented mine and left
+    four untrue lines standing.
+
+    Derived from the source both ways rather than from a hand-kept list: the
+    spawned set comes from `_PROGRAMS_DIR / "<name>.py"` inside each `*_gate`
+    function, the listed set from the docstring's bullets."""
+    import ast
+    import re
+    src = (PROG / "gatekeeper_review.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    spawned = set()
+    for fn in [n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name.endswith("_gate")]:
+        body = ast.get_source_segment(src, fn) or ""
+        spawned |= {m.group(1) for m in
+                    re.finditer(r'_PROGRAMS_DIR / "([a-z0-9_]+\.py)"', body)}
+    assert spawned, "no gate spawns a program — the extractor is broken"
+    listed = {m.group(1) for m in
+              re.finditer(r'\*\s+([a-z0-9_]+\.py)', ast.get_docstring(tree) or "")}
+    missing = sorted(spawned - listed)
+    assert not missing, (
+        "these programs are spawned by a gate and absent from the docstring's "
+        "list of what it composes:\n  " + "\n  ".join(missing))
