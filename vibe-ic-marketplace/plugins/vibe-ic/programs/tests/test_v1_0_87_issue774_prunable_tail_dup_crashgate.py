@@ -230,7 +230,7 @@ def test_endstate_real_program_subprocess_returncode(tmp_path):
         [sys.executable, str(_RESOLVER),
          "--top", "chip_top", str(vendor),
          "--json", str(json_out)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
     # END-STATE 1: returncode == 1 (real defect; 0=PASS, 2=arg/empty error).
     assert proc.returncode == 1, (
@@ -259,7 +259,7 @@ def test_endstate_clean_program_subprocess_returncode_zero(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, str(_RESOLVER), "--top", "top", str(vendor)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
     assert proc.returncode == 0, (
         f"rc={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}")

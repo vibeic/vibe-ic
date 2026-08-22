@@ -30,6 +30,45 @@ yarn-error.log*
 # Project local
 *.log
 *.tmp
+
+# vibe-ic#361, producer side. The `*.log` rule above is right for build noise
+# and wrong for EVIDENCE: a sign-off report that cites `foo.log` as its proof
+# could never ship that proof, because the ignore rule silently dropped it.
+# The gate added for #361 blocks a NEW dangling citation; this is the other
+# half — logs that live beside the reports they prove are deliverables. Adds
+# in this repo are always explicit paths, so nothing is swept in by this.
+!benchmark-data/**/reports/**/*.log
+# vibe-ic review F10, the other half of the same hole. The rescue above covers
+# `reports/**` only, and a formal proof transcript does not live there: the
+# runner writes it beside its task, at `phase2/stage1/formal/<stem>.sby.log`.
+# So `formal_evidence.json` — which DOES ship, being under `reports/` — could
+# cite `phase2/stage1/formal/formal_<top>_formal.sby.log` while the ignore rule
+# silently dropped the very file it points at. MEASURED on 135ce027a: all three
+# published spm PDK cells cite exactly that path, all three genuinely ran the
+# proof (each cell's own phase2_one_shot.json lists `formal/results.json` in
+# phase2_manifests.output_files, a path the runner appends ONLY on the
+# proved-and-all_proved branch), and ZERO of the transcripts are tracked. Not
+# an authoring slip in one campaign — the structurally guaranteed outcome for
+# every design, because the citation and its proof sat on opposite sides of
+# this rule. Deliberately narrow: `*.sby.log` is the runner's own transcript
+# filename, so SymbiYosys task-workdir noise (model/design.log, design_prep.log)
+# stays ignored and nothing is swept in by a wide add.
+!benchmark-data/**/formal/**/*.sby.log
+# The SAME hole, one runner-generation earlier, found by a test of mine that
+# went red in CI and green here. F10's rescue above matches `*.sby.log`, which
+# is how the CURRENT runner names its transcript. An older one writes
+# `sby_<top>.log`, and `benchmark-data/ic/subservient` ships a published,
+# PASS-verdict `formal_evidence.json` citing exactly that — at a path the repo
+# did not contain. A narrow rule and a naming change are all it takes for the
+# citation and its proof to end up on opposite sides again, which is why this
+# negation is by PREFIX rather than by suffix. MEASURED before widening: this
+# pattern matches three files repo-wide, two already tracked
+# (`reset_safety/sby_reset_safety*.log`, force-added by #411 as the
+# deliverables they are) and the one above. The obvious wider rule,
+# `formal/**/*.log`, would sweep in SymbiYosys workdir noise —
+# `model/design.log`, `design_prep.log`, `design_aiger.log` — so it is not
+# used. Adds here are always explicit paths; nothing is swept in by this.
+!benchmark-data/**/formal/**/sby_*.log
 .env
 .env.local
 
@@ -50,6 +89,18 @@ yarn-error.log*
 *.rda
 work/
 runs/
+# vibe-ic#1744 — the SAME evidence-vs-noise line the `*.log` block above draws,
+# for a directory name. `runs/` is right for EDA flow output in a project tree
+# and wrong for the ONE run directory that is a tracked test fixture: the
+# external shuttle precheck writes `runs/<tag>/<NN>-<step>/`, and the parser in
+# `tapeout_readiness_check` keys on that structure — specifically on which step
+# dirs carry a `state_out.json`. A fixture that renamed `runs/` to dodge this
+# rule would stop being what the tool emits, which is the only property that
+# makes it worth having. MEASURED: without these two lines `git add -A` stages
+# PROVENANCE.md and silently drops all fourteen evidence files, so the test
+# would import a fixture that is not there.
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/**
 
 # Quartus local
 db/
@@ -87,6 +138,21 @@ simv
 # scratch, never committed (ORGANIC #720). Anchored to root so it does NOT match
 # tracked source like vibe-ic-marketplace/.../mcp-eda/src/devices/_registry.js.
 /_*.js
+# …and the rest of the same category, which #720 did not cover because it fixed
+# the extension it happened to meet. Measured 2026-07-30: four scratch paths
+# sitting untracked-and-unignored in the working tree for 3 to 9 days —
+# `scratchpad/`, `scratchpad_pr487_msg.txt`, `_gds_closure/`, and
+# `vibe-ic-marketplace/scratch_geom_signoff_tests/`.
+#
+# Untracked-but-not-ignored is the state one `git add -A` turns into a commit,
+# which is precisely why this repo forbids `-A` — and a rule nobody has to
+# remember is better than a rule everybody must. Anchored the same way, so a
+# tracked `scratch`-named source file elsewhere is unaffected.
+/scratchpad
+/scratchpad*/
+/scratchpad_*
+/_gds_closure/
+scratch_geom_signoff_tests/
 history.md
 
 # Local benchmark RUN PRODUCTS are never committed wholesale — only a curated,
@@ -102,3 +168,40 @@ benchmark-data/ic/*/clean_run_*/
 !benchmark-data/ic/*/clean_run_*/reports/
 # Vendored upstream benchmark datasets — large, and not ours to redistribute.
 benchmark-data/datasets/
+
+# --- benchmark-data 收斂證據的 physical 產物（2026-07-25）---
+# 小 cell 的 GDS/DEF/SPEF 只有 KB-MB（spm GDS 最大 1.2MB），該進 git 讓交付包可從
+# netlist 重建到 GDS。大 die 的大檔（>50MB）改走 git-lfs / GitHub Release（sha256
+# 存 MANIFEST）。
+#
+# 2026-07-26（#419）：上面這段原本寫「由 benchmark_evidence_structure_check 的
+# size-guard 擋」——那個 guard 從來沒有被寫出來，那句話就是全部的實作。實測：
+# benchmark-data/ic 下有十個未追蹤的 *.gds 介於 74–105 MB，全部被這裡的 negation
+# 放行，其中兩個超過 GitHub 每檔 100 MB 的硬限（push 會在物件已經進入本地歷史之後
+# 才被拒絕）。真正的 guard 現在存在，叫 programs/tracked_blob_size_guard.py，接在
+# tools/ci/repo_hygiene_gates.sh 裡；publisher 與 structure-check 也改成依大小
+# 路由，四者的一致性由 programs/size_policy_drift_check.py 把關。
+!benchmark-data/ic/**/*.gds
+!benchmark-data/ic/**/*.def
+
+# The `*.gds` rule above says what it is for: "EDA tool outputs (large,
+# regeneratable)". A TEST FIXTURE is neither — it is source, it is 454 bytes,
+# and no tool produces it. `filled.gds` is the layout carrying dummy-fill
+# shapes that makes vibe-ic#990 falsifiable at all (see the fixture module's
+# own docstring); a checkout without it cannot run that test, and generating
+# it at test time instead would leave nothing a reviewer can open in KLayout.
+#
+# NARROW BY CONSTRUCTION: one exact path, in the same shape as the two
+# negations above, not a `tests/**` sweep. A stray tool output landing in a
+# test directory stays ignored.
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/density_fill/filled.gds
+
+# 2026-08-21 fleet run-folder triage, the same hole as #361 one more time.
+# `docs/research/fleet_run_folder_triage_evidence/` holds the ONLY surviving
+# copy of content lifted out of run folders that were then removed: an agent's
+# `agent.log` / `iter*.log` narrative of a round, a `history.md`. `*.log` at
+# line 31 silently dropped 31 of the 88 files and `history.md` at 156 dropped
+# one more; `git add` reported success and the doc would have cited files that
+# were never committed, after the folders holding them had been deleted.
+# MEASURED: 89 files on disk, 57 staged, before this rule.
+!docs/research/fleet_run_folder_triage_evidence/**

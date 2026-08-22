@@ -111,4 +111,17 @@ def test_generator_emits_no_todo_tokens(tmp_path):
     ms = json.loads((hd / "mask_spec.json").read_text())
     assert "PENDING_FOUNDRY_mask_layers" in ms
     kit = json.loads((hd / "corner_test_vectors.json").read_text())
-    assert "PENDING_FOUNDRY_voltage_corners" in kit
+    # WAS `PENDING_FOUNDRY_voltage_corners`, and that assertion was pinning a
+    # defect rather than a contract. #449 established the namespace for fields
+    # SOMEBODY ELSE supplies; the voltage and temperature corners are neither
+    # supplied by anybody else nor unknown — they are the corners the sign-off
+    # liberty files declare, and the generator emitted a CANNED
+    # `["VDD_min","VDD_nom","VDD_max"]` / `[-40, 25, 85, 125]` behind the
+    # prefix instead. Measured over the 8 published roots carrying a kit: 8 of
+    # 8 resolve real corners and not one of them matches the canned list.
+    # They are derived fields now — see
+    # test_foundry_handoff_corners_are_measured_not_canned.py. This test's own
+    # subject, the TODO -> PENDING_FOUNDRY_ namespace rule, is unchanged and is
+    # asserted here on a field that really is somebody else's.
+    assert "PENDING_FOUNDRY_loadboard_id" in kit
+    assert "PENDING_FOUNDRY_voltage_corners" not in kit

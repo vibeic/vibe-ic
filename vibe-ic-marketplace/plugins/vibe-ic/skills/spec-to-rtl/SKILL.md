@@ -46,6 +46,65 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    optional. A runner-driven author that skipped this re-invented a
    genre-determined topology from the prompt's loose wording and failed; this is
    the SAME digest Shape-C blind authors already MUST read.
+
+   **— and LIST THE OTHER ARTIFACTS THE SPEC MAKES MANDATORY (MANDATORY) —**
+   The WAIVE handoff tells you two things: write the RTL here, and read
+   `lessons.md`. It says nothing about the OTHER artifacts the same spec makes
+   mandatory and that you are the only one who can produce. Those clauses are
+   already extractable from the SAME input docs you have just read, so run the
+   preflight BEFORE you author:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/spec_required_artifact_check.py \
+       <project> --preflight
+   ```
+
+   It prints every still-OUTSTANDING spec-declared artifact with the input doc
+   and the clause that demands it, and **always exits 0** — at handoff those
+   files are legitimately absent, so it can never block a correct run. Author
+   each one alongside the RTL. Skipping this does not make the requirement go
+   away: the same extraction runs as a BLOCKING assertion at `final_audit`, so
+   a missing declaration costs an entire Phase 2 (hygiene, lint, synth, DFT, a
+   multi-minute LEC) to discover a file that took seconds to write.
+
+   **— and DECIDE + RECORD YOUR FREE CHOICES *BEFORE* YOU AUTHOR (MANDATORY) —**
+   The preflight above tells you WHICH files the spec demands. When one of them
+   is a DECLARATION — a "MUST declare `<path>`" clause followed by a field table
+   — the file is not paperwork you can write afterwards. Its fields are FREE
+   CHOICES: decisions no downstream tool can recover by inference (serial bit
+   order, reset-release latency, integer encoding, reset polarity, the parameter
+   this build ran at, which optional feature axis you selected). Two correct
+   designs disagree on all of them, so the comparison procedure cannot pair its
+   reference output unless you tell it.
+
+   The runner already staged the contract for you at
+   `<project>/phase2/stage1/declaration_contract.json` (extras key
+   `declaration_contract`). Read it, DECIDE each field, and record them:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/spec_declaration_emit.py <project> --contract
+   python3 plugins/vibe-ic/programs/spec_declaration_emit.py <project> \
+       --set <field>=<value> --set <field>=<value> ...
+   ```
+
+   Then author RTL that CONFORMS to what you declared — not the other way round.
+
+   Rules that are easy to get wrong:
+   - The emitter **refuses** (rc=1, naming the field) while any REQUIRED choice
+     is undetermined, and writes nothing. That refusal is correct: a
+     default-filled declaration would turn the required-artifact gate green
+     against a value nobody chose.
+   - **Do not copy the spec's example value** into the declaration. The example
+     column records what a reference implementation happened to pick; copying it
+     makes the document author the designer.
+   - An informational field you did not decide is **omitted**, never
+     placeholder-filled.
+   - `--from-rtl-declaration` exists ONLY for a legacy design whose RTL was
+     written before the declaration; it promotes an existing
+     `key = value` header block and stamps every field it takes as
+     `recovered_from_prose` in the provenance sidecar. Do not use it as the
+     normal path — a free choice recorded only in an RTL comment is a free
+     choice a downstream tool has to guess.
 2. **Respect the blind rule**: read ONLY the L docs + original prompt. NEVER
    read `testbench.v`, `verified_*.v`, hidden cocotb harness, or any reference
    RTL the upstream benchmark ships. This is enforced by the open-benchmark-
@@ -445,13 +504,17 @@ waveform-only prompt does not supply).
 
 ## Behavioral-prose Moore FSM — extract the table, let the PROGRAM emit (2026-06-23)
 
-A FSM whose states + transitions are stated in NARRATIVE PROSE (Lemmings "if bumped
-on the left it walks right; if it falls for >20 cycles it splatters"; a PS/2 byte-
-boundary search; a sliding-window counter; a multi-phase controller) is the case
-where reading prose → structure genuinely needs a language model — no deterministic
-parser extracts it (so `spec_artifact_registry.generate()` correctly SKIPs it). But
-once the structure is a COMPLETE enumerated table, emitting correct RTL is a pure
-formula. So DO NOT hand-author the always-blocks — split the work:
+Most FSMs whose states + transitions are stated in NARRATIVE PROSE (Lemmings with
+dig/splat/counter precedence; a PS/2 byte-boundary search; a sliding-window counter;
+a multi-phase controller) still need a language model to read prose into structure.
+One strict basic carve-out is already program-solved: when a directional bump+fall
+walker explicitly states both direction mappings, both-side behavior, fall/resume
+memory, all three bump/fall boundary priorities, Moore outputs, reset, and clock
+edge, `behavioral_fsm_synth.py` parses those facts into a complete four-state table
+and the registry emits it. Missing any fact or adding dig/splat/timer behavior is a
+safe SKIP. For every remaining narrative shape, once the AI extracts a COMPLETE
+enumerated table, emitting correct RTL is a pure formula. So DO NOT hand-author the
+always-blocks — split the work:
 
 1. **You (AI) extract the COMPLETE canonical Moore-FSM table from the prose** — every
    state, every Moore output per state, the reset (state + sync/async + level), and
