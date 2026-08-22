@@ -17,6 +17,7 @@ both in the direction that produces a FALSE PASS:
 """
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,14 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import slot_pad_budget_check as S  # noqa: E402
 
+
+# CI bounds each test at 180s with `--timeout-method=thread`, which takes the
+# whole PROCESS down rather than failing one test, so a subprocess bound must
+# be able to fire INSIDE that: `ci_harness_timeout_ceiling_check` sets the
+# per-call ceiling at 60s (= 180 // 3). Measured, the slowest child here is the
+# enforcement audit at ~22s, so 60 is a real bound with headroom rather than a
+# number that can never be reached.
+_CHILD_TIMEOUT_S = 60
 
 # --------------------------------------------------------------------------- #
 # fixtures — a slot in BOTH shapes, built from the same pad list
@@ -620,3 +629,373 @@ def test_that_failure_would_have_been_a_SILENT_SKIP_not_a_red_gate():
     ports = S.parse_top_ports(_RTL_IMPLICIT_SENSITIVITY, "chip_top")
     rep = S.evaluate({"slot_1x1": _slot_ingested()}, ports)
     assert rep["rc"] in (0, 1) and rep["verdict"] != "UNDECIDED"
+
+
+# --------------------------------------------------------------------------- #
+# what sits AFTER the port name — unpacked arrays and initialisers
+# --------------------------------------------------------------------------- #
+# Found by sweeping the PUBLISHED corpus: 174 of 31,873 real ports came back
+# named `1'b0`, `64'd0` or `[PMPNumRegions]`. Both causes sit after the name,
+# where a last-token read finds them instead of it.
+#
+# The unpacked case moves a NUMBER, and it moves it the dangerous way:
+# `input logic [33:0] csr_pmp_addr_i [PMPNumRegions]` is 4 x 34 bits and the
+# packed range alone reports 34. A smaller interface than the design has is how
+# a design that cannot be bonded out reads as FITS.
+#
+# `ibex` is one of the five ICs in this program's own docstring table, so this
+# was mis-measuring a design the file cites as evidence.
+
+_RTL_UNPACKED = """
+module chip_top #(parameter int unsigned NREG = 4) (
+    input  logic          clk,
+    input  logic [33:0]   addr_i [NREG],
+    output reg            done = 1'b0,
+    output reg   [63:0]   order = 64'd0
+);
+endmodule
+"""
+
+
+def test_an_unpacked_array_port_is_named_by_its_NAME_not_its_dimension():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    assert [p["name"] for p in ports] == ["clk", "addr_i", "done", "order"]
+
+
+def test_an_unpacked_array_multiplies_the_bit_count():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    w = {p["name"]: p["width"] for p in ports}
+    assert w["addr_i"] == 34 * 4, "the packed range alone was reported"
+    assert w["order"] == 64 and w["done"] == 1
+
+
+def test_an_unresolvable_array_length_is_UNDECIDED_never_a_guess():
+    """Same rule the packed range already follows: a length nobody supplied is
+    not a pad count this program may invent. None reaches the verdict as
+    UNDECIDED, which REFUSES rather than passes."""
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top")      # no params
+    w = {p["name"]: p["width"] for p in ports}
+    assert w["addr_i"] is None
+    rep = S.evaluate({"slot_1x1": _slot_ingested()}, ports)
+    assert rep["verdict"] == "UNDECIDED" and rep["rc"] == 2
+    assert "addr_i" in rep["unresolved_width_ports"]
+
+
+def test_a_port_initialiser_is_not_mistaken_for_the_port_name():
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    names = [p["name"] for p in ports]
+    assert "1'b0" not in names and "64'd0" not in names
+
+
+def test_a_PACKED_range_is_not_read_as_an_unpacked_dimension():
+    """The regression guard: a packed range sits BEFORE the name, so nothing
+    trailing may be stripped. If this broke, every ordinary bus would lose its
+    width."""
+    rtl = ("module chip_top (input wire [7:0] bus, output wire done);\n"
+           "endmodule\n")
+    ports = S.parse_top_ports(rtl, "chip_top")
+    assert [(p["name"], p["width"]) for p in ports] == [("bus", 8), ("done", 1)]
+
+
+def test_multiple_unpacked_dimensions_multiply_together():
+    rtl = ("module chip_top (input wire [7:0] mem [2][3], output wire d);\n"
+           "endmodule\n")
+    w = {p["name"]: p["width"] for p in S.parse_top_ports(rtl, "chip_top")}
+    assert w["mem"] == 8 * 2 * 3 and w["d"] == 1
+
+
+def test_the_undercount_would_have_been_a_FALSE_FITS():
+    """Why this is worth a test and not just a tidier name: the whole point of
+    the program is refusing a design that cannot be bonded out, and an
+    under-counted array is how one slips through."""
+    ports = S.parse_top_ports(_RTL_UNPACKED, "chip_top", {"NREG": 4})
+    bits = S.interface_budget(ports)["signal_bits"]
+    assert bits == 34 * 4 + 64 + 1        # clk rides a dedicated pad
+
+
+# --------------------------------------------------------------------------- #
+# a packed range with no whitespace around it  (the third and fourth shapes)
+# --------------------------------------------------------------------------- #
+# `output reg [3:0]one` and `input wire[7:0]bus` are both legal: whitespace
+# around a packed range is optional. The range then arrives glued to the
+# identifier as ONE token, so a last-token read returns `[3:0]one` as the name.
+#
+# The WIDTH is unaffected — the range reader searches rather than tokenising —
+# so this is a name-only defect. It still matters: the clk/rst exclusion and
+# the fold-candidate match both key on the NAME, so a glued clock would be
+# counted against the signal budget instead of riding its dedicated pad.
+#
+# Four real ports in the published corpus carried it. Measured after the fix:
+# malformed names 174 -> 0, and zero widths moved.
+
+def test_a_packed_range_glued_to_the_name_still_yields_the_name():
+    """Verbatim shape from the corpus."""
+    rtl = ("module Binary2BCD(input [7:0] num, output reg [3:0]thousand,\n"
+           "  output reg [3:0]hundred, output reg [3:0]ten, output reg [3:0]one);\n"
+           "endmodule\n")
+    ports = S.parse_top_ports(rtl, "Binary2BCD")
+    assert [p["name"] for p in ports] == ["num", "thousand", "hundred", "ten", "one"]
+    assert all(p["width"] == 4 for p in ports if p["name"] != "num")
+
+
+def test_a_type_glued_to_the_range_too_still_yields_the_name():
+    rtl = "module chip_top(input wire[7:0]bus, output wire done);\nendmodule\n"
+    assert [(p["name"], p["width"]) for p in S.parse_top_ports(rtl, "chip_top")] \
+        == [("bus", 8), ("done", 1)]
+
+
+def test_a_glued_clock_still_rides_its_dedicated_pad():
+    """The reason a name-only defect is not cosmetic: `_CLK_RST_RE` matches on
+    the NAME, so a mis-named clock is charged to the signal budget."""
+    rtl = "module chip_top(input wire[0:0]clk_i, output wire done);\nendmodule\n"
+    b = S.interface_budget(S.parse_top_ports(rtl, "chip_top"))
+    assert b["on_dedicated_pads"] == ["clk_i"]
+    assert b["signal_bits"] == 1          # `done` only
+
+
+def test_ordinary_spacing_and_qualified_types_are_untouched():
+    """The regression guard for the glued-name rule: it must fire only when a
+    bracket group actually precedes the identifier."""
+    rtl = ("module chip_top(input wire [7:0] bus, input pkg::cfg_t c,\n"
+           "  output wire done);\nendmodule\n")
+    assert [(p["name"], p["width"]) for p in S.parse_top_ports(rtl, "chip_top")] \
+        == [("bus", 8), ("c", 1), ("done", 1)]
+
+
+# --------------------------------------------------------------------------- #
+# the founding defect, re-checked on the REAL IC the docstring names
+# --------------------------------------------------------------------------- #
+# Every test above this line drives synthetic Verilog. The verdict path — the
+# part that decides FITS / DOES_NOT_FIT / UNDECIDED — had no real-artefact
+# coverage at all, because no design in this repository carries ingested slot
+# files. It can still be covered on the PUBLISHED corpus, which does carry the
+# ICs this file cites as its evidence.
+#
+# `_width`'s docstring records the founding defect verbatim: "a design whose
+# entire datapath is parameterised (`host_wdata[BDW-1:0]` etc., 120 real bits)
+# summed to 31 and the gate answered **FITS**". That IC is `edge_llm_accel` and
+# it is in the corpus. Measured there today: still 31, still the same three
+# unresolved ports — and the verdict is UNDECIDED, not FITS.
+#
+# Skips with an actionable reason when $VIBEIC_CORPUS_ROOT is unset, so it
+# costs nothing on a tree that has no corpus.
+
+def test_the_parameterised_datapath_is_still_refused_on_the_real_IC():
+    rtl_dir = _hostpaths.require_corpus(
+        "ic", "edge_llm_accel", "phase2", "stage1", "rtl")
+    src = None
+    for f in sorted(rtl_dir.iterdir()):
+        if f.suffix in (".v", ".sv"):
+            ports = S.parse_top_ports(f.read_text(errors="replace"),
+                                      "edge_llm_accel")
+            if ports:
+                src = ports
+                break
+    if src is None:
+        pytest.skip("no edge_llm_accel top module in the configured corpus")
+
+    budget = S.interface_budget(src)
+    # the number the docstring records as the false-FITS sum
+    assert budget["signal_bits"] == 31
+    # and the ports it names as the cause, still unresolved rather than dropped
+    assert set(budget["unresolved_width_ports"]) >= {"host_wdata", "host_rdata"}
+
+    rep = S.evaluate({"slot_1x1": _slot_ingested()}, src)
+    assert (rep["verdict"], rep["rc"]) == ("UNDECIDED", 2), (
+        "a parameterised datapath summed to a number and PASSED — the defect "
+        "this program was written to end")
+
+
+# --------------------------------------------------------------------------- #
+# only ONE clock and ONE reset ride for free
+# --------------------------------------------------------------------------- #
+# A slot publishes one dedicated clock pad and one dedicated reset pad. A design
+# with two clock domains therefore pays for the second pair out of signal
+# budget, exactly like any other port.
+#
+# This is the guard against a plausible-looking "improvement": broadening
+# `_CLK_RST_RE` so bus-side spellings match too. That EXCLUDES ports, which
+# shrinks the budget, and a smaller interface than the design has is how
+# something that cannot be bonded out reads as FITS. Over-counting a clock can
+# only refuse a design that would have fitted; the inverse ships one that
+# cannot be bonded at all.
+#
+# Found by re-measuring a published IC against this file's own cited table: it
+# read 107 where the program measures 109, and the two bits are exactly a
+# second clock/reset pair.
+
+_RTL_TWO_CLOCK_DOMAINS = """
+module chip_top (
+    input  wire clk,
+    input  wire rst_n,
+    input  wire bus_clk_i,
+    input  wire bus_rst_i,
+    input  wire [7:0] data_i,
+    output wire done_o
+);
+endmodule
+"""
+
+
+def test_a_second_clock_and_reset_pair_is_COUNTED_not_waived():
+    b = S.interface_budget(S.parse_top_ports(_RTL_TWO_CLOCK_DOMAINS, "chip_top"))
+    assert b["on_dedicated_pads"] == ["clk", "rst_n"], b["on_dedicated_pads"]
+    # 8 data + 1 done + the second clk/rst pair
+    assert b["signal_bits"] == 8 + 1 + 2, (
+        "a second clock domain was waived onto dedicated pads a slot does not "
+        "publish — that shrinks the budget, which is the false-FITS direction")
+
+
+def test_the_first_clock_and_reset_still_ride_for_free():
+    """The other half: the rule must not be tightened into counting every
+    clock, or every design pays for a pad the slot does provide."""
+    rtl = ("module chip_top (input wire clk, input wire rst_n,\n"
+           "  input wire [7:0] d, output wire q);\nendmodule\n")
+    b = S.interface_budget(S.parse_top_ports(rtl, "chip_top"))
+    assert b["signal_bits"] == 9 and b["on_dedicated_pads"] == ["clk", "rst_n"]
+
+
+# --------------------------------------------------------------------------- #
+# where a relative --json lands  (#712 path containment)
+# --------------------------------------------------------------------------- #
+# The destination used to be resolved against the CALLER's working directory,
+# because nothing tied it to the project. Both wirings run with
+# `cwd=<project>`, so neither was affected — but the contract was loose enough
+# that `--json ../../x.json` wrote outside the project entirely.
+#
+# MEASURED while probing exactly that question: one probe put a report in the
+# repository root and another in the invoking user's HOME directory. Neither
+# was noticed by any verdict; the run reported FITS both times.
+
+def _traversal_project() -> Path:
+    d = Path(tempfile.mkdtemp(prefix="trav_"))
+    (d / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    (d / "phase2" / "stage1" / "rtl" / "chip_top.v").write_text(_RTL_FITS)
+    s = d / "input" / "submission_template" / "slots"
+    s.mkdir(parents=True)
+    (s / "slot_1x1.json").write_text(json.dumps(_slot_ingested()))
+    return d
+
+
+def test_a_relative_json_destination_lands_inside_the_project():
+    """Not in whatever directory the caller happened to be standing in."""
+    p = _traversal_project()
+    assert S.main([str(p), "--json", "reports/x.json"]) == 0
+    assert (p / "reports" / "x.json").is_file()
+
+
+def test_a_json_destination_that_climbs_out_is_REFUSED():
+    p = _traversal_project()
+    rc = S.main([str(p), "--json", "../../ESCAPED.json"])
+    assert rc == 3, f"a path climbing out of the project returned {rc}"
+    assert not (p.parent / "ESCAPED.json").exists()
+    assert not (p.parent.parent / "ESCAPED.json").exists()
+
+
+def test_an_absolute_destination_is_still_honoured():
+    """An absolute path is an explicit choice by the caller, not an accident,
+    so containment does not second-guess it."""
+    p = _traversal_project()
+    out = Path(tempfile.mkdtemp(prefix="abs_")) / "elsewhere.json"
+    assert S.main([str(p), "--json", str(out)]) == 0
+    assert out.is_file()
+
+
+def test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one():
+    """A rejected destination is the caller being wrong, so it must not wear
+    rc 2 — which this flow reads as 'there was nothing to examine'."""
+    p = _traversal_project()
+    assert S.main([str(p), "--json", "../out.json"]) == 3
+    assert S.main([str(Path(tempfile.mkdtemp(prefix="noslot_")))]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# the published exit-code contract must list every code the program returns
+# --------------------------------------------------------------------------- #
+# Found by reading this branch's own finished diff instead of only running it.
+# Adding the rc-3 usage tier changed what the program RETURNS and left the
+# docstring's "VERDICTS AND EXIT CODES" table listing 0 / 1 / 2 only. That table
+# is what a caller reads to learn which codes to expect, so a wrapper written
+# from it would meet an undocumented 3 and have no rule for it — the same
+# declaration-does-not-match-behaviour shape this branch has been closing all
+# along, this time in its own file.
+
+def test_every_exit_code_the_program_returns_is_documented():
+    import re
+    import subprocess
+
+    proj = _traversal_project()
+    empty = Path(tempfile.mkdtemp(prefix="nocontract_"))
+    prog = str(Path(S.__file__))
+
+    def rc(*argv):
+        return subprocess.run([sys.executable, prog, *argv],
+                              capture_output=True, text=True,
+                              timeout=_CHILD_TIMEOUT_S).returncode
+
+    observed = {
+        rc(str(proj)),                                  # a real verdict
+        rc(str(empty)),                                 # UNDECIDED
+        rc("--not-a-flag"),                             # usage
+        rc(str(proj), "--json", "../../out.json"),      # usage
+    }
+    assert observed == {0, 2, 3}, f"unexpected exit codes: {sorted(observed)}"
+
+    doc = S.__doc__ or ""
+    # The TABLE ROWS only — the run of indented lines directly under the
+    # heading. Capturing to the next heading instead swept in the prose
+    # underneath, which discusses the codes by name, so deleting a row from the
+    # table left the test green: it was reading the explanation, not the
+    # contract. Verified by deleting a row and watching it fail.
+    m = re.search(r"VERDICTS AND EXIT CODES\n=+\n((?:[ \t]+\S.*\n)+)", doc)
+    assert m, "the program publishes no exit-code contract at all"
+    table = m.group(1)
+    # rc 1 is exercised by the DOES_NOT_FIT tests above; it must still be listed
+    for code in sorted(observed | {1}):
+        assert re.search(rf"\brc {code}\b", table), (
+            f"the program can return {code} and its published contract does "
+            f"not mention it — a caller reading the table has no rule for it")
+
+
+def test_help_is_a_success_not_a_failure():
+    """Documented alongside the usage tier, and easy to get wrong: remapping
+    argparse's exit would make `--help` look like a failure to every wrapper
+    that checks the code."""
+    import subprocess
+    r = subprocess.run([sys.executable, str(Path(S.__file__)), "--help"],
+                       capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+    assert r.returncode == 0 and "usage" in r.stdout.lower()
+
+
+def test_the_undecided_line_carries_the_disclosed_skip_marker():
+    """`docs/PPA_INTERFACES.md` §1: "Use rc=2, and print a marker
+    (`[CANNOT CHECK]` or `[REFUSE]`) so a 2 can never be read as a silent
+    skip." Measured 2026-08-22: 22 programs in this tree already spell
+    it `[CANNOT CHECK]`. (The count is of PROGRAMS; an earlier draft of this
+    comment said "66 gates", which was neither — it was a raw occurrence
+    count, and a number stated in prose that nothing re-derives is exactly
+    what this branch keeps finding wrong.)
+
+    This program is not a `ppa_*` module, so that section does not formally
+    bind it — but rc 2 here IS the silent-skip shape (no slots ingested, or no
+    port list found), and an operator grepping for disclosed skips should find
+    this one beside all the others.
+
+    The marker must appear ONLY on the undecided line: putting it on a real
+    verdict would make a refusal look like a skip, which is the inverse defect
+    and the more dangerous one."""
+    import subprocess
+    prog = str(Path(S.__file__))
+
+    def first_line(*argv):
+        r = subprocess.run([sys.executable, prog, *argv],
+                           capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
+        return r.returncode, (r.stdout.strip().splitlines() or [""])[0]
+
+    rc, line = first_line(str(Path(tempfile.mkdtemp(prefix="nomark_"))))
+    assert rc == 2 and line.startswith("[CANNOT CHECK]"), line
+
+    proj = _traversal_project()
+    rc, line = first_line(str(proj))
+    assert rc == 0 and "[CANNOT CHECK]" not in line, (
+        f"a real verdict wears the disclosed-skip marker: {line}")
