@@ -371,7 +371,22 @@ the runner, never passed from the verifier, and present only in a receipt a
 completed run produces. See the corrected identification section above; the
 working channel is the MOUNTS, and it is now checked to the standard this
 sentence previously only claimed. C's is
-confirmed (M15, implemented and passing in both lanes). **D's is not.**
+confirmed (M15, implemented and passing in both lanes).
+
+> **"D's is not" — RETRACTED. D's channel IS confirmed, and I mis-filed D under
+> B's blocker.** The arm receives FIVE read-only mounts, every one of which
+> crosses: `/subject`, `/runtime`, **`/corpus`**, `/input/selection`,
+> `/input/progress-plan.json`. **D's proposed channel was the corpus, and the
+> corpus crosses.** Further, the tree-based control was BUILT and RUN: the stub
+> took the routed-transition path on both arms, which is D's mechanism executing.
+>
+> **What is genuinely unconfirmed for D is downstream of the channel** — whether a
+> fixture can satisfy the trusted-parent-evidence integrity check that stops the
+> run immediately afterwards (`benchmark-data B2 changed during trusted parent
+> evidence execution`), and whether the two arms' independent enumerations can be
+> made to differ from a fixture at all. **Those are real questions. "The channel is
+> unconfirmed" was not one of them**, and grouping D with B under a channel
+> objection hid the thing that actually blocks it.
 
 ## What this costs — CURRENT, after A and C landed
 
