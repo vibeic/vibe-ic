@@ -1,0 +1,22 @@
+pytest_finding_delta
+  finding predicate := a line inside a FAILURES block carrying pytest's `E ` prefix
+  normalised <TMPPATH>: temp directories carry a fresh random suffix per run
+  normalised <ADDR>: object addresses differ per process
+  normalised [<DURATION>]: elapsed time is not a verdict
+  normalised in <DURATION>s: elapsed time is not a verdict
+  digits are NOT normalised — an enumerated count changing IS the signal
+  base: 1 FAILED id(s), 1 failure section(s)
+  cand: 1 FAILED id(s), 1 failure section(s)
+
+sections RED ON BOTH SIDES: 1  <- the region an id-level differential cancels
+
+  tools/ci/test_gate_mutation_fixture_check.py::test_the_real_repo_is_clean_under_this_gate
+    findings: base 18 -> candidate 16
+    + NEW FINDING INSIDE AN ALREADY-RED TEST: AssertionError: gate_mutation_fixture_check: 96 gate(s) declared in repo_hygiene_gates.sh; 12 carry a CAN-FAIL fixture; 12 carry BOTH.
+    + NEW FINDING INSIDE AN ALREADY-RED TEST: [FAIL] gate_mutation_fixture_check: 12 finding(s)
+    - no longer said: AssertionError: gate_mutation_fixture_check: 96 gate(s) declared in repo_hygiene_gates.sh; 10 carry a CAN-FAIL fixture; 10 carry BOTH.
+    - no longer said: [FAIL] gate_mutation_fixture_check: 14 finding(s)
+    - no longer said: - NEW-OR-UNEXCUSED: 'a printed population agrees with its pin' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+    - no longer said: - NEW-OR-UNEXCUSED: 'table rows belong to tables' carries neither fixture and is not in gate_fixture_debt.json. A gate lands with both directions or it does not land.
+
+2 finding(s) were INTRODUCED inside tests that were already red, and no id-level differential can report them.

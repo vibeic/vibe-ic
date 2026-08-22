@@ -1,0 +1,1137 @@
+DONE batch68
+TREE_SHA 833e8493f2714f5cb55d2c3d1c98cf3228147b8c
+ARRANGEMENT 7 trees, one arm each, hygiene and pytest NEVER sharing a checkout: b68-{base,head}-{py,hy} are the four measured arms; b68-verify (833e8493f) did static reads and the new-test-files run; b68-landtip + b68-landtip-hy (81cd5321b) are the addendum pair on the LANDED main tip. All seven git clean -xdfq, PYTHONDONTWRITEBYTECODE=1. An eighth checkout, b68-head-vfy, holds the evidence branch and ran no gate and no test.
+BASE_IDS 86
+HEAD_IDS 82
+NEW_RED_BEGIN
+NEW_RED_END
+FIXED_BEGIN
+programs/tests/test_issue565_selection_discloses_what_it_dropped.py::test_the_report_reaches_stderr_not_stdout
+programs/tests/test_issue565_selection_discloses_what_it_dropped.py::test_opting_out_is_possible_and_silent
+programs/tests/test_issue565_selection_discloses_what_it_dropped.py::test_a_failed_report_says_the_shortfall_is_UNKNOWN_not_zero
+FIXED_END
+NEW_GATE_BEGIN
+NEW_GATE_END
+NEWFILES 71 passed in 89.96s (0:01:29)
+TOTALS repo_hygiene_gates: at least one gate FAILED (76 of 87 decided — 70 passed, 6 failed; 11 NOT CHECKED, 0 WROTE CORPUS, 2614s)
+#
+# ############################################################################
+# ## SCOPE LIMIT ON THE `NEW_RED` ROW ABOVE — READ BEFORE USING IT.        ##
+# ## Added 13:30 by jmeas3 after the batch had landed. The row is TRUE     ##
+# ## AS MEASURED and its scope excludes a region where THIS BATCH          ##
+# ## INTRODUCED 16 FAILING TESTS.                                          ##
+# ############################################################################
+#
+# NEW_RED was measured over the selector the brief specifies: comm -12 of both
+# trees' `find programs/tests -name 'test_*.py'`, 2721 entries. Repo-root
+# `tools/test_*.py` lies OUTSIDE `programs/tests` and so outside that selector
+# and every plugin-scoped selection. Measured here on a quiet host, clean
+# checkouts, three runs:
+#
+#     a00f53f20  base, v1.11.66     1 failed, 478 passed
+#     833e8493f  THE ASSEMBLY      17 failed, 462 passed   <- this report's TREE_SHA
+#     NEW RED assembly vs base: 16      FIXED: 0
+#
+# All 16 are in tools/test_gatekeeper_land_differential.py — the guard for the
+# LANDING DIFFERENTIAL ITSELF. Mechanism, one commit inside the batch:
+#     d5646372f  "wire the remaining three gates into the differential landing
+#                 gate, which is not a protected path"
+#     tools/gatekeeper-land-differential.sh        +73 -2
+#     tools/test_gatekeeper_land_differential.py   NOT TOUCHED
+# Those +73 lines are the three new-gate invocations at :258/:382/:417 that this
+# report VERIFIES as correctly wired. The wiring is real; the suite pinning the
+# script it rewires was never run by me, and it goes red.
+#
+# ATTRIBUTION IS THE ASSEMBLY, NOT THE LANDING. The landing commit 81cd5321b is
+# 6 files / 7 version-string edits and touches NO tools/ file
+# (`git diff --name-only 833e8493f..81cd5321b -- tools/` is empty). The reds are
+# present at 833e8493f, before the lander ran.
+#
+# CREDIT AND ONE CORRECTION. jland67 (8HD-9) found this by measuring repo-root
+# tools/ on main and bracketing it; I would not have looked. Two refinements
+# from measuring it here: it is 16, not 17 — tools/test_liar_census.py::
+# test_nothing_the_flow_declares_is_left_unswept is RED ON THE BASE too and is
+# pre-existing — and it is the assembly rather than "v1.11.68", because their
+# bracket tested base and landing tip but skipped the assembly between them.
+#
+# NOT REOPENING BATCH 68 (landed 03:57, two versions back) and NOT diagnosing
+# the 16. Reproduce on any sha:
+#     python3 -m pytest -q tools/test_gatekeeper_land_differential.py
+# RECOMMENDATION for the next batch measured on this fleet: add
+# `pytest -q tools/test_*.py` to BOTH arms. 20 files, ~70s, covers a region no
+# selection reaches, and it would have caught these 16 before the batch landed.
+# Evidence: meas/batch68-jmeas3 @ 17717ae77,
+#   docs/measurements/2026-08-22-batch68-jmeas3/
+#     BATCH68_INTRODUCED_16_REDS_OUTSIDE_THE_SELECTOR.md  (+ both id lists)
+
+# --- disclosure; not part of the rows above ---
+#
+# READ THIS FIRST: BATCH68 HAS ALREADY LANDED. The brief's premise is stale.
+#   origin/land/batch68-assembled = 833e8493f  (unmoved; re-verified at launch,
+#     mid-run and immediately before this write)
+#   origin/main                   = 81cd5321b  = 833e8493f + ONE commit,
+#     "landing: assign v1.11.68 at landing time" (2026-08-22 03:57:46 +0800)
+#   `git rev-list --count origin/main..origin/land/batch68-assembled` = 0.
+#   So main CONTAINS the assembly and a differential against today's main is empty
+#   by construction. I did NOT push, force-push or move the canonical name: it
+#   already points at exactly the tree I measured, which is what TREE_SHA asserts.
+#   Re-landing this report is a no-op. Nothing here asks you to land anything.
+#
+# BASE. Since main now contains the head, the only base that measures anything is
+#   the assembly's own merge-base, a00f53f20 ("[v1.11.66]"), an ancestor of
+#   833e8493f by 29 commits / 48 files. That is also the base my reaped
+#   predecessor used, so the two runs are directly comparable — and they agree.
+#   TREE_SHA was stamped AT LAUNCH from the checked-out trees (09:20:43), before
+#   any arm started; both head trees are still detached at it, so nothing rebased
+#   or merged mid-run.
+#
+# THE FOUR INHERITANCE CHECKS, all verified rather than trusted:
+#  1 BUNDLES RELOCATED. docs/capture/2026-08-21-{jcap-chip,jcap-matrix,jcap-ppa}/.
+#    `git ls-tree 833e8493f jcap-chip ppa-capture` is EMPTY. One correction to the
+#    brief: the 48-file diff is ALL `A`, with zero `D` and zero renames — the root
+#    copies were never TRACKED at a00f53f20, so there was no path for `git mv` to
+#    rename and its absence is not an omission. The asked-for outcome holds.
+#  2 NO BARE ROOT RESULT.md. Three RESULT.md exist; every one is inside its own
+#    bundle directory. `git ls-tree 833e8493f RESULT.md` is empty, on the assembly
+#    and on main. Nothing to remove, and I removed nothing.
+#  3 THE VERSION BUMP REACHED ALL THREE, INCLUDING THE REPO-ROOT ONE. On the
+#    assembly all three read 1.11.66, which is CORRECT and stays that way — the
+#    lander assigns the version and I did not bump it. The lander did assign it,
+#    in 81cd5321b, and it reached plugin.json, vibe-ic-marketplace/
+#    .claude-plugin/marketplace.json AND .claude-plugin/marketplace.json, all
+#    1.11.68. The five-red failure mode did not occur. Measured on a clean
+#    checkout of the landed tip (tree b68-landtip):
+#      gen_program_inventory.py --check  OK: committed inventory matches the tree,
+#                                        and every stated count in the bound
+#                                        documents matches its population
+#      plugin_version_prose_sync_check   PASS  6 claims / 3 documents, all 1.11.68
+#      marketplace_version_sync_check    PASS  2 manifests, 2 entries, all 1.11.68
+#      gen_programs_index.py --check     PASS  1164 programs, INDEX.md matches
+#      doc_table_row_placement_check     PASS  325 docs, 6281 table-shaped lines
+#      emitter_population_pin_check      PASS  3 denominators, 1 pin
+#      prose_polarity_consulted_check    PASS
+#    Nothing needed applying, so nothing was applied and no README count row was
+#    touched — by sed or otherwise.
+#  4 THE DISPATCHER'S 21 ADDED LINES RECONCILE, ON BOTH SIDES. 19 comment lines
+#    and exactly TWO invocations, both labels new:
+#      +189  run "table rows belong to tables"             doc_table_row_placement_check.py
+#      +1063 run "a printed population agrees with its pin" emitter_population_pin_check.py
+#    Static census of run / run_tolerating_uncheckable sites: base 88, head 90,
+#    ZERO duplicate labels on either side, 2 added, 0 removed. The sites/declared
+#    gap is fully explained, not waved at: 4 of the sites live inside
+#    _per_published_cell_gates(), which gate_dispatch_over expands over the
+#    published-cell corpus; that corpus expands over 0 items here, so those 4 run
+#    zero times and the expansion declares 1 population gate.
+#      head  90 - 4 + 1 = 87 declared      base  88 - 4 + 1 = 85 declared
+#    RUNTIME CONFIRMATION: `── ` sections actually printed = 85 (base) and 87
+#    (head), equal to what each run declares — every gate present, each once — and
+#    decided + NOT CHECKED equals the declared total on both:
+#      base  74 + 11 = 85        head  76 + 11 = 87
+#    The 11 are 10 exempt (rc 2, non-fatal, each with a stated expiry) plus ONE
+#    blocking: corpus "published cells carrying a routed DEF" is EMPTY, the
+#    population gate reporting its own 0-item expansion rather than passing over
+#    nothing. Nothing runs twice; nothing went missing.
+#
+# EVERY ONE OF THE SIX NEW PROGRAMS IS ACTUALLY INVOKED. None ships with only its
+#   own test running it:
+#     doc_table_row_placement_check.py  tools/ci/repo_hygiene_gates.sh:189
+#     emitter_population_pin_check.py   tools/ci/repo_hygiene_gates.sh:1063
+#     landing_noop_verdict_check.py     tools/gatekeeper-land-differential.sh:258
+#     attestation_preflight_check.py    tools/gatekeeper-land-differential.sh:382
+#     generated_test_list_min_guard.py  tools/gatekeeper-land-differential.sh:417
+#     _gate_usage_exit.py               imported by the three above; it IS in the
+#                                       tree, so #1469's rule holds
+#
+# NEW_GATE IS EMPTY, and both readings of the row are stated so neither is guessed:
+#   gates newly RED (head not base): NONE — same 6 failures on both sides
+#     (checker execution wiring / d3 declaration-manifest parity / declaration
+#      scans strip comments / flow-gate enforcement audit / gates are wired to
+#      something / liar census controls still fire), and NO gate newly NOT CHECKED.
+#   gates newly DECLARED: the two named above, and BOTH PASS on head with their
+#     denominators printed (325 docs, 6281 lines; 3 denominators + 1 pin).
+#
+# ONE HONEST DIFFERENCE FROM THE CALIBRATION, AND IT IS THE HOST, NOT THE TREE.
+#   The brief calibrates main at 69 passed / 6 failed / 10 NOT CHECKED of 85. I
+#   measured the same base at 68 / 6 / 11. The single moved gate is
+#   `gates are host-independent`, which re-drives ~81 gates in a fresh worktree:
+#     ^^ NOT CHECKED (rc 2, non-fatal): gates are host-independent [601s] — needs
+#        a CLEAN checkout and a complete machine record from this enclosing run
+#   It moved IDENTICALLY on BOTH arms, so it cancels in the differential. Both
+#   trees were clean at launch and stayed detached, so this is not the dirty-
+#   checkout case; it is the "complete machine record" half, which a host at load
+#   50-72 (my four arms plus ~25 other agents' pytest processes) can fail to
+#   assemble. Reported rather than smoothed into the calibration.
+#
+# NEW_RED IS EMPTY AS A RESULT OF LOOKING, NOT OF NOT LOOKING.
+#   Raw full-suite differential: 4 new red / 8 fixed — inside the noise floor my
+#   predecessor MEASURED (origin/main run twice, same selector, same host, same
+#   tree, disagreeing on TEN ids). So every candidate was re-run isolated.
+#   Round 1 — the 7 candidate FILES alone, both trees, -n 4: 3 of the 4 new-red
+#     candidates PASSED on head (test_issue316_gate_enforcement_baseline::
+#     test_316_paid_debt_must_leave_the_register and test_organic381_artefact_
+#     defect_close_requires_the_artefact::test_real_history_the_sweep_is_quiet_on_
+#     this_repo among them — both are repo-content-sensitive and were the ones I
+#     most expected to be real, so they were checked hardest). One survived:
+#     test_pytest_per_file_junit.py::test_nested_validated_progress_is_relayed_to_
+#     the_outer_session.
+#   Round 2 — that FILE alone, both trees, quiet host (load 3.4):
+#     base 1 failed / 87 passed in 22.28s
+#     head 1 failed / 87 passed in 22.18s
+#     The same single id, on BOTH sides. Round 3 repeated it on head: 1 failed /
+#     87 passed in 20.22s. It is a PRE-EXISTING failure whose appearance in a
+#     full-suite run is load-dependent, not a regression. Its subject is timing —
+#     nested progress relayed to an outer session — which is why contention moves
+#     it. NO NEW RED SURVIVES.
+#
+# FIXED — the mechanism is in the diff, and I watched it happen.
+#   tools/gatekeeper-land-differential.sh replaces a bare `[ ! -s ]` emptiness
+#   test (which PRINTED and carried on) with generated_test_list_min_guard.py
+#   against a DERIVED floor. The comment the batch ships states the failure it
+#   repairs: an empty list makes `xargs -a <empty> pytest` fall back to
+#   `testpaths` and sweep the WHOLE suite. That is exactly what the three
+#   test_issue565 ids pin, and it is visible in wall-clock:
+#     the file ALONE, head:  10 passed in 15.30s
+#     the file ALONE, base:   2 failed / 8 passed in 888.34s   (14m48s)
+#   The three ids were fixed in my full-suite differential, fixed again in the
+#   isolated round-1 re-run, and fixed independently in my predecessor's run.
+#   DISCLOSED: in the single-file solo run — the least contended configuration
+#   base ever sees — base's third id (test_a_failed_report_says_the_shortfall_is_
+#   UNKNOWN_not_zero) squeaked through green inside that 888s. It is reported as
+#   FIXED on 3 of 4 observations plus the mechanism, not on 4 of 4. The other two
+#   reproduced in every configuration.
+#   DROPPED as noise, having appeared in the raw differential and NOT survived
+#   isolation: 2 ids in test_issue1130_wiring_population_parity, 2 in
+#   test_landing_merge_verdict, and test_matrix_63x8_coverage — whose raw-fixed id
+#   and isolated-fixed ids do not even overlap, and which shows 4 failures on head
+#   alone. A file that disagrees with itself cannot settle a differential.
+#
+# ERRORS: both arms report the same 2 setup errors (test_it_has_a_runner_that_is_
+#   not_an_agent_reading_a_document, test_it_is_no_longer_in_the_test_only_finding)
+#   — identical on both sides, so they cancel. BASE_IDS/HEAD_IDS count them:
+#   base 84 FAILED + 2 = 86, head 80 FAILED + 2 = 82.
+#
+# SELECTOR: comm -12 of both trees' `find programs/tests -name 'test_*.py'` = 2721
+#   entries, EVERY one verified to exist in BOTH trees before any arm started;
+#   2727 head - 2721 = the 6 new files, 0 removed. Well over the 800 floor, so the
+#   refusal did not fire and no empty selector ever reached pytest.
+#   base 84 failed, 36892 passed, 1718 skipped, 28 xfailed, 2 errors in 3507.56s
+#   head 80 failed, 36896 passed, 1718 skipped, 28 xfailed, 2 errors in 3642.51s
+#
+# --write-baseline was NOT run, on any gate, at any point. No assertion was
+#   relaxed, no regex widened, no test deleted, no baseline rewritten, no GDS
+#   touched. No version was bumped by me. Nothing was pushed to main.
+# Evidence branch: meas/batch68-jmeas3, directory
+#   docs/measurements/2026-08-22-batch68-jmeas3/remeasure2/
+#
+# ============================================================================
+# ADDENDUM 12:19 — origin/main AS LANDED IS NOW MEASURED. Every row above is
+# UNCHANGED; this only converts two inferences into measurements and adds the
+# one tree nobody had covered. TREE_SHA is untouched and still 833e8493f.
+# ============================================================================
+#
+# WHY: origin/main = 81cd5321b = the measured assembly PLUS the lander's commit,
+#   authored AFTER every measurement of tonight's batch. No suite run and no
+#   hygiene run had ever covered it. Seven targeted gates are not a suite, and a
+#   targeted check only finds what it aims at. Two more trees, hygiene and pytest
+#   again never sharing a checkout, same 2721-entry selector re-validated against
+#   this tree before launch:
+#     b68-landtip     81cd5321b  pytest
+#     b68-landtip-hy  81cd5321b  bash tools/ci/repo_hygiene_gates.sh
+#
+# THE LANDING COMMIT IS INERT, AND THAT IS MEASURED, NOT INFERRED FROM ITS DIFF.
+#   It is seven `1.11.66` -> `1.11.68` string edits across six files, no code and
+#   no count row. Both instruments agree with the diff:
+#     pytest,  landtip vs head 833e8493f:  newly red NONE
+#     hygiene, landtip vs head:            newly FAILED NONE, gate NAME sets
+#                                          identical (87 = 87), same six failures
+#   The FIVE-red failure mode the brief warns about did not occur, and that is now
+#   established by a suite rather than by seven aimed gates.
+#
+# THE WHOLE DELTA NOW LIVE ON MAIN IS CLEAN.
+#     pytest, landtip 81cd5321b vs base a00f53f20:  newly red NONE  (zero ids)
+#   A third independent full-suite arm, and it agrees with the head-vs-base
+#   differential that NEW_RED is empty.
+#     landtip 69 failed, 36907 passed, 1718 skipped, 28 xfailed, 2 errors, 2140.70s
+#   Same 2 setup errors as both other arms, so they cancel there too.
+#
+# THE THREE FIXED IDS, CONFIRMED ON THE TREE THAT ACTUALLY SHIPPED:
+#     test_the_report_reaches_stderr_not_stdout                    base RED -> main green
+#     test_opting_out_is_possible_and_silent                       base RED -> main green
+#     test_a_failed_report_says_the_shortfall_is_UNKNOWN_not_zero  base RED -> main green
+#   All three, including the third one whose solo-run caveat I disclosed above.
+#   That caveat stands as written — it was about one configuration — but the repair
+#   is now confirmed on base-vs-head, base-vs-live-main, an isolated re-run, and my
+#   predecessor's independent run.
+#
+# MAIN'S OWN HYGIENE NUMBER, for the calibration you keep:
+#     origin/main 81cd5321b  77 of 87 decided — 71 passed, 6 failed; 10 NOT CHECKED,
+#                            0 WROTE CORPUS, 503s
+#   77 + 10 = 87, so decided plus NOT CHECKED equals the declared total on the live
+#   tree. Your calibration of 69/6/10 of 85 plus batch68's two new gates, both
+#   passing, is exactly 71/6/10 of 87. Calibration and live tree agree.
+#
+# THIS RETIRES THE HOST CAVEAT IN MY DISCLOSURE ABOVE. I attributed `gates are
+#   host-independent` going NOT CHECKED on BOTH my arms to host contention rather
+#   than to either tree. That was an inference; here is the control:
+#     head arm,  host at load 50-72   ^^ NOT CHECKED (rc 2) [601s], run total 2614s
+#     landtip,   host at load 16      PASS,                        run total  503s
+#   Near-identical content, opposite verdict, host the only variable. The gate is
+#   fine and both trees are fine. Inference -> measurement.
+#
+# THE 11 IDS RED ON HEAD AND GREEN ON THE LIVE MAIN ARE THE NOISE FLOOR, NOT A
+#   REPAIR, and I am naming them rather than banking them. They include every id
+#   I had already isolated and dismissed as load-sensitive — both
+#   test_pytest_per_file_junit ids (one of which was my last surviving new-red
+#   candidate), test_issue316_gate_enforcement_baseline::test_316_paid_debt_must_
+#   leave_the_register, test_organic381::test_real_history_the_sweep_is_quiet_on_
+#   this_repo, and both test_matrix_63x8_coverage ids. A third arm finding them
+#   green on near-identical content is independent confirmation that NEW_RED is
+#   correctly empty; it is NOT a claim that the landing commit fixed eleven tests.
+#   Eleven is also the measured noise floor's own size, which is the point.
+#
+# Nothing was pushed to main. --write-baseline was not run. Nothing was relaxed.
+# Evidence: meas/batch68-jmeas3, docs/measurements/2026-08-22-batch68-jmeas3/remeasure2/
+#
+# ============================================================================
+# CORRECTION 12:20, written because a NAME went stale under me — which is the
+# exact hazard the TREE_SHA amendment exists for, so it gets said plainly.
+# ============================================================================
+#
+# While the addendum arms were running, origin/main ADVANCED from 81cd5321b to
+# a4caccefe — 214 commits, 178 files, "landing: assign v1.11.69 at landing time".
+# Another batch landed on top of mine.
+#
+# WHAT THIS DOES NOT CHANGE. Every subject I measured is a fixed sha, and all of
+# them are still ancestors of main (verified, not assumed):
+#     833e8493f  the assembly     = origin/land/batch68-assembled   ancestor: YES
+#     81cd5321b  the addendum tip                                   ancestor: YES
+#     a00f53f20  the base
+#   TREE_SHA is unchanged and still equals the canonical name. No arm was rebased
+#   or merged mid-run. Every row above stands exactly as measured.
+#
+# WHAT IT DOES CHANGE: the WORDING. Where the addendum says "origin/main AS
+#   LANDED" it means the sha 81cd5321b, which it names throughout, and which was
+#   main's tip when those arms launched at 11:39:59. It is no longer main's tip.
+#   Read every "live main" claim above as a claim about 81cd5321b.
+#
+# AND THE HONEST LIMIT: v1.11.69's 214 commits / 178 files are NOT covered by any
+#   measurement of mine. My "main is clean" finding is about the tree that carried
+#   batch68, not about whatever is on main as you read this. Do not let my clean
+#   result launder a batch I never measured. If you want the current tip
+#   adjudicated, it needs its own base, its own arms and its own TREE_SHA.
+
+# ============================================================================
+# SUCCESSOR VERIFICATION 12:56 — a second jmeas3 incarnation. NO ROW ABOVE IS
+# CHANGED. I ran no new arm; I re-derived the claims and found one thing that
+# changed under the report after it was written.
+# ============================================================================
+#
+# READ THIS BEFORE FEEDING THE REPORT TO THE LANDER:
+#   `origin/land/batch68-assembled` NO LONGER EXISTS. The sha did not move; the
+#   NAME was retired, which is correct for a batch that has landed:
+#       git ls-remote origin refs/heads/land/batch68-assembled  -> ABSENT
+#       833e8493f... = refs/heads/retired/batch68-assembled     (unmoved)
+#       merge-base --is-ancestor 833e8493f origin/main          -> YES
+#       git rev-list --count origin/main..833e8493f             -> 0
+#   So the amendment's invariant "TREE_SHA == origin/land/batch68-assembled"
+#   CANNOT be satisfied — not because TREE_SHA is wrong, but because the ref is
+#   gone. If the lander refuses this report for that reason, THE REFUSAL IS
+#   CORRECT AND NOTHING IS LOST: the measured tree is already inside main.
+#   I did NOT recreate the canonical ref. The amendment's rule exists so the
+#   lander cannot land a tree older than the measured one; here that risk is not
+#   mitigated but EXTINCT, and resurrecting a deliberately retired branch would
+#   only invite a no-op re-land. Deciding this rather than asking, as instructed.
+#
+# THE FOUR INHERITANCE CHECKS, RE-DERIVED BY ME FROM THE SHAS, NOT READ FROM THE
+# REPORT — all four confirmed:
+#   1 bundles at docs/capture/2026-08-21-{jcap-chip,jcap-matrix,jcap-ppa}/;
+#     `git ls-tree 833e8493f jcap-chip ppa-capture` EMPTY.
+#   2 no bare root RESULT.md on the assembly or on main; the 3 the batch adds
+#     are each inside their own bundle directory.
+#   3 assembly at 1.11.66 on all three manifests (the lander assigns the
+#     version, so this is correct and was left alone); the landing commit
+#     81cd5321b carried ALL THREE — including the repo-root
+#     .claude-plugin/marketplace.json — to 1.11.68. The five-red mode did not
+#     occur, and no README count row was touched by anyone.
+#   4 dispatcher +21 lines = exactly 2 `run` invocations (:189, :1063), 0
+#     duplicate labels on either side, all six new programs invoked outside
+#     their own tests.
+#   ONE CORRECTION to the disclosure above: it calls the 48-file diff "ALL A".
+#   It is 41 A + 7 M. Its point — zero D, zero renames, so the absent `git mv`
+#   is not an omission — is unaffected.
+#
+# THE ROWS ARE CORROBORATED BY THE RAW LOGS, which I read rather than trusted:
+#   base_pytest 84 failed/36892 passed/3507.56s -> BASE_IDS 84+2 errors = 86
+#   head_pytest 80 failed/36896 passed/3642.51s -> HEAD_IDS 80+2 errors = 82
+#   head_hygiene 76 of 87 - 70 passed, 6 failed; 11 NOT CHECKED, 2614s -> TOTALS
+#   new_test_files_run 71 passed in 89.96s EXIT=0                     -> NEWFILES
+#   shared_selector 2721 entries                    -> far over the 800 floor
+#   base vs head failed-gate lists BYTE-IDENTICAL   -> NEW_GATE empty is earned
+#   gate-name diff base->head = exactly the 2 new gates, both passing
+#   TREE_SHA.stamp taken 09:20:43 BEFORE any arm started; all EIGHT worktrees
+#     are STILL detached at their stamped shas, so "nothing rebased mid-run" is
+#     not a promise, it remains observable today.
+#
+# DISPATCHER RECONCILIATION EXTENDED (STATIC ONLY, clearly labelled):
+#   model: declared = sites - 4 (inside _per_published_cell_gates) + 1
+#     a00f53f20 sites 88 -> 85   [RUNTIME CONFIRMED 74+11]
+#     833e8493f sites 90 -> 87   [RUNTIME CONFIRMED 76+11]
+#     81cd5321b sites 90 -> 87   [RUNTIME CONFIRMED 77+10]
+#     a4caccefe sites 96 -> 93   [PREDICTION FROM A MODEL, NOT RUN — do not
+#                                 quote it as a calibration]
+#   Both gates the batch added survive onto today's main, each invoked exactly
+#   once (:334 and :1208). The dispatcher addition neither doubled nor vanished.
+#
+# WHY I RAN NO NEW ARM. The differential is between two IMMUTABLE shas, already
+#   measured by three independent full-suite arms whose raw logs I have now
+#   checked line by line; the batch has landed and been retired, so no decision
+#   waits on it; and the report's own measured noise floor is ~10-11 ids that
+#   disagree between two runs of the SAME tree. A fourth run would add noise,
+#   not signal, at the cost of an hour on a host shared with ~25 agents. That is
+#   not thoroughness, and re-running it would not have made this report truer.
+#
+# STILL UNMEASURED, AND I AM REPEATING THE WARNING RATHER THAN ERODING IT:
+#   v1.11.69 (a4caccefe) is 214 commits / 178 files past the addendum tip and is
+#   covered by NO measurement, mine or my predecessor's. It needs its own base,
+#   its own arms and its own TREE_SHA. Do not let a clean batch68 result launder
+#   a batch nobody measured.
+#
+# No --write-baseline. Nothing relaxed, widened, deleted or rebaselined. Nothing
+# pushed to main. No version bumped. Evidence for THIS section:
+#   meas/batch68-jmeas3 @ ecd59ec41,
+#   docs/measurements/2026-08-22-batch68-jmeas3/remeasure2/
+#     SUCCESSOR_VERIFICATION_jmeas3b.md
+#
+# ============================================================================
+# CLOSING SECTION 15:0x — added by the jmeas3 incarnation after the successor
+# verification. NO ROW ABOVE MOVES. This does two things: it finishes the
+# attribution of the 16 reds disclosed at 13:30, and it REPAIRS them, because
+# they were still red on today's main eleven hours after the batch landed.
+# ============================================================================
+#
+# THE 16 REDS ARE NOW ROOT-CAUSED TO A MECHANISM, NOT ONLY TO A COMMIT.
+#   d5646372f wired three gates into tools/gatekeeper-land-differential.sh
+#   (:258 landing_noop_verdict_check, :382 attestation_preflight_check,
+#   :417 generated_test_list_min_guard) and added NONE of them to the synthetic
+#   repo that tools/test_gatekeeper_land_differential.py builds to drive that
+#   script. The failure surfaces as `python3: can't open file ...` from inside a
+#   temp directory, naming ONLY landing_noop_verdict_check, because :258 aborts
+#   before the other two are ever reached. They are latent behind it.
+#
+#   THE FIXTURE WAS COMPLETE BEFORE THE BATCH — measured, and it reverses the
+#   more comfortable reading that the batch merely stepped in an existing hole:
+#       d5646372f^   invoked 5   provided 7   ABSENT 0
+#       833e8493f    invoked 8   provided 7   ABSENT 3
+#   There was no standing hole. The batch made one. So the defect is not a count
+#   in either list; it is that NOTHING BINDS THEM.
+#
+# STILL RED ON TODAY'S MAIN WHEN I LOOKED, which is why I stopped reporting and
+#   repaired:
+#       a4caccefe  tools/test_gatekeeper_land_differential.py  16 failed, 12 passed
+#   Two agents had each correctly judged this outside their brief. The
+#   consequence of everyone being right about scope is that it stays broken.
+#
+# REPAIRED ON A BRANCH. NOTHING PUSHED TO MAIN. NO VERSION BUMPED.
+#     branch  fix/batch68-stale-fixture-whitelist  on top of a4caccefe
+#     7c1b6c837  test — the binding gate, RED at that commit
+#     085fba99b  fix  — provide the three; 16 failed, 12 passed -> 29 passed
+#
+#   THE RED IS SHOWN, not asserted. At 7c1b6c837 the new test fails with both
+#   its predicates printed and all THREE names in one assertion:
+#       invoked  (:= named as programs/<x>.py on a non-comment line
+#                   of gatekeeper-land-differential.sh): 8
+#       provided (:= any .py under the stub tree's programs/ after
+#                   _write_stub_tree, copied or written): 7
+#       AssertionError: ... attestation_preflight_check.py
+#                           generated_test_list_min_guard.py
+#                           landing_noop_verdict_check.py
+#   The failure it replaces names one and hides two, so a repair guided by the
+#   old message looks like it half-worked twice.
+#
+#   AND IT IS NOT A TAUTOLOGY — a third instrument, run at the commit before the
+#   batch on that tree's own untouched fixture:
+#       d5646372f^ (f2e7b4be1)  invoked 5  provided  7  -> PASSED
+#       a4caccefe   as-is       invoked 8  provided  7  -> FAILED, naming 3
+#       a4caccefe   + repair    invoked 8  provided 10  -> PASSED
+#   Green before the batch, red at it, green after. The middle row reproduces the
+#   earlier hand census EXACTLY by a different route (regex over the script, glob
+#   over the built tree), which is a fourth predicate converging on the same
+#   three names.
+#
+# A FOURTH ABSENCE, LATENT BEHIND THE THREE, THAT NO STATIC CENSUS COULD PREDICT.
+#   Once the three were provided and execution passed :258, the floor derivation
+#   at :404 broke: it IMPORTS ci_targeted_test_select and reads SMOKE_BASENAMES
+#   off it, and the fixture's stub is a bare print() with no such attribute —
+#   whose print also fires at IMPORT time, putting the selection into the floor
+#   derivation's own stdout so SEL_FLOOR could not parse as a number. Both fixed
+#   in the stub. STATED AS A LIMIT ON THE GATE: the dependency there is on a
+#   module ATTRIBUTE, not a file, so the binding gate would NOT have caught it.
+#   It covers the file class of this failure and nothing more.
+#
+# WHAT WAS NOT DONE, and one decision deliberately left to the owner.
+#   No production code is touched: gatekeeper-land-differential.sh is
+#   byte-identical to main and every gate d5646372f wired stays wired, refusing
+#   what it refused. No assertion relaxed, no regex widened, no test deleted, no
+#   baseline rewritten, no --write-baseline, no GDS touched.
+#   THE REFUSE-VS-CONTINUE FLOW DECISION IS NOT MADE. The alternative remedy —
+#   make the differential DEGRADE when a wired gate is absent from the tree it
+#   checks — is a policy change to a landing gate and is the owner's call.
+#   Extending the fixture makes today's suite honest without pre-empting it.
+#
+# THE METHOD FIX, twice earned and repeated here so it is not lost in a doc:
+#   add `pytest -q tools/` to BOTH arms of any batch measurement on this fleet.
+#   Repo-root tools/ is outside programs/tests and therefore outside every
+#   plugin-scoped selector. It would have caught these 16 before batch68 landed.
+#
+# Evidence: meas/batch68-jmeas3 @ 6c31c55ca,
+#   docs/measurements/2026-08-22-batch68-jmeas3/REPAIR_APPLIED_16_REDS.md
+#   and BATCH68_INTRODUCED_16_REDS_OUTSIDE_THE_SELECTOR.md (mechanism, 3-not-6
+#   correction, and the predicate round-trip).
+#
+# THE REPAIR IS MEASURED ON THE WHOLE REGION, NOT ONLY ON THE FILE IT TOUCHES.
+#   Two clean worktrees, one arm each, git clean -xdfq and PYTHONDONTWRITEBYTECODE=1
+#   in both, the entire repo-root tools/ tree collected (885 tests):
+#       a4caccefe  main today     21 failed, 863 passed, 6 skipped  187.42s
+#       085fba99b  + the branch    5 failed, 880 passed, 6 skipped  241.07s
+#       NEWLY RED (fix minus main): NONE
+#       FIXED     (main minus fix): 16, every one in
+#                                   tools/test_gatekeeper_land_differential.py
+#   The fixed set is EXACTLY the 16 disclosed at 13:30 — not 15, not 17 — and
+#   nothing outside that file moved in either direction.
+#
+# AND THE REGION CARRIES FOUR MORE STANDING REDS THAT NO SELECTOR HAS REPORTED.
+#   The 5 survivors are identical on both sides, so they cancel here, but they
+#   are the first measurement this region has ever had on both sides of anything:
+#     tools/ci/test_gate_fixtures_discriminate.py::test_fixture_pair_discriminates[ppa_head_to_head_records]
+#     tools/ci/test_gate_mutation_fixture_check.py::test_the_real_repo_is_clean_under_this_gate
+#     tools/ci/test_phase_b_activated_parity.py::test_the_live_tree_is_exactly_one_recorded_state_and_never_a_mixture
+#     tools/ci/test_phase_b_activated_parity.py::test_the_move_is_exactly_the_paths_the_two_states_disagree_on
+#     tools/test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
+#   The last is the id already established red on the batch68 BASE a00f53f20 and
+#   on jland67's branch — the one that turned their 17 into 16 — and it is red on
+#   both sides here too, a fourth independent confirmation of that correction.
+#   THE FOUR tools/ci IDS ARE NOT DIAGNOSED AND I CLAIM NOTHING ABOUT THEM. They
+#   are red on main without my branch, they are outside batch68, and each is
+#   somebody's brief. Naming them is the point.
+#
+#   THIS ALSO CORRECTS THE RECOMMENDATION'S SCOPE, by running it: the earlier
+#   form said `pytest -q tools/test_*.py`, 20 files, ~70s. Collecting tools/
+#   ENTIRE is 885 tests in 187-241s and reaches tools/ci/, where four of the five
+#   survivors live. The subset would have caught batch68's 16 and would NOT have
+#   surfaced the other four. Recommend `pytest -q tools/`, not `tools/test_*.py`.
+#
+# ============================================================================
+# SECOND CLOSING SECTION 15:15 — two things the earlier rows could not contain.
+# NO ROW ABOVE MOVES. One is a defect this batch introduced that NO id-level
+# differential can see; the other converts the last standing PREDICTION about
+# this repo's gate totals into a measurement, and it found a red.
+# ============================================================================
+#
+# 1. THIS BATCH ADDED TWO DEFECTS INSIDE A TEST THAT WAS ALREADY RED.
+#    tools/ci/test_gate_mutation_fixture_check.py::
+#      test_the_real_repo_is_clean_under_this_gate
+#    enforces a rule the repo states in the gate's own output: "A gate lands with
+#    both directions or it does not land" — every declared gate carries a CAN-PASS
+#    and a CAN-FAIL fixture, or is excused in gate_fixture_debt.json, a baseline
+#    that "may only shrink". Three clean checkouts, one command each:
+#        a00f53f20  base        88 declared    6 NEW-OR-UNEXCUSED   FAILED
+#        833e8493f  assembly    90 declared    8 NEW-OR-UNEXCUSED   FAILED
+#        a4caccefe  main today  96 declared   14 NEW-OR-UNEXCUSED   FAILED
+#    Set difference assembly minus base — exactly two added, none removed:
+#        a printed population agrees with its pin
+#        table rows belong to tables
+#    Those are BYTE-FOR-BYTE the two `run` lines this batch adds to the
+#    dispatcher — the very two the brief asked me to confirm, and which my
+#    predecessor correctly reported as present, invoked exactly once, and PASSING.
+#    They are also, at that same moment, in violation of the repo's stated rule
+#    for landing a gate. "Present" standing in for "right", one level up.
+#
+#    WHY NO ROW ABOVE IS WRONG. The test id is RED ON THE BASE TOO, so in an
+#    id-level differential — `comm` over two lists of failing ids, which is what
+#    every arm on this fleet computes — it appears on both sides and CORRECTLY
+#    cancels. NEW_RED is empty and stays empty. AN ALREADY-RED TEST IS AN
+#    ABSORBING STATE: any number of new defects can land inside it without moving
+#    the arithmetic. The information is destroyed by the SHAPE of the comparison
+#    before judgement gets a chance; no care in running the arms recovers it.
+#    NOTE THIS IS NOT FIXED BY THE `pytest -q tools/` RECOMMENDATION. That closes
+#    the SELECTOR gap. This test is IN the region that recommendation adds, and
+#    both arms would still have cancelled it. The two gaps are independent.
+#
+#    WHAT I DID NOT DO, AND IT MATTERS: I did not add the two gates to
+#    gate_fixture_debt.json. That would turn this red green in one line and it is
+#    a BASELINE REWRITE TO MAKE A FAILURE GO AWAY — the one move the brief
+#    forbids outright. I also did not write the two fixtures: that work is owed
+#    by whoever lands those gates, and inventing fixtures for someone else's gate
+#    is how a fixture ends up asserting what the gate DOES instead of what it
+#    SHOULD do.
+#
+#    THE REMEDY BELONGS TO THE METHOD. For an id red on BOTH sides, diff WHAT IT
+#    SAID, not merely THAT it failed. This batch would then have reported, before
+#    landing: "NEW FINDING inside an already-red test: +'a printed population
+#    agrees with its pin', +'table rows belong to tables'". A cruder form is
+#    free: for ids red on both sides, compare the finding COUNT the assertion
+#    prints (6 -> 8 here).
+#
+#    THE OTHER THREE tools/ci REDS ARE NOT THIS BATCH'S — measured at the base:
+#      test_gate_fixtures_discriminate[ppa_head_to_head_records]  red at a00f53f20
+#      both test_phase_b_activated_parity ids                     red at a00f53f20
+#
+# 2. THE `93` FOR TODAY'S MAIN WAS A PREDICTION THE RECORD SAID NOT TO QUOTE.
+#    IT IS NOW MEASURED. One arm, one clean worktree, pytest never sharing it:
+#        predicted declared 93   |   `── ` sections PRINTED 93   |   claimed 93
+#        repo_hygiene_gates: at least one gate FAILED
+#          (83 of 93 decided — 81 passed, 2 failed; 10 NOT CHECKED, 0 WROTE CORPUS, 561s)
+#        83 + 10 = 93 reconciles;  93 section names, 93 DISTINCT — each gate
+#        present and invoked exactly ONCE. The dispatcher model is now confirmed
+#        by RUNTIME at four consecutive shas (85, 87, 87, 93). Quote 93.
+#
+#    AND YOUR CALIBRATION IS TWO BATCHES STALE — main is HEALTHIER than any tree
+#    measured tonight, 6 failing gates down to 2:
+#        brief's calibration        69 / 6 / 10 of 85
+#        a00f53f20 base             68 / 6 / 11 of 85
+#        81cd5321b batch68 tip      71 / 6 / 10 of 87
+#        a4caccefe MAIN TODAY       81 / 2 / 10 of 93
+#      fixed since the batch68 tip (5): checker execution wiring; d3
+#      declaration/manifest parity; declaration scans strip comments; flow-gate
+#      enforcement audit; gates are wired to something.
+#
+#    ONE GATE WENT NEWLY RED, AND IT IS IN THE BATCH NOBODY MEASURED:
+#        NEWLY FAILED: PPA measurement coverage
+#      The name is in BOTH gate-name sets and is NOT in the landing tip's
+#      recorded failed list, so it is a verdict FLIP on an existing gate:
+#        [REFUSE] record #105 timing.setup.worst_path_slack_ns: SAME_ARTEFACT_TWO_VALUES
+#        [REFUSE] record #107 timing.hold.worst_slack_ns: SCOPE_SENTINEL scope.clock is None
+#        54 record(s) in ppa-crosslayer/.../b000/records_flat.json are REFUSED
+#      A content refusal over committed records — not host, not load. It arrived
+#      with v1.11.69. My warning that v1.11.69 is covered by no measurement now
+#      has a MEASURED INSTANCE behind it, not only a principle. Not diagnosed
+#      here: outside batch68 and outside this brief, and named so it can be
+#      picked up.
+#
+#    A DEGRADATION HIDING INSIDE AN UNCHANGED COUNT, same absorbing shape as (1):
+#      the one BLOCKING NOT CHECKED changed reason between the trees —
+#        81cd5321b  corpus "published cells carrying a routed DEF" is EMPTY,
+#                   producer rc 0, 0 items
+#        a4caccefe  ... was NOT FOUND, producer rc 3, NO CORPUS RESOLVED
+#      Both count as one NOT CHECKED, so no total moves and no differential flags
+#      it. A producer that honestly found nothing has become one that ERRORS.
+#
+#    CAVEAT RETIRED HONESTLY: `gates are host-independent` did NOT go NOT CHECKED
+#      here at load 31-48; it printed its normal `[NOT PROBED] ... it would
+#      recurse` self-exclusion. The earlier contention attribution (NOT CHECKED at
+#      load 50-72, PASS at load 16) stands but is NARROWER than "any busy host":
+#      the threshold sits above 48.
+#
+# No --write-baseline, on any gate, at any point. Nothing relaxed, widened,
+# deleted or rebaselined. Nothing pushed to main. No version bumped.
+# Evidence: meas/batch68-jmeas3 @ 0fe53c542 —
+#   AN_ALREADY_RED_TEST_ABSORBS_NEW_DEFECTS.md
+#   mainhygiene/PREDICTION_93_IS_NOW_MEASURED.md  (+ raw run, gate names, failures)
+#
+# ============================================================================
+# THIRD CLOSING SECTION 15:40 — the blind spot in section (1) is traced to the
+# code that decides landings, and the measurement side now has an instrument.
+# NO ROW ABOVE MOVES. Nothing on the landing path is changed or proposed.
+# ============================================================================
+#
+# THE DEFECT #1498 FIXED FOR THE HYGIENE TIER IS STILL OPEN IN THE TEST TIER.
+#   programs/hygiene_finding_delta.py exists because of this exact shape, and its
+#   own docstring states it:
+#     "the base's suite is red -> the whole label is excused, and a finding this
+#      branch INTRODUCED under it is invisible. That is the permissive half."
+#   The same docstring places the test tier on the right side of the line — "The
+#   TEST tier has the right rule and has had it since vibe-ic#1019 ... what must
+#   be empty is the DIFFERENCE, not the count." THAT SENTENCE IS TRUE and I am
+#   not contradicting it. It is right AT ITS OWN GRANULARITY, and the permissive
+#   half reappears one level down, unaddressed.
+#
+#   READ OFF THE SHIPPED CODE, not inferred. landing_merge_verdict.py:
+#       def _key(tc): return f"{classname}::{name}"            <- the unit is the ID
+#       def _same_red(base, candidate):
+#           """Ordinary pytest reds are equivalent; process rc values are exact."""
+#           ...
+#           return base in RED and candidate in RED            <- ANY red == ANY red
+#       if _is_red(c):
+#           if _same_red(b, c): d.preexisting.append(k)        <- excused, wholesale
+#           else:               d.new_failures.append(k)
+#   For an ordinary pytest failure the MESSAGE is never compared; the `else` is
+#   reachable only for process-rc pseudo-tests. Substitute the docstring's own
+#   sentence, changing one noun: "the base's TEST is red -> the whole ID is
+#   excused, and a finding this branch INTRODUCED under it is invisible."
+#
+#   CHECKED SO IT IS NOT OVERCLAIMED: the adjacent lists do NOT cover it.
+#     weakened            PASSED -> SKIPPED/ABSENT
+#     silenced            FAILED -> SKIPPED/ABSENT
+#     new_absent_on_base  splits NEW-BROKEN from NEW-BROUGHT inside new_failures
+#   All three are real; none reaches inside an id red on both sides.
+#
+#   I AM NOT CHANGING landing_merge_verdict, AND THE RESTRAINT IS THE POINT. The
+#   obvious fix — compare failure text for both-sides-red ids — is NOT obviously
+#   right, and the risk runs the dangerous way: failure text carries temp paths,
+#   durations and orderings, this repo's measured id-level noise floor is already
+#   ~10-11 ids per run, and A LANDING GATE THAT REFUSES ON NOISE DEADLOCKS MAIN.
+#   Deadlock on one side, false green on the other: that is a policy decision and
+#   it belongs to whoever owns the landing tier. I also did not edit that
+#   docstring — adding to a landing-gate program's stated contract is the same
+#   class of call as the refuse-vs-continue decision I already declined.
+#
+# THE MEASUREMENT SIDE NEEDS NO POLICY, SO THAT IS WHERE I BUILT.
+#   branch  measure/pytest-finding-delta  @ c0b29d7e0  (off a4caccefe)
+#     tools/ci/pytest_finding_delta.py       the report
+#     tools/ci/test_pytest_finding_delta.py  8 tests
+#   A report cannot deadlock anything; it can only tell a human what the
+#   differential could not.
+#
+#   VALIDATED ON BATCH68'S REAL REPORTS, not on a toy — both arms captured on
+#   clean checkouts of the actual shas:
+#     sections RED ON BOTH SIDES: 1
+#       tools/ci/test_gate_mutation_fixture_check.py::test_the_real_repo_is_clean_under_this_gate
+#         findings: base 10 -> candidate 12
+#         + NEW FINDING INSIDE AN ALREADY-RED TEST: - NEW-OR-UNEXCUSED:
+#             'a printed population agrees with its pin' ...
+#         + NEW FINDING INSIDE AN ALREADY-RED TEST: - NEW-OR-UNEXCUSED:
+#             'table rows belong to tables' ...
+#     4 finding(s) were INTRODUCED inside tests that were already red
+#   HAD BATCH68'S ARMS RUN THIS, IT WOULD HAVE NAMED BOTH ILLEGALLY-LANDED GATES
+#   BEFORE THE BATCH LANDED.
+#
+#   THE TESTS DISCRIMINATE, CHECKED BY MUTATION rather than asserted — a suite
+#   that passes is not evidence until something makes it fail:
+#     mutant: never compare findings (id-level only)  -> 2 tests RED
+#     mutant: normalise digits away                   -> 2 tests RED
+#     mutant: return 0 when it cannot look            -> 1 test  RED
+#     restored                                        -> 8 passed
+#   Digits are deliberately NOT normalised: 6 finding(s) -> 8 finding(s) IS the
+#   signal, and a normaliser that ate counts would generate false greens. The
+#   predicate and every normalisation rule are PRINTED with their reason.
+#
+#   IT IS WIRED TO NOTHING AND A TEST ENFORCES THAT.
+#   test_it_is_wired_to_nothing_and_that_is_deliberate fails if anyone adds it to
+#   repo_hygiene_gates.sh, gatekeeper-land-differential.sh or gatekeeper-land.sh,
+#   so promoting it requires saying so explicitly.
+#
+#   IT CHANGES NOTHING ELSE — whole tools/ region, clean worktrees:
+#     a4caccefe            21 failed, 863 passed, 6 skipped
+#     c0b29d7e0 + branch   21 failed, 871 passed, 6 skipped
+#     NEWLY RED: none    FIXED: none    (+8 = its own tests)
+#
+#   HOW THE NEXT BRIEF USES IT — capture both arms WITHOUT bare -q (it needs the
+#   `E ` lines; -rf plus normal tracebacks is enough), then:
+#     python3 tools/ci/pytest_finding_delta.py --base <base out> \
+#         --candidate <head out> --repo-root <head wt> --base-repo-root <base wt>
+#   rc 0 nothing introduced, rc 1 something was, rc 2 it could not look — and
+#   rc 2 is NEVER reported as a pass.
+#
+# THE ONE-LINE VERSION FOR WHOEVER PICKS UP THE LANDING SIDE:
+#   #1498 gave the hygiene tier granularity below the LABEL. Nothing gives the
+#   test tier granularity below the ID, and _same_red makes every ordinary red
+#   equal to every other, so a candidate can introduce a finding inside an
+#   already-red test and land with NEW_RED empty. Batch 68 did exactly that,
+#   twice, tonight.
+#
+# No --write-baseline. Nothing relaxed, widened, deleted or rebaselined. Nothing
+# pushed to main. No version bumped. No landing-path file changed.
+# Evidence: meas/batch68-jmeas3 @ f115976e9 —
+#   THE_TEST_TIER_HAS_THE_HYGIENE_TIERS_BUG.md
+#   instrument/VALIDATED_ON_REAL_DATA.md (+ the two real arm reports, raw run)
+
+# ============================================================================
+# THIRD INCARNATION 16:25 — a third jmeas3 on 8HD-6, handed the same brief.
+# NO ROW ABOVE IS CHANGED. I ran no new arm on batch68. What I did was re-derive
+# every standing claim from the shas, and CLOSE the one defect this report named
+# and deliberately left open. That defect is now measured shut.
+# ============================================================================
+#
+# WHY NO NEW BATCH68 ARM, DECIDED NOT ASKED. The brief's premise is three steps
+#   stale: it says to fetch `origin/land/batch68-assembled` (25 commits, 48
+#   files) and measure it against main. That ref is GONE, the batch LANDED at
+#   03:57, it has been RETIRED to `refs/heads/retired/batch68-assembled`, and a
+#   further version (v1.11.69, a4caccefe) has landed on top of it. A differential
+#   against today's main is empty by construction. Three independent full-suite
+#   arms already cover the subject and their raw logs are in this directory. A
+#   fourth would add noise on a shared host, not signal.
+#
+# THE STANDING CLAIMS, RE-DERIVED BY ME FROM THE SHAS — all confirmed:
+#   * All SEVEN measurement worktrees are STILL detached at their stamped shas
+#     (b68-base-{py,hy} a00f53f20; b68-head-{py,hy} + b68-verify 833e8493f;
+#     b68-landtip{,-hy} 81cd5321b). "Nothing rebased mid-run" is still not a
+#     promise — it is still observable, now by a third pair of eyes.
+#   * 833e8493f, 81cd5321b and a00f53f20 are ALL still ancestors of origin/main.
+#   * Bundles at docs/capture/2026-08-21-{jcap-chip,jcap-matrix,jcap-ppa};
+#     `git ls-tree 833e8493f jcap-chip ppa-capture` EMPTY.
+#   * No bare root RESULT.md on the assembly OR on main; the batch adds exactly
+#     3, each inside its own bundle directory.
+#   * Diff shape base..assembly: 41 A + 7 M = 48 files, 29 commits, zero D, zero
+#     renames. The second incarnation's correction to "ALL A" stands; the
+#     original point — the absent `git mv` is not an omission — is unaffected.
+#   * MANIFESTS, all three columns being plugin.json / marketplace.json /
+#     THE REPO-ROOT .claude-plugin/marketplace.json that gets missed:
+#         a00f53f20  1.11.66  1.11.66  1.11.66
+#         833e8493f  1.11.66  1.11.66  1.11.66   <- correct; the lander assigns
+#         81cd5321b  1.11.68  1.11.68  1.11.68   <- all three, incl. the root one
+#         a4caccefe  1.11.69  1.11.69  1.11.69
+#     The five-red failure mode did not occur, at either landing.
+#   * Both gates batch68 added are on today's main exactly ONCE each
+#     (repo_hygiene_gates.sh:334, :1208); all three gates it wired into
+#     gatekeeper-land-differential.sh are there exactly once each. The dispatcher
+#     addition neither doubled nor vanished, two versions later.
+#   * origin/main was a4caccefe when I started and a4caccefe when I finished.
+#
+# ============================================================================
+# THE 16 REDS OUTSIDE THE SELECTOR ARE CLOSED. This is the new result.
+# ============================================================================
+#
+# The SCOPE LIMIT block at the top of this report names 16 tests that batch68
+#   introduced in tools/test_gatekeeper_land_differential.py, outside every
+#   selector, and says plainly: NOT diagnosing the 16. A repair for them existed
+#   on `origin/fix/batch68-stale-fixture-whitelist` @ 085fba99b — pushed, sitting
+#   directly on today's main, and checked by nobody but its author. It is now
+#   checked. Three more clean worktrees, git clean -xdfq, PYTHONDONTWRITEBYTECODE=1,
+#   one arm each, never sharing a checkout.
+#
+# THE RED, SHOWN, BECAUSE THE RULES REQUIRE THE RED:
+#     a4caccefe   main today, as-is            16 failed, 12 passed
+#     7c1b6c837   the TEST commit ALONE        17 failed, 12 passed
+#     085fba99b   test + fix                   29 passed
+#   The 17th is the new guard AND NOTHING ELSE — the two failed-id sets differ by
+#   exactly one id and nothing was dropped:
+#     test_every_program_the_differential_invokes_is_provided_by_the_fixture
+#   and it fails printing its own two predicates, which match its commit message:
+#     invoked 8 / provided 7, missing landing_noop_verdict_check.py,
+#     attestation_preflight_check.py, generated_test_list_min_guard.py.
+#
+# THE WHOLE tools/ REGION, BOTH ARMS, TWICE, -n 8 — not the 20-file subset:
+#     a4caccefe   21 failed, 863 passed, 6 skipped   (32.40s / 30.45s)
+#     085fba99b    5 failed, 880 passed, 6 skipped   (37.23s / 36.91s)
+#     NEWLY RED: NONE       FIXED: 16       ERRORS: 0 on both sides
+#   Both arms' failing-id sets were BYTE-IDENTICAL between run 1 and run 2, so no
+#   isolation pass was needed. Worth recording next to this report's other
+#   number: programs/tests has a MEASURED ~10-11 id noise floor and this region
+#   has none. All 16 fixed ids are in the one file, exactly the set attributed to
+#   the assembly. The 5 that remain are red on base too — including
+#   test_liar_census::test_nothing_the_flow_declares_is_left_unswept, the id this
+#   report already corrected jland67 on, now confirmed pre-existing a third time.
+#
+# WHY THIS IS A REPAIR AND NOT A RED TALKED AWAY. It turns 16 green while touching
+#   ONLY a test file, which is precisely the shape the brief says to distrust, so
+#   I checked it instead of accepting it:
+#   * NOTHING IS RELAXED. One file, +82/-2. No assertion weakened, no regex
+#     widened, no test deleted, no baseline rewritten, no --write-baseline.
+#     gatekeeper-land-differential.sh is UNTOUCHED — the script keeps every gate
+#     d5646372f wired into it and keeps refusing exactly what it refused before.
+#   * THE 16 WERE TESTING NOTHING. They died on `python3: can't open file` from
+#     inside a temp directory BEFORE reaching any assertion. Green here is not a
+#     suppressed failure; it is 16 behavioural cases that now actually execute,
+#     against the shipped script, with the three new gates live.
+#   * THE THREE GATES ARE COPIED, NOT STUBBED (with _gate_usage_exit and
+#     _vacuous_exit, which they import). Each decides whether the arms launch at
+#     all and every case asserts what the arms then did, so a stub would let the
+#     fixture rather than the shipped gate settle the decision table. Copying is
+#     the STRICTEST choice available here, not the loosest.
+#   * THE ONE STUB THAT CHANGED MOVED TOWARD THE REAL PROGRAM. The fixture's
+#     ci_targeted_test_select.py printed at IMPORT; the differential's floor
+#     derivation at :408 imports it and reads S.SMOKE_BASENAMES, so that print
+#     landed in the floor's own stdout and the floor would not parse. I read the
+#     real program at a4caccefe: SMOKE_BASENAMES is a module-level tuple at :324
+#     and it prints only under __main__ at :1720. The STUB was the thing
+#     diverging from reality; the fix aligns it. Verified, not taken on faith.
+#   * IT LEAVES A TRAP WHERE THERE WAS NONE. The stub tree was CORRECT before
+#     d5646372f — invoked 5, provided 7, absent 0. Nothing BOUND the two lists,
+#     so the next invocation added to the script would silently break them again.
+#     The new guard is that binding, and it prints both predicates rather than
+#     only applying them.
+#
+# FOR WHOEVER LANDS NEXT — this is a recommendation, not a landing:
+#   origin/fix/batch68-stale-fixture-whitelist @ 085fba99b sits on today's main,
+#   is one file, closes 16 reds, introduces none across 891 tests, and carries
+#   its own red. The 16 have been red on EVERY tree carrying d5646372f since
+#   03:57 — two landed versions. I did not land it; that is not my row.
+#
+#   And this report's standing recommendation is now doubly earned: put
+#   `pytest -q tools/` — the WHOLE region, both arms — into the measurement
+#   brief. ~35s at -n 8, noise-free where programs/tests is not, and no
+#   plugin-scoped selector reaches it. Both defects batch68 shipped past the
+#   selector would have been caught by it before the batch landed.
+#
+# ON TREE_SHA AND THE AMENDMENT. Unchanged and still 833e8493f. I did NOT
+#   recreate `land/batch68-assembled`. My predecessor retired that name
+#   deliberately and I reach the same decision independently: the measured tree
+#   is already inside main, so the amendment's invariant is not VIOLATED but
+#   EXTINCT, and resurrecting a deliberately retired branch would only invite a
+#   no-op re-land of a batch that is two versions old. If the lander refuses this
+#   report for the missing ref, THE REFUSAL IS CORRECT AND NOTHING IS LOST.
+#
+# STILL UNMEASURED, AND I AM REPEATING IT RATHER THAN ERODING IT: v1.11.69
+#   (a4caccefe) is covered by NO measurement, mine or either predecessor's. It
+#   needs its own base, its own arms and its own TREE_SHA. My clean batch68
+#   result does not launder it.
+#
+# No --write-baseline, on any gate. Nothing relaxed, widened, deleted or
+# rebaselined. No GDS touched. Nothing pushed to main. No version bumped.
+# Evidence: meas/batch68-jmeas3,
+#   docs/measurements/2026-08-22-batch68-jmeas3/fixverify/
+#     THE_16_ARE_CLOSED_AND_INDEPENDENTLY_VERIFIED.md  (+ 7 raw logs, 2 id lists)
+
+# ============================================================================
+# FOURTH INCARNATION 17:2x — a fourth jmeas3 on 8HD-6, handed the same brief.
+# NO ROW ABOVE IS CHANGED and TREE_SHA is untouched. I ran no new batch68 arm.
+# I re-derived every standing claim from the shas, resolved the one place this
+# report's own numbers appeared to disagree, and CLOSED the last defect batch68
+# introduced that was still open and unclaimed.
+# ============================================================================
+#
+# WHY NO NEW BATCH68 ARM — decided, not asked, and reached independently before
+#   reading my predecessors' reasoning. The brief says to fetch
+#   `origin/land/batch68-assembled` (25 commits, 48 files) and measure it. That
+#   ref is ABSENT from `git ls-remote`; the sha lives at
+#   `refs/heads/retired/batch68-assembled`; 833e8493f is an ancestor of
+#   origin/main by 215 commits, so `origin/main..833e8493f` is empty and a
+#   differential against today's main measures nothing. Three independent
+#   full-suite arms already cover the subject, the noise floor between two runs
+#   of the SAME tree is a measured 10-11 ids, and the host carries ~25 other
+#   agents. A fourth arm would add noise, not signal.
+#
+# EVERY STANDING CLAIM RE-DERIVED FROM THE SHAS BY ME — all confirmed:
+#   * refs alive (ls-remote is the only truth, and branches on this fleet rot):
+#       retired/batch68-assembled           833e8493f   (unmoved)
+#       meas/batch68-jmeas3                 e8ffe022b
+#       fix/batch68-stale-fixture-whitelist 085fba99b
+#       measure/pytest-finding-delta        c0b29d7e0
+#       land/batch68-assembled              ABSENT      (as reported)
+#   * origin/main = a4caccefe at my start AND at my finish. 833e8493f,
+#     81cd5321b and a00f53f20 are all still ancestors of it.
+#   * All SEVEN measurement worktrees are STILL detached at their stamped shas.
+#     "Nothing rebased mid-run" remains observable, now by a fourth pair of eyes.
+#   * diff a00f53f20..833e8493f = 41 A + 7 M = 48 files, 29 commits, ZERO D,
+#     ZERO renames. Six new programs, six new tests, three bundles at
+#     docs/capture/2026-08-21-{jcap-chip,jcap-matrix,jcap-ppa}.
+#   * `git ls-tree 833e8493f jcap-chip ppa-capture` EMPTY; no bare root
+#     RESULT.md on the assembly or on main.
+#   * MANIFESTS, the third column being the repo-root one that gets missed:
+#       a00f53f20 1.11.66/1.11.66/1.11.66   833e8493f 1.11.66/1.11.66/1.11.66
+#       81cd5321b 1.11.68/1.11.68/1.11.68   a4caccefe 1.11.69/1.11.69/1.11.69
+#     The five-red mode did not occur, at either landing.
+#   * Both gates batch68 added are on today's main exactly once (:334, :1208);
+#     all three it wired into the differential exactly once (:258, :382, :417);
+#     ZERO duplicate gate labels anywhere in the dispatcher.
+#   * The 16-red repair `fix/batch68-stale-fixture-whitelist` is STILL NOT
+#     LANDED — not an ancestor of main. The 16 have now been red on main for
+#     three landed versions. I did not land it either; that is not my row.
+#
+# THE 2-vs-4 AMBIGUITY IN THIS REPORT IS RESOLVED, AND BOTH NUMBERS ARE RIGHT.
+#   Section (1) names TWO defects batch68 added inside an already-red test; the
+#   instrument's own run says "4 finding(s) were INTRODUCED". Reading the raw
+#   output: the 4 is 2 real `NEW-OR-UNEXCUSED` gates PLUS the 2 summary lines
+#   that were restated with new numbers (88->90 declared, 6->8 finding(s)).
+#   THE DEFECT COUNT IS 2. Confirmed below by construction, in the opposite
+#   direction, on new data.
+#
+# ============================================================================
+# THE NEW RESULT — batch68's two gates now carry the fixtures the repo requires.
+# ============================================================================
+#
+# Section (1) above named this defect and deliberately left it open, for a
+#   stated reason I take seriously: inventing fixtures for someone else's gate
+#   risks asserting what the gate DOES instead of what it SHOULD do. The answer
+#   is to drive each mutation from the defect the gate's OWN DOCSTRING records,
+#   not from its current behaviour. Both gates document theirs precisely.
+#
+#     branch  fix/batch68-gate-fixture-debt  @ 7f98182bb  (on top of a4caccefe)
+#       tools/ci/gate_fixtures/table_rows_belong_to_tables.py
+#       tools/ci/gate_fixtures/a_printed_population_agrees_with_its_pin.py
+#
+# THE RED, SHOWN, BECAUSE THE RULES REQUIRE THE RED:
+#     a4caccefe   main today     14 NEW-OR-UNEXCUSED   10 carry BOTH   rc 1
+#     7f98182bb   + the branch   12 NEW-OR-UNEXCUSED   12 carry BOTH   rc 1
+#     CLOSED (base minus branch), exactly the two batch68 added:
+#       'a printed population agrees with its pin'
+#       'table rows belong to tables'
+#     NEWLY UNEXCUSED: none
+#   The gate still exits 1 because 12 OTHER gates remain unexcused. They are not
+#   batch68's, they are not diagnosed here, and nothing is claimed about them.
+#
+# THE BASELINE WAS NOT TOUCHED, AND THE GATE ITSELF SAYS SO ON BOTH SIDES:
+#     "baseline (gate_fixture_debt.json) still excuses 72 gate(s)"   base
+#     "baseline (gate_fixture_debt.json) still excuses 72 gate(s)"   branch
+#   Adding two entries there would have turned this red green in ONE LINE. That
+#   is a baseline rewrite to make a failure go away — the move the brief forbids
+#   outright — and the file is byte-identical on both sides.
+#
+# THE FIXTURES DISCRIMINATE, CHECKED BY MUTATION RATHER THAN ASSERTED. A fixture
+#   that passes is not evidence until something makes it fail. Every mutant is
+#   caught, each for the right reason:
+#     table   / delimiter row left in place (no mutation) -> CAN-FAIL ACCEPTED rc 0, refused
+#     table   / expected fragment the gate never prints   -> rejected, NOT for the declared reason
+#     emitter / counter stays at 3 sites (no mutation)    -> CAN-FAIL ACCEPTED rc 0, refused
+#     emitter / refuse by REMOVING the subject            -> rc 2, refused
+#     restored, both fixtures as committed                -> can_pass ok, can_fail ok
+#   The fourth line matters most: the protocol FORBIDS reaching a refusal by
+#   removing the subject, and that route does not silently work here — it lands
+#   on `_vacuous_exit`'s rc 2 and the engine refuses it.
+#
+# THE MUTATIONS ARE THE MEASURED DEFECTS, NOT INVENTED ONES.
+#   table rows belong to tables — the same two lines, the same count, the same
+#     words, with the DELIMITER ROW left behind by the paste so they land
+#     mid-paragraph. Placement moves; content does not. That is the gate's own
+#     stated case, the one an agreement gate cannot see.
+#   a printed population agrees with its pin — a fourth `incr` site arrives in
+#     the emitted Tcl and the literal denominator stays at `>= 3`. Verbatim the
+#     lane the gate's docstring measured on 2026-08-21.
+#   Neither removes the corpus.
+#
+# ONE THING THE PROTOCOL FORCED, STATED PLAINLY RATHER THAN BURIED. The emitter
+#   gate is declared `python3 programs/emitter_population_pin_check.py` with cwd
+#   `$PLUGIN` — a RELATIVE path and no `$PG` — and its `--programs` defaults to
+#   the directory the program itself sits in. So for THIS declaration
+#   redirecting the subject NECESSARILY redirects the file that runs. That is
+#   the argv the dispatcher really uses, not the fixture reaching for it. Handled
+#   the strict way: the shipped program and its four private imports are COPIED
+#   OUT OF THE REAL TREE AT RUN TIME, byte for byte — never stubbed, never
+#   vendored into gate_fixtures/. The bytes executed are the bytes that land and
+#   no copy exists here that could drift.
+#
+# NOTHING ELSE MOVED. Whole tools/ region, clean worktrees, -n 8:
+#     a4caccefe   21 failed, 863 passed, 6 skipped   25.53s
+#     7f98182bb   21 failed, 865 passed, 6 skipped   27.11s
+#     NEWLY RED: none   FIXED: none   (+2 = the two new discriminate params)
+#   The base figure reproduces this report's recorded 21/863/6 for a4caccefe on
+#   an independent run.
+#   HYGIENE, two more trees, one arm each, never sharing a checkout with pytest:
+#     a4caccefe   83 of 93 decided — 81 passed, 2 failed; 10 NOT CHECKED, 462s
+#     7f98182bb   83 of 93 decided — 81 passed, 2 failed; 10 NOT CHECKED, 497s
+#     gate-name sets IDENTICAL 93 = 93;  NEWLY FAILED none.
+#   The base figure reproduces this report's recorded 83/93 for a4caccefe, and
+#   `PPA measurement coverage` is confirmed red a fourth time — still not
+#   diagnosed, still outside this brief, still named so it can be picked up.
+#
+# THE IMPROVEMENT IS INVISIBLE TO AN ID-LEVEL DIFFERENTIAL, AND THIS REPORT'S
+#   OWN INSTRUMENT RECOVERS IT. `test_the_real_repo_is_clean_under_this_gate`
+#   goes green only at ZERO unexcused gates, so it is red on both sides and
+#   `comm` reports nothing — the absorbing state section (1) describes, met
+#   again from the other direction. Running pytest_finding_delta.py over the two
+#   arms: findings base 18 -> candidate 16, and
+#     - no longer said: NEW-OR-UNEXCUSED: 'a printed population agrees with its pin'
+#     - no longer said: NEW-OR-UNEXCUSED: 'table rows belong to tables'
+#     - no longer said: [FAIL] ... 14 finding(s)   (candidate says 12)
+#     - no longer said: ... 10 carry a CAN-FAIL fixture; 10 carry BOTH (now 12/12)
+#   First use by someone other than its author, and it works.
+#
+#   ONE LIMITATION OF THAT INSTRUMENT, EARNED BY USING IT AND REPORTED RATHER
+#   THAN SMOOTHED: its closing line here reads "2 finding(s) were INTRODUCED
+#   inside tests that were already red". BOTH are the assertion's own SUMMARY
+#   lines restated with new numbers, and the change they record is an
+#   IMPROVEMENT. A reader acting on that count alone would have the direction
+#   exactly backwards. The signal is in the `- no longer said` lines, which the
+#   tool does print. This is the same shape as batch68's "4", and it is what
+#   settles that number at 2 real defects. SUGGESTED REFINEMENT for whoever owns
+#   the instrument: count restated summary lines separately from new findings,
+#   and say which DIRECTION a changed count moved.
+#
+# WHAT I DID NOT DO. No --write-baseline, on any gate. gate_fixture_debt.json
+#   untouched. No assertion relaxed, no regex widened, no test deleted, no
+#   baseline rewritten. NO PRODUCTION CODE TOUCHED — both gate programs and the
+#   dispatcher are byte-identical to main; the branch adds two files under
+#   tools/ci/gate_fixtures/ and evidence under docs/. No GDS touched. Nothing
+#   pushed to main. No version bumped. I did not recreate
+#   `land/batch68-assembled`, for the reason my predecessors give and which I
+#   reach independently: the measured tree is already inside main, so the
+#   amendment's invariant is EXTINCT rather than violated, and if the lander
+#   refuses this report for the missing ref THE REFUSAL IS CORRECT AND NOTHING
+#   IS LOST.
+#
+# TWO THINGS STILL OPEN THAT ARE NOT MINE AND THAT I AM REPEATING RATHER THAN
+#   ERODING:
+#   1 `origin/fix/batch68-stale-fixture-whitelist` @ 085fba99b — one file, closes
+#     16 reds, introduces none, verified twice. STILL NOT LANDED after three
+#     landed versions.
+#   2 v1.11.69 (a4caccefe) is covered by NO full measurement. `PPA measurement
+#     coverage` arriving red is a MEASURED instance of the cost, now seen four
+#     times. It needs its own base, its own arms and its own TREE_SHA.
+#
+# Evidence: fix/batch68-gate-fixture-debt @ 7f98182bb,
+#   docs/measurements/2026-08-22-batch68-jmeas3/fixtures/
+#     NOTES.md  (+ census both sides, mutation check, tools-region runs,
+#                hygiene runs, gate-name lists, finding-delta output)
+
+# ============================================================================
+# CONTINUATION 17:5x — same fourth incarnation, same brief. NO ROW ABOVE MOVES
+# and TREE_SHA is unchanged. The batch68 rows were already discharged, so this
+# closes the item this report has named FOUR TIMES and diagnosed zero times:
+# `PPA measurement coverage`, the one measured instance of harm from v1.11.69.
+# ============================================================================
+#
+# THE RED IS REAL AND EARNED, AND IT IS NOT A DATA REGRESSION. The gate's
+#   SUBJECT was repointed in v1.11.69:
+#     81cd5321b  --coverage "$ROOT/benchmark-data/ppa/coverage.json"
+#     a4caccefe  --coverage "$ROOT/ppa-crosslayer/records/trials/b000/records_flat.json"
+#   `benchmark-data/` is NOT TRACKED in either tree. At the landing tip the gate
+#   opened nothing — "[CANNOT CHECK] INPUT_ABSENT ... rc=2", NOT CHECKED,
+#   non-fatal. The records file is UNCHANGED in v1.11.69 and already existed at
+#   81cd5321b. So no data got worse: A GATE THAT HAD NEVER OPENED A CORPUS WAS
+#   AIMED AT A REAL ONE. Confirmed by exit code on a clean tree:
+#     rc with the new subject = 1        rc with the old (absent) one = 2
+#
+# THE REPOINT WAS DELIBERATE AND HONEST — credit where it is due. Its author
+#   rewrote the exemption to say so ("the record sets ... are committed and this
+#   row now reads one, so rc 2 is NO_EXPECTATION_SET and not INPUT_ABSENT") and
+#   DECLINED to fabricate the missing denominator: "Writing one HERE would be
+#   composing the answer key after the exam". That is the right call.
+#   THE DEFECT IS NOT THE REPOINT. `uncheckable_until` tolerates rc 2 ONLY, and
+#   the repoint activated a second, CHECKABLE half of the gate that returns rc 1.
+#   The repo's own convention, verbatim in two sibling exemptions, settles it:
+#   "a record that CAN be decided and fails is rc 1." The gate is right to block.
+#
+# THE DECIDABLE DEFECTS, READ OUT OF THE COMMITTED DATA RATHER THAN OFF THE GATE
+#   (148 records, 91 identities, 54 refused — all verified directly):
+#   1 `worst_path_slack_ns` IS UNDER-SCOPED. The parser emits the top-N worst
+#     paths from ONE STA report and files every one under a BYTE-IDENTICAL scope
+#     — no rank, no endpoint, no path id. sha256:4c1f7d31, one identity, three
+#     facts: 5.2 / 5.32 / 5.36. Four groups of this shape. The metric's own name
+#     concedes it: a worst PATH slack is per-path and the scope carries no path.
+#   2 CROSS-ARTEFACT DISAGREEMENT, one run against itself:
+#       route.wirelength.um  openroad.log 16511.0 vs openroad.metrics.json 16522
+#       route.via.count      openroad.log 4151    vs openroad.metrics.json 4159
+#       timing.setup.worst_slack_ns  sta_mcorner_ocv 1.98 vs sta_spef_based 3.58
+#   3 ONE ARTEFACT INDEXED UNDER TWO PATHS. Records #60 and #88 differ in
+#     exactly one field, and it is not the value:
+#       #60 phase3/stage3/sta/sta_mcorner_ocv.rpt
+#       #88 reports/phase3/sta_mcorner_ocv.rpt
+#     Same sha256, same value. Harmless to any number, but it files every record
+#     from that report twice and is most of the 148-vs-91 gap.
+#
+# THE 62 SCOPE_SENTINEL ROWS HAVE A CAUSE THIS REPO ALREADY WROTE DOWN, on the
+#   sibling row `PPA head-to-head records (end-to-end campaign)`: sta_spef_based.rpt
+#   "names no RC corner anywhere in this corpus — 490 of 490 metric rows sourced
+#   from it carry rc_corner null". 32 records here carry rc_corner null and 30
+#   carry clock null — EXPLICIT nulls, not omitted keys, which is the distinction
+#   the gate refuses on. Those 62 are undecidable (rc 2 territory); the rc 1 is
+#   carried by the ~10 decidable ones above.
+#
+# WHAT I DID NOT DO. Did not touch records_flat.json — editing committed
+#   measurement data to turn a gate green is the same class as rewriting a
+#   baseline. Did not widen the exemption to tolerate rc 1; it would swallow
+#   every real finding above. Did not write the missing `expected` list; the
+#   v1.11.69 author already refused that for the correct reason. Did not repoint
+#   the gate back at the absent file — that would restore a dormant gate and
+#   re-hide ten real defects. Did not change the parser or the scope schema:
+#   adding a path discriminator changes what a record MEANS and what the
+#   committed set would have to be regenerated from, which is a producer/schema
+#   decision with an owner, the same class of call this line has declined before.
+#
+# WHAT IS OWED, AND BY WHOM — none of it batch68's, none of it mine:
+#   1 `_ppa/backends/` — give worst_path_slack_ns a per-path discriminator in
+#     scope, or stop emitting more than one per scope.
+#   2 `_ppa/contract.py` — declare which artefact wins when a run's log and its
+#     own metrics JSON disagree. Two refusals wait on exactly that.
+#   3 the double-path indexing of one artefact — a producer or collector bug,
+#     and the cheapest of the three.
+#
+# The red now has a MECHANISM instead of four sightings. It is still red on main
+#   and I did not make it green, because every route to green from here is one
+#   the rules forbid.
+#
+# No --write-baseline. Nothing relaxed, widened, deleted or rebaselined. No
+# measurement data edited. Nothing pushed to main. No version bumped.
+# Evidence: fix/batch68-gate-fixture-debt @ 72661b888,
+#   docs/measurements/2026-08-22-batch68-jmeas3/fixtures/
+#     PPA_MEASUREMENT_COVERAGE_DIAGNOSED.md
