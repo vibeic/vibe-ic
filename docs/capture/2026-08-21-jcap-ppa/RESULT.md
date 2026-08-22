@@ -82,7 +82,7 @@ Accepted with no refusal and no unrouted record.
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
 - [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
-- [Three classes checked this pass and deliberately NOT recorded](#three-classes-checked-this-pass-and-deliberately-not-recorded)
+- [Four classes checked this pass and deliberately NOT recorded](#four-classes-checked-this-pass-and-deliberately-not-recorded)
 - [Six refusals, one principle: two absences compare EQUAL](#six-refusals-one-principle-two-absences-compare-equal)
 - [Summary](#summary)
 - [Next](#next)
@@ -3385,9 +3385,9 @@ a declared path rather than guessing among candidates, standing outside the
 layer it was captured in, which is the whole argument for distilling a landed
 fix into a rule.
 
-## Three classes checked this pass and deliberately NOT recorded
+## Four classes checked this pass and deliberately NOT recorded
 
-All three looked like records. None survived measurement, and the reasons are
+All four looked like records. None survived measurement, and the reasons are
 different enough to be worth separating.
 
 **A gate's exit code must be exercised through the process boundary.** The
@@ -3418,6 +3418,35 @@ and caught several times over. The class stays unrecorded until somebody
 measures it with a screen that can tell an external artefact from a locally
 built dictionary — which is the honest statement of what is missing, and is
 itself the harder half of the rule.
+
+
+**A bounded search reporting nothing must state its bound.** The cross-layer
+lane states it while obeying it: its refutation pass found no counterexample in
+twelve cycles from reset, and it published that as *"a bounded search, not a
+proof… so the difference between refuted and unproven stays visible."* Distinct
+from the record this batch already carries, which separates *unproven because
+the budget ended* from *unproven because the method finished* — this separates
+*no counterexample within a bound* from *no counterexample*.
+
+My screen for it returned **184 programs**, and it is the worst screen in this
+batch. It matched the word *bounded* anywhere in a file, so it collected
+watchdogs, docker memory helpers and two dozen protocol synthesisers. The real
+population is the sites that actually invoke a bounded solver — about **seven**,
+identifiable by a depth or sequence flag — and **four of those already name
+their bound**.
+
+The two remaining were not instances either, and the second is the best
+illustration this batch produced:
+
+| candidate | what it actually is |
+|---|---|
+| a vector generator matching `bmc` | emits a formal harness and states its mode |
+| a USB-PD synthesiser matching `bmc` | **`bmc` is Biphase Mark Coding**, a line code — nothing to do with bounded model checking |
+
+The file's own comment warns that this acronym collides and guards its matching
+against exactly that. **My screen walked into the trap the file it matched was
+written to avoid.** No record: the class is real, the tree has roughly seven
+sites, and most of them already comply.
 
 ## Six refusals, one principle: two absences compare EQUAL
 
