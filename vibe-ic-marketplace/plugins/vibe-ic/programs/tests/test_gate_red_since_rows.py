@@ -462,6 +462,32 @@ def test_a_ref_that_predates_the_ledger_is_empty_not_an_error(tmp_path):
     assert G.load_ledger_from_ref(r, since) == []
 
 
+def test_the_ref_outcomes_are_decided_by_rc_not_by_gits_prose():
+    """The two tests around this one both run under an English git, so neither
+    can fail if the decision goes back to matching git's message. This one can.
+
+    Nothing in this module forces a locale, so a message-text test answers in
+    whatever language the caller's environment selected; the same information
+    is available as a return code. Measured on git 2.55.0:
+        rev-parse --verify -q <badref>^{commit} -> 1
+        cat-file -e <goodref>:<absent>          -> 128
+        cat-file -e <goodref>:<present>         -> 0
+    """
+    src = Path(G.__file__).read_text(encoding="utf-8")
+    body = src[src.index("def load_ledger_from_ref"):]
+    body = body[:body.index("\ndef ", 1)]
+    # STRIP COMMENTS FIRST. The comment above the fix QUOTES the old line so a
+    # reader can see what was replaced, and a scan that does not strip comments
+    # reads that quotation as the code — which is the exact defect the repo's
+    # own `declaration scans strip comments` gate exists for. Caught here by
+    # this test failing on its own first draft.
+    code = "\n".join(l.split("#", 1)[0] for l in body.splitlines())
+    for phrase in ('"does not exist"', '"exists on disk"', ".stderr.lower()"):
+        assert phrase not in code, (
+            f"{phrase} decides control flow from git's prose again")
+    assert "cat-file" in code and "rev-parse" in code, code[:400]
+
+
 def test_a_ref_that_does_not_exist_is_an_error(tmp_path):
     """A caller that names a ref and is wrong about it must not be handed an
     empty ledger, which would read as `nothing is acknowledged`."""
@@ -608,10 +634,12 @@ def test_every_state_the_dispatcher_can_record_is_classified():
     """THE GUARD THAT MAKES THIS A RULE AND NOT A LIST. Parsed from
     `_gate_dispatch.sh` itself, so a state added there fails HERE rather than
     quietly becoming overdue-by-default in a landing."""
-    import re
+    from test_hygiene_record_handover import dispatcher_states
     disp = (REPO / "tools" / "ci" / "_gate_dispatch.sh").read_text(encoding="utf-8")
-    states = set(re.findall(r'GATE_STATES\+=\("([A-Z_]+)"', disp))
-    assert states, "no states parsed — the dispatcher's shape changed"
+    states = dispatcher_states(disp)
+    assert states >= {"PASS", "FAIL", "WROTE_CORPUS"}, (
+        "the three states that MEAN 'this gate ran' must be in the parsed set; "
+        f"a parser that misses them proves nothing here: {sorted(states)}")
     for s in states:
         ran = s in G._RAN
         assert ran != G._did_not_run(s), (

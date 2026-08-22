@@ -254,12 +254,34 @@ def load_ledger_from_ref(repo: Path, ref: str) -> List[Dict[str, Any]]:
     the `$VIBE_IC_BENCHMARK_DATA set + unreadable` shape — never excused.
     An empty `acknowledged` at a valid ref is still the normal starting state.
     """
+    # DECIDED BY RETURN CODE, NOT BY GIT'S PROSE. This once read
+    #     if "does not exist" in proc.stderr or "exists on disk" in proc.stderr
+    # to tell "the ref predates the ledger" from "the ref is wrong". That is
+    # git's ENGLISH message, and nothing here forces a locale, so under a
+    # localized git neither substring matches and a ref that merely predates
+    # the ledger raises instead of returning []. The signal was always
+    # available as an rc; the prose never had to be parsed.
+    #
+    # `cat-file -e` alone cannot separate the two — an absent path and a bad
+    # ref both exit 128 — so the ref is verified first. Measured on git 2.55.0:
+    #     rev-parse --verify -q <badref>^{commit}   -> rc 1
+    #     cat-file -e <goodref>:<absent path>       -> rc 128
+    #     cat-file -e <goodref>:<present path>      -> rc 0
+    def _rc(*args) -> int:
+        return subprocess.run(["git", "-C", str(repo), *args],
+                              capture_output=True, text=True,
+                              timeout=60).returncode
+
+    if _rc("rev-parse", "--verify", "-q", f"{ref}^{{commit}}") != 0:
+        raise ValueError(f"cannot read {LEDGER_REL} at {ref}: "
+                         f"{ref!r} does not name a commit")
+    if _rc("cat-file", "-e", f"{ref}:{LEDGER_REL}") != 0:
+        return []              # the ref predates the ledger: no acknowledgements
+
     proc = subprocess.run(
         ["git", "-C", str(repo), "show", f"{ref}:{LEDGER_REL}"],
         capture_output=True, text=True, timeout=60)
     if proc.returncode != 0:
-        if "does not exist" in proc.stderr or "exists on disk" in proc.stderr:
-            return []          # the ref predates the ledger: no acknowledgements
         raise ValueError(f"cannot read {LEDGER_REL} at {ref}: "
                          f"{proc.stderr.strip()[:200]}")
     doc = json.loads(proc.stdout)
