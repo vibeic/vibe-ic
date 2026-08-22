@@ -1,1 +1,0 @@
-../../phase2/stage2/dft/transition_atpg_plan.md
