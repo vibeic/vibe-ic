@@ -1,0 +1,403 @@
+{
+  "listed_only": false,
+  "declared": 74,
+  "ran": 74,
+  "passed": 70,
+  "failed": 1,
+  "not_checked": 3,
+  "wrote_corpus": 0,
+  "deferred": 0,
+  "other_shard": 0,
+  "shard": null,
+  "corpora": [
+    {
+      "name": "published cells carrying a routed DEF",
+      "items": 1,
+      "gates": 3,
+      "expansion": "EXPANDED"
+    }
+  ],
+  "undisclosed_loops": [],
+  "seconds": 3966,
+  "gates": [
+    {
+      "label": "chip-AGNOSTIC source guard",
+      "state": "PASS",
+      "seconds": 6
+    },
+    {
+      "label": "shipped-path portability",
+      "state": "PASS",
+      "seconds": 8
+    },
+    {
+      "label": "plugin version stated in prose",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "container exec deadlines",
+      "state": "PASS",
+      "seconds": 8
+    },
+    {
+      "label": "container login-banner parses",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "fork downgrades stay visible",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "severity=ERROR is consumed",
+      "state": "PASS",
+      "seconds": 19
+    },
+    {
+      "label": "watchdog compliance",
+      "state": "PASS",
+      "seconds": 7
+    },
+    {
+      "label": "marketplace version sync",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "plugin full audit",
+      "state": "PASS",
+      "seconds": 97
+    },
+    {
+      "label": "openroad TCL deprecations",
+      "state": "PASS",
+      "seconds": 6
+    },
+    {
+      "label": "practical notes specificity",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "P0 disposition backing",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "image-version pins are internally consistent",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "upstream image currency (report-only)",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "no upstream forked twice",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "flow-gate enforcement audit",
+      "state": "PASS",
+      "seconds": 17
+    },
+    {
+      "label": "stage membership declared once",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "L-doc field producer",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "tracked-symlink portability",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "tracked-symlink target present",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "backlog items are tracked",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "STA engines agree",
+      "state": "PASS",
+      "seconds": 4
+    },
+    {
+      "label": "P0 gate invocability drift",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "tracked JSON/YAML parses",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "evidence citation resolves",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "citation routing is true",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "checker execution wiring",
+      "state": "PASS",
+      "seconds": 22
+    },
+    {
+      "label": "gates are wired to something",
+      "state": "PASS",
+      "seconds": 16
+    },
+    {
+      "label": "prose extractors read polarity",
+      "state": "PASS",
+      "seconds": 10
+    },
+    {
+      "label": "per-source record merges",
+      "state": "PASS",
+      "seconds": 22
+    },
+    {
+      "label": "declaration scans strip comments",
+      "state": "PASS",
+      "seconds": 6
+    },
+    {
+      "label": "macro OBS not crossed (spm)",
+      "state": "NOT_CHECKED",
+      "seconds": 0,
+      "corpus": "published cells carrying a routed DEF",
+      "corpus_item": 1,
+      "corpus_items": 1
+    },
+    {
+      "label": "DRC PASS is not vacuous (spm)",
+      "state": "PASS",
+      "seconds": 0,
+      "corpus": "published cells carrying a routed DEF",
+      "corpus_item": 1,
+      "corpus_items": 1
+    },
+    {
+      "label": "inner FAILs reach the verdict (spm)",
+      "state": "PASS",
+      "seconds": 0,
+      "corpus": "published cells carrying a routed DEF",
+      "corpus_item": 1,
+      "corpus_items": 1
+    },
+    {
+      "label": "triage notes state a true reason",
+      "state": "PASS",
+      "seconds": 34
+    },
+    {
+      "label": "NDA scan of the TRACKED tree",
+      "state": "PASS",
+      "seconds": 12
+    },
+    {
+      "label": "PDK registry selectable",
+      "state": "PASS",
+      "seconds": 23
+    },
+    {
+      "label": "PDK via patch vs layer min width",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "tracked blob size ceiling",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "layout-artefact size policy",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "provenance correction notes",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "declared outputs are findable",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "artefact-defect close discipline",
+      "state": "PASS",
+      "seconds": 6
+    },
+    {
+      "label": "cross-layer reference regression",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "step FAIL bubbles up",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "blocker list contract on committed reports",
+      "state": "NOT_CHECKED",
+      "seconds": 1
+    },
+    {
+      "label": "per-PDK table coverage",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "L4 -> SystemRDL disposition",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "published-evidence index honest",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "programs index fresh",
+      "state": "PASS",
+      "seconds": 5
+    },
+    {
+      "label": "inner timeouts fit the harness",
+      "state": "PASS",
+      "seconds": 8
+    },
+    {
+      "label": "gates disclose their denominator",
+      "state": "PASS",
+      "seconds": 208
+    },
+    {
+      "label": "stated corpus figures are derived, not typed",
+      "state": "PASS",
+      "seconds": 10
+    },
+    {
+      "label": "a zero denominator refuses",
+      "state": "PASS",
+      "seconds": 3
+    },
+    {
+      "label": "gate skips reach the vacuous tier",
+      "state": "PASS",
+      "seconds": 5
+    },
+    {
+      "label": "gates are host-independent",
+      "state": "FAIL",
+      "seconds": 2556
+    },
+    {
+      "label": "no gate is left neutered",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "argparse help format",
+      "state": "PASS",
+      "seconds": 8
+    },
+    {
+      "label": "dead plugin path",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "ic_expert_db health",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "verdict token propagation",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "signoff gate self-skip",
+      "state": "PASS",
+      "seconds": 6
+    },
+    {
+      "label": "waveform artifact hygiene",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "gitignore scratch guard",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "silent remedy decline",
+      "state": "PASS",
+      "seconds": 13
+    },
+    {
+      "label": "final-summary roll-up consistency",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "published records not superseded",
+      "state": "PASS",
+      "seconds": 2
+    },
+    {
+      "label": "input-doc claims vs installed PDK",
+      "state": "NOT_CHECKED",
+      "seconds": 0
+    },
+    {
+      "label": "a step whose gate cannot fail",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "flow-gate grid",
+      "state": "PASS",
+      "seconds": 1
+    },
+    {
+      "label": "flow dependency graph",
+      "state": "PASS",
+      "seconds": 0
+    },
+    {
+      "label": "63x8 census freshness",
+      "state": "PASS",
+      "seconds": 148
+    },
+    {
+      "label": "an argued direction is pinned",
+      "state": "PASS",
+      "seconds": 646
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 """Tests for v0.74 bulk parsers (pin_csv, regmap_csv, otp_hex).
 
 Covers round-trip of each parser output through FactGraph save/load
-and verifies the expected L1 / L4 fact shapes land where PM Agent and
+and verifies the expected L1 / L4 fact shapes land where the IC Expert Agent and
 gap detector expect them.
 """
 from __future__ import annotations

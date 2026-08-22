@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "MODBUS is a published protocol specification — there is no PDK, floor-plan, SDC, UPF, or DFT artifact associated with it. Any implementing IP core (open-source FreeModbus, libmodbus, pymodbus, proprietary microcontroller stacks, or vendor RTL like Xilinx Modbus IP) ships its own physical-design collateral targeted at the underlying transport hardware (UART for RTU/ASCII, Ethernet MAC + PHY for TCP). The protocol-level document is silent on every silicon-implementation concern: clock period, IO timing, area, power, scan insertion, power-domain partitioning."
-  }
-}
