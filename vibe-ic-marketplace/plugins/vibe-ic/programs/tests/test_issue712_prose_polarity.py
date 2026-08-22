@@ -4,6 +4,8 @@ from __future__ import annotations
 import ast, json, random, re, subprocess, sys, tempfile
 from pathlib import Path
 
+import pytest
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import _prose_polarity as PP            # noqa: E402
@@ -423,11 +425,272 @@ def test_an_exemption_for_a_module_this_tree_does_not_have_is_out_of_scope(
     assert G.exemption_audit(G.scan(root), root) == []
 
 
-def test_the_shipped_exemption_is_live_and_argued():
+#: The real tree, and ONE scan of it for the whole module.
+#:
+#: `G.scan(real)` walks every `programs/*.py` and costs 55-62s on a loaded host
+#: — measured, it was the top two entries of `--durations` here. Two tests need
+#: it and each used to pay separately, which put this module's slowest test at
+#: 103s against the harness's 180s per-test ceiling. `scan` is deterministic and
+#: read-only, and `exemption_audit` takes the RESULT as an argument rather than
+#: re-deriving it, so one scan serves both. It is NOT cached across the
+#: `_NOT_PROSE` mutation in the test below, and does not need to be: the scan
+#: does not read that register.
+_REAL = Path(__file__).resolve().parents[1].parent
+
+
+@pytest.fixture(scope="module")
+def real_scan():
+    return G.scan(_REAL)
+
+
+def test_the_shipped_exemption_is_live_and_argued(real_scan):
     """Not a fixture — the entry that actually ships. If it ever stops being a
     finding, or its argument is trimmed, this says so."""
-    real = Path(__file__).resolve().parents[1].parent
-    assert G.exemption_audit(G.scan(real), real) == []
+    real = _REAL
+    assert G.exemption_audit(real_scan, real) == []
     assert G.exemptions_in_scope(real) == sorted(G._NOT_PROSE)
     for reason in G._NOT_PROSE.values():
         assert len(reason.strip()) >= G._EXEMPT_REASON_MIN
+
+
+# ── the PRECISION of "writes the matched value" (vibe-ic#712, second round) ──
+#
+# The gate went red on a file that landed after the baseline was written, with
+# two names out of one module. Neither is an extractor:
+#
+#   `_names`      a word-boundary predicate. It searches prose and returns a
+#                 bool; the only thing it writes into a dict is the compiled
+#                 pattern it memoises.
+#   `flip_source` a source mutator. It matches Python's own quote grammar at a
+#                 recorded (line, column) and splices the CALLER'S replacement
+#                 in, then hands the mutated source to pytest.
+#
+# One is fixed by narrowing the predicate, the other is exempted as formal
+# grammar. Which of the two applies is not interchangeable: `_names` reads real
+# English (docstrings and comments), so claiming NOT PROSE for it would be
+# false, and `flip_source` genuinely writes a value out of the text it matched,
+# so no narrowing reaches it honestly.
+#
+# The four tests below the first one are the CONTROL on the narrowing. Two
+# wider narrowings were built and measured before this one, and both dropped a
+# real finding off the register; those exact shapes are pinned here so the
+# rejection cannot be quietly re-litigated.
+
+_PATTERN_MEMO = '''
+import re
+_CACHE = {}
+def names(text, token):
+    """`token` in `text`, not glued to an identifier character."""
+    pat = _CACHE.get(token)
+    if pat is None:
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        right = r"(?![A-Za-z0-9_])" if re.search(r"[A-Za-z0-9_]$", token) else ""
+        pat = re.compile(left + re.escape(token) + right)
+        _CACHE[token] = pat
+    return bool(pat.search(text))
+'''
+
+
+def test_a_memoised_compiled_pattern_is_not_a_declared_value(tmp_path):
+    """A `re.Pattern` is the INSTRUMENT that reads prose, not a value read out
+    of prose, and no sentence can deny one. Caching the searcher under the
+    needle is keeping a tool; both real defects wrote the matched TEXT."""
+    assert G.scan(_tree(tmp_path, _PATTERN_MEMO)) == []
+
+
+_COMPILE_AND_PUBLISH = '''
+import re
+def extract(text, rec):
+    m = re.search(r"targets (\\w+)", text)
+    if m:
+        val = m.group(1)
+        pat = re.compile(val)
+        rec["probe"] = pat.pattern
+        rec["pdk_target"] = val
+    return rec
+'''
+
+
+def test_the_text_that_goes_into_a_pattern_is_still_tracked(tmp_path):
+    """The narrowing is about the OBJECT, not about laundering its input. An
+    extractor that compiles the matched text AND publishes it is #706 with an
+    extra line, and stays a finding."""
+    assert G.scan(_tree(tmp_path, _COMPILE_AND_PUBLISH)) == ["some_extract::extract"]
+
+
+_LITERAL_CHOSEN_BY_A_SEARCH = '''
+import re
+def extract(text):
+    m = re.search(r"\\b(adder|multiplier)\\b", text)
+    if not m:
+        return None
+    d = {"op": m.group(1)}
+    sat = "saturate" if re.search(r"saturat", text) else None
+    if sat:
+        d["overflow"] = sat
+    return d
+'''
+
+
+def test_a_literal_chosen_by_a_search_is_still_a_finding(tmp_path):
+    """REJECTED NARROWING #1, pinned. Dropping the TEST of a conditional
+    expression would have cleared the red name — and would also have cleared
+    this, which is #706 itself: the value published is a literal, but WHICH
+    literal is decided by a search over prose that was never asked whether it
+    denies. 'does NOT saturate' publishes `overflow: saturate`."""
+    assert G.scan(_tree(tmp_path, _LITERAL_CHOSEN_BY_A_SEARCH)) == [
+        "some_extract::extract"]
+
+
+_COLUMN_FOUND_BY_A_HEADER_MATCH = '''
+import re
+_HDR = re.compile(r"resolution", re.I)
+def extract(rows, rec):
+    hdr = rows[0].split("|")
+    res_c = next((k for k, h in enumerate(hdr) if _HDR.match(h)), None)
+    cells = rows[1].split("|")
+    rec["resolution"] = cells[res_c]
+    return rec
+'''
+
+
+def test_a_column_located_by_a_match_is_still_a_finding(tmp_path):
+    """REJECTED NARROWING #2, pinned. Excluding names used only as SLICE bounds
+    would have cleared the source mutator — and would also have cleared this,
+    which publishes a document's own resolution column verbatim."""
+    assert G.scan(_tree(tmp_path, _COLUMN_FOUND_BY_A_HEADER_MATCH)) == [
+        "some_extract::extract"]
+
+
+def test_the_source_mutator_needs_NO_exemption_because_it_publishes_nothing(
+        real_scan):
+    """The other half, and it is NOT the exemption this test used to assert.
+
+    THIS TEST DEMANDED A CONTRADICTION, and demanding it is what made it red on
+    `origin/main`. It required `policy_direction_pin_check::flip_source` to sit
+    in `_NOT_PROSE` **and**, two lines later, to still be a finding of
+    `scan(real)`. It is not a finding, so the exemption cannot be added:
+    `exemption_audit` rejects an entry whose name the scan does not flag, in its
+    own words *"exempted, but the scan does not flag it — the function is gone,
+    renamed, or now consults polarity. Delete the entry."*
+
+    MEASURED, by doing exactly what the old test asked and running the module:
+
+        1 failed, 34 passed        origin/main
+        3 failed, 32 passed        after adding the exemption it demanded
+          + test_the_shipped_exemption_is_live_and_argued
+          + test_the_gate_is_GREEN_on_the_tree_that_ships
+          + this test, STILL red on its own second assertion
+
+    Satisfying it takes the shipped gate red. So the register is right and the
+    assertion was stale.
+
+    WHY IT IS NOT A FINDING, which is the fact worth pinning and is asserted
+    below rather than described. The rule is
+    `_searches_prose(fn) and _writes_a_declared_value(fn)`, and `flip_source`
+    fails BOTH halves:
+
+        _names          searches_prose=True   writes_a_declared_value=False
+        _literal_span   searches_prose=True   writes_a_declared_value=False
+        flip_source     searches_prose=False  writes_a_declared_value=False
+
+    `flip_source` performs a VERIFIED in-place substitution — it re-reads the
+    literal at the recorded `(line, col)` and raises unless it equals the value
+    already recorded — and returns rewritten source. It publishes no value read
+    out of a document, so there is no extracted claim that a surrounding
+    sentence could deny, and nothing for `_prose_polarity` to be consulted
+    about. An exemption would be a reasoned argument for a question that is
+    never asked.
+
+    AND THE SCANNER WAS NOT NARROWED TO GET HERE. That is the failure mode this
+    file is built around, so it is proved and not assumed: the two REJECTED
+    NARROWING tests immediately above still fire, and the last assertion here
+    re-plants `_literal_span`'s own shape — an `re` match plus a slice, in ONE
+    function, publishing the slice — and requires it to still be caught.
+    """
+    name = "policy_direction_pin_check::flip_source"
+    real = Path(__file__).resolve().parents[1].parent
+
+    # 1. it is not a finding, and the reason is mechanical, not a name list
+    tree = ast.parse((PROGRAMS / "policy_direction_pin_check.py").read_text())
+    fns = {n.name: n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert not G._writes_a_declared_value(fns["flip_source"]), (
+        "flip_source now publishes a declared value — it is a prose extractor "
+        "again and needs adjudicating, not this test relaxing")
+    # The module's ONE scan of the real tree, via the fixture. It costs 55-62s
+    # on a loaded host and `exemption_audit` takes the scan RESULT as its
+    # argument, so re-deriving it per assertion would be three times the wall
+    # clock for the same answer — and a single test drifting toward the
+    # harness's 180s ceiling is the #1263 shape, a bound that is legal and
+    # unreliable.
+    live = real_scan
+    assert name not in live
+
+    # 2. so it must NOT be exempted; an exemption would be REJECTED, and the
+    #    audit saying so is what stops `_NOT_PROSE` rotting into a waiver list
+    assert name not in G._NOT_PROSE
+    assert G.exemption_audit(live, real) == []
+    original = G._NOT_PROSE
+    stale = dict(original)
+    stale[name] = "x" * (G._EXEMPT_REASON_MIN + 10)   # a long-enough reason
+    try:
+        G._NOT_PROSE = stale
+        problems = G.exemption_audit(live, real)
+    finally:
+        G._NOT_PROSE = original
+    # MATCHED ON THE DIAGNOSIS, NOT ON ONE PHRASING OF IT. This asserted the
+    # literal `"does not flag it"`, which is main's exact wording — and #1572
+    # improves that message for the refactor case, to "the scan no longer flags
+    # it: the search moved out of this body into `_literal_span` ... Do NOT
+    # delete the entry". Measured: #1602 alone 35 passed, #1572 alone 1 failed
+    # / 37 passed (main's red, inherited), BOTH TOGETHER 1 failed / 37 passed —
+    # and the one failure was THIS assertion, on a substring, while the property
+    # it exists to check was intact and BETTER reported than before.
+    #
+    # `"exempted, but the scan"` is the stem both messages share and is still
+    # specific to the LIVENESS diagnosis: it is the only branch of
+    # `exemption_audit` that opens that way, so a message about a short reason
+    # or an out-of-scope module does not satisfy it. Two tests must not disagree
+    # about behaviour because one of them pinned the other's prose.
+    assert any(name in p and "exempted, but the scan" in p
+               for p in problems), (
+        "an exemption for a non-finding was accepted; the liveness half of "
+        f"exemption_audit has stopped working: {problems}")
+
+    # 3. nor is it a debt: the baseline is for extractors that SHOULD consult
+    #    polarity and do not, which this is not
+    baseline = json.loads(
+        (PROGRAMS / "prose_polarity_baseline.json").read_text())["known"]
+    assert name not in baseline
+    assert "policy_direction_pin_check::_names" not in baseline
+
+    # 4. and none of the above was bought by narrowing the scanner: the shape
+    #    `_literal_span` uses, in one function and publishing its slice, is
+    #    still a finding
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        planted = Path(td)
+        (planted / "programs").mkdir()
+        (planted / "programs" / "some_extract.py").write_text(
+            "import re\n"
+            "def extract(line, col, rec):\n"
+            "    m = re.match(r\"(?P<q>'|\\\")\", line[col:])\n"
+            "    start = col + m.end()\n"
+            "    end = line.find(m.group('q'), start)\n"
+            "    rec['value'] = line[start:end]\n"
+            "    return rec\n")
+        assert G.scan(planted) == ["some_extract::extract"], (
+            "the scanner no longer catches a match-located slice that IS "
+            "published — this test's green would then be a narrowing")
+
+
+def test_the_gate_is_GREEN_on_the_tree_that_ships():
+    """The end of it. Read on the pristine base this exits 1 naming two
+    functions of `policy_direction_pin_check`; a verdict nobody can reproduce
+    green is the thing this repo is closing."""
+    r = subprocess.run(
+        [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py")],
+        capture_output=True, text=True, timeout=55)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
