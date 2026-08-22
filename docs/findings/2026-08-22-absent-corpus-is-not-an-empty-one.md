@@ -582,3 +582,73 @@ its NOT CHECKED and its BLOCKING.  The absent corpus does not borrow that row:
 it gets `corpus "$corpus" was NOT FOUND — nothing was opened to check`, its own
 `GATE_CORPUS_STATE` of `NO_CORPUS` rather than `EXPANDED`, and it is equally
 blocking.  Neither state is a pass, which was never negotiable.
+
+### 5. Is the collapse singular? The class-level sweep, measured
+
+The change repairs ONE producer.  `_corpus_location.py`'s own header calls the
+class the defect — *"THE FOUR OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE
+DEFECT"* — so a record that fixes one row and never asks whether a sibling
+shares it has closed a row, not a defect.  This section asks, and answers it by
+running the siblings rather than by reading them.
+
+**The dispatcher side is singular by construction.**  A corpus can only collapse
+at `gate_dispatch_over` if it is dispatched as an attested POPULATION.  Across
+the tree there is exactly one production call site with
+`GATE_DISPATCH_ATTEST_POPULATION=1` — `tools/ci/repo_hygiene_gates.sh:847` — and
+its producer is `routed_def_corpus.py`, the subject of this record.  (The only
+other `gate_dispatch_over` call is `test_gate_concurrency.sh`'s toy corpus.)  So
+no second row could have been collapsed at the dispatcher.
+
+**The producer side: `may_be_absent` cannot be taken by accident.**
+`_corpus_location.refuse` declares `may_be_absent` with **no default** — of its
+seven parameters only `opt_in_flag` has one — so every call site must state the
+opt-in explicitly.  In the whole production tree exactly **one** call site passes
+a literal `True`: `routed_def_corpus.py:412`, the one this change compensates
+for with its own rc 3.  Every other production caller forwards the operator's
+`--corpus-may-be-absent`, so the decision is made at the command line and not
+baked in.
+
+**That forwarding is the wider surface, so it was measured, not reasoned about.**
+Six programs route the flag into `refuse`, and the PPA family reaches it through
+`_ppa_corpus.open_corpus`.  Three of those gates, both states, flag on and off,
+`VIBE_IC_BENCHMARK_DATA` unset:
+
+| gate | state | `--corpus-may-be-absent` | rc |
+|---|---|---|---|
+| `ppa_head_to_head_check` | A absent | no | **2** |
+| `ppa_head_to_head_check` | A absent | yes | **0** |
+| `ppa_head_to_head_check` | B read, empty | no | **2** |
+| `ppa_head_to_head_check` | B read, empty | yes | **2** |
+| `ppa_contract_check` | A / A / B / B | no / yes / no / yes | 2 / 0 / 2 / **2** |
+| `ppa_measurement_check` | A / A / B / B | no / yes / no / yes | 2 / 0 / 2 / **2** |
+
+**The opt-in moves the ABSENT arm only.  It never reaches the empty one.**  That
+is the property that matters, and it is the one a reader would most want checked:
+no operator flag anywhere in this family can turn a corpus that was read and
+holds nothing into a pass.  State B is rc 2 in all six of its cells.
+
+And the two sentences are already distinguished, each naming what the other
+cannot — the same test this record applies to its own producer:
+
+    A  [PPA head-to-head records] NO_CORPUS: nothing at <path> and
+       VIBE_IC_BENCHMARK_DATA is unset ... NOTHING WAS SCANNED, 0 published
+       head-to-head record(s) were examined and nothing is claimed about them
+
+    B  [CANNOT CHECK] VACUOUS: the corpus carries no head-to-head record, so
+       nothing was validated. This is NOT a pass ... rc=2.
+       ... 0 head-to-head record(s) found in 0 JSON document(s) scanned
+
+A names what it looked for; B names the population it read *and* the number of
+documents it opened to find it.  `_ppa_corpus.open_corpus`'s docstring states
+the thesis of this whole record independently and got there first: *"A CORPUS
+THAT IS NOT THERE IS NOT AN EMPTY CORPUS ... a denominator asserted over a
+population nobody searched."*
+
+**Conclusion, stated as narrowly as the evidence supports.**  The collapse
+vibe-ic#1764 names was singular: it existed where a producer's rc 0 already
+carried a second meaning — *"I read an index and it publishes none"* — and
+`routed_def_corpus.py` was the only program in that position.  The PPA family
+never collapsed the pair because it never overloaded rc 0 that way, and this
+section verifies that by running it rather than by trusting the comment that
+says so.  Nothing here was changed; a sweep whose answer is *"no sibling has
+it"* ships as evidence, not as a patch.
