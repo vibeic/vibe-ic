@@ -192,3 +192,43 @@ def test_emitted_pnr_tcl_wires_sink_into_post_hold_only():
     assert f"findMaster {_SINK}" in tcl
     # not attached to the pre-CTS initial ladder
     assert "INITIAL_DPL_CLKBUF_DOWNSIZE" not in tcl
+
+
+# --- the downsize's own diagnostic: it must speak on FAILURE and be silent on
+# SUCCESS.  Field-measured on gf180mcuD (die 3800, 2 089 instances swapped): the
+# emitted Tcl printed `POST_HOLD_CLKBUF_DOWNSIZE_NONFATAL:` with an EMPTY message
+# straight after `swapped=2089`, i.e. on the success path -- and, by the same
+# inverted guard, printed nothing at all when the body threw.  A rung measured to
+# take the illegal-cell count from 2 337 to 296 must not be able to fail in silence.
+
+_ODB_STUB_FINDMASTER_THROWS = _ODB_STUB + r"""
+# make the swap body throw the way a PDK whose clock buffer is named differently,
+# or an odb that refuses swapMaster, would make it throw
+proc DB {sub args} { error "findMaster: no such master in this PDK" }
+"""
+
+
+@_needs_tcl
+def test_downsize_diagnostic_is_silent_when_the_swap_succeeds(tmp_path):
+    """A `_NONFATAL:` line on the success path is a diagnostic that means nothing."""
+    out = _run(p3._build_escalating_legalize_tcl("POST_HOLD", "_ph",
+                                                 clk_sink_buf=_SINK), tmp_path)
+    assert "POST_HOLD_CLKBUF_DOWNSIZE swapped=2" in out, out
+    assert "POST_HOLD_CLKBUF_DOWNSIZE_NONFATAL" not in out, out
+
+
+@_needs_tcl
+def test_downsize_diagnostic_speaks_when_the_swap_throws(tmp_path):
+    """And the failure path must NAME the failure rather than fall through mute."""
+    tcl = (_ODB_STUB_FINDMASTER_THROWS
+           + p3._build_escalating_legalize_tcl("POST_HOLD", "_ph",
+                                               clk_sink_buf=_SINK))
+    f = tmp_path / "recovery_throws.tcl"
+    f.write_text(tcl)
+    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert "POST_HOLD_CLKBUF_DOWNSIZE_NONFATAL: findMaster: no such master" in out, out
+    # and it must not claim a swap it did not make
+    assert "POST_HOLD_CLKBUF_DOWNSIZE swapped=" not in out, out
