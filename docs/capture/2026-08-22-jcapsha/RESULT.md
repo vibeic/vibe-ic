@@ -86,11 +86,30 @@ mirroring it. That gap is entirely mechanical to close.
 
 ### F2 — the extent measured from the oriented footprint → **Bucket A**
 
-**Not T.** Upstream's script measures a cell in exactly two places and both
-read the master's width, on all four sides; there is no height in its side
-arithmetic at all. Verified independently here in the pinned image: four
-`getWidth` and four `getHeight` occurrences in that file, and the sum is
-`incr sum_of_cell_widths $width`. Upstream is right and ours diverged.
+**Not T.** Upstream's script measures a cell in exactly two places — the fit
+sum and the along-the-row step — and both read the master's WIDTH, on all four
+sides. Read line by line in the pinned image rather than counted, because a
+raw count of `getHeight` in that file is four and would read as a
+contradiction:
+
+    63-67  the SITE's own width and height, and the corner site's. Not a cell.
+    99-100 the master's width AND height are both computed...
+    103    ...and only the width is summed: `incr sum_of_cell_widths $width`
+    162-163 the master's width AND height are both computed again...
+    169    ...and only the width steps the position along the row
+
+So the master's height is computed at BOTH measurement sites and used at
+NEITHER — a dead local, twice, sitting beside the value that is used. That is
+worth naming, because it is the shape that makes this particular divergence
+easy to introduce and invisible afterwards: the wrong dimension is already in
+scope, already named, and already correct-looking.
+
+(Upstream does use a height in the side arithmetic in exactly one place — the
+CORNER SITE's, when stepping a vertical side, because a corner site is not
+always square. That is a different quantity from the pad master's height and
+it is used correctly.)
+
+Upstream is right and ours diverged.
 
     INPUT      the register entry naming our module, the upstream file, the
                anchor STRINGS the computation is recognised by, and the pin
