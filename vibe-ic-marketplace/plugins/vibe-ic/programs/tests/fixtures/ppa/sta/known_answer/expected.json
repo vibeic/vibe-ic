@@ -1,0 +1,42 @@
+{
+  "schema": "vibeic.ppa.fixture_expectation.v1",
+  "fixture": "sta/known_answer",
+  "proves": "positive + vacuous",
+  "known_answer": "Two views are MEASURED with the values below; the third is NOT_MEASURED with a reason. A consumer that returns two rows instead of three has silently dropped the view it could not measure.",
+  "records": [
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 14.56,
+      "unit": "ns",
+      "scope": {"stage": "post_route_extracted", "mode": "functional", "process": "ss", "voltage_v": 4.5, "temperature_c": 125, "rc_corner": "max", "clock": "clk", "check": "setup"},
+      "source": {"path": "views/setup_ss_125c_4v50.rpt", "tool": "opensta", "line_evidence": "worst slack max 14.56"}
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.wns_ns",
+      "status": "MEASURED",
+      "value": 0.57,
+      "unit": "ns",
+      "scope": {"stage": "post_route_extracted", "mode": "functional", "process": "ff", "voltage_v": 5.5, "temperature_c": -40, "rc_corner": "min", "clock": "clk", "check": "hold"},
+      "source": {"path": "views/hold_ff_n40c_5v50.rpt", "tool": "opensta", "line_evidence": "worst slack min 0.57"}
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "NOT_MEASURED",
+      "reason": "The declared view setup_tt_025c_5v00 has no report in this fixture. Nothing was read, so nothing can be said about the tt corner.",
+      "unit": "ns",
+      "scope": {"stage": "post_route_extracted", "mode": "functional", "process": "tt", "voltage_v": 5.0, "temperature_c": 25, "rc_corner": "nom", "clock": "clk", "check": "setup"},
+      "source": {"path": "views/setup_tt_025c_5v00.rpt", "exists": false}
+    }
+  ],
+  "must_not": [
+    {"forbidden": "a `value` key on the NOT_MEASURED record", "why": "contract §2: NOT_MEASURED carries a reason, not a value"},
+    {"forbidden": "value 0, 0.0, -1 or \"\" for the tt view", "why": "contract §2: no numeric sentinels — 0 ns of setup slack is a real and alarming measurement, not a way to say nothing was measured"},
+    {"forbidden": "omitting the tt row", "why": "contract §2: a report prints the literal NOT_MEASURED row; it does not omit it. An omitted row makes an unmeasured corner look like a corner nobody needed."},
+    {"forbidden": "entering the tt row into a numeric comparison", "why": "contract §2: only MEASURED may enter a numeric comparison"}
+  ],
+  "coverage_expectation": {"declared": 3, "measured": 2, "not_measured": 1}
+}
