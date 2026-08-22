@@ -112,7 +112,72 @@ than the under-disclosure being fixed.
 
 ---
 
-## 4. Why both fail, and where the repair probably belongs
+## 3b. WHY NO COUNTING RULE CAN EVER WORK — proven structurally
+
+§4 below originally said the repair "probably" belongs elsewhere. It can be put
+more strongly than that, and this section is the reason. **By count, the two
+steps are identical.**
+
+Step 4, the case the three reds are about:
+
+    4 clauses ran; ONE of them (`professional_tb_check`) examined nothing.
+    REQUIRED VERDICT: not VACUOUS_PASS. It must be PASS + partial disclosure.
+
+Step A9 (`🔁 Co-Simulation (+ HW correlation when bench data exists)`), whose
+gate is an `all_of` of seven clauses:
+
+    1. program_exit_zero            mixed_signal_cosim_check       <- RUNS, passes
+    2. optional_program_exit_zero   analog_hw_spice_correlation_check
+    3. program_exit_zero            analog_a9_hw_verify_check      <- discloses vacuity
+    4-7. advisory_program_exit_zero analog_hil_*
+
+    A substantive sibling runs and passes; ONE clause examined nothing.
+    REQUIRED VERDICT: VACUOUS_PASS
+    (`test_a9_simulation_only_is_disclosed::test_simulation_only_close_is_not_a_bare_pass`
+     asserts `r.status == "VACUOUS_PASS"` exactly).
+
+Same shape. One vacuous clause beside siblings that ran, in both. Opposite
+required answers. **A rule that reads only the two counts cannot distinguish
+them, at any threshold, in either direction.** That is why both attempts above
+fail, and it is not a coincidence of thresholds.
+
+Both gates are also DUAL-CHANNEL, so "which channel disclosed" cannot separate
+them either — measured:
+
+    professional_tb_check       json {"verdict": "NOT_APPLICABLE"} + stdout VACUOUS_PASS: , rc 0
+    analog_a9_hw_verify_check   json {"verdict": "VACUOUS_PASS"}   + stdout VACUOUS_PASS: , rc 0
+
+That is what defeats attempt 2 specifically.
+
+## 3c. What DOES separate them, and the input the flow does not have
+
+The difference is not how many clauses examined nothing. It is WHICH ONE.
+
+  * A9 is named for HW correlation, and `analog_a9_hw_verify_check` is the
+    clause that carries that claim. When it examines nothing, the thing the step
+    is FOR was not measured, and the step must disclose no matter how many
+    ancillary clauses ran.
+  * Step 4 is named for simulation and coverage; its sim, testbench and coverage
+    clauses carry that claim and all three read real content. The clause that
+    examined nothing, `professional_tb_check`, is ancillary — the step's claim is
+    supported, so it is a PASS whose empty clause is still named.
+
+**Nothing in `flow/phase1_phase2_phase3.yaml` declares which clause carries a
+step's claim.** That is the missing input, and no amount of arithmetic over the
+clauses recovers it — it is a statement about intent that only the flow can make.
+
+So the repair is a FLOW-CONTRACT change: a per-clause (or per-step) declaration
+of the defining measurement, after which `check_step` holds a step in the
+disclosure tier when a DEFINING clause examined nothing — regardless of count —
+and uses the count only among ancillary clauses. Both required answers above
+then fall out of the same rule.
+
+That is a change to the flow contract and to every step that would need the
+declaration. It is written down here as a proposal with its evidence rather than
+landed, because an agent whose brief was eleven test ids should not redefine the
+gate schema on the way past.
+
+## 4. Where the repair probably belongs
 
 **Two different properties are riding one tier.**
 
