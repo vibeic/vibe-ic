@@ -1,5 +1,0 @@
-{
-  "ic_name": "HDLC / SDLC (ISO/IEC 13239)",
-  "register_map_present": false,
-  "notes": "HDLC / SDLC is a wire-level data link protocol specification (ISO/IEC 13239), not a peripheral block guide. There is no architectural register map at the protocol layer. Concrete HDLC controller IP blocks (e.g. Zilog Z85C30 SCC, Intel 82530, Motorola MC68302 SCP, Infineon DS28E15, Altera Avalon-ST HDLC, Xilinx LogiCORE HDLC) define their own register file (typically: mode/control / status / receive-FIFO / transmit-FIFO / address-filter / sequence-number / FCS-error-count / interrupt-mask registers) at the SoC integration level — covered by individual block guides, not by ISO/IEC 13239."
-}

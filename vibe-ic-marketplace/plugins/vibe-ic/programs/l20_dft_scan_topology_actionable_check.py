@@ -9,14 +9,21 @@ MIXED, and deliberately so. Three independent findings, two of which
 BLOCK (rc=1) and one of which ADVISES (rc=0 + ``[ADVISE]``):
 
   F1 VACUOUS_DFT_ASSERTION ................................ BLOCKS
-      L20 asserts DFT exists — ``dft_present: true``, or a non-null
-      ``jtag_tap`` / ``test_compression``, or a non-empty
-      ``bist_mbist[]`` — but ``scan_chains[]`` is empty, or its entries
-      lack the fields a DFT-insertion step and the ATPG coverage gate
-      must reconcile against. This is a claim the layer itself cannot
-      back: an asserted scan topology no downstream step can falsify.
+      An EXTRACTED L20 asserts DFT exists — ``dft_present: true``, or a
+      non-null ``jtag_tap`` / ``test_compression``, or a non-empty
+      ``bist_mbist[]`` — but ``scan_chains[]`` is empty; or a
+      ``scan_chains[]`` of any provenance carries entries lacking the
+      fields a DFT-insertion step and the ATPG coverage gate must
+      reconcile against. This is a claim the layer itself cannot back:
+      an asserted scan topology no downstream step can falsify.
       Exactly the checks-that-lie family, and it is self-contained
       inside L20, so blocking costs nothing but a fabricated PASS.
+
+      "EXTRACTED" IS LOAD-BEARING (vibe-ic#1003). Without it F1 read the
+      emitter's skeleton default as the design's claim and reddened 48
+      of 106 published roots for a value 50 protocol emitters write
+      unconditionally. See the guard at the F1 site for the
+      cross-tabulation that settles which side was lying.
 
   F2 REQUIREMENT_OUTSIDE_CONSUMING_LAYER .................. BLOCKS
       The design's OWN inputs state a DFT requirement (its input docs
@@ -125,6 +132,78 @@ _DFT_VOCAB_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A TEST STRUCTURE IS NOT A MESSAGE NAME (vibe-ic#1021)
+# =====================================================
+# `m?bist` above matches the token BIST wherever it appears, and two published
+# roots' own inputs spend it on the name of a PROTOCOL MESSAGE rather than on a
+# built-in self-test. In their own words:
+#
+#   "The <controller> shall transport the following frame types: 0x27
+#    <name>, ... 0x46 Data, 0x58 BIST Activate, 0x5F <name>, ..."
+#   "BIST (B): When '1', indicates that the command that software built is for
+#    sending a BIST <frame>."
+#   "0x03  BIST                 Built-In Self Test"      (a message-type table)
+#
+# Quoted with the roots' own protocol nouns replaced by <placeholders>, the
+# same convention #1020 used in this file: the SHAPE is the evidence and the
+# standard's name is not part of it.
+#
+# A frame information structure and a message type are PAYLOADS A PROTOCOL
+# DEFINES ON THE WIRE. Neither says anything about whether this design has a
+# built-in self-test, which is the only question L20 asks — and both sit inside
+# a `shall` sentence, so requirement framing is genuinely present and cannot
+# discriminate. This is a VOCABULARY defect, so it is fixed in the vocabulary's
+# owner and nowhere else: `framed_hits` is shared by four programs asking four
+# different questions, and none of the other three has a DFT vocabulary to
+# collide.
+#
+# TWO STRUCTURAL SIGNALS, BOTH OF WHICH NAME AN ENCODING RATHER THAN A DESIGN:
+#   (a) the token is preceded by a WIRE CODE POINT — `0x58 BIST`, `0b0011
+#       BIST`, `type 3 BIST`. A number that identifies the token on the wire is
+#       a message identifier; a scan chain does not have one.
+#   (b) the token is followed by a PROTOCOL-OBJECT NOUN — `BIST <frame>`,
+#       `BIST message`, `BIST frame`, `BIST primitive`. The noun says what KIND
+#       of thing the token names, and every noun in the set is a thing that is
+#       TRANSMITTED. The set includes two standards' own words for a frame
+#       alongside the generic ones — the same class of technology literal
+#       `_DFT_VOCAB_RE` above already spends on `jtag`, `bsdl` and `ieee 1149`,
+#       and for the same reason: the vocabulary of the technology is not a
+#       design, PDK, vendor or part identity.
+#
+# SCOPED TO THE SENTENCE, the same reach `framed_hits` now uses for framing and
+# for both of its drop predicates (#1021). That is what reaches "BIST (B): ...
+# for sending a BIST FIS", where the FIRST occurrence carries neither signal
+# and the sentence that defines it carries both. Within one sentence a token is
+# one thing; across a document it is not, which is why this is not run over the
+# whole line.
+_BIST_TOKEN_RE = re.compile(r"\bm?bist\b", re.IGNORECASE)
+_BIST_IS_A_MESSAGE_NAME_RE = re.compile(
+    #   (a) a wire code point standing immediately in front of the token
+    r"(?:0x[0-9a-f]+|0b[01]+|\btype\s+\d+|\bcode\s+\d+)\s*[-:.]?\s*m?bist\b"
+    #   (b) a protocol-object noun standing immediately behind it
+    r"|\bm?bist\b[\s-]+(?:fis|message|msg|frame|packet|pdu|primitive|"
+    r"ordered\s+set|payload|dword|opcode|command\s+type|message\s+type)\b",
+    re.IGNORECASE)
+
+
+def _bist_is_a_message_name(matched: str, sentence: str) -> bool:
+    """True when THIS match spends the BIST token on a protocol message name.
+
+    The ``reject`` hook `framed_hits` calls, so the decision is made INSIDE the
+    hit loop — before dedup and before the limit. A post-filter on the returned
+    records would be wrong twice: the limit would truncate before it ran, and
+    the ``context`` field those records carry is truncated for reporting, so
+    the "BIST (B) ... for sending a BIST FIS" sentence loses its own second
+    half.
+
+    A match that is not a BIST token is never touched: this narrows ONE
+    alternative of the vocabulary and leaves the other fifteen as they were.
+    """
+    if not _BIST_TOKEN_RE.fullmatch((matched or "").strip()):
+        return False
+    return bool(_BIST_IS_A_MESSAGE_NAME_RE.search(sentence or ""))
+
+
 # Sibling layers that legitimately carry a DFT requirement upstream of
 # L20. If the requirement lives here and not in L20, that IS the defect.
 _SIBLING_CODES = ("L7", "L24", "L19", "L2")
@@ -204,6 +283,17 @@ def _chain_missing_fields(entry: Any) -> List[str]:
     return missing
 
 
+def _dft_hits(texts) -> List[Dict[str, Any]]:
+    """Framed DFT-requirement hits from ``texts``, this gate's three policies
+    applied: a denial is not a statement, a scope-deferral is not a statement,
+    and a protocol message name is not this vocabulary. One helper so the two
+    call sites below cannot drift into two policies (#1021)."""
+    return framed_hits(texts, _DFT_VOCAB_RE,
+                       drop_denied=True,
+                       drop_out_of_scope=True,
+                       reject=_bist_is_a_message_name)
+
+
 def _backend_dft_artifacts(project: Path) -> List[str]:
     """The flow's OWN evidence that scan insertion ran.
 
@@ -264,15 +354,69 @@ def inspect(project: Path) -> Dict[str, Any]:
     result["evidence"]["typed_scan_chain_count"] = len(typed_chains)
 
     # ── F1 VACUOUS_DFT_ASSERTION (BLOCKS) ────────────────────────────
-    asserts_dft = (
+    #
+    # AN UN-EXTRACTED LAYER'S FIELD VALUES ARE THE EMITTER'S SKELETON, NOT THE
+    # DESIGN'S CLAIM (vibe-ic#1003).
+    #
+    # F1 used to read `dft_present` as "the layer asserts a DFT topology
+    # exists". MEASURED across the 106 tracked L20 documents, cross-tabulating
+    # `dft_present` against `scan_chains`:
+    #
+    #     dft_present truthy  (partial 54 / true 5 / yes 1)  ->  0 carry chains
+    #     dft_present falsy   (false 45 / null 1)            ->  1 carries chains
+    #
+    # The single design in the whole corpus that HAS a scan topology is the one
+    # whose `dft_present` is null. The field is not merely uninformative for
+    # this question; on this corpus it points the wrong way. It cannot carry the
+    # answer F1 asked it for.
+    #
+    # AND THE PRODUCER IS NOT LYING, which is why this is fixed here and not
+    # there. `dft_present = "partial"` is written unconditionally by 50 protocol
+    # emitters, and read in context it is TRUE: each one pairs it with an
+    # enumerated non-scan test surface (`in_band_test_facilities` /
+    # `exposed_dft_features` — measured, 48 of the 60 assertive documents carry
+    # one) and prose that says in so many words that the protocol exposes no
+    # scan path. "Partial DFT" is a correct statement about a protocol that has
+    # in-band test facilities and no scan chain. F1 demanded `scan_chains[]` as
+    # the only admissible backing for any DFT statement whatsoever.
+    #
+    # THE RULE IS THE HOUSE'S, NOT A NEW ONE. `l_doc_consumer_contract.
+    # is_extraction_claimed` names the producer state as THREE-valued — NOT-RUN
+    # / RAN-AND-EMPTY / RAN-AND-FOUND — and `dft_atpg_coverage_check` already
+    # applies it to THIS EXACT FIELD, in the opposite direction, with the same
+    # sentence: "its `dft_present: false` is the emitter's field default, not a
+    # decision". A default is a default whichever way it points. Corpus:
+    # `extraction_status` is NOT_YET_EXTRACTED on 80 documents and absent on the
+    # other 26 — ZERO of 106 claim extraction, so on today's corpus no L20 field
+    # value is a design's assertion at all.
+    #
+    # CONTENT IS STILL SELF-EVIDENCING. A non-empty `scan_chains[]` is a
+    # topology somebody wrote down, and it is held to the typing contract below
+    # exactly as before, extracted or not. Only the assertion-WITHOUT-content
+    # arm now requires that extraction actually ran.
+    #
+    # ALSO CORRECTED, same disjunct: `is_extraction_claimed` used to be an
+    # assertion on its own, so a layer that ran extraction and honestly found
+    # NOTHING (RAN-AND-EMPTY — the one state that IS a design saying "I need no
+    # DFT") was reported as making a claim it could not back. It now asserts
+    # nothing, which is what it says.
+    #
+    # F1 CAN STILL FIRE, and on today's corpus it fires nowhere — because no L20
+    # has ever been extracted. That is the honest reading of a layer nothing has
+    # populated, and it is a tripwire rather than a silence: the moment
+    # extraction runs and writes `dft_present` beside an empty `scan_chains[]`,
+    # this reddens.
+    extracted = is_extraction_claimed(l20)
+    asserted_fields = (
         _truthy_assertion(present)
         or _truthy_assertion(tap)
         or _truthy_assertion(compression)
         or bool(bist)
-        or bool(chains)
-        or is_extraction_claimed(l20)
     )
+    asserts_dft = bool(chains) or (asserted_fields and extracted)
     result["evidence"]["asserts_dft"] = asserts_dft
+    result["evidence"]["extraction_claimed"] = extracted
+    result["evidence"]["asserted_fields_present"] = asserted_fields
 
     if asserts_dft:
         if not chains:
@@ -314,9 +458,28 @@ def inspect(project: Path) -> Dict[str, Any]:
                 })
 
     # ── F2 REQUIREMENT_OUTSIDE_CONSUMING_LAYER (BLOCKS) ──────────────
-    doc_hits = framed_hits(input_doc_texts(project), _DFT_VOCAB_RE)
-    sib_hits = framed_hits(sibling_l_doc_texts(project, _SIBLING_CODES),
-                           _DFT_VOCAB_RE)
+    # `drop_denied=True` — THIS GATE OPTS IN (vibe-ic#1011). Of the 25 F2
+    # findings this gate had over the 107 published run dirs, 16 were roots
+    # whose own L7 / L19 notes say the requirement is not there — "does NOT
+    # specify JTAG / scan-chain / on-chip BIST", "There is no scan chain, no
+    # JTAG", "no PDK, floor-plan, SDC, UPF, or DFT artifact at the protocol
+    # level". A denial is not a statement of the requirement it denies.
+    #
+    # DFT vocabulary is the case where this is safe, and that is why the flag
+    # is per-consumer rather than global: a real DFT requirement is written
+    # POSITIVELY ("support for scan, JTAG (IEEE 1149.1)"), so this gate loses
+    # nothing by declining denials. L23's security vocabulary is the opposite
+    # — its real requirements are prohibitions — and it deliberately does not
+    # opt in. Measured both ways before either was wired.
+    #
+    # `drop_out_of_scope=True` — THIS GATE OPTS IN TOO (vibe-ic#1021). Two
+    # roots' L7 notes hand chip-level JTAG/scan/BIST to a different party's
+    # silicon, in a sentence carrying no negation word at all, so no denial
+    # ruler can reach them. Same per-consumer reasoning as above and the same
+    # measurement: L22's two consumers and L23 move by 0 hits, so neither is
+    # switched on.
+    doc_hits = _dft_hits(input_doc_texts(project))
+    sib_hits = _dft_hits(sibling_l_doc_texts(project, _SIBLING_CODES))
     result["evidence"]["dft_requirement_hits_input_docs"] = len(doc_hits)
     result["evidence"]["dft_requirement_hits_sibling_l_docs"] = len(sib_hits)
 
@@ -379,6 +542,45 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  if __doc__ else "")
     ap.add_argument("project_dir")
     ap.add_argument("--json", default=None, metavar="PATH")
+    # SHOULD A GATE'S OWN FAIL REPORT FEED A DOWNSTREAM BUBBLE-UP GATE?
+    # ==================================================================
+    # YES — a gate finding IS a step-internal finding, and suppressing the
+    # whole class would let a real blocking FAIL hide from the step that signs
+    # off. What must never happen is the OTHER thing: a finding the flow
+    # deliberately wired ADVISORY becoming BLOCKING by travelling through a
+    # report file into a blocking gate. That is not enforcement, it is a
+    # declaration being overridden by a side effect.
+    #
+    # MEASURED, on isolated copies of two roots that are clean today:
+    #   evaluation/phase1_parity/afdx   step_internal_fail_bubble_up rc 0 -> 1
+    #   evaluation/phase1_parity/jtag   step_internal_fail_bubble_up rc 0 -> 1
+    # after running this gate ONCE, with no `--json`: `write_report` publishes
+    # `reports/phase1/<gate>.json` unconditionally, and the Step-36 gate scans
+    # `reports/**/*.json` for `verdict`. So the "wire it BARE" mitigation that
+    # protects l6/l9 does not protect this one — those two only write under
+    # `--json`; this one always writes.
+    #
+    # THE RULE, and it is the repo's own vocabulary rather than a new one:
+    # EVERY GATE THAT WRITES A VERDICT-BEARING REPORT MUST DECLARE IN THAT
+    # REPORT THE ENFORCEMENT MODE IT IS WIRED AT. `verdict_mode: ADVISES` is
+    # already honoured by `step_internal_fail_bubble_up_check` ("a report that
+    # declares ADVISES alongside FAIL has already said its verdict does not
+    # gate"), already parsed by `flow_gate_enforcement_audit`, and already
+    # emitted by `cross_layer_reference_check`, `dfm_screen_check` and the
+    # L16/L17/L18 gates. Nothing new is invented; this gate simply joins them.
+    #
+    # THE DEFAULT IS `BLOCKS`, deliberately. It preserves today's behaviour
+    # exactly for every existing caller — a bare invocation still cascades —
+    # so this flag can only ever narrow the cascade where a wiring site asks
+    # it to, and never widen it. The declaration then lives ON the flow row
+    # next to the `advisory_` verb, where the two cannot drift apart silently:
+    # promoting the row to blocking means deleting the flag on the same line.
+    ap.add_argument("--verdict-mode", choices=("BLOCKS", "ADVISES"),
+                    default="BLOCKS", metavar="MODE",
+                    help="enforcement mode to DECLARE in the emitted report. "
+                         "ADVISES tells step_internal_fail_bubble_up_check "
+                         "that this finding does not gate, which is what a "
+                         "row wired advisory_program_exit_zero means.")
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -387,6 +589,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     result = inspect(project)
+    result["verdict_mode"] = args.verdict_mode
 
     waiver = waiver_rationale(project, WAIVER_ID)
     if waiver and result["verdict"] == "FAIL":
