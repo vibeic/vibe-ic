@@ -386,6 +386,60 @@ def test_the_set_level_inversion_still_prints_and_records_every_finding(
     assert verdicts.get("cand_unmeasured") == "UNDETERMINED", verdicts
 
 
+def test_the_frontier_gate_makes_the_same_licensed_inversion_and_keeps_it(
+        tmp_path):
+    """THE SECOND deliberate inversion, licensed by the SAME unpinned sentence.
+
+    `_ppa/pareto.frontier_exit_code` inverts exactly as the feasibility CLI
+    does, and says so: "UNDETERMINED outranks REFUSED ... Both block, and every
+    finding is printed whichever code is returned." Same design, same reason,
+    and until now the same clause carried by prose alone.
+
+    MEASURED as the pure function: a FAIL-material code alone is 1, an
+    undetermined-material code alone is 2, and both together are 2.
+
+    The set below is the shape that matters -- a PUBLISHED frontier that
+    disagrees with the recomputation (rc-1 material) while a second candidate
+    has an unmeasured objective (which drives the rc to 2). If the findings
+    stopped being emitted, a published frontier known to be WRONG would sit
+    behind a NOT CHECKED.
+    """
+    pareto_tests = Path(__file__).resolve().parent / "test_ppa_pareto.py"
+    if not pareto_tests.exists():
+        pytest.skip("the pareto fixture module is not in this checkout")
+    _s = importlib.util.spec_from_file_location("_pareto_fx", pareto_tests)
+    FX = importlib.util.module_from_spec(_s)
+    _s.loader.exec_module(FX)
+    from _ppa import pareto as P  # noqa: E402
+
+    clean = FX.cand("cand_clean", 100.0, 1.0, 0.05)
+    unmeasured = FX.cand("cand_unmeasured", 120.0, 2.0, 0.05)
+    for m in unmeasured["metrics"]:
+        if m.get("metric") == "area.total_um2":
+            m["status"] = "NOT_MEASURED"
+            m.pop("value", None)
+
+    published = {"schema": P.PARETO_SCHEMA, "frontier": ["cand_unmeasured"]}
+    r, doc = FX.run(tmp_path, [clean, unmeasured], frontier=published)
+
+    assert r.returncode == B.RC_UNDETERMINED, (
+        "the documented frontier precedence (UNDETERMINED over REFUSED) no "
+        f"longer holds; got rc={r.returncode}")
+    assert doc is not None, "no JSON was written"
+    codes = {f.get("code") for f in doc.get("findings", [])}
+    assert "PARETO_FRONTIER_DISAGREES" in codes, (
+        "the premise is gone: this set no longer produces the rc-1-material "
+        f"finding the test is about. got {sorted(codes)}")
+
+    text = r.stdout + r.stderr
+    for code in sorted(codes):
+        assert code in text, (
+            f"{code} is in the JSON but was NOT printed while the gate "
+            "returned 2. That is the sentence licensing this inversion, and "
+            "it is now false: a published frontier known to be wrong is "
+            "sitting behind a NOT CHECKED.")
+
+
 # ---------------------------------------------------------------------------
 # The same rule, over the corpora the wired rows actually read.
 # ---------------------------------------------------------------------------

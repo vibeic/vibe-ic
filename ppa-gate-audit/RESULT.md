@@ -2972,3 +2972,95 @@ timeout: measured at 23.8s on this branch and 24.0s on main, and the SAME
 selection run smaller -- so less host load -- returns 4 failed, 0 errors, with
 that test PASSING. Load-dependent, environmental, not a regression.
 chip-AGNOSTIC source guard: PASS, 1553 file(s).
+
+
+# Part 28 — the family's REAL denominator, and the licence clause is TWO gates
+
+I OVERSTATED MY OWN COVERAGE IN PART 27 AND THIS PART CORRECTS IT. Part 27
+said the family was swept "10 of 10". What was actually verified was the shared
+`worst_rc` seam plus two gates in depth. A per-record mask inside any other
+gate would NOT have been caught by `worst_rc` being correct, so that claim was
+broader than its evidence -- the same shape of overstatement this lane exists
+to find.
+
+THE REAL DENOMINATOR IS SMALLER AND NOW MEASURED. Of the eleven PPA programs,
+`repo_hygiene_gates.sh` invokes SIX, and those six carry the eleven wired rows:
+
+    ppa_head_to_head_check      3 invocations   repaired, Parts 25-26
+    ppa_contract_check          3               verified below
+    ppa_problem_integrity_check 2               verified below
+    ppa_measurement_check       1               Part 14 repair, intact
+    ppa_feasibility_check       1               Part 27, licence now pinned
+    ppa_pareto_check            1               THIS PART
+
+The other five (`ppa_signoff_records`, `ppa_page_claim_check`,
+`ppa_area_threshold_check`, `power_total_vs_budget_check`,
+`ppa_pr_scope_check`) are wired ZERO times and decide no published row.
+
+CONTRACT AND PROBLEM-INTEGRITY: SOUND, and by construction rather than luck.
+Both COLLECT findings and rank afterwards -- `findings = schema_findings(...)`,
+`findings.extend(C.validate(...))`, then `rc = C.rc_from(findings)`. There is
+no early return that can outrun a later finding; the only short-circuits are
+genuine prerequisites (unreadable file, top level not an object), which are the
+`_load` case and correct. `rc_from` was probed rather than read:
+
+    rc_from([UNDETERMINED, FAIL]) = 1     <- order-independent
+    rc_from([FAIL, UNDETERMINED]) = 1
+    rc_from([UNDETERMINED])       = 2
+    rc_from([NOTE])               = 0
+
+and its own docstring states the rule: "a confirmed finding outranks an
+unchecked one, and the report lists both regardless."
+
+PARETO: THE SECOND DELIBERATE INVERSION, LICENSED BY THE SAME UNPINNED
+SENTENCE. `_ppa/pareto.frontier_exit_code` inverts exactly as the feasibility
+CLI does and says so in terms:
+
+    "UNDETERMINED outranks REFUSED: a run that could not establish every
+     comparison must not publish a complete claim about which design won. Both
+     block, and every finding is printed whichever code is returned."
+
+MEASURED as the pure function: a FAIL-material code alone returns 1, an
+undetermined-material code alone returns 2, both together return 2. So the
+inversion is real, deliberate, and -- exactly like Part 27's -- its entire
+licence was one sentence that nothing enforced. TWO of the six wired gates were
+in that state, which makes it a pattern in this family rather than an oddity of
+one file.
+
+MEASURED TRUE TODAY at the CLI, on a set built to hold both at once: a
+PUBLISHED frontier that disagrees with the recomputation (rc-1 material)
+alongside a candidate whose objective metric is unmeasured (which drives the rc
+to 2).
+
+    rc                                   2
+    findings in the JSON                 PARETO_FRONTIER_DISAGREES,
+                                         PARETO_UNDETERMINED_JUDGED_BETTER
+    both printed                         yes
+
+A FIXTURE THAT PROVED NOTHING, CAUGHT BEFORE IT WAS WRITTEN INTO A TEST. The
+first attempt at this case set a `score` key on a candidate to trigger
+PARETO_COLLAPSED_SCALAR and produced `findings: []` -- rc 2 for the unrelated
+reason, and an assertion that would have passed while measuring nothing. The
+collapsed-scalar and frontier-disagreement checks read the PUBLISHED FRONTIER
+document, not the candidate list. The test now asserts its own premise
+(`PARETO_FRONTIER_DISAGREES in codes`) so it cannot go vacuous the same way.
+
+NEGATIVE CONTROL H -- the per-finding print withheld when the frontier gate
+returns 2:
+
+    1 failed, 16 passed
+    E  AssertionError: PARETO_FRONTIER_DISAGREES is in the JSON but was NOT
+       printed while the gate returned 2. That is the sentence licensing this
+       inversion, and it is now false: a published frontier known to be wrong
+       is sitting behind a NOT CHECKED.
+
+REGRESSION. 2039 passed, 4 failed, 124 skipped, 17 xfailed. The same 4 fail
+identically on pristine origin/main. chip-AGNOSTIC source guard: PASS, 1553
+file(s). No program changed in this part -- test and prose only, no verdict
+moves.
+
+STATE OF THE CLASS, over the denominator that is actually wired:
+    2 gates were defective   -- head_to_head (five ways) and measurement, both repaired
+    2 gates invert on purpose -- feasibility and pareto, both licences now enforced
+    2 gates collect-then-rank -- contract and problem_integrity, verified sound
+    the shared corpus seam    -- probed, order-independent, sound
