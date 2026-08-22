@@ -212,8 +212,17 @@ front of an attested-population loop **cannot** be consumed by the population
 refusal, because `_dispatch` mode 2 rejects it. That fact was **unpinned** —
 every existing empty-corpus test drives the loop with no exemption armed
 (`test_empty_corpus_gate_keeps_the_array_invariant`,
-`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`), so all of
-them stay green if the branch that rejects it is deleted.
+`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`), so deleting
+the branch that rejects it changes none of their verdicts.
+
+Stated precisely, because the two halves were measured separately. In place on
+this branch those three files are green (24 passed, 1 xfailed, together with the
+new one). Against the mutated dispatcher they are **verdict-identical to the
+control**: repointed at the mutant, 4 failed / 17 passed; repointed at an
+unmutated copy, the same 4 failed / 17 passed. Those four failures are the
+repointing harness, not the mutation — the files build their own repo scaffold
+and an absolute dispatcher path breaks it — which is exactly why the control arm
+was run before believing the mutant arm. The mutation moves nothing in them.
 
 `test_population_refusal_cannot_be_bought_off.py` pins it. Measured by deleting
 that one `elif` from a **copy** of the dispatcher (the tracked file was not
