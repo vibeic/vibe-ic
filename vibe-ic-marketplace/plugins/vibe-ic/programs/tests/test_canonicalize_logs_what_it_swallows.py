@@ -233,10 +233,35 @@ def test_every_discarded_spawn_now_reads_its_status(program, _fn):
     the second the instrument itself names -- say so at the call site, so the
     decision is on the record rather than inferred from silence.
     """
-    src = ast.unparse(_spawn_scope(program))
-    assert ".returncode" in src, (
-        f"the spawn of {program} still discards its status entirely, so a "
-        "reader cannot tell a crashed run from a clean one")
+    # KEYED ON THE SPAWN'S OWN BOUND NAME, not on the substring `.returncode`.
+    #
+    # THE FIRST VERSION OF THIS ASSERTION WAS VACUOUS AND ITS OWN CONTROL SAID
+    # SO. It searched the whole enclosing function for `.returncode`; for
+    # `flow_compliance_check` that function is `main`, which on pristine main
+    # ALREADY contains two unrelated `.returncode` uses. So the arm passed
+    # against pre-fix code -- it could not fail, which makes it the defect
+    # rather than the guard. (Scoping it to the `try` instead was the opposite
+    # error: `thermal_screen` reads its status one branch AFTER the try, and
+    # that version reported a false finding.)
+    #
+    # The bound name settles both: an UNBOUND spawn is discarded by
+    # construction and fails here, and a bound one must have ITS OWN
+    # `<name>.returncode` read somewhere in the function.
+    scope = _spawn_scope(program)
+    target = None
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            if program in ast.unparse(node.value):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        target = t.id
+    assert target is not None, (
+        f"the spawn of {program} is not bound to anything, so its status "
+        "cannot be read at all -- the result is discarded by construction")
+    assert f"{target}.returncode" in ast.unparse(scope), (
+        f"the spawn of {program} binds `{target}` and never reads "
+        f"`{target}.returncode`, so a reader cannot tell a crashed run from a "
+        "clean one")
 
 
 @pytest.mark.parametrize("program,_fn", _SPAWNS)
