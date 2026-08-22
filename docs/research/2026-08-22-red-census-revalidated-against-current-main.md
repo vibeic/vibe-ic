@@ -311,3 +311,52 @@ sequencing, not for cost.
 **Verified by running, not by `merge --no-commit` exiting 0** — an automatic merge
 succeeding is a statement about text, and every claim this branch makes is about
 behaviour. The worktree was removed afterwards; nothing in play was touched.
+
+---
+
+# Part 6 — FOUR of the census's five requests have been answered upstream
+
+Part 2 found the flow-gate decision made. **I checked whether that was the only
+one. It was not.**
+
+| census request | status on `a4caccefe` |
+|---|---|
+| declare intent on the two undeclared flow gates | **DONE** (Part 2) — and solved by a third option better than either the census offered |
+| wire `closed_loop_edge_check` | **DONE** — `repo_hygiene_gates.sh:1637`, `run "closed-loop edges resolve" ...` |
+| wire `slot_pad_budget_check` | **DONE** — flow yaml `:1118`, `program_exit_zero: "slot_pad_budget_check . --json ..."` |
+| the liar-census pin | **BUMPED** 179 → 181, with a partial cure attached |
+| wire `ppa_pr_scope_check` | **still unwired** — 0 occurrences anywhere |
+
+**THE TWO PLACEMENTS LANDED WHERE THE CENSUS PREDICTED, and the prediction was
+not a guess.** M88 derived both from a rule `repo_hygiene_gates.sh` states about
+itself — *"its subject is the shipped flow document [...] a repo-wide invariant
+needing no PR context and no design run"*:
+
+* `closed_loop_edge_check` — subject is the flow's `closed_loop:` blocks, no PR
+  context, no run → **hygiene**. It landed in hygiene.
+* `slot_pad_budget_check` — needs a design run → **a flow clause on the chip
+  path**. It landed as a flow `program_exit_zero` clause.
+* `ppa_pr_scope_check` — needs PR context, so the rule EXCLUDES it from hygiene.
+  **It is the one still unwired**, which is consistent: it is the one with no home
+  the stated rule can give it.
+
+**The credit belongs to the rule, not the reading.** The census's contribution was
+noticing that the file already answered the question; anyone who read the same
+paragraph would have placed them the same way.
+
+**THE LIAR CENSUS IS THE INTERESTING ONE, because the census said "do not bump"
+and it was bumped.** M54 argued the literal was *"prose wearing an assertion"* and
+a fifth bump would repeat the defect. What landed is a bump **plus** the beginning
+of the cure, with the open question preserved verbatim:
+
+> *"how a DELIBERATE shrink is authorised — is still the flow owner's to answer,
+> and is deliberately NOT answered here. What is fixed is that the next author can
+> MEASURE the delta against the tree they are landing on instead of reconstructing
+> it by hand from a base that may have moved."*
+
+**That is a better outcome than either "bump it" or "do not bump it".** The number
+still needs remembering, but the DELTA no longer needs reconstructing — which is
+the half of the problem that was costing measurement rounds. **The census was right
+that a bare bump was the wrong move and wrong that the only alternative was a full
+derivation.** Third time on this branch that the remedy space was larger than the
+two options I could see.
