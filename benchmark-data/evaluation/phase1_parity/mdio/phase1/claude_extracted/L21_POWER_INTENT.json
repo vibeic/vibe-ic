@@ -1,8 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "1.2-3.3 V pull-up supply"
-    ],
-    "power_considerations": "Low-speed open-drain signaling with an external pull-up; static power dominated by the pull-up when MDIO is driven low."
-  }
-}

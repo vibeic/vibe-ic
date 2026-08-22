@@ -1,4 +1,0 @@
-VCD info: dumpfile waves.vcd opened for output.
-FULL_STACK_TB_DONE bytes=0 bits=0
-/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom/caravel_r11/phase2/stage1/sim_full_stack/tb_user_project_wrapper_full.v:87: $finish called at 1200000 (1ps)
-

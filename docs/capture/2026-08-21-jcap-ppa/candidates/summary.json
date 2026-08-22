@@ -1,0 +1,43 @@
+{
+  "date": "2026-08-21",
+  "totals": {
+    "A": 12,
+    "B": 0,
+    "C": 1,
+    "D": 0,
+    "T": 1
+  },
+  "routing_used": {
+    "bucket_A": [
+      "programs/ppa_feasibility_check.py",
+      "programs/ppa_head_to_head_check.py",
+      "programs/plugin_change_pytest_gate.py",
+      "programs/_atomic_artefact.py",
+      "programs/ppa_search_run.py",
+      "programs/enhancement_emit.py",
+      "programs/backlog_sanitize_check.py",
+      "programs/gate_host_independence_check.py"
+    ],
+    "bucket_T": [
+      "OpenROAD"
+    ]
+  },
+  "bucket_A_files": [
+    "ppa-capture/candidates/bucket_A_programs_ppa_feasibility_check_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_ppa_head_to_head_check_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_plugin_change_pytest_gate_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs__atomic_artefact_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_ppa_search_run_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_enhancement_emit_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_backlog_sanitize_check_rule_sketches.py",
+    "ppa-capture/candidates/bucket_A_programs_gate_host_independence_check_rule_sketches.py"
+  ],
+  "bucket_C_dir": "ppa-capture/candidates/bucket_C_backlogs",
+  "bucket_C_files": [
+    "ORGANIC-20260821-generated-header-derived-from-recorded-inputs.yaml"
+  ],
+  "bucket_T_dir": "ppa-capture/candidates/bucket_T_forked_tool",
+  "bucket_T_files": [
+    "ORGANIC-20260821-postroute-repair-faults-after-route-completes.yaml"
+  ]
+}

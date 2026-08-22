@@ -65,6 +65,10 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Dict
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _source_record_merge import merge_source_records  # noqa: E402
 
 RC_OK, RC_CANNOT_CLASSIFY = 0, 2
 
@@ -107,7 +111,7 @@ _IDENT_RE = re.compile(r'\\[^\s,{}]+\s|[A-Za-z_][\w$]*(?:\s*\[[^\]]*\])?')
 
 
 # ── liberty ────────────────────────────────────────────────────────────────
-def parse_liberty_pin_directions(text: str) -> dict:
+def parse_liberty_pin_directions(text: str) -> Dict[str, Dict[str, str]]:
     """``{cell: {pin: 'input'|'output'|'inout'}}``.
 
     Sliced on `cell (` boundaries and scanned within each slice. The first
@@ -311,12 +315,24 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return RC_CANNOT_CLASSIFY
 
-    directions: dict = {}
-    for lp in a.liberty:
-        p = Path(lp)
-        if p.is_file():
-            directions.update(parse_liberty_pin_directions(
-                p.read_text(errors="replace")))
+    # ONE LIBERTY PER SOURCE, and a cell two of them both name is NOT resolved
+    # by which file sorted last. `parse_liberty_pin_directions` returns `{}` for
+    # a cell whose pins carry no `direction` -- documented above: a `pg_pin`
+    # block declares none and contributes nothing. Under `dict.update` that
+    # empty map ERASES a populated one from another liberty, and then
+    # `classify()` hits `if not pins: unresolved_cells.add(cell); continue`,
+    # drops every instance of that cell out of the graph, and loses the
+    # observability edges THROUGH it -- so nets upstream come back
+    # "unobservable", get counted untestable, and test coverage goes UP.
+    # The run does not stop: the refusal at `>= len(lib_masters)` needs EVERY
+    # master unresolved, so a partial erase leaves only a [WARN] on stderr.
+    # That is the direction this file's own comment calls "the one failure mode
+    # this program must not have".
+    directions: Dict[str, Dict[str, str]] = merge_source_records(
+        (parse_liberty_pin_directions(p.read_text(errors="replace"))
+         for p in (Path(lp) for lp in a.liberty) if p.is_file()),
+        on_conflict="richer",
+    )[0]
     if not directions:
         print("[SKIP] atpg_untestable_fault_classify: no liberty resolved, so "
               "no pin DIRECTION is known. Guessing them from pin names would "

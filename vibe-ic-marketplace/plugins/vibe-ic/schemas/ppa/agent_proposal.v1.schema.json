@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.agent_proposal.v1",
+  "title": "PPA agent proposal (A0, explain-only)",
+  "description": "What comes BACK from an agent at A0. additionalProperties is false and that is the whole point: an explain-only boundary enforced by a schema that IGNORES unknown keys is not enforced at all, because an action only has to be named something the schema has not heard of. Refusing unknown keys means a new name for an action fails closed. This is the artefact the boundary is checked on, since it is the only thing that reflects what the agent actually produced rather than what it was asked to produce.",
+  "type": "object",
+  "required": ["schema", "handoff_sha256", "explanation"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.agent_proposal.v1"},
+    "handoff_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "The handoff this answers. Without it an agent could return an explanation of a different, easier situation and nothing would notice."
+    },
+    "explanation": {"type": "string", "minLength": 1},
+    "hypotheses": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Candidate root causes, in the agent's own words. They are hypotheses, not findings: nothing here may enter a threshold comparison or a PASS/FAIL, which are never delegated (spec 4.6)."
+    },
+    "suggested_next_checks": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Deterministic checks a PROGRAM could run next. Naming a check is explaining; running it is acting, and A0 may not act."
+    },
+    "confidence": {
+      "type": "number", "minimum": 0, "maximum": 1,
+      "description": "The agent's own. It is not evidence and may not enter any threshold comparison."
+    },
+    "agent_identity": {"type": "object"}
+  }
+}
