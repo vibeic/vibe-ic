@@ -1,0 +1,208 @@
+{
+ "sweep": {
+  "trials": 60,
+  "states": {
+   "COMPLETED": 60
+  },
+  "completed_stage": {
+   "post_route_extracted": 60
+  },
+  "runner_rc": {
+   "1": 60
+  },
+  "wall_s": {
+   "min": 190.293,
+   "median": 246.5495,
+   "max": 398.528,
+   "sum_h": 4.285
+  },
+  "cpu_s": {
+   "min": 222.136,
+   "median": 316.5745,
+   "max": 627.286,
+   "sum_h": 5.546
+  },
+  "peak_rss_mb": {
+   "min": 598.8,
+   "median": 626.5,
+   "max": 1086.9
+  }
+ },
+ "objective": {
+  "metric": "area.design_report.um2",
+  "unit": "um^2",
+  "stage": "post_route",
+  "better_is": "lower",
+  "baseline": 6594.0,
+  "n": 60,
+  "distinct_values": 59,
+  "min": 6136.0,
+  "max": 7393.0,
+  "median": 6734.0,
+  "spread_pct": 20.49,
+  "winner": "t028",
+  "winner_knobs": {
+   "die_um": "auto",
+   "placement_density": "0.60",
+   "spare_cell_density": "0.00"
+  },
+  "winner_value": 6136.0,
+  "vs_baseline_pct": -6.95
+ },
+ "power_invariance": {
+  "n": 60,
+  "distinct_values": 1,
+  "values": {
+   "0.000306": 60
+  },
+  "baseline": 0.000306,
+  "diagnostic_postroute": 0.000573
+ },
+ "lever_effect": {
+  "die_um": {
+   "210x210": {
+    "n": 15,
+    "mean": 6607.0,
+    "min": 6411.0,
+    "max": 6847.0
+   },
+   "240x240": {
+    "n": 15,
+    "mean": 6765.1,
+    "min": 6560.0,
+    "max": 6993.0
+   },
+   "280x280": {
+    "n": 15,
+    "mean": 7151.5,
+    "min": 6969.0,
+    "max": 7393.0
+   },
+   "auto": {
+    "n": 15,
+    "mean": 6495.7,
+    "min": 6136.0,
+    "max": 6994.0
+   }
+  },
+  "placement_density": {
+   "0.20": {
+    "n": 12,
+    "mean": 6901.7,
+    "min": 6545.0,
+    "max": 7393.0
+   },
+   "0.30": {
+    "n": 12,
+    "mean": 6782.7,
+    "min": 6454.0,
+    "max": 7294.0
+   },
+   "0.40": {
+    "n": 12,
+    "mean": 6713.9,
+    "min": 6267.0,
+    "max": 7263.0
+   },
+   "0.50": {
+    "n": 12,
+    "mean": 6679.5,
+    "min": 6160.0,
+    "max": 7307.0
+   },
+   "0.60": {
+    "n": 12,
+    "mean": 6696.2,
+    "min": 6136.0,
+    "max": 7291.0
+   }
+  },
+  "spare_cell_density": {
+   "0.00": {
+    "n": 20,
+    "mean": 6611.5,
+    "min": 6136.0,
+    "max": 7082.0
+   },
+   "0.02": {
+    "n": 20,
+    "mean": 6735.8,
+    "min": 6291.0,
+    "max": 7223.0
+   },
+   "0.05": {
+    "n": 20,
+    "mean": 6917.1,
+    "min": 6462.0,
+    "max": 7393.0
+   }
+  }
+ },
+ "feasibility": {
+  "shipped_only": {
+   "UNDETERMINED": 61
+  },
+  "bridged": {
+   "UNDETERMINED": 60,
+   "INFEASIBLE": 1
+  },
+  "bridged_axes": {
+   "setup": {
+    "UNDETERMINED": 61
+   },
+   "hold": {
+    "UNDETERMINED": 61
+   },
+   "drv": {
+    "UNDETERMINED": 61
+   },
+   "drc": {
+    "SATISFIED": 60,
+    "VIOLATED": 1
+   },
+   "lvs": {
+    "SATISFIED": 61
+   },
+   "antenna": {
+    "SATISFIED": 61
+   },
+   "ir": {
+    "SATISFIED": 61
+   },
+   "em": {
+    "UNDETERMINED": 61
+   },
+   "equivalence": {
+    "UNDETERMINED": 61
+   }
+  }
+ },
+ "manifest": {
+  "candidates": 60,
+  "budget_spent": {
+   "cache_hits": 0,
+   "cpu_hours": 5.545996666666667,
+   "full_pnr_trials": 60,
+   "states": {
+    "BUDGET_EXHAUSTED": 0,
+    "COMPLETED": 60,
+    "DEDUPLICATED": 0,
+    "FAILED": 0,
+    "PROPOSED": 0,
+    "REJECTED_SPACE": 0,
+    "RUNNING": 0,
+    "TIMEOUT": 0
+   },
+   "trials_charged": 60,
+   "trials_proposed": 60,
+   "trials_ran": 60,
+   "wall_seconds": null
+  },
+  "sentence": "budget 60 trial(s) / 60 full-PnR: proposed 60, ran 60 (0 from cache, charged 60), of which 60 reached full place-and-route; 5.5460 CPU-hours, wall time not reconstructible at concurrency 8; 0 candidate(s) are comparable at scope 'post_route_extracted'.",
+  "frontier_included": 0,
+  "frontier_excluded": {
+   "FEASIBILITY_UNDETERMINED": 60
+  },
+  "feasibility_source": "STUB"
+ }
+}
