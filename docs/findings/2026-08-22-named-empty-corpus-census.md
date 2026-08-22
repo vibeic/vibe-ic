@@ -323,3 +323,32 @@ Run against clean `main` and both branches:
 The second gate's WARN count is 12 on `main` and 11 on both branches — lower,
 because the branches sit on the older base where one fewer authority file
 differs. Nothing is introduced by either branch under either rule.
+
+## Incidental, measured, and deliberately NOT filed as a defect
+
+`programs/hygiene_gate_profile.json` is a committed record of a past sweep. Its
+own header says `declared: 74`; a live `repo_hygiene_gates.sh --list` at
+`a4caccefe` declares **93**. Compared label by label:
+
+| | n |
+|---|---|
+| gates declared live but absent from the profile | **25** |
+| gates in the profile but no longer declared | **6** |
+
+**Why this is not filed as a defect, checked rather than assumed.** Both readers
+consume the profile for SHARD TIMING, not as a claim about how many gates exist:
+`gate_host_independence_check` passes it to `plan(driveable, profile, jobs)`, and
+`repo_hygiene_parallel` establishes its denominator by running
+`--list --summary-json` LIVE and refuses if that fails — *"could not establish the
+hygiene denominator"*. So the stale `74` is never believed by anything; a gate
+with no profile entry simply contributes no timing hint.
+
+The consequence is therefore shard balance, not correctness: 25 of 93 gates are
+planned without a measured duration, and 6 rows describe gates that no longer
+exist. That is worth someone re-rendering the profile, and it is worth nobody
+treating it as a false verdict.
+
+It is recorded because a committed record whose headline figure is 19 short of
+the truth is the shape this repository keeps repairing, and the next reader who
+greps `declared` will find `74` — as I did, mid-measurement, and had to go and
+check what consumed it before I could say whether it mattered.
