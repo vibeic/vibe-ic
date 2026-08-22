@@ -743,3 +743,123 @@ tree, not a property of this one, so it is deliberately not pinned by a test
 here** — a test asserting it would either need network access or would encode
 another repository's contents as this one's fixture, and both are worse than a
 dated measurement with its command line written down.
+
+---
+
+## Third finding: after the repair, "I could not find it" and "I declined it" were still the same word
+
+The Barrier-1 repair puts `phase3/stage3/pnr/routed.def` INTO published scope. That
+makes a state exist that did not exist before it: **the run has a routed DEF and it
+is not at that path.** Until this section, `LAYOUT_ROUTING.txt` wrote that state and
+a deliberate policy exclusion with the same word.
+
+### Measured, on the shape the published corpus actually carries
+
+A converged run identical to ARM A's except that its routed DEF sits at
+`phase3/phase3/stage3/pnr/routed.def` — the doubled prefix
+`protocol_parity/lpc` carries in 28 committed files — published through the
+supported path with no flags:
+
+```
+publish rc:            0
+cell exists:           True
+published .def files:  []
+
+LAYOUT_ROUTING  phase3/phase3/stage3/pnr/routed.def   NOT_PUBLISHED
+LAYOUT_ROUTING  phase3/stage3/pnr/placed.def          NOT_PUBLISHED
+LAYOUT_ROUTING  phase3/stage3/pnr/floorplan.def       NOT_PUBLISHED
+
+any mention of routed.def on stdout/stderr:  (none)
+```
+
+The artefact the post-route gates are about, and the scratch the publisher
+excludes on purpose, are indistinguishable in the only record that speaks for
+either. The cell reads as one whose run had no post-route geometry.
+
+**And the corpus consequence is the collapse this branch already pinned.**
+`routed_def_corpus.py` answers `rc 0` with an empty population for a cell like
+that — byte-for-byte what it answers when nothing was ever published
+(`test_routed_def_population_is_depth_exact.py`). So the blocking row keeps
+saying `is EMPTY — nothing was checked over it`, which is true, and no artefact
+anywhere says a routed DEF existed and was dropped.
+
+### The repair: one word, and the sentence the publisher was not saying
+
+`OFF_CANONICAL_PATH`, emitted only when nothing is at the canonical path and the
+run holds a `routed.def` elsewhere, deduped on the resolved path so a `steps/`
+alias is not a second artefact. Plus a stderr warning naming every path found and
+the one path the population is built from.
+
+This is the repair `CITATION_ROUTING.txt` — the sibling record, written for the
+same cell — already argues for citations, in its own header:
+
+> a directory that ships its neighbours and not this file is a HOLE, and is
+> recorded as `DANGLING` / `DANGLING_UNDER_PASS`. The distinction is load-bearing
+> downstream … the wrong word here retires a finding instead of reporting one.
+
+### What it is not
+
+**Not a widening of scope.** Nothing new is staged. The cell is byte-identical;
+only the record and stderr change.
+
+**Not a refusal.** The run may be converged and the cell worth publishing. A
+`Refuse` here would also block a legitimate multi-macro layout that keeps a DEF
+per block, which is a real shape nobody has argued against. What must not happen
+is the drop being *silent*, and that is all this changes.
+
+**Not a way to make the gate pass.** The corpus is still empty, the row is still
+`rc 2 NOT CHECKED`, it still blocks, and it still buys no exemption. Publishing a
+cell with `OFF_CANONICAL_PATH` in its record adds no member, which is the point:
+it makes the reason visible instead of making the row green.
+
+**Not retroactive.** No cell in the published corpus carries a `routed.def` at
+any path, so this fires on future publishes only.
+
+### Pinned, RED first
+
+`programs/tests/test_routed_def_off_the_canonical_path_is_not_out_of_scope.py`.
+ARM A is the finding; B–E are controls and were GREEN before the repair, which is
+what makes them controls rather than evidence:
+
+| arm | subject | before |
+|---|---|---|
+| A | the off-canonical DEF is `OFF_CANONICAL_PATH`, and stderr names both paths | **`NOT_PUBLISHED`** — `1 failed, 4 passed` |
+| B | CONTROL — a canonical DEF is `STAGED` and nothing is `OFF_CANONICAL_PATH` | green |
+| C | CONTROL — a run with no DEF at all emits no such row | green |
+| D | CONTROL — an OVERSIZE canonical DEF stays `ROUTED_AWAY` | green |
+| E | CONTROL — a `steps/` symlink back to the staged DEF is not a second artefact | green |
+| F | CONTROL — a DEF inside a PUBLISHED subtree gets exactly ONE line | **caught the first draft** |
+
+ARM A also asserts that `placed.def` KEEPS the word that is true of it, so the arm
+cannot be satisfied by renaming every exclusion.
+
+### ARM F is there because the first draft of this repair was wrong
+
+The first draft rglobbed for the basename without asking what was already
+recorded, and emitted a SECOND row for a blob `_copy_tree` had already decided
+about — `ROUTED_AWAY` *and* `OFF_CANONICAL_PATH` for one file, breaking the
+invariant `LAYOUT_ROUTING.txt`'s own header states: *"ONE LINE PER BLOB, not per
+path"*. It was caught by an existing test, not by me:
+
+```
+FAILED test_organic419b_signoff_gds_ships_and_routing_is_recorded.py::
+       test_an_oversized_artefact_is_absent_but_recorded_with_its_hash
+assert 2 == 1
+  reports/phase3/routed.def 60000000B sha256:1dd28892… ROUTED_AWAY        not-retained
+  reports/phase3/routed.def 60000000B sha256:1dd28892… OFF_CANONICAL_PATH source-run-only
+```
+
+The seed is `{Path(r["src"]).resolve() for r in layout_records}`, and it draws
+the boundary the new word needs: `OFF_CANONICAL_PATH` is for an artefact the
+publisher **never looked at**, not for one it looked at and decided about. ARM F
+pins it here too — measured RED with the seed removed and restored byte-identical
+after — because the test that caught it is about the GDS block and should not
+have to keep covering this one.
+
+### Regression
+
+The 18 test files touching `benchmark_evidence_publish`, `LAYOUT_ROUTING` or
+`_COPY_SUBTREES`: **`226 passed, 6 failed, 66 skipped`** after the dedupe repair.
+The six are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`, the same six
+that fail on a pristine `origin/main` worktree at `a4caccefe` — base red, not this
+branch. The seventh failure in the first sweep was ARM F's subject and is fixed.
