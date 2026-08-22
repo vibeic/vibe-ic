@@ -1,5 +1,0 @@
-{
-  "ic_name": "1-Wire bus (Maxim AN148 Reliable 1-Wire Networks)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Pure digital open-drain signaling on the single DQ line (referenced to GND). The bus is held HIGH by a weak pull-up resistor Rp (typically 4.7 kΩ for small networks; ≤ 1 kΩ for long / heavy networks); any device (master or slave) may pull LOW (wired-AND). Although the protocol itself is purely digital, the analog characteristics of the network (cable capacitance, pull-up sizing, slew rate, signal reflections) directly affect reliability. AN148 emphasizes impedance matching, slew-rate control, and adequate pull-up current as critical for long networks — see Appendix C (Advanced Bus Driver) and Appendix D (R-C filter for DS2480B)."
-}
