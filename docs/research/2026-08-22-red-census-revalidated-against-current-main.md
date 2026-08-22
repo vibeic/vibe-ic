@@ -268,3 +268,46 @@ moving subject, and its baseline is a pin in sand.** The frozen branch's M54
 argument about the liar census — that a hand-maintained number an author must
 remember is *"prose wearing an assertion"* — applies here with the same force, and
 neither gate has had that cure.
+
+---
+
+# Part 5 — the frozen branch MERGES CLEANLY onto current main, and the merged tree was RUN
+
+The freeze exists because a batch that keeps absorbing changes never lands. **The
+question that actually decides whether this branch costs the batch anything is
+whether it merges and behaves** — asked and answered here rather than left for the
+lander to discover.
+
+**MERGE — clean, in a throwaway worktree at `origin/main` (`a4caccefe`):**
+
+    git merge --no-commit --no-ff ptmo/main-red-triage-v11166   ->  exit 0
+    conflicted files                                            ->  NONE
+    result vs current main    11 files, 9819 insertions, 50 deletions
+
+**That is exactly the frozen branch's own stat.** The merge added nothing and lost
+nothing; two files auto-merged (`test_pad_and_seal_ring...`, `matrix_d3_output_manifest.json`)
+and both produced the branch's own line counts.
+
+**A CLEAN MERGE IS NOT A WORKING TREE, so the merged tree was run:**
+
+| suite, on the MERGED tree | result |
+|---|---|
+| `test_hdl_declaration_scan_strips_comments` | **16 passed** (11 existing + the 5 added) |
+| `test_pad_and_seal_ring_on_the_chip_path` | **46 passed** |
+| `test_hermetic_candidate_runner` | **17 passed** |
+| `hdl_declaration_scan_..._check.py` (the gate) | **exit 0** — `165 (baseline 170)`, `[NOTE] baseline shrank by 5` |
+| `test_landing_merge_verdict` | **6 failed, 128 passed** — **failing set IDENTICAL to the frozen branch's six** |
+
+**Every prediction in Part 4 held on the real merged tree**, including the
+`[NOTE]` about the shrunk baseline — which remains the single action this change
+asks of a lander.
+
+**What this settles for the batch:** the frozen branch is **244 commits behind and
+still merges clean**, and the merged tree measures exactly what the branch
+measured in isolation. **It does not need a rebase to land, and it does not change
+any number it reports once landed.** If it is dropped from this batch it is for
+sequencing, not for cost.
+
+**Verified by running, not by `merge --no-commit` exiting 0** — an automatic merge
+succeeding is a statement about text, and every claim this branch makes is about
+behaviour. The worktree was removed afterwards; nothing in play was touched.
