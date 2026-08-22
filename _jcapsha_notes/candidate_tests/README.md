@@ -5,30 +5,62 @@
 would block every push on the repo. It is the artefact the fix ships with, and
 it should move into `programs/tests/` in the same commit that fixes the defect.
 
-## The red, in full
+## The red, in full — MEASURED 2026-08-22, load 94.84 on 32 cores
+
+Both files, run together. The load belongs beside the numbers; these are
+0.43s AST reads with no subprocess and no timeout, so the load does not reach
+them, and saying so is cheaper than leaving a reader to wonder.
 
 ```
-PASS  test_the_extent_assertion_cannot_see_the_defect
-FAIL  test_the_opposite_side_is_the_upstream_MIRROR_not_a_half_turn
-      the opposite side must be upstream's MIRROR, not a half turn:
-        from N: ours=S  upstream(flipX)=FS      from FN: ours=FS upstream=S
-        from S: ours=N  upstream(flipX)=FN      from FS: ours=FN upstream=N
-        from E: ours=W  upstream(flipX)=FE      from FE: ours=FW upstream=E
-        from W: ours=E  upstream(flipX)=FW      from FW: ours=FE upstream=W
+FAIL test_f3c_side_to_variable_mapping.py::
+       test_each_rotation_variable_drives_the_sides_upstream_says_it_does
+     each rotation variable must drive the sides its upstream defines it for:
+       PAD_ROTATION_HORIZONTAL: ours drives ['N','S'], upstream defines it for ['E','W']
+       PAD_ROTATION_VERTICAL:   ours drives ['E','W'], upstream defines it for ['N','S']
+
+FAIL test_f3d_opposite_side_is_a_mirror.py::
+       test_the_opposite_side_is_derived_by_MIRRORING_as_upstream_does
+     the opposite side must be derived by upstream's MIRROR, not a half turn:
+       side N: derived with ['rotate_cw'] (a ROTATION)
+       side E: derived with ['rotate_cw'] (a ROTATION)
+
+PASS test_f3d_opposite_side_is_a_mirror.py::
+       test_the_footprint_assertion_cannot_see_the_defect
+
+2 failed, 1 passed
 ```
 
-All eight orientations diverge. The first line — `from N: ours=S,
-upstream=FS` — is the case that was MEASURED end to end: our step records the
-north side as `S` while the tool places the north pad at `MX`, which is `FS`.
+THIS TRANSCRIPT REPLACES A STALE ONE, and the staleness is worth naming because
+this capture is *about* that failure mode. The previous version of this file
+printed an eight-line orientation table under two test names that no longer
+exist: the rewrite recorded three lines below — the one that made the F3d test
+satisfiable — renamed its test and changed its predicate from an orientation
+table to a call-site read, and this README was not re-run against it. A reader
+following it would have grepped for a test that is not there. Re-measured, not
+edited to match.
 
 ## The first test in the file is a demonstration, not coverage
 
-`test_the_extent_assertion_cannot_see_the_defect` **passes on the broken tree,
-and that is its purpose.** It writes out the obvious test — assert on the
+`test_the_footprint_assertion_cannot_see_the_defect` **passes on the broken
+tree, and that is its purpose.** It writes out the obvious test — assert on the
 footprint — and shows it agreeing under both a mirror and a half turn, because
 a rectangular master occupies the same bounding box either way. It is there so
 the next author does not write that assertion, watch it pass, and believe the
 question is covered.
+
+RESTORED 2026-08-22, having been dropped by the rewrite while this README went
+on describing it. So for a while the file's stated protection did not exist —
+the exact shape it was written to prevent. GRADED, so it is not vacuously true:
+
+```
+ours = rotate_cw('S',2) = N   footprint (75000, 350000)
+upstream = flipX('S')  = FN   footprint (75000, 350000)  equal -> blind
+a ROTATED 'W'                 footprint (350000, 75000)  differs -> has teeth
+```
+
+It also asserts `ours != upstream` first, so if a fix ever makes the two
+derivations agree the demonstration fails as STALE rather than passing on for
+a reason that has gone away.
 
 ## The three states, measured
 

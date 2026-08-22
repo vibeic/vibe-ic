@@ -29,6 +29,12 @@ _MIRRORING = {"flip_x", "flip_y", "flipx", "flipy", "mirror", "mirror_x",
 #: Helpers that ROTATE. Correct in themselves; wrong for this job.
 _ROTATING = {"rotate_cw", "rotate_ccw", "rotate"}
 
+#: The tool's own mirror-about-X algebra, in DEF spelling: R0<->MX, R90<->MXR90,
+#: R180<->MY, R270<->MYR90. Written out rather than derived so a wrong entry is
+#: visible; an earlier draft of this table had E and W exchanged.
+_FLIP_X = {"N": "FS", "FS": "N", "S": "FN", "FN": "S",
+           "E": "FE", "FE": "E", "W": "FW", "FW": "W"}
+
 #: The sides derived FROM another side. South and west are the declared ones;
 #: north and east are their opposites, and upstream mirrors to get them.
 _DERIVED_SIDES = ("N", "E")
@@ -49,6 +55,36 @@ def _opposite_side_calls(src: str) -> dict:
             out[key.value] = {c for c in called if c}
         return out
     return {}
+
+
+def test_the_footprint_assertion_cannot_see_the_defect():
+    """DEMONSTRATION, not coverage. It PASSES on the broken tree, on purpose.
+
+    The obvious way to test an orientation is to assert on the footprint. This
+    writes that assertion out and shows it agreeing under BOTH the half turn we
+    ship and the mirror upstream uses, because a rectangular master occupies
+    the same bounding box either way. It is here so the next author does not
+    write this assertion, watch it pass, and conclude the question is covered.
+
+    Restored 2026-08-22: the README documented this test at length while the
+    rewrite that made the sibling satisfiable had dropped it, so the file's
+    stated protection did not exist. Measured, not argued — see below.
+    """
+    sys.path.insert(0, str(_PROGRAMS))
+    import _pad_ring as PR
+
+    master = (75.0, 350.0)   # the pad cell: 75 um along the row, 350 um deep
+    units = 1000
+    ours = PR.rotate_cw("S", 2)          # how this step derives north
+    upstream = _FLIP_X["S"]              # how the tool derives north
+
+    assert ours != upstream, (
+        "the two derivations agree — this demonstration is stale, because it "
+        "only means anything while they differ")
+    assert PR.footprint(master, ours, units) == PR.footprint(
+        master, upstream, units), (
+        "the footprints differ, so a footprint assertion WOULD have caught "
+        "this — update the sibling test's rationale, it is no longer true")
 
 
 def test_the_opposite_side_is_derived_by_MIRRORING_as_upstream_does():
