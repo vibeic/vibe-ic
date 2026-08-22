@@ -1820,6 +1820,22 @@ ALL THREE PARTS OF THE RULING, BOUND TO ARTEFACTS RATHER THAN ASSERTED
                                          sentence rather than a count.
 
 EVERY COMMAND THIS FILE PUBLISHES HAS BEEN RUN
+  gen_omitted.py                         The capture bundle is a SUBSET -- the
+                                         repo ignores *.log and *.def -- and the
+                                         list of what it drops is GENERATED, not
+                                         hand-written. It was hand-written once:
+                                         it named eight files while ten were
+                                         missing, and the two it missed were the
+                                         A/B DEFs this report cites for its
+                                         orientation evidence. The generator was
+                                         then WRONG ITSELF on first run,
+                                         comparing two directories and reporting
+                                         "0 absent" -- `cp` fills a working tree,
+                                         but the drop happens at `git add`. It
+                                         asks `git ls-files` now. And the bundle
+                                         shipped the broken copy for one commit,
+                                         because I fixed it after syncing.
+
   every_published_command_runs.txt       Prompted by finding a re-run pointer
                                          aimed at a place with nothing in it.
                                          Eleven runnable commands extracted from
