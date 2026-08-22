@@ -260,11 +260,20 @@ point, still exits 0.
 reach the dispatcher as the same rc 0 / 0 items. That file is line 71 of
 `REQUIRED_AUTHORITY_PATHS` in `tools/ci/protected_landing_transition.py`;
 `build_receipt` refuses a candidate whose protected bytes match neither BASE's
-`current` nor BASE's `next` tuple (*"protected tuple attempts a rollback or
-unprepared move"*), and PREPARE explicitly refuses to change live protected
-bytes. So the fix is reachable only through a base-authorised PREPARE →
-ACTIVATE pair, and not from one candidate commit. Recorded here so the next
-transition has the reason to hand.
+`current` nor BASE's `next` tuple — `_match_state` raises *"protected tuple
+matches neither authorised atomic state"* — and the PREPARE arm explicitly
+refuses a candidate that changed live protected bytes. So the fix is reachable
+only through a base-authorised PREPARE → ACTIVATE pair, and not from one
+candidate commit. Recorded here so the next transition has the reason to hand.
+
+**A note for whoever lands this.** A sibling branch,
+`fix/routed-def-corpus-empty-adjudication`, reaches the same verdict about the
+corpus and then edits `tools/ci/routed_def_corpus.py` directly (70 lines) with
+no manifest change. On the reading above that candidate cannot land as it
+stands: same manifest bytes as BASE, protected tuple equal to neither
+authorised state, so `_match_state` raises before any test runs. The two
+branches do not conflict — this one touches no protected path — but landing them
+as a pair would not produce the fix that branch intends.
 
 ## What this deliberately does not do
 
