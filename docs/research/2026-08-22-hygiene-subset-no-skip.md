@@ -4128,3 +4128,63 @@ interleaved pairs cost exactly what six consecutive runs cost.
 It also means main's red count in the repo-tools lane drifts between 22 and 24
 depending on that single test, so any future arm comparison there must interleave
 or it will manufacture a finding out of the clock.
+
+## 60. The last four fixture rows are not neglected work — three of them cannot be fixtured
+
+Continuing the branch in §59, the debt went **14 → 4**, with 20 of 96 gates now
+carrying both directions (from 10). Every step was a name-set diff:
+
+    measurement coverage          6 -> 5   (bundle carries its own denominator)
+    promotion feasibility         5 -> 4   (records generated from DEFAULT_AXES)
+    table rows belong to tables   4 -> ... wait, see the list below
+
+Final list, and none of the four is a fixture somebody forgot to write:
+
+**`PPA frontier recomputes` — deliberately parked, and the row says so.** Its own
+comment reads: *"without one this gate would recompute a frontier and then check
+it against itself. A gate marking its own paper is not a gate, so this row is
+left refusing."* The declaration passes `--candidates` and no `--frontier`. I
+drove all four of the refusals the checker documents and none is reachable that
+way: an infeasible candidate is EXCLUDED from the recomputation rather than
+published in it (rc 0); an incomparable candidate is UNDETERMINED (rc 2,
+`PARETO_METRIC_ABSENT`); a disagreeing published frontier needs the flag; and
+`assert_no_collapsed_scalar` returns `['weighted_score']` when called directly on
+my document while the checker still exits 0, because it applies that rule to the
+document it EMITS and not to its input. So the row can return 0 or 2 and never 1.
+**That is a confirmation, not a discovery — the comment had it right and I spent
+five probes re-deriving a documented decision.** The named missing input is a
+published `frontier.json` from the search runner.
+
+**The other three cannot see a fixture at all.** `closed-loop edges resolve`,
+`closed-loop executable census` and `a printed population agrees with its pin`
+are declared with NO argument. Run from a bare temporary repository containing a
+single file, all three exit 0 while reporting real data — *"checked 22 declared
+closed_loop edge(s) over 69 step(s)"*, *"3 emitted counter denominator(s) and 1
+test pin(s) examined"*. They resolve their tree from `__file__`, so they measure
+the repository the PROGRAM lives in and never the subject they are pointed at.
+
+The harness substitutes `$PG` with the REAL programs directory and `$ROOT` /
+`$PLUGIN` with the subject, and additionally exports `VIBEIC_SUBJECT_ROOT`. **No
+program in the plugin reads that variable** — measured, zero of them. The harness
+offers a channel nothing consumes, which is
+[[write-the-consumer-for-your-own-evidence]] in the other direction.
+
+### Why "make them honour the variable" is the wrong fix
+
+It is the obvious remedy and it would re-create the defect this whole document is
+about. A gate that resolves what it measures from an environment variable can be
+pointed at an empty tree by anyone who sets it, during a real landing, and will
+then pass vacuously. That is a skip button with extra steps — and the fact that
+zero of 96 programs honour it is probably deliberate rather than an oversight.
+
+The pattern that DOES work is visible in the one row of this group I could
+fixture: `table rows belong to tables` is declared
+`doc_table_row_placement_check.py --repo "$ROOT"`. An explicit subject argument,
+substituted by the harness, honoured by the lander. That is why a fixture could
+be written for it in one pass and cannot be written for its three neighbours.
+
+**So the remedy is: give those three a `--repo` argument and pass `"$ROOT"`.**
+The program half is unprotected and small. The declaration half is in
+`tools/ci/repo_hygiene_gates.sh`, which is a protected `authority` path — so it
+needs the same PREPARE→ACTIVATE route as §58's selector fix, into the same
+already-mixed tuple. Recorded, not done.
