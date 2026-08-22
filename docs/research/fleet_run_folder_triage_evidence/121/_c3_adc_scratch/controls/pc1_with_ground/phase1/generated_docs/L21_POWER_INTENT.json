@@ -1,0 +1,90 @@
+{
+  "doc_id": "L21",
+  "doc_name": "L21_POWER_INTENT",
+  "applicability": "APPLICABLE",
+  "fields": {
+    "power_domains": [
+      {
+        "name": "VDD",
+        "power_net": "VDD",
+        "ground_net": "VSS",
+        "derived_by": "l21_doc_supply_rail_synth",
+        "derived_from": {
+          "doc_supply_table": "first column header 'Rail' names a rail",
+          "heading": "Supplies",
+          "evidence": {
+            "file": "input/docs/SPEC.md",
+            "line": 6,
+            "matched_text": "VDD (core) | 1.2 V"
+          }
+        },
+        "voltage_v": 1.2,
+        "voltage_status": "stated in the design's own documents",
+        "voltage_evidence": {
+          "file": "input/docs/SPEC.md",
+          "line": 6,
+          "matched_text": "1.2 V"
+        }
+      },
+      {
+        "name": "VDDIO",
+        "power_net": "VDDIO",
+        "ground_net": "VSS",
+        "derived_by": "l21_doc_supply_rail_synth",
+        "derived_from": {
+          "doc_supply_table": "first column header 'Rail' names a rail",
+          "heading": "Supplies",
+          "evidence": {
+            "file": "input/docs/SPEC.md",
+            "line": 7,
+            "matched_text": "VDDIO (pads) | 3.3 V"
+          }
+        },
+        "voltage_v": 3.3,
+        "voltage_status": "stated in the design's own documents",
+        "voltage_evidence": {
+          "file": "input/docs/SPEC.md",
+          "line": 7,
+          "matched_text": "3.3 V"
+        }
+      },
+      {
+        "name": "VSS",
+        "power_net": "VDD",
+        "ground_net": "VSS",
+        "derived_by": "l21_doc_supply_rail_synth",
+        "derived_from": {
+          "doc_supply_table": "first column header 'Rail' names a rail",
+          "heading": "Supplies",
+          "evidence": {
+            "file": "input/docs/SPEC.md",
+            "line": 8,
+            "matched_text": "VSS (common return) | 0 V"
+          }
+        },
+        "voltage_v": 0.0,
+        "voltage_status": "ground reference"
+      }
+    ],
+    "isolation_cells": [],
+    "level_shifters": [],
+    "upf_path": null
+  },
+  "extraction_status": "PARTIALLY_EXTRACTED",
+  "extraction_evidence": {
+    "input/docs/SPEC.md": [
+      {
+        "literal": "VDD (core) | 1.2 V",
+        "label": "power_rail VDD (input/docs/SPEC.md:6)"
+      },
+      {
+        "literal": "VDDIO (pads) | 3.3 V",
+        "label": "power_rail VDDIO (input/docs/SPEC.md:7)"
+      },
+      {
+        "literal": "VSS (common return) | 0 V",
+        "label": "power_rail VSS (input/docs/SPEC.md:8)"
+      }
+    ]
+  }
+}

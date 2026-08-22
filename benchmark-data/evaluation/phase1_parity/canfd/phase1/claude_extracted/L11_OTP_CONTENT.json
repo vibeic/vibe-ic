@@ -1,5 +1,0 @@
-{
-  "ic_name": "CAN-FD (Bosch M_CAN Controller v3.3.1, ISO 11898-1:2015)",
-  "otp_present": false,
-  "notes": "The M_CAN module has no OTP / fuse / configuration ROM at the protocol layer. The only synthesis-time-locked values are the BCD-coded YEAR / MONTH / DAY fields in the Core Release Register (CREL) which are set by hardware-synthesis generic parameters (read-only at runtime), and the synthesis generic parameters iso_only_g (forces CCCR.NISO = 0 when 1) and connected_tsu_g (when 0, fixes CCCR.UTSU = 0). Customer Register at 0x008 is reserved for optional customer-specific configuration / control / status bits — its functionality is not part of this specification. All other configuration (bit timing, filter list, FIFO sizes, interrupt routing) lives in software-writable RAM-style registers (protected-write under CCCR.CCE + CCCR.INIT)."
-}
