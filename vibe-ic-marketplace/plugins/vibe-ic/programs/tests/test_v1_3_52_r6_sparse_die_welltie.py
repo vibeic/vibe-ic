@@ -51,6 +51,8 @@ import pytest
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 import phase3_one_shot_runner as r  # noqa: E402
+from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
+                               probe_skip_reason)
 
 
 class _Pdk:
@@ -67,66 +69,84 @@ def _info_complete(tcl: str) -> bool:
     return "OK" in p.stdout
 
 
-# ── the emitted tapcell Tcl now ties the placed cells' wells ───────────
+# ── insertion always ties every placed cell's wells; prune is post-place ──
 def test_sparse_branch_inserts_and_bounds_taps():
-    block = r._build_tapcell_tcl(_Pdk())
-    # the sparse branch RUNS tapcell (well-tie) — not a bare skip
+    # v1.5.x SPLIT: insertion is UNCONDITIONAL + full-die (pre-placement, so
+    # the placer flows logic around the FIXED taps and every cell gets a tie);
+    # the #684 anti-flood prune runs POST-placement on REAL geometry.
+    insert = r._build_tapcell_tcl(_Pdk())
+    prune = r._build_tapcell_prune_tcl(_Pdk())
+    # insertion RUNS the full-die well-tie tapcell — not a bare skip
     assert "tapcell -distance 14.0 -tapcell_master " \
-        "sky130_fd_sc_hd__tapvpwrvgnd_1" in block
-    # then bounds it to the occupied region by pruning taps over empty silicon
-    assert "SPARSE_DIE_TAPCELL_BOUNDED" in block
-    assert "odb::dbInst_destroy" in block
-    # prune keeps taps in the occupied bbox + a latch-up margin
-    assert "_tap_margin" in block
-    assert "getDbUnitsPerMicron" in block
-    # the sparse branch is only entered when there ARE placed core cells
-    assert "_tap_ncore > 0" in block
-    # the prune compares against the occupied bbox (not the whole die)
-    for v in ("_tap_minx", "_tap_miny", "_tap_maxx", "_tap_maxy"):
-        assert v in block
+        "sky130_fd_sc_hd__tapvpwrvgnd_1" in insert
+    assert "odb::dbInst_destroy" not in insert     # no prune in insertion
+    # the prune bounds the taps to the occupied region (empty silicon pruned)
+    assert "SPARSE_DIE_TAPCELL_BOUNDED" in prune
+    assert "odb::dbInst_destroy" in prune
+    assert "getDbUnitsPerMicron" in prune
+    # locality (not bounding-box): a tap survives iff a placed cell is within
+    # the latch-up neighbourhood (2x distance) — kept via the _cbin hash.
+    assert "_cbin" in prune
+    # the prune only fires on a sparse die (util below the fill threshold)
+    assert "getCoreArea" in prune
+    assert "_tap_util < " in prune
 
 
 def test_prune_matches_only_the_tapcell_master():
     # the prune must delete ONLY the tap master it inserted (never a real
     # std cell) — the destroy loop is guarded by an exact master-name match.
-    block = r._build_tapcell_tcl(_Pdk())
+    prune = r._build_tapcell_prune_tcl(_Pdk())
     assert '[[$_ti getMaster] getName] ne "sky130_fd_sc_hd__tapvpwrvgnd_1"' \
-        in block
+        in prune
 
 
 def test_emitted_tcl_is_brace_complete():
     assert _info_complete(r._build_tapcell_tcl(_Pdk()))
+    assert _info_complete(r._build_tapcell_prune_tcl(_Pdk()))
+    assert _info_complete(
+        r._build_tapcell_prune_tcl(_Pdk(), [(155, 185), (1025, 1235)]))
 
 
-# ── §4.05 no-leak: dense design is untouched ───────────────────────────
+# ── §4.05 no-leak: dense design keeps ALL taps (no prune) ──────────────
 def test_dense_branch_still_full_die_taps_no_prune_marker_first():
-    """A dense design (util >= threshold) hits the ELSE branch: full-die
-    tapcell, NO prune. The prune machinery only lives in the sparse if-branch."""
-    block = r._build_tapcell_tcl(_Pdk())
-    # both branches reference tapcell, but the BOUNDED/prune markers must sit
-    # BEFORE the final else-branch tapcell (i.e. inside the sparse branch).
-    bounded_idx = block.index("SPARSE_DIE_TAPCELL_BOUNDED")
-    last_tap_idx = block.rindex("tapcell -distance")
-    assert bounded_idx < last_tap_idx  # dense tapcell is the LAST occurrence
+    """A dense design (util >= threshold) hits the prune's ELSE branch:
+    full-die taps RETAINED, no destroy. The BOUNDED prune only lives in the
+    sparse if-branch, guarded by the util test; the dense path emits the
+    DENSE_OR_UNKNOWN retain marker."""
+    insert = r._build_tapcell_tcl(_Pdk())
+    prune = r._build_tapcell_prune_tcl(_Pdk())
+    # insertion is unconditional full-die — dense and sparse both get taps
+    assert "tapcell -distance" in insert
+    # the destroy is INSIDE the sparse `if {$_tap_util ... < thr}` branch and
+    # BEFORE the dense else-branch retain marker.
+    if_idx = prune.index("_tap_util < ")
+    bounded_idx = prune.index("SPARSE_DIE_TAPCELL_BOUNDED")
+    dense_idx = prune.index("TAPCELL_PRUNE_DENSE_OR_UNKNOWN")
+    assert if_idx < bounded_idx < dense_idx
 
 
 def test_no_master_still_skips():
     class _NoTap:
         tapcell_master = None
         tapcell_distance_um = 14.0
-    block = r._build_tapcell_tcl(_NoTap())
-    assert "TAPCELL_SKIPPED" in block
-    assert "tapcell -distance" not in block
-    assert "odb::dbInst_destroy" not in block
+    insert = r._build_tapcell_tcl(_NoTap())
+    assert "TAPCELL_SKIPPED" in insert
+    assert "tapcell -distance" not in insert
+    assert "odb::dbInst_destroy" not in insert
+    # no tapcell master → nothing to prune → empty prune block
+    assert r._build_tapcell_prune_tcl(_NoTap()) == ""
 
 
-def test_zero_core_cell_edge_case_still_skips():
-    # The emitted Tcl still carries a SPARSE_DIE_TAPCELL_SKIPPED path for the
-    # runtime case where a sparse die has NO placed core cells (nothing to
-    # tie) — we never fabricate taps for a wall-less design.
-    block = r._build_tapcell_tcl(_Pdk())
-    assert "SPARSE_DIE_TAPCELL_SKIPPED" in block
-    assert "no placed core cells" in block
+def test_zero_core_cell_edge_case_keeps_no_taps():
+    # v1.5.x — insertion is unconditional, so on a sparse die with NO placed
+    # core cells (nothing to tie) the post-place prune finds no anchor and
+    # prunes EVERY tap (kept=0). We never leave fabricated taps over a
+    # wall-less design; coverage is still exact (there are no cells to cover).
+    prune = r._build_tapcell_prune_tcl(_Pdk())
+    # the kill list is built from taps with no cell in their 3x3 bin
+    # neighbourhood; with zero anchor bins every tap is killed.
+    assert "_tap_kill" in prune
+    assert "array unset _cbin" in prune
 
 
 # ── attestation parser records the bounded well-tie ────────────────────
@@ -154,11 +174,12 @@ def test_parser_records_bounded_kept_pruned():
 
 def test_parser_ignores_puts_template():
     # §4.05 — the Tcl `puts "SPARSE_DIE_TAPCELL_BOUNDED..."` template line
-    # (present in the emitted block, never a runtime marker) must NOT be
+    # (present in the emitted PRUNE block, never a runtime marker) must NOT be
     # counted as a fired bound.
-    tcl = r._build_tapcell_tcl(_Pdk())
-    att = r._parse_sparse_die_skip(tcl)
-    assert att["tapcell_bounded"] is False
+    prune = r._build_tapcell_prune_tcl(_Pdk())
+    assert "SPARSE_DIE_TAPCELL_BOUNDED" in prune  # the template IS in the block
+    att = r._parse_sparse_die_skip(prune)
+    assert att["tapcell_bounded"] is False        # but the parser ignores it
     assert att["tapcell_skipped"] is False
     assert att["fill_skipped"] is False
 
@@ -180,28 +201,39 @@ def test_no_bound_no_skip_writes_no_attestation(tmp_path):
 
 
 # ── LIVE end-to-end proof (auto-skips without the container) ────────────
-def _container_available() -> bool:
-    if os.environ.get("VIBEIC_R6_LIVE") != "1":
-        return False
-    try:
-        p = subprocess.run(
-            ["docker", "exec", "vibeic-eda", "bash", "-lc",
-             "command -v openroad >/dev/null && echo ok"],
-            capture_output=True, text=True, timeout=30)
-        return "ok" in p.stdout
-    except Exception:
-        return False
+# vibe-ic#1283 — TWO questions, and the old single bool answered them with one
+# word. "the live proof was not asked for" is an ordinary N/A (the first mark);
+# "the probe for openroad did not answer" is NOT a finding that openroad is
+# missing (the second). The `except Exception: return False` this replaces
+# collapsed the timeout into the opt-in reason, so a host that lost the race
+# was reported as a host that had not opted in.
+_R6_LIVE_REQUESTED = os.environ.get("VIBEIC_R6_LIVE") == "1"
+# Not requested -> the probe is NOT RUN AT ALL: the mark above already skips,
+# and spending the budget on a container nobody asked about would only make a
+# loaded host slower. PRESENT here means "nothing to report", not "measured".
+_R6_STATE, _R6_DETAIL = (
+    probe(["docker", "exec", "vibeic-eda", "bash", "-lc",
+           "command -v openroad >/dev/null && echo ok"])
+    if _R6_LIVE_REQUESTED else (PROBE_PRESENT, ""))
 
 
-@pytest.mark.skipif(not _container_available(),
-                    reason="live OpenROAD container proof (set VIBEIC_R6_LIVE=1"
-                           " with the vibeic-eda container up)")
+@pytest.mark.skipif(not _R6_LIVE_REQUESTED,
+                    reason="live OpenROAD container proof not requested (set"
+                           " VIBEIC_R6_LIVE=1 with the vibeic-eda container up)")
+@pytest.mark.skipif(
+    _R6_STATE != PROBE_PRESENT,
+    reason=probe_skip_reason(_R6_STATE, _R6_DETAIL,
+                             "openroad not reachable in the vibeic-eda"
+                             " container",
+                             "bash tools/vibeic-eda/restart-eda.sh"))
 def test_live_emitted_block_ties_wells_and_prunes():
     """Run the ACTUAL emitted R6 block on a caravel-scale (2920x3520 um)
     fixed die with a tiny 4-cell cluster; prove taps are kept in the
     occupied region, pruned over empty silicon, and placed-cell VPB/VNB are
     tied to VPWR/VGND."""
-    block = r._build_tapcell_tcl(_Pdk())
+    # Cells are pre-placed FIRM below, so run insertion (full-die) THEN the
+    # post-place locality prune in sequence — the same order the flow emits.
+    block = r._build_tapcell_tcl(_Pdk()) + r._build_tapcell_prune_tcl(_Pdk())
     vlog = (
         "module sparse_top (input a, input b, input clk, output y);\n"
         "  wire n1, n2, n3;\n"
@@ -246,7 +278,7 @@ def test_live_emitted_block_ties_wells_and_prunes():
     p = subprocess.run(
         ["docker", "exec", "vibeic-eda", "bash", "-lc",
          "cd /tmp && openroad -exit _r6_live.tcl 2>&1"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     out = p.stdout
     assert "SPARSE_DIE_TAPCELL_BOUNDED" in out, out[-2000:]
     # placed-cell wells tied

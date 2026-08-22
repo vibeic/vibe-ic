@@ -129,12 +129,30 @@ def detect_inline_mode(project: Path) -> Tuple[str, List[str]]:
 # `-liberty <path>` real-PDK marker — never any chip / cell / vendor literal.
 # ---------------------------------------------------------------------------
 
-# yosys echoes every command it runs as a line:
-#   -- Running command `<cmd>` --
-# The command body is enclosed in backticks. (Yosys never nests a backtick
-# inside the echoed command, so a non-greedy capture to the next backtick is
-# exact.)
-_RUNNING_CMD_RE = re.compile(r"--\s*Running command\s*`(.+?)`", re.DOTALL)
+# yosys echoes every command it runs as a line, using GNU-style asymmetric
+# quoting (opening BACKTICK, closing APOSTROPHE):
+#
+#   -- Running command `<cmd>' --
+#
+# v1.7.64 (#649 follow-up) — the original pattern demanded a CLOSING BACKTICK
+# (``\`(.+?)\```), a shape yosys has never emitted. Consequence measured on a
+# real run (phase2/stage2/synth/synth.log of a converged ihp-sg13g2 project):
+#   * when the log happened to contain ANY later backtick (yosys' own
+#     "Parsing SystemVerilog input from `<path>'" line), the capture ran 153
+#     characters PAST the end of the command and swallowed log prose — so
+#     conformance was judged against text yosys never ran;
+#   * when the log contained no stray backtick at all, the pattern matched
+#     NOTHING, `audit_inline_yosys` returned NO_INLINE_COMMAND, and a
+#     real-PDK inline synth that skipped `hilomap` sailed through Step 14 as
+#     VACUOUS_PASS.
+# Both branches are now closed by terminating on yosys' real ``' --`` framing
+# at end-of-line. DOTALL is retained so a multi-line ``-p`` body still
+# extracts, but the terminator must be the framing yosys itself prints, so a
+# stray apostrophe inside the command body cannot truncate the capture.
+_RUNNING_CMD_RE = re.compile(
+    r"--\s*Running command\s*`(.+?)'[ \t]*--[ \t]*(?:\r?\n|\Z)",
+    re.DOTALL,
+)
 
 # Logs in which the runner echoes its inline `yosys -p` command. The real-PDK
 # synth (the one that MUST run hilomap) and the simulation-only synth are both
@@ -280,9 +298,108 @@ def audit_inline_yosys(project: Path) -> Tuple[str, List[str], List[str]]:
     return "PASS", evidence_logs, []
 
 
+# ---------------------------------------------------------------------------
+# v1.7.64 — shared "no .ys script" resolution for the two STANDALONE Step-14
+# gates.
+#
+# Until now the #649 content audit lived at exactly ONE call site,
+# `flow_compliance_check._run_yosys_gates`, and that in-process duplicate only
+# governs Step 14 when it FAILs (flow_compliance_check sets
+# `suppress_yaml_step14 = pre_pnr_result is not None`, and pre_pnr_result is
+# built only when the gate returned reasons). Whenever the audit did not fail,
+# the gate the flow YAML literally declares — the project-dir CLI of
+# `yosys_hilomap_required_check` / `yosys_script_template_check` — ran the
+# weak `detect_inline_mode` file-existence confirmer and emitted VACUOUS_PASS
+# without ever looking at the command. Both declared gates now carry the
+# content check themselves.
+# ---------------------------------------------------------------------------
+
+
+def resolve_no_ys_script(project: Path) -> Tuple[int, dict]:
+    """Resolve the "project has no ``.ys`` script" case for a standalone
+    Step-14 Yosys gate.
+
+    Returns ``(exit_code, report_fields)``. ``report_fields`` always carries
+    ``verdict`` / ``reason_class`` / ``reason`` / ``inline_evidence`` and, on
+    the FAIL tier, ``messages``.
+
+    Tiers, strongest first:
+
+      * ``FAIL`` (rc=1) — the runner's synth log echoes a real-PDK inline
+        ``yosys -p`` command that is missing hilomap / flatten. This is the
+        #649 defect and it must NOT be reported as a vacuous pass.
+      * ``VACUOUS_PASS`` / ``inline_yosys_p_mode_conformant`` (rc=0) — an
+        inline command WAS found and it conforms (or only a simulation-only
+        inline synth ran). Strictly stronger evidence than the pre-existing
+        file-existence confirmation, so it is reported as its own class.
+      * the pre-existing ``inline_yosys_p_mode_confirmed`` /
+        ``inline_yosys_p_mode_unconfirmed`` tiers (rc=0) — no inline command
+        was echoed at all; a non-Yosys flow (Genus/DC) is legitimate here.
+    """
+    verdict, evidence_logs, reasons = audit_inline_yosys(project)
+    if verdict == "FAIL":
+        return 1, {
+            "verdict": "FAIL",
+            "reason_class": "inline_yosys_p_mode_nonconformant",
+            "reason": (
+                "no .ys scripts found, and the inline `yosys -p` real-PDK "
+                "command extracted from the runner's synth log is "
+                "NON-CONFORMANT — PnR will crash at detailed_route with "
+                "DRT-0305 'zero_ GROUND' on the unmapped tie net "
+                "(CLAUDE.md rule 4)."
+            ),
+            "inline_evidence": evidence_logs,
+            "messages": list(reasons),
+        }
+    if verdict == "PASS":
+        return 0, {
+            "verdict": "VACUOUS_PASS",
+            "reason_class": "inline_yosys_p_mode_conformant",
+            "reason": (
+                "no .ys scripts found; the inline `yosys -p` command "
+                "echoed by the runner's synth log was extracted and "
+                "verified conformant (hilomap + flatten present on every "
+                "real-PDK command, or simulation-only synth only) across "
+                f"{len(evidence_logs)} log(s)."
+            ),
+            "inline_evidence": evidence_logs,
+            "messages": [],
+        }
+
+    # NO_INLINE_COMMAND — fall back to the pre-#649 file-existence tiers.
+    inline_status, inline_evidence = detect_inline_mode(project)
+    if inline_status == "confirmed":
+        return 0, {
+            "verdict": "VACUOUS_PASS",
+            "reason_class": "inline_yosys_p_mode_confirmed",
+            "reason": (
+                "no .ys scripts found, BUT inline `yosys -p` runner "
+                "mode is positively confirmed by project markers "
+                f"({len(inline_evidence)} evidence path(s)); gate is "
+                "legitimately not applicable."
+            ),
+            "inline_evidence": inline_evidence,
+            "messages": [],
+        }
+    return 0, {
+        "verdict": "VACUOUS_PASS_UNCONFIRMED",
+        "reason_class": "inline_yosys_p_mode_unconfirmed",
+        "reason": (
+            "no .ys scripts found AND no inline `yosys -p` "
+            "runner-mode markers detected. Gate stays rc=0 "
+            "(vacuous) but reviewers should confirm a synthesis "
+            "step actually ran — otherwise a missing synth "
+            "artefact is being silently masked."
+        ),
+        "inline_evidence": inline_evidence,
+        "messages": [],
+    }
+
+
 __all__ = [
     "detect_inline_mode",
     "extract_inline_yosys_commands",
     "check_inline_command_conformance",
     "audit_inline_yosys",
+    "resolve_no_ys_script",
 ]
