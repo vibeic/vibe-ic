@@ -4181,6 +4181,47 @@ with --write-baseline.` **That is exactly the case the standing constraint names
 surviving names, which is honest. Re-recording the baseline is the lander's call.
 
 
+## M79 — the SAME pattern as M78: D's blocker was retired in fact and left standing in prose
+
+M78 was a fix I had diagnosed and then filed as blocked. **D is the same shape,
+one document over.** The proposal's closing paragraph on D still read *"the
+fixture needs a real published cell before either corpus test can exercise a real
+transition"* — a premise **I disproved myself in M68** and never carried back.
+
+**Re-verified now, by path AND by the producer's own predicate:**
+
+    tracked benchmark-data paths                    17210
+    tracked under ic/spm/v1.5.58_ihp-sg13g2           211
+    phase3/stage3/pnr/routed.def                    PRESENT
+    routed_def_corpus.py:121,211 recognises a cell as
+      ("phase3","stage3","pnr","routed.def")        EXACT MATCH
+
+**A real published cell exists, is tracked in git's index, and satisfies the
+producer's own definition of a cell.** Nothing needs authoring.
+
+**Why this one is worth naming separately from M78.** The stale sentence did not
+merely sit there — **it had been promoted into a reason.** "Authoring benchmark
+content to turn a test green is precisely the move this engagement exists to
+prevent" is true, and it was doing work it had no right to do: the prohibition
+was standing in for a fact about where data lives, and the two are not the same
+thing. Authoring remains forbidden **and is unnecessary**, which is the stronger
+statement and was available the whole time.
+
+**That is the more dangerous decay class than a stale number.** A stale count is
+wrong and looks wrong once checked. **A retired blocker that has been restated as
+a principle reads as settled doctrine**, and the next reader has no reason to
+re-derive it — they inherit the conclusion with the evidence stripped off.
+Corrected in place, with the original sentence retained inside the correction so
+the change is legible rather than silent.
+
+**Also confirmed while reading the producer:** `_index_paths` returns
+`UNDETERMINED` (rc 2) for a loose non-git directory, with the comment *"treating
+a loose directory as zero routed DEFs would be a false empty corpus."* **The repo
+already implements rule 9 here** — "could not read it" and "read it, it was
+empty" do not share a verdict. That is a green worth recording, since I have
+spent this branch finding places where they DO share one.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design

@@ -260,9 +260,29 @@ trees enumerate differently against the corpus each can see. That is reachable
 from the subject branch, which crosses. D is implementable in principle, and the
 mechanism is now fully described rather than guessed.
 
-**I still did not build it**, and the constraint is unchanged: M11 measured the
+**I still did not build it — but the constraint is NOT unchanged, and this
+paragraph said so for longer than it was true.** It read: *"M11 measured the
 published corpus as EMPTY upstream, so the fixture needs a real published cell
-before either corpus test can exercise a real transition. Authoring benchmark
+before either corpus test can exercise a real transition."* **That premise is
+false, and I disproved it myself in M68 without coming back to correct it here.**
+
+VERIFIED on this host, by path and by predicate:
+
+    tracked benchmark-data paths                      17210
+    tracked paths under ic/spm/v1.5.58_ihp-sg13g2       211
+    including  phase3/stage3/pnr/routed.def          PRESENT
+
+and `routed_def_corpus.py:121,211` recognises a cell by exactly the tuple
+`("phase3","stage3","pnr","routed.def")`. **So a real published cell exists, is
+tracked in git's index, and matches the producer's own predicate.** Nothing needs
+authoring; the corpus is reachable by pointing `VIBE_IC_BENCHMARK_DATA` at a
+checkout that contains it.
+
+**Authoring benchmark content to turn a test green remains forbidden — and is
+now also unnecessary**, which is the better reason. The original sentence
+(retained above so the correction is legible) turned a fact about where the data
+lives into a doctrinal prohibition, and the prohibition then justified not
+building D. Only the first half was ever true. Authoring benchmark
 content in order to turn a test green is precisely the move this engagement
 exists to prevent — the same rule as never hand-editing a GDS to obtain a pass.
 A cell authored for that purpose would make the test green and the guarantee
