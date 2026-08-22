@@ -78,6 +78,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _INVENTORY_NAME = "population_pin_member_set_inventory.json"
 
 #: Below 2 an integer is a presence test ("any at all"), not a population.
@@ -365,7 +368,7 @@ def main(argv=None) -> int:
             if inv_path.exists() else []
         known = {r["key"] for r in rows}
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] population_pin_without_its_member_set: the "

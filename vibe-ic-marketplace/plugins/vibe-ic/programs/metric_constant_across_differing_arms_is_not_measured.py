@@ -102,6 +102,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 #: Committed multi-arm result sets. A path that does not exist is skipped, and
 #: a run where NONE exists is rc 2 — never a pass.
 _ARM_SETS = ("ppa-e2e/search/trials.json",)
@@ -215,7 +218,7 @@ def main(argv=None) -> int:
                   "A verdict over no arms is NOT a pass.", file=sys.stderr)
             return 2
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] metric_constant_across_differing_arms: the "

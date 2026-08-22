@@ -69,6 +69,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
+
 _ABSENCE = re.compile(
     r"(does not exist|not yet (?:present|landed|written|implemented|exist)"
     r"|is absent|no such file|not present|has not landed|does not ship"
@@ -178,7 +181,7 @@ def main(argv=None) -> int:
                   "under that root. NOT a pass.", file=sys.stderr)
             return 2
         if a.json_out:
-            Path(a.json_out).write_text(json.dumps(
+            _aa.write_text(Path(a.json_out), json.dumps(
                 {"denominators": denom, "findings": findings}, indent=2) + "\n")
     except Exception as exc:                    # noqa: BLE001 — see rc contract
         print(f"[CANNOT DETERMINE] published_absence_claim: the walk did not "
