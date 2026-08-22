@@ -525,7 +525,13 @@ branch, a promise the publishing path could not keep.
 ### The regression sweep, and the base red it distinguishes itself from
 
 The 13 test files touching `benchmark_evidence_publish`, `LAYOUT_ROUTING` or
-`_COPY_SUBTREES`: **201 passed, 7 failed.**
+`_COPY_SUBTREES`, as they stood when this was measured: **201 passed, 7 failed.**
+
+> **This sweep is DATED, not withdrawn.** It was taken before the third finding
+> below existed, over the 13 files matching at that time; the set is 16 now that
+> this branch has added to it. The numbers were true of that tree and the
+> attribution argument below is the one that still holds. For the tree as it
+> stands read [the later sweep](#regression).
 
 Six of the seven are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`,
 and the control is what makes them attributable: the **same six** fail on a
@@ -858,8 +864,21 @@ have to keep covering this one.
 
 ### Regression
 
-The 18 test files touching `benchmark_evidence_publish`, `LAYOUT_ROUTING` or
-`_COPY_SUBTREES`: **`226 passed, 6 failed, 66 skipped`** after the dedupe repair.
-The six are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`, the same six
-that fail on a pristine `origin/main` worktree at `a4caccefe` — base red, not this
-branch. The seventh failure in the first sweep was ARM F's subject and is fixed.
+The **16** test files touching `benchmark_evidence_publish`, `LAYOUT_ROUTING` or
+`_COPY_SUBTREES` (`programs/tests/test_*.py`; the grep also matches
+`_pdk_revision_fixture.py` and `matrix_d7_write_record.py`, which pytest does not
+collect): **`228 passed, 6 failed, 66 skipped`** after the dedupe repair. The
+seventh failure in the first sweep was ARM F's subject and is fixed.
+
+> **The two numbers in this paragraph were wrong when first written and are
+> corrected here.** It said "18 test files" and "226 passed". 18 was the grep's
+> file count, not the set pytest ran; 226 was drafted from the *pre-hardening*
+> sweep and never re-read against the run that followed it. Both are the defect
+> class this whole document is about — a number written beside a measurement
+> instead of taken from it — so they are corrected in place rather than quietly
+> overwritten.
+
+The six are `test_matrix_d3_outputs_produced[step15/17/19/20/30/32]`. **Measured
+rather than inherited:** a pristine detached worktree at `a4caccefe`, that file
+alone, gives `6 failed / 52 passed / 61 skipped` — the same six. Base red, not
+this branch.
