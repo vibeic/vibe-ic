@@ -71,6 +71,7 @@
       "process": "tt",
       "voltage_v": 1.8,
       "temperature_c": 25.0,
+      "mode": "functional",
       "group": "Total"
      },
      "value": 0.306,
@@ -191,6 +192,7 @@
       "process": "tt",
       "voltage_v": 1.8,
       "temperature_c": 25.0,
+      "mode": "functional",
       "group": "Total"
      },
      "value": 0.30200000000000005,

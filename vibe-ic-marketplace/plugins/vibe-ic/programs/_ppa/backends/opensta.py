@@ -142,6 +142,13 @@ _BASIS_SPEF_RE = re.compile(
     r"^\s*#?\s*STA_BASIS_SPEF\s*:\s*(\S+)", re.MULTILINE)
 _SIGNOFF_CORNER_COUNT_RE = re.compile(
     r"^\s*#?\s*STA_SIGNOFF_CORNER_COUNT\s*:\s*(\d+)", re.MULTILINE)
+#: The parasitics the run timed. Dialect C carries NO banner, so this whole-file
+#: stamp is the only place its RC condition can be stated -- and until the
+#: emitter was taught to write it, the deck read a SPEF on one line and
+#: disclosed four other facts about the corner on the next five. Parsed as a
+#: fact; judged nowhere in this file.
+_BASIS_SPEF_RE = re.compile(
+    r"^\s*#?\s*STA_BASIS_SPEF\s*:\s*(\S+)", re.MULTILINE)
 
 # ── the emitter's own attestations that a query RAN ────────────────────────
 # Their ABSENCE is what separates "queried and clean" from "never asked", which

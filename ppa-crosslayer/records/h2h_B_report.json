@@ -18,8 +18,8 @@
   },
   "record": "/home/reyerchu/_jxlayer/records/h2h_B.json",
   "refusal": {
-    "code": "SCOPE_INCOMPLETE",
-    "message": "arm 'vibe-ic-phase3-defaults''s `power_mw` scope does not declare ['mode']. Both arms declaring nothing would otherwise satisfy equality, and two numbers that say nothing about themselves are not thereby comparable."
+    "code": "STAGE_CONTRADICTS_BASIS",
+    "message": "arm 'vibe-ic-phase3-defaults' declares measurement_basis='post_route_sta', which may cite ['post_route', 'post_route_extracted'], but its `power_mw` was taken at stage='synth' -- a stage this basis does not cover. A record that cites a pre-physical number under a sign-off basis is claiming a measurement it did not take."
   },
   "roles": {
     "baselines": [

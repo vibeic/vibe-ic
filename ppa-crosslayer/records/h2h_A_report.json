@@ -18,8 +18,8 @@
   },
   "record": "/home/reyerchu/_jxlayer/records/h2h_A.json",
   "refusal": {
-    "code": "SCOPE_SENTINEL",
-    "message": "arm 'vibe-ic-phase3-defaults''s `timing_wns_ns` scope declares ['rc_corner'] with no value. `null` and \"\" are not unknown-corner markers: two of them compare EQUAL, so two numbers measured under conditions nobody recorded would pass as measured under the SAME conditions. State the field or omit the key."
+    "code": "STAGE_CONTRADICTS_BASIS",
+    "message": "arm 'vibe-ic-phase3-defaults' declares measurement_basis='post_route_sta', which may cite ['post_route', 'post_route_extracted'], but its `power_mw` was taken at stage='synth' -- a stage this basis does not cover. A record that cites a pre-physical number under a sign-off basis is claiming a measurement it did not take."
   },
   "roles": {
     "baselines": [

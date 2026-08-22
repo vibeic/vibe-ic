@@ -476,12 +476,68 @@ def evaluate(path: Path) -> Tuple[int, Dict[str, Any]]:
         # v2. Each one is argued in `_ppa/benchmark.py`; none of them can be
         # switched off by anything the record says about itself.
         report["contract"] = _bench.check_contract_identity(arms)
-        report["scope"] = _bench.check_scope_parity(arms)
+        # STAGE-BASIS BEFORE SCOPE PARITY, and the order is the finding.
+        # MEASURED on this repo's own corpus: h2h_A and h2h_B each cite a
+        # `synth` power number under `measurement_basis='post_route_sta'` --
+        # a STAGE_CONTRADICTS_BASIS refusal, rc 1 -- and each ALSO trips
+        # `check_scope_parity`. With parity first, both records reported as
+        # `[UNDETERMINED] ... SCOPE_INCOMPLETE`, rc 2, and the refusal was
+        # never printed. An rc 2 that swallows an rc 1 is the failure mode
+        # this whole layer exists to end, and it is the third instance found
+        # in this family (`run_coverage` and `ppa_problem_integrity_check`
+        # carried the same inversion).
+        #
+        # THE ARGUMENT IS NOT MERELY "1 OUTRANKS 2". It is what each check
+        # reads. STAGE_CONTRADICTS_BASIS is INTRA-arm: one arm's declared
+        # basis contradicts its own recorded stage, and no other arm is
+        # consulted. `check_scope_parity` is INTER-arm: it asks whether two
+        # arms are comparable. Withholding "this record contradicts itself"
+        # because "these two records could not be compared" is backwards --
+        # the self-contradiction is established whatever the comparison does.
+        #
+        # SAFE IN THIS ORDER BY CONSTRUCTION, not by luck: the callee skips
+        # (`continue`) on an unknown basis and on an absent scope, naming
+        # C4 and SCOPE_UNDECLARED as the owners of those cases, so it reaches
+        # nothing that parity was holding for it.
         _bench.check_stage_basis_agreement(arms)
+        # AND SO DO THE OTHER TWO CHECKS WHOSE EVIDENCE IS INDEPENDENT OF THE
+        # COMPARISON. The line is not "1 outranks 2" applied blindly; it is
+        # WHERE A CHECK'S EVIDENCE COMES FROM:
+        #
+        #   independent of parity   `feasibility` and `tuning` are read off ONE
+        #                           arm's own block. An arm with DRC violations
+        #                           is infeasible, and an opponent handed a
+        #                           smaller budget than ours is under-budgeted,
+        #                           whether or not two scopes line up.
+        #   DEPENDENT on parity     `derive_verdict` / `check_asserted_verdict`
+        #                           compare the numbers. A verdict refusal
+        #                           derived from arms that were never shown
+        #                           comparable is not independently
+        #                           demonstrable, so those STAY BELOW parity
+        #                           and an honest rc 2 keeps them.
+        #
+        # MEASURED before the move -- each of these is a `1` alone and became a
+        # `2` the moment an unrelated `rc_corner` sentinel was added to the
+        # record, which is the mask this repair is about:
+        #
+        #   ARM_INFEASIBLE ................... 1 -> 2
+        #   OPPONENT_UNDERBUDGETED ........... 1 -> 2
+        #   OPPONENT_NOT_TUNED ............... 1 -> 2
+        #   BASELINE_TUNING_CONTRADICTS_ROLE . 1 -> 2
+        #
+        # Three of those four are the rigged-benchmark refusals #1121 exists
+        # to enforce, and THREE PUBLISHED RECORDS CARRY A SCOPE SENTINEL, so
+        # the mask was live and not theoretical: any tuning defect in those
+        # records would have been invisible behind an incomplete scope key.
+        #
+        # SAFE HERE because `check_baseline_is_theirs` above already refused
+        # ROLES_UNCLEAR unless there is exactly one subject, which is what the
+        # `next()` below relies on; neither callee reads a `ppa` scope.
         report["feasibility"] = _bench.check_feasibility(arms)
         subject = next(a for a in arms if a.get("role") == "subject")
         report["tuning"] = _bench.check_tuning_parity(
             subject, [a for a in arms if a.get("role") == "baseline"])
+        report["scope"] = _bench.check_scope_parity(arms)
         derived = derive_verdict(arms)
         check_asserted_verdict(doc, derived)
         report["derived_verdict"] = derived

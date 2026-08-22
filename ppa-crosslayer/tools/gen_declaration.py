@@ -179,7 +179,14 @@ def build(trial: str) -> int:
         capture_output=True, text=True, cwd=str(PROGRAMS), timeout=900)
     print(f"[gen_declaration] {trial}: contract_check rc={c.returncode} "
           f"{c.stdout.strip().splitlines()[-1] if c.stdout.strip() else c.stderr.strip()[:200]}")
-    return 0
+    # PROPAGATE THIS ONE TOO. `contract_build`'s rc is propagated sixteen lines
+    # up and `contract_check`'s was discarded with `return 0` -- an asymmetry
+    # inside one function, and the discarded half is the half that JUDGES the
+    # contract rather than producing it. The comment above goes to real trouble
+    # to give the check the jsonschema version it needs so that it is not a
+    # false pass; having done that, throwing its answer away undoes the whole
+    # point of the exercise.
+    return c.returncode
 
 
 if __name__ == "__main__":

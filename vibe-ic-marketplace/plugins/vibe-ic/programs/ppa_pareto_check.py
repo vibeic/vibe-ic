@@ -330,4 +330,20 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # PPA_INTERFACES §1: 3 is INTERNAL ERROR. Letting a traceback propagate
+        # exits 1, which is reserved for a FINDING about the design -- so a
+        # crash would reach the roll-up as a verdict nothing reached.
+        #
+        # NEWLY LOAD-BEARING. While this gate took an exact path a crash was a
+        # local accident; with `--corpus` it sweeps a whole campaign, so one
+        # badly shaped document decides the entire row. The same guard
+        # ppa_contract_check has carried from the start.
+        print(f"{MARK_REFUSE} ppa_pareto_check: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was decided. rc=3 "
+              f"(NOT a finding about any design).", file=sys.stderr)
+        sys.exit(3)

@@ -736,6 +736,10 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             # it alone and it happens here.
             liberty = liberty or report.basis_liberty
             process = process or report.signoff_corner
+            # Dialect C has no banner, so the whole-file stamp is the ONLY
+            # place its parasitics can be named. Same relation as the two
+            # lines above: the BACKEND parsed the stamp, relating it to this
+            # section is meaning, and meaning happens here.
             spef = spef or report.basis_spef
         pvt = opensta.parse_liberty_pvt(liberty)
         gaps: Dict[str, str] = {}
@@ -767,15 +771,35 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         if rc_corner is None:
             rc_corner = _rc_corner_from_spef(spef)
         if rc_corner is None:
-            gaps["rc_corner"] = (
-                ("this report names the parasitic file %r, whose stem carries "
-                 "no %s corner token; an RC corner is not inferred from a file "
-                 "name that does not state one"
-                 % (spef, "/".join(_RC_CORNER_TOKENS)))
-                if spef else
-                ("this report names neither an RC corner nor the parasitic "
-                 "file it read, so which extraction it was timed against is "
-                 "not recoverable from it"))
+            # THE DATUM WAS HERE AND THIS BRANCH USED TO DENY IT. Dialect B's
+            # banner reads `=== SETUP corner: process=SS liberty=..,
+            # SPEF=x.max.spef ===`, and the backend captures that token off the
+            # SAME line it takes `process=` and `liberty=` from
+            # (`_BANNER_SPEF_RE`). This branch answered "this report names no
+            # RC corner" for it regardless -- a producer reporting a field
+            # unreported while holding the identity of it, which is the class
+            # the PPA record gates exist to end. MEASURED on a real run's
+            # `sta_mcorner_ocv.rpt`: rc_corner=None, spef='<top>.max.spef'.
+            #
+            # It stays a GAP, and that is deliberate rather than a half-fix.
+            # The token is a FILE NAME, and reading `max` out of `x.max.spef`
+            # is exactly the filename inference `_stage_for` refuses above --
+            # "inferring `post_route_extracted` from the filename would let a
+            # pre-layout estimate be compared against sign-off evidence". What
+            # the reason owes is the TRUE cause and the identity it is holding,
+            # so the next reader starts at the artefact instead of at a denial.
+            if spef:
+                gaps["rc_corner"] = (
+                    "this section names its parasitics as %r but no normalised "
+                    "RC-corner label, and the file name is NOT read as one: "
+                    "deriving a corner from a stem is the filename inference "
+                    "this module refuses elsewhere. The RC identity IS stated "
+                    "by the report and is not yet carried in scope" % (spef,))
+            else:
+                gaps["rc_corner"] = (
+                    "this report names no RC corner for the section; the RC "
+                    "axis is reported by the multi-corner SPEF report, not "
+                    "this one")
 
         # ── which CHECKS analysed nothing? Keyed per check, never per
         # report: an unbannered report carries BOTH checks in one section, and

@@ -504,6 +504,21 @@ def check_stage_basis_agreement(arms: Sequence[Mapping[str, Any]]) -> None:
             if sc is None:
                 continue      # SCOPE_UNDECLARED in check_scope_parity owns it
             stage = sc.get("stage")
+            # A STAGE THAT WAS NEVER STATED CANNOT CONTRADICT ANYTHING.
+            # `check_scope_parity` owns completeness and says so precisely
+            # ("scope does not declare ['stage', ...]", SCOPE_INCOMPLETE, rc 2);
+            # this check owns the case where a stage IS stated and is wrong for
+            # the declared basis. The distinction became load-bearing when this
+            # check moved AHEAD of parity in `ppa_head_to_head_check.evaluate`:
+            # without it, an arm whose `area_um2` scope is `{}` was reported as
+            # "taken at stage=None -- a stage this basis does not cover", which
+            # names a contradiction that does not exist and buries the real
+            # defect, which is that the scope is empty. MEASURED by
+            # tests/test_ppa_benchmark_fairness.py::test_VACUOUS_both_arms_
+            # declaring_an_EMPTY_scope_does_not_buy_equality, which went red on
+            # exactly that substitution.
+            if stage is None:
+                continue      # SCOPE_INCOMPLETE in check_scope_parity owns it
             if stage in allowed:
                 continue
             kind = ("a PROXY stage" if stage in PROXY_STAGES

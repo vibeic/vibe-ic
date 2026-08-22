@@ -1363,4 +1363,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # PPA_INTERFACES §1: 3 is INTERNAL ERROR. A traceback here exits 1, the
+        # code reserved for a FINDING about the change under review -- so a crash
+        # would read as "this PR fails the checklist", a verdict nothing reached.
+        print(f"[REFUSE] {GATE_NAME}: internal error "
+              f"{type(exc).__name__}: {exc}. Nothing was decided. rc=3 "
+              f"(NOT a finding about the change under review).", file=sys.stderr)
+        sys.exit(3)

@@ -354,7 +354,7 @@ run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pa
 # MEASURED 2026-08-22:
 #   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
 #   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
-uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 problem group, every pair inside the group compared. It was 20 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 # `--baseline` IS GONE, and dropping it is what makes this row decide anything.
 # MEASURED on a758f4adc, exactly as the line below was written:
 #
@@ -377,7 +377,7 @@ uncheckable_until 2027-02-28 "PASSES today over 20 pairs; rc 2 means a contract 
 run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-crosslayer"
-uncheckable_until 2027-02-28 "PASSES today over 60 pairs; rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
+uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
 run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
     python3 "$PG/ppa_problem_integrity_check.py" \
     --corpus "$ROOT/ppa-e2e"
@@ -1134,7 +1134,7 @@ run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_
 # The checker now refuses to call that state a PASS (rc 2 with the count), so
 # this line cannot go green until a contract-carrying report is committed, and
 # it goes green by itself on the first one that is.
-uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed"
+uncheckable_until 2026-11-30 "IT IS A MISSING PREREQUISITE, AND THIS DECLARATION USED TO DENY BEING ONE. Measured 2026-08-22: the gate prints \`--dir <ROOT>/benchmark-data is not a directory\` — it opens NO report. The previous wording said \"KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key\", which is a claim about the CONTENT of reports nothing read; it was plausibly true before v1.10.56 moved benchmark-data to its own repository, and has been a statement about an absent tree ever since. It also promised to go \"green by itself on the first contract-carrying report committed\" — it cannot, because no report committed HERE is in the directory it opens. MISSING INPUT, NAMED: a readable benchmark-data corpus, i.e. VIBE_IC_BENCHMARK_DATA pointed at a clone of the published-corpus repository. NOT given --corpus-may-be-absent deliberately: that flag returns rc 0 NO_CORPUS, which is a pass printed over a population nobody opened. THE REVIEW DATE IS DELIBERATELY UNCHANGED at 2026-11-30 even though the mechanism it was defending turned out to be false: re-dating an exemption is forbidden outright, and the argument for moving it here — that a date guarding a false reason means something different from one guarding a named absence — is exactly the kind of reasoning an author uses to widen his own deadline. The text is corrected; the clock is not touched"
 run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
     python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
@@ -1218,7 +1218,7 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # therefore "this clone cannot answer", which is the normal state for a
 # developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
 # complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
-uncheckable_until 2027-02-28 "needs a COMPLETE clone: it REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; CI checks out complete and genuinely checks. A hand-edited figure is still rc 1"
+uncheckable_until 2027-02-28 "needs a COMPLETE clone AND the artefact to have been generated, and only the first half used to be stated. It REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; a hand-edited figure is still rc 1. MEASURED 2026-08-22 on a COMPLETE checkout (git rev-parse --is-shallow-repository = false): rc 2 anyway, and the reason is not depth — \`docs/ENGINEERING_EVIDENCE.md does not exist\`. That file is NOT tracked (git ls-files finds none), so on any clean checkout it is absent until \`python3 tools/gen_engineering_evidence.py\` has run. Blaming shallowness alone sends a reader to check their clone depth when the answer is that nothing generated the file yet"
 run_tolerating_uncheckable "engineering evidence fresh" \
     "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
