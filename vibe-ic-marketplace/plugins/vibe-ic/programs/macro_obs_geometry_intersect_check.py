@@ -1,7 +1,39 @@
 #!/usr/bin/env python3
 """Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 
-THIS GATE BLOCKS (rc=1).
+THIS GATE BLOCKS (rc=1) — a statement about this program's VERDICT SEVERITY,
+not about where its verdict is consumed. Those are two different axes, and the
+second one is declared immediately below: a gate that says nothing about it is
+the defect `flow_gate_enforcement_audit` exists to catch, and silence there is
+not a decision.
+
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 21 while step 21 is running. What it DOES have, and this is why `advisory`
+here is not "ignorable": it is a gate leg of step 21 in the flow's BLOCKING
+slot (`program_exit_zero`, never `advisory_program_exit_zero`), so when
+`flow_compliance_check` evaluates that clause an rc=1 FAILs the step, and that
+verdict reaches the run's headline through
+`reports/audit/phase23_completion_audit.json`, which
+`phase3_one_shot_runner._derive_headline_verdict` reads. MEASURED on a copy of
+a published run-root: the evaluator's own step report lists this program under
+step 21's `measures`. What `flow_gate_enforcement_audit` scores is the narrower
+question "can this verdict stop the step it guards", and the answer there is
+no; `advisory` is that audit's token for that answer.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING, MEASURED. The one inline pattern the
+phase-3 runner has — `_DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` —
+routes every rc other than 0 and 1 to BLOCKED (non-green), deliberately, because
+for a sign-off gate "could not check" is not a pass. This gate's rc=2 means
+something different: no DEF, no macro LEF, no placed macro, or no OBS in any of
+them, i.e. there was legitimately no obstruction to cross. Over the 15 published
+phase-3 run-roots under `benchmark-data/ic`, invoked exactly as a caller would:
+rc 2 on all 15, rc 0 and rc 1 on none. Wiring it into that table would therefore
+turn every one of those published runs non-green for owning no macro
+obstruction, which is the false alarm this gate's own rc-2 branch was written to
+avoid. The flow's rc=2 -> VACUOUS_PASS encoding is the correct consumer; that
+table is not. Promotion needs an inline consumer that PRESERVES
+rc=2 -> VACUOUS_PASS at the step that owns the subject — a flow-owner change
+with its own blast radius, not a side effect of recording this decision.
 
 WHY IT EXISTS
 -------------
@@ -116,18 +148,20 @@ define a MACRO" directly; its path and name only guess at it.
 
 WHERE IT RUNS (#828 part 2, closed). This file used to say: "It is not
 registered in `flow/phase1_phase2_phase3.yaml` and no runner invokes it; its
-only caller is `tools/ci/repo_hygiene_gates.sh`." A gate that declares itself
-BLOCKING and that no flow step runs enforces nothing on a real design — it
+only caller is `tools/ci/repo_hygiene_gates.sh`." A gate whose verdict is
+blocking and that no flow step runs enforces nothing on a real design — it
 reproduced this defect in seconds on a routed DEF and was never asked to.
 
 It is now a gate leg of STEP 21 (Routing), the step that PRODUCES routed.def,
-so the metal it examines exists by the time it is asked. It is conditioned on
-its own precondition — that the project stages a LEF to read — because that is
-the one input without which it can say nothing at all; every OTHER refusal it
-makes (an incomplete LEF set, discarded OBS evidence, a truncated read) still
-reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed rather than passed.
-The CI caller in `tools/ci/repo_hygiene_gates.sh` is unchanged and still sweeps
-the tracked cells.
+so the metal it examines exists by the time it is asked. The clause is
+UNCONDITIONAL — the sentence here previously said it was conditioned on staging
+a LEF, and the flow definition says the opposite in the comment above the clause
+itself: a `**/*.lef` trigger is what `flow_condition_reachability_check` calls
+SELF-DISABLING, so the gate is asked on every run and answers for itself. Every
+refusal it makes (no LEF at all, an incomplete LEF set, discarded OBS evidence,
+a truncated read) reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed
+rather than passed. The CI caller in `tools/ci/repo_hygiene_gates.sh` is
+unchanged and still sweeps the tracked cells.
 
 SEE ALSO `macro_obs_load_parity_check`, which asks the prior question this gate
 cannot: whether the obstructions this file PARSES are the obstructions the tool
@@ -142,6 +176,68 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+import _routed_checker_progress as _routed_progress
+import _semantic_child_progress as _semantic_progress
+
+
+PROGRESS_SCOPE = "routed-def:macro-obs-geometry-intersect"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+
+
+def _read_input_text(path: Path) -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(path, errors="replace")
+    return Path(path).read_text(errors="replace")
+
+
+def _is_default_routed_def(relative: str) -> bool:
+    path = Path(relative)
+    return (path.parent.as_posix() == "phase3/stage3/pnr"
+            and path.name.startswith("routed")
+            and path.suffix == ".def")
+
+
+def _default_macro_lef_population(project: Path) -> List[Path]:
+    """Historical triple-glob order before content-based LEF filtering."""
+    ordered: List[Path] = []
+    seen = set()
+    for pattern in (
+            "input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
+        for path in sorted(Path(project).glob(pattern)):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path.absolute()
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
+            ordered.append(path)
+    return ordered
+
+
+def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    routed = index.select(
+        _is_default_routed_def,
+        sorted(project.glob("phase3/stage3/pnr/routed*.def")),
+        population="macro OBS routed DEF population")
+    lefs = index.select(
+        lambda relative: relative.endswith(".lef"),
+        _default_macro_lef_population(project),
+        population="macro OBS LEF population")
+    reads = [
+        *_routed_progress.planned_reads("routed-def", routed),
+        *_routed_progress.planned_reads("macro-lef", lefs),
+    ]
+    return _routed_progress.FiniteInputPlan(
+        [index.population_unit("macro-obs:git-index")], reads)
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell)).units
 
 _MACRO_RE = re.compile(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$", re.S | re.M)
 _SIZE_RE = re.compile(r"^\s*SIZE\s+([\d.-]+)\s+BY\s+([\d.-]+)\s*;", re.M)
@@ -847,19 +943,16 @@ def discover_macro_lefs(proj: Path) -> List[Path]:
 
     chip-AGNOSTIC: pure LEF grammar; no vendor, PDK or path literal beyond
     the two legacy globs it preserves."""
-    ordered: List[Path] = []
-    seen = set()
-    for pat in ("input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
-        for p in sorted(proj.glob(pat)):
-            rp = p.resolve()
-            if rp in seen or not p.is_file():
-                continue
-            seen.add(rp)
-            ordered.append(p)
+    if _ACTIVE_INPUT_PLAN is not None:
+        # The held, verified population is the decision input.  Re-globbing or
+        # restatting the pathname here would reopen a transient TOCTOU window.
+        ordered = _ACTIVE_INPUT_PLAN.paths("macro-lef")
+    else:
+        ordered = _default_macro_lef_population(proj)
     out: List[Path] = []
     for p in ordered:
         try:
-            text = p.read_text(errors="replace")
+            text = _read_input_text(p)
         except OSError:
             continue
         if _MACRO_RE.search(text):
@@ -876,12 +969,37 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out", type=Path, default=None)
     a = ap.parse_args(argv)
 
+    global _ACTIVE_INPUT_PLAN
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                if (a.def_path is not None or a.macro_lefs is not None
+                        or a.json_out is not None):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the default DEF/LEF "
+                        "population only")
+                _ACTIVE_INPUT_PLAN = _input_plan(a.project_dir)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(a)
+            if _ACTIVE_INPUT_PLAN is not None:
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(
+                    fresh_plan=_input_plan(a.project_dir))
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+
+
+def _main_parsed(a) -> int:
+
     proj = a.project_dir
     def_p = a.def_path
     if def_p is None:
-        cands = sorted(proj.glob("phase3/stage3/pnr/routed*.def"))
+        cands = (_ACTIVE_INPUT_PLAN.paths("routed-def")
+                 if _ACTIVE_INPUT_PLAN is not None else
+                 sorted(proj.glob("phase3/stage3/pnr/routed*.def")))
         def_p = cands[0] if cands else None
-    if def_p is None or not def_p.is_file():
+    if (def_p is None
+            or (_ACTIVE_INPUT_PLAN is None and not def_p.is_file())):
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no routed DEF "
               f"under {proj}. NOT a pass.", file=sys.stderr)
         return 2
@@ -893,7 +1011,7 @@ def main(argv=None) -> int:
     labels = []
     for p in lefs:
         try:
-            texts.append(p.read_text(errors="replace"))
+            texts.append(_read_input_text(p))
         except OSError:
             continue
         labels.append(str(p))
@@ -904,7 +1022,7 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    rep = audit(def_p.read_text(errors="replace"), texts, labels)
+    rep = audit(_read_input_text(def_p), texts, labels)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")
