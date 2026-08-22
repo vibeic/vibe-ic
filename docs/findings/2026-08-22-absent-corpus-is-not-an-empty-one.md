@@ -780,3 +780,92 @@ four consecutive lines of one log:
 
 The producer says it scanned nothing; the next line calls the corpus empty; the
 DAG closes 0.  Fixed tree, same three files: 22 + 17 + 42 = 81 passed.
+
+### 7. The sweep asked about producers. It did not ask about RECORD consumers.
+
+Sections 5 and 5b answered *"is the collapse singular?"* by enumerating every
+program that reaches `_corpus_location.refuse` — 13 of them, both states, flag
+on and off.  That is the **producer** side, and the answer there holds.  But a
+collapse can also live in a program that reads the dispatcher's `corpora` row
+**back**, and the sweep never asked about those.  Three exist:
+
+| record consumer | covered before this section |
+|---|---|
+| `repo_hygiene_parallel._summary_rc` | yes — §"The second collapse, in the waiver" |
+| `hygiene_finding_delta._validate_record` | yes — §"what does an OLD reader do with it?" |
+| `tools/gatekeeper-verify-merge.sh:810` `base_has_exact_legacy_routed_empty` | **no** |
+
+The third was missed because it is neither a producer nor a Python consumer: it
+is a shell function wrapping a heredoc, so both selectors walked past it.  It is
+also the most expensive place the defect could have lived.  It decides whether
+the BASE arm is in the one state that authorises `build_trusted_transition_
+evidence` — the trusted parent **enumerating and executing** the routed corpus
+on the landing path.  A base arm whose corpus nothing opened, accepted there,
+would have the landing build trusted transition evidence over a measurement
+nobody took.
+
+**Measured, not read.**  The shipped predicate lifted verbatim out of the script
+and driven over records the real `_gate_dispatch.sh` wrote, five cells, on
+`81cd5321b` (before the fix) and on this branch:
+
+| cell | before: `expansion` → verdict | after: `expansion` → verdict |
+|---|---|---|
+| stub producer `exit 3`, SHA bound | `PRODUCER_FAILED` → refuses | **`NO_CORPUS`** → refuses |
+| no pointer, SHA bound | `PRODUCER_FAILED` → refuses | `PRODUCER_FAILED` → refuses |
+| pointer → read-empty, SHA bound | `EXPANDED` → **AUTHORISES** | `EXPANDED` → **AUTHORISES** |
+| no pointer, no SHA | `EXPANDED` → refuses | **`NO_CORPUS`** → refuses |
+| pointer → read-empty, no SHA | `EXPANDED` → refuses | `EXPANDED` → refuses |
+
+**The verdict is identical in every cell on both commits.**  This consumer was
+never collapsed, and #1763's row keeps exactly the authority it has today.
+
+It is held by **two independent guards**, and naming both matters because the
+interesting one is not the obvious one:
+
+1. `_corpus_location` already refuses **rc 2 UNDETERMINED** for a bound SHA with
+   no checkout — *"GATEKEEPER_BENCHMARK_DATA_SHA is set but VIBE_IC_BENCHMARK_
+   DATA is unset, so no byte-attested checkout is bound to that SHA"*.  Inside
+   `gatekeeper-verify-merge.sh`, which exports that SHA into **both** arms, this
+   is the only way state A could arise — and there it is a broken pointer, not
+   an absent corpus.  So the question of which row to wear never came up.
+2. Without that SHA the predicate refuses on `benchmark_data_sha` equality
+   anyway (the record carries `null`).
+
+**So this ships as a regression pin, not as a fix, and it is not red on
+`81cd5321b`.**  Calling it a fix would repeat exactly the overstatement the top
+of this file already corrected once.  What
+`test_the_landing_transition_authorizer_never_accepts_an_unopened_corpus` pins
+is that the two guards stay **independent**: the strict dict equality against
+`expansion: "EXPANDED"` is what makes guard 2 unnecessary, and widening it to a
+subset check would put the whole weight back on one binding being right — the
+same shape of single-guard dependence §"How far that reaches" closed in the
+waiver.
+
+**Shown to bite, twice.**  Widening the predicate to accept `NO_CORPUS` fails on
+the substantive assertion — `assert 0 == 1`, *"a base arm whose corpus was NEVER
+OPENED authorised the trusted parent to enumerate and execute the routed
+corpus"* — and it fails that way **even when the mutation keeps the literal the
+shape check looks for**, so the pin does not rest on a string search.  The
+predicate's bytes are lifted out of the shipped script rather than restated, and
+the extraction asserts what it took, so a rename fails loudly here instead of
+leaving the test silently measuring nothing.
+
+### 8. Re-verified at the branch head, independently
+
+Every measurement above was made at `c6ec85abb` or earlier; eleven commits have
+landed on the branch since.  Re-run at `ce79b380e`, on a clean detached worktree
+of `origin/main` and a clean checkout of the branch, `PYTHONDONTWRITEBYTECODE=1`:
+
+| what | result |
+|---|---|
+| producer, state A (no pointer) | rc **3**, 0 items, `NOT FOUND (rc 3) … ABSENCE of a measurement` |
+| producer, state B (git checkout, index holds no routed DEF) | rc **0**, 0 items, `MEASURED EMPTY … names the index it read` |
+| producer over the REAL corpus this host carries (`~/_matrix_benchmark_data`) | rc **0**, `MEASURED EMPTY`, 0 routed DEF in its index — **#1763's row, unchanged** |
+| `test_routed_def_corpus_dispatch` + `test_corpus_location` + `test_repo_hygiene_parallel` | **82 passed** (81 + §7's pin) |
+| whole `tools/` suite, this branch | 863 passed, 6 skipped, **21 failed** |
+| whole `tools/` suite, pristine `origin/main` `a4caccefe` | 863 passed, 6 skipped, **21 failed** |
+| `diff` of the two sorted `FAILED` ID lists | **empty — the branch introduces none** |
+
+The 21 are the pre-existing reds §2b names and neither was touched.  Counts are
+reported alongside IDs and the conclusion rests on the IDs, because a total is
+the one number that moves for reasons unrelated to the change.
