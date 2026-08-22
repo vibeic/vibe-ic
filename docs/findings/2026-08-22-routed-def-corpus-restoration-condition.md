@@ -175,8 +175,9 @@ to the same question, at two depths, and every consumer reads exactly one of
 them.
 
 That is the `u_hawaii_adc` shape — a second, contradictory verdict one directory
-too deep — still committed, in a different design, twenty-one months of
-convention later. It is why the rule below is a program and not another line in
+too deep — still committed, in a different design, two days after the cell that
+carried it was withdrawn for exactly that and the instruction to check for it
+was written down. It is why the rule below is a program and not another line in
 a contract.
 
 ## Decision: BLOCKING stays, and it buys no exemption
