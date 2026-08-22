@@ -166,6 +166,64 @@ ref and on a live-but-not-containing ref.
 
 **Result: 110 rows examined, 445 citations parsed, 0 rows without an instruction that resolves.**
 
+## 8. Sixteen verdicts were wrong, and the rule in the rows is why
+
+Everything above re-checked claims. This section changes them. **16 rows move
+RECOVER -> LANDED**; the file now reads **74 RECOVER / 34 LANDED / 2 ABANDON / 0 UNREACHABLE**.
+
+Shard C's rule R2 calls a worktree unlanded when one of its files differs from
+`git show origin/main:<path>` — that is main's **tip**. The brief's warning has a second half
+nobody wrote down. "A branch whose content is fully on main still shows as ahead" is about
+ancestry; the same branch also still shows as **different**, because vibe-ic squash-lands and
+then main keeps moving. Work that landed on 2026-08-04 differs from the tip of 2026-08-22
+exactly as unlanded work does. R2 cannot separate them, and on these 16 rows it did not.
+
+The question that separates them: **did main's history ever hold these bytes at this path?**
+
+For each of the 16 that is answered twice over — once per file, once per tree:
+
+- every blob in the head's tree is among the **55114 distinct blobs reachable from
+  `origin/main a4caccefe`**;
+- of the paths that differ from main's tip, **every one is content main has held at that path,
+  and none is content main never held**;
+- and for the very file the row cited as proof of divergence, a **named main commit holds that
+  exact blob at that exact path** — e.g. `wt-jdrc1177`'s `die_density_fill_gen.py` at
+  `69ce9260dfd4`, `wt_sdc`'s `phase3_one_shot_runner.py` at `ab57adbde7f4`. Two of the 16 go
+  further: their whole snapshot **is** one of main's own 2944 tree hashes, which is what a
+  squash-land looks like from the branch side.
+
+Each was then re-read on its host *after* the judgement: **0 tracked modifications, 0 untracked
+files, HEAD unchanged**, and every gitignored entry attributed by `git check-ignore` to a class
+main's own `.gitignore` declares generated or scratch — `rm -rf` has never read `.gitignore`.
+
+### Three rows that qualified on content and did not move
+
+- **`_ld/wt`** — content qualifies exactly like the 16. It stays RECOVER because 14 of its
+  ignored entries fall under `benchmark-data/ic/*/clean_run_*/`, a class the deletion-bound
+  table does not declare. Main's comment calls that class local run products, which is
+  suggestive and is not the same as examined. The missing input is named in the row.
+- **`_v1123`** (384 modified) and **`_a1456`** (1 modified) — committed content is landed; the
+  rows now say so explicitly, so whoever acts knows the value is exactly the uncommitted files
+  and nothing in the history behind them.
+
+### Two traps hit while measuring this, both now gates
+
+1. **`git rev-list --objects` names each blob under only one path.** A `(path, blob)` index
+   built from it proves presence and *cannot* prove absence — it misses **109 of main's own tip
+   files**, because a sibling path holds the same bytes. A sweep that treats a miss as absence
+   invents unlanded work.
+2. **`git rev-list <main> -- <path>` simplifies history.** For one file it returned 7 commits
+   and hid the one holding the content; `--full-history` returned 14 and found it at
+   `bf85ef43adb2`. My first proof run reported NOWHERE for content that was plainly there.
+
+Both are self-test cases in `bin_jharv3_s5/landed_by_history.py`, along with: main's own tip
+must come back landed over >1000 files, a known-unlanded head must come back holding work, and
+a head tracking zero files must be **REFUSED** rather than passed. Five guarantees, all driven.
+
+Raw: `raw_landed_by_history_s5_jharv3.tsv` (per row: tracked files, paths differing from tip,
+paths main has held, ignored entries and classes), `raw_landing_proofs_s5_jharv3.tsv` (the named
+file, its blob, and the main commit holding it), `raw_ignored_entries_landedflip_s5_jharv3.tsv`.
+
 ## What was not done
 
 Nothing was deleted, on any host. No working tree, index or HEAD was modified anywhere — the
