@@ -4512,3 +4512,39 @@ a count under an UNSTATED PREDICATE. Age was the predicate I happened to have
 computed; "does the gate still fail" was the predicate that decides what anyone
 should DO. Same family as [[compare-signatures-not-counts]] — a number that is
 accurate and answers a question nobody asked.
+
+## 65. The branches were checked against each other, and two of them collided
+
+Six branches that all have to land is six chances to hand somebody a conflict, so
+I trial-merged the set onto `main` before calling any of it finished. Five went
+in clean and the sixth did not:
+
+    next/differential-fixture-carries-the-wired-gates    clean
+    next/ppa-head-to-head-fixture-declares-a-contract    clean
+    next/liar-census-shrink-pin-follows-the-flow         clean
+    next/fake-docker-state-is-serialised                 clean
+    next/retire-five-stale-acknowledgements              CONFLICT
+        tools/ci/gate_red_since.json
+
+Both ledger branches delete rows from the same JSON array — §61's retires the row
+its own fix closes, §64's retires the five whose gates already pass — so the
+collision is textual and the intended result is not in doubt: two rows survive.
+
+**Resolved by making the dependency explicit rather than leaving it for whoever
+lands them.** `next/retire-five-stale-acknowledgements` is now a two-commit stack
+rebased onto `next/liar-census-shrink-pin-follows-the-flow`:
+
+    9c25882dac  ledger: retire five acknowledgements whose gates already went green
+    9554367ecc  test(liar-census): the shrink literal follows the flow, and its
+                ledger row retires
+
+Landing the stack brings both. Re-trialled: **all clean**, and the merged tree's
+ledger holds exactly `['L-doc field producer', 'evidence citation resolves']` —
+the two rows that are still true.
+
+**Worth doing at all because a conflict is invisible until landing day**, and the
+person who meets it is not the person who knows what the merged file should say.
+A JSON array of acknowledgements is exactly the shape where "resolve both sides"
+silently keeps a row that should have gone — which would restore a stale
+acknowledgement, the defect §64 exists to remove, in the act of resolving the
+change that removes it.
