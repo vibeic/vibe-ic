@@ -1960,3 +1960,38 @@ Both would have been confident, specific, wrong findings against my own gates, a
 both were caught by the same habit that caught the others: state what the instrument
 should return on a known case, then check it did. The zero is never the evidence —
 the denominator beside it is.
+
+## The inverse failure: a gate whose corpus goes away
+
+A gate reading a key that is never there reads nothing. So does a gate whose CORPUS
+moves — and that one is worse, because the gate is correct, the tree is wrong, and
+the suite goes green. This repository has had exactly that: an unresolved corpus
+pointer once hid four hygiene failures behind a passing run.
+
+The gates' own first line of defence holds — every one says `examined 0 ... NOT
+CHECKED` and refuses to call an empty set a pass. This is the second line: the
+SOURCES they draw from are now asserted non-trivial, so a corpus that moves is a
+red test rather than a quiet green suite.
+
+    measured at f8760c4e0     floor
+      flow steps          69     10
+      required_outputs   164     50
+      top-level programs 1250   500
+      json files in tree 1236   100
+
+**Floors, not pins.** Exact counts break on every legitimate addition and get
+re-dated rather than fixed, which is the habit the standing rules forbid. The
+floors sit far below all four, so they can only fire on a collapse.
+
+Proven on real content, not only on a fixture — emptying the flow to `steps: []`:
+
+    E  AssertionError: a population these gates depend on has collapsed, so they
+       would examine little or nothing and PASS. Fix the corpus or the pointer —
+       never lower the floor:
+         required_outputs: 0 (floor 50)
+         steps: 0 (floor 10)
+
+The message names the remedy and forbids the wrong one in the same sentence,
+because the tempting repair for a floor that fires is to lower the floor.
+
+281 tests across the thirteen.

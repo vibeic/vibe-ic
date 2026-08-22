@@ -42,6 +42,7 @@ import contextlib
 import importlib.util
 import ast
 import io
+import os
 import re
 import json
 import sys
@@ -430,3 +431,60 @@ def test_the_capture_reference_has_not_rotted():
     assert any(r.get("bucket") == "A" for r in rows), (
         "the capture no longer declares a single Bucket-A rule, so the sweep "
         "would pass over an empty set")
+
+
+# ── THE POPULATIONS THESE GATES DEPEND ON MUST STAY ALIVE ───────────────────
+# The inverse of a gate reading a key that is never there is a gate whose CORPUS
+# goes away. It then examines nothing, finds nothing, and passes — and a passing
+# gate over an empty set is the failure this repository has already had: an
+# unresolved corpus pointer once hid four hygiene failures behind a green run.
+#
+# The gates themselves say "examined 0 ... NOT CHECKED" and refuse to call that a
+# pass, which is the first line of defence. This is the second: the SOURCES they
+# draw from are asserted to be non-trivial here, so a corpus that moves is a red
+# test rather than a quiet green suite.
+#
+# FLOORS, NOT PINS. Exact counts would break on every legitimate addition and
+# would be re-dated rather than fixed, which is the habit the standing rules
+# forbid. Measured at f8760c4e0: 69 steps, 164 required_outputs, 1250 top-level
+# programs, 1236 JSON files. The floors sit far below all four.
+_FLOORS = {"steps": 10, "required_outputs": 50, "programs": 500, "json": 100}
+
+
+def _population_sizes():
+    import yaml
+    root = _PROGRAMS.parents[3]
+    flow = (root / "vibe-ic-marketplace/plugins/vibe-ic/flow"
+                   "/phase1_phase2_phase3.yaml")
+    doc = yaml.safe_load(flow.read_text(encoding="utf-8"))
+    steps = doc.get("steps") or []
+    n_json = 0
+    for dp, dn, fn in os.walk(root, followlinks=False):
+        dn[:] = [d for d in dn if d not in (".git", "node_modules", "__pycache__")]
+        n_json += sum(1 for f in fn if f.endswith(".json"))
+    return {
+        "steps": len(steps),
+        "required_outputs": sum(len(s.get("required_outputs") or [])
+                                for s in steps),
+        "programs": len(list(_PROGRAMS.glob("*.py"))),
+        "json": n_json,
+    }
+
+
+def test_the_populations_these_gates_draw_from_are_not_empty():
+    sizes = _population_sizes()
+    thin = {k: (v, _FLOORS[k]) for k, v in sizes.items() if v < _FLOORS[k]}
+    assert not thin, (
+        "a population these gates depend on has collapsed, so they would examine "
+        "little or nothing and PASS. Fix the corpus or the pointer — never lower "
+        "the floor:\n  " + "\n  ".join(
+            f"{k}: {got} (floor {floor})" for k, (got, floor) in sorted(thin.items())))
+
+
+def test_the_population_floor_check_can_fail():
+    """PROVE IT FIRES — a collapsed corpus must not satisfy the floors."""
+    collapsed = {"steps": 0, "required_outputs": 0, "programs": 1250, "json": 3}
+    thin = {k: v for k, v in collapsed.items() if v < _FLOORS[k]}
+    assert set(thin) == {"steps", "required_outputs", "json"}, (
+        "the floor comparison did not catch a collapsed corpus, so the assertion "
+        f"above could never fail: {thin}")
