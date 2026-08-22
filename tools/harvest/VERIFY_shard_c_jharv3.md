@@ -474,3 +474,65 @@ assumption went untested because nobody wrote the consumer. It is the same
 sentence as *found nothing and parsed nothing print the same thing*, one altitude
 up: an unexercised reader and an absent reader are indistinguishable until
 something tries to read.
+
+## The gates now have tests, and the red was shown
+
+Three gates were shipped to outlive the agent that wrote them. All three were
+untested code, which sits badly beside the brief's own rule that every fix ships
+with a test that goes red without it — and worse beside the fact that **five
+defects were found in these three scripts on the night they were written**.
+
+`bin_jharv3/test_gates.py`, 15 assertions, all passing:
+
+```
+rescue gate FAILS when a guarded path is called LANDED
+rescue gate PASSES when that same path is called RECOVER
+rescue gate FAILS on ABANDON too, not only LANDED
+regression fixture actually differs from the shipped source
+shipped pattern DETECTS the contradiction
+greedy pattern MISSES it — this is the false green being pinned
+parity gate FAILS on the real files
+parity gate PASSES when the joined view is made to agree
+parity gate REFUSES an empty joined view instead of reporting 0
+contract check PASSES on shard c as pushed
+contract check does not fail shard a for using another grammar
+contract check does not fail shard b for using another grammar
+contract check rejects a bad shard name
+contract check names an unresolvable ref instead of passing
+```
+
+`rescue_contradiction.py` gained a `--shard-dir` seam so it can be exercised
+against synthetic shard files. It changes no default; the gate reads the branch
+exactly as before.
+
+### Showing the red
+
+Reverting the trailing-comma fix — restoring `uncommitted work in (\S+)` —
+turns the suite red immediately:
+
+```
+FAIL  rescue gate FAILS when a guarded path is called LANDED
+FAIL  rescue gate FAILS on ABANDON too, not only LANDED
+FAIL  regression fixture actually differs from the shipped source
+FAIL  shipped pattern DETECTS the contradiction
+exit 1
+```
+
+**One line in that output is the whole argument for the regression test.** With
+the fix reverted, `rescue gate PASSES when that same path is called RECOVER`
+**still passes** — because a gate that detects nothing passes every
+should-be-clean case for free. A both-directions test looks thorough and is
+satisfied by a checker that has stopped working. Only the fixture that reverts
+the pattern and demands the broken build *miss* what the fixed build catches can
+tell a working gate from a silent one.
+
+That is the false green from earlier tonight, pinned so it cannot return
+unnoticed. It printed `OK: no shard file contradicts a rescue ref` over four rows
+that really did contradict, and it was caught only because the expected answer
+was already known to be 4. Written before the measurement, it would have passed
+and been shipped as proof the shards were consistent.
+
+The test also self-checks its own fixture: `regression fixture actually differs
+from the shipped source` fails loudly if the pattern it patches is ever renamed,
+so a stale fixture cannot quietly become a test of nothing — which is the same
+failure, one level up.

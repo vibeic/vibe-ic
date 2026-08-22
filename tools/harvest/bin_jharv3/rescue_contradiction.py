@@ -91,6 +91,17 @@ def rescue_paths():
 
 
 def main():
+    # --shard-dir exists so the gate can be exercised against synthetic shard
+    # files. A gate with no test is how the trailing-comma FALSE GREEN below
+    # survived: it printed OK for a reason that had nothing to do with the
+    # artefact, and nothing was watching. The seam changes no default.
+    argv, shard_dir = sys.argv[1:], None
+    while argv:
+        a = argv.pop(0)
+        if a == "--shard-dir":
+            shard_dir = argv.pop(0)
+        else:
+            _die(f"unknown argument {a!r}")
     guarded = rescue_paths()
     if not guarded:
         print("no falselanded rescue refs on origin — nothing to gate")
@@ -103,7 +114,11 @@ def main():
         # Read from a NAMED ref. Never FETCH_HEAD: it means "whatever was
         # fetched last", and this function fetches each rescue ref, so relying
         # on it here would read the shard file out of a rescue branch.
-        body = git("show", f"{BRANCH}:{f}", check=False)
+        if shard_dir:
+            local = os.path.join(shard_dir, os.path.basename(f))
+            body = open(local, encoding="utf-8").read() if os.path.exists(local) else ""
+        else:
+            body = git("show", f"{BRANCH}:{f}", check=False)
         if not body.strip():
             _die(f"{f} is absent or empty at {BRANCH} -- refusing to report "
                  f"0 contradictions about a file I could not read")
