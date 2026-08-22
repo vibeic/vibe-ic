@@ -71,6 +71,7 @@ except ImportError:  # pragma: no cover
 
 import _vacuous_exit as _vx
 import _analog_a_check_common as _acc
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ── A NON-ZERO DELAY IS A DELAY OF SOMETHING ──────────────────────────────
@@ -411,7 +412,7 @@ def main(argv: List[str] = None) -> int:
     so_blocks = (res.summary or {}).get("structure_only_blocks") or []
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
         # The tier travels on the verdict WORD — `pass_token` is the seam
         # `_vacuous_exit` already provides for it — so a reader of the one

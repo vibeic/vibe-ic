@@ -1,9 +1,0 @@
-{
-  "program": "eco_status_gen",
-  "verdict": "ECO_REQUIRED",
-  "sta_source": "phase3/stage3/sta/sta_spef_based.rpt",
-  "wns_negative": false,
-  "tns_zero": false,
-  "raw_lines_inspected": 4,
-  "remediation": "Run hold-fix or setup-fix ECO via vibe-ic:hold-fix / vibe-ic:eco-plan skill. After ECO, re-run phase3_one_shot_runner to refresh STA and overwrite this log."
-}
