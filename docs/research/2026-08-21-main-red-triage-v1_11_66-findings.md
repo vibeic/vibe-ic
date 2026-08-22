@@ -5829,6 +5829,49 @@ discipline is not a way of finding errors — it is a way of knowing which claim
 survive it. **Three of my "open questions" did not survive; this one did.**
 
 
+## M110 — the fixture edit audited against doctrine I learned AFTER making it. It holds
+
+M109 checked the one program change. This checks the one DATA change — the D3
+manifest entry — and it is the harder test, because I wrote it early and only
+later learned the doctrine governing run-root records (#527 admissibility, the
+`home`/`repo`/`published` kinds, M105).
+
+**I have spent this document faulting records that cite roots nothing can
+resolve. Mine had to be held to that.**
+
+| claim in my entry | verified |
+|---|---|
+| `run: benchmark-data/ic/spm/v1.9.96_gf180mcuD` | **491 tracked paths** |
+| the artefact `reports/phase3/drc_signoff.json` | **present** |
+| *"carries `provenance.jsonl`"* | **present** |
+| *"and `reports/orchestrator/`"* | **present** (phase2 + phase3 one-shots) |
+| `size_bytes: 1919` | **1919** in the tracked blob AND on disk |
+
+**Every claim is a tracked fact, and the root is a `benchmark-data/` path — the
+admissible kind, not a `home` one.** The entry does what the six failing D3
+records do not: it cites something a checkout can reach.
+
+**AND THE CONCLUSION THE TWO AUDITS SUPPORT TOGETHER, which is the useful thing
+for whoever reviews this branch:**
+
+    the CODE change      survives its module's contract (M109)
+    the FIXTURE change   survives the record doctrine (here)
+    the PROSE around them needed 35 corrections (section D)
+
+**The diff held; the claims about the diff did not.** Every retraction in this
+document — "the repair is invisible to CI", "B's channel is confirmed", "one
+publication decision closes six", "a third cause", "not a fix", "22 reds one
+cause" — was a statement ABOUT the work, not the work. **Nothing I actually
+changed had to be reverted for being wrong; two things were reverted for being
+INCOMPLETE (B, and the corpus-control migration), and both were reverted rather
+than shipped half-done.**
+
+**So the review advice I would give on my own branch: trust the diff, verify the
+prose.** That is an uncomfortable thing to have earned and a useful thing to know,
+and it is the honest inverse of how I was reporting for most of this engagement —
+confident in the summary, casual with the check.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
