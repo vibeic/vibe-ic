@@ -2525,7 +2525,7 @@ four, and not one survived unchanged.**
 | A-14 | 11 candidates | **8 confirmed** | strengthened; 3 masked, not cleared |
 | A-3 | 161 floors | 36 | rescoped; `>= 1` is a different, valid assertion |
 | A-4 | 32 prefix globs | needs a discriminator | **most are correct**; see below |
-| A-6 | — | 0 false positives | clean **where the record puts it**; placement warning |
+| A-6 | 759 of 1238 take an output path | **7 relative defaults, not all defects** | **swept**: the offending property is where a path RESOLVES at runtime, not that its default is relative — a static scan reports 7 and several are correct. Confirms the check belongs in the shared writer |
 | A-10 | — | population of **1** | real defect, but the guard protects one site |
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | — | 5 admitted, 0 counted | verified on the published document |
@@ -2699,9 +2699,12 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the six unswept rules** — A-6, A-10,
-   A-16, A-17, A-18, A-19, which are exactly the rows carrying no *before*
-   figure in the sweep table. **A-1 and A-2 were two of the nine and have now
+3. **Sweep before building each of the five unswept rules** — A-10, A-16,
+   A-17, A-18, A-19, which are exactly the rows carrying no *before* figure in
+   the sweep table. **Four of the nine are now swept**, and the yield argues for
+   the rest: two overturned their own row, one survived on a population twice
+   the batch, and one settled a design question the record had argued on
+   reasoning alone. **A-1 and A-2 were two of the nine and have now
    been swept. Both overturned their own row, and for the same reason**: each
    claimed freedom from false positives *by construction*, on the ground that a
    set difference cannot invent a member — and in both cases one input to the
