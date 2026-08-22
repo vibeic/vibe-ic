@@ -691,3 +691,38 @@ def test_a_citation_resolving_ABOVE_the_scan_root_is_disclosed_not_judged(tmp_pa
     r = _run(scope, tmp_path / "bl.json")
     assert r.returncode == 0, r.stdout
     assert "OUT OF SCOPE" in r.stdout, r.stdout
+
+
+def test_a_file_above_the_corpus_root_does_not_silence_a_dangling_citation(tmp_path):
+    """The scope walk must not reach past the corpus root.
+
+    It used to climb FOUR ancestors of the scan root, so an unrelated file that
+    merely shared the cited basename, sitting up to four levels above, was
+    enough to report a genuinely dangling citation as OUT OF SCOPE and PASS.
+
+    MEASURED with a stray proof-log file directly in /tmp: an identical fixture
+    gave opposite verdicts purely by DEPTH -- 2..4 levels below /tmp reported
+    rc 0 OUT OF SCOPE, 5+ levels rc 1 FAIL. pytest's tmp_path sits 3 levels
+    down, which is why four of this module's own controls were red on main for
+    247+ commits.
+
+    The two arms here differ ONLY in whether the decoy exists.
+    """
+    deep = tmp_path / "a" / "b" / "c"
+    scan = deep / "corpus"
+    (scan / "sub").mkdir(parents=True)
+    (scan / "sub" / "EV.md").write_text("see `proof.log` for the run\n",
+                                        encoding="utf-8")
+
+    clean = _run(scan, tmp_path / "bl1.json")
+    assert clean.returncode == 1, clean.stdout
+    assert "proof.log" in clean.stdout
+
+    # the decoy: same basename, two levels above the scan root, unrelated file
+    (deep.parent / "proof.log").write_text("not the cited artifact\n",
+                                           encoding="utf-8")
+    with_decoy = _run(scan, tmp_path / "bl2.json")
+    assert with_decoy.returncode == 1, (
+        "a file above the corpus root silenced a real dangling citation:\n"
+        + with_decoy.stdout)
+    assert "OUT OF SCOPE" not in with_decoy.stdout, with_decoy.stdout

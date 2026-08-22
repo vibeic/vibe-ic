@@ -376,13 +376,20 @@ def _resolves_outside_the_scan_root(cite: str, root: Path) -> bool:
     """
     if Path(cite).is_absolute():
         return False              # absolute is non-portable; already never resolvable
-    bases = []
-    base = root.parent
-    for _ in range(4):            # benchmark-data/ic -> benchmark-data -> ...
-        bases.append(base)
-        if base.parent == base:
-            break
-        base = base.parent
+    # ONE ancestor, not four. The baseline lives beside the data it describes
+    # (`root.parent`), so that level is load-bearing and stays. Levels 2..4 were
+    # the legacy INFERENCE of the repository from where the corpus happens to
+    # sit, and the block below replaced that with a STRUCTURAL lookup — so they
+    # no longer reach anything this function needs, while they do reach `$HOME`
+    # and `/`.
+    #
+    # MEASURED 2026-08-22, why that matters: with a stray proof-log file sitting
+    # directly in /tmp, an identical fixture gave opposite verdicts purely by
+    # DEPTH — a scan root 2..4 levels below /tmp found it and reported the
+    # planted dangling citation OUT OF SCOPE (rc 0), 5+ levels down did not
+    # (rc 1). pytest's tmp_path sits 3 levels below /tmp, which is why four of
+    # this gate's own controls have been red on main for 247+ commits.
+    bases = [root.parent]
     # THE ANCESTOR WALK STOPPED REACHING THE REPO AT c5d7f2d00 (measured
     # 2026-08-21). The comment this loop used to carry read
     # "benchmark-data/ic -> benchmark-data -> repo root", which was true while
