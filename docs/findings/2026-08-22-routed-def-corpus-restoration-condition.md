@@ -15,10 +15,13 @@ Measured 2026-08-22 on a clean worktree of `origin/main` @ `81cd5321b`
 clean worktree of `origin/main` @ `a4caccefe` (v1.11.69), 214 commits later,
 against the publishing repository at its live tip `3b58ccd42`.** Evidence
 attaches to a sha, not to a branch name: this record was written against a base
-that main has moved past, so every load-bearing figure below was taken again
-rather than carried forward. Three figures moved and are corrected in place —
-each correction is marked **[re-measured @ a4caccefe]** and states what the
-earlier number was. Nothing in the verdict moved. It reaches the same verdict as
+that main has moved past, so every load-bearing claim below was taken again
+rather than carried forward. Ten passages are marked **[re-measured @
+a4caccefe]**; most reproduce unchanged. **Three claims moved, and each says so
+where it stands:** a count of mine that was simply wrong (4 cells and 342
+directories, not "5 cells, 388"), an item this record FILED that has since been
+FIXED on main by #1764, and a sibling branch that the same landing superseded on
+the merits. Nothing in the verdict moved. It reaches the same verdict as
 `2026-08-22-routed-def-corpus-adjudication.md` by a different route — that
 record read this repository's publishing programs; this one reads the
 **publishing repository's own committed statement** — and it then contradicts
