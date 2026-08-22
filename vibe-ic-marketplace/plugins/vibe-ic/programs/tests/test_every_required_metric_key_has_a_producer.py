@@ -143,7 +143,28 @@ def test_no_records_is_not_checked(tmp_path):
     (root / "records" / "records_flat.json").write_text("[]")
     rc, out = _run(root)
     assert rc == 2, out
-    assert "an absent corpus is not a clean one" in out
+    assert "no axis was judged" in out
+
+
+def test_an_empty_corpus_reports_no_finding_at_all(tmp_path):
+    """MEASURED DEFECT IN THIS GATE, now pinned.
+
+    Over a tree with no metric records EVERY axis is trivially unprovable. The
+    first version computed the findings before checking the corpus size, so it
+    printed nine "STRUCTURALLY UNPROVABLE ... forever" lines to stdout and THEN
+    returned NOT CHECKED. The exit code was right and the output was an unearned
+    claim — absence rendered as a finding, which is the error this whole family
+    of rules exists to refuse, and a caller reading stdout would have acted on it.
+
+    The empty-corpus branch must therefore return BEFORE any finding is printed.
+    """
+    root = _corpus(tmp_path, set())
+    (root / "records" / "records_flat.json").write_text("[]")
+    rc, out = _run(root)
+    assert rc == 2, out
+    assert "STRUCTURALLY UNPROVABLE" not in out, (
+        "an empty corpus produced findings:\n" + out)
+    assert "0 key(s) observed" in out
 
 
 def test_unparseable_json_is_skipped_not_fatal(tmp_path):

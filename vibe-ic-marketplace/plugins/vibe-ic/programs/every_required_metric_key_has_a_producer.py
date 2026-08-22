@@ -180,6 +180,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[{NAME}] NOT CHECKED — the axis table could not be read, so no "
               f"axis was judged: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
+    # THE EMPTY-CORPUS CHECK COMES FIRST, AND THAT ORDER IS THE RULE.
+    #
+    # Over a tree with no metric records EVERY axis is trivially unprovable, so
+    # computing the findings first and returning NOT CHECKED afterwards printed
+    # nine "STRUCTURALLY UNPROVABLE ... forever" lines about a corpus nobody had
+    # looked at. The exit code was right and the output was an unearned claim —
+    # absence rendered as a finding, which is the exact error this whole family
+    # of rules exists to refuse. A caller reading stdout would have acted on it.
+    if emitted == 0:
+        print(f"[{NAME}] NOT CHECKED — no canonical metric record was found "
+              f"under {str(root)!r}, so no axis was judged and NO finding is "
+              f"reported: over an empty corpus every axis is unprovable for the "
+              f"same reason. This gate answers only about runs it can see.",
+              file=sys.stderr)
+        print(f"examined {axis_count} axis/axes over {key_count} canonical "
+              f"metric key(s); 0 key(s) observed in emitted records")
+        return 2
     for name, groups in unprovable:
         print(f"axis {name!r} is STRUCTURALLY UNPROVABLE — no group of proofs "
               f"is fully present in any metric record under this tree: {groups}. "
@@ -192,12 +209,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"examined {axis_count} axis/axes over {key_count} canonical metric "
           f"key(s); {emitted} key(s) observed in emitted records; "
           f"{len(dead)} dead proof path(s) disclosed")
-    if emitted == 0:
-        print(f"[{NAME}] NOT CHECKED — no canonical metric record was found "
-              f"under {str(root)!r}, so no axis was judged. This gate answers "
-              f"only about runs it can see; an absent corpus is not a clean "
-              f"one.", file=sys.stderr)
-        return 2
     if axis_count == 0:
         print(f"[{NAME}] NOT CHECKED — the axis table declares no axis, so this "
               f"gate walked an empty set. Not a pass.", file=sys.stderr)
