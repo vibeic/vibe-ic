@@ -138,9 +138,10 @@ def _config(**over) -> dict:
         "PAD_CORNER_SITE_NAME": "io_corner_site",
         "PAD_EDGE_SPACING": 10,
         "PAD_ROTATION_HORIZONTAL": "R0",
-        # librelane's default, and the ONLY value this step proceeds on: the
-        # placer does not read this variable (measured), so a declared
-        # non-default is refused NOT_DETERMINED rather than silently ignored.
+        # librelane's default, and the ONLY value this step proceeds on. The
+        # placer DOES read this variable (measured — it moves the S/N rows);
+        # this step does not implement it, so a declared non-default is
+        # refused NOT_DETERMINED rather than silently ignored.
         "PAD_ROTATION_VERTICAL": "R0",
         "PAD_ROTATION_CORNER": "R0",
         "PAD_CORNER": "pad_corner",
@@ -1192,11 +1193,14 @@ def test_the_vertical_sides_carry_the_orientation_the_placer_produces(tmp_path):
 
 
 def test_a_declared_non_default_vertical_rotation_is_not_determined(tmp_path):
-    """DEGRADE LOUDLY. The placer does not read this variable. Honouring it
-    silently is a lie and ignoring it silently is the defect. An author who
-    sets a knob is entitled to be told the knob does nothing — and being told
-    is rc 2, not rc 0 and not rc 1: it is `I cannot honour what you asked`,
-    which is neither a pass nor a finding about the design."""
+    """DEGRADE LOUDLY. THIS DOCSTRING SAID "the placer does not read this
+    variable" AND "the knob does nothing", AND BOTH WERE WRONG — the placer
+    reads it and moves the S/N rows with it; it is THIS STEP that does not
+    implement it. Honouring it silently is a lie and ignoring it silently is
+    the defect. An author who sets a knob is entitled to be told it was not
+    honoured here — and being told is rc 2, not rc 0 and not rc 1: it is `I
+    cannot honour what you asked`, which is neither a pass nor a finding about
+    the design."""
     root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R90"))
     assert _gen(root) == 2
     rep, _ = CHK._unwrap(_report(root))
@@ -1218,7 +1222,7 @@ def test_every_non_default_vertical_rotation_is_refused(tmp_path, value):
     assert "PAD_ROTATION_VERTICAL_NOT_HONOURED" in _rules(root)
 
 
-def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
+def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_unhonoured(
         tmp_path):
     """The other half of the rule, and the half that keeps it honest. A run at
     librelane's default is indistinguishable from a run that set nothing, so it
@@ -1262,10 +1266,9 @@ def test_the_disclosure_does_not_claim_the_variable_is_inert(tmp_path):
     assert "rotation_vertical_inert" not in rep, (
         "the key asserts inertness in the schema itself")
     rec = rep["rotation_vertical_not_honoured"]
-    blob = json.dumps(rec).lower()
-    for lie in ("is inert", "does not read it", "the knob does nothing"):
-        assert lie not in blob, f"the disclosure claims {lie!r}, which is false"
-    assert "does not implement" in blob
+    blob = json.dumps(rec)
+    _assert_no_retracted_claim(blob, "the disclosure")
+    assert "does not implement" in blob.lower()
 
 
 def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
@@ -1682,3 +1685,119 @@ def test_the_placer_agrees_with_the_orientation_constants(tmp_path):
             f"{PR.CORNER_ORIENT}. The placer ALTERNATES rotation and mirror "
             f"(R0, MY, R180, MX); a pure rotate_cw walk gives E and W where it "
             f"writes FN and FS, which is the defect this pins")
+
+
+
+#: The sentences `main` shipped as live claims about the placer, VERBATIM, for
+#: scanning SOURCE. Every one is false: `-rotation_vertical` moves the S/N rows,
+#: so the placer reads the variable. The retraction that replaced them is worded
+#: so that it does not contain them, which is why a verbatim scan works here.
+RETRACTED_CLAIMS = (
+    "`PAD_ROTATION_VERTICAL` IS INERT",
+    "The same measurement shows the placer does not read it.",
+    "placer ignores it",
+    "the knob does nothing",
+)
+
+#: The same falsehoods as the shortest fragment that still identifies one, for
+#: scanning EMITTED text — the report and the console.
+#:
+#: THIS LIST EXISTS BECAUSE THE TWO GUARDS DISAGREED. The record guard listed
+#: three phrases and did not list `placer ignores it`, so that one sentence
+#: survived in the console line the whole time the commit next to it was
+#: removing `is inert` from the record. One vocabulary, checked in both places,
+#: is the fix — a second list is a second thing to forget to update.
+
+
+
+#: The same falsehoods as the shortest fragment that still identifies one, for
+#: scanning EMITTED text — the report and the console.
+#:
+#: THIS LIST EXISTS BECAUSE THE TWO GUARDS DISAGREED. The record guard listed
+#: three phrases and did not list `placer ignores it`, so that one sentence
+#: survived in the console line the whole time the commit next to it was
+#: removing `is inert` from the record. One vocabulary, checked in both places,
+#: is the fix — a second list is a second thing to forget to update.
+RETRACTED_PHRASES = (
+    "is inert",
+    "does not read it",
+    "the knob does nothing",
+    "placer ignores it",
+)
+
+
+
+
+
+def _assert_no_retracted_claim(text: str, where: str) -> None:
+    """No retracted falsehood in EMITTED text, verbatim or reworded."""
+    low = text.lower()
+    for lie in RETRACTED_PHRASES:
+        assert lie not in low, (
+            f"{where} carries the retracted claim {lie!r}: the placer DOES "
+            f"read PAD_ROTATION_VERTICAL — it moves the S/N rows. This step "
+            f"is what does not implement it.")
+
+
+
+
+
+def test_the_module_docstring_does_not_carry_the_inert_claim():
+    """THE WRONG CLAIM LIVED IN THE DOCSTRING, AND THAT IS WHERE IT WAS READ
+    FROM. The record-level guard above watches the emitted JSON; nothing
+    watched the prose, which is what a human opens and what the "it is inert"
+    conclusion was reported upward from.
+
+    A wrong claim that a knob is inert is worse than a missing one: it tells
+    the next author the parameter cannot matter, so nobody varies it again.
+    This test fails if any of the four shipped sentences returns to either
+    module, and fails if the retraction that replaced them is deleted."""
+    for mod in (GEN, PR):
+        src = Path(mod.__file__).read_text()
+        for claim in RETRACTED_CLAIMS:
+            assert claim not in src, (
+                f"{Path(mod.__file__).name} carries the retracted claim "
+                f"{claim!r}; -rotation_vertical moves the S/N rows, so the "
+                f"placer does read PAD_ROTATION_VERTICAL")
+    # and the retraction is stated, not silently substituted: a reader who
+    # believed the old sentence has to be able to see it withdrawn.
+    prose = " ".join(GEN.__doc__.split())
+    assert 'THIS SECTION SAID "IS INERT"' in prose
+    assert "AND BOTH WERE WRONG" in prose
+
+
+@pytest.mark.parametrize("var", ["PAD_ROTATION_HORIZONTAL",
+                                 "PAD_ROTATION_VERTICAL",
+                                 "PAD_ROTATION_CORNER"])
+
+
+def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
+                                                          capsys):
+    """THE REFUSAL BROADENED TO THREE VARIABLES AND ITS REPORT DID NOT.
+
+    All three are named for the ROW AXIS and this step implements none of
+    them, so a declared non-default on any one is refused. But the rule id,
+    the `variables_absent` entry and the console line were still the literal
+    `PAD_ROTATION_VERTICAL`, so a run refused for declaring
+    PAD_ROTATION_HORIZONTAL was told to go look at a variable it had left
+    alone. A refusal that names the wrong input is a refusal a reader cannot
+    act on.
+
+    The console line is checked too, because it is the half a human reads and
+    it is where `placer ignores it` — the retracted claim — survived the
+    correction that removed it from the record."""
+    root = _project(tmp_path, config=_config(**{var: "R90"}))
+    assert _gen(root) == 2
+    rep, _ = CHK._unwrap(_report(root))
+    assert f"{var}_NOT_HONOURED" in _rules(root)
+    assert rep["missing_inputs"][0]["variables_absent"] == [var]
+    assert var in rep["reason"]
+    printed = capsys.readouterr().out
+    assert f"{var}_NOT_HONOURED" in printed
+    # BOTH halves, through the one shared vocabulary. An earlier draft of this
+    # test left the `reason` assertion OUTSIDE the loop, so it re-used the
+    # leaked loop variable and checked exactly one of the four claims against
+    # exactly one of the two texts. Planting `placer ignores it` in the emitted
+    # reason passed it 3/3.
+    _assert_no_retracted_claim(printed, "the console line")
+    _assert_no_retracted_claim(rep["reason"], "the refusal reason")
