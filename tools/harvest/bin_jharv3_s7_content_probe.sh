@@ -1,4 +1,20 @@
 #!/bin/bash
+# KNOWN LIMIT, MEASURED 2026-08-22 -- READ THIS BEFORE TRUSTING A "DISK_DIFFERS" FROM THIS SCRIPT.
+# `git hash-object` APPLIES the clean filter configured for a path. Several clones on this fleet
+# set filter.lfs.clean, so for files under that filter the hash computed here is NOT the blob sha
+# stored in the tree, and this script reports a difference where there is none. Run against
+# /home/reyerchu/_a1456 on .112 it claimed 95 paths differed; `git status` and `git diff --name-only
+# HEAD` in the same directory both reported exactly ONE changed file, and git was right.
+# So NEITHER direction is self-standing and both must be confirmed with git's own status/diff:
+#   DISK_DIFFERS  can be manufactured by a filter, as it was for _a1456 above.
+#   DISK_EQUALS_HEAD_TREE is the stronger of the two but is not a proof either -- a NORMALISING
+#     filter (line-ending conversion, say) maps two different files to one blob, so a difference
+#     that lies only in what the filter normalises is hidden rather than reported.
+# The findings taken from this script's .121 run were confirmed the other way before being acted
+# on: its "only_on_disk" files are exactly the untracked counts `git status --porcelain -uall`
+# reported independently in the same directories (3 in _adv_lgate_unknown, 1 in wt-all).
+# Adding --no-filters to the hash-object call below removes the first failure mode; it is left
+# as-is so the raw measurements committed alongside it can be reproduced exactly.
 # READ-ONLY: `git hash-object` without -w never writes. No index is touched, nothing is fetched.
 # Question: is the directory's on-disk content (tracked + untracked, excluding ignored) exactly HEAD's tree?
 while IFS=$'\t' read -r p rest; do

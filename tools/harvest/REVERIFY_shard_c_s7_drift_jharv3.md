@@ -70,3 +70,79 @@ and stand.
 - The 74 RECOVER rows were checked for recovery-instruction resolution and citation, not re-probed
   for on-disk drift. A drifted RECOVER still says keep.
 - This is a decision, not an action. Nothing on any host was deleted, moved, or fetched.
+
+---
+
+# Part 2: the same sweep over the 74 RECOVER rows
+
+Drift on a RECOVER row cannot cause a wrong deletion, so this was not about verdicts. It was about
+the other way work disappears here: content that lives in exactly one directory on one machine.
+
+**73 of the 74 RECOVER rows carry a judged HEAD** (the 74th, `vibe-ic-wt-caravel-slew-drv3`, is a
+row whose value is an untracked file and so is in no tree by construction). All 73 were re-probed.
+
+## Two more heads had moved, and both are already on origin
+
+| row | judged at | now at | on origin? |
+|---|---|---|---|
+| `/home/reyerchu/_gf180_priv/wt` (.112) | `5240ead2c7ee` | `c130f26f853a` | yes — it is exactly the tip of `next/general-precheck-tells-the-density-gate-the-pdk` |
+| `/home/reyerchu/AI_IC_design/wt_jwire2` (.121) | `4c77f7f0ae43` | `c190bf024bc2` | yes — exactly the tip of `fix/jwire2-hygiene-wiring` |
+
+Zero orphan commits on either. Verdicts unchanged; both were RECOVER and stay RECOVER.
+
+## Four directories that look like a mountain of uncommitted work, and are not
+
+`_advkill_lgate`, `_adv_lgate_unknown`, `_LRNdh` and `wt_k3_dep` on .121 each report roughly
+**4685 modified AND 4685 untracked** files. That reads as thousands of uncommitted edits. It is one
+thing: **their index has been emptied**, so every tracked file is reported twice — once as a staged
+deletion (`D `) and once as untracked.
+
+Measured read-only, three of the four hold **exactly HEAD's tree and nothing else**. Their HEADs are
+preserved, so there is nothing single-copy in them at all.
+
+## Four files that existed in exactly one place on the fleet
+
+The fourth directory, and one other row, held real single-copy content:
+
+| file | bytes | sha256 (16) | in main? | seen in the .108 clone? |
+|---|---|---|---|---|
+| `_adv_lgate_unknown/tools/test_adv_round2.py` | 5677 | `de0fae95cd8f0beb` | absent | never |
+| `_adv_lgate_unknown/tools/test_adv_round3.py` | 1347 | `d5b6660e2e330787` | absent | never |
+| `_adv_lgate_unknown/tools/test_adv_unknown_buys_leniency.py` | 14541 | `f48116dbe4883db9` | absent | never |
+| `AI_IC_design/wt-all/.gate.json` | 6524 | `dfee38305c0a108c` | absent | never |
+
+All four are now on the branch under `preserved_untracked_s7/`, read back through origin and
+re-hashed. `.gate.json` is stored as `gate.json` — the dot is dropped deliberately so no ignore
+rule can swallow it; restore the dot when recovering.
+
+## The .112 pair: both already preserved, and both re-confirmed current
+
+- `_a1456` — one working-tree edit. `harvest/rescue-112-a1456-staged` is live and its copy of that
+  path hashes to `c664219faf3d9b0e`, **the same bytes as the disk today**. A preserved snapshot of a
+  working-tree edit is worth checking rather than assuming: it goes stale the moment anyone edits
+  the file again. This one has not.
+- `vibe-ic-wt-caravel-slew-drv2` — one untracked file, `HANDOFF_TO_GATEKEEPER.md`. Its blob
+  `b71c633addb1` **is** on origin, stored by an earlier session under the renamed path
+  `HANDOFF_TO_GATEKEEPER.drv2.md`. A search by filename finds nothing and would have concluded the
+  file was unpreserved; the search had to be by blob, over all 147406 objects reachable from the
+  1536 locally-resolvable shas of the 1571 origin advertises.
+
+## A method error of mine, and how it was caught
+
+The content probe hashes files with `git hash-object`, **which applies the clean filter configured
+for the path**. Several clones here set `filter.lfs.clean`. Run against `_a1456`, the probe reported
+95 paths differing from HEAD; `git status` and `git diff --name-only HEAD` in that same directory
+both reported **one**. Git was right and the probe was wrong, and had I published its numbers this
+file would claim a hundred phantom uncommitted files on a live machine.
+
+Nothing from that run was acted on or committed as a finding. The four preserved files rest on the
+`.121` run, where the probe's "only on disk" set is exactly the untracked count `git status`
+reported independently in the same directories — a second, unfiltered measurement of the same fact.
+The limit is now written at the top of `bin_jharv3_s7_content_probe.sh`, in both directions: a
+filter can manufacture a difference, and a *normalising* filter can also hide one.
+
+## Shard C, final
+
+**110 rows: 75 RECOVER, 34 LANDED, 1 ABANDON.** One verdict changed this session. Four files were
+moved from single-copy to on-origin. Nothing was deleted, and nothing was written on .112 or .121
+beyond a temp script in `/tmp` that removed itself.
