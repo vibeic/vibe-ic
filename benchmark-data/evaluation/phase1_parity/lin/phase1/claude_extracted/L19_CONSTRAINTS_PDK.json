@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "LIN 2.2A is a wire-level protocol specification, not a chip specification. No PDK / floorplan / SDC / UPF / DFT constraints exist at the protocol level. The Physical Layer Specification (section 6) defines line-driver / receiver characteristics — bit-rate tolerances (F_NOM, F_TOL_RES_SLAVE, F_TOL_RES_SLAVE_BETTER), bus voltage thresholds, slew rate, EMI behaviour — but these are wire-level requirements, not silicon constraints. Real LIN-capable silicon (vendor LIN transceivers, microcontroller UARTs with LIN extensions) provides its own SDC / Liberty / UPF at the IP-license level outside the LIN spec."
-  }
-}

@@ -115,6 +115,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 # ---------------------------------------------------------------------------
 # DE10-Lite (Terasic, MAX10 10M50DAF484C7G) external-I/O pin catalogue.
@@ -400,7 +401,7 @@ def main(argv: list | None = None) -> int:
     elif args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2) + "\n")
 
     if args.json != "-":
         status = report["status"]
