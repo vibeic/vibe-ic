@@ -2546,7 +2546,7 @@ four, and not one survived unchanged.**
 | A-31 | 52 of 52 | **29 + 13 + 10** | the emitter's own template, across three lanes; not one step takes those inputs |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | — | n/a | FP-free by construction: a set difference cannot invent a member |
-| A-2 | — | n/a | FP-free by construction, same reason |
+| A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
 | A-9 | 29 → **33** in-tree backlogs | 6 → **10** offenders | swept during construction, then RE-MEASURED after the merge; the 4 new offenders are the sibling capture lanes |
 | A-13 | 47 pairs | 6 | swept during construction; unusable until the generic token was excluded |
 
@@ -2699,9 +2699,13 @@ Work through it in sequence. Step 1 gates the rest.
    (one axis is unanswerable today, so no candidate can ever be promoted).
    **Build the five test-population rules as one piece of work**, per the
    contention list above.
-3. **Sweep before building each of the nine unswept rules** — A-1, A-2, A-6,
+3. **Sweep before building each of the eight unswept rules** — A-1, A-6,
    A-10, A-16, A-17, A-18, A-19, A-23, which are exactly the rows carrying no
-   *before* figure in the sweep table. Thirteen sweeps
+   *before* figure in the sweep table. **A-2 was the ninth and has now been
+   swept**, which is the argument for doing the rest: its row claimed freedom
+   from false positives *by construction*, and the sweep overturned that — the
+   claim needs both sides of the set difference to be declared, and only one of
+   its three axes declares both. Thirteen sweeps
    changed ten rules and demoted one out of its bucket; the base rate says expect
    change.
 4. **Wire the verifier** — one line in the pinned hygiene gates, which this lane
