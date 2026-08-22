@@ -1,9 +1,22 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: A and C are IMPLEMENTED and verified on this branch — and C is the only
-one of the four that actually works, for the reason this document spends its
-length arriving at: its control is a COMMIT, and the tree crosses where the
-environment refuses. B was BUILT, RUN, and REVERTED. D's premise was FALSE.**
+**Status: A and C are IMPLEMENTED and verified on this branch. B was BUILT, RUN,
+and REVERTED. D's premise was FALSE.**
+
+**What separates them is whether a test must inject a CONTROL into the arm.** A
+needs none — it reads the verdict document the verifier already writes. C injects
+one and gets it across, because its control is a COMMIT. **B and D both need a
+control the ENVIRONMENT would have to carry, and the environment is an exact-set
+contract that refuses.** C alone therefore carries a self-delivering mutation arm:
+its `new_failures` assertion proves the tamper was DELIVERED, not merely that a
+refusal happened.
+
+> **CORRECTION, one commit old and mine.** This line briefly read *"C is the only
+> one of the four that actually works"*, which contradicts its own first clause —
+> **A is implemented, passes in both lanes, and is non-vacuous by construction.**
+> The real distinction is the narrower one above: C is the only one with a
+> self-delivering mutation arm. **I wrote an overclaim into the status line in the
+> same commit that fixed three overclaims in the status line.**
 
 > **THIS LINE USED TO SAY:** *"B is fully specified — both channels confirmed from
 > source, with a safety bound — and deliberately NOT built. D's mechanism is fully
