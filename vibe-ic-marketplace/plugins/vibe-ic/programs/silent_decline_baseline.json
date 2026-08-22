@@ -1,0 +1,13 @@
+{
+  "_comment": "Remedy call sites whose DECLINE path records nothing (vibe-ic#313 §6, wired vibe-ic#693). MAY ONLY SHRINK — each entry is a place the flow can refuse its own rescue with nobody told. The wrong repair is to widen the disclosure table until the number falls.",
+  "count": 15,
+  "scanned": 1091,
+  "by_file": {
+    "cvdp_complete_extract.py": 3,
+    "cvdp_context_interface_recover.py": 1,
+    "design_one_shot_runner.py": 1,
+    "lec_run.py": 2,
+    "phase1_doc_one_shot_runner.py": 6,
+    "phase3_one_shot_runner.py": 2
+  }
+}

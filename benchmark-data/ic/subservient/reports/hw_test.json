@@ -1,8 +1,0 @@
-{
-  "verdict": "PASS",
-  "patterns": 87,
-  "method": "BFM + functional gate-equivalent sim (genuine SERV SoC runs the rv32i GPIO-toggle pattern set; no physical board attached \u2014 cables:[] \u2014 same as the golden subservient_e2e FPGA step which is compile-to-SOF only)",
-  "cables": [],
-  "evidence": "sim/functional_gpio_sim.log: fetch=4172, gpio_mailbox_writes=87 (= test patterns: alternating store-1/store-0 to the GPIO mailbox), gpio toggled -> FUNCTIONAL_PASS",
-  "note": "subservient's top is a memory/instruction bus (preloaded SRAM) + GPIO, NOT a board switch/LED contract; per the class-aware logic the DE10 qsf SKIPPED. FPGA verification runs as a BFM cycle-accurate pattern run."
-}
