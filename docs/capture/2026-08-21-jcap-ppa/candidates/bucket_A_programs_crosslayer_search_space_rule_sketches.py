@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/crosslayer_search_space.py
 # Corpus-sweep REQUIRED before merging into programs/crosslayer_search_space.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A search space decides, per lever, whether the specification permits turning it, and publishes the admitted set with a count. Permission is a property of the SPECIFICATION; having somewhere to apply it is a property of the DESIGN, and the document conflates them. A lever that is permitted but has no applicable site on this design is admitted, counted, and indistinguishable in the published record from one with many sites — so the space advertises a dimensionality it does not have, a reader plans a sweep against it, and the shortfall only appears when somebody tries to author a candidate and finds there is nothing to change.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

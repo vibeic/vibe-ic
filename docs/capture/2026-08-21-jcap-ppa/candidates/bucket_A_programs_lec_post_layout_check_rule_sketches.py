@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/lec_post_layout_check.py
 # Corpus-sweep REQUIRED before merging into programs/lec_post_layout_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A step drives an external tool, the tool exits without a usable result, and the step records a verdict meaning tool-error. The verdict text names the tool as the cause. The tool's own message is not retained anywhere. Downstream a gate reads that verdict and repeats the attribution in its own finding — so the claim that the tool failed is asserted twice by two layers, neither of which saw the tool's output. The attribution is then unfalsifiable: a genuine tool defect and a setup gap in the step's own invocation produce a byte-identical record, and the only way to tell them apart is to reproduce the run.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 37 records, and the seventeen already-program claims of which sixteen hold
+# The PPA cluster, DISTILLED — 37 records, and the eighteen already-program claims of which seventeen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -7,12 +7,12 @@ eighteen end-to-end findings are already enforced by a shipped program or a
 general census test, and were fixed between the run that found them and this
 tree.** Add the smaller `jsonschema` item, which is not one of the eighteen, and
 four more classes drawn from the six lane records, and the count is
-**11 + 1 + 5 = 17** claims examined — of which **sixteen hold and one, F-2, is
+**11 + 1 + 6 = 18** claims examined — of which **seventeen hold and one, F-2, is
 disproven by execution**: its guard's predicate is satisfied by a production
 fallback and cannot fail. Those sixteen produced no record; duplicating them would be
 worse than skipping them.
 
-Two of the seventeen were marked *conditional* rather than clean, and one of those
+Two of the eighteen were marked *conditional* rather than clean, and one of those
 two, F-2, was later disproven outright. The brief's test
 for a landed fix — can the class recur in a module nobody has touched? — is
 really a question about whether the guard's population is DISCOVERED or
@@ -20,7 +20,7 @@ DECLARED, and theirs is declared. Both are flagged in the table and folded into
 **A-3**.
 
 Tree distilled against: `origin/main` @ `a00f53f20`, plugin **v1.11.66**; then
-merged up to `81cd5321b`, plugin **v1.11.68**. What that re-pin does and does not
+merged up to `a4caccefe`, plugin **v1.11.69** (main moved twice under this branch: 30 commits, then 214). What that re-pin does and does not
 claim, precisely: the live gate figures, both quoted pytest figures and every
 record/table tally WERE re-run on the merged tree, and one of each was wrong
 (619 gates, `18 passed`, two `26`s), as were the near-duplicate figures. The
@@ -68,6 +68,7 @@ Accepted with no refusal and no unrouted record.
 - [How much to trust each figure in this report](#how-much-to-trust-each-figure-in-this-report)
 - [Re-measuring the older sweeps, and what it cost to try](#re-measuring-the-older-sweeps-and-what-it-cost-to-try)
 - [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
+- [A record closed on main while this branch was open](#a-record-closed-on-main-while-this-branch-was-open)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -166,6 +167,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a gate that read NOTHING must not exit 0 | `programs/gate_zero_denominator_refuses_check.py` — and its header states exactly why the first gate does not imply it, which is the distinction I would otherwise have re-derived |
 | a bad invocation is 3, and asking for `--help` is not a bad invocation | `programs/_ppa/cli_exit.py` reads the exit code rather than catching the type; `test_ppa_layer_exit_contract.py` carries BOTH arms — the two are one defect from opposite sides, so a suite testing one manufactures the other. **The repo-wide form of this landed while this branch was open** and is worth the lander's attention: `programs/_gate_usage_exit.py` gives new gates an rc 3 because rc 2 already means VACUOUS, and `programs/_gate_invocation.py` recovers the distinction for the 1232 programs that predate it by reading the callee's error protocol out of its stderr. Their own measurement is the population: of 241 registered structural gates, **39 never got past argument parsing and every one was recorded as a benign input-missing skip**. I hit this live in this lane — the backlog sanitiser answered rc 2 to a missing `--file` and I read it as a content verdict before checking. `classify_not_invocable` was run on that exact invocation and named it, with a genuine content FAIL and a clean PASS as controls returning None |
 | a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
+| a lever that deletes a design property is priced, and the axis refuses | `programs/ppa_eco_spare_records.py` producing the evidence, `ECO_AXIS = "eco_readiness"` in `_ppa/feasibility.py` refusing on it, and two gates on the flow's own spare-cell artefact. **Landed on main DURING this lane** — see the withdrawn `A-18` |
 | a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
@@ -866,33 +868,6 @@ artefact class — the pattern this lane keeps finding.
 **(o)** yes. **(d)** yes — it is per producer per field, so it re-answers for the
 next producer added and for any other provenance field the record gains.
 
-### A-18 · a lever that deletes a design property must be priced or the winner is a trade · `ppa.pareto`
-
-The published winner of the 60-arm sweep won partly by **deleting all ten of the
-design's spare ECO cells**. The report decomposes the move exactly:
-
-    default -> winner                   6594 -> 6136 um2      -6.95 %
-      of which, density 0.30 -> 0.60    6594 -> 6291          -4.60 %   real
-      of which, spare 0.02 -> 0.00      6291 -> 6136          -2.46 %   a trade
-
-So roughly a third of the headline win is paid for in metal-only ECO readiness,
-and the preserving candidate is a **different arm** — 2.4 % worse on the
-objective and whole on the property.
-
-**The ranking layer cannot express any of this.** The word for that property does
-not appear anywhere in the search or frontier modules — zero mentions. The lever
-is exposed by the runner, the objective does not price it, so the optimum sits at
-the setting that removes it, monotonically, and the ranking reports a straight
-win.
-
-**Two separate lanes computed the distinction by hand and put it in prose** — one
-naming the preserving arm as "the winner a design that wants design-for-ECO
-should read", the other making an ECO-preserving winner its own headline
-category. Two independent hand-computations of the same missing term is the
-evidence that the layer owes it.
-**(o)** yes. **(d)** yes — it is per declared property, so it covers the next
-lever whose range includes switching something off.
-
 ### A-19 · a cheap fidelity rung may not rank candidates until its rank agreement is measured · `ppa.search`
 
 The search ships an ordered fidelity ladder, *cheapest first*, so candidates can
@@ -1426,6 +1401,38 @@ took the trouble to derive.
 
 ---
 
+### A-36 · a declared requirement must be satisfiable by correct practice · `ppa.feasibility`
+
+The last of the unmined requests, and the smallest-looking one in the list.
+
+    the per-axis view lookup            returns the caller's declaration verbatim
+    satisfiability checks in the module 0, in any spelling
+
+So a declaration demanding a slow, a typical **and** a fast view for *both* the
+setup and the hold axis is accepted — and cannot be met. A flow signs setup at
+the slow and typical views and hold at the typical and fast ones, which is
+correct practice, so setup-at-fast and hold-at-slow never exist and the axis
+reports no record forever. **The failure is silent and it points the expensive
+way**: an axis with no record is indistinguishable from a run that never got
+there.
+
+**One piece has to be built before the check can exist.** Screened for a
+declaration of which views the flow signs each axis at — by constant name and by
+report text — and found none; the multi-corner reports name a setup and a hold
+corner per report, not a producible set per axis. So the rule is two-part: the
+flow declares what it produces per axis, and the evaluator refuses any per-axis
+requirement that is not a subset of it.
+
+The source that found it put the principle better than a rule name can: *the
+strictest declaration a flow can satisfy is not the broadest one that can be
+written down.*
+
+**(o)** yes — on the declaration that produced the permanently unadjudicable axis.
+**(d)** yes: a subset test over every per-axis declaration, so it covers any axis
+and any view vocabulary the flow later gains.
+
+---
+
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
 > **why_not_bucket_a**: A program can decide this and the predicate is trivial —
@@ -1529,7 +1536,7 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **12 of the
+`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **11 of the
 37 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
@@ -2225,7 +2232,7 @@ what it contains. Mapped properly:
 | 7 | report how far the equivalence induction got | **now recorded as A-34** — the program already emits a depth field for its refutation half and none for its induction half |
 | 8 | the post-route repair crash, ten reproductions | **T-1** exactly |
 | 9 | name the taps in the area taxonomy | **now recorded as A-35, and my assessment was wrong** — tested, the required scope is 1 key and the composition is not among the 5 carried, so the required-key rule cannot reach it |
-| 10 | the smaller ones | **unmined** |
+| 10 | the smaller ones | its substantive half is **now recorded as A-36**; the other half — a refusal that gives a good reason and no resolving command — is left as the actionability item it is |
 
 **Four are covered exactly, one partly, five are not mined.** They are listed
 rather than absorbed, because a request that is neither paid nor recorded is
@@ -2326,6 +2333,37 @@ The general lesson, measured across four attempts: **a keyword screen over one's
 own prose measures the author's vocabulary.** It is worth building once to find
 what it happens to catch, and it is never worth wiring, because the vocabulary it
 encodes is the one blind spot guaranteed to be shared with the text.
+
+## A record closed on main while this branch was open
+
+The withdrawn record is `A-18`.
+
+This was a Bucket-A rule: *a lever that deletes a design property must be priced,
+or the winner is a trade.* Main landed the fix in the 214 commits it gained
+during this lane, and the brief's rule is that a class an existing program
+enforces gets named, not duplicated. So the record is withdrawn and the entry
+moved to the ALREADY-PROGRAM list.
+
+What landed, verified rather than taken from a commit message:
+
+    programs/ppa_eco_spare_records.py   the producer — the spare population as
+                                        canonical records a gate can adjudicate
+    `_ppa/feasibility.py`               `ECO_AXIS = "eco_readiness"` — the axis
+                                        that refuses
+    spare_cell_coverage_check.py        were enough inserted, spread, tied off
+    spare_cell_preservation_check.py    did they survive to the shipped artefacts
+
+The producer's own header states the defect in the same terms this record did: a
+search deleted a design's entire spare-cell population and **scored better for
+it** — smaller area, lower power, and no axis anywhere saying the layout could no
+longer be repaired by a metal-only ECO.
+
+**This is the outcome the loop exists to produce**, and it is worth saying plainly
+that it happened without this batch: the sweep here established that the property
+was invisible to both judges, and main independently built the producer, the axis
+and two gates. The record's value now is the measurement it leaves behind, not
+the rule it no longer needs to argue for.
+
 
 ## The honest sentences, checked verbatim against the records
 
@@ -2667,7 +2705,7 @@ rather than in a command line that would fail for whoever tried it.
 ## Summary
 
 **STATUS**: 37 records emitted and validated — 34 Bucket A, 2 C, 1 T, zero B,
-zero D. 17 ALREADY-PROGRAM claims examined, 16 holding and 1 (F-2) disproven by
+zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
 re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (48 fast + 4 authoritative). No gate
@@ -2692,9 +2730,9 @@ bucket. My 27 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
-| ALREADY-PROGRAM | 17 claims, **16 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
-| **AUGMENT-EXISTING** | 23 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 11 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35 |
+| ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
+| **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
+| **EXTRACT-NEW** | 12 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -2821,7 +2859,6 @@ gap was non-empty every single time it was measured.
 | A-15 | 1 literal site | artefact-level | **check moved**; a code scan cannot answer it |
 | A-16 | 5 admitted levers | **4 design-scoped, 1 tool-scoped; and 3 of 5 never searched** | **swept**: demanding a site count from all five is 1 false positive — a synthesis strategy has no sites. **Second clause**: the space publishes no field saying which admitted levers were exercised, so a consumer reads coverage of five where the run turned two |
 | A-17 | 6804 absolute, **2 roots** | **0 outside a run tree** | **swept**: no absolute path is forced, so the declared-convention check has an empty false-positive population and the "rewriting breaks provenance" objection does not apply. Earlier correction stands: mixed WITHIN producers, 6804/6804 host-prefixed |
-| A-18 | objective = **1 metric**; feasibility names **6** families | **spare cells in neither** | **swept**: removing them lowers the area the ranking optimises AND passes a gate that has no term for them — while the artefact carries a protection block asserting they cannot be stripped |
 | A-19 | 21 trials | **21 empty proxy files** | **swept**: a check keyed on the cheap rung's own artefact is born vacuous — it is empty in every trial. Build from the predicted and measured orders, and make emptiness a refusal |
 | A-20 | 48 lists | 30 | narrowed to those ignoring an existing declaration |
 | A-21 | 18 of 19 | 1 of 2 | the 18 was argparse; 17 programs NOT measured |
@@ -2839,6 +2876,7 @@ gap was non-empty every single time it was measured.
 | A-33 | 3 knobs, **0 synthesis actuators** | **6 of 9 staged files** carry a hand-written disclosure | the correct fact, in the one place no consumer parses |
 | A-34 | 2 runs, 3.8 s and 1795 s | **identical JSON** | the depth field exists for the other half of the method |
 | A-35 | 1 required scope key, 5 carried | **0 name the composition** | one component IS named — `fill` — and the rest are not |
+| A-36 | declaration honoured verbatim | **0 satisfiability checks** | and the producible set is not declared anywhere, so build that first |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

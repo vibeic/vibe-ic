@@ -452,7 +452,14 @@ else:
 _ids = {sid for sid, _ in heads}
 _refs = {m.group(1) for m in re.finditer(r"(?<![A-Za-z-])([ACT]-\d+)\b", MD)}
 control("dangling-refs", "A-999" not in _ids)
-_dang = sorted(_refs - _ids)
+# A record can be WITHDRAWN -- closed on main while this branch was open -- and
+# the prose still has to name it, in the ALREADY-PROGRAM row that replaced it and
+# in the sweep synthesis that still counts its result. The withdrawal is declared
+# in a section of its own, and ids named there are history, not dangles.
+_WD = "## A record closed on main"
+_withdrawn = (set(re.findall(r"`([ACT]-\d+)`", MD[MD.index(_WD):][:1500]))
+              if _WD in MD else set())
+_dang = sorted(_refs - _ids - _withdrawn)
 check("no prose reference points at a record with no section",
       not _dang, f"{len(_refs)} referenced, dangling {_dang}")
 

@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/_ppa/cli_exit.py
 # Corpus-sweep REQUIRED before merging into programs/_ppa/cli_exit.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: An interface fixes which output stream carries the human summary and which carries a refusal, so that a caller can capture one without the other and a grep over a log means something. Nothing enforces it, because the obvious test — run the command and look — is run with no arguments, which produces an argument-parser error rather than a verdict. So every program looks identical under the test, the clause is never measured, and programs drift onto whichever stream their author reached for.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

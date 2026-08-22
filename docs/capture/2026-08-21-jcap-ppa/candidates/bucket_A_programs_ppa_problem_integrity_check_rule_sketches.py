@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/ppa_problem_integrity_check.py
 # Corpus-sweep REQUIRED before merging into programs/ppa_problem_integrity_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A scheme partitions a run's artefacts into named identities and one of them carries a written membership prohibition. The others carry none, so what belongs in them is inferred from the examples that happen to exist. A run whose shape the examples do not cover is then judged by the reader's inference rather than by the scheme, and two readers infer differently. Detect by requiring a stated membership rule for each declared identity, not only for the one whose violation was noticed first.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.

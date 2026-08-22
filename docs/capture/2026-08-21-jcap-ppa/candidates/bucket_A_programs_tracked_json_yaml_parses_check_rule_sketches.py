@@ -1,7 +1,7 @@
 # Bucket A — program-rule sketches for programs/tracked_json_yaml_parses_check.py
 # Corpus-sweep REQUIRED before merging into programs/tracked_json_yaml_parses_check.py.
 
-# Auto-captured by benchmark-enhancement-capture at plugin v1.11.68
+# Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
 # Pattern: A hygiene gate walks everything the repository tracks and is given one root. A body of data is later moved into its own repository — the product still consumes it, resolving it at run time through an environment variable — and every root-scoped gate silently stops covering it. Nothing changes in the gate, its name, its wiring or its verdict; the population it walks simply got smaller and it has no way to say so. The split is recorded as a size or layout improvement and the loss of coverage is not recorded at all.
 # CORPUS-SWEEP REQUIRED before merging: zero false-positives across
 # the open-benchmark corpora used by `score_iverilog_tb.py`.
