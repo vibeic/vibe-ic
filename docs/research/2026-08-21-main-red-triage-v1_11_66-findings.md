@@ -1,9 +1,12 @@
 # findings — agent `ptmo`: the v1.11.66 red triage, and what auditing my own claims found
 
-host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header before M0**
+host 8hd-3 · started 2026-08-21 · **read this header before M0**
 
-> **THE COUNTERS BELOW DECAY, AND HAVE THREE TIMES.** They were last re-derived at
-> the commit that added this note. Every section appended afterwards invalidates
+> **THE SECTION COUNT IS GONE FROM THE TITLE, DELIBERATELY.** I corrected it three
+> times (32 → 57 → 69) and it was stale again *within the commit that last fixed
+> it* — M75 pushed it to 70 while claiming 69. **A number that is wrong after
+> every commit does not belong in a header**; the command below is the number.
+> The counters that remain are as-of the commit that last touched this block. Every section appended afterwards invalidates
 > them and none of them touches this header — a summary's accuracy is inversely
 > proportional to how much work happens after it is written. **Re-derive before
 > quoting**, with:
