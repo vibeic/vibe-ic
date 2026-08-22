@@ -971,3 +971,23 @@ each is right about its own tree.
 Nothing about reading the file would have shown it. The check is to REGENERATE
 and COMPARE — the same discipline as re-polling the base instead of trusting
 the last answer.
+
+
+### …and the same question, asked twice, found a second one
+
+If the version stamp went stale in the rebase, what else did? Audited every
+artefact for facts whose meaning is *relative to the tree that carries them*,
+as opposed to facts that name their own sha.
+
+`evidence/MEASURED_AT_main.txt` was the second. Its entire content was a bare
+sha and a local worktree path, and its MEANING is "the base here" — so on the
+landable branch it said `a4caccefe` while sitting on `ae78abb28`.
+
+The distinction is the whole point, and every other file is on the right side
+of it: they say *"MEASURED … origin/main a4caccefe"* inside their own text,
+which stays true wherever the file sits and must NOT be rewritten — doing so
+would falsify the record. Only a fact that means "HERE" can go stale by moving.
+
+Both copies now state which kind of claim they are, name their own tree's base,
+and point at the re-verification. The local worktree path is gone: it named a
+directory on one host and told a reader nothing they could check.
