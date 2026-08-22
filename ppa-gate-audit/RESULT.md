@@ -1363,3 +1363,73 @@ The same selection on this branch:
     failures on the baseline and not this branch:
       test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py
         ::test_every_in_tree_corpus_holds_at_least_one_document
+
+---
+
+# Part 13 — reproduced from the pushed branch, and a count in Part 12 corrected
+
+Part 11 established the rule this part follows: a result measured once, in the
+tree that produced it, is a result whose host-dependence nobody has tested. Every
+number in Part 12 was measured in the worktree that authored it. So a second
+worktree was created from the pushed commit `48ea29e6b`, `git clean -xdfq`,
+`PYTHONDONTWRITEBYTECODE=1`, and all of it was run again on a checkout that had
+never seen it.
+
+## The eleven wired rows
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused
+    rc=2  PPA head-to-head records (end-to-end)          2 records
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=2  PPA measurement coverage                      148 rows, no denominator
+    rc=2  PPA promotion feasibility (cross-layer)       21 candidate sets
+    rc=2  PPA frontier recomputes                       no objective declared
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+**Identical to Part 12, row for row.** And the naming itself reproduced, which is
+the part that matters here — an rc that travels while the sentence does not would
+be the same defect wearing a passing exit code:
+
+    [FAIL] ppa_head_to_head_check: .../ppa-crosslayer/records/h2h_F.json: BASELINE_TUNED_BY_US
+    [UNDETERMINED] ppa_head_to_head_check: .../ppa-e2e/records/head_to_head.json: SCOPE_SENTINEL
+    [UNDETERMINED] ppa_head_to_head_check: .../ppa-e2e/records/head_to_head_diagnostic_power.json: SCOPE_SENTINEL
+      em: MISSING `reliability.em.violations` ... cited artefact: reports/phase3/em.json
+      em: MISSING `reliability.em.worst_ratio` ... cited artefact: reports/phase3/em.json
+      equivalence: MISSING `equivalence.verdict` ... cited artefact: reports/lec.json
+
+    83 passed   the new guard + the three #1241/#1121 files it sits beside
+    PASS        source_chip_agnostic_check, 1553 file(s), no forbidden token
+
+## A COUNT IN PART 12 IS WRONG, AND IT IS CORRECTED HERE RATHER THAN EDITED THERE
+
+Part 12 records negative control A as **3 failed, 10 passed**. Re-run from the
+pushed commit it is **4 failed, 23 passed**:
+
+    test_a_refusal_over_two_records_names_both_of_them
+    test_the_two_blocks_are_not_byte_identical
+    test_an_internal_error_is_rc_2_and_names_the_record_not_rc_1     <- the fourth
+    test_every_wired_corpus_gate_that_refuses_names_what_is_missing[ppa_head_to_head_check.py-ppa-e2e]
+
+Nothing regressed and nothing was overstated in the direction that flatters this
+branch — the control got STRONGER, not weaker. The cause is ordinary and worth
+naming so nobody hunts for a subtler one: control A was measured when the guard
+file held 13 tests, and `test_an_internal_error_is_rc_2_and_names_the_record_not
+_rc_1` was written afterwards. It depends on the same record naming, so it joins
+the control. The file now holds 27 tests, which is where `23 passed` comes from.
+
+Control B re-run from the pushed commit is **2 failed, 25 passed** — the same two
+tests Part 12 names, against the same larger file.
+
+**Part 12's number is left standing.** This report's header rule is that later
+parts supersede earlier ones and that early sections are not quietly brought up
+to date, because a document edited in place cannot be checked against the commits
+that made the changes. A stale count that a reader can reproduce and see
+superseded is worth more than a corrected one they must take on trust.
+
+## What this part does NOT change
+
+No program, no gate, no test and no wiring line. Part 13 is prose in an audit
+document; every verdict above is the one the pushed commit already produced.
