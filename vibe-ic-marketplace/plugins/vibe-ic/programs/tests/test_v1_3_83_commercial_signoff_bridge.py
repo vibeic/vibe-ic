@@ -146,7 +146,7 @@ def test_same_net_heal_REFUSES_unsafe_max_bridge(tmp_path, monkeypatch):
     # let a SAFE layer through to the exec path.
     calls = {}
 
-    def _fake_exec(container, cmd, marker=None):
+    def _fake_exec(container, cmd, marker=None, **_kw):
         calls["cmd"] = cmd
         return 1, "", "no-docker"      # fail the exec -> NONFATAL note
     monkeypatch.setattr(p3, "_docker_exec", _fake_exec)
@@ -193,7 +193,7 @@ def test_same_net_heal_refuses_when_pdn_unconfirmed(tmp_path, monkeypatch):
                             "max_bridge_um": 0.22}]})
     calls = {}
 
-    def _fake_exec(container, cmd, marker=None):
+    def _fake_exec(container, cmd, marker=None, **_kw):
         calls["cmd"] = cmd
         return 1, "", "no-docker"
     monkeypatch.setattr(p3, "_docker_exec", _fake_exec)
@@ -237,7 +237,7 @@ def test_same_net_heal_forces_klayout_streamout_not_magic(tmp_path, monkeypatch)
         return True, "magic ran (should NOT happen for heal-only config)"
     monkeypatch.setattr(p3, "_magic_def_to_gds", _no_magic)
 
-    def _fake_exec(container, cmd, marker=None):
+    def _fake_exec(container, cmd, marker=None, **_kw):
         (pnr / "top.gds").write_bytes(b"\x00")     # KLayout streamout wrote GDS
         return 0, "", ""
     monkeypatch.setattr(p3, "_docker_exec", _fake_exec)

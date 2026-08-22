@@ -157,6 +157,43 @@ def evaluate(blob: Optional[dict], floor: float = TDF_LOGIC_FLOOR_DEFAULT,
                 "reasons": blob.get("reasons",
                                     ["producer recorded BLOCKED"])}
 
+    # ENGINE_LIMITED — a DOCUMENTED OSS capability gap, SKIPPED-CONDITION (rc 0),
+    # NOT a pass and NOT a coverage claim. The at-speed `fault` engine cannot
+    # detect flops in a GENERIC (unmapped) yosys netlist (`$_DFF_*` primitives) —
+    # the SAME disclosed gap the sibling stuck-at ATPG records (Step 11:
+    # cap:atpg_signoff_coverage), and the flow's Step-10 DFT gate already accepts
+    # "transition >= target (or DOCUMENTED engine-limited)". Guarded so a design
+    # cannot fabricate it: honoured ONLY when the producer attests engine_limited
+    # on a `generic_unmapped` netlist that DOES have sequential cells (SEQ_PRESENT)
+    # — a flop-free design is NOT_APPLICABLE, and a MAPPED netlist with 0 pairs
+    # stays a hard ERROR (the producer never emits ENGINE_LIMITED for it).
+    if blob.get("verdict") == "ENGINE_LIMITED":
+        _ev = blob.get("sequential_evidence") or {}
+        _seq_present = str(_ev.get("verdict", "")).upper() in (
+            "HAS_SEQUENTIAL", "SEQ_PRESENT")
+        if (blob.get("engine_limited") is True
+                and blob.get("pdk_detected") == "generic_unmapped"
+                and str(blob.get("capability_flag", "")).startswith("cap:")
+                and _seq_present):
+            return {"verdict": "SKIPPED-CONDITION", "status": "SKIPPED-CONDITION",
+                    "scan_flops": blob.get("scan_flops", 0),
+                    "engine_limited": True,
+                    "capability_flag": blob.get("capability_flag"),
+                    "sequential_evidence": blob.get("sequential_evidence"),
+                    "reasons": blob.get("reasons",
+                                        ["at-speed TDF ATPG engine-limited on a "
+                                         "generic/unmapped netlist — DOCUMENTED "
+                                         "OSS capability gap (coverage unmeasured, "
+                                         "never claimed)"])}
+        # An ENGINE_LIMITED claim missing its attestation is not trustworthy.
+        return {"verdict": "BLOCKED", "status": "BLOCKED",
+                "scan_flops": blob.get("scan_flops"),
+                "sequential_evidence": blob.get("sequential_evidence"),
+                "reasons": ["producer claimed ENGINE_LIMITED without the required "
+                            "attestation (engine_limited=true + "
+                            "pdk_detected=generic_unmapped + cap: flag + "
+                            "SEQ_PRESENT evidence) — refusing an unverified skip"]}
+
     # NOT_APPLICABLE is EARNED, not asserted. "No scan flops, therefore no TDF
     # faults" is only sound on a design that genuinely has no sequential
     # elements — which is checkable, from the `ff` groups of the Liberty the
@@ -325,6 +362,14 @@ def main(argv: Optional[list] = None) -> int:
         for r in report.get("reasons", [])[:3]:
             print(f"  {v}: {r}", file=sys.stderr)
     if v == "NOT_APPLICABLE":
+        return 0
+    # SKIPPED-CONDITION is the DOCUMENTED engine-limited outcome (generic/unmapped
+    # netlist — the OSS at-speed engine cannot detect its flops; the Step-10 DFT
+    # gate accepts "DOCUMENTED engine-limited"). It is emitted ONLY behind the
+    # evaluate() attestation guard, never a coverage claim.
+    if v == "SKIPPED-CONDITION":
+        for r in report.get("reasons", [])[:2]:
+            print(f"  SKIPPED-CONDITION: {r}", file=sys.stderr)
         return 0
     # BLOCKED is NOT a pass. An unmeasured at-speed step must not exit 0.
     return 0 if v == "PASS" else 1

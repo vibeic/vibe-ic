@@ -25,6 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _source_pin import func_src
+
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -163,9 +165,8 @@ def test_runner_tries_oracle_before_skeleton():
 
 
 def test_oracle_pass_requires_all_goldens():
-    i = _P2_SRC.index("def _run_oracle_tb")
-    # window widened for the GAP-E2E-5 SV-subset WAIVE block added at the
-    # compile-FAIL branch (the pass/all-goldens invariant sits further down).
-    window = _P2_SRC[i:i + 6000]
+    # (was a hand-widened 6000-char window, re-widened whenever the function
+    #  grew; func_src covers the whole function and needs no maintenance.)
+    window = func_src(_P2_SRC, "_run_oracle_tb")
     assert "ORACLE_TB_DONE pass=" in window
     assert "n_total > 0 and n_pass == n_total" in window
