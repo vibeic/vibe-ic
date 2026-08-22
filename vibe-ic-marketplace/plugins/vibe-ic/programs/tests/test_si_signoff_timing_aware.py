@@ -17,8 +17,12 @@ Covers:
     capture commands and the documented JSON shape.
   * run_si_signoff_timing_aware public API + CLI exit codes (advisory => exit 0
     by default; --strict opt-in exits 1 only when the HIGH watch-list is set).
-  * REAL-SPEF validation against a routed sky130 SPEF in the repo (skipped if
-    not present in this checkout).
+  * REAL-SPEF validation against PUBLISHED extraction output — a routed SPEF
+    under `benchmark-data/`, selected by `_real_data` on a checked publication
+    rule rather than by a filesystem walk, and DISCLOSED by path in the run's
+    `real-data provenance` summary. If nothing published qualifies, these skip
+    with a reason naming which absence occurred; they never fall back to a
+    fixture (vibe-ic#1037).
 
 The synthetic SPEF fixtures use the exact OpenROAD SPEF dialect (C_UNIT PF,
 ':' delimiter, *NAME_MAP, *D_NET/*CONN/*CAP/*RES/*END) so the parser is
@@ -34,31 +38,55 @@ from pathlib import Path
 import pytest
 
 import si_signoff_timing_aware as m
-from _hostpaths import repo_path_opt  # noqa: E402
+import _real_data as rd  # noqa: E402
 
 PROG = Path(m.__file__).resolve()
 
-# --- locate a real routed SPEF in the repo (main checkout), if present -------
-_REPO_SPEF_CANDIDATES = [
-    repo_path_opt("benchmark-data/evaluation/phase1_parity/mdio/"
-                  "phase3/stage3/extracted/chip_top.spef"),
-    repo_path_opt("benchmark-data/evaluation/phase1_parity/espi/"
-                  "phase3/stage3/extracted/chip_top.spef"),
-    repo_path_opt("benchmark-data/evaluation/phase1_parity/sgmii/"
-                  "phase3/stage3/extracted/chip_top.spef"),
-]
+# --- locate a real routed SPEF: PUBLISHED run output only --------------------
+# vibe-ic#1037. This used to be three named `benchmark-data/...` paths followed
+# by an unbounded `root.rglob("*.spef")` fallback. The named candidates sit
+# under run roots being withdrawn from publication (#1015/#1010); the moment
+# they go, the fallback is the only live branch — and the only `*.spef` under
+# that walk root are THIS SUITE'S OWN FIXTURES. Two tests named
+# `test_real_spef_*` would then assert properties of "production extraction
+# output" about a file this suite wrote for itself.
+#
+# The red that caught it was luck, and the luck is measurable: of the six
+# fixture SPEFs that walk yields, `si_mcf_zero_coupling/coupled/design.spef`
+# (`pair_cc == 1`) satisfies EVERY assertion in BOTH tests below. Only
+# `Path.rglob`'s directory-walk order kept this suite from reporting a green
+# real-data anchor over its own fixture.
+#
+# So "real" is now a CHECKED property, not a hope, and the check lives in
+# `_real_data` where any other real-data selector can adopt it:
+#   * the candidate set comes from the GIT INDEX, not from a walk — the walk
+#     was the bug, so there is no walk;
+#   * eligibility is an ALLOW-LIST of published-run SHAPES (under
+#     `benchmark-data/`, downstream of a flow phase, no held/dot tree,
+#     git-tracked), not a deny-list of fixture directory names;
+#   * selection applies THE PROPERTY THESE TESTS ASSERT (coupling pairs
+#     present), so a substituted premise fails loudly at selection instead of
+#     quietly at assertion, where it can accidentally agree;
+#   * nothing falls back. If no published SPEF carries coupling pairs, that is
+#     the answer and the skip says which absence occurred.
+_SPEF_REQUIREMENT = ("coupling pairs present (`*CAP` entries between two "
+                     "distinct nets) — the parasitic these tests read")
 
 
-def _real_spef() -> Path | None:
-    for p in _REPO_SPEF_CANDIDATES:
-        if p.is_file() and p.stat().st_size > 0:
-            return p
-    # also search relative to the plugin tree (in case the checkout has them)
-    root = PROG.parents[2]  # .../vibe-ic-marketplace
-    for hit in root.rglob("*.spef"):
-        if hit.stat().st_size > 0:
-            return hit
-    return None
+def _has_coupling_pairs(p: Path) -> bool:
+    """The property the two `test_real_spef_*` tests assert, applied at
+    SELECTION. Extraction output with no coupling pair cannot answer the
+    question these tests ask, so it is not a candidate for them — this is a
+    requirement, not a filter for convenience."""
+    return len(m.parse_spef(p.read_text(errors="replace"))["pair_cc"]) > 0
+
+
+def _real_spef() -> rd.Selection:
+    """The published, git-tracked, coupling-carrying SPEF — or a refusal that
+    names what is missing. NEVER a fixture, and never "whatever the walk
+    yields"."""
+    return rd.select(".spef", _has_coupling_pairs, _SPEF_REQUIREMENT,
+                     label="test_si_signoff_timing_aware::real_spef")
 
 
 # ===========================================================================
@@ -506,13 +534,21 @@ def test_cli_emit_tcl(tmp_path):
 
 
 # ===========================================================================
-# REAL-SPEF validation (skips cleanly if the routed SPEF is not in this
-# checkout — the worktree may not carry benchmark_phase1/*)
+# REAL-SPEF validation. The premise is PUBLISHED extraction output, and the
+# premise is CHECKED (vibe-ic#1037), not assumed from a walk. A skip here names
+# which absence occurred — "the real-data anchor was withdrawn" and "nothing of
+# this kind was ever published here" are different facts and do not share a
+# message.
 # ===========================================================================
-def test_real_spef_parses_and_attributes():
-    sp_path = _real_spef()
-    if sp_path is None:
-        pytest.skip("no real routed SPEF present in this checkout")
+def test_real_spef_parses_and_attributes(record_property):
+    sel = _real_spef()
+    if sel.path is None:
+        pytest.skip(sel.reason)
+    sp_path = sel.path
+    # SAY WHICH FILE — the premise is disclosed, not trusted (vibe-ic#1037).
+    record_property("real_spef_source", rd.provenance(sp_path))
+    record_property("real_spef_eligible_of_tracked",
+                    f"{sel.eligible}/{sel.considered}")
     sp = m.parse_spef(sp_path.read_text(errors="replace"))
     # a real OpenRCX SPEF must carry coupling pairs + named nets + drivers
     assert len(sp["pair_cc"]) > 0
@@ -522,18 +558,23 @@ def test_real_spef_parses_and_attributes():
     # coupling pair should be a real D_NET id that has a ground cap OR a driver
     real_nets = set(sp["cg"]) | set(sp["net_driver_pins"]) | set(sp["net_load_pins"])
     leaked = [n for pr in sp["pair_cc"] for n in pr if n not in real_nets]
-    assert leaked == [], f"coupling attributed to non-net ids: {leaked[:5]}"
+    assert leaked == [], (f"coupling attributed to non-net ids: {leaked[:5]} "
+                          f"(in {rd.provenance(sp_path)})")
 
 
-def test_real_spef_scores_with_synthetic_windows():
+def test_real_spef_scores_with_synthetic_windows(record_property):
     """Score the real SPEF against a permissive all-overlap timing JSON
     (every net's driver in one big window). Validates the scorer runs on real
     extracted parasitics end-to-end and is deterministic; with no decoupling
     it must reproduce the floating bound on the truly coupling-dominated nets
     (i.e. it does NOT crash and the verdict is well-formed)."""
-    sp_path = _real_spef()
-    if sp_path is None:
-        pytest.skip("no real routed SPEF present in this checkout")
+    sel = _real_spef()
+    if sel.path is None:
+        pytest.skip(sel.reason)
+    sp_path = sel.path
+    record_property("real_spef_source", rd.provenance(sp_path))
+    record_property("real_spef_eligible_of_tracked",
+                    f"{sel.eligible}/{sel.considered}")
     sp = m.parse_spef(sp_path.read_text(errors="replace"))
     # build a timing JSON: every driver pin switches in [0,1] ns (all overlap)
     pins = {}
