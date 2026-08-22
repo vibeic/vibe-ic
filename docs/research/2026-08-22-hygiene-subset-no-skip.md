@@ -2799,3 +2799,46 @@ and the disposition belongs to whoever holds the landing. Continuing past that
 line would be building an argument against someone else's work with tools that
 cannot reach the evidence — which is the accusing-direction version of every
 error §32 already lists.
+
+## 43. Exactly what landed: `main` is this branch at `3bfe4338e4`, and §20–43 are not on it
+
+§41 confirmed the right things are on `main`. It did not establish WHICH state
+landed, and the answer matters for anyone reading the copy that is there.
+
+**Ancestry by SHA is useless here** — the landing rewrote history, so
+`3bfe4338e4` and `d0873e5f32` are not ancestors of `main` while `05732dd26` is,
+which reads as "only the first commit landed" and is wrong. I nearly published
+that. Settled by CONTENT instead:
+
+```
+main's docs/research/…-no-skip.md   sha 77237a68…  ==  3bfe4338e4   MATCH
+main's tools/gatekeeper-land.sh     sha 466a820a…  ==  1eefc98923   MATCH
+```
+
+**`main` is this branch as of `3bfe4338e4`.** That state is self-consistent —
+its lander and its digest pin are the pair `1eefc98923` set together, which is
+why `ci_harness_timeout_ceiling_check` is rc 0 on `main` and the nine tests pass.
+The landing took a coherent snapshot; it simply is not the branch's head.
+
+**What is therefore NOT on `main`:**
+
+| not landed | what it is |
+| --- | --- |
+| `3106e4d3c2` | the SECOND lander-comment correction — `main` says 1800 bounds the review's supervisor, but not the measured margin (247.5 s vs 240 s, a 3% overrun, not a landslide) |
+| §20–28 | the re-derived differential, the watchdog mechanism, the two-defect resolution with `jmeas3` |
+| §29–38 | the batch's re-merge, the denominator work, the seven reds against clean main, the positive control that constructs the rename |
+| **§39–40** | **how `4232a7301` escaped, and the fact that the guarantee is now enforced by a test the landing can see** |
+| §41–43 | the landing verification and this |
+
+**The one that matters is §39.** `main` now carries the fix and carries no
+record of how the defect it fixes got in — the selector gap that let it through
+is on `main`, unaltered and undocumented there. Anyone reading `main`'s copy
+gets a complete account of the repair and nothing about the hole it went
+through.
+
+**Not acting on this.** Getting §20–43 onto `main` means another landing, which
+is not mine to run, and the content is pushed and named on
+`fix/jland67-hygiene-subset-honoured`. What I can do is say precisely where the
+gap is, which is this section. If anyone lands this branch again, the code delta
+is one comment (`3106e4d3c2`) and the rest is documentation — but that
+documentation contains the only account of the escape route that exists.
