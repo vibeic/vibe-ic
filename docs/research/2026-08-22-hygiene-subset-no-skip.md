@@ -3975,3 +3975,36 @@ Three habits would each have caught it, and I had skipped all three: commit befo
 mutate; assert the mutation **applied** (`assert n != s`); assert the target was
 **collected** (`--collect-only -k <expr> | grep -c '::'` ≥ 1). All three are in the
 re-run, which is why B and C are trustworthy now.
+
+### §57 addendum — measured at the lane level, both arms, sequentially
+
+The file-level number (16 → 30) is not the denominator that matters: the question is
+whether the fix costs anything anywhere else in the lane that actually runs it. Both arms
+over all 37 repo-root test files, run one after the other on one host to keep fleet
+contention out of it:
+
+    clean main  a4caccefea    22 failed, 722 passed, 6 skipped   (127 s)
+    candidate   832264e58e     6 failed, 740 passed, 6 skipped   (141 s)
+
+    name-set diff:  16 removed, 0 added
+                    every one of the 16 in tools/test_gatekeeper_land_differential.py
+
+**Zero `>` lines.** Nothing fails on the candidate that does not already fail on clean
+main, and the six survivors are the same six on both arms — `liar_census`,
+`gate_fixtures_discriminate[ppa_head_to_head_records]`, `gate_mutation_fixture_check`,
+`landing_runtime_preflight_gate`, and the two `phase_b_activated_parity` nodes, the last
+pair already recorded as red on clean main in
+[[protected-tuple-on-main-is-already-mixed]].
+
+The collected totals cross-check the claim: 746 on the candidate against 744 on main. The
+difference of exactly **two** is the two guards this branch adds — which is how I know
+they were collected and passed, rather than skipped into invisibility. A fix whose new
+tests do not show up in the total is a fix whose new tests did not run.
+
+**One instrument failure to record against this measurement.** The first capture of the
+candidate arm enumerated **five** `FAILED` lines under its own `6 failed` count line. Had
+I diffed that five-element set against the control, `test_liar_census` — a red that is
+pre-existing on both arms — would have appeared as present-on-main-only and I would have
+reported 17 removed instead of 16, or worse, gone looking for a regression that does not
+exist. The re-run passes `-rf` and the list now matches the count. **A name set is
+evidence only if it is complete, and an incomplete one looks exactly like a shorter one.**
