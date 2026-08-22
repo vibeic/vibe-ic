@@ -1163,6 +1163,16 @@ currently unguarded.
    NOT_MEASURED              0
 ```
 
+> **"CURRENT" MEANS 2026-08-21, NOT NOW.** Every term below has moved and the
+> corrections are ~4,700 lines away: **3 IMAGE-ONLY -> 0** (the seal-ring trio,
+> fixed and re-verified in the image lane at HEAD); **24 BOTH -> 14 live**, over
+> 12 files, three of which this document never opened until M95; **9
+> landing-verdict -> 6**. The measured total today is **34 reds over 5 roots**
+> (section C). The figure below is accurate for the date it was taken and is kept
+> as provenance. **Like the "FINAL DISPOSITION" banner above, the defect is the
+> word — a bolded "current" that stops being current the next day, in a document
+> whose own header says summaries decay.**
+
 **The current red list is 33 IDs**: 24 BOTH + 3 IMAGE-ONLY + the 9 real ones
 inside the quarantined 22 (established by the outside-`$HOME` arm; 0 closed and
 0 new since v1.11.62), minus double counting — the quarantined file contributes
@@ -2999,7 +3009,22 @@ M48 showed that running the flow-gate audit revealed a clause its label hid. The
 same is true of the other five. **I recorded the six blocking hygiene FAILs as a
 list of names and never ran four of them again.**
 
-**Current, measured:**
+**Current, measured — AS OF THIS SECTION. Three rows have since moved, and their
+corrections are 2,000–3,000 lines below:**
+
+* **`declaration scans strip comments`** — no longer "5 regexes". **I FIXED the
+  analyser (M78):** it did not propagate stripped status through `for` and
+  comprehension targets. Repo-wide **175 -> 168**, **0 newly flagged**, and the
+  BLOCKING list went **5 names -> 3**, with both departures verified false
+  positives in source. It still exits 1, for three real candidates.
+* **`liar census controls still fire`** — no longer "not re-run". **Re-run
+  (M84):** the census is CLEAN (`swept 181 = declared 181`, `unswept []`), and the
+  red is purely the stale pinned floor. Clause SETS diffed: the owner's decision
+  is **two names**.
+* **`flow-gate enforcement audit`** — still FAIL, but its blast radius is **double
+  what this row implies (M95):** three further reds in three separate files fail
+  for no reason other than this audit exiting 1. Declaring intent on the two
+  undeclared gates closes **six**, not three.
 
 | gate | now |
 |---|---|
