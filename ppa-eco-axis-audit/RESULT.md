@@ -1669,7 +1669,7 @@ instruction. That sha is what ships. 0 pushes since; clean tree; nothing held
 back. I made no claim that anything of mine MUST be in the batch, because
 nothing is outside it.
 
-FOLLOW-ON. `next/honest-tripwire-framing` @ 70800d1ed, pushed, rides the NEXT
+FOLLOW-ON. `next/eco-axis-audit-followups` @ 537587d09, pushed, rides the NEXT
 batch. Comment-only. It is the result of checking my own work against the ruling
 that "an assertion comparing a literal to its own size can never fail": mine are
 not that shape (the expected value is typed independently, so dropping an entry
