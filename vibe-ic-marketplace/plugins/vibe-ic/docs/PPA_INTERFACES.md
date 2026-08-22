@@ -213,6 +213,47 @@ comparison over an ordinal correctly REFUSES rather than comparing two paths
 that cannot be shown to be the same path. Guard:
 `tests/test_ppa_timing.py::test_two_paths_sharing_one_name_pair_do_not_share_one_identity`.
 
+**The RC corner is an AXIS, and an axis nobody read is not an axis nobody has.**
+Measured 2026-08-22 on two real run trees: the gate refused four records as
+`CONFLICTING_RECORD` —
+
+    timing.setup.worst_slack_ns  13.83 from phase3/stage3/sta/sta_mcorner_ocv.rpt
+                                 15.29 from phase3/stage3/sta/sta_spef_based.rpt
+
+— and read as two sign-off reports disagreeing it is unsettleable, because
+nothing in the tree ranks one STA report over the other. It was never that. The
+two runs read DIFFERENT parasitic files (`extracted/spef_corners/<top>.max.spef`
+against `extracted/<top>.spef`) at the same liberty, netlist, SDC and derate. A
+max-RC slack IS worse than a nominal-RC one; the two numbers never contradicted
+each other, and the extra 1.46 ns is the coupling capacitance. What made them
+look like a contradiction is that `scope.rc_corner` was left unestablished on
+both — the §6.1 sentinel one level OUT, where spelling the absence correctly
+does not help because the axis itself was never read.
+
+It was readable in the artefact the whole time, and unread in three places:
+`opensta.Section.spef` was parsed off the dialect-B banner and never consulted
+by `_ppa/timing`; the whole-file `STA_BASIS_SPEF:` stamp — which two of the
+runner's STA emitters already wrote — had no regex in the backend at all; and
+`_emit_spef_sta` stamped the PROCESS corner and not the parasitics it read, so
+the one axis on which it differs from its sibling was the one axis it left
+unstated. The gap the extractor wrote in place of the corner was itself false:
+*"this report names no RC corner for the section"*, on a section whose banner
+names `SPEF=<top>.max.spef`. **A gap that misdescribes the artefact is worse
+than no gap — it tells a reader to stop looking in the place the answer is.**
+
+**A corner is read from a stamp, never inferred from a file name.**
+`<top>.<corner>.spef` with `<corner>` in the closed vocabulary the extraction
+step emits (`min`, `nom`, `max`) is that step's own naming, so reading it back
+is reading a stamp. Anything else — including the un-cornered `<top>.spef` the
+single-corner step really reads — establishes NOTHING and says so, naming the
+file it could not classify. An open "whatever token sits before `.spef`" rule
+would mint an RC corner called `pnr`, and a corner nobody extracted is worse
+than a corner nobody named. Guards:
+`tests/test_ppa_rc_corner_is_an_axis.py`, whose positive control strikes the
+parasitics out of both artefacts and requires the conflict to come BACK — an
+artefact that states nothing about what it was timed against has not become
+comparable, and the index is right to refuse it.
+
 ### 2.2 Required views are declared PER AXIS
 
 `_ppa/feasibility.FeasibilityPolicy` reads `required_views` (global) and

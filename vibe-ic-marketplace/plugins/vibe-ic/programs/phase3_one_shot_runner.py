@@ -34476,6 +34476,12 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"puts $_bf \"STA_BASIS: POST_ROUTE_SPEF\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER: {_signoff_corner}\"\n"
         f"puts $_bf \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+        # …and the RC axis too. Stamping only the PROCESS corner left the one
+        # axis on which this report differs from `sta_mcorner_ocv.rpt` -- which
+        # reads `spef_corners/<top>.max.spef` while this reads the un-cornered
+        # `<top>.spef` -- unstated, so a consumer saw two setup slacks under one
+        # identity and had to call two different measurements a contradiction.
+        f"puts $_bf \"STA_BASIS_SPEF: {spef_path.name}\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
         f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
         f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"

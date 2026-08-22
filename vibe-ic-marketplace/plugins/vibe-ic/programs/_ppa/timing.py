@@ -432,6 +432,36 @@ def _ident(value: Optional[str]) -> Optional[str]:
     return value.strip().lower() if isinstance(value, str) and value.strip() else None
 
 
+#: The RC-corner vocabulary the extraction step actually emits, as a CLOSED set
+#: (`phase3_one_shot_runner._SPEF_CORNERS`). Closed rather than "whatever token
+#: sits before `.spef`": an open rule turns `chip_top.pnr.spef` into an RC
+#: corner named `pnr`, and a corner nobody extracted is worse than none.
+_RC_CORNER_TOKENS = ("min", "nom", "max")
+
+
+def _rc_corner_from_spef(spef: Optional[str]) -> Optional[str]:
+    """The RC corner a parasitic file NAMES, or None.
+
+    `<top>.<corner>.spef` with `<corner>` in the closed vocabulary is the
+    extraction step's own naming, so reading the corner back out of it is
+    reading a stamp, not guessing from a filename. Anything else -- including
+    the un-cornered `<top>.spef` the single-corner STA step reads -- establishes
+    NOTHING. Two runs may extract the un-cornered file with different models,
+    and a corner inferred from a name that does not carry one is exactly the
+    invented identity `scope` exists to prevent.
+    """
+    if not isinstance(spef, str) or not spef.strip():
+        return None
+    stem = spef.strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if not stem.lower().endswith(".spef"):
+        return None
+    parts = stem[: -len(".spef")].split(".")
+    if len(parts) < 2:
+        return None
+    token = parts[-1].strip().lower()
+    return token if token in _RC_CORNER_TOKENS else None
+
+
 #: Why a scope key is ABSENT, when the caller has no more specific sentence.
 #: Every omission is explained -- an unexplained absent key and a `null` one are
 #: the same silence, and the whole point of omitting is that the reason moves
@@ -443,7 +473,8 @@ _SCOPE_OMISSION_REASON = {
     "process": "this section names no process corner",
     "voltage_v": "no liberty path was available to read a supply voltage from",
     "temperature_c": "no liberty path was available to read a temperature from",
-    "rc_corner": "this section names no RC corner",
+    "rc_corner": ("this section names neither an RC corner nor the parasitic "
+                  "file it read"),
     "clock": ("not_applicable: this row is the DESIGN-WIDE figure and is not "
               "scoped to one clock; the per-clock evidence is "
               "`timing.*.worst_path_slack_ns`, which carries the clock it names"),
@@ -690,12 +721,16 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
         liberty = sec.liberty
         rc_corner = sec.rc_corner
         process = sec.process
+        # Which parasitic file this view was timed against. Dialect A/B name it
+        # on the banner; the unbannered dialect can only say so whole-file.
+        spef = sec.spef
         if sec.banner is None:
             # Dialect C: one implicit section, and the whole-file stamps are
             # what describe it. Relating them is meaning, so the BACKEND left
             # it alone and it happens here.
             liberty = liberty or report.basis_liberty
             process = process or report.signoff_corner
+            spef = spef or report.basis_spef
         pvt = opensta.parse_liberty_pvt(liberty)
         gaps: Dict[str, str] = {}
         if stage_gap:
@@ -716,10 +751,25 @@ def rows_from_report(project: Path, path: Path, report: opensta.Report,
             gaps["process"] = (
                 "banner declares process=%s but its liberty stem %s reads %s"
                 % (process, pvt.stem, pvt.process))
+        # THE RC AXIS IS AN AXIS. Only dialect A prints a `<x>-RC corner`
+        # label, so every other dialect used to leave `rc_corner` unestablished
+        # -- and two views timed against DIFFERENT parasitic files then carried
+        # one identity and collided as if they contradicted each other. They do
+        # not: a max-RC slack and a nominal-RC slack are two facts. The corner
+        # is recoverable from the parasitic file the artefact NAMES, which is a
+        # stamp the extraction step wrote, so read it.
+        if rc_corner is None:
+            rc_corner = _rc_corner_from_spef(spef)
         if rc_corner is None:
             gaps["rc_corner"] = (
-                "this report names no RC corner for the section; the RC axis "
-                "is reported by the multi-corner SPEF report, not this one")
+                ("this report names the parasitic file %r, whose stem carries "
+                 "no %s corner token; an RC corner is not inferred from a file "
+                 "name that does not state one"
+                 % (spef, "/".join(_RC_CORNER_TOKENS)))
+                if spef else
+                ("this report names neither an RC corner nor the parasitic "
+                 "file it read, so which extraction it was timed against is "
+                 "not recoverable from it"))
 
         # ── which CHECKS analysed nothing? Keyed per check, never per
         # report: an unbannered report carries BOTH checks in one section, and
