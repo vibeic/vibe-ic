@@ -1731,3 +1731,134 @@ the suite?" would have had to run all fourteen again to find out that it does.
 
 No program, no gate, no wiring, no verdict. Part 16 is a measurement and a
 docstring.
+
+---
+
+# Part 17 — guards that crashed, a guard that asserted a falsehood, and what is
+# genuinely left
+
+Part 12 recorded thirty-one pre-existing reds in the PPA guard family and called
+them "per-test-site work across four files with no shared fix". That was
+imprecise, and the imprecision mattered: nine of them were not the rename family
+at all, and one of the nine was a guard reporting a defect that does not exist.
+
+## A FALSE RED — a guard asserting a defect that is not there
+
+`test_contract_check_says_the_schema_was_not_applied` gates on
+`HAVE_DRAFT_2020_12` — *is the REFERENCE jsonschema usable here* — and then
+asserts about the PROGRAM. The program resolves its engine through
+`_ppa/schema_validation.resolve`, which prefers the reference library and falls
+back to `_ppa/jsonschema_bundled`, which SHIPS WITH THE PLUGIN. On a host with
+jsonschema 3.2.0 the reference is unusable, so the skip did not fire, so the test
+ran, and it reported:
+
+    AssertionError: the contract's shape went unvalidated and nothing said so
+      [FAIL] PPA-C-010: the document violates contract.v1 at <document root>:
+             'resolutions' is a required property
+      [FAIL] PPA-C-010: the document violates contract.v1 at <document root>:
+             'run_manifest' is a required property
+      ...
+
+The shape HAD been validated — by the bundled engine — and three violations were
+printed directly above an assertion claiming nobody looked.
+
+`_ppa_jsonschema` is RIGHT to ask about the reference library, and says so in its
+own docstring: the tests it guards call `Draft202012Validator` themselves as an
+independent cross-check, and handing them the bundled engine would make that
+cross-check the plugin agreeing with itself. But this test calls nothing itself,
+so its predicate was one layer off the thing it asserts about. It now asks
+`resolve()` — the program's own question — and where the branch is unreachable it
+says so through `not_verified_reason` with a remedy, so it lands in the
+not-verified roll-up as an unanswered question instead of a quiet green tick.
+
+**A guard asserting a defect that is not there is the same disease as a gate
+missing one that is, and it is the harder of the two to unpick, because the red
+looks like work to do.**
+
+## Eight missing table entries, in two sweeps that refuse to be incomplete
+
+`test_no_ppa_program_lets_a_traceback_reach_the_exit_code` and
+`test_vacuous_input_is_undetermined_not_pass` each `pytest.fail` for a program
+their table does not name — *"its traceback arm is untested"*, *"its vacuous arm
+is untested"*. That is those files holding themselves to the rule they hold the
+programs to, and four programs had no entry in either.
+
+All eight were MEASURED before being listed. No traceback anywhere; exit codes
+3/3/1/3 on junk input and 2/2/2/3 on vacuous input. The first two take a
+POSITIONAL document (`manifest`, `situation`), and pointing `--policy` at the
+absent file instead is a BAD INVOCATION rather than a vacuous one — a distinction
+that produced three misleading rc 3s in the first probe of this part, and which
+the table now records.
+
+`test_vacuous_refusal_is_marked` skipped those same four for want of an entry.
+Three now reach its assertion and pass; the fourth skips only because the rc arm
+already reports it. That file went `4 failed, 91 passed, 4 skipped` to
+`99 passed, 1 skipped`.
+
+## A CROSS-PROGRAM DISAGREEMENT ABOUT §1, declared rather than settled or buried
+
+Handed a path argument that does not resolve, two PPA programs answer
+differently, and each has a stated rationale:
+
+    ppa_pr_scope_check    `--changed-file not found`        -> rc 2
+    ppa_signoff_records   `run` is not a directory          -> rc 3
+
+and `ppa_signoff_records`' own test argues its choice: *"3 and not 2: a path that
+is not there is the caller's error, and a 2 would be indistinguishable from 'I
+looked and could not tell'."* Its docstring declares the same.
+
+Both readings are defensible and `PPA_INTERFACES.md` §1 does not adjudicate
+between them. There were three ways to make the sweep green and two of them were
+dishonest: "fix" one program to match a rule its own test argues against, or
+quietly drop it from the table. `_VACUOUS_RC` records the disagreement instead —
+a DECLARATION, not an exemption. `returncode != 0` stays unconditional, so
+nothing there can buy a vacuous pass; only the choice between 2 and 3 is
+declarable, and `test_the_vacuous_rc_declaration_can_never_buy_a_pass` refuses 0
+and 1 outright.
+
+**This is a question for the contract's owner, not for this branch.** It is
+written down so it is answerable, not answered.
+
+## What is genuinely left, characterised properly this time
+
+    targeted selection, 28 files:  31 failed -> 22 failed, 816 passed
+    new failures: NONE
+
+The remaining **22** are one cause — a test reaching for a program internal that
+a refactor renamed — but Part 12's "no shared fix" undersold WHY, and the real
+reason is the thing worth recording:
+
+    PI.corpus_candidates(corpus, baseline)    gone
+    CC.corpus_contracts(corpus)               gone
+    FC.corpus_candidate_sets(corpus)          gone
+    CC/PI._CONTRACT_SCHEMA, FC._CANDIDATES_SCHEMA   gone
+
+These are not renames with a one-line forwarding address. The PROPERTIES those
+helpers carried moved to a different level. `corpus_candidates(corpus, baseline)`
+existed so that
+
+    test_the_baseline_is_never_paired_with_itself
+        assert PI.corpus_candidates(tmp_path, base) == []
+
+could hold the program to it. Self-exclusion now lives in `check_corpus`'s
+problem-grouping, and it demonstrably still holds — 21 contracts in one group
+produce 210 pairs, which is exactly 21x20/2, so no contract is paired with
+itself. Selection likewise moved from a schema constant to a SHAPE predicate
+(`is_candidate_set`), which is why `_CANDIDATES_SCHEMA` has no successor at all.
+
+So a shim restoring the old signatures inside the test file would make those
+tests VACUOUS — the exclusion would be performed by the test and then asserted by
+the test, with the program no longer in the loop. That is the defect this entire
+report is about, manufactured deliberately to turn a red green.
+
+**Repairing them honestly means re-expressing each property at the level it now
+lives** — assert the pair COUNT and that no pair has both sides equal, rather
+than asserting a helper's return value. That is better than what was there, and
+it is a rewrite with its own reasoning per assertion, not a sweep. It is left
+undone and described, with the exact list above, so the next person starts from
+the diagnosis rather than from the AttributeError.
+
+## No program changed in this part, and no verdict
+
+Every repair here is in a test file. The eleven wired rows are exactly as Part 14
+lists them.
