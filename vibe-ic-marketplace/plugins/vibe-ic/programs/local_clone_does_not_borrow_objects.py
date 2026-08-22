@@ -39,6 +39,19 @@ refuses:
                      survive the source's `gc`, accepted by the preflight, and
                      named as the remedy by two programs.
 
+WHAT THIS SCAN CAN AND CANNOT SEE — STATED, BECAUSE A PASS MUST BE LEGIBLE
+==========================================================================
+It reads argv expressions: a list/tuple literal, `+` concatenation of them, and
+a simple name bound to a literal list. That covers how preparation sites in this
+tree are actually written, INCLUDING the `["git","clone"] + OPTS` form, which an
+earlier version of this scan reported as PASS.
+
+It cannot see an option assembled at runtime from a value it cannot constant-fold
+— read from a config file, computed in a branch, passed in as a parameter. There
+is no scan that can. That residue is why `landing_tier_checkout_preflight` exists
+and runs on the built checkout: this gate refuses the shape at the site, the
+preflight refuses it at the artefact, and neither alone is complete.
+
 DID NOT LOOK IS NOT LOOKED AND FOUND NOTHING
 ============================================
 These are separate exit codes and they never collapse:
@@ -122,25 +135,74 @@ def _is_clone_argv(elts: Sequence[ast.expr]) -> bool:
     return "git" in consts and "clone" in consts
 
 
+def _list_constants(tree: ast.AST) -> dict:
+    """`{name: [str constants]}` for simple list/tuple assignments.
+
+    MEASURED: without this the scan reported PASS on
+
+        OPTS = ["--quiet", "--shared"]
+        subprocess.run(["git", "clone"] + OPTS + [str(src), str(dest)])
+
+    which is a borrowing clone written the way a real preparation site writes
+    one. A scan that answers PASS because the offending token sits one
+    assignment away is not conservative, it is wrong in the passing direction —
+    the same failure this whole capture is about.
+    """
+    out: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, (ast.List, ast.Tuple)):
+            out[node.targets[0].id] = [
+                e.value for e in node.value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return out
+
+
+def _flatten_argv(node: ast.AST, lists: dict) -> List[str]:
+    """Every string constant an argv expression contributes, following `+` and
+    simple names bound to literal lists."""
+    out: List[str] = []
+    if isinstance(node, (ast.List, ast.Tuple)):
+        for e in node.elts:
+            if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                out.append(e.value)
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        out.extend(_flatten_argv(node.left, lists))
+        out.extend(_flatten_argv(node.right, lists))
+    elif isinstance(node, ast.Name):
+        out.extend(lists.get(node.id, []))
+    return out
+
+
 def _scan_python(text: str, rel: str) -> Tuple[List[Finding], Optional[Unread]]:
-    """Findings from argv lists, via AST so a comment can never be a finding."""
+    """Findings from argv expressions, via AST so a comment can never be one."""
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return [], Unread(rel, f"could not be parsed as Python ({exc.msg})")
+    lists = _list_constants(tree)
     out: List[Finding] = []
+    seen = set()
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.List, ast.Tuple)):
+        argv = None
+        if isinstance(node, (ast.List, ast.Tuple)):
+            argv = node
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            argv = node
+        if argv is None:
             continue
-        if not _is_clone_argv(node.elts):
+        toks = _flatten_argv(argv, lists)
+        if "git" not in toks or "clone" not in toks:
             continue
-        for e in node.elts:
-            if isinstance(e, ast.Constant) and e.value in BORROWING_OPTIONS:
-                snippet = " ".join(
-                    str(x.value) for x in node.elts
-                    if isinstance(x, ast.Constant) and isinstance(x.value, str))
-                out.append(Finding(rel, getattr(e, "lineno", node.lineno),
-                                   e.value, snippet[:90]))
+        for opt in BORROWING_OPTIONS:
+            if opt not in toks:
+                continue
+            key = (rel, argv.lineno, opt)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(Finding(rel, argv.lineno, opt, " ".join(toks)[:90]))
     return out, None
 
 

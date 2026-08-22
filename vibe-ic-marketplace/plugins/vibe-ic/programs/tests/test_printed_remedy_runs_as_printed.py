@@ -86,6 +86,37 @@ def test_the_same_remedy_with_skip_first_passes(tmp_path):
     assert rc == 0, out
 
 
+def test_a_remedy_concatenated_from_a_constant_goes_red(tmp_path):
+    """MEASURED FALSE PASS, now pinned.
+
+    This scan reported PASS on a swallowed remedy written the way a real refusal
+    writes one, with the image reference kept in a constant:
+
+        IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"
+        print("Remedy: docker run ... " + IMAGE + " bash -lc yosys")
+    """
+    (tmp_path / "gate.py").write_text(
+        'IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"\n'
+        'def refuse():\n'
+        '    print("Remedy: docker run -d --init --name c " + IMAGE +\n'
+        '          " bash -lc yosys")\n')
+    rc, out = _run(tmp_path)
+    assert rc == 1, f"the concatenated form was not caught:\n{out}"
+    assert "Unexpected option" in out
+
+
+def test_the_same_concatenated_remedy_with_skip_first_passes(tmp_path):
+    """BIDIRECTIONAL, and it also proves the fold does not glue tokens that were
+    never adjacent — `--skip` really is read as the token after the image."""
+    (tmp_path / "gate.py").write_text(
+        'IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"\n'
+        'def refuse():\n'
+        '    print("Remedy: docker run -d --init --name c " + IMAGE +\n'
+        '          " --skip bash -lc yosys")\n')
+    rc, out = _run(tmp_path)
+    assert rc == 0, out
+
+
 def test_a_returned_remedy_is_in_the_population(tmp_path):
     (tmp_path / "gate.py").write_text(
         'def remedy():\n'

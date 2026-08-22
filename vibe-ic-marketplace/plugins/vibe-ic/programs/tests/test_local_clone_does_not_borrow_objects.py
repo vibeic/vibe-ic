@@ -91,6 +91,39 @@ def test_borrowing_clone_goes_red(tmp_path, option):
     assert "alternates" in out
 
 
+def test_a_borrowing_option_held_in_a_variable_goes_red(tmp_path):
+    """MEASURED FALSE PASS, now pinned.
+
+    This scan reported PASS on a borrowing clone written the way a real
+    preparation site writes one — the options in a list one assignment away:
+
+        OPTS = ["--quiet", "--shared"]
+        subprocess.run(["git", "clone"] + OPTS + [str(src), str(dest)])
+
+    Answering PASS because the offending token is not lexically inside the argv
+    list is not conservatism, it is wrong in the passing direction.
+    """
+    (tmp_path / "prep.py").write_text(
+        'import subprocess\n'
+        'OPTS = ["--quiet", "--shared"]\n'
+        'def prepare(src, dest):\n'
+        '    subprocess.run(["git", "clone"] + OPTS + [str(src), str(dest)])\n')
+    rc, out = _run(tmp_path)
+    assert rc == 1, f"the dynamic form was not caught:\n{out}"
+    assert "--shared" in out
+
+
+def test_the_same_site_without_the_borrowing_option_passes(tmp_path):
+    """BIDIRECTIONAL: the identical shape, with only the option removed."""
+    (tmp_path / "prep.py").write_text(
+        'import subprocess\n'
+        'OPTS = ["--quiet", "--no-checkout"]\n'
+        'def prepare(src, dest):\n'
+        '    subprocess.run(["git", "clone"] + OPTS + [str(src), str(dest)])\n')
+    rc, out = _run(tmp_path)
+    assert rc == 0, out
+
+
 def test_borrowing_clone_in_shell_goes_red(tmp_path):
     (tmp_path / "prep.sh").write_text(
         '#!/bin/bash\n'

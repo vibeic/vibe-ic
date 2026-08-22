@@ -45,6 +45,18 @@ this scan can do, and a rule that reddens a correct error message to protect a
 correct remedy is a net loss. The `docker run` ordering rule below stays because
 it is decidable from the token order alone.
 
+WHAT THIS SCAN CAN AND CANNOT SEE
+=================================
+It folds a printed expression: string literals, `+` concatenation, f-string
+literal parts, and a simple name bound to a string constant. That covers the
+`"... " + IMAGE + " bash"` form, which an earlier version reported as PASS.
+An unresolvable part becomes `<x>` rather than being deleted, so tokens that were
+never adjacent are never glued into a command nobody printed.
+
+It cannot see a remedy assembled from values it cannot constant-fold. The
+residue is real and is why the paired test EXECUTES the remedy shape rather than
+only asserting on its text.
+
 STRINGS ONLY, AND ONLY PRINTED ONES
 ===================================
 The scan reads string literals that reach a `print`/`raise`/message builder. A
@@ -120,11 +132,58 @@ def inspect_remedy(text: str) -> Optional[str]:
     return None
 
 
+def _str_constants(tree: ast.AST) -> dict:
+    """`{name: value}` for simple module-level string assignments.
+
+    MEASURED: without this the scan reported PASS on
+
+        IMAGE = "ghcr.io/vibeic/vibeic-eda:0.3.16"
+        print("Remedy: docker run ... " + IMAGE + " bash -lc yosys")
+
+    which is a swallowed remedy written the way a real refusal writes one — the
+    image reference kept in a constant. Answering PASS because the token sits
+    one assignment away is wrong in the passing direction.
+    """
+    out: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            out[node.targets[0].id] = node.value.value
+    return out
+
+
+def _fold(node: ast.AST, names: dict) -> str:
+    """A concatenation expression rendered AS PRINTED, following `+` and simple
+    names bound to string constants. An unresolvable part becomes a placeholder,
+    never a deletion — deleting it would glue tokens that were never adjacent."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return names.get(node.id, "<x>")
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _fold(node.left, names) + _fold(node.right, names)
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) and isinstance(v.value, str)
+            else "<x>" for v in node.values)
+    return "<x>"
+
+
 def _printed_strings(tree: ast.AST) -> List[Tuple[int, str]]:
     """(lineno, text) for every string literal that is printed or raised."""
     out: List[Tuple[int, str]] = []
+    names = _str_constants(tree)
 
     def collect(node: ast.AST, lineno: int) -> None:
+        # A concatenation is one printed line; fold it before walking, so the
+        # image reference and the command that follows it stay adjacent.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            folded = _fold(node, names)
+            if folded.strip():
+                out.append((getattr(node, "lineno", lineno), folded))
+                return
         for sub in ast.walk(node):
             if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
                 out.append((getattr(sub, "lineno", lineno), sub.value))
