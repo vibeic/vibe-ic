@@ -53,8 +53,40 @@ def test_the_checker_population_covers_checker_shaped_names():
     assert "gitignore_scratch_guard.py" in pop
     assert "organic_issue_body_lint.py" in pop
     assert "benchmark_triage_absorption_audit.py" in pop
-    # and the widening stayed CHECKER-SHAPED: generators are still out
-    assert not [p for p in pop if p.endswith(("_synth.py", "_gen.py"))]
+    # AND THE WIDENING STAYED CHECKER-SHAPED. Asserted against the NAME GLOB,
+    # which is the half this clause is about, and not against the population as
+    # a whole — the two are different questions and reading one for the other
+    # made this assertion wrong on 2026-08-20.
+    #
+    # `checker_population` is `glob(_CHECKER_SUFFIXES)` UNION the programs the
+    # flow DECLARES as gate clauses, and its own docstring states the rule the
+    # union exists for: "A gate is in this population because the flow runs it,
+    # not because somebody named it `*_check.py`." Step 15.5ic and step 37.5ic,
+    # declared at 0a7699737, put `pad_assignment_gen` and `tapeout_docs_gen`
+    # into `program_exit_zero:` clauses. Both are therefore programs the flow
+    # runs as gates, both must be wired, and both belong in this denominator —
+    # arriving by DECLARATION, which is the union's whole purpose, and not by
+    # name. MEASURED here: each is `in glob=False, in flow-declared=True`.
+    #
+    # The blanket form of this assertion said the opposite and would have to be
+    # satisfied by narrowing the flow union — that is, by dropping two real gate
+    # programs out of the wiring audit's denominator to protect a sentence about
+    # filenames. So the predicate is corrected to the population it was always
+    # arguing about, and it can still go red: adding `*_gen.py` or `*_synth.py`
+    # to `_CHECKER_SUFFIXES` fails the first assertion, and a generator that is
+    # neither name-shaped nor flow-declared fails the second.
+    by_name = {q.name for suf in W._CHECKER_SUFFIXES for q in _PROGRAMS.glob(suf)}
+    assert not [p for p in by_name if p.endswith(("_synth.py", "_gen.py"))], (
+        "the checker NAME GLOB now matches generators; the widening was "
+        "supposed to stay checker-shaped")
+    flow_declared = {n for n in W.flow_declared_gate_programs(
+        _PLUGIN / "flow" / "phase1_phase2_phase3.yaml")
+        if (_PROGRAMS / n).is_file()}
+    strays = [p for p in pop if p.endswith(("_synth.py", "_gen.py"))
+              and p not in flow_declared]
+    assert not strays, (
+        f"generator(s) in the checker population that the flow does not "
+        f"declare as a gate: {strays}")
 
 
 def test_the_orphan_now_has_a_real_runner_and_the_false_positive_always_had_one():

@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import not_verified_tier as NV  # noqa: E402
+
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 ENTRY = PROGRAMS / "trusted_pytest_entry.py"
@@ -77,8 +80,16 @@ def test_pinned_hermetic_image_ignores_subject_module_shadows(tmp_path):
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)
     except (FileNotFoundError, OSError) as exc:
-        pytest.skip(f"no container engine is reachable here ({exc}) — the "
-                    "hermetic image claim is UNVERIFIED, not verified")
+        # THROUGH THE TIER, not past it. The sentence was already honest — "the
+        # hermetic image claim is UNVERIFIED, not verified" — and an honest
+        # sentence in a bare `pytest.skip` still lands in pytest's `skipped`
+        # bucket, which is green, and reaches no roll-up. That is the whole of
+        # vibe-ic#1128. `skip_not_verified` stamps the same fact where the
+        # summary can read it, and carries the remedy with it.
+        NV.skip_not_verified(
+            f"no container engine is reachable here ({exc}), so the hermetic "
+            f"image claim could not be tested",
+            remedy=f"install a container engine and `docker pull {IMAGE}`")
     if available.returncode != 0:
         pytest.skip("exact hermetic landing image is not locally available")
     (tmp_path / "pytest.py").write_text(

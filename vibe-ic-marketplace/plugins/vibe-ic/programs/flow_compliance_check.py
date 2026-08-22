@@ -10118,6 +10118,16 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"gate verified the equivalent by another route: "
                     f"{h[len(_SUBSTANTIVE_HINT_PREFIX):]}")
         elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
+            # THE TIER IS UNCHANGED HERE, DELIBERATELY, and the paired guard
+            # `test_issue901_...::test_GUARD_the_legacy_channel_keeps_its_tier_
+            # when_siblings_ran` is why. What is added is the DENOMINATOR IN THE
+            # SENTENCE: this branch granted the step-wide word "every executed
+            # sub-gate was vacuously satisfied" while printing a line that named
+            # one clause and no total, so a reader could not tell "the only
+            # clause that ran examined nothing" from "one clause of six did".
+            # vibe-ic#901 established the count for the structured channel; this
+            # states it for the legacy one. Stating a count is not a tier
+            # decision and cannot move a step in either direction.
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
@@ -10125,7 +10135,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 cmd = h[len(_VACUOUS_HINT_PREFIX):]
                 result.reasons.append(
                     f"vacuous: gate program signalled VACUOUS_PASS "
-                    f"(input not applicable): {cmd}"
+                    f"(input not applicable), and it is "
+                    f"{len(all_vacuous_cmds)} of {len(ran_hints)} gate "
+                    f"clause(s) that ran here: {cmd}"
                 )
         elif passed and structure_only_hints and not non_hint_reasons:
             # The step ran and produced its declared artefact — from a library

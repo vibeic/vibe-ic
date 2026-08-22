@@ -12,8 +12,11 @@ Detection (static, deterministic): for each step, derive SIGNALS from its
 `required_outputs` (a distinctive path fragment) and its declared `mcp_tools`
 (the executor that does the work). Search the runner sources for those signals.
 A step is:
-  - WIRED           : some runner references the step's output path or its
-                      mcp_tool → an executor produces it.
+  - WIRED           : some runner references the step's output path, its
+                      mcp_tool, or a program it declares in `programs:` → an
+                      executor produces it. The `programs:` signal is a
+                      REFERENCE test, never a declaration test: a step that
+                      lists a program no runner invokes is still ORPHANED.
   - SKILL-ONLY-AI   : no mcp_tool / program, but declares `skills` → an AI
                       authoring step the runner WAIVES to by design (spec-to-rtl,
                       analog authoring). Not an orphan.
@@ -195,6 +198,41 @@ def classify(doc, runner_text: str):
             for t in mcp:
                 if t and t in runner_text:
                     wired_by, matched = "mcp_tool", t
+                    break
+        # 3) or DELEGATE to the plugin PROGRAM it declares?
+        #
+        # THE THIRD WAY A STEP IS EXECUTED, AND THIS GATE COULD NOT SEE IT.
+        # A runner may drive a step by shelling out to a program named in the
+        # step's `programs:` list, and let THAT program write the step's
+        # declared outputs. The runner then contains neither the output path
+        # (the program builds it) nor an mcp tool name (there is none), so both
+        # signals above miss and a fully-wired step is reported ORPHANED.
+        #
+        # MEASURED on origin/main a4caccefe against the shipped flow:
+        #
+        #   26.5ic die finishing   `phase3_one_shot_runner._die_finishing`
+        #                          invokes `die_finishing_gen.py` — 5 references
+        #   37.5ip hardmacro gen   `phase3_one_shot_runner.
+        #                          step_digital_hardmacro_gen` invokes
+        #                          `digital_hardmacro_gen.py` — 8 references
+        #
+        # Both were listed as digital-main-track steps that "can only ever be
+        # MISSING" while a real run executes them. A gate that reports two
+        # working steps as broken is a gate people learn to read past, which is
+        # the same end state as not having it.
+        #
+        # THE DISCIPLINE IS THE ONE ALREADY APPLIED TO `skills`, AND FOR THE
+        # SAME REASON. A declared name is not a wiring: step 12 lists
+        # `synth-doctor`, no runner invokes it, and that step is correctly an
+        # orphan. So a `programs:` entry counts only when a RUNNER ACTUALLY
+        # REFERENCES IT. Declaring `programs: [foo_gen]` and wiring nothing
+        # still comes out ORPHANED — measured, on this same flow: 15.5ic
+        # (`pad_assignment_gen`, `pad_ring_gen`) and 37.5ic (`tapeout_docs_gen`)
+        # appear 0 times in every runner and stay in the ORPHANED set.
+        if not wired_by:
+            for prog in progs:
+                if prog and prog in runner_text:
+                    wired_by, matched = "program", prog
                     break
         stage = str(s.get("stage", ""))
         is_mfg = stage == "stage5_manufacturing" or sid in {

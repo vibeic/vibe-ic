@@ -53,21 +53,78 @@ def test_engine_is_bundled_in_plugin_payload():
     assert (BUNDLED / "gap_detect.py").is_file()
 
 
+#: THE ONE FILE THAT CANNOT BE MIRRORED, and it is not an escape hatch — it is
+#: a file whose CONTENT names its own location, so a byte-identical copy of it
+#: at a second path is invalid by the schema of the gate that reads it.
+#:
+#: `tools/phase1_engine/INVARIANTS.json` (added 8adebfc4e) declares
+#: `"package": "tools/phase1_engine"`, and `package_invariants_check` refuses a
+#: file whose `package` is not the package's own repo-relative path:
+#:
+#:     [SCHEMA] vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine:
+#:     'package' must be the package's own repo-relative path,
+#:     got 'tools/phase1_engine'
+#:
+#: MEASURED on this tree: a plain `rsync -a --exclude=__pycache__` — the remedy
+#: this test used to print — turns `test_package_invariants_check` from
+#: `24 passed` into two failures, first `[UNENROLLED] ... exists but ... is not
+#: named in package_invariants_enrolled.json` and then, once enrolled, the
+#: SCHEMA refusal above. There is no spelling of the mirror that satisfies both
+#: gates, because the two gates are asking about different things: this one asks
+#: that the shipped ENGINE is the master engine, and that one asks that a
+#: package's rule file names the package it binds.
+#:
+#: So the exclusion is DECLARED here rather than discovered, it is asserted to be
+#: exactly this one name below, and the remedy printed on failure is the rsync
+#: that actually produces a tree both gates accept.
+_NOT_MIRRORED = ("INVARIANTS.json",)
+
+_RSYNC = ("rsync -a --exclude=__pycache__ "
+          + " ".join(f"--exclude={n}" for n in _NOT_MIRRORED)
+          + " tools/phase1_engine/ "
+          + "vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine/")
+
+
 @pytest.mark.skipif(_MASTER is None, reason="repo-root master not present "
                     "(installed cache layout)")
 def test_bundle_does_not_drift_from_master():
     def _digest(root: Path) -> dict:
         out = {}
         for f in sorted(root.rglob("*")):
-            if f.is_file() and "__pycache__" not in f.parts:
+            if (f.is_file() and "__pycache__" not in f.parts
+                    and f.name not in _NOT_MIRRORED):
                 out[str(f.relative_to(root))] = hashlib.sha256(
                     f.read_bytes()).hexdigest()
         return out
     master, bundle = _digest(_MASTER), _digest(BUNDLED)
     assert master == bundle, (
         "bundled engine drifted from tools/phase1_engine — re-run "
-        "`rsync -a --exclude=__pycache__ tools/phase1_engine/ "
-        "vibe-ic-marketplace/plugins/vibe-ic/tools/phase1_engine/`")
+        f"`{_RSYNC}`")
+
+
+def test_the_unmirrored_set_is_exactly_the_self_naming_rule_file():
+    """The exclusion above may not quietly grow.
+
+    An excluded name is a file the drift guard stops comparing, so every entry
+    is a hole. This pins the set to one, and pins WHY that one is there: it
+    exists in the master, it names its own package path, and it is absent from
+    the bundle. A second entry, or this one silently reappearing in the bundle,
+    fails here rather than widening the guard's blind spot in silence.
+    """
+    assert _NOT_MIRRORED == ("INVARIANTS.json",)
+    if _MASTER is None:                                 # installed cache layout
+        pytest.skip("repo-root master not present (installed cache layout)")
+    src = _MASTER / "INVARIANTS.json"
+    assert src.is_file(), (
+        "the excluded name does not exist in the master, so the exclusion "
+        "guards nothing — delete it from _NOT_MIRRORED")
+    assert json.loads(src.read_text())["package"] == "tools/phase1_engine", (
+        "the reason for the exclusion is that this file names its own package "
+        "path; if it no longer does, the exclusion has lost its justification")
+    assert not (BUNDLED / "INVARIANTS.json").exists(), (
+        "the bundle carries a copy of the master's INVARIANTS.json — "
+        "`package_invariants_check` refuses it (UNENROLLED, then SCHEMA). "
+        f"Re-mirror with `{_RSYNC}`")
 
 
 def test_bundled_class_kb_resolves_self_anchored():

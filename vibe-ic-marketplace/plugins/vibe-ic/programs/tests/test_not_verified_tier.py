@@ -232,8 +232,15 @@ def _undeclared_infra_skips():
 #: now declared, but the site also carries a second, ORDINARY mark — "the live
 #: proof was not requested" — and annexing an opt-in N/A into this tier is the
 #: over-reach the module docstring rules out.
+#: 2026-08-22 (jred-misc): `test_fault_atpg_run.py` is DELETED per the rule above.
+#: v1.11.47 (752a8baaf) removed `tools/vibeic-eda/VERSION` and with it the
+#: `_find_version_file()` helper this file used and the skip that guarded it, so
+#: the site has been gone since 2026-08-21 while the row stayed. The `shrunk`
+#: assertion below was already red on `origin/main` a4caccefe for exactly this —
+#: `test_fault_atpg_run.py: 1 -> 0` — and could not be seen because the
+#: `new_files` assertion above it fired first on three other files. Removing the
+#: row lowers the frontier, which is the only direction it may move.
 RESIDUAL_UNDECLARED: dict = {
-    "test_fault_atpg_run.py": 1,
     "test_formal_env_unavailable_actionable.py": 1,
     "test_gds_geometry_signoff_wiring.py": 1,
     "test_hspice_lib_ngspice_normalize.py": 1,
