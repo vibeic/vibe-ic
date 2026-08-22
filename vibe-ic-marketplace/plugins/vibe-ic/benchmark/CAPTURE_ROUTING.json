@@ -308,6 +308,11 @@
       "description": "Admitting an alternative way to establish an axis alongside the original",
       "bucket_A_program": "programs/_ppa/feasibility.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.verdict_provenance": {
+      "description": "Emitting a verdict that will be quoted after the tree it judged has moved",
+      "bucket_A_program": "programs/benchmark_evidence_structure_check.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
