@@ -32077,10 +32077,39 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                  str(project), "--json", str(sdc_check_json)],
                 capture_output=True, text=True, timeout=60,
             )
+            # `r` WAS BOUND AND NEVER READ. This step's own docstring promises
+            # "any individual emission failure logs WARN but the step
+            # continues", and this block logged nothing on any outcome: it
+            # tested only whether the file appeared. A step that swallows the
+            # result of a subprocess it ran, while its contract says it warns,
+            # is a disclosure that exists from the emitter's side and not the
+            # reader's.
+            #
+            # THE TWO OUTCOMES ARE NOT THE SAME THING and the note says which:
+            #   report written, rc != 0  -- NOT an emission failure. The
+            #       checker exits `0 if result.passed else 1`, so a non-zero
+            #       code means the SDC has real findings, and they are IN the
+            #       JSON that the downstream gate reads. Noted because the
+            #       runner's own notes are what a human reads first, and
+            #       "I emitted a report saying the SDC did not pass" must not
+            #       be silent.
+            #   report NOT written        -- a genuine emission failure, which
+            #       is what the docstring's WARN was promised for.
             if sdc_check_json.is_file():
                 written.append(str(sdc_check_json))
-        except Exception:
-            pass
+                if r.returncode != 0:
+                    notes.append(
+                        f"sdc_syntax_check reported findings (rc={r.returncode}); "
+                        f"the verdict is in "
+                        f"{sdc_check_json.relative_to(project)} and this step "
+                        "neither blocks on it nor hides it")
+            else:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()
+                notes.append(
+                    f"sdc_syntax_check emitted no report (rc={r.returncode}): "
+                    + (tail[-1][:200] if tail else "no output"))
+        except Exception as exc:  # best-effort, never block the step
+            notes.append(f"sdc_syntax_check emit failed: {exc}")
 
     # --- v1.6.190 / v1.6.191 (#77 P2 / #78 P2): copy chip GDS into
     # foundry_handoff/ ----
