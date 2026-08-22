@@ -109,10 +109,13 @@
     "file_sha256": "a3bae7d559e8c8b9f16d8dc5d086cfd217207ed09667263bd8e183a5c5ebd52c"
    },
    "pin_test": {
-    "status": "known_gap",
-    "reason": "nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.",
-    "reference": "vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it"
-   }
+    "status": "test",
+    "test": "programs/tests/test_upstream_pin_pad_cfg.py::test_the_fit_sum_and_the_row_step_both_accumulate_the_width",
+    "note": "THE PIN IS TWO-SIDED AND THE TWO HALVES LIVE IN DIFFERENT FILES. OURS: programs/tests/test_pad_ring.py::test_the_spacing_is_upstreams_arithmetic -- the fixture's pad master is 75 x 350 and each side is 1_280_000 DEF units, so four pads summed by WIDTH fit with 196_000-unit gaps and four summed by HEIGHT (1_400_000) do not fit at all; that test goes red the moment the extent returns to the oriented footprint. THEIRS: the named test above, plus the three beside it in the same file -- sha256 against this snapshot, both cell measurements reading getWidth, and the master's height reaching nothing but a puts diagnostic. The upstream half SKIPS, and does not pass, when no distribution is reachable."
+   },
+   "_history": [
+    "2026-08-22 jcapsha: pin_test known_gap -> test. The gap was real and specific -- OUR half was pinned behaviourally all along, THEIRS was a sentence in a comment. Closed by reading the upstream file out of the image this snapshot records (sha256 verified equal) and asserting the three properties our Python mirrors. Prior: {\"status\": \"known_gap\", \"reason\": \"nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.\", \"reference\": \"vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it\"}"
+   ]
   }
  ]
 }
