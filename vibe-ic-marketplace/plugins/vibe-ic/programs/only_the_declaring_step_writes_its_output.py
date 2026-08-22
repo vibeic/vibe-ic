@@ -47,6 +47,10 @@ containing a declared output's basename, and then finding a real write on that
 variable: `write_text`, `write_bytes`, or `open` with a mode containing w/a/x.
 `.open()` without a write mode is a READ and is not counted.
 
+Shell scripts are scanned too, for a redirection / tee / cp / mv landing on a
+declared basename, because this tree drives real work from `tools/*.sh` and a
+Python-only scan reported PASS on a shell writer sitting beside a Python one.
+
 This is intra-scope resolution, not whole-program data-flow. It therefore UNDER-
 reports: a writer that passes the path through a helper is not seen. Under-
 reporting is the safe direction for this rule — every path it names really is
@@ -116,17 +120,55 @@ def _is_write(node: ast.Call) -> bool:
     return any(m in mode for m in ("w", "a", "x"))
 
 
+# A shell write: redirection, tee, or a copy/move landing on the path.
+_SH_WRITE = re.compile(r"(>>?|\btee\b|\bcp\b|\bmv\b|\binstall\b)")
+
+
+def _shell_writers(text: str, by_basename: Dict[str, Set[str]]) -> Set[str]:
+    """Declared-output basenames this shell script WRITES.
+
+    MEASURED FALSE PASS: the scan was Python-only, so
+
+        echo "{}" > "$PROJECT/reports/coverage.json"
+
+    beside a Python writer of the same declared path reported PASS — two writers,
+    one seen. This tree drives real work from shell (`tools/*.sh`), so the blind
+    spot was not hypothetical, and unlike the data-flow limit it was not
+    disclosed either.
+    """
+    hit: Set[str] = set()
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0]          # a comment is never a write
+        if not _SH_WRITE.search(line):
+            continue
+        for base in by_basename:
+            if base in line:
+                hit.add(base)
+    return hit
+
+
 def writers_of(programs: Path, by_basename: Dict[str, Set[str]]
                ) -> Dict[str, Set[str]]:
-    """`{declared path: {module basenames that write it}}`."""
+    """`{declared path: {file basenames that write it}}` — Python and shell."""
     found: Dict[str, Set[str]] = collections.defaultdict(set)
     for dirpath, dirnames, filenames in os.walk(programs, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "tests")
                        and not os.path.islink(os.path.join(dirpath, d))]
         for fn in sorted(filenames):
-            if not fn.endswith(".py") or fn.startswith("test_"):
+            if fn.startswith("test_"):
                 continue
             path = Path(dirpath) / fn
+            if fn.endswith(".sh"):
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for base in _shell_writers(text, by_basename):
+                    for full in by_basename[base]:
+                        found[full].add(fn)
+                continue
+            if not fn.endswith(".py"):
+                continue
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8",
                                                 errors="replace"))

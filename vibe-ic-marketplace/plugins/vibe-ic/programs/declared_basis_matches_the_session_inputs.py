@@ -35,8 +35,10 @@ file NAME is used as a weaker claim, and that fallback is reported as such.
     rc 0   N>0 pairs read; every claim agrees with its session.
     rc 1   a claim disagrees with its session.
     rc 2   NOT CHECKED — no (session, report) pair found, or one could not be
-           read. A pair whose report carries no claim at all is UNDECLARED and
-           is counted and disclosed, never silently passed.
+           read, or NOT ONE pair declares a stage (nothing was compared, so the
+           run is undetermined rather than clean). An UNDECLARED pair beside at
+           least one declared pair is counted and disclosed, never silently
+           passed.
     rc 3   bad invocation.
 """
 from __future__ import annotations
@@ -116,11 +118,12 @@ def _pairs(root: Path) -> List[Tuple[Path, Path]]:
     return out
 
 
-def audit(root: Path) -> Tuple[List[Finding], List[str], List[str], int]:
+def audit(root: Path) -> Tuple[List[Finding], List[str], List[str], int, int]:
     findings: List[Finding] = []
     undeclared: List[str] = []
     unread: List[str] = []
     pairs = 0
+    declared_pairs = 0
     for script, report in _pairs(root):
         rs = script.relative_to(root).as_posix()
         rr = report.relative_to(root).as_posix()
@@ -138,9 +141,10 @@ def audit(root: Path) -> Tuple[List[Finding], List[str], List[str], int]:
         if claim is None:
             undeclared.append(rr)
             continue
+        declared_pairs += 1
         if claim != actual:
             findings.append(Finding(rs, rr, claim, how, actual))
-    return findings, undeclared, unread, pairs
+    return findings, undeclared, unread, pairs, declared_pairs
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -156,7 +160,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return 3
     try:
-        findings, undeclared, unread, pairs = audit(root)
+        findings, undeclared, unread, pairs, declared_pairs = audit(root)
     except Exception as exc:                        # noqa: BLE001
         print(f"[{NAME}] NOT CHECKED — the scan itself failed: "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
@@ -169,7 +173,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for u in unread:
         print(f"NOT CHECKED — {u}", file=sys.stderr)
     print(f"examined {pairs} (session, report) pair(s) under {str(root)!r}; "
-          f"{len(undeclared)} declare no stage")
+          f"{declared_pairs} declare a stage, {len(undeclared)} declare none")
     if pairs == 0:
         print(f"[{NAME}] NOT CHECKED — no analysis session with a report was "
               f"found.", file=sys.stderr)
@@ -178,6 +182,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[{NAME}] FAIL — a report claims a stage its session did not "
               f"measure")
         return 1
+    # A CORPUS THAT DECLARES NOTHING WAS NOT CHECKED, AND MUST NOT READ AS CLEAN.
+    #
+    # MEASURED: over two pairs that both declared no stage at all, this printed
+    # "PASS — every claimed stage matches its session's inputs" and returned 0,
+    # having compared ZERO claims. That is a vacuous pass, and the capture this
+    # implements settles it in as many words at RESULT.md row 4: "a report that
+    # declares nothing is *undetermined*, not clean."
+    #
+    # One declared pair is enough to make the run a real comparison; the
+    # undeclared ones are disclosed beside it.
+    if declared_pairs == 0:
+        print(f"[{NAME}] NOT CHECKED — {pairs} pair(s) were read and NOT ONE "
+              f"declares a stage, so no claim was compared against any session. "
+              f"A report that declares nothing is undetermined, not clean.",
+              file=sys.stderr)
+        return 2
     if unread:
         print(f"[{NAME}] NOT CHECKED — a pair could not be read")
         return 2

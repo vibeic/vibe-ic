@@ -122,10 +122,38 @@ def test_the_file_name_is_a_claim_when_there_is_no_stamp(tmp_path):
 # -------------------------------------------------------------- verdicts
 
 def test_an_undeclared_report_is_disclosed_not_passed(tmp_path):
+    """It is disclosed by name AND counted, and — since it is the only pair —
+    the run is NOT CHECKED rather than clean: nothing was compared."""
     _pair(tmp_path, _POST, "Total 5.73e-04\n", stem="power")
     rc, out = _run(tmp_path)
     assert "UNDECLARED" in out
-    assert "1 declare no stage" in out
+    assert "0 declare a stage, 1 declare none" in out
+    assert rc == 2, out
+
+
+def test_a_corpus_that_declares_nothing_is_not_checked(tmp_path):
+    """MEASURED VACUOUS PASS, now pinned.
+
+    Over two pairs that BOTH declared no stage, this printed "PASS — every
+    claimed stage matches its session's inputs" and returned 0, having compared
+    ZERO claims. The capture this implements settles it at RESULT.md row 4: "a
+    report that declares nothing is *undetermined*, not clean."
+    """
+    _pair(tmp_path, _POST, "Total 5.73e-04\n", stem="power")
+    _pair(tmp_path, _POST, "Total 5.70e-04\n", stem="power2")
+    rc, out = _run(tmp_path)
+    assert rc == 2, f"a corpus declaring nothing passed:\n{out}"
+    assert "NOT ONE" in out
+
+
+def test_one_declared_pair_makes_it_a_real_comparison(tmp_path):
+    """BIDIRECTIONAL: a single declared pair beside an undeclared one is a real
+    run, and the undeclared one is disclosed rather than fatal."""
+    _pair(tmp_path, _POST, _RPT_STAMPED_POST, stem="power_postroute")
+    _pair(tmp_path, _POST, "Total 5.70e-04\n", stem="power2")
+    rc, out = _run(tmp_path)
+    assert rc == 0, out
+    assert "1 declare a stage" in out and "1 declare none" in out
 
 
 def test_a_session_that_publishes_no_number_is_not_a_pair(tmp_path):

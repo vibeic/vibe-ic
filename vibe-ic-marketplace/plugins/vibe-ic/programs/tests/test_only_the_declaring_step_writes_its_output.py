@@ -126,6 +126,40 @@ def test_a_different_basename_is_the_remedy(tmp_path):
 
 # ------------------------------------------------------- reads are not writes
 
+def test_a_shell_second_writer_goes_red(tmp_path):
+    """MEASURED FALSE PASS: the scan was Python-only, so a shell redirection
+    onto the same flow-declared path sat beside a Python writer unseen. This
+    tree drives real work from tools/*.sh, so the blind spot was not
+    hypothetical."""
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "runner.sh").write_text(
+        '#!/bin/bash\n'
+        'echo "{}" > "$PROJECT/reports/coverage.json"\n')
+    rc, out = _run(root)
+    assert rc == 1, f"the shell writer was not seen:\n{out}"
+    assert "runner.sh" in out
+
+
+def test_a_shell_read_is_not_a_writer(tmp_path):
+    """BIDIRECTIONAL: reading the path from shell must not count."""
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "consumer.sh").write_text(
+        '#!/bin/bash\n'
+        'cat "$PROJECT/reports/coverage.json"\n')
+    rc, out = _run(root)
+    assert rc == 0, out
+
+
+def test_a_shell_comment_is_not_a_writer(tmp_path):
+    root = _tree(tmp_path, _ONE_STEP, {"checker.py": _WRITER})
+    (tmp_path / _PROG_REL / "note.sh").write_text(
+        '#!/bin/bash\n'
+        '# never do: echo x > reports/coverage.json\n'
+        'true\n')
+    rc, out = _run(root)
+    assert rc == 0, out
+
+
 def test_a_read_is_not_a_writer(tmp_path):
     reader = ('from pathlib import Path\n'
               'def load(project):\n'
