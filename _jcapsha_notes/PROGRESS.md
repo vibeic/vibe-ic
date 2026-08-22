@@ -1,30 +1,35 @@
-# jcapsha — capture of the pad-site recovery (IN PROGRESS)
+# jcapsha — RETIRED WORKING NOTE. Read `RESULT.md` instead.
 
-Branch: `jcapsha/pad-site-capture`, off `origin/main` @ `a00f53f20`.
-Source: `_jpadsite_priv/RESULT.md` on 8hd-3 (476 lines) + `origin/jpadsite/pad-site`
-(5 commits). Both read end to end.
+This file was the running note taken while the capture was still open. It is
+kept only so that a reader who finds a link to it is not left guessing, and its
+original body is REMOVED rather than left in place, because two of its three
+findings were later overturned by this same lane and a reader arriving here
+first would take the overturned versions as current.
 
-## Measured so far, on this host, not taken on trust
+WHAT IT SAID, AND WHAT REPLACED IT:
 
-1. **F1's stated generalisation does not hold against the artefact it came
-   from.** Driving the PRE-FIX `pad_ring_gen` (origin/main, unmodified) at a PDK
-   whose IO LEFs carry only the SITE-REFERENCE form and whose tech view declares
-   the site, the refusal record already ENUMERATED the view it read:
-   `io_cell_library.lefs = ["…/libs.ref/proc_io/lef/io.lef"]`, `n_sites: 0`,
-   `pad_class_sites: []`, and the message carried both counts. "Say WHICH views
-   you read" was ALREADY satisfied by the code that had the bug, so a disclosure
-   guard would have run clean on the pre-fix tree. The rule with teeth is
-   different, and it is F2's — see the RESULT.
+1. It claimed F1's stated generalisation ("say WHICH views you read") does not
+   hold, because the pre-fix refusal already enumerated the view it read. That
+   observation is CORRECT and survives — see `RESULT.md`, F1. The rule the note
+   proposed in its place did NOT survive: it was refuted by its own corpus
+   sweep, and the shipped record is
+   `refusal_on_absence_falsified_by_the_declaration_grammar`.
 
-2. **F2 confirmed directly from upstream source in the pinned image.**
-   `librelane/scripts/openroad/common/pad_cfg.tcl` computes both
-   `getWidth` and `getHeight` per instance and sums ONLY `getWidth`, in a loop
-   that is side-agnostic. Confirmed by reading the file, not by citation.
+2. Its F2 reading of upstream's `pad_cfg.tcl` stands unchanged.
 
-3. **The F3 ladder call turns on a measurement jpadsite recorded and did not
-   chase.** Its `rotation_probe/MEASURED.txt` notes that the SOUTH pad's
-   orientation TRACKED `-rotation_vertical` while `-rotation_horizontal` was
-   pinned at R0. That is not "a knob is inert" — it is two arguments crossed,
-   inside OpenROAD's `make_io_sites`. Re-measuring here with the decisive
-   second arm (vary `-rotation_horizontal`, hold `-rotation_vertical`) before
-   the bucket is assigned.
+3. It stated that the F3 ladder call turns on "two arguments crossed, inside
+   OpenROAD's `make_io_sites`", and said the second arm was being measured
+   before the bucket was assigned. THAT SECOND ARM WAS RUN AND THE CONCLUSION
+   IS WITHDRAWN. The measurements were right; the inference from them was not.
+   The tool's documented contract defines "horizontal" as the horizontally-
+   ORIENTED pads, which sit on the east and west rows, and under that
+   convention every number measured is documented behaviour. The tool is
+   correct. The defect is ours — our side-to-variable mapping is INVERTED with
+   respect to that contract — and it ships as the Bucket-A records
+   `upstream_convention_not_inverted` and
+   `opposite_side_transform_matches_upstream`.
+   Full account: `evidence/f3_bucket_T_WITHDRAWN.txt`.
+
+A working note that outlives the work is a register of things that were true
+once, and this one had a live Bucket-T accusation against a forked tool at the
+top of it. Retired 2026-08-22, in the same lane that overturned it.
