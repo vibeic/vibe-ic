@@ -7063,3 +7063,67 @@ number that was already on the page.
 assignment exists. The four UNDETERMINED chips never reached that step, so this
 characterises the FLOW gap — which is chip-AGNOSTIC and is precisely what §7 says the wall
 is. It is not a measurement of those four designs' own pin-outs.
+
+---
+
+## J90 — the pad-limited die floor turns out NOT to depend on the decision J89 found missing
+
+J89 established that the missing pad step has two halves and that the first — *which IO
+cell type each pad is* — is a choice nobody has made. `padring_die_floor.py` computed
+every design's pad-limited die edge with **one** pad width, `pad_w_um = 75.0`. So the
+obvious question, and one nothing in this report had asked: **does the published floor
+depend on a choice nobody has taken?** If it did, six published numbers would be
+conditional on it.
+
+Measured from the PDK's own LEFs:
+
+```
+gf180mcu_ef_io__bi_t        75.000 x 350.000     gf180mcu_fd_io__dvdd    75.000 x 350.000
+gf180mcu_fd_io__asig_5p0    75.000 x 350.000     gf180mcu_fd_io__dvss    75.000 x 350.000
+gf180mcu_fd_io__bi_24t      75.000 x 350.000     gf180mcu_fd_io__in_c    75.000 x 350.000
+gf180mcu_fd_io__bi_t        75.000 x 350.000     gf180mcu_fd_io__in_s    75.000 x 350.000
+
+distinct widths among the signal-carrying masters: [75.0]     UNIFORM
+```
+
+**Every signal-carrying IO master in this library is exactly 75.000 µm wide** — input,
+Schmitt input, bidirectional at both drives, analog, and both supply cells. The variation
+is entirely in the fillers and breakers (0.1 / 1 / 2 / 5 / 10 µm), which exist to take up
+the slack and are not what a pad is.
+
+### Which means
+
+```
+design                       in    out  inout   bits   floor moves?
+caravel_user_project        330    164      8    502   NO
+opentitan_aes               384    131      0    515   NO
+ibex                        156    106      0    262   NO
+edge_llm_matmul_accel        73     36      0    109   NO
+edge_llm_accel               29      2      0     31   NO
+```
+
+**No cell-type choice the missing step could make moves any published pad floor by one
+micron.** Every direction each design needs is covered — inputs by `in_c`/`in_s`, outputs
+and inouts by `bi_t`/`bi_24t`, analog by `asig_5p0` — and all of them are the same width.
+
+**And J89's odd detail is confirmed from the other side**: a scan for an output-only
+master returns **NONE**, so outputs must use a bidirectional cell with its enable tied.
+That is a real constraint on the missing step and it costs **nothing** in geometry,
+because the bidirectional cell is the same 75.000 µm as everything else.
+
+### Why this matters to the adjudication rather than to the flow
+
+Two decisions are open in this report and neither is mine: §8's ladder question (options
+A–E) and J89's cell-type mapping. **Both have now been checked for whether a verdict
+moves with them, and neither does** — J88 measured that `edge_llm_matmul_accel` is
+core-limited at **2.145×–2.156×** as the flow stands and **2.128×–2.139×** under option E,
+and J90 measures that the pad floors every row is quoted against are invariant to the
+cell-type choice.
+
+**A verdict that moves with a decision nobody has taken is not a verdict.** That property
+was asserted nowhere and is now measured on both open decisions.
+
+**Scope, stated**: the table above is the five designs `padring_die_floor.json` carries.
+`u_hawaii_adc` is not among them — §2 measures it separately with its own 24 / 68 / 69-pad
+probes — and its verdict rests on the PDK having no 1.2 V device at all, which no pad
+width touches.

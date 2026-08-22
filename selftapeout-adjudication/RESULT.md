@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J89). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J90). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -2989,6 +2989,19 @@ is *a mapping from 77 declared directions onto 15 masters, plus the instantiatio
 instances an exit-0 assignment already names* — **nothing invented, nothing absent.**
 That is the strongest form this tier can take: not "we could not tell", but the missing
 input counted with evidence that each of its inputs already exists.
+
+**★ AND THE FLOOR EVERY ROW IS QUOTED AGAINST DOES NOT DEPEND ON THAT MISSING CHOICE
+(J90).** `padring_die_floor.py` used ONE pad width, 75.0 µm, so the published floors could
+have been conditional on the cell-type mapping J89 found missing. Measured from the PDK's
+own LEFs: **every signal-carrying IO master is exactly 75.000 × 350.000 µm** — `in_c`,
+`in_s`, `bi_t`, `bi_24t`, `asig_5p0`, `dvdd`, `dvss`, all identical; the variation is
+entirely in fillers and breakers. **So no choice that step could make moves any published
+pad floor by one micron**, and every direction each design needs is covered
+(330/164/8, 384/131/0, 156/106/0, 73/36/0, 29/2/0 in/out/inout). **Two decisions are open
+in this report and a verdict now measurably moves with neither**: J88 for the ladder
+(core-limited at both ends, 2.145×–2.156× and 2.128×–2.139×) and J90 for the cell type.
+*A verdict that moves with a decision nobody has taken is not a verdict* — that property
+was asserted nowhere and is now measured on both.
 
 **I did not build it, and that is deliberate.** It is a new flow step, not a bug
 fix, and `pad_assignment_gen`'s own docstring states the rule for exactly this
