@@ -1485,6 +1485,30 @@ and any view vocabulary the flow later gains.
 
 ---
 
+*A cheaper detector, from the lane that made the decision.* Comparing a declared
+view set against what the flow produces needs a second source that can itself go
+stale. Most of these fail a test that needs neither:
+
+| axis group | scope namespace | a global corner list demands… |
+|---|---|---|
+| setup, hold | signs off **across process corners** | corners it has — fine |
+| DRC, LVS, antenna, IR, EM, equivalence | a **single measurement over one database**, no process corner at all | corners that do not exist — **permanently uncovered** |
+
+The requirement is unsatisfiable **as a matter of type, not availability**. And
+the tell is sharp: the only way a producer could satisfy it is to *fabricate*
+the missing scopes. **A requirement whose sole route to satisfaction is
+invention is malformed, not strict.** Check that direction first; fall back to
+the flow comparison only for what survives it.
+
+The shipped remedy is worth copying because it re-opens the question without
+breaking anything: per-axis requirements fall back to the global list for any
+axis they do not name, so a contract written before the field adjudicates
+identically; an axis named with an **empty** list is undetermined rather than
+trivially satisfied, since there is deliberately no spelling for *any view will
+do*; a key naming no known axis is dropped rather than silently honoured; and
+the resolved view set is published on **satisfied** axes too, so questioning a
+requirement does not require first making the axis fail.
+
 ### A-37 · a refusal that names the obstacle also names the remedy · `ppa.cli_contract`
 
 The last unmined item in the brief's sources, and the first clean sweep in this
