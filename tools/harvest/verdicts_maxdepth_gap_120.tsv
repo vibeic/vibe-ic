@@ -1,0 +1,2 @@
+host	path	verdict	evidence
+120	/home/reyerchu/_rb_r808/repo/base_wt	LANDED	all 0 file(s) this tree changed hash-match main a4caccef byte for byte (git blob ids equal for every one); nothing in it is absent from main. tip: compliance gate: regenerate programs INDEX + pin the classifier's untested rules
