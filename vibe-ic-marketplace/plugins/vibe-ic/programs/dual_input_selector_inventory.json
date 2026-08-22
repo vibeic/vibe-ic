@@ -1,0 +1,37 @@
+{
+  "_comment": "Parsers offering two ways to name the input with no decision for the both-given case, as they stand on the tree two_input_selectors_given_together_must_refuse.py shipped with. MAY ONLY SHRINK; a row matching nothing is rc 1. Hand-authored from --json; there is no --write-baseline.",
+  "known": [
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_evidence_structure_check.py::paths::tree",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['paths'] and ['tree'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_run_manifest.py::run_dir::tree",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['run_dir'] and ['tree'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/blocker_classification_check.py::reports::dir",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['reports'] and ['dir'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/cross_layer_reference_check.py::manifest,project::corpus",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['manifest', 'project'] and ['corpus'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_is_one_commit_check.py::repo::batch",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['repo'] and ['batch'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_k5_quality_check.py::target::all",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['target'] and ['all'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_head_to_head_check.py::record::corpus",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['record'] and ['corpus'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    },
+    {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/spec_complete_extract.py::doc::inputs",
+      "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['doc'] and ['inputs'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
+    }
+  ]
+}
