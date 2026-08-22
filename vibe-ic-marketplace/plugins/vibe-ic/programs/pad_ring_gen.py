@@ -96,7 +96,7 @@ directions:
                                     knob does nothing.
 
 And the DEF carries the orientation the placer ACTUALLY produces on the
-vertical sides (`_pad_ring.VERTICAL_SIDE_ORIENT`), not the declared one, so the
+sides (`_pad_ring.SIDE_ORIENT`, all four), not the declared one, so the
 footprint a DEF reader derives matches the geometry this step recorded. An
 artefact that disagrees with itself is worse than either half alone.
 
@@ -330,16 +330,17 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         })
 
     # The vertical sides take the orientation the placer ACTUALLY produces,
-    # measured, not the declared one — see `_pad_ring.VERTICAL_SIDE_ORIENT`.
+    # measured, not the declared one — see `_pad_ring.SIDE_ORIENT`.
     # `PAD_ROTATION_VERTICAL` does not reach this dict because it does not
     # reach the tool either; `main` refuses before here if a run DECLARED a
     # non-default value, so nobody is silently ignored.
-    side_orient = {
-        "S": cfg["rotation"]["PAD_ROTATION_HORIZONTAL"],
-        "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2),
-        "W": PR.VERTICAL_SIDE_ORIENT["W"],
-        "E": PR.VERTICAL_SIDE_ORIENT["E"],
-    }
+    # ALL FOUR SIDES come from the placer's measured orientation, not from the
+    # declared rotation variables. NORTH used to be
+    # `rotate_cw(PAD_ROTATION_HORIZONTAL, 2)` -> S at the default, where the
+    # placer produces MX -> FS: same bbox, MIRRORED not rotated, so a DEF
+    # reader derives different pin positions. Part 3 of the ruling applied to
+    # W/E and missed N.
+    side_orient = dict(PR.SIDE_ORIENT)
     side_width = {
         "S": (urx - llx) - 2 * edge - 2 * corner_sw,
         "N": (urx - llx) - 2 * edge - 2 * corner_sw,
@@ -638,13 +639,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the variable at librelane's default is indistinguishable from a run that
     # never set it, so it proceeds and is TOLD, in
     # `rotation_vertical_not_honoured`.
-    declared_rotv = PR.normalise_orient(
-        cfg["rotation"]["PAD_ROTATION_VERTICAL"])
-    if declared_rotv != PR.normalise_orient(PR.ROTATION_DEFAULT):
-        raw = json.loads(asg_path.read_text(errors="replace")).get(
-            "PAD_ROTATION_VERTICAL")
+    # BOTH rotation variables, not just the vertical one. They are named for
+    # the ROW AXIS: -rotation_horizontal moves W/E and -rotation_vertical moves
+    # S/N. This step implements neither, so a declared non-default on EITHER is
+    # refused. Refusing only one of them was an artefact of the probe that
+    # measured only one.
+    _rot_var = None
+    for _v in ("PAD_ROTATION_VERTICAL", "PAD_ROTATION_HORIZONTAL"):
+        if PR.normalise_orient(cfg["rotation"][_v]) != PR.normalise_orient(
+                PR.ROTATION_DEFAULT):
+            _rot_var = _v
+            break
+    if _rot_var is not None:
+        raw = json.loads(asg_path.read_text(errors="replace")).get(_rot_var)
         reason = (
-            f"NOT DETERMINED: this run DECLARES PAD_ROTATION_VERTICAL={raw!r}, "
+            f"NOT DETERMINED: this run DECLARES {_rot_var}={raw!r}, "
             f"a value other than librelane's default "
             f"{PR.ROTATION_DEFAULT!r}, which this step does not implement. "
             f"{ROTATION_VERTICAL_NOT_HONOURED['reason']} Placing the ring anyway "

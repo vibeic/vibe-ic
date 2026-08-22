@@ -267,22 +267,25 @@ _CW90 = {"N": "E", "E": "S", "S": "W", "W": "N",
 #: Orientations whose footprint is the master's SIZE with the axes swapped.
 _ROTATED = ("E", "W", "FE", "FW")
 
-#: What the placer ACTUALLY orients a vertical-side pad to, in DEF spelling.
+#: What the placer ACTUALLY orients a pad to ON EVERY SIDE, in DEF spelling.
 #:
-#: MEASURED 2026-08-22, four SEPARATE OpenROAD processes (26Q3-1165), one per
-#: `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be reused
-#: by a later one:
+#: RE-MEASURED 2026-08-22, OpenROAD 26Q3-1581, at librelane's default rotations,
+#: all four sides observed in one process and cross-checked by holding one
+#: rotation parameter and varying the other:
 #:
-#:     ROTV = R0 / R90 / R180 / MX   ->   WEST orient=MXR90, EAST orient=R90
-#:                                        75 um along the row, 350 um into the
-#:                                        die, IDENTICAL in all four
+#:     SOUTH R0    -> N        WEST  MXR90 -> FW
+#:     NORTH MX    -> FS       EAST  R90   -> W
 #:
-#: The vertical-side orientation is a CONSTANT of the placer, not a function of
-#: the declared rotation. Written here in the placer's own spelling
-#: (`MXR90` -> `FW`, `R90` -> `W`) so the DEF this step emits says what the tool
-#: would have said. Emitting the DECLARED orientation instead produced an
-#: artefact that contradicted its own geometry.
-VERTICAL_SIDE_ORIENT: Dict[str, str] = {
+#: THE NORTH ENTRY IS THE CORRECTION. This step used to compute NORTH as
+#: `rotate_cw(PAD_ROTATION_HORIZONTAL, 2)`, which at the default yields S
+#: (R180). The placer produces MX -> FS. Same bounding box, MIRRORED rather
+#: than rotated, so a DEF reader deriving pin positions gets a different cell.
+#: Part 3 of the flow owner's ruling -- "the DEF must not contradict itself,
+#: write the orientation the tool actually produces" -- was applied to the
+#: vertical sides and missed here.
+SIDE_ORIENT: Dict[str, str] = {
+    "S": ORIENT_ALIASES["R0"],
+    "N": ORIENT_ALIASES["MX"],
     "W": ORIENT_ALIASES["MXR90"],
     "E": ORIENT_ALIASES["R90"],
 }
