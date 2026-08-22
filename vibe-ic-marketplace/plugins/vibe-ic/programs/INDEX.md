@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1183
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1183)
+- **Total programs (excluding helpers / shims):** 1184
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1184)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1174 |
+| `any` | 1175 |
 
 ## Alphabetical listing
 
@@ -445,6 +445,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_process_attestation` | any | — | Structured process evidence for repo hygiene gates. |
+| `gate_proof_vocabulary_has_a_producer` | any | — | An axis whose whole proof vocabulary is produced by nobody. |
 | `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
@@ -1255,7 +1256,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1174 programs)
+### `any` (1175 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1672,6 +1673,7 @@ _(no programs in this group)_
 - `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_process_attestation` — Structured process evidence for repo hygiene gates.
+- `gate_proof_vocabulary_has_a_producer` — An axis whose whole proof vocabulary is produced by nobody.
 - `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
