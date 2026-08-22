@@ -3528,3 +3528,51 @@ demonstrated by single-variable revert, the failure mechanism named, and a
 remedy with the flow question that decides between its two forms. Sent to it,
 since the finding belongs to its closed brief and it should not have to
 rediscover the mechanism if the owner reopens it.
+
+### Six absent, three of them new — and that strengthens `jmeas3`'s own remedy
+
+`jmeas3` extended §53: the fixture populates the synthetic repo from a hardcoded
+whitelist, the script invokes more than the whitelist provides, and the batch
+wired in THREE new ones without adding any. Only the earliest speaks, because
+`:258` aborts before `:382` and `:417` are reached — so one symptom hides three
+causes. Verified independently, and the count is larger than three.
+
+```
+fixture provides (whitelist + the one copied separately)      4
+script invokes                                                8
+INVOKED BUT ABSENT                                            6
+```
+
+Splitting those six by whether `d5646372f` introduced them:
+
+```
+attestation_preflight_check      before 0  after 1   NEWLY WIRED
+generated_test_list_min_guard    before 0  after 1   NEWLY WIRED
+landing_noop_verdict_check       before 0  after 1   NEWLY WIRED
+ci_targeted_test_select          before 2  after 3   pre-existing absence
+landing_worktree_is_clean_check  before 1  after 1   pre-existing absence
+pytest_per_file_junit            before 2  after 2   pre-existing absence
+```
+
+**`jmeas3`'s three are exactly the newly-wired ones, and its count is right for
+the question it asked** — what did this batch add. Three more were already
+invoked-and-absent before the batch and are apparently harmless: not reached on
+the exercised paths, or tolerated. **So the fixture was already six-eighths
+incomplete and nothing said so.** The batch did not create the hole; it stepped
+in one that was already open.
+
+**That is a stronger argument for its own recommendation than the one it made.**
+It preferred "stop making that list a whitelist" over "add the three", and
+reasoned from the next wired gate landing in the same hole. The better reason is
+in front of us: **three programs are ALREADY invoked and absent, and the fixture
+has been silently tolerating that for however long.** A whitelist that is 50%
+short today will not be rescued by adding three entries — the pattern is the
+defect, not the entries.
+
+**And it sharpened my own point better than I did.** On stale pins versus stale
+fixtures it observed: a pin mismatch reports per-pin, so three stale pins give
+three complaints; a fixture gap reports the FIRST missing file and stops, so the
+symptom count is one regardless of how many are missing. **The failure mode that
+"makes you find out" also understates its own size** — here by a factor of six
+against one. That is the version of the pin-versus-fixture argument worth
+keeping, and it is theirs.
