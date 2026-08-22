@@ -848,26 +848,43 @@ same real-dispatcher record the test builds — `expansion: "NO_CORPUS"`, gate
 label *"… was NOT FOUND — nothing was opened to check"*, `benchmark_data_sha`
 **matching**, so guard 1 is satisfied and cannot be what refuses:
 
-| mutation of the shipped predicate | authorizer | the pin |
-|---|---|---|
-| widen the `expansion` comparison to accept `NO_CORPUS`, literal kept | refuses — the gate-label filter still selects nothing | **green** |
-| widen the gate-label filter to accept the `NOT FOUND` label too | refuses — the exact `expansion` dict still fails | **green** |
-| widen **both**, both literals kept | **AUTHORISES** | **red** on the substantive assertion: `assert 0 == 1`, *"a base arm whose corpus was NEVER OPENED authorised the trusted parent to enumerate and execute the routed corpus"* |
-| drop `"expansion"` from the dict comparison altogether | — | **red** on the shape check: *"the landing-transition authorizer no longer mentions `\"expansion\": \"EXPANDED\"`"* |
-
 So the sentence this paragraph replaces — *"the strict dict equality against
 `expansion: "EXPANDED"` is what makes guard 2 unnecessary"* — was half the
 truth, and the half it left out is the reassuring one: the gate-label filter is
-an equal partner, and **either one alone** already refuses.  The substantive
-assertion goes red only when **both** are widened, which is exactly the state
-worth catching — widening one is harmless, widening both hands the landing a
-corpus nothing opened.  The remaining move, deleting a literal rather than
-widening a comparison, is what the shape check covers: it requires the predicate
-to still mention `"expansion": "EXPANDED"`, `is EMPTY` and `benchmark_data_sha`.
-So the pin rests neither on a single comparison nor on a single string search.
-The predicate's bytes are lifted out of the shipped script rather than restated,
-and the extraction asserts what it took, so a rename fails loudly here instead
-of leaving the test silently measuring nothing.
+an equal partner, and **either one alone** already refuses.
+
+**And that redundancy is exactly what made the first version of this pin half a
+guard.**  Because either guard alone refuses, relaxing *one* left the record
+still rejected and the end-to-end assertion still **green**.  A guard that only
+bites once **both** have fallen is not protecting either of them; it is
+protecting their conjunction, and single-guard erosion is how a conjunction
+becomes a single point.  So `_shipped_authorizer` now polices the two
+individually.  Measured, unmutated first:
+
+| mutation of the shipped predicate | before this section | now |
+|---|---|---|
+| *(none — the shipped bytes)* | passes | **passes** |
+| widen the gate-label filter to accept the `NOT FOUND` label too | green — the exact `expansion` dict still refuses | **red**: *"no longer selects on `g.get("label") == label`"* |
+| widen the `expansion` comparison to accept `NO_CORPUS`, literal kept | green — the gate-label filter still selects nothing | **red**: *"now names `NO_CORPUS`"* |
+| widen **both**, both literals kept | **red** — `assert 0 == 1`, *"a base arm whose corpus was NEVER OPENED authorised the trusted parent to enumerate and execute the routed corpus"* | **red** (and that assertion still stands behind it) |
+| drop `"expansion"` from the dict comparison altogether | **red** on the shape check | **red** |
+
+The second row is the one that needed a new kind of check.  An `== "EXPANDED"`
+left intact beside an `or … == "NO_CORPUS"` still carries every literal the
+shape check looks for, so the only thing that sees it is a **forbidden**
+spelling: the predicate authorises exactly one state, that state is the
+READ-empty one, and it therefore has no legitimate reason to name `NO_CORPUS`
+or `NOT FOUND` at all.  Neither appears in the shipped bytes today, so this is
+a guard on the state we shipped, not one that fires on it.
+
+**The bound, stated rather than glossed.**  These checks read the predicate's
+shipped *text*.  A widening that avoids both spellings — routing the accepted
+value through a variable — would pass them, and is caught only by the
+end-to-end assertion, and only if **both** guards fall.  That is a strictly
+smaller hole than the one this closes, and naming it is cheaper than
+discovering it.  The predicate's bytes are lifted out of the shipped script
+rather than restated, and the extraction asserts what it took, so a rename
+fails loudly here instead of leaving the test silently measuring nothing.
 
 ### 8. Re-verified at the branch head, independently
 

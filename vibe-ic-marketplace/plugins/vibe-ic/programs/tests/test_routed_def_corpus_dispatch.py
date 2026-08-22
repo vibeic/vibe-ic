@@ -1032,24 +1032,31 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
 #
 # WHICH BYTES DO THAT REFUSING. Re-measured at the branch head, because the
 # first version of this comment named only one of them. There are TWO
-# in-predicate guards, and each refuses on its own. Over the exact record case
-# (2) builds — `NO_CORPUS`, the NOT FOUND gate label, `benchmark_data_sha`
-# MATCHING, so guard 1 is satisfied and cannot be what refuses:
+# in-predicate guards -- the gate-label equality and the exact `expansion` dict
+# -- and EACH REFUSES ON ITS OWN. That redundancy is why the end-to-end
+# assertion below cannot police them: relax one and the other still refuses, so
+# the record is still rejected and the assertion is still green. A guard that
+# only bites once BOTH have fallen is half a guard.
 #
-#     widen `expansion` to accept NO_CORPUS, literal kept   -> pin GREEN
-#         (the gate-label filter still selects nothing)
-#     widen the gate-label filter to accept NOT FOUND too   -> pin GREEN
-#         (the exact `expansion` dict still fails)
-#     widen BOTH, both literals kept                        -> pin RED, on the
-#         substantive assertion below: `assert 0 == 1`
-#     drop `"expansion"` from the dict comparison           -> pin RED, on the
-#         shape check in `_shipped_authorizer`
+# So `_shipped_authorizer` polices them individually, and the two layers are
+# measured, not assumed. Mutations of the shipped predicate, each driven over
+# the exact record case (2) builds -- `NO_CORPUS`, the NOT FOUND gate label,
+# `benchmark_data_sha` MATCHING, so guard 1 is satisfied and cannot be what
+# refuses:
 #
-# The substantive assertion bites only when BOTH are widened, which is the state
-# worth catching: widening one is harmless, widening both hands the landing a
-# corpus nothing opened. Deleting a literal instead of widening a comparison is
-# what the shape check covers. So this pin rests neither on one comparison nor
-# on one string search.
+#     widen the gate-label filter to accept NOT FOUND too   -> RED  "no longer
+#         selects on g.get("label") == label"
+#     widen `expansion` to accept NO_CORPUS, literal kept   -> RED  "now names
+#         'NO_CORPUS'"   <- the literal survives an `or` branch, so only the
+#         forbidden-spelling check sees this one
+#     widen BOTH, both literals kept                        -> RED  (and the
+#         substantive `assert 0 == 1` behind it)
+#     drop `"expansion"` from the dict comparison           -> RED  "no longer
+#         mentions '"expansion": "EXPANDED"'"
+#     unmutated shipped bytes                               -> PASSES
+#
+# So no single-guard erosion is invisible any more, and the end-to-end
+# assertion stays as the backstop for the case where both fall at once.
 
 VERIFY_MERGE = REPO / "tools" / "gatekeeper-verify-merge.sh"
 _AUTHORIZER = "base_has_exact_legacy_routed_empty"
@@ -1115,8 +1122,39 @@ def _shipped_authorizer(tmp_path: Path, stem: str, record: Path) -> int:
         assert required in body, (
             f"the landing-transition authorizer no longer mentions {required!r}. "
             f"It decides whether a base arm authorises trusted transition "
-            f"evidence; the exact `expansion` comparison is what keeps a corpus "
-            f"nothing opened out of that decision (vibe-ic#1764)")
+            f"evidence; keeping a corpus nothing opened out of that decision is "
+            f"what these bytes do (vibe-ic#1764)")
+    # BOTH guards must stay EQUALITIES, and this is asserted separately from the
+    # substantive check below because the substantive check cannot see a single
+    # widening: with two redundant guards, relaxing one leaves the other
+    # refusing and the assertion green (measured -- see the matrix above). A
+    # membership test in place of either `==` is the first half of the only
+    # mutation that gets an unopened corpus through, so it fails HERE, on its
+    # own, before it can be paired with the second half.
+    for guard in ('g.get("label") == label',
+                  '"expansion": "EXPANDED"}'):
+        assert guard in body, (
+            f"the landing-transition authorizer no longer selects on {guard!r}. "
+            f"It is one of TWO independent guards that keep an absent-corpus "
+            f"record out of `build_trusted_transition_evidence`; widening "
+            f"either to a membership or subset test is invisible to the "
+            f"end-to-end assertion below, because the other one still refuses "
+            f"(vibe-ic#1764 §7)")
+    # ...and neither guard may be widened by NAMING the absent-corpus state.
+    # An `== "EXPANDED"` kept intact beside an `or ... == "NO_CORPUS"` still
+    # carries both literals above, so only this catches it. The predicate has
+    # no legitimate reason to mention either spelling: it authorises exactly
+    # one state and that state is the READ-empty one. Bound stated honestly --
+    # this reads the shipped text, so a widening that avoids both spellings
+    # (an indirection through a variable) would pass here and is caught only by
+    # the end-to-end assertion below, and only if BOTH guards fall.
+    for forbidden in ("NO_CORPUS", "NOT FOUND"):
+        assert forbidden not in body, (
+            f"the landing-transition authorizer now names {forbidden!r}. It "
+            f"authorises the trusted parent to enumerate and EXECUTE the routed "
+            f"corpus, and the only state that may do so is a corpus that was "
+            f"READ and publishes nothing. A corpus nothing opened must not be "
+            f"reachable from these bytes at all (vibe-ic#1764)")
     driver = tmp_path / f"authorizer-{stem}.sh"
     driver.write_text(
         f"TRUSTED_REPO={str(REPO)!r}\nBENCHMARK_SHA={_BOUND_SHA!r}\n"
