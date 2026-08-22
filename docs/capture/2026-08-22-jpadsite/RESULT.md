@@ -1246,8 +1246,42 @@ scattered across this report; collected here because a reader looking for "what
 is left" should not have to find five paragraphs. The owner is asleep and will
 read this cold.
 
-0. LAND THIS REPORT AS A CAPTURE BUNDLE — NOT TAKEN, AND THIS ONE IS PURELY
-   MINE TO DECIDE, SO HERE IS THE REASONING RATHER THAN A VERDICT.
+0. LAND THIS REPORT AS A CAPTURE BUNDLE — DECIDED "NO", THEN REVERSED WITHIN
+   THE HOUR, AND THE REVERSAL IS THE PART WORTH READING.
+   PUSHED as branch `jpadsite/capture-bundle`, NOT a PR and NOT on
+   `jpadsite/pad-site`. It carries `docs/capture/2026-08-22-jpadsite/` with this
+   file and the evidence tree. (Head was a3f68ee0d; it is 19a2e23e1 after the
+   correction below. I pinned the first sha here and it went stale within the
+   hour, from my own next commit -- the same class this report documents, so it
+   is corrected rather than quietly updated.)
+
+   AND THE REPO COPY IS A SUBSET, WHICH I ONLY LEARNED BY RETRIEVING IT.
+   `git add` silently dropped EIGHT files -- `.gitignore:31` excludes `*.log`,
+   `:84` excludes `*.def`. The push said "new branch" and shipped 40 of 48.
+   Found by fetching the branch into a fresh clone and running the bundle's own
+   MANIFEST against it: 8 FAILED. Nothing in the push output hinted at it, and
+   `git status` was clean.
+   NOT force-added: those rules are the repo's, and the three capture bundles
+   already under `docs/capture/` contain ZERO .log or .def. Instead the branch
+   carries `OMITTED_BY_GITIGNORE.md` naming all eight with the sha256 the
+   manifest records, what is lost by each, and the load-bearing point -- NO
+   CLAIM IN THIS FILE RESTS ON AN ABSENT FILE ALONE. The five logs' verdicts and
+   denominators are quoted in `merge_preview/MERGE_PREVIEW.md`, which shipped;
+   every figure derived from the three DEFs is re-derived from the JSON
+   artefacts, which shipped. In that bundle `arithmetic_selfcheck.py` returns
+   **rc=2 NOT VERIFIED** rather than passing, because two checks read a .def --
+   the refusal path doing real work in a situation I had not anticipated when I
+   graded it.
+   MY FIRST DECISION WAS NOT TO, and the reasoning below is left standing
+   because it was not wrong -- it was WEIGHED WRONG. What flipped it: my own
+   recorded rule says "private paths can vanish; only pushed work survives",
+   and I was violating it for the largest artefact I had produced. The
+   objection I had given most weight -- "outward-facing and not asked for" --
+   is an argument against LANDING. It is much weaker against an UNMERGED
+   BRANCH, which costs the repo nothing until someone merges it and is
+   reversible with one `git push --delete`. I had let an argument about one
+   action rule out a different, cheaper action.
+   THE REASONING THAT STILL STANDS, and why this is a branch and not a PR:
    THE RISK IS REAL AND THE BRIEF NAMES IT: "everything not pushed at any moment
    is what you lose." The code is pushed. THIS REPORT AND ITS 47 EVIDENCE FILES
    ARE ON ONE HOST'S DISK AND NOWHERE ELSE — `_jpadsite_priv/` and the fleet
@@ -1267,13 +1301,11 @@ read this cold.
    without breaking the property that makes it checkable — MANIFEST.sha256
    covers all 47, and "0 uncited, 0 manifest failures" stops being true the
    moment a subset ships.
-   TO TAKE IT, in one command, if the owner wants it durable:
-       mkdir -p docs/capture/2026-08-22-jpadsite
-       cp -r /home/reyerchu/_jpadsite_priv/{RESULT.md,evidence} \
-             docs/capture/2026-08-22-jpadsite/
-   on a branch of its own, NOT on `jpadsite/pad-site` — that branch is now a
-   68-line change and adding 692 KB of docs to it would undo the clarity the PR
-   banner exists to give.
+   TO LAND IT: open a PR from `jpadsite/capture-bundle`, or cherry-pick
+   a3f68ee0d. TO DISCARD IT: `git push origin --delete jpadsite/capture-bundle`.
+   Deliberately NOT on `jpadsite/pad-site` — that branch is a 68-line code
+   change and adding 692 KB of docs to it would undo the clarity its PR banner
+   exists to give.
 
 1. BUMP THE PLUGIN VERSION — NOT TAKEN.
    Explicitly forbidden by the brief: "Do NOT bump the plugin version — the
