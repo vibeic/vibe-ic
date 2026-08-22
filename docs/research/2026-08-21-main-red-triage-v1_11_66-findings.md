@@ -4350,6 +4350,62 @@ carry the sentinel**, which is a stronger safety property than an env flag becau
 a flag can be set by accident and a committed file cannot.
 
 
+## M82 — "B's channel is confirmed" was FALSE. The label cannot be learned; the mounts can
+
+My own document states the rule: *"every 'just express it through channel X'
+claim needs channel X checked before the item is ranked"*, and then ranks B with
+**"B's channel is confirmed (the container label, from source)."** I checked that
+the label EXISTS. I never checked that a test can learn its VALUE. **Those are
+different claims and I wrote the second having verified only the first.**
+
+**MEASURED — the value is unreachable:**
+
+    hermetic_candidate_runner.py:1824   run_id = os.urandom(12).hex()
+    validated as                        [0-9a-f]{24}                  (:1448)
+    passed from the verifier?           NO — there is no --run-id argument
+    grep run_id gatekeeper-verify-merge.sh   -> 0
+    grep run_id landing_merge_verdict.py     -> 0
+    appears only in the RECEIPT              (:1998)
+
+**The runner mints its own random id.** The verifier's `RUN_ID` — the one reachable
+through `refs/gk-verify/$RUN_ID/head`, which B correctly identified — is a
+DIFFERENT VALUE and is never given to the runner. The only artefact carrying the
+label's value is the receipt, **which is produced by a completed run**; the
+interrupt tests never let one complete. So at the instant the assertion needs the
+id, nothing on the host has ever held it.
+
+And B had already ruled out the fallback: filtering on the label KEY alone is
+unsafe here, because a concurrent verification by another agent on this host would
+be caught and the guard would go red for someone else's container.
+
+**THE CHANNEL THAT DOES WORK — mounts, not labels.**
+
+    RUN="$(mktemp -d -t gkverify.XXXXXX)"   gatekeeper-verify-merge.sh:276
+    WT_CAND="$RUN/candidate"                                          :277
+    RUNTIME_SNAPSHOT="$RUN/protected-runtime"                         :299
+    launch_hermetic_*_arm passes --subject "$subject" --runtime "$RUNTIME_SNAPSHOT"
+
+Every arm's container mounts host paths **under `$RUN`**, and `RUN_ID` is exactly
+`basename "$RUN"` (`:327`) — the value the git ref publishes. So:
+
+    ref refs/gk-verify/<RUN_ID>/head   ->  RUN_ID
+    docker ps -a --filter label=ai.vibeic.hermetic-run   ->  candidates
+    docker inspect  ->  keep those with a Mount.Source containing RUN_ID
+
+**This is concurrency-safe for the reason the label-key filter was not**: another
+agent's verification has a different `mktemp -d`, so its mounts cannot contain
+this run's `RUN_ID`. The identification is derived from a path the test can
+predict rather than a secret the test would have to be told.
+
+**Why I am recording this rather than quietly fixing the spec.** B was ranked
+buildable on a confirmation that did not cover the claim it was attached to, and
+it was ranked by me, in a document whose stated rule is precisely the check I
+skipped. **A rule you write and then fail to apply in the same document is worse
+than no rule**, because the next reader sees the rule and trusts the ranking that
+violates it. The mount channel is now verified to the standard the label channel
+only appeared to meet.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
