@@ -1202,7 +1202,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"{f['program']} (line(s) "
                       f"{', '.join(str(x) for x in f['program_lines'])}) states "
                       f"{', '.join(f['emitted'])} — the population moved and "
-                      f"the pin did not")
+                      f"the pin did not", file=out)
         print(f"[FAIL] {TOOL}: {len(findings)} population(s) stated twice and "
               f"disagreeing [{head}]", file=out)
         return _vac.RC_FAIL

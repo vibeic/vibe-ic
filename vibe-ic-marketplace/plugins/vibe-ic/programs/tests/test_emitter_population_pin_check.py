@@ -2615,6 +2615,76 @@ def test_json_at_a_directory_is_a_usage_error_before_the_work(tmp_path):
     assert "is a directory" in out, out
 
 
+# ── the document stream, on EVERY verdict path ──────────────────────────────
+# A single print that forgets `file=out` puts a human line after the closing
+# brace and the document stops parsing. That is not hypothetical: the commit
+# that introduced `--json -` left exactly one behind, on the refusal path, where
+# the PASS-path test could not see it.
+
+CLEAN_EMIT = (
+    'def script():\n'
+    '    return ("  set _n 0\\n"\n'
+    '            "  if {[catch {a}]} { incr _n }\\n"\n'
+    '            "  if {[catch {b}]} { incr _n }\\n"\n'
+    '            "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"\n'
+    '            "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def _verdict_tree(tmp_path, kind):
+    progs = tmp_path / "progs"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    if kind == "vacuous":
+        return progs, tests
+    (progs / "thing_emit.py").write_text(CLEAN_EMIT, encoding="utf-8")
+    pin = "of 2 repairs refused" if kind != "refusal" else "of 3 repairs refused"
+    (tests / "test_thing_emit.py").write_text(
+        f'from thing_emit import script\n\n\n'
+        f'def test_it():\n    assert "{pin}" in script()\n', encoding="utf-8")
+    if kind == "substituted":
+        (progs / "bad_emit.py").write_bytes(b'def s():\n    return "\xff\xfe x"\n')
+    return progs, tests
+
+
+@pytest.mark.parametrize("kind", ["pass", "refusal", "vacuous", "substituted"])
+def test_json_dash_keeps_stdout_parseable_on_every_verdict(tmp_path, kind):
+    progs, tests = _verdict_tree(tmp_path, kind)
+    r = _run(progs, tests, "--json", "-")
+    try:
+        doc = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(
+            f"a human line leaked into the document on the {kind} path ({e}):\n"
+            + r.stdout) from None
+    assert doc["tool"] == "emitter_population_pin_check"
+    if kind == "refusal":
+        assert r.returncode == RC_FAIL, r.stdout + r.stderr
+        assert "[POPULATION]" in r.stderr, r.stderr
+
+
+def test_every_print_after_the_stream_is_chosen_goes_through_it():
+    """The structural twin of the test above, and the one that scales: it fails
+    on a print added later without `file=out`, before anyone has to construct a
+    tree that reaches that line. Read from the AST, because a regex over the
+    source cannot tell which multi-line call carries the keyword -- the leak it
+    is guarding against was left by exactly that mistake."""
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    anchor = max(n.lineno for n in _ast.walk(main)
+                 if isinstance(n, _ast.Assign)
+                 and getattr(n.targets[0], "id", "") == "out")
+    unrouted = sorted(n.lineno for n in _ast.walk(main)
+                      if isinstance(n, _ast.Call)
+                      and getattr(n.func, "id", "") == "print"
+                      and "file" not in {k.arg for k in n.keywords}
+                      and n.lineno > anchor)
+    assert not unrouted, (
+        "these print() calls run after the output stream is chosen and do not "
+        f"use it, so `--json -` emits them into the document: {unrouted}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
