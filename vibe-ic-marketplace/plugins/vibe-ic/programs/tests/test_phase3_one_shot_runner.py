@@ -147,3 +147,54 @@ def test_edge_explicit_pdk_sky130a(tmp_path):
     body = json.loads(
         (project / "reports" / "orchestrator" / "phase3_one_shot.json").read_text())
     assert body["pdk"] == "sky130A"
+
+
+# ---------------------------------------------------------------------------
+# The two steps wired for 15.5ic (pad ring) and 37.5ic (tape-out docs) shipped
+# with a CLAIM and no test: "Exit codes are treated as DISCLOSURES, never run
+# verdicts ... rc 2 maps to SKIP, not ENV_UNAVAILABLE — a not-asked is not an
+# absent capability." Nothing exercised the step functions themselves, so the
+# claim rested on reading the code.
+#
+# It matters in one direction in particular. `step_pad_ring_gen` promotes to
+# "PASS" on rc 0, so a producer that exits 0 having written nothing would put a
+# step that produced no artefact into the executed-PASS numerator — which is
+# the harm the whole 15.5ic/37.5ic wiring exists to end, arriving by the other
+# door. These pin the disclosed shape on a project with nothing in it.
+# ---------------------------------------------------------------------------
+def _phase3():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import phase3_one_shot_runner as R  # noqa: E402
+    return R
+
+
+def test_the_pad_ring_step_discloses_a_skip_on_a_bare_project(tmp_path):
+    R = _phase3()
+    r = R.step_pad_ring_gen(tmp_path)
+    assert r.status == "SKIP", (
+        f"a bare project has no floorplan and no tapeout declaration, so the "
+        f"ring producer cannot have run — status {r.status!r} claims otherwise")
+    assert r.status != "PASS", "a step that produced no ring is not a PASS"
+    assert "rc=" in r.detail, (
+        f"the disclosure must name the producer's exit code, or a reader "
+        f"cannot tell a refusal from a not-asked: {r.detail!r}")
+
+
+def test_the_tapeout_docs_step_discloses_a_skip_on_a_bare_project(tmp_path):
+    R = _phase3()
+    r = R.step_tapeout_docs_gen(tmp_path)
+    assert r.status == "SKIP", (
+        f"there is no run to document in an empty project — status "
+        f"{r.status!r} claims otherwise")
+    assert r.detail.strip(), "a SKIP with no reason is indistinguishable from a mute"
+
+
+def test_neither_step_reports_an_output_it_did_not_produce(tmp_path):
+    # `output_files` is what downstream reads as "this step produced these".
+    # Every path it names must exist, or a SKIP starts looking like a run.
+    R = _phase3()
+    for fn in (R.step_pad_ring_gen, R.step_tapeout_docs_gen):
+        r = fn(tmp_path)
+        missing = [p for p in r.output_files if not Path(p).is_file()]
+        assert not missing, (
+            f"{fn.__name__} reported output(s) that are not on disk: {missing}")
