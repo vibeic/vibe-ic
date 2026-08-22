@@ -100,6 +100,48 @@ _NOT_PROSE: Dict[str, str] = {
         "#711 die_area_budget_um) both read English design documents, where "
         "denial is spellable and was spelled. Consulting `_prose_polarity` on "
         "a VIAS entry would be an unreachable branch.",
+    "input_doc_pdk_claim_vs_installed_pdk_check::_sections_of":
+        "SPICE `.lib` section directives inside a PDK corner library. The "
+        "matched text is `^\\s*\\.lib\\s+(NAME)\\s*$` -- a production of the "
+        "ngspice/SPICE library grammar, written by the foundry's model "
+        "packaging, in which there is no form that DENIES a section: SPICE "
+        "gives no way to write '.lib mos_tt is NOT defined here'. A section "
+        "either appears as a directive or it does not, and absence is already "
+        "how this function reports it (the name is simply not in the returned "
+        "list). The values written back are those section NAMES, quoted into "
+        "the gate's evidence so a reader can re-derive the vocabulary from the "
+        "same file -- they are never read as an assertion that could be "
+        "negated by surrounding text. Consulting `_prose_polarity` on a `.lib` "
+        "directive would add a branch that can never fire, and a call that can "
+        "never fire is a green light rather than a check. Contrast the two "
+        "defects this gate was built from (#706 pdk_target, #711 "
+        "die_area_budget_um): both read English design documents, where denial "
+        "is spellable and was spelled -- which is exactly what "
+        "vibe-ic#904 is about on the OTHER side of this same gate, where the "
+        "CLAIM text is prose and is parsed by the claim scanner, not here.",
+    "phase3_one_shot_runner::density_counted_specs":
+        "Two machine-written grammars, neither of which can spell a denial. "
+        "The first is a LEF/DEF streamout layermap row -- `<lefname> "
+        "<purpose> <gdslayer> <gdsdatatype>`, whitespace-separated columns "
+        "emitted by the foundry's streamout packaging or by this runner's own "
+        "`_synthesize_streamout_layermap`; there is no form in it that says "
+        "'met1 FILL is NOT on 68/36'. The second is the KLayout DRC layer "
+        "binding `NAME = input(L, D)` / `polygons(L, D)`, a production of the "
+        "deck's Ruby DSL, in which a layer is bound or it is not -- a deck "
+        "cannot write 'this is NOT layer 68 datatype 36'. Absence is already "
+        "how both halves report it: an unmatched row or an unmatched binding "
+        "simply does not enter `counted`, and the report publishes the "
+        "resulting spec list plus `specs_from_layermap` / `specs_from_deck` "
+        "counts so a reader can see exactly what was and was not found. "
+        "Nothing here is read as an assertion that surrounding text could "
+        "negate. There is also a hard reason it CANNOT consult the module: "
+        "this function's source is injected verbatim into the KLayout batch "
+        "recipe (`_metal_density_recipe`) and executed inside the container "
+        "under KLayout's own interpreter, which has no path to "
+        "`_prose_polarity` -- so the call would not merely be unreachable, it "
+        "would not import. Contrast the two defects this gate was built from "
+        "(#706 pdk_target, #711 die_area_budget_um): both read English design "
+        "documents, where denial is spellable and was spelled.",
 }
 
 
@@ -125,11 +167,56 @@ def _searches_prose(fn: ast.AST) -> bool:
     return False
 
 
+#: Modules whose `.compile` mints a PATTERN. Kept to the two spellings that
+#: exist in this corpus rather than `attr == "compile"` on anything, so an
+#: unrelated `x = obj.compile(...)` cannot borrow the exclusion.
+_PATTERN_FACTORY_MODULES = {"re", "regex"}
+
+
+def _is_compiled_pattern(value: ast.AST) -> bool:
+    """`re.compile(...)` -- the INSTRUMENT that reads prose, not a value read
+    out of prose.
+
+    A `re.Pattern` is never a declared value taken out of a sentence, whatever
+    was concatenated to build it, and no sentence can deny one. Both real
+    defects (#706 `pdk_target`, #711 `die_area_budget_um`) wrote the matched
+    TEXT into a declared field; memoising the searcher is keeping a tool.
+
+    Without this, a word-boundary helper that caches its own pattern --
+
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        pat  = re.compile(left + re.escape(token) + right)
+        _CACHE[token] = pat
+
+    -- reads as an extractor publishing a declared value, because the `re.match`
+    in the CONDITION marks `left` match-derived and `pat` inherits it. The text
+    that goes INTO a pattern is still tracked: an extractor that compiles a
+    pattern AND writes the matched text is unchanged, which is pinned by test.
+
+    MEASURED on this corpus before it was written: this removes exactly ONE
+    name from the 217 the predicate returns, `policy_direction_pin_check::_names`,
+    and no other. Two wider narrowings were built first and REJECTED on the same
+    measurement -- dropping the test of a conditional expression also dropped
+    `parametric_spec_extractor::extract_arithmetic`, whose
+    `"saturate" if re.search(r"saturat", text) else ...` is the #706 defect
+    exactly; and excluding slice bounds also dropped
+    `l22_checklist_milestone_emit::extract_milestones`, which publishes a
+    document's own resolution column. Both are findings, not noise.
+    """
+    return (isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "compile"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in _PATTERN_FACTORY_MODULES)
+
+
 def _match_derived_names(fn: ast.AST) -> Set[str]:
     """Locals bound to a regex match or to text taken out of one.
 
     `m = RE.search(t)`, `hits = RE.findall(t)`, `val = m.group(1)`, and one hop
-    onward (`val = raw.strip()`), which is how both real defects were written."""
+    onward (`val = raw.strip()`), which is how both real defects were written.
+    A local bound to `re.compile(...)` is NOT one of them -- see
+    `_is_compiled_pattern`."""
     out: Set[str] = set()
     for _ in range(3):                       # transitive, cheaply bounded
         grew = False
@@ -138,6 +225,8 @@ def _match_derived_names(fn: ast.AST) -> Set[str]:
                 continue
             t = n.targets[0]
             if not isinstance(t, ast.Name):
+                continue
+            if _is_compiled_pattern(n.value):
                 continue
             for sub in ast.walk(n.value):
                 hit = (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)

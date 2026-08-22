@@ -34,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _published_tree  # noqa: E402
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 
 def _read_text(p: Path) -> str:
@@ -547,7 +549,7 @@ def main(argv=None) -> int:
             "Author: stepper field size, alignment marks, kerf width."
         ),
     }
-    (handoff_dir / "mask_spec.json").write_text(
+    _aa.write_text(handoff_dir / "mask_spec.json",
         json.dumps(mask_spec, indent=2, ensure_ascii=False) + "\n")
 
     # Step 2: wat_plan.json — Wafer Acceptance Test plan.
@@ -576,7 +578,7 @@ def main(argv=None) -> int:
             "Author: pass/fail thresholds for each WAT parameter."
         ),
     }
-    (handoff_dir / "wat_plan.json").write_text(
+    _aa.write_text(handoff_dir / "wat_plan.json",
         json.dumps(wat_plan, indent=2, ensure_ascii=False) + "\n")
 
     # Step 3: corner_test_vectors.json — ATE corner test kit.
@@ -604,7 +606,7 @@ def main(argv=None) -> int:
             "Author: ATE loadboard part number + revision."
         ),
     }
-    (handoff_dir / "corner_test_vectors.json").write_text(
+    _aa.write_text(handoff_dir / "corner_test_vectors.json",
         json.dumps(corner_kit, indent=2, ensure_ascii=False) + "\n")
 
     # Step 4: scribe line — ORGANIC-20260606 #446: NO file wearing the
@@ -622,7 +624,7 @@ def main(argv=None) -> int:
         if head.startswith(b"# PLACEHOLDER"):
             scribe_path.unlink()  # remove the old fabricated placeholder
     if not scribe_path.is_file():
-        (handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt").write_text(
+        _aa.write_text(handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt",
             "scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures "
             "+ alignment marks) and is NOT generated here (#446). Obtain "
             "it from the shuttle/foundry kit and place it beside this "

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -73,6 +74,7 @@ import extraction_input_capability_check as _eicap  # extraction-input precondit
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
+import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
@@ -762,6 +764,60 @@ _LOG_SINK_PIPE = "| tee "
 _PIPEFAIL_PREFIX = "set -o pipefail; "
 
 
+
+def _log_surviving_artefact(outputs, *, produced_by: str,
+                            marker: str | None = None) -> None:
+    """Record artefacts AFTER the verdict that decides whether they survive.
+
+    vibe-ic#1330. `_docker_exec(..., outputs=[...])` hashes the declared paths
+    the instant the tool returns, which is correct for the ~17 call sites whose
+    artefact is meant to survive. It is wrong for a call site that may DESTROY
+    its own output on inspection: `_emit_multi_corner_sta` unlinks the per-corner
+    report when OpenSTA black-boxed a master (#437(c) — `rc == 0` plus a written
+    report is not evidence anything was timed), and the ledger was left asserting
+    a digest for a file deliberately removed three statements later. The record
+    could not be audited either way: present digest, absent artefact.
+
+    Splitting the declaration off the invocation is what lets BOTH rules hold —
+    #437(c) still destroys a falsely-clean report, and ORGANIC-443 still forbids
+    a declared output being removed later in the same function, because nothing
+    is declared until it is known to survive.
+
+    A SEPARATE record kind, deliberately. Calling `_log_invocation` a second
+    time would emit two `invocation` rows for one tool run, which is a worse
+    misstatement than the one being fixed. `record: "artefact"` is additive: a
+    consumer reading `invocation` rows sees exactly what it saw before.
+
+    Silent when nothing survived — `_hash_declared_outputs` already omits paths
+    that do not exist, so an unlinked report simply produces no row. That is the
+    honest outcome and it needs no special case.
+    """
+    sink = _PROV_SINK
+    if sink is None:
+        return
+    _outs = _hash_declared_outputs(sink, outputs)
+    if not _outs:
+        return
+    entry = {
+        "record": "artefact",
+        "produced_by": produced_by,
+        "outputs": _outs,
+        "measured": True,
+        # Same idiom as _log_invocation: `_dt` is a FUNCTION-local alias
+        # elsewhere in this file, so referencing it here would NameError.
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if marker:
+        entry["marker"] = marker
+    try:
+        with (Path(sink) / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break the run
+        pass
+
+
 def _tool_status_not_the_log_sinks(cmd: str) -> str:
     """Make the TOOL's exit status survive a `| tee` log sink.
 
@@ -1223,9 +1279,16 @@ _ASIC_TOP_MODULE_BODY_RE = re.compile(
     r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b", re.S)
 
 
-def _asic_top_strip_v_comments(text: str) -> str:
+def _strip_v_comments(text: str) -> str:
     """Remove // and /* */ comments so a module name mentioned only in a
-    comment is never mistaken for a declaration or an instantiation."""
+    comment is never mistaken for a declaration or an instantiation.
+
+    Shared: the ASIC-top resolver and `_sta_blackboxed_masters` both read
+    a name out of text that may carry comments, so neither carries its own
+    copy. Renamed from `_asic_top_strip_v_comments` when the second caller
+    arrived — the old name asserted a scope this helper no longer has.
+    Line-bounded for `//`, so stripping one line can never reach the next.
+    """
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     text = re.sub(r"//[^\n]*", " ", text)
     return text
@@ -1252,7 +1315,7 @@ def _resolve_asic_top_structural(project: Path, top_name: str,
     for ext in (".v", ".sv"):
         for f in sorted(rtl_dir.rglob(f"*{ext}")):
             try:
-                raw = _asic_top_strip_v_comments(f.read_text(errors="replace"))
+                raw = _strip_v_comments(f.read_text(errors="replace"))
             except OSError:
                 continue
             for m in _ASIC_TOP_MODULE_HEADER_RE.finditer(raw):
@@ -3065,36 +3128,77 @@ def _build_unplaceable_master_cap_tcl() -> str:
     This block runs right after `tapcell`, MEASURES the longest free-site run
     from the LIVE fixed-instance grid (not from a formula, so a pruned or
     macro-blocked floorplan is measured as it really is), and `set_dont_use`s
-    every core master above it.  It is guarded three ways: it is a no-op when
-    the floorplan has no fixed obstruction, it never removes the last usable
-    buffer from the pool, and any error degrades to a NONFATAL note with the
-    prior behaviour.
+    every core master above it.
+
+    WHAT IS SCANNED, AND WHY IT IS THE ROWS (#966).  The first version of this
+    block iterated the `yMin` buckets of the FIXED INSTANCES.  A row holding no
+    fixed instance was therefore never visited at all -- and such a row is a
+    full-width free run, i.e. usually the LONGEST run on the die.  The bound
+    came out too small and `set_dont_use` then took away masters that did have
+    a legal site: measured on a two-row floorplan (both rows 0..1000 dbu, 10
+    dbu site) whose first row carried a 20 dbu obstruction every 200 dbu and
+    whose second row was empty, the true longest free run is 1000 dbu = 100
+    sites, and the block reported `PLACEABLE_WIDTH_BOUND: 200 dbu = 20 site(s)`
+    and excluded two masters that fit in the empty row with 600 dbu to spare.
+    That is the exact failure this docstring used to promise was impossible.
+    It was inert on the floorplan #951 was measured against only because
+    `tapcell -distance D` had put a tap in every one of its 64 rows.
+
+    The scan is now driven by `getRows`: EVERY row the design declares is
+    visited, each row is measured against its OWN extent and its OWN fixed
+    set, and a row with no fixed instance contributes its own full span.  The
+    global "nothing is fixed anywhere" special case is gone -- it is simply the
+    case where every row is free, and the row scan already answers it.
 
     It also REPORTS (without changing) any master already instantiated in the
     linked netlist that exceeds the bound -- that is a synthesis-side residual
     the resizer cannot fix, and the operator needs to see it named.
 
-    WHERE THE MEASUREMENT IS APPROXIMATE, AND IN WHICH DIRECTION.  Two
-    simplifications are deliberate and both err the SAME way -- toward a
+    WHERE THE MEASUREMENT IS STILL APPROXIMATE, AND IN WHICH DIRECTION.  These
+    simplifications are deliberate and they all err the SAME way -- toward a
     LARGER bound, i.e. toward excluding LESS:
 
       * a fixed instance is bucketed into the row of its `yMin` only, so a
-        multi-row hard macro obstructs one row here instead of all the rows
-        it really covers;
-      * the row extent is taken as the union of all rows, so a short row is
-        credited with the full span at its ends.
+        multi-row hard macro obstructs one row here instead of all the rows it
+        really covers.  Under a ROW scan that omission can only leave the other
+        covered rows looking freer than they are, i.e. raise the maximum;
+      * a fixed instance whose `yMin` coincides with no declared row (a macro
+        placed off the row grid) is counted in no row at all -- again, freer;
+      * area blockages / obstructions that are not instances are not counted;
+      * site alignment is not enforced: the comparison is dbu against dbu, so a
+        run that no site boundary can actually fit the master into is still
+        credited in full.
 
-    Both can therefore only FAIL to forbid a master that is in fact
-    unplaceable; neither can forbid one that is placeable.  That is the
-    correct direction to be wrong in: an over-large bound leaves the prior
-    behaviour, while an over-small bound would take away masters the design
-    can legitimately use.  The bound is also compared STRICTLY (`> bound` is
-    forbidden), so a master exactly as wide as the longest free run stays
-    legal.
+    Every one of those can therefore only FAIL to forbid a master that is in
+    fact unplaceable; none of them can forbid one that is placeable.  That is
+    the correct direction to be wrong in: an over-large bound leaves the prior
+    behaviour, while an over-small bound would take away masters the design can
+    legitimately use.  The bound is also compared STRICTLY (`> bound` is
+    forbidden), so a master exactly as wide as the longest free run stays legal.
+
+    THE THREE GUARDS, AND WHAT EACH ONE NOW GUARANTEES.  They are deliberately
+    at different layers and none of them stands in for another:
+
+      * MEASUREMENT (the row scan above) is the only thing that guarantees the
+        bound is not too small.  Nothing downstream can recover a bound that
+        was measured wrong -- which is the whole lesson of #966;
+      * DEGENERATE-MEASUREMENT FLOOR (`_wc_run <= 0`): if no row has a single
+        free dbu, exclude NOTHING and say so.  A floorplan with no free space
+        is a floorplan problem; forbidding the entire library cannot fix it and
+        would only destroy the run in a second way;
+      * BUFFER-POOL FLOOR (`_wc_keepbuf < 1`): never leave the resizer and CTS
+        with zero usable buffers.  This is a floor on the CONSEQUENCE, not a
+        check on the measurement -- it fires only when a bound is wrong enough
+        to wipe the whole buffer family, so a MODERATELY wrong bound passes it
+        by construction.  It must never be read as evidence that the bound is
+        right;
+      * ERROR FLOOR (`catch`): any error degrades to a NONFATAL note and the
+        prior behaviour, so the cap can never itself kill a PnR run.
 
     Emits, on stdout, exactly one of:
 
-        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>
+        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>;
+            rows=<r>
         UNPLACEABLE_MASTERS_NONE: ...            nothing exceeded the bound
         UNPLACEABLE_MASTERS_EXCLUDED: <k> ...    k masters set_dont_use'd
         UNPLACEABLE_MASTERS_SKIPPED: ...         guard tripped, pool preserved
@@ -3118,12 +3222,6 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "  set _wc_rows [$_wc_blk getRows]\n"
         "  if {[llength $_wc_rows] > 0} {\n"
         "    set _wc_sw [[[lindex $_wc_rows 0] getSite] getWidth]\n"
-        "    set _wc_x0 {} ; set _wc_x1 {}\n"
-        "    foreach _wc_r $_wc_rows {\n"
-        "      set _wc_b [$_wc_r getBBox]\n"
-        "      if {$_wc_x0 eq {} || [$_wc_b xMin] < $_wc_x0} { set _wc_x0 [$_wc_b xMin] }\n"
-        "      if {$_wc_x1 eq {} || [$_wc_b xMax] > $_wc_x1} { set _wc_x1 [$_wc_b xMax] }\n"
-        "    }\n"
         "    array unset _wc_fx\n"
         "    set _wc_nfixed 0\n"
         "    foreach _wc_i [$_wc_blk getInsts] {\n"
@@ -3134,41 +3232,57 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "      lappend _wc_fx([$_wc_bb yMin]) [list [$_wc_bb xMin] [$_wc_bb xMax]]\n"
         "      incr _wc_nfixed\n"
         "    }\n"
+        "    # #966: scan the ROWS, not the fixed-instance buckets. A row with\n"
+        "    # no fixed instance is a FULL-WIDTH free run -- usually the longest\n"
+        "    # on the die -- and bucket iteration never visited it, so the bound\n"
+        "    # came out too small and forbade masters that were placeable.\n"
+        "    # Each row is measured against its OWN extent and its OWN fixed set.\n"
         "    set _wc_run 0\n"
-        "    if {$_wc_nfixed == 0} {\n"
-        "      set _wc_run [expr {$_wc_x1 - $_wc_x0}]\n"
-        "    } else {\n"
-        "      foreach _wc_y [array names _wc_fx] {\n"
-        "        set _wc_cur $_wc_x0\n"
-        "        foreach _wc_p [lsort -integer -index 0 $_wc_fx($_wc_y)] {\n"
-        "          set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
-        "          if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
-        "          if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
-        "        }\n"
-        "        set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "    foreach _wc_r $_wc_rows {\n"
+        "      set _wc_rb [$_wc_r getBBox]\n"
+        "      set _wc_x0 [$_wc_rb xMin]\n"
+        "      set _wc_x1 [$_wc_rb xMax]\n"
+        "      set _wc_y [$_wc_rb yMin]\n"
+        "      set _wc_own {}\n"
+        "      if {[info exists _wc_fx($_wc_y)]} { set _wc_own $_wc_fx($_wc_y) }\n"
+        "      set _wc_cur $_wc_x0\n"
+        "      foreach _wc_p [lsort -integer -index 0 $_wc_own] {\n"
+        "        set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
         "        if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "        if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
         "      }\n"
+        "      set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "      if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
         "    }\n"
         "    puts \"PLACEABLE_WIDTH_BOUND: $_wc_run dbu = "
-        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed\"\n"
+        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed; "
+        "rows=[llength $_wc_rows]\"\n"
         "    set _wc_kill {}\n"
-        "    foreach _wc_lib [[ord::get_db] getLibs] {\n"
-        "      foreach _wc_m [$_wc_lib getMasters] {\n"
-        "        if {![$_wc_m isCore]} { continue }\n"
-        "        if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "    set _wc_keepbuf 0\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_m [$_wc_lib getMasters] {\n"
+        "          if {![$_wc_m isCore]} { continue }\n"
+        "          if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "        }\n"
+        "      }\n"
+        "      # GUARD: never take away the last usable buffer.\n"
+        "      foreach _wc_c [get_lib_cells -quiet *] {\n"
+        "        if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
+        "        if {!$_wc_ib} { continue }\n"
+        "        if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
+        "        if {$_wc_du} { continue }\n"
+        "        if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
+        "        incr _wc_keepbuf\n"
         "      }\n"
         "    }\n"
-        "    # GUARD: never take away the last usable buffer.\n"
-        "    set _wc_keepbuf 0\n"
-        "    foreach _wc_c [get_lib_cells -quiet *] {\n"
-        "      if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
-        "      if {!$_wc_ib} { continue }\n"
-        "      if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
-        "      if {$_wc_du} { continue }\n"
-        "      if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
-        "      incr _wc_keepbuf\n"
-        "    }\n"
-        "    if {[llength $_wc_kill] == 0} {\n"
+        "    # GUARD: a non-positive bound is a broken floorplan, not a library\n"
+        "    # problem -- forbidding every master cannot give it free space.\n"
+        "    if {$_wc_run <= 0} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_SKIPPED: measured free-site run is "
+        "$_wc_run dbu -- no row has free space; excluding masters cannot "
+        "create any -- left enabled\"\n"
+        "    } elseif {[llength $_wc_kill] == 0} {\n"
         "      puts \"UNPLACEABLE_MASTERS_NONE: every core master fits the "
         "measured free-site run\"\n"
         "    } elseif {$_wc_keepbuf < 1} {\n"
@@ -3190,9 +3304,11 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "    # REPORT-ONLY: masters the netlist already instantiates that the\n"
         "    # floorplan cannot legalize. set_dont_use cannot undo those.\n"
         "    set _wc_pre {}\n"
-        "    foreach _wc_i [$_wc_blk getInsts] {\n"
-        "      if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
-        "        lappend _wc_pre [$_wc_i getName]\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_i [$_wc_blk getInsts] {\n"
+        "        if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
+        "          lappend _wc_pre [$_wc_i getName]\n"
+        "        }\n"
         "      }\n"
         "    }\n"
         "    if {[llength $_wc_pre] > 0} {\n"
@@ -8834,6 +8950,8 @@ def _v1_6_605_remap_surviving_dlatch(
 import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -11839,6 +11957,28 @@ def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
     cur_v, cur_r = now["plugin_version"], now["recipe_sha256"]
     rec = _read_producer_identity(out_dir, kind)
 
+    # vibe-ic#1097 S6 — `--force-step <kind>`. ORFS ships `do-2_1_floorplan`
+    # beside `2_1_floorplan` (`flow/Makefile:366-405`) so an external caller can
+    # bypass make's UP-TO-DATE judgement and execute the stage anyway; without
+    # it a close-loop repair re-runs the whole phase to re-test one step.
+    #
+    # WIRED HERE, AND ONLY HERE. This predicate is the ONE freshness authority
+    # the three cache sites consult (:38958 synth, :39053 pnr, :39189 gds) and
+    # each ANDs its answer into the reuse decision, so denying here reaches all
+    # three without touching a call site.
+    #
+    # FRESHNESS ONLY. It does NOT touch `step_preflight`'s input contract: that
+    # answers "does this step have what the flow says it reads", which is not
+    # make's question, and `test_there_is_no_switch_that_turns_a_refusal_into_
+    # a_pass` bans exactly the switch that would weaken it. Forcing means "do
+    # the work again", never "do it blind" — see `step_force`'s docstring.
+    try:
+        import step_force as _sf  # noqa: PLC0415
+        if _sf.is_forced(kind):
+            return (False, _sf.disclosure(kind))
+    except Exception:  # noqa: BLE001 — a missing helper must not break reuse
+        pass
+
     def _deny_unless_forced(msg: str) -> Tuple[bool, str]:
         if os.environ.get(_STALE_PRODUCER_ENV) == "1":
             # The reuse still happens, but it can never LOOK fresh: the token
@@ -12904,9 +13044,11 @@ def _compute_downsized_die(die_w: int, die_h: int,
 # optimization iterations. The empirically-clean routing util is design-
 # dependent (a high-fanout crypto core routes only at a very sparse util; a
 # clean datapath converges much denser), so a single fixed target cannot serve
-# every design. This loop LOOSENS an auto-sized die one rung at a time toward a
-# floor util when — and ONLY when — detailed route shows a genuine
-# non-convergence signal, re-running bounded to the ladder length.
+# every design. This loop LOOSENS an auto-sized die one rung at a time when —
+# and ONLY when — detailed route shows a genuine non-convergence signal.
+# #914: it re-runs until its own MEASUREMENTS stop improving, not until an
+# authored list runs out; the hard bounds are the rung budget and the die cap,
+# and each of them says so by name when it is the thing that fired.
 #
 # §4.05 (LOAD-BEARING honesty):
 #   * Fires ONLY when `--die-um auto` OWNS the geometry — an explicit WxH is the
@@ -12916,7 +13058,10 @@ def _compute_downsized_die(die_w: int, die_h: int,
 #     NOT trigger a loosen. The trigger is a PLATEAU/CLIMB at the trajectory
 #     tail or a single-iteration finish that never improved.
 #   * Bounded + strictly monotone: each rung is a strictly LOWER util (strictly
-#     LARGER die), stopping at the floor rung and never above the die cap.
+#     LARGER die), never above the die cap. #914 — what STOPS it is a measured
+#     stall (`_loosen_stall_streak`), the rung budget, or the die cap, and the
+#     emitted reason distinguishes the three; the authored ladder's last rung
+#     is where the SCHEDULE ends, which is not the same fact.
 #   * Every loosen step is DISCLOSED in the pnr result (`resize_history`,
 #     `direction="loosen"`), exactly like the existing upsize/downsize records.
 #   * This is a DETERMINISTIC mechanism, not a proven convergence improvement
@@ -12924,20 +13069,57 @@ def _compute_downsized_die(die_w: int, die_h: int,
 #     design's violations can only be confirmed by a LIVE PnR run. The helpers
 #     below decide + resize honestly; they make no empirical convergence claim.
 # chip-AGNOSTIC: pure OpenROAD-log grammar + geometry math, no chip literal.
-_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # never target a util below this floor
+# The last AUTHORED rung. #914 — this is where the hand-written schedule ends,
+# NOT a safety limit: past it `_loosen_ladder_util` continues at the schedule's
+# own ratio, still bounded by `_ROUTE_LOOSEN_MAX_RUNGS` and the die cap. The
+# comment here used to read "never target a util below this floor", which
+# stopped being true the moment the ladder was allowed to keep going.
+_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # last authored rung (not a hard limit)
 # Ladder head is the auto-die's own routing-headroom target; each rung is
 # strictly looser (lower util → larger die), ending at the floor rung.
 _ROUTE_LOOSEN_UTIL_LADDER: Tuple[float, ...] = (
     _AUTO_DIE_TARGET_UTIL, 0.18, _ROUTE_LOOSEN_UTIL_FLOOR)
+# ── #914 — the ladder terminates on EVIDENCE, and every terminator names
+# itself ─────────────────────────────────────────────────────────────────────
+# The authored ladder above is a STARTING SCHEDULE, not a termination criterion.
+# Until #914 the only thing that ended the ladder was running off the end of
+# that list, and the decline it emitted was `loosen_ladder_exhausted` with
+# `proposed_util=None` — a terminal-sounding pair that says "no automatic
+# remedy remains" when what was true was "the authored list ended". Measured:
+# the ladder stopped at a 138x138um die against a 2000um cap, and the residual
+# series it had measured (5 -> 2 -> 3) played no part in the decision at all.
+# It would have stopped in the same place for 50 -> 20 -> 8 and for 9 -> 9 -> 9.
+#
+# A rung bound cannot distinguish "more die area buys nothing" from "the budget
+# ran out". So:
+#   * past the authored floor the ladder CONTINUES at the authored ladder's OWN
+#     final ratio (`_loosen_ladder_util` — derived from the schedule, never a
+#     second hand-typed constant, so the two cannot drift apart);
+#   * it stops on a measured STALL, or on a bound that SAYS it is a bound.
+# The thing that must never grow without limit is the DIE, and that is still
+# capped by `_DEFAULT_DIE_MAX_UM` and still reports itself when it fires.
+_ROUTE_LOOSEN_MAX_RUNGS = 6
+# A stall needs `_ROUTE_LOOSEN_STALL_PATIENCE` consecutive rungs that beat
+# NOTHING measured before them. Patience is LOAD-BEARING and is set from the
+# filed run: its residuals went 5 -> 2 -> 3, so a criterion that stopped on the
+# first non-improving rung would have stopped that run in exactly the same
+# place, only with a different word — and the controlled re-run at a much
+# larger die reached 0 violations. The residual count is a noisy PROXY for
+# routability across a die change; one non-improving rung is noise, two
+# consecutive is a signal.
+_ROUTE_LOOSEN_STALL_PATIENCE = 2
 # Preserve the historical over-util upsize budget (initial run + up to 3 grows)
 # EXACTLY, independent of the loop's total iteration count.
 _PNR_UPSIZE_RETRIES = 3
 # Total retry-loop iterations: initial run + up-to-3 upsizes + up-to-1 downsize
-# + up-to (ladder-1) loosen steps. Each mutation path is independently bounded
-# (upsize by the die cap + `_PNR_UPSIZE_RETRIES`; downsize by a one-shot flag;
-# loosen by the ladder length), so the loop always terminates well within this.
+# + up-to `_ROUTE_LOOSEN_MAX_RUNGS` loosen steps. Each mutation path is
+# independently bounded (upsize by the die cap + `_PNR_UPSIZE_RETRIES`;
+# downsize by a one-shot flag; loosen by the rung bound AND the die cap), so
+# the loop always terminates well within this. #914: this budget must stay
+# >= the ladder's own bound, or the SHARED loop guard would end the ladder
+# before the ladder's own criterion did — the same defect one level up.
 _PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1
-                    + (len(_ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + _ROUTE_LOOSEN_MAX_RUNGS)
 
 
 def _drt_violation_trajectory(log_text: str) -> List[int]:
@@ -13036,11 +13218,74 @@ def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
     )
 
 
+def _loosen_ladder_util(idx: int,
+                        ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER
+                        ) -> Optional[float]:
+    """#914 — target utilisation of loosen-ladder rung `idx`.
+
+    Inside the authored ladder this is the authored value, unchanged. PAST its
+    end the ladder continues geometrically at the authored ladder's OWN final
+    ratio (`ladder[-1] / ladder[-2]`), so the continuation is DERIVED from the
+    schedule instead of being a second hand-typed list that could disagree with
+    it. Returns None only when no continuation is definable (a ladder shorter
+    than two rungs, or one that is not strictly decreasing) — the one case in
+    which the AUTHORED LADDER is genuinely out of proposals.
+    chip-AGNOSTIC: arithmetic only."""
+    if idx < 0:
+        return None
+    if idx < len(ladder):
+        return ladder[idx]
+    if len(ladder) < 2 or not ladder[-2]:
+        return None
+    ratio = ladder[-1] / ladder[-2]
+    if not (0.0 < ratio < 1.0):
+        return None
+    return ladder[-1] * (ratio ** (idx - (len(ladder) - 1)))
+
+
+def _loosen_stall_streak(residuals: Sequence[int]) -> int:
+    """#914 — how many TRAILING rungs failed to beat the BEST residual measured
+    before them. 0 means the most recent rung set a new best.
+
+    Measured against the best-so-far, NOT against the immediately previous
+    rung: the residual count is a noisy proxy for routability across a die
+    change, and a rung that comes back worse than its predecessor can still be
+    far better than where the ladder started. The filed run went 5 -> 2 -> 3;
+    against-previous would have called that a stall, and the controlled re-run
+    at a larger die reached 0. chip-AGNOSTIC: arithmetic only."""
+    streak = 0
+    for i in range(1, len(residuals)):
+        streak = 0 if residuals[i] < min(residuals[:i]) else streak + 1
+    return streak
+
+
+# #914 — the loosen ladder's DECLINE vocabulary and what each entry means for
+# the operator. SINGLE source of truth: the printed marker, the pnr extras, the
+# ROUTE_NOT_CONVERGED remedy sentence and the tests all read this map, so a new
+# decline reason cannot be added in one place and silently missed in another.
+#   not_engaged — the ladder never applied to this run
+#   evidence    — the ladder's OWN measurements say more die area buys nothing
+#   bound       — a budget/geometry limit fired: the remedy is CUT SHORT, not
+#                 exhausted, and the operator's manual remedy is still live
+_LOOSEN_TERMINATOR_KIND: Dict[str, str] = {
+    "explicit_die_requested": "not_engaged",
+    "route_did_not_complete": "not_engaged",
+    "route_still_converging": "not_engaged",
+    "loosen_ladder_stalled": "evidence",
+    "loosen_ladder_exhausted": "bound",
+    "loosen_rung_budget_reached": "bound",
+    "die_cap_reached": "bound",
+}
+
+
 def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
                               loosen_idx: int, auto_die_requested: bool,
                               route_completed: bool,
                               ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
-                              die_max_um: int = _DEFAULT_DIE_MAX_UM
+                              die_max_um: int = _DEFAULT_DIE_MAX_UM,
+                              residual_history: Optional[Sequence[int]] = None,
+                              max_rungs: int = _ROUTE_LOOSEN_MAX_RUNGS,
+                              patience: int = _ROUTE_LOOSEN_STALL_PATIENCE,
                               ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -13049,8 +13294,11 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
 
       1. only an AUTO-owned die is ever loosened (`auto_die_requested`);
       2. only a COMPLETED route is judged (`route_completed` = rc==0 + DEF);
-      3. bounded — stop once the ladder floor rung is reached
-         (`loosen_idx + 1 >= len(ladder)`);
+      3. bounded — #914: with a measured `residual_history` the ladder stops on
+         a STALL (`_loosen_stall_streak >= patience`) or on the named rung
+         budget (`loosen_idx >= max_rungs`); without one it falls back to the
+         authored ladder's length (`loosen_idx + 1 >= len(ladder)`), which is
+         what every pre-#914 caller still gets;
       4. loosen ONLY on a genuine non-convergence signal
          (`_drt_is_non_converging` over the parsed trajectory);
       5. never grow past the die cap (delegated to `_compute_loosened_die`).
@@ -13073,13 +13321,35 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         # DEF, so the loudest congestion signal reaches this path as
         # `route_completed=False` and buys exactly zero loosening.
         return None, "route_did_not_complete"
-    if loosen_idx + 1 >= len(ladder):
-        return None, "loosen_ladder_exhausted"
     trajectory = _drt_violation_trajectory(log_text)
-    if not _drt_is_non_converging(trajectory):
-        return None, "route_still_converging"
-    cur_util = ladder[loosen_idx]
-    next_util = ladder[loosen_idx + 1]
+    series: Optional[List[int]] = None
+    if residual_history is None:
+        # LEGACY CALL (no measured rung-to-rung evidence supplied). Without a
+        # residual series there is nothing to apply a stall criterion TO, so
+        # the authored ladder length is the only bound available and the
+        # behaviour is exactly what it was before #914 — same order, same
+        # reasons. Kept so every existing caller/test keeps its meaning.
+        if loosen_idx + 1 >= len(ladder):
+            return None, "loosen_ladder_exhausted"
+        if not _drt_is_non_converging(trajectory):
+            return None, "route_still_converging"
+    else:
+        # EVIDENCE MODE (#914). Terminate on what the ladder MEASURED, and when
+        # a BOUND is what stopped it, say which bound — `bound` and `evidence`
+        # are different facts about the remedy and must never share a word.
+        if not _drt_is_non_converging(trajectory):
+            return None, "route_still_converging"
+        if _loosen_ladder_util(loosen_idx + 1, ladder) is None:
+            return None, "loosen_ladder_exhausted"
+        if loosen_idx >= max_rungs:
+            return None, "loosen_rung_budget_reached"
+        series = list(residual_history) + [trajectory[-1]]
+        if _loosen_stall_streak(series) >= patience:
+            return None, "loosen_ladder_stalled"
+    cur_util = _loosen_ladder_util(loosen_idx, ladder)
+    next_util = _loosen_ladder_util(loosen_idx + 1, ladder)
+    if cur_util is None or next_util is None:
+        return None, "loosen_ladder_exhausted"
     dims = _compute_loosened_die(die_w, die_h, cur_util, next_util, die_max_um)
     if dims is None:
         return None, "die_cap_reached"
@@ -13094,6 +13364,16 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         "to_target_util": next_util,
         "final_violations": trajectory[-1],
         "violation_trajectory": list(trajectory),
+        # #914 — the evidence THIS rung was taken on, recorded next to the
+        # action it justified. `final_violations` above is the residual of the
+        # run being loosened AWAY from; `residual_series` is the across-rung
+        # series, which is the thing the termination criterion reads and the
+        # thing a reader of resize_history could not previously reconstruct.
+        "rung": loosen_idx,
+        "residual_series": list(series) if series is not None else None,
+        "stall_streak": (_loosen_stall_streak(series)
+                         if series is not None else None),
+        "past_authored_ladder": bool(loosen_idx + 1 >= len(ladder)),
     }
     return (new_w, new_h, record), "loosened"
 
@@ -19842,6 +20122,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
+    # #914 — the across-rung residual series the ladder terminates on, and the
+    # name of whatever finally stopped it. Both are DISCLOSED downstream: a
+    # verdict that reports a remedy as finished must be able to say why.
+    _loosen_residuals: List[int] = []
+    _loosen_terminator: Optional[str] = None
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
     # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
     # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
@@ -19893,7 +20178,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # (See _route_feedback_loosen for the full guard set + honesty note.)
             _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
-                _auto_die_requested, _route_completed)
+                _auto_die_requested, _route_completed,
+                residual_history=_loosen_residuals)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -19901,26 +20187,47 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 # this now leaves the symmetric named record. Disclosure only:
                 # the verdict is unchanged, the refusal is merely no longer
                 # invisible.
+                # #914 — `proposed_util` read None whenever the AUTHORED
+                # ladder ran out, which says "no proposal exists" when what was
+                # true was "we chose not to make one". It now carries the util
+                # the next rung WOULD target whenever one is definable, next to
+                # the named reason it was not taken and the residual series the
+                # decision was actually made on.
+                _l_series = list(_loosen_residuals)
+                _l_traj = _drt_violation_trajectory(_pnr_log)
+                if _l_traj:
+                    _l_series.append(_l_traj[-1])
+                _l_streak = _loosen_stall_streak(_l_series)
                 _decline = {
                     "iteration": _retry_i,
                     "direction": "loosen",
                     "action": "declined",
                     "reason": _lf_reason,
+                    "kind": _LOOSEN_TERMINATOR_KIND.get(_lf_reason, "unknown"),
                     "die_w_um": die_w, "die_h_um": die_h,
                     "loosen_idx": _loosen_idx,
-                    "proposed_util": (_ROUTE_LOOSEN_UTIL_LADDER[_loosen_idx + 1]
-                                      if _loosen_idx + 1 < len(_ROUTE_LOOSEN_UTIL_LADDER)
-                                      else None),
+                    "proposed_util": _loosen_ladder_util(_loosen_idx + 1),
                     "die_max_um": _DEFAULT_DIE_MAX_UM,
+                    "residual_series": _l_series,
+                    "stall_streak": _l_streak,
+                    "stall_patience": _ROUTE_LOOSEN_STALL_PATIENCE,
+                    "max_rungs": _ROUTE_LOOSEN_MAX_RUNGS,
+                    "still_improving": len(_l_series) >= 2 and _l_streak == 0,
                 }
                 loosen_declines.append(_decline)
+                _loosen_terminator = _lf_reason
                 print(f"ROUTE_LOOSEN_DECLINED reason={_lf_reason} "
+                      f"kind={_decline['kind']} "
                       f"die={die_w}x{die_h}um rung={_loosen_idx} "
-                      f"proposed_util={_decline['proposed_util']}")
+                      f"proposed_util={_decline['proposed_util']} "
+                      f"residual_series={_l_series} "
+                      f"stall_streak={_l_streak}/{_ROUTE_LOOSEN_STALL_PATIENCE} "
+                      f"still_improving={_decline['still_improving']}")
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
                 resize_history.append(_lrec)
+                _loosen_residuals.append(int(_lrec["final_violations"]))
                 die_w, die_h = _lw, _lh
                 core_w = die_w - 2 * core_pad
                 core_h = die_h - 2 * core_pad
@@ -20227,19 +20534,63 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _drt_viol = _drt_final_violations(
                 _log_p.read_text(errors="ignore"))
     if _drt_viol is not None and _drt_viol > 0:
+        # #914 — this verdict used to hand the operator a remedy ("increase
+        # --die-um, lower --util") that the automatic ladder had just declined
+        # to apply, without saying whether the ladder had run out of EVIDENCE
+        # or merely out of BUDGET. Those are different facts and the operator
+        # acts differently on each, so the sentence now names the terminator.
+        _last_decline = loosen_declines[-1] if loosen_declines else {}
+        _term_kind = _LOOSEN_TERMINATOR_KIND.get(_loosen_terminator or "",
+                                                 "not_engaged")
+        _l_series = _last_decline.get("residual_series") or []
+        _ladder_note = ""
+        if _loosen_terminator is not None and _term_kind == "bound":
+            _ladder_note = (
+                f" AUTO-LOOSEN CUT SHORT, NOT EXHAUSTED: the ladder stopped "
+                f"after {_loosen_idx} rung(s) on {_loosen_terminator} (a "
+                f"bound, not a measurement) with residual series {_l_series}; "
+                f"its next rung would have targeted util "
+                f"{_last_decline.get('proposed_util')}. The manual remedy "
+                f"above is the SAME remedy the ladder was still able to "
+                f"apply.")
+        elif _loosen_terminator is not None and _term_kind == "evidence":
+            _ladder_note = (
+                f" AUTO-LOOSEN STALLED: the ladder took {_loosen_idx} rung(s) "
+                f"and then {_last_decline.get('stall_streak')} consecutive "
+                f"rung(s) beat nothing measured before them (residual series "
+                f"{_l_series}) — on this design more die area is not buying "
+                f"convergence, so the manual remedy above is unlikely to "
+                f"either.")
+        # #914 — `util` is the util the caller REQUESTED. Once the ladder has
+        # moved the die, the utilisation the routed geometry was targeted at is
+        # the ladder rung's, not that one; presenting the requested number as
+        # "the condition the design is limited at" states one as the other.
+        _eff_util = _loosen_ladder_util(_loosen_idx) if _loosen_idx else None
+        _util_note = ("" if _eff_util is None else
+                      f" (auto-loosen rung {_loosen_idx} targeted util "
+                      f"{_eff_util:.4g})")
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
             (f"ROUTE_NOT_CONVERGED: detailed route completed with "
              f"{_drt_viol} violations remaining (final DRT-0199). The "
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
-             f"util {util:g}: increase --die-um, lower --util, or raise "
-             f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts."),
+             f"requested util {util:g}{_util_note}: increase --die-um, lower "
+             f"--util, or raise the router's end iteration. Emitted DEF/GDS "
+             f"are kept for debugging but are NOT sign-off "
+             f"artifacts.{_ladder_note}"),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
                     "die_um": f"{die_w}x{die_h}",
                     "util": util,
+                    "loosen_terminator": _loosen_terminator,
+                    "loosen_terminator_kind": _term_kind,
+                    "loosen_rungs_taken": _loosen_idx,
+                    "loosen_was_cut_short": _term_kind == "bound",
+                    "loosen_still_improving": bool(
+                        _last_decline.get("still_improving")),
+                    "loosen_residual_series": _l_series,
+                    "loosen_target_util": _eff_util,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines})
@@ -20415,7 +20766,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "metal_fill_eco_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
-        (out_dir / "spare_cells.json").write_text(
+        _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
         # Coverage readiness JSON. distribution_ok is derived from the
         # grid spread (>1 distinct grid cell occupied); tie_off_ok from
@@ -24936,9 +25287,10 @@ def _drc_wall_budget_s() -> float:
     runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
     (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
     CPU, 4.4h, zero output). This wall-clock cap bounds the DRC step so a perf
-    ceiling surfaces as an HONEST SKIPPED-CONDITION, never a multi-hour silent
-    hang. Default 2h; env VIBE_IC_DRC_BUDGET_S overrides (e.g. raise for a
-    genuinely-large sign-off, lower for CI). chip/tool-AGNOSTIC."""
+    ceiling surfaces as an HONEST, NON-GREEN verdict (see the kill path below),
+    never a multi-hour silent hang. Default 2h; env VIBE_IC_DRC_BUDGET_S
+    overrides (e.g. raise for a genuinely-large sign-off, lower for CI).
+    chip/tool-AGNOSTIC."""
     try:
         v = float(os.environ.get("VIBE_IC_DRC_BUDGET_S", "7200"))
         return v if v > 0 else 7200.0
@@ -25002,8 +25354,8 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             cmd += f" --cell-aware-feol={cfg_c}"
     # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
     # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
-    # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
-    # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
+    # NOT a proven violation, and it is NOT a sign-off either — see the kill path
+    # below for the tier it takes and why, never a silent multi-hour hang.
     _drc_budget = _drc_wall_budget_s()
     rc, out, err = _docker_exec(container, cmd, marker=gds_c,
                                 hard_ceiling_s=_drc_budget)
@@ -25025,13 +25377,53 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                                     hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
         _mins = int(_drc_budget // 60)
+        # vibe-ic#925 — THE TIER, not the prose. The message below was already
+        # honest: it refuses to call a timeout a violation and refuses to sign
+        # off from a partial report. The word beside it was not. This site
+        # returned `SKIPPED-CONDITION`, which is a word from
+        # `flow_compliance_check`'s vocabulary and not from this runner's
+        # (`_VERDICT_TIERS`) — and `_aggregate_verdict` enumerates ITS OWN
+        # vocabulary and lets anything else fall through to the catch-all
+        # `return "PASS"`. MEASURED on this tree before the change: a plan whose
+        # only non-PASS step was a timed-out sign-off DRC aggregated to a plain
+        # green `"PASS"` — not even PASS_WITH_WAIVERS. Downstream,
+        # `_flow_verdict_tiers.is_excused("SKIPPED-CONDITION")` is True, so
+        # wherever that word IS adjudicated the step is subtracted from
+        # `total_required` as well: a DRC that ran out of time stopped being
+        # owed at all.
+        #
+        # WHY NOT `SKIPPED-SETUP-REQUIRED`, the tier #925 proposed. That word
+        # appears ZERO times in this file — it belongs to
+        # `flow_compliance_check`, a different program with a different status
+        # vocabulary. Adopting it here would swap one foreign word for another
+        # and `_aggregate_verdict` would go on returning a green `"PASS"`
+        # (measured, both arms, in test_issue925_drc_timeout_is_not_excused).
+        #
+        # WHY `BLOCKED`. It is THIS runner's own word for the state that
+        # actually obtains — "the tool is present, the input is present, the
+        # check could not be completed, so NOTHING is known about the design"
+        # — it is named explicitly in `_aggregate_verdict`'s non-green bucket,
+        # and unlike `FAIL` it does not assert a violation the deck never
+        # found. (NOT relied on here, and stated so it is not assumed:
+        # `declared_signoff_rollup` does NOT cover this step — its declared
+        # population is STA/EM plus the DRV promotion gate, and `drc` is not
+        # in it. The denominator this fix moves is `_aggregate_verdict`'s.)
+        #
+        # ORGANIC #570 — a killed engine may have left a PARTIAL report at the
+        # canonical path, and the next reader cannot tell it from a finished
+        # one. Rename it away exactly as the PnR and LVS stall paths do, so no
+        # verdict can be read from an artefact this run never finished writing.
+        _docker_timeout_isolate([rpt])
         return StepResult(
-            "drc", "SKIPPED-CONDITION", time.time() - t0,
+            "drc", "BLOCKED", time.time() - t0,
             f"svrf-native commercial DRC did not complete within the "
             f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
             f"ceiling on large/dense geometry (single-thread derived-layer "
             f"build), NOT a proven violation. No sign-off from a partial report; "
-            f"disclosed. Re-run under a fixed/parallelised engine or raise "
+            f"the partial report (if any) was isolated to *.timeout.partial. "
+            f"NOTHING is known about the layout's DRC state, so this step is "
+            f"BLOCKED (never green) and still owes an answer — it is not an "
+            f"excused skip. Re-run under a fixed/parallelised engine or raise "
             f"VIBE_IC_DRC_BUDGET_S.",
             extras={"finding": "SVRFDRC_PERF_CEILING",
                     "drc_budget_s": _drc_budget})
@@ -26485,6 +26877,8 @@ extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
+feedback save $env(FEEDBACK_OUT)
+puts "MAGIC_EXT2SPICE_FEEDBACK $env(FEEDBACK_OUT) [feedback count]"
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """
@@ -27547,6 +27941,46 @@ def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
         + tail, dropped
 
 
+#: How long the illegal-overlap gate may take. It reads one small text file;
+#: this is a hang ceiling, not a budget.
+_ILLEGAL_OVERLAP_GATE_TIMEOUT = 120
+
+
+def _run_illegal_overlap_gate(project: Path, out_json: Path
+                              ) -> Tuple[int, str]:
+    """Spawn `magic_illegal_overlap_check` and return ``(rc, one-line reason)``.
+
+    Spawned as a SUBPROCESS rather than called in-process on purpose. The gate
+    declares ``ENFORCEMENT: blocking``, and `flow_gate_enforcement_audit` grades
+    that claim by whether a runner spawns the program AND lets the exit status
+    reach a control-flow decision. An in-process call would do the same work and
+    leave the declaration unverifiable — the #884 shape, one layer over.
+
+    Every non-zero rc is returned as-is so the caller can say WHICH failure it
+    was. A gate that could not be spawned at all returns rc 2 with a reason
+    saying nothing was examined: the flow declares this gate, so its absence is
+    an incomplete deployment, not an exemption (the same rule
+    `_run_declared_signoff_gate` applies to the step-23/25 gates).
+    """
+    prog = PROGRAMS_DIR / "magic_illegal_overlap_check.py"
+    if not prog.is_file():
+        return 2, (f"NOT CHECKED — the illegal-overlap gate is not present in "
+                   f"this deployment ({prog}); the extraction feedback channel "
+                   f"was never read.")
+    try:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return 2, f"NOT CHECKED — cannot create {out_json.parent}: {exc}"
+    cmd = [sys.executable, str(prog), str(project), "--json", str(out_json)]
+    try:
+        cp = subprocess.run(cmd, timeout=_ILLEGAL_OVERLAP_GATE_TIMEOUT,
+                            check=False, capture_output=True, text=True)
+    except Exception as exc:                                   # noqa: BLE001
+        return 2, f"NOT CHECKED — the illegal-overlap gate could not run: {exc}"
+    return cp.returncode, _gate_detail(out_json, cp.stdout or "",
+                                       cp.stderr or "")
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -27568,6 +28002,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
+    # W2.3 — magic's ERROR channel. The extractor files every rectangle it
+    # refused to connect ("Illegal overlap between <a> and <b> (types do not
+    # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
+    # See feedback entries.` — it points at a channel. Until this line the
+    # recipe never dumped that channel, so nothing downstream could read it and
+    # an extraction that told us it did not understand the layout still handed
+    # netgen a netlist to bless. `feedback save` writes an EMPTY file when there
+    # are no areas (verified against the image's magic 8.3.681), which is what
+    # makes the ABSENCE of this file a distinguishable fault rather than a zero.
+    feedback_out = ext_dir / _mio.FEEDBACK_NAMES[0]
     # ── LVS ROOT FIX (extract side) — POWER-AWARE DEF extraction (§4.05-safe). ──
     # The plain recipe collapses the four sky130 power nets onto ~2 MIS-named
     # nodes (the ground rail + its VNB taps → the substrate node `VSUBS`; the
@@ -27643,7 +28087,8 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
         f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
-        f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
+        f"SPICE_OUT={_to_container_path(str(spice_out), container)} "
+        f"FEEDBACK_OUT={_to_container_path(str(feedback_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     _magic_tcl_c = _to_container_path(str(tcl), container)
     cmd = (env_prefix +
@@ -27810,6 +28255,45 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             f"warning(s)/error(s) (below the {_LVS_EXT_ERROR_FAIL_CEILING:,} "
             f"FAIL ceiling) — extracted netlist usable but review "
             f"ext2spice.log (#477).")
+    # ── W2.3 — THE EXTRACTOR'S OWN ERROR CHANNEL, GATED AT ZERO, BEFORE
+    # NETGEN EVER RUNS. ────────────────────────────────────────────────────
+    # The #477 guard above asks "did the extraction COLLAPSE" — from the
+    # transcript's `N errors` summary, at a ceiling of 1000. This asks a
+    # different question off a different channel at a different threshold:
+    # "did the extractor REFUSE a rectangle", from the feedback areas, at 0.
+    # An illegal overlap is magic saying it could not decide what the layout
+    # means at that rectangle; the `.subckt` it wrote anyway describes a design
+    # the layout does not, and netgen can report `Circuits match uniquely` over
+    # it. That is a dead chip with a clean report, and one occurrence is enough
+    # — which is why the threshold is 0 and not a tunable.
+    #
+    # SPAWNED INLINE and the status reaches this `if`, so the gate's
+    # `ENFORCEMENT: blocking` docstring is a claim `flow_gate_enforcement_audit`
+    # can check. rc 0 continues; EVERY other outcome stops the step, including
+    # rc 2 — a gate reporting "nothing to examine" immediately after this
+    # function extracted is itself the defect, not an exemption.
+    _mio_json = _pl.reports_phase3_dir(project) / "magic_illegal_overlap.json"
+    _mio_rc, _mio_detail = _run_illegal_overlap_gate(project, _mio_json)
+    if _mio_rc != 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+            f"Magic's extraction feedback channel did not clear the "
+            f"zero-illegal-overlap gate (rc={_mio_rc}): {_mio_detail} netgen "
+            f"was NOT run — a compare against a netlist the extractor could "
+            f"not decide is not evidence about this design.",
+            extras={"illegal_overlap_gate_rc": _mio_rc,
+                    "illegal_overlap_report":
+                        "reports/phase3/magic_illegal_overlap.json",
+                    "extraction_feedback":
+                        f"phase3/stage3/extracted/{_mio.FEEDBACK_NAMES[0]}"})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted before netgen: {_mio_detail} (see "
+            f"reports/phase3/magic_illegal_overlap.json)",
+            extras={"finding": "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+                    "illegal_overlap_gate_rc": _mio_rc,
+                    "lvs_verdict": verdict})
+
     # Magic may emit the top subckt as `<top>` or `<top>_flat` — feed
     # netgen the name that actually exists in the extracted netlist.
     sub_txt = spice_out.read_text(errors="replace")
@@ -30726,15 +31210,46 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "ss/ff)."),
         }, indent=2) + "\n")
         written.append(str(mc_ocv_stance))
-        # When the sign-off STA SURFACED a real SETUP violation, ALSO emit the
-        # honest achievable-Fmax datapoint so a Category-H spec-vs-technology
-        # residual (a full CPU/crypto block at a slow OSS PDK — e.g. ibex@sky130,
-        # sha256 single-cycle round) SELF-REPORTS the frequency it actually MEETs
-        # instead of a bare FAIL. §4.05 HONESTY: this is a MEASUREMENT, never a
-        # clock relaxation — `timing_closed_multi_corner` above stays as-is and the
-        # sign-off verdict is unchanged; achievable_fmax.json travels ALONGSIDE the
-        # FAIL, `relaxation_applied` is always False.
-        if mc_ocv_ok and setup_wns is not None and setup_wns < 0:
+        # Emit the honest achievable-Fmax datapoint whenever the sign-off STA
+        # produced a setup number — on a PASS as well as on a FAIL.
+        #
+        # WHY THE `setup_wns < 0` CONDITION IS GONE (vibe-ic#1097, S8). This
+        # started as a Category-H aid: a spec-vs-technology residual (a full
+        # CPU/crypto block at a slow OSS PDK — ibex@sky130, sha256 single-cycle
+        # round) should SELF-REPORT the frequency it actually MEETs instead of a
+        # bare FAIL. That is still true, and it is not the whole use.
+        #
+        # The period a design is ASKED for reaches the SDC through a four-tier
+        # precedence walk (`l8_sta_clock_period_design_owned_check`), and every
+        # tier — down to `sdc_gen._DEFAULT_MHZ`, which is fabricated — is a
+        # number somebody REQUESTED. The achieved period is the only MEASUREMENT
+        # in that set, so it is what makes "asked" and "reached" two diffable
+        # files instead of a sentence in a log. Suppressing it on the runs that
+        # PASS kept the measurement for exactly the runs nobody needs convincing
+        # about.
+        #
+        # MEASURED on this repo's published corpus at f9c13443: 13 run roots
+        # reached post-route STA, and 2 carry `achievable_fmax.json` — the two
+        # that failed. The other 11 shipped no achieved period although the
+        # slack was on disk, and the gaps are not small:
+        #
+        #     caravel_user_project   asked 25.0 ns   reached  7.81 ns
+        #     spm/v1.10.18_sky130A   asked 10.0 ns   reached  4.76 ns
+        #     edge_llm_accel         asked 10.0 ns   reached  8.92 ns
+        #
+        # `achievable_from_slack` already handled positive slack — it reports the
+        # margin as headroom (see its own comment at the `spec_margin_ns` key) —
+        # so this is a wiring change and not a new computation.
+        #
+        # §4.05 HONESTY, unchanged and load-bearing: this is a MEASUREMENT, never
+        # a clock relaxation. `timing_closed_multi_corner` above stays as-is, the
+        # sign-off verdict is untouched, the artefact is written to its OWN path
+        # and never over the design's SDC, and `relaxation_applied` is always
+        # False. vibe-ic#1083 records ORFS's `update_ok` / `--failing` semantics
+        # — a golden that moves itself to the current run's worse value — as
+        # explicitly NOT adopted; emitting on PASS as well is the opposite of
+        # that, not a step toward it.
+        if mc_ocv_ok and setup_wns is not None:
             try:
                 from sta_achievable_fmax_report import achievable_from_slack
                 _spec_period_ns, _ = _resolve_clock_spec(project, top=top)
@@ -30743,12 +31258,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 (rpt_phase3 / "achievable_fmax.json").write_text(
                     json.dumps(_fmax_rep, indent=2) + "\n")
                 written.append(str(rpt_phase3 / "achievable_fmax.json"))
+                # The sentence has to be true on BOTH branches now. "setup FAIL
+                # -> achievable X" read as a repair on a run that had already
+                # MET its spec; on a PASS the same two numbers are asked-vs-
+                # reached headroom, which is a different statement about the
+                # same measurement.
+                _spec_verdict = "MET" if _fmax_rep["spec_met"] else "FAIL"
                 notes.append(
                     "achievable-Fmax reported (honest measurement, sign-off "
-                    f"verdict UNCHANGED): spec {_fmax_rep['spec_period_ns']} ns "
-                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup FAIL -> achievable "
-                    f"{_fmax_rep['achievable_period_ns']} ns "
-                    f"({_fmax_rep['achievable_fmax_mhz']} MHz) setup MET.")
+                    f"verdict UNCHANGED): asked {_fmax_rep['spec_period_ns']} ns "
+                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup {_spec_verdict} "
+                    f"-> reached {_fmax_rep['achievable_period_ns']} ns "
+                    f"({_fmax_rep['achievable_fmax_mhz']} MHz)"
+                    + (f", headroom {_fmax_rep['spec_margin_ns']} ns."
+                       if _fmax_rep["spec_met"] else
+                       ", i.e. the period at which setup would MET."))
             except Exception as _fmax_err:  # never break the flow on a report
                 notes.append(f"achievable-Fmax emit non-fatal: {_fmax_err}")
         if mc_ocv_ok and _viol:
@@ -31831,7 +32355,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        (eco_out / "eco_trigger_decision.json").write_text(
+        _aa.write_text(eco_out / "eco_trigger_decision.json",
             json.dumps(_eco_decision, indent=2) + "\n")
         written.append(str(eco_out / "eco_trigger_decision.json"))
     except Exception:  # pragma: no cover — defensive
@@ -31849,7 +32373,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
-            (rpt_phase3 / "power.json").write_text(json.dumps({
+            _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
@@ -31944,7 +32468,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(routed_drc))
         # Mirror to reports/phase3/ where the gate's --json output lands
         rpt_phase3.mkdir(parents=True, exist_ok=True)
-        (rpt_phase3 / "drc_router.rpt").write_text(body)
+        _aa.write_text(rpt_phase3 / "drc_router.rpt", body)
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
@@ -33082,6 +33606,27 @@ def _sta_blackboxed_masters(log_path: Path) -> List[str]:
         # report-exists tests still apply. Fail OPEN here so this check can
         # only ever add a finding, never invent one.
         return []
+    # READ WHAT THE TOOL SAID, NEVER A COMMENT ABOUT WHAT IT SAID (vibe-ic#731).
+    # A per-corner log is not HDL, but nothing keeps HDL out of one: a flow that
+    # folds the netlist into its transcript, or a reader that echoes the
+    # offending source line, puts `//` and `/* */` text in here. A comment
+    # RESTATING the warning — the note somebody leaves beside the fix — would
+    # then be read as OpenSTA ASSERTING it, and the consequence is not a spare
+    # name in a list: the caller `rpt.unlink()`s this corner's report and
+    # records that the design did not link, so a MENTION would destroy a real
+    # post-route sign-off artefact.
+    #
+    # SAFE IN THE OTHER DIRECTION TOO, which matters more, because losing a
+    # genuine Warning 198 would restore the falsely-clean corner this helper
+    # exists to stop. The `//` strip is line-bounded, and the only text OpenSTA
+    # prints before the phrase on that line is `Warning <n>: <netlist path>
+    # line <n>, `; that path comes from `_to_container_path`, which appends a
+    # `/`-prefixed remainder to a mount destination and so cannot emit `//`.
+    # MEASURED over 64 real per-corner logs carrying 18 genuine Warning 198
+    # lines: `//` appeared on 50 lines, every one of them the OpenSTA GPL
+    # banner URL and none on a warning line, and the stripped scan returned the
+    # same 18 masters as the raw one.
+    txt = _strip_v_comments(txt)
     return sorted({m.group(1) for m in _STA_BLACKBOX_RE.finditer(txt)})
 
 
@@ -33278,7 +33823,12 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # vibe-ic#1330: DECLARED AFTER THE VERDICT, not before it. This is
+        # the one call site that may destroy its own output (the `_bb`
+        # branch below), so declaring `rpt` here would record a digest for
+        # a file removed three statements later. See
+        # `_log_surviving_artefact`, called on the surviving path only.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
@@ -33319,6 +33869,11 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"netlist's technology and that every hard-macro .lib is staged.")
         else:
             any_emitted = True
+            # The corner LINKED and its report survives, so now it
+            # is an artefact this run can be held to.
+            _log_surviving_artefact(
+                [rpt], produced_by="_emit_multi_corner_sta",
+                marker=str(tcl_c))
     # The reports this call REUSED rather than produced, whenever they do not
     # carry the basis the inputs resolve to. Without this the run publishes
     # "basis=POST_ROUTE_SPEF … post-route multi-corner timing" over a directory
@@ -35244,9 +35799,12 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         _psm_failed = _cov["analysis_failed"]
         _psm_conn = _cov["connectivity"]
         _bump_m = re.search(r"PSM-0073.*?bump", log)
-        # PSM's own connectivity verdict, kept beside the number it explains.
-        _psm_unconn = re.findall(r"PSM-0039\]\s*(.+)", log)
-        (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
+        # PSM's own connectivity verdict, kept beside the number it explains —
+        # and now DECIDING it. This list used to be re-derived here by a second
+        # inline regex, which is the drift the module's own header warns about;
+        # there is ONE implementation of the rule and this reads it.
+        _psm_unconn = _cov["unconnected_instances"]
+        _aa.write_text(ir_rpt.parent / "ir_drop.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
@@ -35293,14 +35851,18 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "nets_analysed": _psm_analysed,
             "nets_analysis_failed": _psm_failed,
             "connectivity_findings": _psm_conn,
-            "verdict_basis": verdict_basis(_psm_failed),
-            # BOTH conditions, composed. #662 says an unmeasured supply has no
-            # derivable verdict; #669 says a net whose analysis FAILED must not
-            # make the number better. They are independent reasons the verdict
-            # is not a PASS, and taking either side of the conflict alone would
-            # have dropped the other silently.
+            "verdict_basis": verdict_basis(_psm_failed, _psm_unconn),
+            # ALL THREE conditions, composed. #662 says an unmeasured supply
+            # has no derivable verdict; #669 says a net whose analysis FAILED
+            # must not make the number better; and an instance terminal the
+            # solver could not REACH must not either — the supply question this
+            # flow otherwise gates is net OWNERSHIP, which such a terminal
+            # passes (its net pointer is valid) while no conductor arrives.
+            # They are independent reasons the verdict is not a PASS, and
+            # taking any one alone would drop the others silently.
             "verdict": ("UNMEASURED" if not _supply_measured
-                        else ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed)),
+                        else ir_verdict(_worst_ir_uv, _ir_budget_uv,
+                                        _psm_failed, _psm_unconn)),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         if not _supply_measured:
@@ -35355,7 +35917,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM/EM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of em.rpt\n")
         em_rpt.write_text(body)
-        (em_rpt.parent / "em.json").write_text(json.dumps({
+        _aa.write_text(em_rpt.parent / "em.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "electromigration",
             "power_nets": power_nets,
@@ -35487,7 +36049,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
-                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
                     "net_violations": net_viol if have_counts else None,
@@ -35570,7 +36132,7 @@ exit
         "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
-    (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+    _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
         "tool": "openroad",
         "mode": "antenna_check",
         "net_violations": net_viol,
@@ -35891,7 +36453,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             if pdk is not None and container is not None:
                 _merge_si_timing_aware(project, top, pdk, container, spef,
                                        sbody, notes)
-            (si_rpt.parent / "si_crosstalk.json").write_text(
+            _aa.write_text(si_rpt.parent / "si_crosstalk.json",
                 json.dumps(sbody, indent=2) + "\n")
             # Advisory timing-window tail (only present when the upgrade ran).
             ta = sbody.get("timing_aware_advisory")
@@ -35957,7 +36519,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
     }
-    (si_rpt.parent / "si_crosstalk.json").write_text(
+    _aa.write_text(si_rpt.parent / "si_crosstalk.json",
         json.dumps(body, indent=2) + "\n")
     si_rpt.write_text(
         "# Signal-integrity / crosstalk screen — emitted by\n"
@@ -36142,7 +36704,7 @@ exit
     fill_substantiated = placed_n > 0 or (
         _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
-        (pnr_out / "metal_fill.done").write_text(
+        _aa.write_text(pnr_out / "metal_fill.done",
             "metal_fill_done\n"
             "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
@@ -36250,8 +36812,142 @@ exit
 # than kept as a second authority that can drift again.
 _METAL_DENSITY_LAYER_RE = _mld._METAL_RE.pattern
 
+# ===========================================================================
+# WHICH DATATYPES DOES THE PDK ACTUALLY COUNT? (vibe-ic#990)
+#
+# The producer selected ONE (gds_layer, datatype) per metal layer — the first
+# routing/NET row of the LEF/DEF layermap — while the PDK's own KLayout density
+# deck counts routing PLUS a separate dummy-fill datatype. #988 measured both
+# paths on the published run's own GDS against that run's own deck and they
+# agreed to 0.00e+00 on all six layers, but recorded WHY:
+#
+#     measured 0 shapes on 36/28, 41/28, 34/28, 51/28 and 68..72/99
+#
+# That layout carries no fill. On a run that HAS fill the producer under-counts
+# by exactly the inserted fill area — the area inserted to SATISFY the rule —
+# and it under-counts in the direction that pushes a result toward the disputed
+# floor. A gate that cannot see fill cannot see the thing that fixes the
+# violation it reports.
+#
+# SO THE DATATYPE SET IS DISCOVERED, NEVER TYPED. Two sources, both the PDK's
+# own files, and the provenance of each is published in the report:
+#
+#   * the LAYERMAP — every purpose row the map carries for that LEF layer
+#     name, not only the first NET one. A real streamout map states FILL, PIN
+#     and TEXT as separate rows; the synthesized map this runner emits bundles
+#     them onto one spec, and both shapes are handled by the same rule.
+#   * the DECK — every layer binding in the PDK's own density deck that lands
+#     on that layer's GDS LAYER NUMBER. Keying on the NUMBER rather than on the
+#     deck's variable name is what makes this work across PDKs that name the
+#     same layer `met1`, `Metal1` and `m1`; #988 established that the PDKs in
+#     this registry already disagree about density SCOPE, so assuming they
+#     agree about naming is exactly the unwarranted assumption.
+#
+# A DATATYPE NUMBER IS NEVER WRITTEN DOWN HERE. What IS written down is a
+# PURPOSE VOCABULARY — the words that mean "this row carries no area a density
+# rule counts". That vocabulary is already this repo's: the synthesized
+# streamout map emits `LEFPIN,NET,SPNET,PIN,VIA,BLOCKAGE,FILL` and the
+# pre-#990 recipe matched on `"NET" in purpose`. #988's reading of the deck was
+# "all datatypes on the metal layer except text and via", which is the same
+# vocabulary and is why those two words are the exclusion.
+_DENSITY_PURPOSE_EXCLUDE = ("VIA", "CUT", "TEXT", "LABEL")
+
+
+def density_counted_specs(map_text, deck_texts, metal_re):
+    """(counted, routing, provenance) — every GDS spec a density rule counts.
+
+    `counted` maps a lower-cased metal layer name to a sorted list of
+    ``[gds_layer, gds_datatype]``; `routing` maps it to the single spec the
+    pre-#990 producer used, kept so the report can publish BOTH numbers and a
+    reader can see the delta rather than a figure that silently moved.
+
+    Pure text in, pure data out, no filesystem and no KLayout: this function is
+    injected VERBATIM into the KLayout recipe (see `_metal_density_recipe`) so
+    there is one authority, and it is directly testable off a fixture on a host
+    with no PDK and no klayout installed — which is every host this was written
+    on.
+    """
+    routing = {}
+    counted = {}
+    from_map = 0
+    for line in (map_text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name, purpose = parts[0], parts[1]
+        try:
+            gl, gd = int(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        if not metal_re.match(name):
+            continue
+        key = name.lower()
+        up = purpose.upper()
+        if "NET" in up and key not in routing:
+            routing[key] = (gl, gd)
+        # A row is EXCLUDED only when EVERY purpose on it is an excluded one.
+        # The synthesized map bundles VIA onto the same row as NET and FILL, so
+        # a substring test would have dropped the whole layer — measured on
+        # this runner's own `_synthesize_streamout_layermap` output.
+        toks = [t for t in re.split(r"[^A-Za-z]+", up) if t]
+        if toks and all(t in _DENSITY_PURPOSE_EXCLUDE for t in toks):
+            continue
+        if (gl, gd) not in counted.setdefault(key, []):
+            counted[key].append((gl, gd))
+            from_map += 1
+
+    # The deck half. `NAME = input(L, D)` / `polygons(L, D)` / `layer(L, D)` are
+    # the KLayout DRC layer-binding forms; a missing datatype means 0.
+    bind_re = re.compile(
+        r"^[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*(?:\w+\.)?"
+        r"(?:input|polygons|polygon_layer|layer)[ \t]*\([ \t]*"
+        r"(\d+)[ \t]*(?:,[ \t]*(\d+)[ \t]*)?\)", re.MULTILINE)
+    layer_numbers = {}
+    for key, specs in counted.items():
+        for gl, _gd in specs:
+            layer_numbers.setdefault(gl, []).append(key)
+    for key, spec in routing.items():
+        layer_numbers.setdefault(spec[0], [])
+        if key not in layer_numbers[spec[0]]:
+            layer_numbers[spec[0]].append(key)
+    from_deck = 0
+    decks_read = 0
+    for text in (deck_texts or []):
+        if not text:
+            continue
+        decks_read += 1
+        for m in bind_re.finditer(text):
+            var, gl = m.group(1), int(m.group(2))
+            gd = int(m.group(3)) if m.group(3) is not None else 0
+            if gl not in layer_numbers:
+                continue
+            up = var.upper()
+            if any(tok in up for tok in _DENSITY_PURPOSE_EXCLUDE):
+                continue
+            for key in layer_numbers[gl]:
+                if (gl, gd) not in counted.setdefault(key, []):
+                    counted[key].append((gl, gd))
+                    from_deck += 1
+
+    for key in list(counted):
+        counted[key] = sorted(counted[key])
+    prov = {
+        "specs_from_layermap": from_map,
+        "specs_from_deck": from_deck,
+        "deck_files_read": decks_read,
+        "purpose_exclusions": list(_DENSITY_PURPOSE_EXCLUDE),
+        "note": ("the datatype SET is discovered from the PDK's own layermap "
+                 "and its own density deck; no datatype number is written into "
+                 "this program (vibe-ic#990). `layers` counts that set; "
+                 "`layers_routing_only` is what the pre-#990 producer counted "
+                 "(the routing/NET row alone) and is published beside it so "
+                 "the delta is visible rather than a number that moved."),
+    }
+    return counted, routing, prov
+
+
 _METAL_DENSITY_KLAYOUT_RECIPE = r'''
-import json, re, sys
+import json, os, re, sys
 import pya
 gds_path = globals().get("gds", "")
 map_path = globals().get("map", "")
@@ -36261,44 +36957,97 @@ out_path = globals().get("out", "")
 # to be told from outside which process produced it can be rejudged against the
 # wrong one the moment it is read from a differently-configured shell.
 pdk_name = globals().get("pdk", "")
-# Parse the LEF/DEF layermap: "<lefname> <purpose> <gdslayer> <gdsdatatype>".
-# Keep the routing purpose (NET/SPNET) row per metal layer. The layer-name
-# pattern is injected from the CONSUMER gate's own regex so the two cannot drift.
-metal_layers = {}
+# The PDK's OWN density deck. Every deck in this registry `require`s its
+# density rules from a SIBLING file (`rule_decks/density.rb`,
+# `met_min_ca_density.lydrc`), so the named deck alone is not where the layer
+# bindings are — the deck's own directory and one level under it are swept.
+# Discovered from the path the runner already resolves, never a list of
+# PDK-specific filenames, and the sweep is BOUNDED and its size reported.
+# An absent or unreadable deck is not fatal: the layermap half still answers
+# and the report says the deck contributed nothing (vibe-ic#990).
+deck_path = globals().get("deck", "") or ""
+_DECK_SUFFIXES = (".drc", ".lydrc", ".rb", ".lydrf")
+_DECK_SWEEP_MAX = 40
+deck_paths = []
+if deck_path:
+    deck_paths.append(deck_path)
+    _base = os.path.dirname(deck_path)
+    for _root, _dirs, _files in os.walk(_base):
+        if _root != _base and os.path.dirname(_root) != _base:
+            continue                      # depth > 1 below the deck directory
+        for _f in sorted(_files):
+            _p = os.path.join(_root, _f)
+            if _p not in deck_paths and os.path.splitext(_f)[1] in _DECK_SUFFIXES:
+                deck_paths.append(_p)
+    deck_paths = deck_paths[:_DECK_SWEEP_MAX]
 metal_re = re.compile(r"__METAL_LAYER_NAME_RE__", re.IGNORECASE)
 try:
     with open(map_path) as fh:
-        for line in fh:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            name, purpose = parts[0], parts[1]
-            try:
-                gl, gd = int(parts[2]), int(parts[3])
-            except ValueError:
-                continue
-            if metal_re.match(name) and "NET" in purpose.upper():
-                metal_layers.setdefault(name.lower(), (gl, gd))
+        map_text = fh.read()
 except OSError as e:
     open(out_path, "w").write(json.dumps({"error": "map_unreadable: %s" % e}))
     sys.exit(0)
+deck_texts = []
+decks_unreadable = []
+for p in deck_paths:
+    try:
+        with open(p) as fh:
+            deck_texts.append(fh.read())
+    except OSError as e:
+        decks_unreadable.append("%s: %s" % (p, e))
+
+__DENSITY_COUNTED_SPECS_SRC__
+
+counted, routing, spec_prov = density_counted_specs(
+    map_text, deck_texts, metal_re)
+spec_prov["deck_files_offered"] = len(deck_paths)
+spec_prov["deck_files_unreadable"] = decks_unreadable
+metal_layers = dict(routing)
 ly = pya.Layout()
 ly.read(gds_path)
 top = ly.top_cell()
 dbu = ly.dbu
 bb = top.bbox()
 die_um2 = (bb.width() * dbu) * (bb.height() * dbu)
-layers = {}
-absent = []
-for name, (gl, gd) in sorted(metal_layers.items()):
-    li = ly.find_layer(gl, gd)
-    if li is None:
-        absent.append(name)
-        continue
-    reg = pya.Region(top.begin_shapes_rec(li))
+
+
+def _density_of(specs):
+    """Merged area over the die bbox for a SET of (layer, datatype) specs.
+
+    The regions are joined and THEN merged, so a fill shape overlapping routing
+    is counted once. Summing per-datatype areas would inflate the number in the
+    one direction nobody questions.
+    """
+    reg = pya.Region()
+    seen = 0
+    for gl, gd in specs:
+        li = ly.find_layer(gl, gd)
+        if li is None:
+            continue
+        seen += 1
+        reg = reg + pya.Region(top.begin_shapes_rec(li))
+    if not seen:
+        return None
     reg.merge()
     area_um2 = reg.area() * dbu * dbu
-    layers[name] = round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+    return round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+
+
+layers = {}
+routing_only = {}
+fill_delta = {}
+absent = []
+for name in sorted(set(list(counted) + list(routing))):
+    full = _density_of(counted.get(name, []))
+    if full is None:
+        absent.append(name)
+        continue
+    layers[name] = full
+    r = routing.get(name)
+    bare = _density_of([r]) if r else None
+    if bare is not None:
+        routing_only[name] = bare
+        fill_delta[name] = round(full - bare, 6)
 open(out_path, "w").write(json.dumps({
     "tool": "klayout",
     "measurement": "per_layer_drawn_area_over_die_bbox_area",
@@ -36306,16 +37055,31 @@ open(out_path, "w").write(json.dumps({
     "gds": gds_path,
     "die_area_um2": round(die_um2, 3),
     "layers": layers,
+    # THE PRE-#990 NUMBER, PUBLISHED BESIDE THE NEW ONE. A gate whose figures
+    # move without saying so is a gate a reader cannot reconcile against an
+    # earlier run, and #988 left step 34 ORACLE-DISPUTED on a number measured
+    # under the old selector.
+    "layers_routing_only": routing_only,
+    "layers_datatype_delta": fill_delta,
     "layers_absent_in_gds": absent,
     "layer_gds_map": {k: list(v) for k, v in sorted(metal_layers.items())},
+    "layer_gds_specs": {k: [list(s) for s in v]
+                        for k, v in sorted(counted.items())},
+    "datatype_discovery": spec_prov,
     "disclosure": ("REAL KLayout measurement of the AS-BUILT (post-OpenROAD-"
                    "filler) GDS. Per-layer density = merged drawn metal area / "
-                   "die bbox area. Metal->GDS numbers from the PDK's own "
-                   "LEF/DEF layermap (routing/NET purpose). The signoff gate "
-                   "applies the foundry CMP window (or a DISCLOSED generic "
-                   "[0.30,0.70] default). Layers absent in the GDS are listed, "
-                   "not fabricated. A dedicated dummy-fill INSERTION pass is a "
-                   "documented follow-on; this measures the achieved density."),
+                   "die bbox area. The DATATYPE SET counted per metal layer is "
+                   "DISCOVERED from the PDK's own LEF/DEF layermap (every "
+                   "purpose row for that layer, not only routing/NET) and from "
+                   "the PDK's own density deck (every binding on that layer's "
+                   "GDS layer number); no datatype number is written into the "
+                   "producer. `layers_routing_only` is what the pre-#990 "
+                   "producer counted and `layers_datatype_delta` is the "
+                   "difference — on a layout with no dummy fill the delta is "
+                   "0.0 on every layer. The signoff gate applies the foundry "
+                   "CMP window (or a DISCLOSED generic [0.30,0.70] default) to "
+                   "`layers`. Layers absent in the GDS are listed, not "
+                   "fabricated."),
 }, indent=2))
 '''
 
@@ -36337,7 +37101,29 @@ def _metal_density_recipe() -> str:
         raise RuntimeError(
             "metal-density recipe: the metal-layer-name regex was not injected "
             "(template placeholder renamed?) — emitting it would measure nothing")
+    # THE DATATYPE DISCOVERY IS INJECTED BY SOURCE, not restated (vibe-ic#990).
+    # The recipe runs inside the container under KLayout's interpreter and
+    # cannot import this module, so the alternative to injection is a second
+    # copy — and a second copy of a selector is precisely how the producer and
+    # the consumer came to disagree in the first place (see the comment on
+    # `_METAL_DENSITY_LAYER_RE`). Injected, the function the tests exercise IS
+    # the function that runs.
+    src = "\n".join((
+        "_DENSITY_PURPOSE_EXCLUDE = %r" % (_DENSITY_PURPOSE_EXCLUDE,),
+        inspect.getsource(density_counted_specs),
+    ))
+    recipe = recipe.replace("__DENSITY_COUNTED_SPECS_SRC__", src)
+    # Same guard shape as above, and for the same reason: assert what SHOULD be
+    # there. `str.replace` makes an absent-placeholder check false by
+    # construction, so it can never fire.
+    if "def density_counted_specs(" not in recipe:
+        raise RuntimeError(
+            "metal-density recipe: the datatype-discovery source was not "
+            "injected (template placeholder renamed?) — emitting it would "
+            "measure the routing datatype alone and silently miss dummy fill")
     return recipe
+
+
 
 
 def _freshest_gds(alias_gds: Path, source_gds: Path) -> Optional[Path]:
@@ -36428,6 +37214,17 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     map_c = _to_container_path(str(layermap), container)
     out_c = _to_container_path(str(out_json), container)
     script_c = _to_container_path(str(script), container)
+    # THE PDK'S OWN DENSITY DECK (vibe-ic#990) — already resolved by this
+    # runner for sign-off DRC, and passed through here so the measurement
+    # counts the datatype set that deck counts. `pdk.drc_deck` is already a
+    # container-side path, and an empty one is not fatal: the recipe falls back
+    # to the layermap half and RECORDS that the deck contributed nothing.
+    deck_c = pdk.drc_deck or ""
+    if not deck_c:
+        notes.append(
+            f"metal density: PDK {pdk.name} resolves no DRC deck — the counted "
+            f"datatype set comes from the LEF/DEF layermap alone (#990). This "
+            f"is DISCLOSED in the report, not silent.")
     cmd = (
         # Our build first when the image has one; this used to pin the BASE
         # klayout directory ahead of everything, which defeated even a wrapper
@@ -36435,6 +37232,10 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         f"{KLAYOUT_PREFER_FORK_SH}"
         f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
+        # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
+        # a malformed argument, and the recipe already treats an absent `deck`
+        # global as "no deck offered" and says so in the report.
+        + (f"-rd deck={deck_c} " if deck_c else "") +
         f"-rd pdk={pdk.name} -rd out={out_c} 2>&1 | tee "
         f"{_to_container_path(str(script.parent / 'metal_density.log'), container)}"
     )
@@ -37894,7 +38695,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
-    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _aa.write_text(rpt3 / "perc_equivalent.json", json.dumps(summary, indent=2) + "\n")
 
     # --- perc_equivalent.rpt (human-readable) -----------------------------
     def _line(c):
@@ -37925,7 +38726,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
            if summary["manual_review_pending"]
            else "# No MANUAL items pending (all N/A or automated).\n")
         + "# end of perc_equivalent.rpt\n")
-    (rpt3 / "perc_equivalent.rpt").write_text(body)
+    _aa.write_text(rpt3 / "perc_equivalent.rpt", body)
 
     # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
     _emit_perc_signoff_memo(project, top, summary, categories)
@@ -38087,7 +38888,37 @@ def main() -> int:
                    help=("Design-for-ECO spare-cell density as a fraction "
                          "of placed cells (default 0.02 = 2%%; clamped to "
                          "[0, 0.2]). 0 disables spare insertion."))
+    # vibe-ic#1097 S6 — ORFS `do-<stage>` (`flow/Makefile:366-405`).
+    p.add_argument("--force-step", action="append", metavar="KIND",
+                   default=None,
+                   help=("Re-run this step even if its cached artefact looks "
+                         "current (repeatable; also comma-separated). "
+                         "Bypasses the FRESHNESS check only — the step's "
+                         "declared input contract is still enforced. "
+                         "An unrecognised KIND is refused, not ignored."))
     args = p.parse_args()
+
+    # vibe-ic#1097 S6 — validate AT THE CLI BOUNDARY and publish through the
+    # environment. The freshness predicate that consumes this sits deep in this
+    # module and is called from three sites; threading a parameter to it would
+    # mean changing the signatures `step_preflight.py:20-40` documents as
+    # un-wrappable. So the flag SETS the channel and the predicate READS it.
+    #
+    # `resolve()` RAISES on an unrecognised kind and we exit 2 rather than
+    # continuing: a run that silently forced nothing reads exactly like one
+    # that re-ran the step, which is the defect class this repo keeps removing.
+    if getattr(args, "force_step", None):
+        import step_force as _sf  # noqa: PLC0415
+        _toks = [t for chunk in args.force_step
+                 for t in str(chunk).replace(",", " ").split()]
+        try:
+            os.environ[_sf.ENV] = _sf.as_env_value(_toks)
+        except _sf.UnknownStep as exc:
+            print(f"[phase3] {exc}", file=sys.stderr)
+            return 2
+        print(f"[phase3] --force-step: {os.environ[_sf.ENV]} "
+              f"(freshness bypass only; the input contract still applies)",
+              file=sys.stderr)
 
     # The container name is threaded EXPLICITLY into every step (step_pnr,
     # step_drc, ...), but several PDK-resolution helpers read it from

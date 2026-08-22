@@ -64,6 +64,12 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase3_one_shot_runner as R          # noqa: E402
 import sta_signoff_rigor_check as G         # noqa: E402
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 tclsh = shutil.which("tclsh")
 needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
@@ -310,7 +316,7 @@ def test_report_checks_contract_matches_the_real_opensta(tmp_path):
     "accepted and reached analysis". Skips when no container is running."""
     container = _live_container()
     if not container:
-        pytest.skip("no running vibeic-eda container")
+        skip_not_verified("no running vibeic-eda container", RUN_REMEDY)
     probe = tmp_path / "probe.tcl"
     probe.write_text(
         'set rc [catch {report_checks -max -group_path_count 3} m]\n'
@@ -324,7 +330,9 @@ def test_report_checks_contract_matches_the_real_opensta(tmp_path):
                         capture_output=True, text=True,
                         timeout=_DOCKER_CP_TIMEOUT_S)
     if cp.returncode != 0:
-        pytest.skip(f"cannot stage probe into {container}: {cp.stderr}")
+        skip_not_verified(
+            f"cannot stage probe into {container}: {cp.stderr}",
+            RUN_REMEDY)
     r = subprocess.run(
         ["docker", "exec", "-e", "IIC_OSIC_TOOLS_QUIET=1", container,
          "bash", "-lc",
@@ -333,7 +341,9 @@ def test_report_checks_contract_matches_the_real_opensta(tmp_path):
         capture_output=True, text=True, timeout=_DOCKER_EXEC_TIMEOUT_S)
     out = r.stdout
     if "OLD rc=" not in out:
-        pytest.skip(f"OpenSTA probe did not run in {container}: {out[-400:]}")
+        skip_not_verified(
+            f"OpenSTA probe did not run in {container}: {out[-400:]}",
+            RUN_REMEDY)
     old = re.search(r"OLD rc=(\d) msg=(.*)", out).group(1, 2)
     new = re.search(r"NEW rc=(\d) msg=(.*)", out).group(1, 2)
     ws = re.search(r"WS rc=(\d) msg=(.*)", out).group(1, 2)
