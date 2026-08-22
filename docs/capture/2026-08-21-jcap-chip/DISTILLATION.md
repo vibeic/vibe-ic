@@ -1824,3 +1824,47 @@ correction is urgent. Ruling welcome; (A) is one cherry-pick.
   argument it holds, so authoring it is a judgement rather than a transcription.
 
 So the earlier "the other two need their sessions read first" is now one, not two.
+
+## Auditing the OTHER gates for the same defect: the dual-writer findings hold
+
+The false positive above was a gate reading one surface and missing the truth one
+hop away. That is a class, not an incident, so the other rc=1 gate was audited for
+it before its findings go to a ruling.
+
+`only_the_declaring_step_writes_its_output` reports five unowned dual-writer paths
+and they are one of the open decisions. Two failure modes could inflate them:
+
+**1. Scope-local blindness — DOES NOT APPLY.** This gate attributes at MODULE
+granularity ("written by 2 modules"), so a wrapper and its helper in one file count
+once. The defect that bit arm B cannot occur here.
+
+**2. Counting a MIRROR as a producer — CHECKED, and it does not.** The signoff arm
+needed a copy exclusion because `phase3_one_shot_runner.py` republishes artefacts,
+and that same module appears in most of these findings. A scope-level copy
+heuristic flags `step_canonicalize_artefacts` and `step_pnr` as copiers, which
+looked damning — but that heuristic cannot attribute a copy to a PARTICULAR
+artefact, and in scopes thousands of lines long any unrelated read-then-write pair
+marks the whole function. So the writes were read directly:
+
+    reports/spare_cell_coverage.json
+      spare_cell_coverage_check.py:main   write_text, and its own line 221 calls it
+                                          "Canonical output"
+      phase3_one_shot_runner.py:step_pnr  writes it as "the readiness verdict"
+      -> BOTH genuinely write. The flow names the CHECK as step 18's producer, so
+         the runner's write is the anomaly. Finding REAL.
+
+    phase3/stage3/eco/eco_log.json
+      _eco_log.write_text(json.dumps({"program":
+          "phase3_one_shot_runner.eco_auto_trigger", ...}))
+      -> fresh content, not a copy. Finding REAL.
+
+**A trap worth recording:** grepping for `eco_log.json` lands first on line 33445,
+which is PROSE inside a comment — *"writing an eco_log.json would fabricate a
+repair that never happened"* — a sentence about deliberately NOT writing it. The
+gate never saw that line, because it reads string constants through AST rather than
+text. The instrument was right and the grep I checked it with was wrong, which is
+the third time in this lane that the cross-check needed checking harder than the
+thing it was checking.
+
+**Net: the five dual-writer findings stand.** The decision they feed is unchanged
+and is now made on audited findings rather than unaudited ones.
