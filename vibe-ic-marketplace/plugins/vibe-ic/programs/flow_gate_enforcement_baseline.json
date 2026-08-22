@@ -104,7 +104,6 @@
     "undeclared::rtl_bug_report_schema_check",
     "undeclared::rtl_hygiene_lint",
     "undeclared::sdc_exception_correlation_check",
-    "undeclared::sdc_syntax_check",
     "undeclared::sdc_validator_check",
     "undeclared::sdd_coverage_check",
     "undeclared::si_crosstalk_check",

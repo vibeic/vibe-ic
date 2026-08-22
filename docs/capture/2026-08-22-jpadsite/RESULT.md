@@ -1294,8 +1294,8 @@ written down, so none of them is a pointer at an empty place -- this report
 shipped one of those earlier and it is the reason this block exists.
 
   1. THE EVIDENCE IS WHAT IT SAYS IT IS
-       cd evidence && sha256sum -c <(grep 'sha256:' MANIFEST.sha256 \
-           | sed 's|\(.*\) [0-9]*B sha256:\(.*\)|\2  \1|')
+       cd evidence && sha256sum -c <(grep 'sha256:' MANIFEST.sha256 |
+           sed 's|\(.*\) [0-9]*B sha256:\(.*\)|\2  \1|')
      Proves: no evidence file was edited after it was recorded.
      Does NOT prove: that the files say anything true.
 
@@ -1322,8 +1322,8 @@ shipped one of those earlier and it is the reason this block exists.
      weakened at an unchanged count.
 
   5. EVERY EVIDENCE FILE IS CITED
-       cd evidence && find . -type f | sed 's|^\./||' \
-           | while read f; do grep -qF "$f" ../RESULT.md || echo "UNCITED: $f"; done
+       cd evidence && find . -type f | sed 's|^\./||' |
+           while read f; do grep -qF "$f" ../RESULT.md || echo "UNCITED: $f"; done
      Runs files->claims. It says NOTHING about claims with no file -- that is
      what (3) is for, and the two are not substitutes.
 
