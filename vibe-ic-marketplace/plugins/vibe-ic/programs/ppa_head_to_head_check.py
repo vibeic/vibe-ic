@@ -495,11 +495,44 @@ def evaluate(path: Path) -> Tuple[int, Dict[str, Any]]:
         # C4 and SCOPE_UNDECLARED as the owners of those cases, so it reaches
         # nothing that parity was holding for it.
         _bench.check_stage_basis_agreement(arms)
-        report["scope"] = _bench.check_scope_parity(arms)
+        # AND SO DO THE OTHER TWO CHECKS WHOSE EVIDENCE IS INDEPENDENT OF THE
+        # COMPARISON. The line is not "1 outranks 2" applied blindly; it is
+        # WHERE A CHECK'S EVIDENCE COMES FROM:
+        #
+        #   independent of parity   `feasibility` and `tuning` are read off ONE
+        #                           arm's own block. An arm with DRC violations
+        #                           is infeasible, and an opponent handed a
+        #                           smaller budget than ours is under-budgeted,
+        #                           whether or not two scopes line up.
+        #   DEPENDENT on parity     `derive_verdict` / `check_asserted_verdict`
+        #                           compare the numbers. A verdict refusal
+        #                           derived from arms that were never shown
+        #                           comparable is not independently
+        #                           demonstrable, so those STAY BELOW parity
+        #                           and an honest rc 2 keeps them.
+        #
+        # MEASURED before the move -- each of these is a `1` alone and became a
+        # `2` the moment an unrelated `rc_corner` sentinel was added to the
+        # record, which is the mask this repair is about:
+        #
+        #   ARM_INFEASIBLE ................... 1 -> 2
+        #   OPPONENT_UNDERBUDGETED ........... 1 -> 2
+        #   OPPONENT_NOT_TUNED ............... 1 -> 2
+        #   BASELINE_TUNING_CONTRADICTS_ROLE . 1 -> 2
+        #
+        # Three of those four are the rigged-benchmark refusals #1121 exists
+        # to enforce, and THREE PUBLISHED RECORDS CARRY A SCOPE SENTINEL, so
+        # the mask was live and not theoretical: any tuning defect in those
+        # records would have been invisible behind an incomplete scope key.
+        #
+        # SAFE HERE because `check_baseline_is_theirs` above already refused
+        # ROLES_UNCLEAR unless there is exactly one subject, which is what the
+        # `next()` below relies on; neither callee reads a `ppa` scope.
         report["feasibility"] = _bench.check_feasibility(arms)
         subject = next(a for a in arms if a.get("role") == "subject")
         report["tuning"] = _bench.check_tuning_parity(
             subject, [a for a in arms if a.get("role") == "baseline"])
+        report["scope"] = _bench.check_scope_parity(arms)
         derived = derive_verdict(arms)
         check_asserted_verdict(doc, derived)
         report["derived_verdict"] = derived

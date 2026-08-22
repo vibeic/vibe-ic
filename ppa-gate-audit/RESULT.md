@@ -2814,3 +2814,88 @@ ppa/sta/rc2/ablation selection. The same 4 fail IDENTICALLY on pristine
 origin/main — verified by running them there rather than assumed:
 test_ppa_layer_timing_view_dedup x3, test_ppa_runner_extraction_ledger x1.
 None is mine. chip-AGNOSTIC source guard: PASS, 1553 file(s).
+
+
+# Part 26 — the same mask, four more refusals, and the one deliberately left
+# under it
+
+WHY I WENT LOOKING. Part 25 repaired ONE instance of "an rc 2 that swallows an
+rc 1". The brief's rule is general, so the question of how many OTHER checks
+the same mask covered was mine to answer and not to leave.
+
+THE SWEEP. Every function in `programs/ppa_*.py` and `programs/_ppa/*.py` was
+parsed and its raisable rc set computed transitively (`Refusal(code, msg)`
+defaults to RC_REFUSED; a third argument of `RC_UNDETERMINED` marks the rc-2
+raisers): 585 functions, 68 that can raise, 40 rc-2-only, 9 rc-1-only, 19 both.
+
+STRUCTURE ALONE OVER-FIRES AND IS NOT THE ANSWER. It reported 37 "inversion
+candidates" in `evaluate`, nearly all spurious -- `_load` raising rc 2 ahead of
+every rc-1 check is CORRECT, because a file that will not load supports no
+finding at all. A structural rule that cannot tell that apart would have had me
+"fix" the one ordering in the function that is right. So each candidate was
+probed EMPIRICALLY instead: craft the record, run the real checker, compare the
+verdict alone against the verdict with an unrelated `rc_corner` sentinel added.
+
+MEASURED, and it is wider than Part 25:
+
+    ARM_INFEASIBLE ................... 1 alone -> 2 masked
+    OPPONENT_UNDERBUDGETED ........... 1 alone -> 2 masked
+    OPPONENT_NOT_TUNED ............... 1 alone -> 2 masked
+    BASELINE_TUNING_CONTRADICTS_ROLE . 1 alone -> 2 masked
+    FEASIBILITY_NOT_CHECKED .......... 2 alone -> 2          (not a mask)
+    TUNING_UNDECLARED ................ 2 alone -> 2          (not a mask)
+
+THREE OF THE FOUR ARE THE RIGGED-BENCHMARK REFUSALS #1121 EXISTS TO ENFORCE,
+and the fourth says an arm has DRC violations. Any one of them was invisible
+behind an unrelated incomplete scope key. This was LIVE and not theoretical:
+three published records carry exactly such a sentinel, so a tuning defect in
+any of them would not have reached a reader.
+
+THE LINE IS NOT "1 OUTRANKS 2" APPLIED BLINDLY. It is where a check's evidence
+comes from:
+
+    INDEPENDENT of parity   `feasibility` and `tuning` are read off ONE arm's
+                            own block. An arm with DRC violations is infeasible
+                            and an opponent handed a smaller budget is
+                            under-budgeted, whether or not two scopes line up.
+                            MOVED ABOVE `check_scope_parity`.
+    DEPENDENT on parity     `derive_verdict` / `check_asserted_verdict` compare
+                            the numbers. A verdict refusal drawn from arms
+                            never shown comparable is not independently
+                            demonstrable -- it is a conclusion from a
+                            comparison the checker just said it could not make.
+                            LEFT BELOW parity, deliberately.
+
+That last one is a DECISION and is pinned as one:
+`test_a_verdict_refusal_DELIBERATELY_stays_below_parity` exists so that
+"finish the job and move the verdict check up too" is refused with a reason
+rather than done. VERDICT_UNKNOWN_BASELINE is still masked by a scope defect
+and that is the honest answer, not an unfinished edge.
+
+NO CORPUS VERDICT MOVED. Measured before and after on both campaigns:
+cross-layer 14 records / 2 refused / rc 1, end-to-end 2 records / 1 refused /
+rc 1, feasibility 21 sets / rc 2 -- identical to Part 25. This repair closes a
+latent class; it does not restate the corpus.
+
+NEGATIVE CONTROL F -- feasibility and tuning put back below parity:
+
+    4 failed, 11 passed
+    FAILED ::test_a_parity_independent_refusal_survives_a_scope_defect[_infeasible-ARM_INFEASIBLE]
+    FAILED ::...[_underbudgeted-OPPONENT_UNDERBUDGETED]
+    FAILED ::...[_our_search_space-BASELINE_TUNING_CONTRADICTS_ROLE]
+    FAILED ::...[_not_tuned-OPPONENT_NOT_TUNED]
+    E  AssertionError: ARM_INFEASIBLE is demonstrable from the record itself,
+       and an unrelated incomplete scope key hid it. got rc=2
+       {'code': 'SCOPE_SENTINEL', ...}
+
+The 11 that stay green include the PREMISE arm for each of the four (the same
+code fires on a clean record, so the test above is not asserting nothing) and
+the deliberate-exception test.
+
+A NOTE ON THE REGRESSION COUNT, because it moved from 4 to 5 and the fifth is
+not mine. `test_issue1241_vendored_attribution_wired.py::test_the_audit_
+returns_a_clean_verdict` fails with `subprocess.TimeoutExpired` after 30s.
+MEASURED directly on both trees: `checker_execution_wiring_audit.py` takes
+23.8s on this branch and 24.0s on pristine origin/main against a 30s budget --
+this branch is marginally FASTER. It tips over only when the host is loaded,
+reproduces identically on main, and is environmental rather than a regression.

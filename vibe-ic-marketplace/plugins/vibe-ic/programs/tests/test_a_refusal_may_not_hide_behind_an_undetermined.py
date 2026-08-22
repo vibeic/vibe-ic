@@ -220,6 +220,89 @@ def test_the_refusal_names_the_stage_and_the_basis_it_contradicts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# THE WIDER CLASS. The basis contradiction was one instance; a scope defect
+# could mask every rc-1 refusal whose evidence is INDEPENDENT of the
+# comparison, including three of the four rigged-benchmark refusals #1121
+# exists to enforce. Each of these was MEASURED at 1 alone and 2 the moment an
+# unrelated `rc_corner` sentinel was added.
+# ---------------------------------------------------------------------------
+
+def _infeasible(doc):
+    doc["arms"][1]["feasibility"]["checks"]["drc"] = {"violations": 3,
+                                                      "source": "<drc report>"}
+
+
+def _underbudgeted(doc):
+    doc["arms"][1]["tuning"]["budget"] = {"trials": 1, "cpu_hours": 0.1}
+
+
+def _our_search_space(doc):
+    doc["arms"][1]["tuning"]["search_space"]["authored_by_this_project"] = True
+
+
+def _not_tuned(doc):
+    doc["arms"][1]["tuning"]["performed"] = False
+
+
+@pytest.mark.parametrize("mutate,code", [
+    (_infeasible, "ARM_INFEASIBLE"),
+    (_underbudgeted, "OPPONENT_UNDERBUDGETED"),
+    (_our_search_space, "BASELINE_TUNING_CONTRADICTS_ROLE"),
+    (_not_tuned, "OPPONENT_NOT_TUNED"),
+])
+def test_a_parity_independent_refusal_survives_a_scope_defect(
+        tmp_path, mutate, code):
+    """An arm with DRC violations is infeasible whether or not two scopes line
+    up, and an opponent handed a smaller budget than ours is under-budgeted
+    whether or not two scopes line up. Both are read off ONE arm's own block.
+
+    THE PAIRED HALF IS THE NEXT TEST: this must not be achieved by making
+    parity stop refusing.
+    """
+    doc = _doc(baseline_ppa=_with_scope_defect(_ppa(1200.0, -0.30, 6.00)))
+    mutate(doc)
+    rc, rep = _run(tmp_path, doc)
+    assert rc == B.RC_REFUSED, (
+        f"{code} is demonstrable from the record itself, and an unrelated "
+        f"incomplete scope key hid it. got rc={rc} {rep.get('refusal')}")
+    assert rep["refusal"]["code"] == code, rep
+
+
+@pytest.mark.parametrize("mutate,code", [
+    (_infeasible, "ARM_INFEASIBLE"),
+    (_underbudgeted, "OPPONENT_UNDERBUDGETED"),
+    (_our_search_space, "BASELINE_TUNING_CONTRADICTS_ROLE"),
+    (_not_tuned, "OPPONENT_NOT_TUNED"),
+])
+def test_the_same_refusal_is_raised_with_no_scope_defect_present(
+        tmp_path, mutate, code):
+    """THE PREMISE for the test above. If these codes did not fire on a clean
+    record either, the test above would be asserting nothing about masking.
+    """
+    doc = _doc()
+    mutate(doc)
+    rc, rep = _run(tmp_path, doc)
+    assert rc == B.RC_REFUSED and rep["refusal"]["code"] == code, rep
+
+
+def test_a_verdict_refusal_DELIBERATELY_stays_below_parity(tmp_path):
+    """THE ONE THAT IS NOT MOVED, AND IT IS A DECISION RATHER THAN A LEFTOVER.
+
+    `derive_verdict` / `check_asserted_verdict` compare the NUMBERS. A verdict
+    refusal derived from two arms that were never shown comparable is not
+    independently demonstrable -- it is a conclusion drawn from a comparison
+    the checker just said it could not make. So when parity fails, the honest
+    answer is the rc 2, and this test exists so that "finish the job and move
+    the verdict check up too" is refused with a reason rather than done.
+    """
+    doc = _doc(baseline_ppa=_with_scope_defect(_ppa(1200.0, -0.30, 6.00)))
+    doc["verdict"] = {"pareto": "SUBJECT_DOMINATES"}
+    rc, rep = _run(tmp_path, doc)
+    assert rc == B.RC_UNDETERMINED, rep
+    assert rep["refusal"]["code"].startswith("SCOPE_"), rep
+
+
+# ---------------------------------------------------------------------------
 # The same rule, over the corpora the wired rows actually read.
 # ---------------------------------------------------------------------------
 
