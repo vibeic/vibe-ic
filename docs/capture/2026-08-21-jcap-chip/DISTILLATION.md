@@ -181,9 +181,16 @@ and discarded; nothing was pushed and no add/add conflict was hand-merged.
 
 **The eight add/add conflicts are gone.** After the ruling's renames — these four
 filenames to the gates, the other lane's to `<rule>_census.py` — the four gates
-and the four censuses coexist, and in the composed tree every one of the four
-disputed filenames carries the GATE (positional path CLI, not `--root`), with the
-census beside it. The gates still refuse correctly in composition:
+and the four censuses coexist.
+
+Which implementation survives at each of the four filenames was then checked by
+BLOB HASH rather than inferred from the CLI shape, because "it takes a positional
+path so it must be the gate" is a proxy and this is the one thing the ruling
+turns on:
+
+    composed blob == this lane's blob, for all four programs AND all four tests
+
+so the ruling is satisfied byte-for-byte, with the census beside each. The gates still refuse correctly in composition:
 `only_the_declaring_step_writes_its_output` rc=1, the other three rc=0.
 
 **Four conflicts remain and NONE may be hand-merged.** All four are generated
