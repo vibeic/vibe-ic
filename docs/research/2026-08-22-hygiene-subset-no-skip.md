@@ -2009,6 +2009,29 @@ again rather than quoted again — the additions:
     and named this branch's OWN seam guard among them. The list had been built
     from a selection file and never included tests run individually.
 
+**AN EIGHTEENTH claim, and the worst of the set: I asked a peer to publish it.**
+"The fixture was already six-eighths incomplete; the batch stepped in an open
+hole." False — three of my six were provided as STUBS and my census read only
+`shutil.copy`. I did not merely record it: I asked `jmeas3` to REPLACE its own
+(true) forward-looking argument with my (false) present-tense one, and to make
+mine the line for whoever picks the work up. It declined and checked. Every
+other claim in this register cost me a correction; this one would have cost
+somebody else's report its accuracy.
+
+**And a SEVENTEENTH instrument: a census with an UNSTATED PREDICATE.** It
+counted `shutil.copy` and reported "provided", which are not the same set —
+`write_text` stubs are provided too. Two censuses of one tree gave 6 and 3 and
+neither was checkable against the other, because the disagreement was not in the
+data but in what each was counting. `jmeas3`'s formulation, which is the keeper:
+**two counts of the same tree are not two measurements of the same thing until
+the predicate is stated.**
+
+*(And the compounding failure underneath both: §53 recorded "28 passed at
+`d5646372f^`" as one arm of my own revert. A six-eighths-incomplete fixture
+cannot be green. I had the refutation, in my own document, four subsections
+earlier, and never put the two side by side — which is the same
+"the-later-section-fixes-it" reading that made instrument 16 possible.)*
+
 **A SEVENTEENTH claim, contradicting a measurement I had already made.** §51
 said "All 17 are green on this branch". Sixteen are; the seventeenth
 (`test_liar_census`) is red here too — and §33 had MEASURED that eighteen
