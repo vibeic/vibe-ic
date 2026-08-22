@@ -1,5 +1,27 @@
 DEFAULT_ROTATION_RERUN: PASS pads=77 die=2.262 mm rc=0
 
+IF YOU READ ONE THING, READ ONE OF THESE. They are five questions a reader
+actually has, each answered in ONE place. All five sit in the middle of this
+file, behind 500 lines of section 4 -- grep the heading, not a line number.
+
+    what would it take to finish this?
+        WHAT STANDS BETWEEN THIS DESIGN AND A FINISHED PAD RING
+    who picks up what is left?
+        WHAT REMAINS, AND WHO OWNS EACH PIECE
+    where was this report wrong?
+        WHERE THIS REPORT WAS WRONG, INDEXED
+    how do I check it without trusting it?
+        HOW TO CHECK THIS REPORT WITHOUT TRUSTING IT
+    what does the branch actually change?
+        WHAT THIS BRANCH CHANGES, BY IDENTIFIER
+    and what the PASS at the top does not certify
+        SCOPE OF THE DEFAULT_ROTATION_RERUN PASS
+
+Each of those existed only as fragments until 2026-08-22 -- every fact was in
+the report and none of the five questions had an answer a reader could find.
+That is the defect this file kept producing, and it is worth knowing before
+reading the rest of it.
+
 THREE ORIENTATION DEFECTS FOUND 2026-08-22, AFTER THE FIX HAD LANDED, BY
 RE-RUNNING MY OWN PROBE. They are on main now. All three are one mistake:
 I COMPUTED ORIENTATIONS THAT THE TOOL PRODUCES.
