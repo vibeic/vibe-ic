@@ -23,7 +23,7 @@ branch's tree, 33 on main; the difference is the branch's own effect, Part 18):
 |--:|---|---|
 | 14 | corpus/record | **re-point the records** to a `repo`/`published` kind. Publishing does not help — `home` roots are excluded by design. A registry waiver is the third route and is **available but forbidden to me** (Part 8) |
 | 6 | landing-verdict | **2** need ONE LINE: `gatekeeper-verify-merge.sh` announcing `RUN_ID`. **4** are fully diagnosed: `validate` requires an `origin` its only caller's subject cannot have — both shipped in `7c376e348` (Part 12) |
-| 5 | vacuity | **the fix is already written twelve lines from the defect.** `#901` diagnosed this mis-fire in prose and fixed it for the structured channel; the uncounted legacy branch at `:10120` runs first (Part 15) |
+| 5 | vacuity | **the fix is already written 16 lines from the defect (`:10120` -> `:10136`).** `#901` diagnosed this mis-fire in prose and fixed it for the structured channel; the uncounted legacy branch at `:10120` runs first (Part 15) |
 | 3 | mutation ledger | red **BY DESIGN** — frozen `applies_to` demands a measurement that the d3 red currently blocks (Part 16) |
 | 1 | 63x8 anti-skip | a considered disagreement between two rules, both defensible (Part 13) |
 | 1 | `magic` | environment, not a defect |
@@ -845,7 +845,7 @@ on:**
 **So the remedy is not "should `:10057` decline the waiver branch" (Part 3), nor
 "revisit a June guard" (Part 14). It is: the legacy branch needs the same count
 the structured branch already has** — and the repository has both the diagnosis
-and the working implementation, twelve lines apart.
+and the working implementation, 16 lines apart (`:10120` -> `:10136`).
 
 **What I have NOT established:** whether the legacy branch was left uncounted
 deliberately. **#901 says the STEP-level half was deferred as an owner decision**
@@ -946,7 +946,7 @@ wrote the line.
 findings survive 244 commits, four of its five requests have been answered
 upstream, and the remaining 30 reduce to **four decisions and two environment
 facts** — of which one decision (the vacuity count) has its fix already written
-twelve lines from the defect.
+16 lines from the defect (`:10120` -> `:10136`).
 
 ---
 
