@@ -542,7 +542,22 @@ rc=1 and states:
     timing.drv.max_cap_violations     MEASURED  63    NOT_MEASURED   0
     timing.drv.max_fanout_violations  MEASURED  63    NOT_MEASURED   0
 
-in `drv_records.json` and `candidates.json`. The `drv` axis is an OR of ANDs —
+in `drv_records.json` and `candidates.json`. **Provenance checked before relying
+on it**, because a count that overrides another lane's blocking gate has to be
+better evidenced than the claim it overrides: the 63 MEASURED rows are spread
+across **21 distinct trial directories** under `ppa-crosslayer/records/trials/`
+(p04, w03, z14, u04, u01, …), and each is a canonical record citing its source
+artefact by path and hash —
+
+    {"schema": "vibeic.ppa.metric.v1",
+     "metric": "timing.drv.max_tran_violations", "status": "MEASURED",
+     "scope":  {"stage": "post_route", "tool": "opensta", "check": "drv"},
+     "source": {"path": ".../phase3/stage3/sta/sta_spef_multicorner.rpt",
+                "sha256": "sha256:7e4e6a1221e3a4c4…", "tool": "opensta"}}
+
+So these are real runs attributing the measurement to OpenSTA multicorner SPEF
+reports — 21 independent trials × 3 keys = 63 — not fixtures written to satisfy a
+test. The `drv` axis is an OR of ANDs —
 group 1 is `[violations]`, group 2 is `[max_tran AND max_cap AND max_fanout]` —
 and **group 2 is fully measured, 63 times**. Real runs prove this axis.
 
