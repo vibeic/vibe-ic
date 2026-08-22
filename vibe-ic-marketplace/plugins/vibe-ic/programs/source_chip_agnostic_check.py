@@ -165,8 +165,32 @@ _NDA_TOKENS: Tuple[str, ...] = tuple(_cpdk.nda_tokens())
 # The ONE file allowed to carry the (encoded) NDA tokens — its literals are
 # base64, so it never actually matches, but we exempt it explicitly for clarity.
 _NDA_ENCODED_HOME = "programs/_commercial_pdk.py"
-# Text file extensions scanned for the strict NDA panel across the WHOLE tree.
-_NDA_SCAN_EXTS = (
+# THE NDA PANEL HAD A FILE-LEVEL ALLOWLIST AND ITS OWN CONTRACT SAYS IT HAS
+# NONE. Fourteen lines above: "the NDA panel has NO allowlist of any kind (no
+# file-level, no line-level): a literal NDA token ANYWHERE under the plugin tree
+# ... FAILS ... This is the strengthened contract that guarantees
+# `git grep <SKU>` stays 0 forever."
+#
+# `_NDA_SCAN_EXTS` was a file-level allowlist. MEASURED 2026-08-22: 51 files
+# under the plugin tree were never opened by this panel, among them the EDA
+# formats most able to carry a foundry name — 7 `.rpt`, 7 `.spef`, 4 `.log`,
+# 3 `.drc`, 1 `.ys`. `git grep` does not filter by extension, so a token in any
+# of them would have been grep-visible while the gate promising otherwise never
+# read the file. The guarantee was stated more strongly than it was delivered.
+#
+# NONE OF THE 51 MATCHED, checked with this panel's own regex before the change,
+# so this closes a LATENT hole and reports no live leak — which is the cheapest
+# moment to close it and the only one where the closing is not also an argument
+# about a finding.
+#
+# The panel now reads EVERY file under the tree. Cost measured: 4711 -> 4762
+# files, 73.7 MiB total, exactly two files over 2 MiB and both were already
+# scanned. Binary content decodes lossily to noise and the tokens are
+# distinctive ASCII, so a match inside one is a thing to investigate rather than
+# a false alarm to design around. The extension tuple is kept ONLY as the
+# census's "text-shaped" tally, so the disclosure can still say how much of what
+# it read was source.
+_NDA_TEXT_EXTS = (
     ".py", ".md", ".json", ".yaml", ".yml", ".tcl", ".txt",
     ".cfg", ".ini", ".sh", ".v", ".sv", ".rule", ".rules", ".lib",
 )
@@ -394,13 +418,14 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
     read = 0
     # Asked ONCE per scan and DISCLOSED: a denominator computed with git
     # consulted and one computed without it are different measurements.
+    text_shaped = 0
     _ignored = _git_ignored_prefixes(plugin_root)
     ignored_prefixes = _ignored if _ignored is not None else set()
     SCAN_CENSUS["nda_ignore_source"] = (
         "git" if _ignored is not None else "names-only (git could not be asked)")
     SCAN_CENSUS["nda_ignored_prefixes"] = len(ignored_prefixes)
     for f in plugin_root.rglob("*"):
-        if not f.is_file() or f.suffix.lower() not in _NDA_SCAN_EXTS:
+        if not f.is_file():
             continue
         parts = f.parts
         # Runtime caches are not source and are deliberately absent from a
@@ -418,6 +443,8 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
         if rel_str.replace("\\", "/") == _NDA_ENCODED_HOME:
             continue
         found += 1
+        if f.suffix.lower() in _NDA_TEXT_EXTS:
+            text_shaped += 1
         # vibe-ic#1476 — THE instance. `except (OSError, UnicodeDecodeError):
         # continue` dropped the entire file from the strictest gate in this
         # repo, silently. Measured on this tree: a file carrying an NDA SKU
@@ -445,6 +472,7 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
     # files and a panel that walked the whole tree both returned `[]`, and
     # `audit` turned both into the same PASS line.
     SCAN_CENSUS["nda_files_found"] = found
+    SCAN_CENSUS["nda_text_shaped"] = text_shaped
     SCAN_CENSUS["nda_files_read"] = read
     SCAN_CENSUS["nda_files_unreadable"] = found - read
     return out
