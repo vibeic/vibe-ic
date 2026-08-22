@@ -1353,3 +1353,55 @@ can-it-fail proof beside it, because a completeness check that cannot fail is th
 same defect a third level up.
 
 255 tests across the thirteen files.
+
+## DECISION FOR THE ADJUDICATOR — where the three live findings get their deadline
+
+**The ruling that prompts this:** "A gate going NOT CHECKED -> FAIL because it can
+finally SEE a real corpus is PROGRESS. It lands, with a ledger row for the defect
+it found." I tried to comply and the ledger refuses the row. Stating it rather
+than quietly skipping it.
+
+**The two sides.**
+
+*The ruling* wants every live red to carry a DEADLINE, so a red that everyone has
+stopped reading cannot sit forever. `tools/ci/gate_red_since.json` is the machinery
+for that, and its own doc is explicit that a row grants no leniency — it only
+starts a clock.
+
+*The ledger* is keyed on gates the hygiene dispatcher actually runs: the `gate`
+field must be "the gate's label EXACTLY as tools/ci/_gate_dispatch.sh records it",
+and "a label that matches nothing in the record is failed as `stale`". My three
+gates are UNWIRED, so they appear in no dispatch record.
+
+**Measured, just now, on `0a945b9d4`:**
+
+    ledger as it stands, synthetic 2-gate record   -> rc=0  [PASS]
+    same record + a row for signoff_report_...     -> rc=1  [FAIL]
+      [stale] signoff_report_states_its_stage: acknowledged, but no gate by this
+              name ran in this record.
+
+So writing the rows the ruling asks for turns a currently-green gate RED, for a
+bookkeeping entry, and the row says nothing true — the gate did not run.
+
+**The options, with costs.**
+
+* **(A) Write the three rows now.** Cost: MEASURED rc=1 on `gate_red_since_check`,
+  a green gate turned red, and three rows that assert a gate ran when it did not.
+  Buys: nothing until the gates are wired.
+* **(B) Wire the three gates into `_gate_dispatch.sh`, then write the rows.** Cost:
+  makes the hygiene tier red for three defects, two of which this lane cannot fix
+  (the unowned dual-writer paths and the metric producers belong to other owners);
+  and wiring is itself one of the open decisions. Buys: real deadlines, at the
+  price of a red tier someone else must clear.
+* **(C) Leave the findings recorded here and in the report, and let whoever wires
+  the gates add the rows in the same commit.** Cost: no deadline; the findings
+  rely on being read. Buys: no false row, no green turned red.
+
+**My recommendation: (C), and it is what the tree currently does.** The ledger's
+own doctrine is that a row is a deadline taken on for a red that IS being skipped
+by a dispatcher. An unwired gate is not being skipped; it is not yet running. The
+row becomes true and useful in the same commit that wires the gate, which is
+exactly the commit that knows the deadline it wants.
+
+I have NOT written the rows. If you rule (A) or (B) I will do it immediately;
+(B) additionally needs a ruling on wiring, which is already on the list.
