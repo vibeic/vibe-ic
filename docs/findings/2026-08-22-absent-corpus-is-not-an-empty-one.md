@@ -499,3 +499,86 @@ just the shipped program:
 Different rc, different sentence, and each names the thing the other cannot: A
 names what it looked for, B names the index it read. `test_routed_def_corpus_
 dispatch.py` on this branch: **22 passed**.
+
+### 4. Re-checked a second time, 2026-08-22, by the simplest construction available
+
+Everything in section 3 was re-derived rather than re-read.  This section does
+the same to section 3, and it deliberately uses a *different, simpler* fixture,
+because a record confirmed only by the construction that produced it has been
+confirmed by nothing.
+
+**The red, with no revert at all.**  Section 3 showed it on a worktree of this
+branch with three production files hand-reverted.  A hand-revert is a
+construction, and a construction can be wrong.  So instead: check out
+`81cd5321b` — the pristine parent of the fix commit `ef0399606`, nothing edited
+— copy in **only** this branch's test file, and run it whole.
+
+`81cd5321b` carries neither name (`grep -c 'NO_CORPUS_RC\|GATE_DISPATCH_ABSENT_RC'`
+is `0` in both `routed_def_corpus.py` and `_gate_dispatch.sh`):
+
+    7 failed, 15 passed in 6.27s
+
+    FAILED test_an_unconfigured_moved_corpus_is_explicit_no_corpus
+    FAILED test_the_absent_exit_code_is_one_number_in_two_languages
+    FAILED test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict
+    FAILED test_the_dispatcher_gives_absent_and_empty_different_rows
+    FAILED test_a_corpus_that_was_read_and_holds_none_says_so
+    FAILED test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND
+    FAILED test_an_absent_corpus_does_not_close_the_hygiene_dag_green
+
+**The same seven IDs as section 3, in the same order, from an unrelated
+fixture** — and the sharpest one prints the same log, ending `assert 0 == 2`
+under *"the parallel hygiene DAG closed GREEN (rc 0) over a corpus that was
+NEVER OPENED"*.  The same file on this branch: **22 passed**.  Section 3's
+count of *"6 failed"* is over the nine tests the change ADDS; the seventh is
+`test_an_unconfigured_moved_corpus_is_explicit_no_corpus`, which pre-existed and
+was re-pinned.  The two framings agree; this one states the denominator it used.
+
+**No test was deleted and no assertion relaxed — mechanically, not asserted.**
+Diff the test file `81cd5321b..HEAD` and keep only removed lines matching
+`def test` or `assert`:
+
+    -    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+That is the whole removal.  **Zero `def test` lines were removed**, and the one
+removed assertion was replaced by a strictly stronger pair on the same object —
+`== _no_corpus_rc()` *and* `!= 0`, plus three new assertions requiring the
+sentence to name `benchmark-data`, name the environment variable, and *not* say
+`MEASURED EMPTY`.  Re-pinning a test whose subject deliberately changed is the
+opposite of relaxing it: the old line asserted the collapsed behaviour.
+
+**The executable delta to `origin/main` is empty — both files, not one.**
+Section 3 checked `repo_hygiene_parallel.py`.  Parse *both* changed Python files
+at `origin/main` and at this tip, normalise every docstring to one placeholder,
+compare the ASTs:
+
+    repo_hygiene_parallel.py                AST-identical: True   raw-identical: False
+    tests/test_routed_def_corpus_dispatch.py  AST-identical: True   raw-identical: False
+
+So this branch changes no executable line against `a4caccefe`.  Any sweep on it
+is the same measurement as a sweep on `main`, by construction rather than by
+coincidence — which is the strongest available form of the brief's *"whatever
+you change must run clean on the current repo"*.
+
+**The `tools/` suite whole, at this tip.**  `tools/` sits outside every selector
+this repository ships (batch 68 shipped 16 reds through that gap), and the
+producer this record is about lives there, so it is run whole and not grepped:
+
+    tools/   863 passed, 6 skipped, 21 failed   (121.66s)   at `faaf10d6b`
+
+Identical to the pair section 2b measured at `c6ec85abb` and at pristine
+`a4caccefe`, and identical by construction given the empty AST delta above.  All
+21 are the two pre-existing clusters section 2b named — 16 in
+`test_gatekeeper_land_differential.py` (a fixture whose candidate is
+byte-identical to its base), 4 in `tools/ci` and 1 stale literal in
+`test_liar_census.py`.  None was touched: bumping someone else's stale count to
+clear a red is the one thing this branch may not do.
+
+**What the #1763 row still says.**  Unchanged, and checked at the source rather
+than inferred.  In `_gate_dispatch.sh` the rc-0 arm still emits the literal
+`corpus "$corpus" is EMPTY — nothing was checked over it` and still dispatches
+`_dispatch 2 0`, so the empty-but-read corpus keeps its exact label, its rc 2,
+its NOT CHECKED and its BLOCKING.  The absent corpus does not borrow that row:
+it gets `corpus "$corpus" was NOT FOUND — nothing was opened to check`, its own
+`GATE_CORPUS_STATE` of `NO_CORPUS` rather than `EXPANDED`, and it is equally
+blocking.  Neither state is a pass, which was never negotiable.
