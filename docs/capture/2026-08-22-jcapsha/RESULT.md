@@ -317,6 +317,25 @@ Twenty-six seconds. Nothing on the editing side: no message, no prompt, no
 record. It was not recoverable, because being uncommitted is precisely the
 condition the rule selects for.
 
+**And the destroyed edit is the smaller half.** The run's own report, after it
+finished, names the file:
+
+    [GATE_CORRUPTED_CHECKOUT] no retired pytest plugin request
+        this gate left the WORKING CHECKOUT modified while being driven ...
+        Restored: docs/capture/.../rotation_axis/hv.tcl
+
+The misattribution MANUFACTURED A FINDING AGAINST AN INNOCENT GATE. The gate
+named there wrote nothing; this lane's editor did, in the window while that
+gate happened to be running. A maintainer reading that report would go hunting
+for a write that does not exist. Lost work is at least visible to whoever lost
+it — a false accusation is delivered to somebody with no way to tell it from
+the real ones beside it in the same list.
+
+That also bounds what this run's verdict is worth: it reported `[FAIL] 17 of 81
+... 6 GATE_CORRUPTED_CHECKOUT, 11 HOST_DEPENDENT_VERDICT`, and exactly one of
+those six is this editor. The other sixteen are not judged here and nothing
+above claims anything about them.
+
 **It is the same shape as F1**, which is why it belongs in this bundle rather
 than in a note. A sentence somebody wrote down stood in for a measurement; it
 was careful, well-reasoned prose, and the care is what kept it unexamined. F1's
@@ -351,11 +370,14 @@ about something else. `evidence/concurrent_repair/`.
    constraint. `test_upstream_contract_parity.py` was run, with its own
    `--basetemp`, and the suite's write guard reports the session wrote nothing
    `git status` would show.
-6. **The whole-repo host-independence gate** builds fresh worktrees per gate
-   and a peer lane was already running one on this host. The property it would
-   establish for THIS guard is measured directly instead, in the cwd sweep
-   above: four unrelated directories, identical verdict, identical text. That
-   is narrower than the gate and it is the part that concerns this change.
+6. **The whole-repo host-independence gate RAN, and its verdict is not clean
+   data.** It reported `[FAIL] 17 of 81`, and one of those 17 is this lane's
+   own editor rather than a gate — see the fourth finding. It named no
+   host-dependence in the guard this bundle ships. The property that concerns
+   this change is measured directly and independently in the cwd sweep above:
+   four unrelated directories, identical verdict, identical text.
+   The remaining 16 findings are pre-existing to this branch and are not
+   adjudicated here.
 
 ## Evidence
 
