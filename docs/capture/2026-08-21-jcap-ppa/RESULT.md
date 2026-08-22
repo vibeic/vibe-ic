@@ -2817,14 +2817,14 @@ rather than in a command line that would fail for whoever tried it.
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
-re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (48 fast + 4 authoritative). No gate
+re-measurable by `python3 docs/capture/2026-08-21-jcap-ppa/verify.py` (49 fast + 4 authoritative). No gate
 implemented, no version bumped, no baseline written, nothing pushed to main.
 
 *This block read "15 records — 13 Bucket A" until the batch had nearly doubled
 past it. It is the section a reader reads first and the last one to be checked,
 because none of the twenty-one checks covered it. Check 22 does now.*
 
-*And the sixteen ALREADY-PROGRAM claims — the part of this report that argues
+*And the eighteen ALREADY-PROGRAM claims — the part of this report that argues
 something needs no work — each name the program that covers the class. Nothing
 checked those programs still exist. Rename one and the sentence still reads
 correctly while the class quietly stops being covered, which is **A-7**'s shape
@@ -2835,7 +2835,7 @@ artefacts; all 17 are present.*
 
 The skill splits Bucket A into ALREADY-PROGRAM / EXTRACT-NEW / AUGMENT-EXISTING /
 KEEP-JUDGMENT, and the implementing lane needs the split more than it needs the
-bucket. My 27 resolve as:
+bucket. My 35 resolve as:
 
 | resolution | n | records |
 |---|---:|---|
@@ -2851,7 +2851,7 @@ rules against one file and was already out of date by five:
 
     6 rules -> plugin_change_pytest_gate     A-3, A-4, A-13, A-22, A-26, A-30
     5 rules -> enhancement_emit              A-9, A-23, A-27, A-29, A-31
-    3 rules -> ppa_head_to_head_check        A-2, A-5, A-11
+    4 rules -> ppa_head_to_head_check        A-2, A-5, A-11, A-35
     3 rules -> ppa_search_run                A-7, A-8, A-19
 
 * **The six test-population rules are one piece of work, not six.** A-3 and
@@ -2865,7 +2865,10 @@ rules against one file and was already out of date by five:
   constrain one program, and three of them constrain what it WRITES — the field
   shapes, the output location and the skeleton's signature. One pass over the
   emit path, not five.
-* **The three-rule files each want one pass, not three.** Apply them together or
+* **A-35 joins the comparison gate's three**, making four: it adds a scope key
+  the same gate must then compare on, so it is one edit with the others rather
+  than a fifth pass over the same file.
+* **The multi-rule files each want one pass, not several.** Apply them together or
   serialise them; three agents editing one file in parallel is the contention
   the skill's reporting rule exists to prevent.
 
@@ -3080,7 +3083,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            48 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            49 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -3100,7 +3103,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     48 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     49 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other

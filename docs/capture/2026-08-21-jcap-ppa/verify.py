@@ -797,6 +797,25 @@ check("the brief's four constraints hold, measured against the base",
       f"plugin files touched: {len(_plugdiff)}" + ("; " + "; ".join(_viol) if _viol else
       "; no version bump, no baseline, no program added, HEAD not on main"))
 
+# 48. the contention table in the summary is DERIVED from the routing, so derive
+# it. It went stale three times -- once by five rules, once when a record was
+# added at a shared target, once when a whole second cluster formed and the list
+# did not mention it. Every one of those was a figure a reader acts on: it tells
+# an implementing lane which rules must be applied in one pass over one file.
+import collections as _co
+_prog_of = {}
+for _r in RECS:
+    if _r["bucket"] != "A" or _r["step"] not in ROUTING["steps"]: continue
+    _prog_of.setdefault(pathlib.Path(
+        ROUTING["steps"][_r["step"]]["bucket_A_program"]).stem, []).append(_r)
+_live_rows = {k: len(v) for k, v in _prog_of.items() if len(v) >= 3}
+_stated = {m.group(2): int(m.group(1))
+           for m in re.finditer(r"^ {4,}(\d+) rules -> (\w+)", MD, re.M)}
+control("contention", bool(_live_rows) and "no_such_program" not in _stated)
+check("the contention table matches the routing it is derived from",
+      _stated == _live_rows,
+      f"stated {dict(sorted(_stated.items()))} vs routed {dict(sorted(_live_rows.items()))}")
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} claim(s) no longer hold:")
