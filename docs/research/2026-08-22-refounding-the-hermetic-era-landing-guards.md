@@ -7,9 +7,21 @@ doctrinal reason stated with it.**
 
 **Effect, measured in both lanes** (authority: **M65** in the findings document —
 this is a reference, re-derive there): host `9 failed -> 6 failed` (134 collected,
-nothing newly red); pinned image `22 failed -> 22 failed`, unchanged. **The
-repair is invisible to CI**, because all 22 die on the absent Docker CLI before
-reaching any re-founded assertion (M27). It exists so the policy call in
+nothing newly red).
+
+> **RETRACTED — this block used to continue:** *"pinned image `22 failed -> 22
+> failed`, unchanged. **The repair is invisible to CI**, because all 22 die on
+> the absent Docker CLI before reaching any re-founded assertion (M27)."*
+> **The first half is false.** M90 measured the image lane with four invocation
+> flags (docker CLI + socket + `--group-add` + **`-v /tmp:/tmp`**): **22 failed
+> -> 6 failed, 128 passed**, failing set **byte-identical to the host's**, and
+> **both re-founded A and C tests PASS there**. The `22 failed` figure describes
+> an UNCONFIGURED lane. The repair was never invisible — the lane was
+> misconfigured, and I wrote that misconfiguration up as a property of the
+> repair. M27's mechanism itself stands: 18 `cannot execute Docker CLI` messages
+> are real, and supplying the CLI alone does not fix them (M89).
+
+It exists so the policy call in
 `2026-08-21-main-red-triage-v1_11_66-findings.md` (escalation 3) can be decided
 against a concrete alternative instead of in the abstract.
 

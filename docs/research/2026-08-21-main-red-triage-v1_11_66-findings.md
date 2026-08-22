@@ -5065,12 +5065,23 @@ manifest itself did not.
 | lane | pristine | this branch |
 |---|---|---|
 | host 8hd-3 | 9 failed, 125 passed | **6 failed, 128 passed** |
-| pinned image | 22 failed, 112 passed | **22 failed, 112 passed** |
+| pinned image, AS CI RUNS IT | 22 failed, 112 passed | **22 failed, 112 passed** |
+| pinned image, **CONFIGURED** (M90) | — | **6 failed, 128 passed** |
 
-134 collected throughout; nothing newly red in either lane. **Read M27 before
-quoting the host number:** the repair is invisible to CI, because all 22 image
-failures die on the absent Docker CLI with `rc 2 = RC_CANNOT_MEASURE` before
-reaching any assertion this branch changed.
+134 collected throughout; nothing newly red in any lane.
+
+> **CORRECTED — this paragraph used to read:** *"Read M27 before quoting the host
+> number: the repair is invisible to CI, because all 22 image failures die on the
+> absent Docker CLI [...] before reaching any assertion this branch changed."*
+> **The conclusion is false and M90 measured it.** Give the image lane four
+> invocation flags (docker CLI + socket + `--group-add` + **`-v /tmp:/tmp`**) and
+> it returns **6 failed, 128 passed**, with a failing set **byte-identical to the
+> host's** — **both re-founded tests among the passes.** The repair reaches CI
+> fine; the lane was never configured to run it. **M27's mechanism stands** (18
+> real `cannot execute Docker CLI` messages), and M89 shows supplying the CLI
+> alone is not enough — the bind-mount namespace is the second layer. What was
+> wrong was the leap from "the arms cannot run here" to "the repair does not
+> reach".
 
 ## A. Take freely — strict improvements, no decision needed
 
