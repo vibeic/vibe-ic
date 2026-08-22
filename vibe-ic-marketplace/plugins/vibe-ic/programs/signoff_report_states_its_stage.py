@@ -191,6 +191,7 @@ def scan(root: Path) -> Tuple[List[Emitter], List[Emitter], int, int]:
     unstamped: List[Emitter] = []
     undeclared: List[Emitter] = []
     inexpressible: List[Emitter] = []
+    unparsed = [0]
     seen: Set[Tuple[str, str, str]] = set()
     found = 0
     for dirpath, dirnames, filenames in os.walk(root / PROGRAMS_REL,
@@ -205,6 +206,14 @@ def scan(root: Path) -> Tuple[List[Emitter], List[Emitter], int, int]:
                 text = fp.read_text(encoding="utf-8", errors="replace")
                 tree = ast.parse(text)
             except (OSError, SyntaxError, ValueError):
+        # A file this scan cannot parse is COUNTED, not dropped in
+        # silence. Measured today: 0 such files in this population — so
+        # the exposure is latent, not live. But a gate that skips input
+        # without saying how much has an undisclosed boundary, and this
+        # lane's whole finding is that the undisclosed boundary is the
+        # one that bites. The count goes on the DENOMINATOR line, never
+        # the verdict line.
+                unparsed[0] += 1
                 continue
             lines = text.splitlines()
             for scope in ast.walk(tree):
@@ -247,7 +256,7 @@ def scan(root: Path) -> Tuple[List[Emitter], List[Emitter], int, int]:
                                 unstamped.append(e)
     # Emitted-but-undeclared timing/power reports, disclosed.
     undeclared = _undeclared_timing_reports(root, set(declared))
-    return unstamped, undeclared, inexpressible, len(wanted), found
+    return unstamped, undeclared, inexpressible, len(wanted), found, unparsed[0]
 
 
 def _undeclared_timing_reports(root: Path, declared: Set[str]) -> List[Emitter]:
@@ -289,7 +298,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return 3
     try:
-        unstamped, undeclared, inexpressible, population, found = scan(root)
+        unstamped, undeclared, inexpressible, population, found, unparsed = scan(root)
     except Exception as exc:                        # noqa: BLE001
         print(f"[{NAME}] NOT CHECKED — the flow's declarations could not be "
               f"read: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -309,7 +318,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"a stamp chosen at random.", file=sys.stderr)
     print(f"examined {found} emitter(s) of {population} flow-declared "
           f"timing/power report(s); {len(inexpressible)} inexpressible and "
-          f"{len(undeclared)} emitted-but-undeclared report(s) disclosed")
+          f"{len(undeclared)} emitted-but-undeclared report(s) disclosed; "
+          f"{unparsed} source file(s) skipped as unparseable")
     if population == 0:
         print(f"[{NAME}] NOT CHECKED — the flow declares no timing or power "
               f"report, so this gate walked an empty set. Not a pass.",

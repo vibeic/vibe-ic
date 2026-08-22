@@ -929,3 +929,74 @@ The transferable part is not the fix. It is that the gap was found by **reading
 another lane's commit title and asking whether it applied here** — no verification
 pass over this branch would have surfaced it, because the gate was green and its
 tests passed. Cross-lane commit logs are an instrument.
+
+### A second gap from the same commit log — and it pointed the other way
+
+Their other title was `fix(two_input_selectors): stop being a declaration-shaped
+regex`. `declared_basis_matches_the_session_inputs` decides a structural question
+— did this session load parasitics? — with a regex over Tcl, so I put it through
+nine realistic deck shapes. Two failed:
+
+    catch {read_spef design.spef} err      -> reported PRE_LAYOUT
+    [read_spef design.spef]                -> reported PRE_LAYOUT
+
+Both DO load parasitics. The old pattern was `^\s*read_spef\b`, which sees a
+command only at a line start; in Tcl a command may also begin after `{`, `[` or
+`;`, and wrapping a possibly-failing read in `catch` is idiomatic.
+
+**The error direction is the opposite of the last one and worse.** The write-scan
+gap made the gate blind — it stayed silent. This one makes the gate SPEAK: a
+session that really read SPEF is called PRE_LAYOUT, so a report correctly claiming
+POST_ROUTE is accused of claiming a stage it did not measure. A false accusation,
+from a rule whose entire subject is artefacts that claim more than they measured.
+
+Fixed to match a command position, with the quoted-string case pinned so the
+widening does not swallow prose: `puts "would read_spef here"` is still not a
+read. Nine variations, nine correct, and the repository sweep is unchanged at 22
+pairs, all declaring, rc=0.
+
+Two gaps, from two commit titles, in one afternoon — one fail-open, one
+fail-closed. **Reading a rival implementation's fixes is a cheaper way to find
+your own bugs than testing your own code**, because their fixes are a list of
+mistakes someone already made in the same problem, and you are looking for
+mistakes rather than confirmation.
+
+### Silent skips: measured first, then fixed where it counts
+
+Third question from the same commit log — theirs was *"the unparseable half is
+clean, and my predicate was not"*. Mine: what do these gates do with input they
+cannot parse? Five of twelve had a bare `except (...): continue` and recorded
+nothing:
+
+    signoff_report_states_its_stage
+    every_required_metric_key_has_a_producer
+    measurement_only_artefact_is_not_a_verdict_source
+    only_the_declaring_step_writes_its_output
+    generated_values_state_whether_they_were_read_or_defaulted
+
+**Measured before fixing, and the measurement matters:**
+
+    .py under programs/          4055 total, 0 unparseable
+    .json under the ppa corpora  1105 total, 0 unparseable
+
+So the exposure is **latent, not live** — nothing is being dropped today, and any
+claim that these gates were silently skipping real files would have been false.
+
+Fixed in the two with the largest populations — `only_the_declaring_step`
+(195 declared outputs) and `signoff_report` (8 declared reports) — which now
+count and disclose:
+
+    examined 195 flow-declared output(s), 57 with an identified writer,
+    1 exempt, 0 source file(s) skipped as unparseable
+
+The count goes on the DENOMINATOR line, never the verdict line. Finding sets are
+byte-identical (`200f1f446857`, still 6). 228 tests pass.
+
+**The other three are left as they are, deliberately**, and that is a judgement
+rather than an oversight: they carry the same latent property with the same zero
+exposure, and rewiring a working gate's return signature has a real cost —
+I broke `only_the_declaring_step` doing exactly that in this change (a
+`return dict(found)` my edit did not match, so the caller unpacked a dict and the
+gate answered rc=2 NOT CHECKED until I noticed). Churn in a green gate for an
+empty population is not obviously worth it; the property is recorded here so the
+next person decides with the number in front of them.

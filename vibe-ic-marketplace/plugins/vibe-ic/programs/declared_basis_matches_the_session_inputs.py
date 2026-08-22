@@ -56,7 +56,24 @@ import _sta_basis                                          # noqa: E402
 NAME = "declared_basis_matches_the_session_inputs"
 SKIP_DIRS = {".git", "docs/capture", "node_modules", "__pycache__"}
 
-_READ_SPEF = re.compile(r"^\s*read_spef\b", re.M)
+#: `read_spef` AT A COMMAND POSITION, not merely at the start of a line.
+#:
+#: MEASURED: the previous form was `^\s*read_spef\b` and reported PRE_LAYOUT for
+#:
+#:     catch {read_spef design.spef} err        <- idiomatic, wraps a failing read
+#:     [read_spef design.spef]                  <- command substitution
+#:
+#: Both DO load parasitics. Saying PRE_LAYOUT of a session that read SPEF makes
+#: this gate emit a FALSE FINDING against any report correctly claiming
+#: POST_ROUTE — a false accusation, which is the worst direction for a rule whose
+#: whole subject is artefacts that claim more than they measured.
+#:
+#: In Tcl a command may begin at the start of a line or after `{`, `[` or `;`.
+#: A word inside a quoted string is preceded by none of those, so
+#: `puts "would read_spef here"` is still not a read — asserted in the tests.
+#: Found by taking the census lane's "stop being a declaration-shaped regex"
+#: and asking it of this scan.
+_READ_SPEF = re.compile(r"(?:^|[;{\[])\s*read_spef\b", re.M)
 _REPORTS = re.compile(r"^\s*report_(power|checks|timing)\b", re.M)
 _POST_NAME = re.compile(r"post_?route|post_?layout|postpnr|post_?pnr", re.I)
 _PRE_NAME = re.compile(r"pre_?layout|pre_?pnr|prelayout", re.I)
