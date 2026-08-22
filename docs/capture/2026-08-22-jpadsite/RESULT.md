@@ -247,8 +247,8 @@ number must not be quoted without it.)
 
 STATUS OF THE PAIRING: sha256 x gf180mcuD IS A RECORDED NON-CELL.
 AND `sha256 x sky130A` IS A CELL — row 6 of the same document's CELLS table,
-`L19 pdk_target: sky130; L1 "SKY130 主目標"`. That completes a picture the
-report had only half of: the pairing this brief measured is a recorded
+`L19 pdk_target: sky130; L1 "SKY130 主目標"` (= "SKY130 primary target").
+That completes a picture the report had only half of: the pairing this brief measured is a recorded
 non-cell, and the pairing that IS a cell is the very tree whose pre-check and
 pad ring were finally run on 2026-08-22 (`_bm_sha256_sky130A_121`: 15 DEFs,
 zero GDS, NOT_DETERMINED, pad ring SKIP, site fix resolving
@@ -825,6 +825,7 @@ on this host, in the same run directory I took the port count from:
 
     input/docs/L3_external_interface.md  "Physical Pad Placement"
     input/docs/L9_constraints_floorplan.md  9.2.1 "Pad 配置(對齊 L3)"
+                                            (= "Pad placement (aligned to L3)")
 
         North  address[7:0] + write_data[31:0]   40
         South  read_data[31:0] + error           33
@@ -832,7 +833,9 @@ on this host, in the same run directory I took the port count from:
         West   cs, we                             2   = 77
 
 Only ORDERING WITHIN A SIDE is left to the tool ("Pad ordering 同一邊內由 Plugin
-自選;只要符合邏輯區隔即可"). The GROUPING is declared, twice.
+自選;只要符合邏輯區隔即可" = "pad ordering within one side is the
+Plugin's own choice, so long as it respects the logical grouping"). The
+GROUPING is declared, twice.
 
 I read `phase2/stage2/synth/netlist.v` for the 77 and never opened `input/docs/`
 two directories over. The port COUNT was measured; the SIDE SPLIT was asserted
@@ -964,7 +967,8 @@ verified on four PDK trees.
 
 **AND THE DESIGN DOES NOT TARGET gf180mcuD AT ALL.** Raised by the publishing
 agent, verified here: gf180 appears ZERO times across ALL 28 L-DOCUMENT FILES, spanning L1-L27 (L8 appears twice, as _RTL_CONSTANTS and _TIMING_WAVEFORM) -- counted 2026-08-22 on the real tree, file by file. An earlier draft said "the nine L-documents", a denominator I never measured; the zero was right and understated, since 0 of 28 is stronger evidence than 0 of 9. L1
-declares "目標 PDK | SKY130 主目標" and `sky130_fd_sc_hd`; L9 sets the clock
+declares "目標 PDK | SKY130 主目標" (= "Target PDK | SKY130 primary target")
+and `sky130_fd_sc_hd`; L9 sets the clock
 period against that library. Every per-side figure in this report is therefore a
 statement about a PDK this design never names.
 
@@ -2061,6 +2065,60 @@ assumed:
 
 If opening it was wrong, closing it costs one command and nothing is lost.
 
+## The brief's two artefact constraints, graded on what I actually pushed
+
+Both were stated in the brief and neither had been measured on the artefact that
+carries them, as against on the plugin source. The bundle branch is the exposed
+one: it is not checked out anywhere, so no CI gate and no pre-commit hook has
+ever read it.
+
+**No commercial foundry name, process node, SKU or chip codename.** PASS,
+measured by running the repo's OWN scanner over the pushed bundle rather than
+over the working tree. `source_chip_agnostic_check._scan_nda` — 8 tokens, 15
+file extensions — returned `[]` across all 77 eligible files of the 82 on
+`jpadsite/capture-bundle`. The working-tree run that reported "4667 file(s)
+tree-wide" did NOT cover them: `git ls-files docs/capture` is 0 on the working
+branch and 82 on the bundle branch, so the two runs read disjoint sets and only
+the second one is evidence about what shipped. `sky130`, `gf180mcuD` and
+`ihp-sg13g2` are OPEN PDKs, named by the brief as permitted.
+
+The first attempt at that run passed the wrong plugin root and the gate answered
+`NOTHING_SCANNED: ... A clean result over an empty scan is not a clean result`.
+That is `gate_zero_denominator_refuses_check` (#564) firing on me, and it is the
+reason the number above is worth anything.
+
+**English only in repo artefacts.** This one has a real tension with quotation
+integrity, and the resolution is visible rather than silent. Six lines of this
+report quote the design's own L-documents, which are not in English. Translating
+inside the quotation marks would satisfy the constraint by falsifying evidence —
+the whole point of those six quotes is what the source literally says, and two of
+them are load-bearing (they are how this report establishes that the pad GROUPING
+was declared by the design and only the ORDERING WITHIN A SIDE was left to the
+tool). So the quotation stays byte-exact and an English rendering sits beside it.
+A reader who reads no CJK can now read every claim; a reader who does can still
+check the quote against the source.
+
+Verified additions-only: 12 CJK runs before the edit, the same 12 in the same
+sequence after, +253 bytes. `evidence/english_only_check.py` grades it — rc 0
+with every run quoted and rendered, rc 1 with a rendering removed (fires on
+exactly the stripped site), rc 2 for unreadable, empty, and — deliberately — for
+a file with NO CJK at all, since an empty scan is NOT OBSERVED rather than PASS.
+
+I am NOT claiming the constraint is met in its strictest reading. Strictly, an
+English-only artefact contains no CJK, and this one contains twelve runs of it.
+I decided that falsifying six quotations to reach that reading is the worse
+trade, and I am recording the decision here rather than reporting a clean PASS
+the wording would not support. If the flow owner reads the constraint strictly,
+the fix is to drop the six quotations and cite the L-document line numbers alone
+— which costs the reader the ability to check the claim without the source tree.
+
+An edit of my own broke something one line away, in the way an edit to a long
+document reliably does: the rendering on
+line 250 consumed the closing backtick of the inline-code span it followed. Found
+by reading the output rather than by any instrument, then generalised — a
+whole-document backtick-balance pass reports 16 odd-count lines in 8 runs, all 8
+pairing across a line break, 0 real breaks.
+
 ## Evidence index — everything in `evidence/`, and what each file settles
 
 Audited 2026-08-22: every file below exists, and every claim in this report
@@ -2423,6 +2481,13 @@ once — an old head and an old main — for the same reason every other stale
 figure here did: it described a moving thing and named no moment.)
 
 ---
+
+
+`english_only_check.py` — grades the brief's "English only in repo
+artefacts" rule on `RESULT.md`. Asserts every CJK run is a verbatim
+quotation carrying an English rendering within 3 lines. rc 0 / 1 / 2 all
+exercised, including rc 2 for a file with no CJK (an empty scan is NOT
+OBSERVED, not PASS). Run: `python3 evidence/english_only_check.py`
 
 ## For whoever handles the other six UNDETERMINED rows
 
