@@ -48,8 +48,18 @@ loosen, and a warning nobody can find is not a warning. It is not this file's
 growth: the program is 0.18% of the corpus by bytes, and the gate measures the
 same with it swapped back to the author's 326-line revision.
 
-MUTATION, TWO SWEEPS
-====================
+MUTATION, TWO SWEEPS  --  MEASURED 2026-08-22, PINNED, NOT RE-DERIVED
+=====================================================================
+Every figure in this section is a RECORD OF A SWEEP THAT WAS RUN, not a claim
+about the tree as it stands. The guard sweep was recorded in 88d63d0131
+against `emitter_population_pin_check.py` blob c6612e5ec; the statement-parent
+figures in 725283fc19 against blob 452cde7bd. Both 2026-08-22, both under
+#712. The program has changed since (blob 566b30e2e today), so these numbers
+are pinned to the trees named above and nothing here maintains them. That is
+the distinction `derived_corpus_figure_check` exists to draw: re-deriving them
+would destroy the record of what the sweep actually found, and leaving them
+bare would read as a claim about today.
+
 Guards: every `if ...: continue` in the program deleted in turn -- 20 sites, 8
 survived, 4 of which were real gaps and are now covered (see "guards a mutation
 sweep found nothing was holding"). Three of the remaining four are fast paths,
@@ -61,7 +71,8 @@ statement-parent edges over 3,965 files of this tree, zero with an expression
 parent. The premise that argument needs is pinned by
 `test_the_statement_stop_rests_on_a_true_premise`.
 
-Boundaries: every comparison operator flipped to its neighbour -- `>=`<->`>`,
+Boundaries (same sweep, same pin: 2026-08-22, 88d63d0131, blob c6612e5ec):
+every comparison operator flipped to its neighbour -- `>=`<->`>`,
 `<`<->`<=`, `==`<->`!=`. 12 sites, ZERO survivors, including the two that carry
 the semantics: `value < MIN_POPULATION` (the population floor) and
 `sites > value` (the lower-bound rule, where an equality false-PASS was fixed
@@ -3233,9 +3244,12 @@ def test_a_pin_in_a_test_naming_a_silent_program_is_deliberately_not_reached(
 def test_the_statement_stop_rests_on_a_true_premise():
     """`denies_containment` stops walking at the first statement, and the
     mutation sweep could not kill that stop. The reason is not thin coverage: an
-    `ast.expr` is never the parent of an `ast.stmt` -- measured over this tree,
-    602,938 statement-parent edges across 3,965 files, zero with an expression
-    parent -- so no form the walk tests for can appear above the stop.
+    `ast.expr` is never the parent of an `ast.stmt` -- measured 2026-08-22 and
+    recorded in 725283fc19, 602,938 statement-parent edges across 3,965 files
+    of that tree, zero with an expression parent -- so no form the walk
+    tests for can appear above the stop. The figures are PINNED to that
+    measurement and are not re-derived here; what this test actually enforces
+    is the PREMISE below, which is checked against the live tree on every run.
 
     That argument holds only while every form it tests for IS an expression. Add
     a check for something that can sit above a statement and the stop starts
