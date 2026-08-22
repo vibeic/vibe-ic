@@ -34,10 +34,18 @@
 > state the world moved past); the fix for the first two was to remove the
 > moving value, and this line is the fix for the rest.
 >
-> **Superseded, do not act on:** §23's trade (both bullets — see §30) · §26's
-> "version is the blocker" (§30) · §27's "a quiet host closes it" (§31) · §31's
-> first "shadows stdlib" wording (§31's own correction) · §3's "~550 s" (§3's
-> correction) · §13's "clears 6" (§22 — it is seven).
+> **Superseded, do not act on** — *this list went stale too and is now current
+> to §57; if you add a retraction below, add it here:*
+> §23's trade, both bullets (§30) · §26's "version is the blocker" (§30) ·
+> §27's "a quiet host closes it" (§31) · §31's first "shadows stdlib" wording
+> (its own correction) · §3's "~550 s" (its own correction) · §13's "clears 6"
+> (§22 — it is seven) · **§39's causal claim** that the selector gap is how
+> `4232a7301` got in (§47 — the sibling test WAS selected and red; the gap
+> finding stands, the causation does not) · **§51's "All 17 are green on this
+> branch"** (§52 — sixteen are) · **§53's addendum claiming the fixture was
+> already six-eighths incomplete** (retracted in place — the predicate was
+> wrong; it was COMPLETE before the batch) · **§54's recipe read as sufficient**
+> (§56 — the merge is green but the landing cannot be run on this host).
 >
 > **If you read only one section beyond the fix, read §39 — then §47, which
 > takes half of it back.** §39 is the only part of this document that finds a
