@@ -2,7 +2,9 @@
 
 > ## READ THIS FIRST — LATER SECTIONS SUPERSEDE EARLIER ONES
 >
-> Fifteen claims in here were corrected by measurement after they were written,
+> Many claims in here were corrected by measurement after they were written
+> (the register in §32 is the count; a number repeated here goes stale the next
+> time one is added, and this line has already done that once),
 > and the corrections are APPENDED rather than edited in (deleting what a later
 > section retracts is what makes `landing_collateral_revert_check` fire — this
 > branch already carries one such finding). So an early section can be read and
@@ -21,7 +23,7 @@
 > | Should the batch be re-assembled for my finding? | **NO.** The base already fails that gate on `jrows`'s finding; mine is additive | §30 |
 > | **Is there a gate defect?** | Yes: the no-skip test is unreachable by the default targeted mode, and the #565 gap report says `NOT selected 0` because it shares the blind spot. **How the defect got in is NOT established** — its sibling test WAS selected and red, so the selector gap explains one of the two reds, not both | **§39, corrected by §47** |
 > | Can §20–56 be landed from here? | **Not from 8HD-9 as it stands.** The MERGE is verified green (3 conflicts, take the branch, rc 0, 149 passed — §54) but the LANDER refuses its tier on this host over an `argparse` 1.4.0 backport in the user site. Fix the host first, then merge | **§56** |
-> | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31) | — |
+> | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31). **The 16 red lander tests of §44 are NO LONGER open** — fixed on `fix/jland67-differential-fixture-lacks-wired-gates`, off `main`, 16 failed → 30 passed | **§57** |
 >
 > **WHAT IN THIS TABLE CAN GO STALE, and what it is pinned to.** Rows about what
 > this BRANCH does — fixed, wiring, rename, breakage — are measurements of a
