@@ -375,3 +375,41 @@ it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
   `returncode == NO_CORPUS_RC` plus an explicit `returncode != 0`, plus two new
   assertions that the diagnostic names what it looked for. That reversal IS the
   behaviour change this issue asked for, and it is argued in full above.
+
+## Third re-measurement, by a session that did not make the change
+
+Run 2026-08-22 on `8HD-6` at HEAD `4eb68581a`, host load **6-15** — the "lower
+load" the section above named as the condition under which its open question
+should be settled. `PYTHONDONTWRITEBYTECODE=1`, both arms in clean worktrees,
+`origin/main` at `81cd5321b`.
+
+* **The pair, re-pinned.** `test_routed_def_corpus_dispatch.py` on this branch:
+  **19 passed**. The same file with the six production files reverted to
+  `origin/main` and every test kept: **6 failed, 13 passed** — the same six IDs
+  the record names, ending in the log that carries the defect in two adjacent
+  lines (`NOTHING WAS SCANNED` … `^^ NOT CHECKED (rc 2, BLOCKING): corpus "…"
+  is EMPTY`) and `assert 0 == 2`. The red is reproducible by a session that did
+  not write it.
+* **The other four touched test files**, on this branch: `test_hygiene_corpus_
+  binding_before_the_set` + `test_hygiene_finding_delta` + `test_repo_hygiene_
+  parallel` + `test_corpus_location` = **134 passed**;
+  `test_issue538_merge_gate_covers_ci_hygiene` = **35 passed**.
+* **The shipped `--list`, all four cells, re-diffed.** State B built as a real
+  git checkout whose `ic/` subtree publishes a `placement.def` and no
+  `routed.def`. 87 declared gates in every cell:
+
+  | | `origin/main` | this branch |
+  |---|---|---|
+  | **A** pointer unset | `…is EMPTY — nothing was checked over it` | `…was NOT FOUND — nothing was opened to check` |
+  | **B** pointer at a read, empty corpus | `…is EMPTY — nothing was checked over it` | *byte-identical to main* |
+
+  State B diffs to **zero lines** between the two trees; state A diffs to
+  **exactly one**. On `main` the A and B rows are byte-identical to each other,
+  which is the defect, stated as a diff.
+* **`test_landing_merge_verdict.py`, the open question, now closed.** Both arms
+  run concurrently under load ~15 rather than 70-85: **9 failed / 125 passed on
+  each**, in 533s and 531s, and the two failing sets are **identical, ID for
+  ID**. The 4-ID gap the previous high-load runs disagreed about did not
+  reproduce. So the earlier reading is confirmed by measurement rather than left
+  as an inference: the branch introduces no red in that file and repairs none,
+  and the gap was scheduling noise.
