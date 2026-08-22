@@ -785,7 +785,15 @@ check("every record's fix text carries a figure", not _nofig,
 import subprocess as _sp2
 def _git(*a):
     return _sp2.run(["git", *a], capture_output=True, text=True, cwd=str(ROOT)).stdout
-_base = "origin/main"
+# THE MERGE-BASE, not the branch tip. Comparing this branch against origin/main
+# answers "how does my tree differ from main today", which includes everything
+# MAIN gained since I branched -- 503 commits on the day this line was written,
+# reporting 131 plugin files touched when this branch touches one. The question
+# these checks ask is what THIS BRANCH changed, and its counterfactual is the
+# point the branch left, never the tip it is behind.
+_base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"],
+                       capture_output=True, text=True,
+                       cwd=str(ROOT)).stdout.strip() or "origin/main"
 _plugdiff = [f for f in _git("diff", "--name-only", _base, "HEAD",
                              "--", "vibe-ic-marketplace/").split() if f]
 _vers = [l for l in _git("diff", _base, "HEAD", "--",
@@ -908,7 +916,7 @@ _quoted_checks |= {int(m) for m in re.findall(r"verifier's (\d+) checks", MD)}
 # times in one session and they went stale twice anyway, each time because a
 # record was added at a step the base does not carry. Derive them.
 _bR = _sp2.run(["git", "show",
-                "origin/main:vibe-ic-marketplace/plugins/vibe-ic/benchmark/CAPTURE_ROUTING.json"],
+                f"{_base}:vibe-ic-marketplace/plugins/vibe-ic/benchmark/CAPTURE_ROUTING.json"],
                capture_output=True, text=True, cwd=str(ROOT))
 if _bR.returncode == 0:
     def _steps(txt):

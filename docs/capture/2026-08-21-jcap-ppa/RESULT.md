@@ -1987,13 +1987,15 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **18** steps. Without them **21 of the
+`benchmark/CAPTURE_ROUTING.json` gains **3** steps. Without them **3 of the
 47 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
 record was added at a step main does not carry; they are derived from the two
 routing files rather than maintained by hand, and the derivation is one command.*
+
+*Three, not the eighteen this sentence said an hour ago, and the difference is not an edit here.* Fifteen of those steps **landed with the frozen bundle**, so relative to the point this branch left they are no longer additions. The figure is derived against the MERGE-BASE rather than against main's tip — comparing to the tip answers *how does my tree differ from main today*, which on the day this was written meant 503 commits of main's work and 131 plugin files this branch never touched.
 
 *This read "every record here" until the universal claims in this report were
 audited against their denominators. It was true when written — all sixteen steps
@@ -3726,11 +3728,30 @@ deal of it states more than any detector I wrote ever credited:
 
 | record | what it says | what is missing |
 |---|---|---|
-| a scope key the producer cannot establish is omitted | *measured, and every party to it has already said this is wrong* | the population, and how it was counted |
+| ~~a scope key the producer cannot establish is omitted~~ | **closed** — reproduces exactly, by parse | needed an AST parse; a grep finds **zero** of five, see below |
 | ~~layer membership is declared not inferred from a filename prefix~~ | **closed** — carries a stated, re-runnable screen | the original 32 could **not** be recovered; a supplied screen replaces it, see below |
 | a verdict reachable by exhaustion must say whether it exhausted | *measured on the program and on two of its own runs* | which two runs, and what was compared across them |
 
-**One of the three is now closed, and how it closed is the point.** The original
+**A second closed, and it reproduces exactly — but only by parsing.** The
+module's eight-key scope constructor is called 5 times. Two pass a literal null
+for both the corner and the clock; four pass a null clock; **three** pass a null
+clock while carrying no resolved corner — two null outright, one a conditional
+that yields null on the branch that matters. Three is the recorded figure,
+recovered without ambiguity.
+
+**The reusable part is why a grep cannot do it.** The nulls are *positional
+arguments*, so searching for a key name beside a null finds **zero of the five**
+and reads as a module with no nulls in it at all. A reader who greps here
+concludes the exact opposite of the truth — which is worse than getting no
+answer, and is the strongest argument in this section for stating the screen
+rather than the number.
+
+The other figure in that record, a count of refusals on one field, is **cited
+from a comment in the program** rather than measured, and stays labelled that
+way. A number from a comment and a number from the tree are different kinds of
+claim, and collapsing them would hide which one the record rests on.
+
+**One of the three closed earlier, and how it closed is the point.** The original
 figure of 32 could not be reproduced: three readings of *a test file selecting a
 population by filename prefix* gave **52** for any identifier-then-star glob,
 **38** excluding the universal every-test prefix, and **17** also requiring the
