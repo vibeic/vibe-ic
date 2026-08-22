@@ -319,7 +319,10 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
     corners: List[Dict[str, Any]] = []
     cmaster = cfg["corner_master"]
     for i, pos in enumerate(PR.CORNER_POSITIONS):
-        orient = PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_CORNER"], i)
+        # MEASURED, not rotated from the declared value: the placer
+        # alternates rotation and mirror (R0, MY, R180, MX). A pure
+        # rotate_cw walk gave E and W where the tool writes FN and FS.
+        orient = PR.CORNER_ORIENT[pos]
         dx, dy = PR.footprint(lib.masters[cmaster], orient, units)
         corners.append({
             "instance": f"{cmaster}_{pos}", "master": cmaster,
@@ -645,7 +648,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # refused. Refusing only one of them was an artefact of the probe that
     # measured only one.
     _rot_var = None
-    for _v in ("PAD_ROTATION_VERTICAL", "PAD_ROTATION_HORIZONTAL"):
+    for _v in ("PAD_ROTATION_VERTICAL", "PAD_ROTATION_HORIZONTAL",
+               "PAD_ROTATION_CORNER"):
         if PR.normalise_orient(cfg["rotation"][_v]) != PR.normalise_orient(
                 PR.ROTATION_DEFAULT):
             _rot_var = _v

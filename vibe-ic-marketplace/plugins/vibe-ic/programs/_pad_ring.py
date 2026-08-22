@@ -212,6 +212,7 @@ MIN_REASON_CHARS = 40
 SIDES: Tuple[str, ...] = ("S", "E", "N", "W")           # upstream's order
 CORNER_POSITIONS: Tuple[str, ...] = ("SW", "SE", "NE", "NW")
 
+
 #: Upstream's variable name for each side.
 SIDE_VAR = {"S": "PAD_SOUTH", "E": "PAD_EAST",
             "N": "PAD_NORTH", "W": "PAD_WEST"}
@@ -288,6 +289,28 @@ SIDE_ORIENT: Dict[str, str] = {
     "N": ORIENT_ALIASES["MX"],
     "W": ORIENT_ALIASES["MXR90"],
     "E": ORIENT_ALIASES["R90"],
+}
+
+#: What the placer ACTUALLY orients each CORNER to, in DEF spelling, at
+#: librelane's default `PAD_ROTATION_CORNER`.
+#:
+#: MEASURED 2026-08-22, OpenROAD 26Q3-1581, `place_corners` after
+#: `make_io_sites -rotation_corner R0`:
+#:
+#:     SW  R0   -> N        NE  R180 -> S
+#:     SE  MY   -> FN       NW  MX   -> FS
+#:
+#: THE PLACER ALTERNATES ROTATION AND MIRROR: R0, MY, R180, MX. This step used
+#: to walk `rotate_cw(PAD_ROTATION_CORNER, i)` -- N, E, S, W -- a PURE
+#: ROTATION, so SE and NW were wrong: E where the tool writes FN, W where it
+#: writes FS. Same bounding box for a square corner cell, mirrored rather than
+#: rotated, so the fit arithmetic cannot see it and a DEF reader can. Two of
+#: four corners, in every ring this step has ever written.
+CORNER_ORIENT: Dict[str, str] = {
+    "SW": ORIENT_ALIASES["R0"],
+    "SE": ORIENT_ALIASES["MY"],
+    "NE": ORIENT_ALIASES["R180"],
+    "NW": ORIENT_ALIASES["MX"],
 }
 
 #: librelane's declared default for all three pad rotations
