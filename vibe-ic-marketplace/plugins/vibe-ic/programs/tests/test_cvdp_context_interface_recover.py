@@ -222,3 +222,38 @@ def test_no_iface_section_falls_back_to_context():
     ports = m.recover_interface(rec, target="bar")
     assert {p["name"] for p in ports} == {"clk", "rst_n", "q"}
     assert next(p for p in ports if p["name"] == "q")["width"] == 4
+
+
+# ── polarity: a prompt lists a RETIRED port as readily as a live one (#712) ──
+#
+# `recover_interface_from_prompt` feeds interface recovery, so a port the prompt
+# says is gone became a port on the generated module.
+
+_IFACE = "## Updated Interfaces\n\n- **Inputs**:\n"
+
+
+def _names(body):
+    import cvdp_context_interface_recover as M
+    return [p["name"] for p in M.recover_interface_from_prompt(_IFACE + body)]
+
+
+def test_a_port_its_own_description_retires_is_not_recovered():
+    assert _names("  - `clk` (1 bit) — the clock\n"
+                  "  - `data` (8 bits) — payload\n"
+                  "  - `ready` (1 bit) — this port is no longer present\n") \
+        == ["clk", "data"]
+
+
+def test_a_denial_does_not_spill_onto_the_next_port():
+    """Each item IS the record -- one port, one line, its own prose. A scope
+    measured in characters would reach into the neighbour and retire a live
+    port standing beside a dead one."""
+    assert _names("  - `ready` (1 bit) — this port is no longer present\n"
+                  "  - `clk` (1 bit) — the clock\n"
+                  "  - `data` (8 bits) — payload\n") == ["clk", "data"]
+
+
+def test_a_plainly_described_port_is_still_recovered():
+    """The control arm: a fix that dropped everything would pass the rest."""
+    assert _names("  - `clk` (1 bit) — the clock\n"
+                  "  - `ready` (1 bit) — handshake\n") == ["clk", "ready"]
