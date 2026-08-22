@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J88). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J89). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -2975,6 +2975,20 @@ That distinction matters for whoever picks this up, because it changes what the 
 IS. Inventing a pin-out would be the exact thing this brief forbids and the exact
 thing `_pad_ring` refuses. **Instantiating the cells an existing, exit-0 assignment
 already names is mechanical and forbidden by nothing.**
+
+**★ AND THE MISSING INPUT IS NOW COUNTED, not described (J89).** *"Mechanical and
+forbidden by nothing"* assumed the pieces such a step needs exist. Measured:
+**0 of 77** signal pads carry a cell TYPE (the assignment fixes the pin-out and the
+corner/filler masters only — so the step has two halves, not one); **every** master it
+names is **PRESENT** in the PDK, whose IO library ships **15** masters covering input
+(`in_c`/`in_s`), bidirectional (`bi_t`, three drives), analog and supply — **with no
+output-only pad, so outputs must use a `bi_t` with its enable tied**, which is measured
+rather than assumed; and **77 of 77** pad signals have a **declared** direction, the
+port-bit count matching the pad count exactly (**44 in / 33 out**). So the missing input
+is *a mapping from 77 declared directions onto 15 masters, plus the instantiation of 77
+instances an exit-0 assignment already names* — **nothing invented, nothing absent.**
+That is the strongest form this tier can take: not "we could not tell", but the missing
+input counted with evidence that each of its inputs already exists.
 
 **I did not build it, and that is deliberate.** It is a new flow step, not a bug
 fix, and `pad_assignment_gen`'s own docstring states the rule for exactly this

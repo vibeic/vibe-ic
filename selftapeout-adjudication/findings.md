@@ -6973,3 +6973,93 @@ than one number and one open clock.
 
 The claim is now a **terminal fact** and cannot decay again, which is why it goes into
 the ledger as a completed reading rather than a running one.
+
+---
+
+## J89 — "UNDETERMINED, and here is exactly what was missing" — the missing input, counted
+
+The brief requires an UNDETERMINED verdict to *"say exactly what was missing"*. §7 says
+the wall is `PAD_INSTANCE_NOT_IN_BLOCK` — an exit-0 pad assignment names the pad
+instances and nothing creates them — and that *"instantiating the cells an existing,
+exit-0 assignment already names is mechanical and forbidden by nothing."*
+
+**That sentence contains an assumption nobody had measured**: that the pieces such a step
+would need actually exist. "Mechanical" is only true if they do. Three questions, each
+answered from an artefact:
+
+### 1. What the assignment actually names
+
+```
+pad instances ordered on the four sides   77
+entries in SIGNAL_MAP                     77
+keys naming an IO MASTER                  PAD_CORNER, PAD_FILLERS
+signal pads carrying their own master     0 of 77
+```
+
+**So §7's phrasing was slightly generous to itself.** The assignment fixes the **pin-out**
+— which signal sits at which pad position — and the corner and filler masters. It does
+**not** say which IO cell TYPE each of the 77 signal pads is. The missing step therefore
+has two halves, not one: choose a cell type per pad, then instantiate.
+
+### 2. Does the PDK ship what it names, and what is there to choose from
+
+```
+PAD_CORNER    gf180mcu_fd_io__cor       PRESENT
+PAD_FILLERS   fill10 / fill5 / fill1 / fillnc   ALL PRESENT
+
+IO masters in the library: 15
+  bi_t     3   bi_t bi_24t (bidirectional, three drives)
+  in_c     1   in_c        (input, CMOS)
+  in_s     1   in_s        (input, Schmitt)
+  asig_p   1   asig_5p0    (analog)
+  dvdd/dvss 2  supply
+  cor 1 · fill 3 · fillnc 1 · brk 2
+```
+
+**Every master the assignment names is present**, and the library carries a family for
+each direction. One measured detail for whoever builds the step, which is not obvious and
+was not assumed: **there is no output-only pad in this library** — outputs have to use a
+`bi_t` with its enable tied, because `in_c`/`in_s` are input-only and nothing else drives
+out.
+
+### 3. Is the information to CHOOSE among them available
+
+```
+top module 'chip_top': 77 declared port BITS   {input: 44, output: 33}
+pad signals whose direction IS declared        77 of 77
+```
+
+**All 77, and the port-bit count matches the pad count exactly.** So the cell-type choice
+is *derived* from the design rather than invented — which is the exact distinction this
+brief turns on, and the one `_pad_ring` refuses to cross (*"a value this program invented
+would be a pin-out nobody chose"*).
+
+### What this changes
+
+**No verdict.** The four rows stay UNDETERMINED and the wall stays ours. What changes is
+that the tier now carries a **counted** missing input rather than a described one:
+
+> a mapping from **77 declared port directions** (44 in / 33 out) onto the library's
+> **15 IO masters**, and the instantiation of the **77** instances an exit-0 assignment
+> already names — with **every** master present in the PDK and **every** direction
+> declared in the design.
+
+Nothing has to be invented and nothing is absent. **That is the strongest form the
+UNDETERMINED tier can take**: not "we could not tell", but "here is the missing input,
+counted, and here is the evidence that every one of its inputs already exists".
+
+### And my own instrument was wrong first, in the way that reads as an answer
+
+Question 3's first version scanned the module BODY for `input x;` statements and reported
+**8 port declarations** — against 77 pads — and concluded *"direction is DECLARED"*. It
+had found a **submodule**. The top module declares its ports ANSI-style inside the
+parenthesised header, which that parser never looked at. **A count that does not match the
+thing it is about is not a near miss; it is a different measurement wearing the answer's
+clothes** — the same family as J83's tolerance-larger-than-signal and J86's
+`at-or-over-50-sites=0`. The corrected parser returns 77, and 77 is checkable against a
+number that was already on the page.
+
+**Scope, stated**: this is measured on the pad-ring probe project, which is where an exit-0
+assignment exists. The four UNDETERMINED chips never reached that step, so this
+characterises the FLOW gap — which is chip-AGNOSTIC and is precisely what §7 says the wall
+is. It is not a measurement of those four designs' own pin-outs.
