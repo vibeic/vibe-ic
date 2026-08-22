@@ -72,6 +72,11 @@ that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
 ## 5. Still open, and not mine to close
 
+- **All 49 deletion-bound rows in `verdicts_joined.tsv` have now been measured** —
+  `JOINED_DELETION_GUARD_RESULTS.tsv`: **38 SAFE, 11 HOLD CONTENT** against live main. The eleven
+  include `vibe-ic-wt-jxlayer` (678 files not contained), `_agentjob_i1015/wt` (98 uncommitted) and
+  `_wt_1486` (the canonical `phase1_phase2_phase3.yaml`). Deleting any of the eleven loses work that
+  is not on main. They are still marked deletion-bound in that file.
 - **49 deletion-bound rows in `verdicts_joined.tsv` carry no preservation citation** — nor do the
   12 in `verdicts_shard_a.tsv`, 20 in `verdicts_shard_c.tsv` or 12 in
   `verdicts_unreachable_resolved.tsv`. Their verdicts may be perfectly correct; the point is that

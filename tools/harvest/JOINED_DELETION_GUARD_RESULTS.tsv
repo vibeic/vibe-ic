@@ -1,0 +1,50 @@
+host	path	guard	measured_against_main	detail
+105	/home/reyerchu/_jppa_p0/tree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+105	/home/reyerchu/_jppa_runner/tree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+105	/home/reyerchu/_jppatests_base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/_jcapture	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/_jfeas_base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/_jppa_fixtures/tree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/_jppa_power/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/jf-63x8-work/basejm9	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/home/reyerchu/wt-main62	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+108	/tmp/claude-1000/-home-reyerchu-vibe-ic/0144f922-cbe4-48a4-937e-a5e723ca0cec/scratchpad/wt-base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+112	/home/reyerchu/_gf180_priv/wt2	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+112	/home/reyerchu/_jcorpus/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+112	/home/reyerchu/_jd3	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jcpath2/base2	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jdeadline/measure	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jicip/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jintent/wt	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jlandpar/readmain	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jppae2e/wt	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jrows/w_clean	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jrows/wt	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+114	/home/reyerchu/_jrunner2/mut	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+120	/home/reyerchu/_agentjob_jeco/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+120	/home/reyerchu/_agentjob_jliar/wt	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+120	/home/reyerchu/_jppa_prscope/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+120	/home/reyerchu/_jsearch2/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+121	/home/reyerchu/AI_IC_design/_jm9_base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+121	/home/reyerchu/_jcap_priv/wt	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+105	/home/reyerchu/_jppa_timing/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab (clone fetched FORWARD first; a stale ref manufactures a false LANDED)
+112	/home/reyerchu/_cpath_priv/basetree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab (clone fetched FORWARD first; a stale ref manufactures a false LANDED)
+114	/home/reyerchu/_jppa_bench/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab (clone fetched FORWARD first; a stale ref manufactures a false LANDED)
+121	/home/reyerchu/_ptmo_priv/ppa	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab (clone fetched FORWARD first; a stale ref manufactures a false LANDED)
+121	/home/reyerchu/_j4reds2/base	SAFE	a4caccefeab	change_contained_in_main (repo has a LOCAL-PATH origin; fetched from the real URL by name, never `fetch origin`, which would pull that path's local branch)
+121	/home/reyerchu/_j4reds3/base	SAFE	a4caccefeab	change_contained_in_main (local-path origin; fetched by URL)
+121	/home/reyerchu/_smrg_priv/smrg_base	SAFE	a4caccefeab	change_contained_in_main (local-path origin; fetched by URL)
+108	/home/reyerchu/wt-j63x8c	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=9 uncommitted_differing=0 first=RESULT.md
+114	/home/reyerchu/_jlandpar/wtgates	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=19 uncommitted_differing=0 first=tools/ci/protected_landing_transition.json
+114	/home/reyerchu/_jlandpar/wttests	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=19 uncommitted_differing=0 first=tools/ci/protected_landing_transition.json
+120	/home/reyerchu/_agent_scratch_whatif/wt_C	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=0 uncommitted_differing=37 first=tools/vibeic-eda/EDA_FORK_SYNC_LOG.md
+120	/home/reyerchu/_agentjob_i1015/wt	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=0 uncommitted_differing=98 first=.claude-plugin/marketplace.json
+120	/home/reyerchu/_jppa_prscope/mut	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=3 uncommitted_differing=0 first=vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_pr_scope_check.py
+120	/home/reyerchu/_jppa_prscope/tree	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=3 uncommitted_differing=0 first=vibe-ic-marketplace/plugins/vibe-ic/programs/ppa_pr_scope_check.py
+120	/home/reyerchu/_wt_1236	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=0 uncommitted_differing=5 first=tools/liar_census.py
+120	/home/reyerchu/_wt_1390pg	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=0 uncommitted_differing=1 first=tools/phase1_engine/tests/test_typical_scaffolds_retired.py
+120	/home/reyerchu/_wt_1486	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=0 uncommitted_differing=8 first=vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
+120	/home/reyerchu/vibe-ic-wt-jxlayer	HOLDS_CONTENT	a4caccefeab	not_contained_in_main=678 uncommitted_differing=0 first=ppa-crosslayer/RESULT.md
+112	/home/reyerchu/_jppa_skills/tree	SAFE	a4caccefeab	HEAD object gc'd so the guard fails closed; measured by the owned-file method instead — all 28 files it owns are byte-identical to main
+112	/home/reyerchu/_v1126	SAFE	a4caccefeab	HEAD object gc'd; ABANDON is duplicate-justified — whole-index md5 identical to /home/reyerchu/_i_solo_1126 (21804 files), which is RECOVER in every file naming it
+114	/tmp/claude-1000/-home-reyerchu-vibe-ic/4128148d-4b2f-440c-a3b5-fe91ba70098a/scratchpad/base	SAFE	a4caccefeab	GONE from all seven hosts; its row proves content by TREE IDENTITY (tree 1f18f8d032d is published by main at e4c5840d6f8), so nothing was lost when the directory went
