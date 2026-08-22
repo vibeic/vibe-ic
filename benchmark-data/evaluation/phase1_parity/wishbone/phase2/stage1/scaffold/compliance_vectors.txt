@@ -1,8 +1,0 @@
-# Auto-generated compliance vector catalog.
-# One requirement per line; format: <source-L-doc>: <description>
-
-L10: Reset behavior verification.
-L10: Register access (read/write to all fields; reserved-bit behavior).
-L10: Nominal transfer / transaction across the protocol's operating modes.
-L10: Error and fault condition handling.
-L10: Back-to-back / sustained operation.
