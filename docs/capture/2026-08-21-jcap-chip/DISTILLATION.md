@@ -735,3 +735,19 @@ by exactly that (`test_*`). It does NOT flag them — it is scoped to L-doc laye
 membership and flags `power_total_vs_budget_check.py`. Checked rather than
 assumed, because a composed gate reddening this lane's own exclusions would have
 been a real landing problem.
+
+**Do this lane's gates have the same defect? Checked: no.** Grepping all twelve
+for `THIS GATE BLOCKS` / `BLOCKING` / `is wired` returns two hits and both are
+prose describing a failure DIRECTION ("false in the blocking direction"), not a
+claim about wiring. None of the twelve declares itself blocking, so none of them
+can announce a refusal it does not perform.
+
+**And none of them will be given such a claim**, which is a deliberate choice
+rather than an omission. A program cannot know whether something invokes it, so
+`THIS GATE BLOCKS` in a docstring is a fact about the repository written into a
+file that will not be edited when the repository changes — it is true on the day
+it is typed and rots silently thereafter. That is the same shape as a line-anchored
+citation, or a version stamp used as an identity. Wiring status belongs in the
+RECORD, where it is dated and where a reader knows to re-derive it; it is stated
+for all twelve above, with the method (`grep tools/ .github/`) so it can be
+re-run rather than believed.
