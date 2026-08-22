@@ -365,3 +365,56 @@ file was fine. The pattern is stable enough to state as a rule: **when a checker
 disagrees with an artefact, the checker is the more likely defect** — it is
 younger, it was written to a sample of one, and it has never been reviewed. Go
 measure the artefact before you go fix it.
+
+## The consumable contradicts my own shard, in the direction that deletes
+
+jharv2 found 1083 decided rows that never reach `verdicts_joined.tsv` at all.
+That prompted the obvious question about my own shard, which I had only
+spot-checked: do all 110 of my rows reach it, carrying the verdict I gave them?
+
+They all reach it. **Six carry a different verdict**, and three of those differ
+in the direction that gets a directory deleted — my file says RECOVER, the
+consumable says LANDED:
+
+| path | shard C | joined view | re-measured against current main |
+|---|---|---|---|
+| `/home/reyerchu/_jd3` | RECOVER | LANDED | 292 lines at its head vs 218 on main, `f7e68c793cc50edb` ≠ `ac6c915e9083e606` |
+| `/home/reyerchu/_a1456` | RECOVER | LANDED | one tracked uncommitted edit, on disk only, on no ref |
+| `/home/reyerchu/AI_IC_design/wt_jwire2` | RECOVER | LANDED | named file differs; 20+ commits since judging |
+
+The other three go the safe way — `_jcapture` and `_jcap_priv/wt` (LANDED here,
+RECOVER there) and `_v1126` (ABANDON here, RECOVER there) — which costs effort,
+not content. Every one of the three dangerous rows was re-measured against
+current `origin/main` before this was written. **The shard file is right and the
+consumable is wrong.**
+
+The joined rows are tagged `shard=c+retry`, so they were regenerated from some
+earlier snapshot of shard C rather than from the file as it stands. That is the
+same shape as jharv2's 1083: the last link in the chain — the only one anyone
+reads — does not reflect the work behind it.
+
+Running the same check across all three shards found **8 disagreements, 0 absent**
+— my 6, plus 2 in shard B, one of which (`/home/reyerchu/_jintent/wt`) is also
+deletion-bound in the joined view only. That one is jharv2's to judge; it has
+been told.
+
+### Why this is a gate and not an edit
+
+Editing `verdicts_joined.tsv` would not hold. It regenerates, the disagreement
+returns silently, and nothing records that anyone ever noticed. So
+`bin_jharv3/joined_parity.py` fails while any shard row disagrees with the joined
+view, and names which direction each disagreement runs in.
+
+**Proved in four directions before shipping**, because a gate seen only passing is
+not a gate:
+
+```
+real files                   -> FAIL, 8 disagree     (a count measured independently first)
+joined patched to agree      -> OK,   0 disagree
+patch removed                -> FAIL, 8 disagree
+empty joined view            -> REFUSES, exit 1 — not "0 disagreements"
+```
+
+That last one is the whole night in one line: **"found nothing" and "parsed
+nothing" print the same thing.** A checker that cannot tell them apart will
+eventually report the second and be believed as the first.
