@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 40 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 44 records, and the nineteen already-program claims of which eighteen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 40 records](#the-40-records)
+- [The 44 records](#the-44-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -80,6 +80,8 @@ Accepted with no refusal and no unrouted record.
 - [Three checks the verifier was missing, two of which could not have failed](#three-checks-the-verifier-was-missing-two-of-which-could-not-have-failed)
 - [Was every commit green? Replayed, and the answer is one](#was-every-commit-green-replayed-and-the-answer-is-one)
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
+- [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
+- [Where two of these rules fire NEXT, now that this layer closed them](#where-two-of-these-rules-fire-next-now-that-this-layer-closed-them)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -88,7 +90,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 37 | deterministic rules — the default, and every one names its predicate |
+| **A** | 41 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -161,7 +163,7 @@ it now — checked by reading it, not by trusting the fix note.
 | F-18 a count is demanded where the schema allows a status | `_ppa/benchmark.py` `CHECK_CLEAN` / `VERDICT_CLEAN`; `test_ppa_verdict_and_scope_shapes.py` | every floor check, verdict-valued or count-valued |
 | (smaller) `jsonschema` not a dependency | `_ppa/jsonschema_bundled.py` — bundled, so a stock host is covered | and it names the too-old case the import guard missed |
 
-Four more classes, drawn from the six lane records rather than from the 18, are
+Seven more classes, drawn from the six lane records rather than from the 18, are
 also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 
 | class | already enforced by |
@@ -172,6 +174,7 @@ also ALREADY-PROGRAM. Each was a candidate record until I opened the program:
 | a present-but-empty population is never a pass | `tests/test_ppa_layer_vacuous_population.py` — the right question, on 8 of 19 programs; the coverage gap is recorded under **A-3**, not as a class of its own |
 | a lever that deletes a design property is priced, and the axis refuses | `programs/ppa_eco_spare_records.py` producing the evidence, `ECO_AXIS = "eco_readiness"` in `_ppa/feasibility.py` refusing on it, and two gates on the flow's own spare-cell artefact. **Landed on main DURING this lane** — see the withdrawn `A-18` |
 | a published run's inputs are declared by DIGEST, so identity survives the path | the trial contracts' `evidence_manifest` — **525 of 525** artefacts carry a content digest beside path, role and byte count. Demonstrated working: the published baseline was recovered by hash after its source project ceased to exist on this host. Found late, in the one source section this lane had not read |
+| a shared ABSENCE is not a shared value, so records with no measured identity are not grouped together | `programs/ppa_contract_check.py` clause `PPA-C-007` — an identity that is NOT_MEASURED is CANNOT CHECK, never a pass, and the corpus mode refuses to key on it rather than comparing two runs on the strength of a shared blank. **Driven, not cited**: a contract declaring one identity as NOT_MEASURED returns four UNDETERMINED `PPA-C-007` rows naming each absent identity. The sibling gate states the matching exclusion out loud — a contract with no identities is dropped from the conflict scan, *because a silent exclusion is a denominator nobody can see* |
 
 Three more are fixed on this tree but their guard is the fix itself, and the
 CLASS is what this lane recorded instead:
@@ -230,7 +233,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 40 records
+## The 44 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1015,8 +1018,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            37     (22 when the rule was written)
-    distinct target programs    19
+    Bucket-A records            41     (22 when the rule was written)
+    distinct target programs    22
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1146,6 +1149,29 @@ my attempt to count quantified docstring sentences matched a pattern literal
 inside a regex and reported a "document" that does not exist. That is the tenth
 measurement-apparatus error of this batch, so the record ships with **one
 confirmed instance rather than a number I could not defend.**
+
+*Attempted again, properly, and the naive number turns out to be the wrong
+number* — which is worth more to the implementer than no number. A quantifier
+screen over every module, class and function docstring in the package returns
+**44 sentences**. Reading all 44:
+
+| what the sentence is | can a tree change falsify it? |
+|---|---|
+| a design invariant — *refusing is the only safe read*, *the ONLY place exit codes are decided*, *an empty list is the only PASS* | **no** — the majority |
+| a tree census — *the only dialect that stamps*, *all 22 edges on main*, *all three sign-off reports are byte-identical* | **yes** — the enforceable subset |
+
+A gate flagging all 44 is switched off as noise within a day. The screen must
+pair the quantifier **with an artefact-class noun**, because a census sentence
+always names the thing it is counting and an invariant does not.
+
+Two findings for whoever builds it. The lane's **second** flagged docstring was
+already repaired in place — and repaired well, stating the old behaviour in the
+past tense and the new one after it — so this class is handled today
+*reactively, one site at a time, by whoever happens to touch the file*. That is
+the argument for the gate, not against it. And there is a test in the tree whose
+**name reads as exactly this rule and which is the wrong thing to extend**: its
+subject is canned prose emitted into generated documents by one function, not
+docstrings at all. I nearly recommended it.
 *Landed during this branch, and it narrows this record without closing it:*
 `programs/emitter_population_pin_check.py` binds a stated population to its source
 in two places — an emitted script's literal denominator against the sites that
@@ -1527,6 +1553,154 @@ covers every command the layer ships, and the shape to copy is in the 5 that
 already have it.
 
 ---
+### A-40 · an aggregate over exit codes combines by severity not by integer value · `benchmark.aggregate_verdict`
+
+From the corpus lane's aggregation note: the flow's own reader maps exit code 2
+to a vacuous pass and 1 to a fail, so **2 is the larger integer and the weaker
+verdict**. Aggregating a corpus with a bare maximum therefore lets ADDING a
+record SUBTRACT a refusal.
+
+    call sites taking a maximum over an rc/verdict-named value   8
+      passing an explicit severity key                           3
+      integer maximum, but guarding the not-checked code         1
+      integer maximum over a deliberate two-value space          1
+      unguarded integer maximum                                  3
+
+I did not stop at reading it. Built a two-run corpus and ran the gate:
+
+| tree | per-run lines | exit |
+|---|---|---|
+| one run, manifest missing | `[FAIL] … no RUN_MANIFEST.json` | **1** |
+| the same run **plus** one whose manifest is unreadable | `[FAIL] …` **twice** | **2** |
+
+The added run is the only difference. Both lines still say FAIL; the process
+says could-not-check. A consumer keying on the exit code sees the failing run
+disappear.
+
+The guarded site is the interesting one: it takes an integer maximum but carries
+an explicit `if rc != NOT_CHECKED` clause. Someone hit this exact bug and
+repaired **one call site instead of the class** — which is the whole reason this
+lane exists.
+
+Of the two unconfirmed sites, one takes its code from a loader that reports
+unreadable input with the not-checked code (the confirmed shape), and the other
+nests two integer maxima, an inner one whose result the outer then combines
+again.
+
+**(o)** yes — the confirmed call site has no severity key, so the rule fires on
+it as written.
+**(d)** yes — it keys on the SHAPE, a maximum over exit-code-valued operands
+with no declared order, not on any of these three functions.
+
+### A-41 · a gate writes its verdict to a path no producer owns · `flow.artefact_write_ownership`
+
+From a flow comment left beside a hand-caught near-miss: *had the option ever
+been honoured, the checker would have destroyed the measurement it was
+auditing.* That sent me looking for the general case.
+
+    gate output paths stated in the flow            138
+      also written by a program                       9
+        the gate invoking that same program        most — not a collision
+        CONFIRMED overwrite of a producer's file      2
+
+The two are confirmed in the **producer's own source**, not inferred. A runner
+comment states that the gate-checkers run after the manifest-emitting step and
+**overwrite two stamped lint artefacts with bare, identity-less payloads** — one
+family collapsing to an empty list. Nothing fails: the gate exits zero, the file
+exists and it parses. What is gone is the evidence, replaced by a document
+saying the evidence was fine.
+
+The repair that was applied is a caller-side sweep that re-stamps those two
+directories **after** the audit has clobbered them. That repairs the damage; it
+does not prevent the collision, and it covers the two directories somebody had
+already noticed. **Three instances, three separate one-off responses, no rule.**
+
+A methodology note, because it nearly cost me the finding. My first screen asked
+whether a gate writes a path a *different step* declares. It returns **zero**,
+and the zero is real — I injected a collision and the screen caught it. It is a
+true answer to the wrong question: the confirmed collisions are **inside one
+step**, because the same step declares the artefact and wires the gate that
+overwrites it. A negative control proves a screen can see; it says nothing about
+whether the screen is pointed at the defect.
+
+**(o)** yes — the original is a literal path equality between a gate's stated
+output and a producer's write.
+**(d)** yes — it compares two generated sets and names no filename, so it fires
+wherever the equality appears.
+
+### A-42 · a generator over the tracked set refuses a tree that is not the one being published · `repo.generated_manifest`
+
+A sibling lane left this as a parenthesis: *the inventory generator counts
+TRACKED files, so it had to run after the commit — worth knowing.* Knowledge in
+a report instead of a refusal in the program is the gap this batch exists to
+close, so I went and looked.
+
+The generator is careful in one direction and not the other:
+
+| the enumeration query… | what the generator does |
+|---|---|
+| **cannot be answered** (no repo, no binary, timeout) | returns nothing, so a missing tool never reads as an empty repository |
+| **answers about the previous commit** | accepted silently |
+
+Run before committing, it emits a manifest of the tree *without* the work being
+described, which is then committed alongside the very files it omits. Nothing in
+the output says so.
+
+**The denominator matters here and the obvious one is wrong.** 42 programs
+consult the tracked-file query and 34 of them write something — but most are
+CHECKERS, and a checker reading committed state is *supposed* to ignore a dirty
+tree; that is the whole point of it. Flagging those would be the same error as
+A-5's screen for the third time. The population is generators publishing a
+manifest of the tracked set *as a tracked artefact*:
+
+    such generators        3
+      guarded              1
+      unguarded            2   (one confirmed to have bitten a lane)
+
+**(o)** yes — it would have refused instead of emitting a manifest missing the
+new files.
+**(d)** yes — it keys on the pairing of a tracked-set enumeration with a tracked
+output, and names no generator.
+
+### A-43 · an enforcement point named as the only one must be proven present · `repo.enforcement_point`
+
+A sibling lane recorded that on its machine the pre-push hook **refuses every
+push from an isolated working copy**, because the corpus it inspects is untracked
+and therefore absent there. I have pushed from an isolated copy all batch and
+was never refused, so I went to find out why.
+
+    tracked hook       tools/git-hooks/pre-push     present, executable, 23743 bytes
+    installed hook     .git/hooks/pre-push          ABSENT
+    hooks directory    core.hooksPath               not configured
+
+The hook does not run here. And the document that names it *the only
+enforcement* records the other two rungs as already gone — automation disabled
+at the account level, branch protection returning not-protected — so on this
+machine **the number of enforcement points that actually execute is zero.**
+
+Three tests reference the hook. All three locate the **tracked** copy and assert
+on its text; **none asserts that it is installed.** Testing the script is not
+testing that it runs, and a hook takes effect only from an untracked location
+that every fresh clone starts without.
+
+**This batch is the evidence that it is not theoretical.** Nine pushes were made
+from an isolated copy during it and not one was gated. From my side a successful
+push looked exactly like a push that had passed — which is this batch's own
+central class, arriving in the first person.
+
+So the enforcement point has two observable states, refuse-everything and
+enforce-nothing, and which one a person gets is decided by an untracked file
+nobody checks.
+
+*What I did about my own pushes:* ran the gate the hook would have run, with the
+documented pointer. `rc=0`, and it says why — *no evidence folders changed since
+`origin/main`, nothing to enforce*, which is correct for a branch that touches
+none.
+
+**(o)** yes — the installed path is absent, so the check fails where it stands.
+**(d)** yes — it compares a resolved hook path against a tracked source and
+names no particular hook.
+
 
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
@@ -1631,8 +1805,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **14 of the
-40 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **15** steps. Without them **18 of the
+44 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1883,7 +2057,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          37     (26 when the rubric was applied)
+    Bucket-A records                          41     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1964,9 +2138,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 40 records**:
+the patterns were unchecked by anything. Over **all 44 records**:
 
-    pairs compared                      780
+    pairs compared                      946
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -2515,7 +2689,7 @@ only — whether the row recorded HOW it counted:
 | A-11 | **partial** — the census reproduces within three per cent (1584 → 1544) but its taxonomy does not, because where "extension-only" ends was never stated, and its load-bearing figure needs a judgement no screen makes |
 | A-24 | **not re-derivable** — a plausible reconstruction returned more than twice each figure |
 | A-26 | reproduced, and **closed its own gap**: 2 → 7 documents bound, and the population it left unestimated is now 1215 candidate docstrings of 4026, by a stated screen |
-| A-5 | population not comparable across screens, but the **remedy is demonstrated in-tree** — a sibling refuses both selectors with rc 2 |
+| A-5 | re-measured BY EXECUTION: 8 commands, **6 silently pick one**, 1 refuses with the wrong exit code, 1 returns a green pass on zero work; the remedy is demonstrated in-tree by **4 gates calling a shared seam** with the bad-invocation code — not by argparse, and not by the rc-2 refuser I first credited |
 | A-20 | **not re-derivable** — no screen recorded at all |
 
 Three reproduced, two could not be, one partly. **Every failure is the same
@@ -2971,9 +3145,94 @@ occupy, and the emit line is the exact invocation that produced the bytes in
 historical claim is preserved where it belongs, in this section and in `A-29`,
 rather than in a command line that would fail for whoever tried it.
 
+## A shipped record's evidence was a source screen, and it was wrong
+
+Reading the corpus lane's second decision — *an exact path and a corpus are never
+both silently accepted* — sent me back to my own record for that class. Its
+shipped evidence read: **nine commands take both a single target and a collection
+selector, and NOT ONE declares a mutual-exclusion group.**
+
+That sentence is true. It is also the wrong measurement, and it took five
+consecutive failed probes in one sitting to see why.
+
+| # | probe | what it returned | why it was wrong |
+|---|---|---|---|
+| 1 | count refusal-shaped keywords per gate | 5–11 mentions each | counted my own vocabulary, not behaviour |
+| 2 | run six gates with both selectors | rc=3 on all six | `--report` is not a flag on any of them; argparse rejected an **unknown argument**. Right answer, wrong cause |
+| 3 | re-run with each gate's real flag | one gate rc=2, not 3 | its `--baseline` is a **companion** to a corpus, not a competitor — no conflict to refuse |
+| 4 | grep source for the refusal mechanism | **0 of 6** had one | but I had just watched three of them refuse |
+| 5 | regex the whole tree for the population | 32 commands | `--allow-*` flags are permissions, not collection selectors |
+
+Probe 4 is the one that matters. The refusal is real; it is delegated to a shared
+seam whose exit constant lives in the seam, so a per-file grep for that constant
+sees nothing in any caller. **The layer's actual remedy was invisible to the
+screen that declared the layer had no remedy** — and that screen is what the
+record shipped.
+
+So the population was re-measured by RUNNING all eight commands and reading the
+exit code:
+
+| outcome | count | what a caller sees |
+|---|---|---|
+| refuses via the shared seam, bad-invocation code | 4 (a different set) | both selectors named, and why — **the shape to copy** |
+| silently picks one | 6 of 8 | a verdict about the input they did not name |
+| refuses correctly, returns NOT-CHECKED | 1 of 8 | indistinguishable from "found no artefacts" |
+| **returns a GREEN PASS on `Scanned 0 ICs`** | 1 of 8 | success, over zero work |
+
+The record's substance survived — the gap is real and it is most of the
+population. Its evidence did not. And the correction changed the FIX: an
+implementation that adds a mutual-exclusion group, which is what the record used
+to ask for, fixes six of eight and leaves the wrong-code and vacuous-pass cases
+untouched. The rule has three failure shapes, not one.
+
+Ten over-matched screens in this lane now. Nine were caught in scratch. This one
+shipped, and only a sibling lane's unrelated decision note walked me back into it.
+
+## Where two of these rules fire NEXT, now that this layer closed them
+
+The corpus lane's note said one gate still finds its records with a filename
+glob. It does not any more — it walks every JSON under the corpus and selects on
+the declared schema, keeping the glob only so that a file which WAS named a
+record and cannot be parsed stays in the population. *Unreadable is not absent*
+is a distinction I did not have a name for and now do.
+
+The same file carries the self-reading measurement in a comment: pointed at a
+corpus, the old glob matched four files — two records and **two reports the
+checker itself had written**. A report has no arms, so the gate refused its own
+output with the most severe verdict it can reach. **Half that corpus verdict was
+the gate marking its own paper.**
+
+So I measured whether the layer closed it everywhere, and nearly filed a false
+finding doing it:
+
+| how the gate selects | needs an own-output exclusion? | has one |
+|---|---|---|
+| on a declared input schema | **no** — its report declares a different schema, so it cannot be selected | 0 of 3 |
+| on a structural predicate | **yes** — its own output has the same shape | **3 of 3** |
+
+A keyword screen reports that as *three of six gates are unguarded*. It is
+wrong in the same way A-5's screen was wrong: it counts a mechanism's presence
+without asking whether its absence is correct. Three of these gates cannot eat
+their own output no matter what, and adding an exclusion to them would be dead
+code. **The class is closed in this layer.**
+
+Which sharpens the second half of the question both records must answer. If the
+rule cannot fire again here, the different instance has to live outside — so I
+went and found it. Three non-PPA commands find inputs by a semantic filename
+glob and write their own JSON. The one I read through resolves its input like
+this: three declared candidate paths, and when none exists, **two recursive
+globs that return the first match of an unordered walk**, then `None`.
+
+Its producer takes its output path from the caller, so there is no fixed
+filename for the consumer to agree with — the guessing is not sloppiness, it is
+the only thing available given the interface. That is the record about resolving
+a declared path rather than guessing among candidates, standing outside the
+layer it was captured in, which is the whole argument for distilling a landed
+fix into a rule.
+
 ## Summary
 
-**STATUS**: 40 records emitted and validated — 37 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 44 records emitted and validated — 41 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -3001,7 +3260,7 @@ bucket. My 37 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 15 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39 |
+| **EXTRACT-NEW** | 19 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3123,7 +3382,7 @@ gap was non-empty every single time it was measured.
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
-| A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard** — but the remedy is **already demonstrated in-tree**: a sibling uses argparse's mutually exclusive group and refuses both selectors with rc 2, so this is application, not design |
+| A-5 | 8 commands | 8 | re-measured by RUNNING each, after the source screen proved wrong: **6 of 8 silently pick one**, 1 refuses correctly but exits NOT-CHECKED, 1 exits **0 on `Scanned 0 ICs`**. The in-tree remedy is a **shared seam** 4 gates call, exiting bad-invocation — my earlier row credited argparse and held up the rc-2 refuser, which is itself one of the defects |
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off. **Its motivating site was fixed on main mid-lane — and the record stands**: the timing selector still picks sign-off reports by filename prefix |
@@ -3153,9 +3412,13 @@ gap was non-empty every single time it was measured.
 | A-34 | 2 runs, 3.8 s and 1795 s | **identical JSON** | the depth field exists for the other half of the method |
 | A-35 | 1 required scope key, 5 carried | **0 name the composition** | one component IS named — `fill` — and the rest are not |
 | A-36 | declaration honoured verbatim | **0 satisfiability checks** | and the producible set is not declared anywhere, so build that first |
-| A-37 | 23 refusal messages | **0 carry a remedy** | the first clean sweep in this lane to survive its own control |
+| A-37 | 23 **marked** refusals | **0 carry a remedy** | survived its control — and its denominator is the marked subset, blind to unmarked refusals by construction |
 | A-38 | 3 null-emitting sites | **44 recorded refusals** | the doc forbids it in bold, the gate refuses it, a sibling module already fixed it |
 | A-39 | 20 entry points | **15 unguarded** | an escaped exception exits on the finding code; 5 siblings already guard it |
+| A-40 | 8 aggregation sites | **3 unguarded** | rc 2 outranks rc 1 by integer order; CONFIRMED by execution — adding a run took a corpus from rc 1 to rc 2 |
+| A-41 | 138 gate output paths | **2 confirmed** | a gate's output path equals a producer's; the overwrite is documented in the producer's own source and repaired after the fact |
+| A-42 | 3 tracked-set generators | **2 unguarded** | guards the query FAILING but not the query answering about the previous commit |
+| A-43 | 3 tests reference the hook | **0 assert installation** | the tracked hook is present, the installed one is absent, and 9 pushes this batch went ungated |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

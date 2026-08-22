@@ -623,8 +623,14 @@ def test_cli_a_silent_campaign_says_out_loud_that_it_made_no_eco_finding(
     assert tc["feasibility_eco_state"] == F.ECO_NOT_DECLARED
     assert tc["feasibility_delivery_path"] == "NOT_SUPPLIED"
     out = capsys.readouterr()
-    assert "[CANNOT CHECK]" in out.out + out.err
-    assert "--project" in out.out + out.err
+    text = out.out + out.err
+    assert "[CANNOT CHECK]" in text
+    assert "--project" in text
+    # The warning must name the CONSEQUENCE, not only the condition. Without
+    # this the line reads as informational and a caller does not learn that
+    # `--verify` is about to refuse what they just built.
+    assert "ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE" in text, text
+    assert "--verify" in text, text
 
 
 def test_cli_project_stamps_the_route_into_the_published_manifest(tmp_path):

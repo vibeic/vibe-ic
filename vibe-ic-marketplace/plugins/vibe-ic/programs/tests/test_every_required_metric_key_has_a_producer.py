@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,34 @@ _spec = importlib.util.spec_from_file_location("erkhap", _TOOL)
 erkhap = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(erkhap)
 
+
+
+def _count_in(text: str, phrase: str) -> bool:
+    """`phrase` (which begins with a count) appears with NO digit before it.
+
+    MEASURED: `assert "1 inexpressible" in out` is satisfied by an output saying
+    `21 inexpressible`, and `"0 key(s) observed"` by `10 key(s) observed`. A
+    substring assertion on a count is not a pin — every one of these tests would
+    have passed against a tenfold-wrong number. Taken from the census lane's
+    "a substring assertion on a count is not a pin — parse the number".
+    """
+    return re.search(r"(?<!\d)" + re.escape(phrase), text) is not None
+
+
+def test_the_count_anchor_actually_fires():
+    """PROVE THE PIN FIRES. `_count_in` exists because a substring assertion on a
+    count is not a pin — `"1 inexpressible" in out` is satisfied by an output
+    saying `21 inexpressible`. A helper that silently never rejects anything would
+    reinstate exactly the defect it was added to remove, and nothing else in this
+    file would notice, because every other use of it asserts the TRUE case.
+
+    So: the true case passes, and a preceding digit is refused.
+    """
+    assert _count_in("examined 1 thing", "1 thing")
+    assert not _count_in("examined 21 thing", "1 thing"), (
+        "the anchor did not fire: a tenfold-wrong count still satisfies the pin")
+    assert not _count_in("examined 10 thing", "0 thing")
+    assert _count_in("a, 0 thing", "0 thing")
 
 def _run(root):
     cp = subprocess.run([sys.executable, str(_TOOL), str(root)],
@@ -179,7 +208,7 @@ def test_an_empty_corpus_reports_no_finding_at_all(tmp_path):
     assert rc == 2, out
     assert "STRUCTURALLY UNPROVABLE" not in out, (
         "an empty corpus produced findings:\n" + out)
-    assert "0 key(s) observed" in out
+    assert _count_in(out, "0 key(s) observed")
 
 
 def test_unparseable_json_is_skipped_not_fatal(tmp_path):

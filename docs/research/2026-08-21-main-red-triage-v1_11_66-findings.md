@@ -13,7 +13,9 @@ host 8hd-3 · started 2026-08-21 · **read this header before M0**
 >
 > ```sh
 > P=docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md
-> grep -cE '^## M[0-9]+' $P                                   # sections
+> # sections — THREE heading conventions exist; matching only `^## M` UNDERCOUNTS
+> # by 5 (M14/M15/M16 are `### M{n}`, M17/M19 are `### Title (M{n})`).
+> grep -cE '^#{2,3} M[0-9]+ |^#{2,3} .*\(M[0-9]+\)' $P       # sections
 > grep -oE '^## M[0-9]+' $P | grep -oE '[0-9]+' | sort -n | tail -1   # highest M
 > sed -n '/^### .*instrument defects, consolidated/,/^\*\*The common shape/p' $P | grep -cE '^\| [0-9]+ \|'
 > sed -n "/^## D\. Corrections/,\$p" $P | grep -cE '^[0-9]+\. \*\*'   # corrections
@@ -1161,6 +1163,16 @@ currently unguarded.
    NOT_MEASURED              0
 ```
 
+> **"CURRENT" MEANS 2026-08-21, NOT NOW.** Every term below has moved and the
+> corrections are ~4,700 lines away: **3 IMAGE-ONLY -> 0** (the seal-ring trio,
+> fixed and re-verified in the image lane at HEAD); **24 BOTH -> 14 live**, over
+> 12 files, three of which this document never opened until M95; **9
+> landing-verdict -> 6**. The measured total today is **34 reds over 5 roots**
+> (section C). The figure below is accurate for the date it was taken and is kept
+> as provenance. **Like the "FINAL DISPOSITION" banner above, the defect is the
+> word — a bolded "current" that stops being current the next day, in a document
+> whose own header says summaries decay.**
+
 **The current red list is 33 IDs**: 24 BOTH + 3 IMAGE-ONLY + the 9 real ones
 inside the quarantined 22 (established by the outside-`$HOME` arm; 0 closed and
 0 new since v1.11.62), minus double counting — the quarantined file contributes
@@ -1374,6 +1386,26 @@ landing-verdict file = 32**, with IMAGE-ONLY 0 (the seal-ring trio fixed) and
 HOST-ONLY 0.
 
 # ===== FINAL DISPOSITION AT v1.11.66 =====
+
+> **⚠ THIS IS NOT THE FINAL DISPOSITION, AND THE WORD "FINAL" IN THIS BANNER IS A
+> NAVIGATIONAL TRAP OF MY OWN MAKING.** It sits at ~21% of the file, with roughly
+> **5,000 lines and eighty sections after it**. A reader who stops here — which
+> the title invites — leaves with counts that have all moved:
+>
+> | this table says | measured now | where |
+> |---|---|---|
+> | "one of **four** causes" | **5 roots**, 34 reds | M108, section C |
+> | 9 landing-verdict | **6** | M90, M120 |
+> | 3 flow-gate | **6** — three more reds in three files not named here | M95 |
+> | 2 coverage bridge | part of a **5-red** group under one conditional | M100 |
+> | 11 matrix family | **11 D3**, of which 5 are visible only once a corpus is offered | M96 |
+> | 2 `magic` / lease | 1 `magic` (environment); the lease was diagnosed as fails-when-FAST | M60, M62 |
+>
+> **The table below is accurate as of when it was written and is kept for
+> provenance.** The current disposition is `REQUESTS TO THE LANDER` → section C,
+> at the end of the file. **I named a section "final" while still working, which
+> is the same error as a summary that stops updating — except that this one
+> actively tells the reader to stop.**
 
 Every remaining red is now attributed to one of four causes, none of which is
 "unknown":
@@ -2977,7 +3009,22 @@ M48 showed that running the flow-gate audit revealed a clause its label hid. The
 same is true of the other five. **I recorded the six blocking hygiene FAILs as a
 list of names and never ran four of them again.**
 
-**Current, measured:**
+**Current, measured — AS OF THIS SECTION. Three rows have since moved, and their
+corrections are 2,000–3,000 lines below:**
+
+* **`declaration scans strip comments`** — no longer "5 regexes". **I FIXED the
+  analyser (M78):** it did not propagate stripped status through `for` and
+  comprehension targets. Repo-wide **175 -> 168**, **0 newly flagged**, and the
+  BLOCKING list went **5 names -> 3**, with both departures verified false
+  positives in source. It still exits 1, for three real candidates.
+* **`liar census controls still fire`** — no longer "not re-run". **Re-run
+  (M84):** the census is CLEAN (`swept 181 = declared 181`, `unswept []`), and the
+  red is purely the stale pinned floor. Clause SETS diffed: the owner's decision
+  is **two names**.
+* **`flow-gate enforcement audit`** — still FAIL, but its blast radius is **double
+  what this row implies (M95):** three further reds in three separate files fail
+  for no reason other than this audit exiting 1. Declaring intent on the two
+  undeclared gates closes **six**, not three.
 
 | gate | now |
 |---|---|
@@ -5047,6 +5094,11 @@ done at all".
 
 ## M93 — closing regression: every remaining red is a documented item, and nothing is unexplained
 
+> **SUPERSEDED BY M97 — the numbers below are over a REDUCED DENOMINATOR.** This
+> run had no corpus pointer, so its `61 skipped` were cells reporting nothing. The
+> honest figures are **17 failed, 296 passed, 0 skipped**. The VERDICT here stands —
+> every red is still a documented item — but read the counts as M97 restates them.
+
 Ran every test file this branch touches, plus the two suites its changes could
 reach, on the host at the pushed commit.
 
@@ -5393,6 +5445,11 @@ thing is the owner's call, and it is ONE call, not five.**
 
 
 ## M101 — the consolidated census: 34 reds, 6 causes, measured rather than accumulated
+
+> **SUPERSEDED BY M108 — it is 5 roots, not 6 causes.** The mutation-ledger three
+> turned out to be DOWNSTREAM of the D3 group, which puts **16 of the 34 under one
+> root**. The census below is otherwise accurate and the totals are unchanged;
+> only the grouping consolidated. Section C carries the current shape.
 
 Twice this document recorded a correctly-diagnosed cause with **half its blast
 radius** (the flow-gate item at 3 when it owns 6, M95; the vacuity conditional at
@@ -5872,6 +5929,402 @@ and it is the honest inverse of how I was reporting for most of this engagement 
 confident in the summary, casual with the check.
 
 
+## M111 — design A's "Discriminates:" was an ARGUMENT. Here is what is actually established, and what cannot be
+
+Section A entry 4 says design A *"Discriminates: `base_total == 0` and
+`base_land is None` are both real, disclosed conditions"*, evidenced as
+**RED -> GREEN**. **That is a before/after, not a mutation arm**, and the
+discrimination clause beside it is reasoning. This branch has refused that
+distinction in other people's work all week, so:
+
+**WHAT IS ESTABLISHED, by construction and by measurement:**
+
+1. **Non-vacuous by construction.** Every assertion is a BARE SUBSCRIPT —
+   `doc["base_land"]`, `doc["land"]`, `doc["delta"]`, `delta["base_total"]`,
+   `delta["candidate_total"]`. **No `.get(..., default)` anywhere.** A missing key
+   raises `KeyError` and the test fails loudly. It cannot pass because something
+   was absent — which is exactly the defect M14 found in its neighbour and the
+   reason that neighbour is one of the surviving six.
+2. **It bites on real values.** Measured from the verifier's own output:
+   `6 test(s) ran on the candidate, 6 on the base`. So `base_total > 0` is
+   asserted against **6**, not against a constant that cannot be otherwise.
+3. **RED -> GREEN, full-file, both lanes** — and in the CONFIGURED image lane it
+   is among the 128 passes (M90).
+
+**WHAT CANNOT BE ESTABLISHED, AND WHY IT IS THE SAME WALL:** a true mutation arm
+means **preventing an arm from running** and watching the test redden. **That
+requires injecting a control into the arm — which the exact-set env contract
+refuses (M107), and which is the precise reason four of the six surviving reds
+are blocked.** The subject-tree route exists (M92, proven), but building a
+sentinel that suppresses a whole wave is a larger change than the one under test.
+
+**So the honest evidence line for design A is not "discriminates" — it is
+"non-vacuous by construction, asserted against a measured 6, and its live
+mutation arm is blocked by the same contract this branch is reporting."** That is
+weaker than what section A implies and stronger than nothing, and the difference
+between those two is the entire subject of this document.
+
+**Corrected in section A** rather than left as a claim a reviewer would have to
+take on trust.
+
+
+## M112 — design C has the mutation arm design A cannot, and the reason is the whole thesis
+
+M111 found design A's discrimination claim was an argument. **Design C's is not,
+and auditing why turns out to explain the entire branch.**
+
+**All three tamper guards verified line by line, and section A describes them
+accurately:**
+
+    assert r.returncode == 1
+    assert doc["verdict"] == "REFUSE"
+    assert doc["expected_tree"] == doc["verified_tree"]      # tamper did not redefine
+    assert doc["candidate_test_worktree_status"] == "clean"  # never reached real work
+    assert any("test_moves_the_detached_subject_but_stays_green"
+               in f for f in doc["delta"]["new_failures"])   # <- DELIVERY PROOF
+
+**Each names a DIFFERENT planted test** — `..._moves_the_detached_subject...`,
+`..._hides_changed_subject_bytes...`, `..._redefines_head...` — **and requires it
+to appear in `new_failures`.**
+
+**That last assertion is the mutation arm, built in.** It is not "the verifier
+refused, so presumably the tamper happened". It is *the tamper's own planted test
+was observed as a new failure*. **A tamper that silently failed to apply cannot
+satisfy it** — which is exactly the defect that made G4's injected hang
+unreachable for the entire hermetic era while its test reported nothing.
+
+**AND HERE IS WHY DESIGN C HAS THIS AND DESIGN A CANNOT.** Design C's control is
+**a commit**: the test clones, plants a test file, commits, and the tamper crosses
+into the arm **through the subject tree**. Design A's would need to suppress a
+wave, which means reaching the arm through its environment — and that is the
+exact-set contract that refuses (M107).
+
+**Design C is the working proof of M91's thesis, and it has been passing the whole
+time.** I spent this branch establishing that *the tree crosses and the environment
+does not*, built a sentinel to demonstrate it (M92), reverted it at the next
+layer — **while three tests already in the file were doing precisely that, every
+run, in both lanes.** The pattern I proposed as a remedy was sitting in the same
+file as the tests that need it.
+
+**So the ranking in the proposal was upside down.** C was listed third and is the
+only one of the four with a complete, self-delivering mutation arm. **A, B and D
+are all attempts to reach the arm by a channel that refuses; C simply commits the
+control.** That is not a design insight I brought — it is one I could have read
+off the passing tests before writing four designs.
+
+
+## M113 — entry 2's mutation arm PROVEN, and a fifth instance of the same grep error nearly made me accuse a good test
+
+Section A entry 2 claims *"Mutation arm proven: delete the `RW is not False`
+clause and it goes red."* **Every other "proven" in this document has now been
+checked; this one was not.** Measured:
+
+    sha256 before                     e7e4dce1fcc0c994...
+    disable `item.get("RW") is not False`  ->  1 FAILED
+    restored                          sha256 MATCHES, git status clean
+
+**The claim is exact — that is the clause, at `hermetic_candidate_runner.py:852`,
+and removing it reddens the test.** Verified against a PROTECTED file by
+mutate-measure-restore with a checksum on both sides, and the file is byte-identical
+to HEAD afterwards.
+
+**AND THE NEAR-MISS, which is worth more than the confirmation.** Looking for the
+refusal the test names, I ran:
+
+    grep -rn "subject bind is not exact" --include=*.py .
+      -> ONE hit, in the TEST. Nothing in any program emits it.
+
+**For a moment that read as: the test asserts a message no production code
+produces.** That would be a serious accusation about a test I shipped. **It is
+wrong.** The runner raises
+
+    raise Refusal(f"candidate {role} bind is not exact/read-only")
+
+an **f-string**, rendering `candidate subject bind is not exact/read-only` — of
+which the test's literal is a substring. My search was for a string that is
+CONSTRUCTED AT RUNTIME, so of course the source does not contain it.
+
+**That is the fifth instance of one error class in this engagement**, and the
+first where it nearly produced an accusation rather than a wrong number:
+
+    grep -c NAME              -> 0    "the variable cannot cross"   (it ABORTS the arm)
+    docker-absence pattern    -> 0    "M27 is refuted"              (18 real occurrences)
+    grep -Ff <(empty)         -> 9/9  "all protected touched"       (true of any branch)
+    failure's first line             "a third cause"               (payload named the first)
+    grep "subject bind..."    -> 1    "no code emits this"          (f-string)
+
+**The declaration-scan module I patched warns about exactly this shape** — that
+`ast.unparse` re-escapes, so a `\bmodule\b` probe finds no boundary, *"an artefact
+that silently produced two confident, wrong populations."* **I read that warning,
+fixed that module, and then made the same mistake against a different file an hour
+later.** Knowing the class is not the same as checking for it, and the check is
+always the same: **run the pattern against a known positive before believing a
+zero.**
+
+
+## M114 — audited my own zeros. The load-bearing ones hold, and now they have controls
+
+Five times a zero from a pattern I wrote produced a wrong claim (M113). **The
+systematic version of that lesson is to audit MY OWN zeros**, of which this
+document makes **18**. Two are load-bearing; the rest are incidental.
+
+**LOAD-BEARING ZERO 1 — the three env names (M91, M107; SIX reds rest on it):**
+
+    GATEKEEPER_STUB_ROUTED_TRANSITION      0
+    GATEKEEPER_STUB_BASE_EXPANDED          0
+    GATEKEEPER_CONCURRENCY_PROBE_DIR       0
+    ------------------------------------------ known positives, same pattern class
+    GATEKEEPER_VERIFY_ARM                  8
+    GATEKEEPER_BASE                        2
+    VIBEIC_LANDING_PROGRESS_NONCE          2
+
+**HOLDS.** Plain substring `grep -c` against a file where three names of identical
+shape return 8, 2 and 2. The pattern demonstrably finds what is there.
+
+**LOAD-BEARING ZERO 2 — `critical_path.sp` absent (M86/M87):**
+
+    critical_path.sp            0
+    routed.def                130   <- same root, same depth
+    eco_trigger_decision.json 140   <- same root, same depth
+
+**HOLDS — and my first control did not.** I initially proved `find -name` works by
+searching `routed.def` under `benchmark-data/`, a **narrower root** than the
+absence claim searched. That proves the mechanism, not the coverage. **A control
+under a different root is not a control**, and re-running both under
+`/home/reyerchu` at the same depth is what makes the zero evidence.
+
+**So the two claims this document leans hardest on both survive**, and they now
+carry the controls they should have carried when written. **The check costs one
+extra line in the same command** — the positive control goes in the loop beside
+the thing being tested, so a broken pattern cannot report an absence.
+
+**What I would not claim:** that the other 16 zeros are all validated. They are
+incidental — occurrence counts inside corrections, arithmetic like `0 closed`,
+diffs that were themselves set-compared. **I checked the two that carry weight and
+say so, rather than asserting a sweep I did not perform.** That distinction is the
+one this document has spent a hundred sections learning to make.
+
+
+## M115 — the corpus pointer changes NONE of the six, and two of them are named as if it would
+
+A plausible wrong inference is available in this document, and it should be closed
+before someone acts on it. **Two of the six env-allowlist reds carry `corpus` in
+their names:**
+
+    test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord
+    test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta
+
+And this document establishes at length that a corpus pointer un-skips 61 cells
+and reveals 7 reds (M96/M98). **A reader could reasonably conclude the pointer is
+relevant to those two. It is not.**
+
+**Measured — and answered from data already taken rather than a fresh 7-minute
+run:** the closing regression exists in both arms, with and without
+`VIBE_IC_BENCHMARK_DATA`, and the landing-verdict subset is **identical**:
+
+    without pointer   6 landing-verdict failures
+    with pointer      6 landing-verdict failures
+    diff of the two sets                        EMPTY
+
+**All six are blocked by the exact-set env contract (M107), not by corpus
+availability.** Their subject is a corpus TRANSITION that a test control must
+announce; the control cannot reach the arm, so the transition never occurs. **The
+corpus being present does not help, because nothing is asking it a question.**
+
+**Two things worth separating, since this document has conflated them once
+already:** the D3 group is blocked on WHAT THE CORPUS CONTAINS (specific `home`
+roots, M105). These six are blocked on WHETHER A CONTROL CAN REACH THE ARM. **They
+share a word and nothing else**, and the 16-vs-6 split in section C depends on
+keeping them apart.
+
+**Recorded as a negative result** because it costs nothing now and would cost
+someone a wasted afternoon later — the same reason the retracted `refs/gk-verify`
+instruction in the proposal was worth correcting rather than deleting.
+
+
+## M116 — the last unaudited claim, and the mutation arm came back STRONGER than the claim
+
+Section A entry 1 was the only "take freely" row never re-checked: *"Kills a
+**4-in-10** flake [...] A/B 4/10 -> 0/12 on the host."* **A flake rate is the
+easiest kind of claim to get wrong, and a green run is the worst kind of evidence
+for one** — this document's own rule is that a flake's colour is not evidence.
+
+**AFTER ARM — 12 iterations with the fix: 12 passed, 0 failed.** That reproduces
+the recorded `0/12`, and on its own it proves nothing: twelve greens are exactly
+what a surviving flake looks like some of the time.
+
+**So I ran the BEFORE arm**, restoring `save_container` from `origin/main` (the
+pre-fix two-liner: `write_text` with no `create=` guard), with a checksum on both
+sides:
+
+    pre-fix save_container, 10 iterations   ->   1 passed, 9 FAILED
+    with the fix,           12 iterations   ->  12 passed, 0 failed
+    restored: sha256 MATCHES, git status clean
+
+**THE CLAIM IS CONFIRMED IN DIRECTION AND WRONG IN MAGNITUDE — upward.** Recorded
+as 4-in-10; measured today at **9-in-10**. The fix is not a nice-to-have that
+removes an occasional annoyance; **without it this test fails almost always on
+this host right now.**
+
+**What I will NOT infer.** A flake rate is not a property of the code — it is a
+property of code, host and load together. Earlier in this session I proved a
+neighbouring timing test fails when the host is FAST, not slow (M62), so a rate
+that rose from 4/10 to 9/10 on a quieter host is *consistent* with the same
+shape. **I did not measure that, and it stays a hypothesis.** What is measured is
+the A/B, and the A/B is unambiguous.
+
+**The useful correction is to how the number was WRITTEN, not what it was.**
+"Kills a 4-in-10 flake" reads as a stable property. It is one observation of a
+load-dependent rate, and the honest form is **"measured 9/10 pre-fix and 0/12
+post-fix on this host on 2026-08-22; the rate moves with load, the direction does
+not."** Section A updated to say that.
+
+**All seven entries in section A have now been re-checked against measurement.**
+This one was last because it looked the least likely to be interesting, which is
+a poor reason and produced the largest single correction of the set.
+
+
+## M117 — "a control must share the scope" is too blunt. It must cover the DIMENSION THAT COULD FAIL
+
+M114 earned a rule the hard way: my `find` control searched a NARROWER root than
+the absence claim, proving the mechanism and not the coverage. **Stated as "the
+control must share the scope", that rule is wrong in the other direction** — and
+applying it to my own earlier controls is what shows why.
+
+**M94's control was CROSS-FILE.** The claim was *"these three documents contain 0
+instances of the retracted phrases"*; the control was *"the same pattern finds 46
+and 6 in two OTHER documents"*. **Under a blunt same-scope rule that is invalid.
+It is not, and the distinction is what makes the rule usable:**
+
+| claim shape | what can fail | what the control must cover |
+|---|---|---|
+| `grep` a NAMED file | the PATTERN (the file is definitely read) | pattern validity — a positive **anywhere** suffices |
+| `find` over a TREE | the COVERAGE (which dirs were reached) | **same root, same depth, same flags** |
+| `grep -f` with a pattern FILE | the pattern file being non-empty | assert the pattern list, not the result |
+
+**M94 is sound because its two failure modes were each covered separately:**
+pattern validity by the cross-file positives (46 and 6), and file-readability by
+the line counts printed in the same command (460, 28, 1758 — none empty, all
+read). **Two dimensions, two pieces of evidence, neither standing in for the
+other.**
+
+**The corrected rule: a control must cover the dimension that could actually
+fail.** "Same scope" is a proxy for that, correct for tree searches and
+over-strict for single-file greps. **A proxy applied without its reason becomes
+superstition** — and an over-strict rule gets abandoned the first time it is
+inconvenient, which is worse than a precise one.
+
+**This is the fourth rule in this document that needed narrowing after it was
+written** — after *"a run root's premise must be a commit fact"* (narrowed by the
+offered-corpus route, M105), *"the allowlist means the control cannot cross"*
+(strengthened to a refusal, M107), and *"a skipped cell has no colour"* (narrowed
+to CELL tests, M103). **Every one was right and every one was imprecise, and the
+imprecision is only visible when you try to apply it somewhere new.**
+
+
+## M118 — the published re-derivation command UNDERCOUNTS, and M59 is a citation with no section
+
+The header's rule is *"a number that is wrong after every commit does not belong
+in a header; **the command below is the number**."* **So a command that is wrong
+is worse than a stale figure**, because the figure at least invites doubt. Ran all
+four as published:
+
+    sections           112
+    highest M          117      <- these two disagree, and a reader will see it
+
+**Three heading conventions exist in this document and the command matched one:**
+
+    ## M{n} — ...              113 sections
+    ### M{n} — ...               2  (M14, M15, M16 — cited 17, 11 and 8 times)
+    ### Title ... (M{n})         2  (M17, M19)
+
+**115 + 2 = 117, which equals the highest M exactly.** So of slots 0–117 exactly
+**one** is genuinely absent, and it is not a formatting variant.
+
+**M59 IS CITED TWICE AND HAS NO SECTION** — *"CORRECTION to my own blocker
+(M59)"* and *"the gate's own docstring says the set may only shrink (M59)"*. Both
+read as pointers to a numbered finding that a reader can go and check. **They
+point at nothing.** That is the dangling-ordinal defect: the citation names its
+referent perfectly and still resolves to nowhere.
+
+**Fixed the command rather than renumbering the headings** — renumbering would
+break 36 live citations to M14/M15/M16 alone, to make a regex simpler. The command
+now matches all three forms and returns **117**, which agrees with the highest-M
+command instead of contradicting it.
+
+**M59 is left standing and flagged rather than quietly deleted**, because I cannot
+tell from the citations whether a section was lost or the number was never
+allocated, and inventing either answer would be worse than naming the gap.
+
+**The lesson is narrow and sharp: I published a command as the antidote to a
+decaying number, and never ran it after the document grew.** The header says
+*"re-derive before quoting"* — I wrote that instruction and then quoted the
+section count from memory for a hundred sections.
+
+
+## M119 — the other three published commands audited. Three sound, one was broken, and that ratio is the point
+
+M118 found the section-count command undercounting. **A command that runs is not
+a command that is right** — the identical lesson as a test that passes — so the
+other three got the same treatment rather than a glance at their output.
+
+**`instrument defects` — SOUND.** The `sed` range yields 12 pipe-rows: 10 numbered
+plus header and separator. Numbers run **1–10 with no gaps**, and the terminator
+`^\*\*The common shape` is present, so the range closes where the table does
+rather than running to end-of-file.
+
+**`corrections` — SOUND.** 45 entries, range **1–45, no missing numbers, no
+duplicates**, `len == max`. Checked with a parser rather than a count, because a
+count cannot tell 45 sequential entries from 45 entries numbered 1..47 with two
+repeats — which is exactly the failure the section-count command had.
+
+**`highest M` — SOUND**, and now agrees with the corrected section count instead
+of contradicting it.
+
+**One of four was wrong, and it was the one whose answer I quoted most.** The
+three that survived are the ones I never leaned on; the broken one produced the
+figure in the title, in summaries, and in the header block that exists to stop
+figures decaying.
+
+**That is not a coincidence and it is worth naming.** A command whose output you
+publish repeatedly is the one whose brokenness costs most and the one you are
+least likely to re-run, precisely because you already "know" the answer. **The
+check that matters least is the one you run; the check that matters most is the
+one you remember the result of.**
+
+
+## M120 — re-ran the number I quote most, and the two protected-file mutations left nothing behind
+
+M119 ended on *"the check that matters most is the one you remember the result
+of."* **The most-quoted number in this document is the host lane's `6 failed`,
+and since measuring it I have mutated two files — one PROTECTED — and restored
+them.** Checksums matched both times. **A checksum proves the bytes; it does not
+prove the suite.**
+
+    test_hermetic_candidate_runner.py    17 passed   (mutated at :852, restored)
+    test_hdl_declaration_scan_...py      16 passed   (my 5 regression tests)
+    hdl_declaration_scan_..._check.py    exit 1      (the 3 real candidates, as recorded)
+    test_landing_merge_verdict.py         6 failed, 128 passed  (490s)
+
+**And the failing set is IDENTICAL to the recorded six** — `diff`ed by node id,
+not compared by count, because this document has twice been caught by two sets
+agreeing on a total and differing in membership.
+
+**So the mutation experiments left nothing behind.** Both were run by
+mutate → measure → restore with a checksum on each side, and `git status` clean
+afterwards; this is the independent confirmation that the restores were real and
+not merely byte-identical at one path.
+
+**Why this was worth eight minutes at the end.** I ran a destructive experiment
+against a protected authority file to verify someone else's claim, and the
+verification of my own cleanup was a hash comparison — **the same kind of evidence
+I have rejected all week when other people's checks offered it.** A hash says the
+file is what it was. It says nothing about whether the file I restored was the
+right file, or whether anything else moved while I was working.
+
+**The suite says both. It is the only thing that does.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -5914,10 +6367,10 @@ manifest itself did not.
 
 | # | change | why it is safe |
 |---|---|---|
-| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12 on the host; the race does not reproduce in the image at all (M23). The runner is untouched. |
+| 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. **RE-MEASURED 2026-08-22 (M116): 9 of 10 FAIL pre-fix, 0 of 12 post-fix** — recorded here earlier as 4/10, and the true rate on this host today is more than double that. A flake rate is a property of code AND host AND load, so read it as one dated observation; the DIRECTION is unambiguous and the before-arm was run by restoring `save_container` from `origin/main` with a checksum on both sides. the race does not reproduce in the image at all (M23). The runner is untouched. |
 | 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. Passes in BOTH lanes (M21). |
 | 3 | `test_landing_merge_verdict.py`: the G4 diagnosis fix (M8) | Does NOT change any verdict. Converts a misattributed `TimeoutExpired` into a message naming the true cause, and stops leaking the verifier process. The two tests stay RED either way. |
-| 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. Discriminates: `base_total == 0` and `base_land is None` are both real, disclosed conditions. RED -> GREEN, verified full-file. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
+| 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. **Evidence, stated exactly (M111):** NON-VACUOUS BY CONSTRUCTION — every assertion is a bare subscript, so a missing key is a `KeyError`, never a pass. BITES ON REAL VALUES — `base_total > 0` is asserted against a measured **6** (`6 test(s) ran on the candidate, 6 on the base`). RED -> GREEN full-file, and among the 128 passes in the CONFIGURED image lane (M90). **A live mutation arm is NOT established**: suppressing a whole wave needs a control injected into the arm, which the exact-set env contract refuses (M107) — the same wall that blocks four of the six surviving reds. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
 | 5 | `test_landing_merge_verdict.py`: **design C** — the three tamper guards re-founded (M24) | Each now asserts the verifier REFUSES (`rc 1`), the tamper did NOT redefine the tree (`expected_tree == verified_tree`), it never reached the real worktree (`candidate_test_worktree_status == "clean"`), and it WAS observed (the planted test in `delta.new_failures`). Specification verified against a live run BEFORE the edit. 3 RED -> GREEN. **Retires** the old `rc 2` / `doc is None` / `"raw attestation failed"` assertions deliberately — that was a hard `Refusal` for an arm dirtying the REAL worktree, which no longer happens; the check moved into `candidate_test_worktree_status`. The reasoning is inline in each test. |
 | 6 | `matrix_d3_output_manifest.json`: the measured step-31 entry (M32) | EVIDENCE, not a baseline rewrite. `reports/phase3/drc_signoff.json` measured at **1919 B** from `benchmark-data/ic/spm/v1.9.96_gf180mcuD` — the same declared run root step 31's other entries cite, carrying `provenance.jsonl` AND `reports/orchestrator/`. Gate goes `1 not covered -> 0`. **Closes 3 reds.** Blast radius checked including the one the gate names: `matrix_mutation_ledger` gives an IDENTICAL failure ID set to the pristine baseline. |
 | 7 | `hdl_declaration_scan_strips_comments_check.py`: `stripped_locals` propagates through `for` and comprehension targets, + 5 regression tests (M78) | **A GATE FIX, and the only change here that touches a program rather than a test.** The analyser only propagated "passed through a stripper" across ASSIGNMENT, so `for line in stripped.splitlines()` read as unstripped — the commonest shape for a declaration scan. 10-case A/B: **5 wrong -> 0 wrong**, all four true positives still flagged, so it is a PRECISION fix and not a relaxation. Repo-wide **175 -> 168** sites, **0 newly flagged**, and the gate's BLOCKING list goes **5 names -> 3** with both departures verified false positives in source. Mutation arm: revert the analyser and **4 of the 5 new tests go red**; the fifth passes in both arms by design, as the anti-relaxation control. **Baseline deliberately NOT written** though the gate asks for it on the shrink. |
@@ -6119,6 +6572,44 @@ anti-staleness section is not exempt):
 35. **"the document now runs to M36"**, in the header block that warns summaries
     decay and publishes a command to re-derive exactly that number. It was 56
     sections stale.
+
+36. **"a third cause, distinct from the `home`-root group and the allowlist
+    group"** — FALSE (M99). It is the FIRST cause propagating; the assert payload
+    named two D3 reds I had already recorded. I grouped on the failure's headline.
+37. **"the pointer is not a fix and must never be quoted as one"** — WRONG (M105).
+    It takes 61 cells from reporting NOTHING to 54 measured passes. I was watching
+    the failure count, which went up.
+38. **"one publication decision closes six reds"** — FALSE (M96). Pointing at a
+    real corpus closes **zero** of them; `home` roots cannot become admissible by
+    publishing anywhere (M105). Right diagnosis, wrong remedy — and the remedy is
+    the half a lander would act on.
+39. **"the corpus and bootstrap four have no second blocker"** — FALSE (M92),
+    corrected within one commit of writing it.
+40. **"34 reds, 6 causes"** — superseded (M108). The mutation-ledger three are
+    DOWNSTREAM of D3, making it 5 roots with 16 under one.
+41. **`ALREADY_RED` filed as `NOT_FALSIFIABLE`** — a category error I nearly
+    published as a request (M108). "Nothing can redden this" is not "this is
+    already red, so nothing can be SHOWN to redden it."
+42. **"the assertions discriminate"** (design A) — an ARGUMENT presented as
+    evidence (M111). What is established is non-vacuity by construction and a
+    measured `6`; a live mutation arm is blocked by the same contract this branch
+    reports.
+43. **The proposal's B bound told a future builder to capture the run id from
+    `refs/gk-verify/*`** — those refs exist ONLY on the `--pr` path. **Not a stale
+    number: an instruction that would have sent someone down the exact dead end I
+    walked.** Corrected in place rather than deleted.
+44. **"kills a 4-in-10 flake"** — measured today at **9 in 10** (M116). Wrong in
+    magnitude, upward, and wrong in FORM: a flake rate is not a stable property of
+    code, and stating one without a date and a host reads as though it were.
+45. **The proposal's "none of this is implemented or run"** — false in both halves
+    once A and C landed and B was built and reverted.
+
+**AND THIS SECTION WENT STALE A SECOND TIME.** It was extended to 35 with the
+observation that a summary decays as work continues past it — **then nine more
+corrections landed and it did not move.** The rule was already written, already
+correct, already applied once, and it still needed applying again. **That is the
+strongest evidence in this document that the rule is real: it beat me twice in
+the same file, after I had named it.**
 
 **Six near-misses that measurement killed before publication**, listed because
 each would have been believed: "three tamper guards fail in the strong tier" (the

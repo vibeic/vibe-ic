@@ -20,6 +20,7 @@ chip-AGNOSTIC: argument parsing and output text.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +49,34 @@ _ANNOUNCED = _SILENT.replace(
     '        print(f"note: {CORPUS_ENV} overrides --tree {tree} -> {env}")\n'
     '        tree = env\n')
 
+
+
+def _count_in(text: str, phrase: str) -> bool:
+    """`phrase` (which begins with a count) appears with NO digit before it.
+
+    MEASURED: `assert "1 inexpressible" in out` is satisfied by an output saying
+    `21 inexpressible`, and `"0 key(s) observed"` by `10 key(s) observed`. A
+    substring assertion on a count is not a pin — every one of these tests would
+    have passed against a tenfold-wrong number. Taken from the census lane's
+    "a substring assertion on a count is not a pin — parse the number".
+    """
+    return re.search(r"(?<!\d)" + re.escape(phrase), text) is not None
+
+
+def test_the_count_anchor_actually_fires():
+    """PROVE THE PIN FIRES. `_count_in` exists because a substring assertion on a
+    count is not a pin — `"1 inexpressible" in out` is satisfied by an output
+    saying `21 inexpressible`. A helper that silently never rejects anything would
+    reinstate exactly the defect it was added to remove, and nothing else in this
+    file would notice, because every other use of it asserts the TRUE case.
+
+    So: the true case passes, and a preceding digit is refused.
+    """
+    assert _count_in("examined 1 thing", "1 thing")
+    assert not _count_in("examined 21 thing", "1 thing"), (
+        "the anchor did not fire: a tenfold-wrong count still satisfies the pin")
+    assert not _count_in("examined 10 thing", "0 thing")
+    assert _count_in("a, 0 thing", "0 thing")
 
 def _mk(tmp_path, body, name="gate.py", scope=_SCOPE):
     d = tmp_path / scope
@@ -116,14 +145,14 @@ def test_an_out_of_scope_reader_is_disclosed_not_refused(tmp_path):
     rc, out = _run(tmp_path)
     assert rc == 0, out
     assert "DISCLOSED" in out
-    assert "1 silent reader(s) outside the scope disclosed" in out
+    assert _count_in(out, "1 silent reader(s) outside the scope disclosed")
 
 
 def test_the_disclosure_is_never_silently_zero(tmp_path):
     """A PASS whose scope hides offenders must state how many it hid."""
     _mk(tmp_path, _ANNOUNCED)
     rc, out = _run(tmp_path)
-    assert "0 silent reader(s) outside the scope disclosed" in out
+    assert _count_in(out, "0 silent reader(s) outside the scope disclosed")
 
 
 # -------------------------------------------------------------- verdicts

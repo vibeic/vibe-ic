@@ -7,13 +7,88 @@ HOW MUCH OF THIS SUITE ACTUALLY COVERS THE FIX
 one commit at a time and easy to stop satisfying. Measured by swapping in
 3c3c51aee's 326-line program and running this file against it:
 
-    67 of 83 RED, 16 green.
+    77 of 94 RED, 17 green.
 
-Ten of the sixteen are the author's originals, which test behaviour that already
-worked. The other six are: two that read files other than the program (the CI
-wiring, the polarity baseline), three that pin PRE-EXISTING behaviour against
-regression, and one structural invariant that held before as well. None is
-vacuous.
+Ten of the seventeen are the author's originals, which test behaviour that
+already worked. The other seven are: two that read files other than the
+program (the CI wiring, the polarity baseline), four that pin PRE-EXISTING
+behaviour against regression, and one structural invariant that held before as
+well. None is vacuous.
+
+(Re-measured at this branch's tip. The figure read 67 of 83 for several
+commits after the suite had grown past 83 -- a count of the tests that exist
+goes stale the moment one is added, which is the same fault this file records
+against the program's own docstring. Re-derive it, never re-read it: swap
+3c3c51aee's program in and run this file.)
+
+IF THIS AREA GOES RED FOR A REVIEWER OR A RE-MEASURE, READ THIS FIRST
+====================================================================
+`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+bounds its subprocess at `timeout=55` -- WALL CLOCK, at three call sites -- and
+its subject is `prose_polarity_consulted_check.py` over the whole corpus.
+
+That subject is not a fixed cost, and the spread is not a smooth function of
+load. Measured on this machine: 10.8s to 13.0s across most runs, one run of
+19.4s at a load average near 20 with three runs of 10.9-11.3s at the SAME load
+minutes later, and it has been OBSERVED failing at 58.25s under a load average
+of 71 and passing on the next run with nothing changed. So a red there can mean
+the census is broken, or it can mean the machine was busy at that moment, and
+the two are not distinguishable from the failure alone. Do not read a single
+timing as the cost; the 19.4s figure was an outlier and is quoted as one.
+
+To tell them apart, run the gate DIRECTLY:
+
+    python3 programs/prose_polarity_consulted_check.py ; echo $?
+
+rc 0 means the census is intact and the test hit its wall clock. rc 1 means a
+real polarity-blind extractor and the number it names is the finding.
+
+This note lives HERE because the bound lives in a file this branch may not
+loosen, and a warning nobody can find is not a warning. It is not this file's
+growth: the program is 0.18% of the corpus by bytes, and the gate measures the
+same with it swapped back to the author's 326-line revision.
+
+MUTATION, TWO SWEEPS
+====================
+Guards: every `if ...: continue` in the program deleted in turn -- 20 sites, 8
+survived, 4 of which were real gaps and are now covered (see "guards a mutation
+sweep found nothing was holding"). Three of the remaining four are fast paths,
+not guards: deleting them leaves the shipped tree's --json byte identical. The
+fourth, `if isinstance(up, ast.stmt)`, is EQUIVALENT, and now says so with a
+proof rather than a shrug: every form that walk tests for is an `ast.expr`,
+and an expression is never the parent of a statement -- 602,938
+statement-parent edges over 3,965 files of this tree, zero with an expression
+parent. The premise that argument needs is pinned by
+`test_the_statement_stop_rests_on_a_true_premise`.
+
+Boundaries: every comparison operator flipped to its neighbour -- `>=`<->`>`,
+`<`<->`<=`, `==`<->`!=`. 12 sites, ZERO survivors, including the two that carry
+the semantics: `value < MIN_POPULATION` (the population floor) and
+`sites > value` (the lower-bound rule, where an equality false-PASS was fixed
+earlier on this branch). Reproduce by rewriting the file through `ast.unparse`
+with one op flipped; the un-mutated round trip passes, so the harness itself is
+not what fails.
+
+Constants: every integer constant outside an f-string incremented by one -- 37
+sites, 32 caught, 5 survivors, and each survivor is EQUIVALENT rather than
+uncovered:
+
+    rfind("\n", 0, at) + 1   both the 0 and the +1: `lstrip()` absorbs the
+                             one-character shift, and searching from 1 differs
+                             only if a newline sits at index 0
+    calls.get(host, 0) > 1   with a default of 1 the test is still False
+    max(out.get(k, 0), ...)  `calls[host]` is >= 2 on that path, so the max
+                             does not move
+    json.dumps(indent=2)     whitespace of the `--json -` document; pinning it
+                             would be specifying the formatting, not the report
+
+Argued AND measured: each leaves the shipped tree's --json byte identical.
+
+The first attempt at this arm was discarded, not reported: it matched sites by
+`lineno`/`col_offset`, and constants inside f-strings carry bogus positions on
+this interpreter, so it edited sites other than the ones it named -- its
+"survivors" pointed at docstring prose, which is how the instrument was caught.
+Mutating by INDEX during one walk uses no positions and has none of that.
 
 THE SWAP RUN THE OTHER WAY, because "my tests pass" is not the same claim as
 "the author's contract still holds": 3c3c51aee's ORIGINAL test file, unmodified,
@@ -3153,6 +3228,49 @@ def test_a_pin_in_a_test_naming_a_silent_program_is_deliberately_not_reached(
     assert doc["pins_unmatched"] == 0, (
         "this pin was reached after all -- the limit the docstring sizes has "
         "changed, and the 24 it names are now counted: " + repr(doc))
+
+
+def test_the_statement_stop_rests_on_a_true_premise():
+    """`denies_containment` stops walking at the first statement, and the
+    mutation sweep could not kill that stop. The reason is not thin coverage: an
+    `ast.expr` is never the parent of an `ast.stmt` -- measured over this tree,
+    602,938 statement-parent edges across 3,965 files, zero with an expression
+    parent -- so no form the walk tests for can appear above the stop.
+
+    That argument holds only while every form it tests for IS an expression. Add
+    a check for something that can sit above a statement and the stop starts
+    hiding answers instead of ending a question. This fails then, which is the
+    only moment it matters."""
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "denies_containment")
+    # ONLY the checks made on the walk variable itself. The first version of
+    # this probe collected every `ast.X` in every isinstance call, which swept
+    # in `ast.Not` and `ast.NotIn` -- operator classes, tested on `up.op` and on
+    # the comparison's ops, never on `up` -- and failed on unmutated code. What
+    # the stop's soundness depends on is what can be found ABOVE it, which is
+    # only ever what `up` is tested against.
+    walked = {"up"}
+    tested = set()
+    for call in _ast.walk(fn):
+        if isinstance(call, _ast.Call) and getattr(call.func, "id", "") == "isinstance" \
+                and getattr(call.args[0], "id", None) in walked:
+            for arg in call.args[1:]:
+                for node in _ast.walk(arg):
+                    if isinstance(node, _ast.Attribute) and \
+                            getattr(node.value, "id", "") == "ast":
+                        tested.add(node.attr)
+    assert tested, "no isinstance checks on the walk variable -- probe is broken"
+    tested.discard("stmt")                      # the stop itself
+    not_expressions = sorted(
+        name for name in tested
+        if not (isinstance(getattr(_ast, name, None), type)
+                and issubclass(getattr(_ast, name), _ast.expr)))
+    assert not not_expressions, (
+        "this walk now tests for forms that are not expressions, and an "
+        "expression is the only thing that cannot sit above the statement "
+        f"stop -- so the stop may now be hiding an answer: {not_expressions}")
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────
