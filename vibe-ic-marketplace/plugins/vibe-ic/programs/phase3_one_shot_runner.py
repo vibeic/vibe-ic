@@ -32108,10 +32108,39 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                  str(project), "--json", str(sdc_check_json)],
                 capture_output=True, text=True, timeout=60,
             )
+            # `r` WAS BOUND AND NEVER READ. This step's own docstring promises
+            # "any individual emission failure logs WARN but the step
+            # continues", and this block logged nothing on any outcome: it
+            # tested only whether the file appeared. A step that swallows the
+            # result of a subprocess it ran, while its contract says it warns,
+            # is a disclosure that exists from the emitter's side and not the
+            # reader's.
+            #
+            # THE TWO OUTCOMES ARE NOT THE SAME THING and the note says which:
+            #   report written, rc != 0  -- NOT an emission failure. The
+            #       checker exits `0 if result.passed else 1`, so a non-zero
+            #       code means the SDC has real findings, and they are IN the
+            #       JSON that the downstream gate reads. Noted because the
+            #       runner's own notes are what a human reads first, and
+            #       "I emitted a report saying the SDC did not pass" must not
+            #       be silent.
+            #   report NOT written        -- a genuine emission failure, which
+            #       is what the docstring's WARN was promised for.
             if sdc_check_json.is_file():
                 written.append(str(sdc_check_json))
-        except Exception:
-            pass
+                if r.returncode != 0:
+                    notes.append(
+                        f"sdc_syntax_check reported findings (rc={r.returncode}); "
+                        f"the verdict is in "
+                        f"{sdc_check_json.relative_to(project)} and this step "
+                        "neither blocks on it nor hides it")
+            else:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()
+                notes.append(
+                    f"sdc_syntax_check emitted no report (rc={r.returncode}): "
+                    + (tail[-1][:200] if tail else "no output"))
+        except Exception as exc:  # best-effort, never block the step
+            notes.append(f"sdc_syntax_check emit failed: {exc}")
 
     # --- v1.6.190 / v1.6.191 (#77 P2 / #78 P2): copy chip GDS into
     # foundry_handoff/ ----
@@ -32865,12 +32894,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     dfm_json = rpt_phase3 / "dfm_screen.json"
     if primary_def.is_file() and _signoff_regen(dfm_json, primary_def):
         try:
-            subprocess.run(
+            # ADVISORY AT THE CALL SITE, which is the second of the two
+            # remedies `spawned_gate_whose_status_is_discarded` names: "bind
+            # the result and read its status, OR say ADVISORY at the call site
+            # so the decision is on the record rather than inferred from
+            # silence." The status is deliberately NOT a verdict here -- the
+            # comment above says it, and it is true: this is the canonicalize
+            # EMITTER, and the gate re-runs the screen for the verdict. What
+            # was wrong was the silence, not the leniency: an absent report was
+            # indistinguishable from a clean one.
+            _dfm = subprocess.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
                  str(project)],
                 timeout=300, check=False, capture_output=True, text=True)
             if dfm_json.is_file():
                 written.append(str(dfm_json))
+            else:
+                _tail = (_dfm.stderr or _dfm.stdout or "").strip().splitlines()
+                notes.append(
+                    f"DFM screen emitted no report (rc={_dfm.returncode}); the "
+                    "gate re-runs the screen for the verdict, so this is "
+                    "ADVISORY here and not a finding: "
+                    + (_tail[-1][:200] if _tail else "no output"))
         except Exception as exc:
             notes.append(f"DFM screen emit failed: {exc}")
 
@@ -39282,8 +39327,13 @@ def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,
     not_computed / no die area → the gate writes an honest SKIP (never a
     fabricated density). Returns True when the JSON is produced (any verdict)."""
     out_json.parent.mkdir(parents=True, exist_ok=True)
+    # ADVISORY AT THE CALL SITE. The status is deliberately not a verdict: the
+    # VERDICT is read out of the JSON immediately below, which is where this
+    # screen's answer actually lives. The one silent path was the missing
+    # report -- `return False` with nothing said, so a screen that CRASHED was
+    # indistinguishable to the caller from one that was not applicable.
     try:
-        subprocess.run(
+        _th = subprocess.run(
             [sys.executable, str(PROGRAMS_DIR / "thermal_screen_check.py"),
              str(project), "--json", str(out_json)],
             timeout=300, check=False, capture_output=True, text=True)
@@ -39291,6 +39341,10 @@ def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,
         notes.append(f"thermal screen emit failed: {exc}")
         return False
     if not out_json.is_file():
+        _tail = (_th.stderr or _th.stdout or "").strip().splitlines()
+        notes.append(
+            f"thermal screen emitted no report (rc={_th.returncode}): "
+            + (_tail[-1][:200] if _tail else "no output"))
         return False
     try:
         v = json.loads(out_json.read_text(errors="replace")).get("verdict")
@@ -41429,18 +41483,42 @@ def main() -> int:
     # post-layout gate-sim's no-SDF retry recompiles the full PDK cell library),
     # leaving _derive to read a stale phase23 that says FAIL while the
     # authoritative re-audit — written moments later — says PASS_WITH_WAIVERS.
-    # This direct, BLOCKING flow_compliance re-run rewrites
+    # This direct, SYNCHRONOUS flow_compliance re-run rewrites
     # phase23_completion_audit.json on the exact state the verdict is about to
     # report, so the orchestrator's headline can never lag its own sign-off.
+    #
+    # THE WORD HERE WAS "BLOCKING" AND THE CODE COULD NOT BLOCK. `check=False`,
+    # the result was unbound, and the handler was `except Exception: pass` --
+    # so prose asserted a property the three lines below cannot have. It is a
+    # REFRESH, and calling it blocking made a reader believe a failed re-run
+    # would stop the verdict when nothing would even mention it.
+    #
+    # AND THE FAILURE MATTERS, which is why the silence was the real defect: if
+    # this refresh does not run, `_derive` reads a STALE
+    # phase23_completion_audit.json -- exactly the lag this call exists to
+    # prevent, and the headline can then disagree with its own sign-off. It
+    # still must not abort finalize (the summary this failure belongs in is
+    # written below it), so the outcome is RECORDED and the step continues.
     try:
         import subprocess as _sp_fc
-        _sp_fc.run(
+        _fc = _sp_fc.run(
             [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
              str(project), "--strict"],
             timeout=_pl.audit_timeout_s(project) + 120,
             check=False, capture_output=True, text=True)
-    except Exception:  # nosec — best-effort refresh; _derive still reads the file
-        pass
+        if _fc.returncode != 0:
+            # NOT a finding about the design: flow_compliance exits non-zero
+            # for a non-clean flow, which is the ordinary case this refresh is
+            # run to capture. What is worth saying is that the refresh RAN and
+            # what it returned, so a stale audit can be told from a fresh one.
+            print(f"[INFO] flow_compliance refresh returned rc={_fc.returncode}; "
+                  "phase23_completion_audit.json is fresh and the headline is "
+                  "derived from it", file=sys.stderr)
+    except Exception as _fc_exc:  # nosec — must not abort finalize
+        print("[WARN] flow_compliance refresh did NOT run "
+              f"({_fc_exc}); _derive will read a STALE "
+              "phase23_completion_audit.json and the headline may lag its own "
+              "sign-off", file=sys.stderr)
 
     steps_verdict = _aggregate_verdict(plan)
     verdict, audit_verdict, verdict_note = _derive_headline_verdict(
