@@ -252,8 +252,13 @@ def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
     CLI's own help text rather than asserted, so it goes red if any of them
     loses the flag again.
     """
-    for prog in ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
-                 "ppa_search_run.py"):
+    progs = ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
+             "ppa_search_run.py")
+    # The denominator, stated. This loop is over a literal so it cannot be
+    # empty, but a literal edited down to two entries would still pass while
+    # checking less -- and "all three CLIs" is the claim in the name.
+    assert len(progs) == 3, progs
+    for prog in progs:
         out = subprocess.run([sys.executable, str(_PROGRAMS / prog), "--help"],
                              capture_output=True, text=True,
                              cwd=str(tmp_path))
@@ -276,7 +281,7 @@ def test_finding_the_shipped_campaign_contracts_declare_neither_key():
     empty scan is NOT OBSERVED and must not read as "every contract is fine".
     """
     import pytest
-    trials = (_PROGRAMS.parents[3] / "ppa-crosslayer" / "records" / "trials")
+    trials = _campaign_trials()
     if not trials.is_dir():
         pytest.skip(f"the cross-layer campaign records are not in this tree "
                     f"({trials}); this row was NOT OBSERVED, not satisfied")
@@ -774,8 +779,38 @@ CAMPAIGN_ARMS = (("z23", 10, True), ("p08", 10, True),
                  ("p04", 0, False), ("z21", 0, False))
 
 
+#: A file in the repo root that is not this lane's, so finding it means the
+#: anchor below resolved to a REPO and not merely to some directory that
+#: happens to lack `ppa-crosslayer`.
+_ROOT_WITNESS = "vibe-ic-marketplace"
+
+
+def _repo_root():
+    """The repo root, or a FAILURE -- never a silent skip.
+
+    Every row that reads shipped records locates them from `_PROGRAMS.parents[3]`,
+    and every one of them SKIPS when it finds nothing. That is right when the
+    records are genuinely absent and WRONG when the arithmetic has gone stale:
+    move the plugin one directory and all of them skip, reporting NOT OBSERVED
+    about a tree they never looked at. "The records are not here" and "I am
+    looking in the wrong place" would share a verdict, which is the one thing
+    this lane refuses everywhere else.
+
+    So the anchor is CHECKED. A root that does not carry `_ROOT_WITNESS` is a
+    broken calculation and fails loudly; a root that carries it and lacks the
+    records is a real absence and the caller may skip.
+    """
+    root = _PROGRAMS.parents[3]
+    assert (root / _ROOT_WITNESS).is_dir(), (
+        f"the repo-root anchor `_PROGRAMS.parents[3]` resolved to {root}, which "
+        f"carries no `{_ROOT_WITNESS}` -- the path arithmetic is stale, and "
+        f"every record-reading row in this file would otherwise SKIP and report "
+        f"NOT OBSERVED about a tree it never looked at")
+    return root
+
+
 def _campaign_trials():
-    return _PROGRAMS.parents[3] / "ppa-crosslayer" / "records" / "trials"
+    return _repo_root() / "ppa-crosslayer" / "records" / "trials"
 
 
 def _eco_only_policy():
@@ -1037,8 +1072,18 @@ def test_knob_the_space_guard_is_what_makes_that_cost_zero(tmp_path):
                            capture_output=True, text=True, cwd=str(tmp_path))
 
     assert without.returncode == 0, without.stderr      # the control
+    # THE RC IS THE GATE. The message is corroboration on wording this file does
+    # not own, kept because the landed `test_M_ECO_7` asserts the same phrase --
+    # diverging would leave two tests disagreeing about what the refusal looks
+    # like. Split out with its own message so a REWORD reads as a reword and
+    # not as the guard having stopped refusing. (Audited after a sibling row was
+    # found parsing an output shape that had already moved: this program is not
+    # touched by current main, so the phrase has not drifted yet.)
     assert withd.returncode == 1, withd.stdout + withd.stderr
-    assert "metal-only ECO" in withd.stderr
+    assert "metal-only ECO" in withd.stderr, (
+        "the space guard still refuses (rc=1) but no longer explains itself in "
+        "these words; if the wording moved, update this row and the landed "
+        f"test_M_ECO_7 together:\n{withd.stderr}")
 
 
 # ---------------------------------------------------------------------------
@@ -1139,7 +1184,7 @@ def test_penalty_is_never_mistakable_for_an_eligibility_decision():
 # worse than the silence it replaces.
 def _real_project_dirs():
     """Real, non-fixture directories in this repo that look like run trees."""
-    root = _PROGRAMS.parents[3]
+    root = _repo_root()
     out = []
     for phase3 in sorted(root.glob("docs/research/**/phase3"))[:12]:
         d = phase3.parent
@@ -1247,7 +1292,9 @@ def test_publication_a_declared_stance_audits_clean(tmp_path):
     """Both proofs license eligibility, and the clause must not refuse them --
     otherwise it is not "eligibility may not rest on silence", it is "no design
     may ever be eligible"."""
-    for i, eco in enumerate(({"required": False}, dict(DECL))):
+    proofs = ({"required": False}, dict(DECL))
+    assert len(proofs) == 2, proofs      # both licensing shapes, stated
+    for i, eco in enumerate(proofs):
         sub = tmp_path / f"case{i}"
         sub.mkdir()
         d = _campaign(sub, eco=eco)
@@ -1341,9 +1388,19 @@ def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
             [sys.executable, str(CHECK), "--candidates", str(cands)],
             capture_output=True, text=True)
         assert p.returncode in (F.RC_PASS, F.RC_FAIL, F.RC_UNDETERMINED), p.stderr
-        # the axis row, parsed from the CLI's own stdout line
-        assert f"[eco_readiness " in p.stdout, p.stdout
-        status = p.stdout.split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
+        # The axis row, parsed from the CLI's own stdout. ANCHORED ON THE TRIAL
+        # ID, not on the first occurrence of the marker: the verdict line's
+        # shape is not this test's to rely on, and it has already moved once --
+        # it gained a `<candidates path>: ` prefix and a block of per-axis
+        # MISSING detail lines. Taking the first match would silently start
+        # reading a different candidate's row the day a run carries two.
+        rows = [ln for ln in p.stdout.splitlines()
+                if "[eco_readiness " in ln and f"{trial}:" in ln]
+        assert len(rows) == 1, (
+            f"expected exactly one eco_readiness verdict row naming {trial}, "
+            f"got {len(rows)}; the CLI's output shape moved and this row is "
+            f"no longer reading what it thinks:\n{p.stdout}")
+        status = rows[0].split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
         spares = json.loads(plan.read_text(encoding="utf-8"))["count"]
         seen[trial] = (spares, status)
 
@@ -1353,3 +1410,114 @@ def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
         f"the shipped CLI now distinguishes these two arms: {seen}. That is "
         f"the gap this file measures being CLOSED -- re-measure the report "
         f"rather than trusting it.")
+
+
+# ---------------------------------------------------------------------------
+# THE GATE'S OWN DECLARATION STILL DESCRIBES A NINE-AXIS WORLD
+# ---------------------------------------------------------------------------
+# `tools/ci/repo_hygiene_gates.sh` wires "PPA promotion feasibility" at the 21
+# real candidate sets, and its exemption text explains the rc=2 as a CONTENT
+# verdict:
+#
+#   "seven of nine feasibility axes are SATISFIED on every one and two
+#    (em, equivalence) carry no measurement at all"
+#
+# Seven plus two is nine. The axis table has TEN. The tenth -- eco_readiness --
+# is NOT_APPLICABLE on all 21 and is counted in neither half, so the gate's
+# stated reasoning is complete about a table that no longer exists.
+#
+# This is the same shape as everything else in this file, one level up: a
+# declaration that reads as total while a whole axis passes underneath it
+# uncounted. It is a DISCLOSURE, not a gate -- the rows below fail if the
+# numbers drift so somebody re-measures, and say which way.
+def _hygiene_script():
+    return _repo_root() / "tools" / "ci" / "repo_hygiene_gates.sh"
+
+
+def test_the_hygiene_declaration_and_the_axis_table_disagree_on_the_count():
+    """The axis table grew a tenth entry; the gate's exemption text did not."""
+    import pytest, re
+    script = _hygiene_script()
+    if not script.is_file():
+        pytest.skip(f"{script} is not in this checkout; NOT OBSERVED")
+    text = script.read_text(encoding="utf-8")
+    if "PPA promotion feasibility" not in text:
+        pytest.skip("the promotion-feasibility gate is not wired here")
+
+    assert len(F.DEFAULT_AXES) == 10, [a.name for a in F.DEFAULT_AXES]
+    assert F.ECO_AXIS == F.DEFAULT_AXES[-1].name
+
+    # The declaration's own arithmetic, read out of it rather than retyped.
+    m = re.search(r"(\w+) of (\w+) feasibility axes are SATISFIED", text)
+    assert m, ("the promotion-feasibility exemption no longer states its axis "
+               "arithmetic; re-measure rather than trusting this row")
+    words = {"seven": 7, "eight": 8, "nine": 9, "ten": 10}
+    satisfied, of = words.get(m.group(1)), words.get(m.group(2))
+    assert (satisfied, of) == (7, 9), (
+        f"the declaration now reads '{m.group(1)} of {m.group(2)}'; it was "
+        f"'seven of nine' when this was measured, so the gap may be closed")
+    assert of < len(F.DEFAULT_AXES), (
+        f"the declaration counts {of} axes and the table has "
+        f"{len(F.DEFAULT_AXES)}")
+
+
+def test_the_axis_the_declaration_omits_is_not_applicable_on_every_candidate():
+    """And it is omitted while being uniformly inert, which is why nothing
+    noticed: on all 21 real candidate sets the tenth axis reads
+    NOT_APPLICABLE, so it never appears in a failure anybody reads."""
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip("the cross-layer campaign records are not in this tree; "
+                    "NOT OBSERVED")
+    sets = sorted(trials.glob("*/candidates.json"))
+    if not sets:
+        pytest.skip("no candidate sets in this tree; NOT OBSERVED")
+
+    seen = []
+    for cands in sets:
+        p = subprocess.run(
+            [sys.executable, str(CHECK), "--candidates", str(cands)],
+            capture_output=True, text=True)
+        rows = [ln for ln in p.stdout.splitlines() if "[eco_readiness " in ln]
+        assert rows, (cands, p.stdout)
+        for line in rows:
+            seen.append(line.split("[eco_readiness ", 1)[1]
+                        .split("]", 1)[0].strip())
+    assert len(seen) >= len(sets), (len(seen), len(sets))
+    assert set(seen) == {"NOT_APPLICABLE"}, (
+        f"the tenth axis now reports {sorted(set(seen))} on the campaign; it "
+        f"was uniformly NOT_APPLICABLE when this was measured")
+
+
+def test_the_repo_root_anchor_fails_loudly_when_it_goes_stale(monkeypatch,
+                                                              tmp_path):
+    """The guard, SHOWN TO FIRE. A check that has only ever run against a
+    correct tree has not been shown to detect anything.
+
+    Point the anchor at a directory that is not a repo root and assert
+    `_repo_root()` RAISES rather than returning a path the record-reading rows
+    would then quietly skip on.
+    """
+    import pytest
+    # sanity: it does not fire on the real tree
+    assert _repo_root().is_dir()
+
+    fake = tmp_path / "not" / "a" / "repo" / "root" / "deep" / "enough"
+    fake.mkdir(parents=True)
+    monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", fake)
+    with pytest.raises(AssertionError) as exc:
+        _repo_root()
+    assert _ROOT_WITNESS in str(exc.value)
+    assert "stale" in str(exc.value)
+
+    # and the distinction it protects: a root that DOES carry the witness but
+    # has no records is a real absence, and must NOT raise -- otherwise the
+    # guard has replaced one conflation with another.
+    real_shape = tmp_path / "empty_repo"
+    (real_shape / _ROOT_WITNESS).mkdir(parents=True)
+    deep = real_shape / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", deep)
+    assert _repo_root() == real_shape
+    assert not (_repo_root() / "ppa-crosslayer").exists()
