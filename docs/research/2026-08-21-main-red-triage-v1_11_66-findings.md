@@ -5392,6 +5392,52 @@ red because the code is doing what it was told; whether it was told the right
 thing is the owner's call, and it is ONE call, not five.**
 
 
+## M101 — the consolidated census: 34 reds, 6 causes, measured rather than accumulated
+
+Twice this document recorded a correctly-diagnosed cause with **half its blast
+radius** (the flow-gate item at 3 when it owns 6, M95; the vacuity conditional at
+2 when it owns 5, M100). That is a census defect, not a diagnosis defect, so here
+is the census — assembled from the runs above, deduplicated by node id.
+
+**34 distinct failing test ids across 10 files**, every one measured on this host
+at HEAD with the corpus pointer set.
+
+| n | cause | how established | where |
+|--:|---|---|---|
+| **11** | D3 outputs: 6 cite `home` run roots no corpus supplies; **5 are visible only once the corpus is pointed at all** | A/B with and without `VIBE_IC_BENCHMARK_DATA`, sets diffed | M86/M87/M96 |
+| **6** | the closed 7-name env allowlist — a test control that can no longer cross into the arm | `grep -c` per name in the runner; remedy built and executed | M91/M92 |
+| **5** | `flow_compliance_check.py:10057` — `not vacuous_hints` declines the WAIVED-DEFERRED branch for Step 4 | five payloads read side by side; conditional verified in source | M45/M100 |
+| **3** | `flow_gate_enforcement_audit` exits 1 on two undeclared gates | identical audit output in three unrelated files | M80/M95 |
+| **3** | `0.5ic` and `1.6x` are ENFORCED cells whose d3 cell is **red at baseline**, so no mutation can redden them | `--replay` returns `ALREADY_RED (baseline_rc=1)` | M95/M96 |
+| **1** | `magic` cannot launch on this host | 10/10 deterministic, tool-absence | M60 |
+| **5** | `test_matrix_63x8_coverage.py` — **2 verified downstream of D3 reds** (M99); **3 NOT individually root-caused** | partial | — |
+
+**SIX CAUSES ACCOUNT FOR 31 OF 34.** The three I have not individually
+root-caused are named rather than folded into a neighbouring group:
+`test_every_na_cell_asserts_a_live_precondition` (*"2 NA problem(s)"*),
+`test_no_cell_is_counted_enforced_while_its_predicate_is_red` (*"55 of 621 cells
+are reported in a state their own live precondition denies"*), and
+`test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress`.
+**Two of those three carry the nested-run message that M99 showed is D3
+propagating, and I have NOT confirmed the third belongs with them** — so they sit
+in their own row rather than inflating a group I like the shape of.
+
+**What the census changes for a lander:**
+
+* **Declaring intent on two gates closes 3 reds** — not the 3 section C named,
+  and in three files section C never mentions.
+* **One conditional owns 5.** Whether `:10057` should decline the waiver branch is
+  ONE decision, and it is the same decision for all five.
+* **Publishing or re-pointing the D3 records touches 11**, of which 5 only became
+  visible when the corpus was pointed at all.
+* **Nothing here is closable by me**: every one is a protected file, a product
+  decision, or a corpus publication.
+
+**The honest summary line of this whole engagement**: not "22 reds, one cause",
+which was true of one file, but **34 reds, six causes, three unresolved, and the
+denominators stated.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
