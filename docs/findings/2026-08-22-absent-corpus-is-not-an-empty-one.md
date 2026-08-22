@@ -186,8 +186,11 @@ that it replaces one wrong sentence with a different wrong sentence.
   and correctly reported that there was nothing to open.
 * `_corpus_location.refuse(may_be_absent=True)` is a considered, documented
   opt-in — a repository that no longer carries the published tree is not
-  thereby misconfigured. Reversing it would change every other call site's
-  behaviour to fix this one's.
+  thereby misconfigured. The issue proposed flipping it at this one call site,
+  which leaves the opt-in standing but makes this producer disagree with every
+  other consumer of `refuse` about what absence means; the fix taken leaves the
+  opt-in standing *and* keeps the agreement, by adding a state instead of
+  re-labelling one.
 * The `producer FAILED` row says *"the $n item(s) below are what it managed to
   print and NOT the corpus"*. In state A there is no partial anything.
 
