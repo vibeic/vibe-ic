@@ -27,6 +27,7 @@ chip-AGNOSTIC: flow declarations and stamp vocabulary.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,18 @@ _STAMPED = ('def emit(project, body):\n'
             '    p = project / "sta" / "post_route_timing.rpt"\n'
             '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n')
 
+
+
+def _count_in(text: str, phrase: str) -> bool:
+    """`phrase` (which begins with a count) appears with NO digit before it.
+
+    MEASURED: `assert _count_in(out, "1 inexpressible")` is satisfied by an output saying
+    `21 inexpressible`, and `"0 key(s) observed"` by `10 key(s) observed`. A
+    substring assertion on a count is not a pin — every one of these tests would
+    have passed against a tenfold-wrong number. Taken from the census lane's
+    "a substring assertion on a count is not a pin — parse the number".
+    """
+    return re.search(r"(?<!\d)" + re.escape(phrase), text) is not None
 
 def _tree(tmp_path, flow, modules):
     f = tmp_path / _FLOW_REL
@@ -161,13 +174,13 @@ def test_an_inexpressible_stage_is_disclosed_not_refused(tmp_path):
     rc, out = _run(root)
     assert rc == 0, out
     assert "cannot describe a report written after CTS" in out
-    assert "1 inexpressible" in out
+    assert _count_in(out, "1 inexpressible")
 
 
 def test_the_inexpressible_count_is_never_silently_zero(tmp_path):
     root = _tree(tmp_path, _FLOW, {"runner.py": _STAMPED})
     rc, out = _run(root)
-    assert "0 inexpressible" in out
+    assert _count_in(out, "0 inexpressible")
 
 
 # ------------------------------------- the gap the record came from, disclosed

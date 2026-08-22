@@ -25,6 +25,7 @@ chip-AGNOSTIC: flow-stage vocabulary. `/foss/pdks/sky130A` is an open kit root.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -49,6 +50,18 @@ _PRE = _POST.replace('read_spef design.spef\n', '')
 _RPT_STAMPED_POST = "# STA_BASIS: POST_ROUTE_SPEF\nTotal 5.73e-04\n"
 _RPT_STAMPED_PRE = "# STA_BASIS: PRE_LAYOUT_ESTIMATE\nTotal 3.06e-04\n"
 
+
+
+def _count_in(text: str, phrase: str) -> bool:
+    """`phrase` (which begins with a count) appears with NO digit before it.
+
+    MEASURED: `assert "1 inexpressible" in out` is satisfied by an output saying
+    `21 inexpressible`, and `"0 key(s) observed"` by `10 key(s) observed`. A
+    substring assertion on a count is not a pin — every one of these tests would
+    have passed against a tenfold-wrong number. Taken from the census lane's
+    "a substring assertion on a count is not a pin — parse the number".
+    """
+    return re.search(r"(?<!\d)" + re.escape(phrase), text) is not None
 
 def _run(root):
     cp = subprocess.run([sys.executable, str(_TOOL), str(root)],
@@ -160,7 +173,7 @@ def test_an_undeclared_report_is_disclosed_not_passed(tmp_path):
     _pair(tmp_path, _POST, "Total 5.73e-04\n", stem="power")
     rc, out = _run(tmp_path)
     assert "UNDECLARED" in out
-    assert "0 declare a stage, 1 declare none" in out
+    assert _count_in(out, "0 declare a stage, 1 declare none")
     assert rc == 2, out
 
 
@@ -186,7 +199,7 @@ def test_one_declared_pair_makes_it_a_real_comparison(tmp_path):
     _pair(tmp_path, _POST, "Total 5.70e-04\n", stem="power2")
     rc, out = _run(tmp_path)
     assert rc == 0, out
-    assert "1 declare a stage" in out and "1 declare none" in out
+    assert _count_in(out, "1 declare a stage") and _count_in(out, "1 declare none")
 
 
 def test_a_session_that_publishes_no_number_is_not_a_pair(tmp_path):

@@ -1037,3 +1037,31 @@ I broke `only_the_declaring_step` doing exactly that in this change (a
 gate answered rc=2 NOT CHECKED until I noticed). Churn in a green gate for an
 empty population is not obviously worth it; the property is recorded here so the
 next person decides with the number in front of them.
+
+### A fourth finding from their commit log: my count assertions were not pins
+
+They pushed six more commits, one titled *"test: a substring assertion on a count
+is not a pin — parse the number"*. Seven of my assertions are exactly that shape.
+Demonstrated rather than reasoned about:
+
+    assertion                              actual output              passes?
+    "1 inexpressible"                      21 inexpressible           YES
+    "0 key(s) observed"                    10 key(s) observed         YES
+    "1 silent reader(s) ... disclosed"     11 silent reader(s) ...    YES
+    "0 declare a stage, 1 declare none"    10 declare a stage, 1 ...  YES
+
+Every one of those tests would have passed against a **tenfold-wrong number**.
+They were written to pin a disclosure count — the counts this file keeps insisting
+must be visible so a PASS bought by an exclusion is legible — and they pinned
+nothing.
+
+Fixed with a non-digit front anchor (`(?<!\d)`) behind a named helper, so the
+intent is in the test rather than in a regex: a count assertion now fails when a
+digit precedes the number. All six demonstrations flip to "correctly FAILS". 228
+tests pass.
+
+**That is the fourth defect this lane owes to reading the other lane's commit
+titles** — after the write enumeration, the declaration-shaped regex, and the
+silent unparseable skips. Two were fail-open, one fail-closed, one latent, and
+this one was in the TESTS rather than the gates: the instrument that was supposed
+to catch a regression in a disclosure count could not see one.
