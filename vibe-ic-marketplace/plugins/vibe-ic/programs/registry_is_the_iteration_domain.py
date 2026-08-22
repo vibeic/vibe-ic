@@ -77,10 +77,33 @@ One measured false positive on a live blocking gate, for eight modules of
 reach. It was not taken, and the numbers are here so the decision can be
 revisited with evidence rather than re-argued.
 
-The principled fix is narrower than either: count a derived loop as exculpating
-only when the collection it appends to REACHES THE VERDICT, which would exclude
-a local AST-walk accumulator (`stack.append`) while keeping a reported one.
-That is a dataflow question and a larger change than this lane distils.
+A THIRD VARIANT WAS PROPOSED HERE AND HAS NOW BEEN MEASURED. It said: count a
+derived loop as exculpating only when the collection it appends to REACHES THE
+VERDICT — returned, printed, or passed on — so a local AST-walk worklist
+(`stack.append`) would stop exculpating while a reported collection kept doing
+so. It was written up as the principled fix and as a larger change than this
+lane distils.
+
+IT IS NOT AN IMPROVEMENT, and this paragraph replaces that claim rather than
+sitting beside it. Implemented as a prototype and run over the same population:
+reach **2 of 22**, findings **1** — identical to the shipped rule, to the
+module. The reason is the useful part: in all 20 exculpated modules the derived
+appending loops DO reach a verdict. They are real findings over a real derived
+population, which is precisely what SHOULD exculpate. The verdict-reachability
+test agrees with the permissive one because the permissive one was already
+right.
+
+That also retires the 10-of-22 variant properly. It reached further only by
+requiring the exculpating collection to be NAMED like a finding, which excludes
+genuine finding loops whose author picked another word — so its eight extra
+modules were mis-exculpations, not coverage, and its second finding
+(`checker_execution_wiring_audit:951`) was the false positive that shape
+predicts.
+
+CONCLUSION: 2 of 22 is not an artefact of a loose heuristic. It is the measured
+structure of this population — only two registry-reading enforcement modules
+emit findings from nowhere else. A future lane should NOT spend the dataflow
+change; it has been run.
 
 The run prints the reach every time, so the bound is visible in the verdict and
 not only in this docstring.
