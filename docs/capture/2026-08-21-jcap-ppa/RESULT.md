@@ -63,6 +63,7 @@ Accepted with no refusal and no unrouted record.
 - [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
+- [Every blockage in this report, measured](#every-blockage-in-this-report-measured)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -2051,6 +2052,28 @@ calibration is: a figure that names its screen and its control has been through
 that filter; the handful explicitly dated to the base has not been re-run at all,
 and says so.
 
+## Every blockage in this report, measured
+
+The handoff names things this lane could not do. Those are the easiest claims in
+a report to get wrong, because a blockage is asserted from the outside and
+nothing fails when it is imagined. Seventeen paragraphs here assert that
+something is impossible or blocked; all of them carry evidence in or beside them.
+But evidence *near* a claim is not the claim being tested, so the two that
+actually stop work were tested directly:
+
+    the verifier cannot be wired          the landing manifest lists 47 protected
+                                          paths and the hygiene-gate script is
+                                          one, with the `authority` role — and no
+                                          entry covers this bundle's own path
+    the Bucket-T crash evidence is gone   both run trees the records' provenance
+                                          paths name are absent from this host,
+                                          so it can be REMADE but not found
+
+Both hold. One of them did not hold in the form it was first written: the
+handoff had said to *attach* the crash artefacts, which presumes they exist
+somewhere, and the check turned that into *re-run one arm to produce them* —
+a different instruction with a different cost.
+
 ## The honest sentences, checked verbatim against the records
 
 The deliverable owes, *"for each Bucket B/C/D, the one honest sentence the ladder
@@ -2737,7 +2760,11 @@ Work through it in sequence. Step 1 gates the rest.
    changed ten rules and demoted one out of its bucket; the base rate says expect
    change.
 4. **Wire the verifier** — one line in the pinned hygiene gates, which this lane
-   could not touch.
+   could not touch. **Verified, not assumed**: the landing manifest carries 47
+   protected paths and `tools/ci/repo_hygiene_gates.sh` is one of them, declared
+   with the `authority` role. The same check confirms the other direction — no
+   entry covers `docs/capture`, so this bundle's own path is freely landable and
+   the only thing needing an owner's hand is that one line.
 5. **File the Bucket-T roadmap entry** in `benchmark-data/`, the repository this
    branch cannot reach — but **not before attaching the crash artefacts**. The
    ten committed bad samples do not contain the crash: three JSON files each, no
