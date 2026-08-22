@@ -387,3 +387,73 @@ The remaining 8 survivors are defensive input guards in `joined_parity.py` and
 `ls-remote` runs with `check=True`, so a network failure dies instead of returning
 empty, and "nothing to gate" can only follow a *successful* empty query. That one is
 sound as written.
+
+### The last survivor was jharv2's own branch
+
+Re-running the sweep after the fix, 7 of 8 were caught. The one holdout:
+
+```
+  contract_check.py:203  elif at_main is None:      SURVIVED
+```
+
+That is literally the absent-file branch — the same one jharv2 found unexercised in
+`evidence_contract.py`. It survived for a reason worth naming exactly: **blinding it
+changes no pass/fail.** An absent file falls through to `verified_differs`, which is
+also not a problem, so the gate still exits 0. A suite that asserts exit codes cannot
+see the difference, and would report the branch as covered.
+
+Pinning it meant asserting the **coverage bucket**, not the exit code:
+
+```
+  PASS  absent-from-main file is counted as verified_absent_from_main
+  PASS  blinding fixture actually differs from the shipped source
+  PASS  blinded, the absent file is misfiled as verified_differs
+```
+
+So the generalisation of the both-arms standard, which this is the first thing to
+force: **a case must assert the outcome the branch actually changes.** Both arms on
+pass/fail is necessary and not sufficient — a branch that only moves a row between
+two non-failing buckets is invisible to pass/fail however many arms you check.
+
+Final sweep, the same instrument that found the defect:
+
+```
+  contract_check.py L167 caught   L173 caught   L178 caught   L180 caught
+  contract_check.py L182 caught   L184 caught   L203 caught   L205 caught
+
+  GUARANTEES THE SUITE DOES NOT NOTICE: 0
+```
+
+Eight of eight, from zero of eight. `test_gates.py` is 26 assertions, all passing.
+
+### Why the joined view disagrees, and what would fix it
+
+Worth diagnosing rather than only reporting, because the obvious fix could make it
+worse. `rescue_contradiction.py` warns that the joined view is DERIVED from the shard
+files, so regenerating it re-propagates whatever the shard files get wrong. That
+argues against regeneration. For these six rows it turns out to be the opposite.
+
+Six shard-C rows disagree with the joined view. Their joined evidence matches
+**neither** the current `verdicts_shard_c.tsv` **nor** the earlier 90/17/3 draft, and
+they carry the shard label `c+retry` with the `all 0 file(s)` grammar. So the joined
+view is **not a stale copy of the shard file** — it is an independent, weaker
+measurement pass that *overrode* the shard file for those rows.
+
+The direction matters, and only half of it is dangerous:
+
+| direction | rows | consequence |
+|---|---|---|
+| joined more conservative than the shard (`RECOVER` over `LANDED`/`ABANDON`) | `_jcapture`, `_v1126`, `_jcap_priv/wt` | harmless — keeps a directory this shard would release |
+| **joined deletion-bound where the shard says keep** | **`_a1456`, `_jd3`, `wt_jwire2`** | **deletes verified work** |
+
+So for shard C the fix is the ordinary one: take the shard file as authoritative and
+let the `c+retry` rows go. That is safe *here* precisely because shard C is clean
+against both `vacuous_universal.py` and `reverify_shard_c.py`. It is **not** a general
+licence to regenerate — shard A carries 9 vacuous and 11 stale deletion-bound rows of
+its own, and regenerating over those would propagate them into the consumable exactly
+as `rescue_contradiction.py` warns.
+
+I have not regenerated anything. The joined view is a shared consumable owned by
+another lane, the four false-LANDED shard-A rows are still unfixed in it, and
+silently rewriting another lane's deliverable is how the `c+retry` rows got there in
+the first place.

@@ -278,13 +278,52 @@ def test_contract_check_main_is_derived_not_frozen():
           out[-200:])
 
 
+def test_contract_check_absent_from_main_branch_is_load_bearing():
+    """The LAST survivor of the blinding sweep, and the same branch jharv2 found
+    unexercised in evidence_contract.py: the one that says a named file is ABSENT
+    from main.
+
+    It survived because blinding it changes no pass/fail. An absent file falls
+    through to `verified_differs`, which is also not a problem, so the gate still
+    exits 0 and a suite that asserts only exit codes cannot see the difference. The
+    branch is real work -- it is what separates "this file is not on main at all"
+    from "this file is on main and differs" -- and pinning it means asserting the
+    COVERAGE BUCKET, not the exit code.
+    """
+    ref = "origin/harvest/rescue-112-untracked-caravel-handoffs"
+    named = "HANDOFF_TO_GATEKEEPER.drv3.md"
+    head = subprocess.run(["git", "-C", REPO, "rev-parse", ref],
+                          capture_output=True, text=True).stdout.strip()
+    on_main = subprocess.run(["git", "-C", REPO, "cat-file", "-e", f"origin/main:{named}"],
+                             capture_output=True).returncode == 0
+    if len(head) != 40 or on_main:
+        check("absent-from-main fixture is valid", False,
+              f"need {named} present at {ref} and absent from main")
+        return
+    ev = (f"rule R2: {named} sha256 aaaaaaaaaaaaaaaa (1 lines) is ABSENT from main. "
+          f"worktree HEAD when judged: {head}")
+    with tempfile.TemporaryDirectory() as tmp:
+        fn = _tsv(tmp, [("/home/reyerchu/w", "RECOVER", ev)])
+        rc, out = run("contract_check.py", "--file", fn)
+        check("absent-from-main file is counted as verified_absent_from_main",
+              rc == 0 and "'verified_absent_from_main': 1" in out, out[-350:])
+        src = open(os.path.join(HERE, "contract_check.py")).read()
+        blinded = src.replace("elif at_main is None:", "elif False:  # BLINDED", 1)
+        check("blinding fixture actually differs from the shipped source", blinded != src)
+        rc2, out2 = run("contract_check.py", "--file", fn, source=blinded)
+        check("blinded, the absent file is misfiled as verified_differs",
+              "'verified_absent_from_main': 0" in out2 and "'verified_differs': 1" in out2,
+              out2[-350:])
+
+
 for t in (test_rescue_gate_both_directions,
           test_rescue_gate_catches_trailing_comma_regression,
           test_parity_gate_all_directions,
           test_contract_check_shape_and_inputs,
         test_contract_check_each_guarantee,
         test_contract_check_catches_recover_identical_to_main,
-        test_contract_check_main_is_derived_not_frozen):
+        test_contract_check_main_is_derived_not_frozen,
+        test_contract_check_absent_from_main_branch_is_load_bearing):
     print(f"\n--- {t.__name__}")
     t()
 
