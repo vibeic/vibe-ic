@@ -82,8 +82,37 @@ def test_simulation_only_close_is_not_a_bare_pass(tmp_path):
     p = _project(tmp_path, hw=None)
     assert not list(p.rglob("hw_measurements.json"))
     r = FCC.check_step(p, _a9(), {}, None)
+    # THE SUBJECT, UNTOUCHED AND NOW LOAD-BEARING ON ITS OWN. `pass_count` in
+    # `flow_compliance_check` is `counts["PASS"]` and nothing else, so this one
+    # line is the whole of "must not rejoin the executed-PASS numerator" —
+    # which is what the docstring above, and the #901 guard that names this
+    # test by name, actually protect.
     assert r.status != "PASS", (r.status, r.reasons)
-    assert r.status == "VACUOUS_PASS", (r.status, r.reasons)
+    # 2026-08-22 — CORRECTED FROM `== "VACUOUS_PASS"`, and MEASURED before it
+    # was changed rather than argued.
+    #
+    # A9 dispatches two clauses over this tree. `analog_a9_hw_verify_check`
+    # examines nothing; `mixed_signal_cosim_check` reports
+    # `"skipped": false, "simulated": 1, verdict PASS, 2/2 scenarios verified`
+    # — it read two real staged scenarios. So "every executed sub-gate was
+    # vacuously satisfied", which is what `VACUOUS_PASS` asserts, is FALSE of
+    # this step, and it was granted only because the legacy channel did not
+    # count. A9 is 1-of-2, not 2-of-2.
+    #
+    # The word this test needs is "not audited throughout, and here is the
+    # clause that examined nothing" — which is `PARTIALLY-VACUOUS`, a strictly
+    # more specific statement than the one it replaces. Both words are held out
+    # of `pass_count` identically, so the defect this test was written against
+    # ("status PASS with reasons == []") cannot return through the change.
+    #
+    # THE ARM THIS REFUSES, MEASURED. Splitting the disclosure channel by exit
+    # code instead — rc=2 unconditional, rc=0-plus-printed-token counted —
+    # turns all 20 tests in the #901 file green and yields, right here,
+    #     status=PASS, partial_vacuity_disclosed=True
+    # i.e. A9 disclosed on its own line and COUNTED AS AN EXECUTED PASS, an
+    # analog step that closed in simulation with no bench measurement anywhere
+    # back in the numerator. That arm was built, measured and reverted.
+    assert r.status == "PARTIALLY-VACUOUS", (r.status, r.reasons)
     assert any("VACUOUS" in x or "vacuous" in x for x in r.reasons), r.reasons
 
 

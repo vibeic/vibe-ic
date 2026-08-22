@@ -73,6 +73,22 @@ PRODUCER_STATUSES: Set[str] = {
     # and it is why the anti-drift test went red the moment the word appeared
     # rather than at the next landing that happened to notice.
     "PASS-VOIDED-BY-DEPENDENCY",
+    # vibe-ic#901, 2026-08-22 — the step ran, some clauses examined the design
+    # and some examined nothing. CLASSIFIED HERE DELIBERATELY, at the same
+    # commit that introduces it, because this module's whole subject is the
+    # word that arrives unregistered: registered in neither EXCUSED nor
+    # NON_GREEN, so by the derivation above it is a DONE-CLAIM and a QUALIFIED
+    # one — identical adjudication to `VACUOUS-PASS`, which is correct, because
+    # it is the same tier split by a count and not a new kind of outcome. It
+    # may stand under an ordinary process step and may not stand under one
+    # whose job was to certify something.
+    #
+    # It is NOT in EXCUSED: `total_required` must keep subtracting exactly what
+    # it subtracted before, and a partially-vacuous step is still a step that
+    # was required. It is NOT in NON_GREEN: the step passed, and this word only
+    # ever replaces `VACUOUS-PASS`, which is in neither set either — so no
+    # run's greenness moves.
+    "PARTIALLY-VACUOUS",
 }
 
 #: The step is NOT claimed as done and is not held against the run — the
@@ -127,8 +143,8 @@ def is_full_pass(status: Optional[str]) -> bool:
 
 
 def is_qualified_done(status: Optional[str]) -> bool:
-    """A done-claim that is not a full pass: VACUOUS-PASS, STRUCTURE-ONLY,
-    INCOMPLETE, and any tier added later."""
+    """A done-claim that is not a full pass: VACUOUS-PASS, PARTIALLY-VACUOUS,
+    STRUCTURE-ONLY, INCOMPLETE, and any tier added later."""
     return is_done_claim(status) and not is_full_pass(status)
 
 
