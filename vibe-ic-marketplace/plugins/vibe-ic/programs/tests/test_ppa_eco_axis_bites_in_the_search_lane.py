@@ -838,13 +838,38 @@ def _campaign_trials():
 
 def _eco_only_policy():
     """The ECO axis alone. The bundles below carry ECO records and nothing
-    else, and a verdict dragged to UNDETERMINED by eight axes nobody supplied
-    evidence for would say nothing about design-for-ECO."""
+    else, so against the full table NINE axes have no evidence at all
+    (setup, hold, drv, drc, lvs, antenna, ir, em, equivalence) and the verdict
+    they drag to UNDETERMINED would say nothing about design-for-ECO.
+
+    NINE, measured -- ten axes in the table, one of them the subject. An earlier
+    revision of this docstring said "eight", which was wrong when written and is
+    the reason `test_eco_only_policy_leaves_exactly_nine_axes_unevidenced`
+    exists: a number in a comment that nothing checks is a number that drifts.
+    """
     pol = F.policy_from_document(
         {"required_views_by_axis": {F.ECO_AXIS: [{"stage": "post_route"}]},
          "eco_readiness": dict(CAMPAIGN_DECL)})
     return dataclasses.replace(
         pol, axes=tuple(a for a in pol.axes if a.name == F.ECO_AXIS))
+
+
+def test_eco_only_policy_leaves_exactly_nine_axes_unevidenced():
+    """Pins the number the sibling docstring states.
+
+    The ECO-only bundles carry one axis's records; the table has ten. If a
+    future axis is added or removed, this reddens and the prose next to it gets
+    re-read -- which is the only way a count in a comment stays true.
+    """
+    recs = clean_nine()[:0] + spares()          # ECO records and nothing else
+    pol = F.policy_from_document(
+        {"required_views_by_axis": {F.ECO_AXIS: [dict(VIEW)]},
+         "eco_readiness": dict(DECL)})
+    r = F.promotion_verdict(cand("eco-only", recs), pol)
+    unevidenced = [a.name for a in r.axes if a.status == F.AXIS_UNDETERMINED]
+    assert len(F.DEFAULT_AXES) == 10, [a.name for a in F.DEFAULT_AXES]
+    assert len(unevidenced) == 9, unevidenced
+    assert F.ECO_AXIS not in unevidenced, unevidenced
 
 
 def test_real_the_axis_admits_the_eco_preserving_arm_and_refuses_the_winners(
