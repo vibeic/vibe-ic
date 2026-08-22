@@ -501,9 +501,26 @@ def extract_floorplan_contract(project: Path,
     for rel, path, text in files:
         if path.suffix.lower() not in ("", ".md", ".txt", ".rst"):
             continue
-        m = _FP_SIZING_PROSE_RE.search(text)
-        if m:
+        # POLARITY, THE SAME QUESTION THE DIE_AREA PATH ALREADY ASKS
+        # (vibe-ic#712). This file guards its die figure with
+        # `_die_statement_negated` and did not guard the sizing beside it, so
+        #
+        #     FP_SIZING absolute is no longer used for this block.
+        #
+        # was recorded as a mandated hint. Two readers of one document
+        # disagreeing about a denial is #711 itself, and here they are in the
+        # same function.
+        #
+        # `finditer`, not `search`: a denied statement must not END the search.
+        # A document that retires one sizing and then states another would
+        # otherwise yield nothing, which is the false refusal this trade keeps
+        # producing in the other direction.
+        for m in _FP_SIZING_PROSE_RE.finditer(text):
+            if _die_statement_negated(text, m.start(1), m.end(1)):
+                continue
             prose_fp_sizing = (m.group(1).lower(), rel)
+            break
+        if prose_fp_sizing:
             break
     if prose_fp_sizing and not any(
             h["kind"] == "fp_sizing" for h in hints):

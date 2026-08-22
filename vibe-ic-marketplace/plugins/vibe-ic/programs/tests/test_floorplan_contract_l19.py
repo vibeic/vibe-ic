@@ -347,3 +347,51 @@ def test_phase3_no_mandate_passes_auto_through(tmp_path):
     eff, note = P3._effective_die_um("auto", proj)
     assert eff == "auto"
     assert note is None
+
+
+# ── polarity for FP_SIZING, the sibling of the guarded DIE_AREA path (#712) ──
+#
+# Found by prose_polarity_census. This file guards its die figure with
+# `_die_statement_negated` and did not guard the sizing beside it, so a document
+# retiring a sizing recorded it as a mandated hint. Two readers of one document
+# disagreeing about a denial is #711 itself.
+
+def _fp(doc, tmp_path):
+    import floorplan_contract as M
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "input" / "constraints.md").write_text(doc, encoding="utf-8")
+    return [h["value"] for h in
+            M.extract_floorplan_contract(tmp_path)["floorplan_hints"]
+            if h["kind"] == "fp_sizing"]
+
+
+def test_a_retired_sizing_is_not_a_mandated_hint(tmp_path):
+    assert _fp("FP_SIZING absolute is no longer used for this block.\n",
+               tmp_path) == []
+
+
+def test_an_explicitly_negated_sizing_is_not_recorded(tmp_path):
+    assert _fp("This block does not use FP_SIZING absolute.\n", tmp_path) == []
+
+
+def test_a_plainly_stated_sizing_is_still_recorded(tmp_path):
+    """The control arm: a fix that recorded nothing would pass the rest."""
+    assert _fp("The floorplan uses FP_SIZING absolute for this block.\n",
+               tmp_path) == ["absolute"]
+
+
+def test_a_denial_does_not_end_the_search(tmp_path):
+    """`finditer`, not `search`. A document that retires one sizing and then
+    states another in a later PARAGRAPH must yield the live one -- the scope
+    this file uses for prose is the paragraph, inherited here deliberately so
+    the two readers of one document agree."""
+    assert _fp("FP_SIZING absolute is no longer used.\n\n"
+               "The floorplan uses FP_SIZING relative.\n", tmp_path) == ["relative"]
+
+
+def test_a_denied_TABLE_row_does_not_veto_the_row_beneath(tmp_path):
+    """A markdown row is a self-contained record and this file already scopes it
+    to its own line. That semantic is inherited too, not re-invented."""
+    assert _fp("| setting | value |\n|---|---|\n"
+               "| FP_SIZING absolute | no longer used |\n"
+               "| FP_SIZING relative | the target |\n", tmp_path) == ["relative"]
