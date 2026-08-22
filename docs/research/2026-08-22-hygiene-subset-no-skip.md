@@ -23,6 +23,17 @@
 > | Can §20–56 be landed from here? | **Not from 8HD-9 as it stands.** The MERGE is verified green (3 conflicts, take the branch, rc 0, 149 passed — §54) but the LANDER refuses its tier on this host over an `argparse` 1.4.0 backport in the user site. Fix the host first, then merge | **§56** |
 > | What is still open? | `jrows`'s revert; two flow-level defects (§18, §28); the end-to-end run, blocked by `argparse` 1.4.0 in the user site (§31) | — |
 >
+> **WHAT IN THIS TABLE CAN GO STALE, and what it is pinned to.** Rows about what
+> this BRANCH does — fixed, wiring, rename, breakage — are measurements of a
+> frozen tree and stay true. Four rows describe a MOVING world: *are the other
+> reds new* and *is there a gate defect* describe `main`; *can §20–56 be landed
+> from here* describes this host; *what is still open* is a list that others can
+> close. **All four are as measured against `main` a4caccefea on 2026-08-22 —
+> re-check them before acting, they are not maintained.** This table has already
+> gone stale three ways (a cached count, a claim §47 retracted, and a landing
+> state the world moved past); the fix for the first two was to remove the
+> moving value, and this line is the fix for the rest.
+>
 > **Superseded, do not act on:** §23's trade (both bullets — see §30) · §26's
 > "version is the blocker" (§30) · §27's "a quiet host closes it" (§31) · §31's
 > first "shadows stdlib" wording (§31's own correction) · §3's "~550 s" (§3's
