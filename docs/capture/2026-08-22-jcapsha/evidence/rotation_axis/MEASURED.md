@@ -24,8 +24,10 @@ vertical rows never moved.
 
 ## The 2x2, one process per cell (`hv.tcl`)
 
-Raw output in `HV_MEASURED_raw.txt`. Row orientation and the orientation of
-one pad placed into each of the four rows:
+Raw output in `HV_MEASURED_raw.txt`. The probe writes its own input, so this
+directory tracks no tool output and the reproduction needs nothing but the two
+`.tcl` files and the image. Row orientation and the orientation of one pad
+placed into each of the four rows:
 
     ROTH  ROTV | IO_SOUTH  IO_NORTH | IO_WEST  IO_EAST
     -----------+--------------------+------------------
@@ -53,11 +55,19 @@ asked with two DISTINCT sites and no orientation reasoning at all — the row
 report simply names which site landed in which row:
 
     IO_NORTH  site=SITE_FED_TO_VERTICAL_FLAG
+    IO_SOUTH  site=SITE_FED_TO_VERTICAL_FLAG
     IO_EAST   site=SITE_FED_TO_HORIZONTAL_FLAG
+    IO_WEST   site=SITE_FED_TO_HORIZONTAL_FLAG
 
-`-horizontal_site` feeds the vertical rows; `-vertical_site` feeds the
-horizontal rows. Same crossing, same direction, a different pair of flags,
-and established without measuring a single orientation.
+All four rows, and all four agree. `-horizontal_site` feeds BOTH vertical
+rows; `-vertical_site` feeds BOTH horizontal rows. Same crossing, same
+direction, a different pair of flags, and established without measuring a
+single orientation.
+
+(An earlier reading of this control showed only the first two rows, because
+the command that produced it was truncated by a line limit rather than by the
+tool. The result was right and its denominator was half of what it looked
+like. Re-run in full; `axis_control.txt` is the complete output.)
 
 ## What the consumer believes
 
