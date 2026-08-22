@@ -1,0 +1,909 @@
+{
+  "schema": "vibeic.ppa.records.v1",
+  "label": "y03",
+  "run_dir": "/home/reyerchu/_jxlayer/run/trials/y03",
+  "openroad": {
+    "schema": "vibeic.ppa.backend_records.v1",
+    "tool": "openroad",
+    "tool_version": "26Q3-1535-g543c33894f",
+    "parser": "_ppa/backends/openroad.py",
+    "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+    "dialects": {
+      "detailed_placement": "DPL-0006/0007/0008/0009-split"
+    },
+    "sources": [
+      {
+        "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+        "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+        "kind": "log"
+      }
+    ],
+    "records": [
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.die.um2",
+        "status": "DERIVED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "floorplan",
+          "tool": "openroad",
+          "bbox_um": [
+            0.0,
+            0.0,
+            192.0,
+            192.0
+          ]
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 36864.0,
+        "formula": "(x1-x0)*(y1-y0) from [INFO IFP-0100] Die BBox"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.core.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "floorplan",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 25911.101
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.instances.total.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "floorplan",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 4031.366
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "utilization.floorplan.effective",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "floorplan",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 0.156
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "design.instance.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "floorplan",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 416
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "utilization.global_placement.pct",
+        "status": "MEASURED",
+        "unit": "%",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 16.725
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.instances.large.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.macro.um2",
+        "status": "NOT_MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "NO_SUCH_FIGURE: no OpenROAD log line states a macro area. `[INFO GPL-0021] Large instances area` is the global placer's size-threshold proxy and is emitted as area.instances.large.um2; substituting it here would answer a different question"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.core.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "detailed_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last"
+        },
+        "value": 25911.1
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.instances.movable.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "detailed_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.instances.fixed_in_core.um2",
+        "status": "MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "detailed_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last"
+        },
+        "value": 5591.61
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "utilization.detailed_placement.pct",
+        "status": "MEASURED",
+        "unit": "%",
+        "scope": {
+          "stage": "detailed_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last"
+        },
+        "value": 21.6
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.instances.placed.um2",
+        "status": "DERIVED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "detailed_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last"
+        },
+        "value": 5591.61,
+        "formula": "[INFO DPL-0007] Movable instances area + [INFO DPL-0008] Fixed instances area within core -- the quantity the older DPL-0006-combined dialect prints as a single `Instances area`"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "area.design_report.um2",
+        "status": "NOT_MEASURED",
+        "unit": "um^2",
+        "scope": {
+          "stage": "post_route",
+          "tool": "openroad",
+          "rounding": "integer"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "STAGE_NOT_RUN: this log carries a `Design area N um^2 P% utilization` line nowhere, so OpenROAD never reached the step that prints `Design area N um^2 P% utilization` line"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "utilization.design_report.pct",
+        "status": "NOT_MEASURED",
+        "unit": "%",
+        "scope": {
+          "stage": "post_route",
+          "tool": "openroad",
+          "rounding": "integer"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "STAGE_NOT_RUN: this log carries a `Design area N um^2 P% utilization` line nowhere, so OpenROAD never reached the step that prints `Design area N um^2 P% utilization` line"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 15367.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.via.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 3789
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "li1"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "met1"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 6916.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "met2"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 8107.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "met3"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 343.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "met4"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.wirelength.by_layer.um",
+        "status": "MEASURED",
+        "unit": "um",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad",
+          "layer": "met5"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 10,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.drc.violation.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "detailed_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 8,
+          "selection": "last",
+          "trajectory_len": 8
+        },
+        "value": 0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.overflow.total",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.overflowed_tiles.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.overflowed_tiles.pct",
+        "status": "MEASURED",
+        "unit": "%",
+        "scope": {
+          "stage": "global_placement",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 0.0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.resource.count",
+        "status": "INVALID",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.demand.count",
+        "status": "INVALID",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.usage.pct",
+        "status": "INVALID",
+        "unit": "%",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.max_h.count",
+        "status": "INVALID",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.max_v.count",
+        "status": "INVALID",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "route.congestion.total_congestion.count",
+        "status": "INVALID",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "FIGURE_ABSENT_THOUGH_STAGE_RAN: the global_route stage ran but this log carries no parseable `[INFO GRT-0096] Final congestion report:` table"
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "antenna.net.violation.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 4,
+          "selection": "last"
+        },
+        "value": 0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "antenna.pin.violation.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_route",
+          "tool": "openroad"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 4,
+          "selection": "last"
+        },
+        "value": 0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "antenna.violation.count",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "global_route",
+          "tool": "openroad",
+          "repair_pass": "pre_repair"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 2,
+          "selection": "last"
+        },
+        "value": 0
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "drv.max_slew.violation.count.pre_repair",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_place",
+          "tool": "openroad",
+          "repair_pass": "pre_repair"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 4,
+          "selection": "last"
+        },
+        "value": 41
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "drv.max_capacitance.violation.count.pre_repair",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_place",
+          "tool": "openroad",
+          "repair_pass": "pre_repair"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 1
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "drv.max_fanout.violation.count.pre_repair",
+        "status": "MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_place",
+          "tool": "openroad",
+          "repair_pass": "pre_repair"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 1,
+          "selection": "last"
+        },
+        "value": 5
+      },
+      {
+        "schema": "vibeic.ppa.metric.v1",
+        "metric": "drv.residual.violation.count",
+        "status": "NOT_MEASURED",
+        "unit": "1",
+        "scope": {
+          "stage": "post_route",
+          "tool": "openroad",
+          "repair_pass": "post_repair"
+        },
+        "source": {
+          "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.log",
+          "sha256": "sha256:07b38ebc1cb335e5f023cd653f397a5510336f4d1c9a7fd5066b0fae16a42a26",
+          "tool": "openroad",
+          "tool_commit": "26Q3-1535-g543c33894f",
+          "parser": "_ppa/backends/openroad.py",
+          "parser_sha256": "sha256:6be03b7ad2a67293cab6ff7713718851be99e14b9b61668932801bb235e33a34",
+          "occurrences": 0,
+          "selection": "last"
+        },
+        "reason": "NO_SUCH_FIGURE: OpenROAD's resizer states DRV counts only BEFORE repair_design repairs them and no build on record re-prints a residual. The post-repair residual is an OpenSTA `report_check_types -max_slew -max_capacitance -max_fanout` question and belongs to the opensta backend"
+      }
+    ],
+    "refusals": [],
+    "diagnostics": [
+      {
+        "code": "STAGES_SEEN",
+        "stages": [
+          "antenna",
+          "detailed_placement",
+          "detailed_route",
+          "floorplan",
+          "global_placement",
+          "global_route",
+          "resizer"
+        ]
+      },
+      {
+        "code": "METRICS_JSON_NOT_PRESENT",
+        "path": "/home/reyerchu/_jxlayer/run/trials/y03/phase3/stage3/pnr/openroad.metrics.json"
+      }
+    ]
+  },
+  "yosys": null,
+  "notes": [
+    "no yosys transcript at /home/reyerchu/_jxlayer/run/trials/y03/phase2/stage2/synth/yosys.log"
+  ]
+}

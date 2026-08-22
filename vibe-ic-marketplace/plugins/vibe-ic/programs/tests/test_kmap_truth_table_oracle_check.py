@@ -17,12 +17,21 @@ And the gates_atomic.py wiring: a BLOCK from this check joins the emit-blocking
 allow-list (structural_emit_block) so the sample is NOT emitted.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import kmap_truth_table_oracle_check as ktt  # noqa: E402
+
+import pytest  # noqa: E402
+
+#: `check()` RUNS the oracle through iverilog+vvp. Without them it now
+#: returns a disclosed TOOL_ERR (see the program) — honest, but not a
+#: verdict about the RTL, which is what the tests below assert on.
+_HAS_EDA = (shutil.which("iverilog") is not None
+            and shutil.which("vvp") is not None)
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -182,21 +191,25 @@ def test_bus_axis_kmap_skips_no_oracle():
 
 # ── functional check: BLOCK the wrong read, PASS the correct read ─────────
 
+@pytest.mark.skipif(not _HAS_EDA, reason="check() runs the oracle: needs iverilog + vvp")
 def test_wrong_kmap_read_blocks(tmp_path):
     v, _ = ktt.check(KMAP4_PROMPT, _rtl(tmp_path, "w.sv", K4_WRONG))
     assert v == "BLOCK"
 
 
+@pytest.mark.skipif(not _HAS_EDA, reason="check() runs the oracle: needs iverilog + vvp")
 def test_correct_kmap_read_passes(tmp_path):
     v, _ = ktt.check(KMAP4_PROMPT, _rtl(tmp_path, "g.sv", K4_CORRECT))
     assert v == "PASS"
 
 
+@pytest.mark.skipif(not _HAS_EDA, reason="check() runs the oracle: needs iverilog + vvp")
 def test_wrong_truthtable_blocks(tmp_path):
     v, _ = ktt.check(TRUTHTABLE_PROMPT, _rtl(tmp_path, "ttw.sv", TT_WRONG))
     assert v == "BLOCK"
 
 
+@pytest.mark.skipif(not _HAS_EDA, reason="check() runs the oracle: needs iverilog + vvp")
 def test_correct_truthtable_passes(tmp_path):
     v, _ = ktt.check(TRUTHTABLE_PROMPT, _rtl(tmp_path, "ttg.sv", TT_CORRECT))
     assert v == "PASS"
