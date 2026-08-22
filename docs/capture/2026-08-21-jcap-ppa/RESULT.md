@@ -2098,6 +2098,8 @@ only — whether the row recorded HOW it counted:
 | A-25 | reproduced, and **the gap widened**: 17 of 29 → 19 of 38 |
 | A-11 | **partial** — the census reproduces within three per cent (1584 → 1544) but its taxonomy does not, because where "extension-only" ends was never stated, and its load-bearing figure needs a judgement no screen makes |
 | A-24 | **not re-derivable** — a plausible reconstruction returned more than twice each figure |
+| A-26 | reproduced, and **closed its own gap**: 2 → 7 documents bound, and the population it left unestimated is now 1215 candidate docstrings of 4026, by a stated screen |
+| A-5 | population not comparable across screens, but the **remedy is demonstrated in-tree** — a sibling refuses both selectors with rc 2 |
 | A-20 | **not re-derivable** — no screen recorded at all |
 
 Three reproduced, two could not be, one partly. **Every failure is the same
@@ -2626,7 +2628,7 @@ gap was non-empty every single time it was measured.
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
-| A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard**, nothing to narrow |
+| A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard** — but the remedy is **already demonstrated in-tree**: a sibling uses argparse's mutually exclusive group and refuses both selectors with rc 2, so this is application, not design |
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off |
