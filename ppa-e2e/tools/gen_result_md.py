@@ -516,8 +516,13 @@ line. **The first LIVE request in this list is #3.**
 the guard `tests/test_multicorner_signoff_reports_declare_their_stage.py`. All
 three emitters — `_emit_spef_sta`, `_emit_corner_spef_sta` and
 `_emit_mcorner_ocv_sta` — now write a `STA_BASIS:` line, and `_ppa/timing`
-resolves it to `stage=post_route_extracted`. Kept as the record of the finding,
-NOT as a live request. AS WRITTEN: three `puts "STA_BASIS: POST_ROUTE_SPEF"`
+resolves the stamp according to what that stanza actually read:
+`PRE_LAYOUT_ESTIMATE` -> `pre_layout_estimate` for RC pre-layout and for OCV
+pre-layout;
+`POST_ROUTE_NO_SPEF` -> `post_route_no_extraction` for routed OCV without SPEF;
+and `POST_ROUTE_SPEF` -> `post_route_extracted` for routed OCV with SPEF. Kept
+as the record of the finding, NOT as a live request. AS WRITTEN: three `puts
+"STA_BASIS: POST_ROUTE_SPEF"`
 lines, in the emitters that write `sta_spef_multicorner.rpt` and
 `sta_mcorner_ocv.rpt`; at the time they stamped nothing, 48 of 56 timing rows
 came out `stage=null`, and the *sign-off* corners were the ones that could not

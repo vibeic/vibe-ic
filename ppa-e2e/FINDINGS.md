@@ -168,10 +168,15 @@ is three `puts` in `phase3_one_shot_runner.py`'s multi-corner emitters.
 > **SATISFIED by `e4c5840d6` (v1.11.57, 2026-08-21).** The three `puts` landed,
 > with the guard `tests/test_multicorner_signoff_reports_declare_their_stage.py`.
 > `_emit_spef_sta`, `_emit_corner_spef_sta` and `_emit_mcorner_ocv_sta` each
-> write a `STA_BASIS:` line now, and `_ppa/timing` resolves it to
-> `stage=post_route_extracted`. The finding above is left as written because it
-> was true of the run it describes, whose tree is gone; it is a record, not a
-> live request. **A run tree produced BEFORE 2026-08-21 still shows exactly this
+> write a `STA_BASIS:` line now, and `_ppa/timing` resolves the stamp according
+> to what that stanza actually read: `PRE_LAYOUT_ESTIMATE` ->
+> `pre_layout_estimate` for RC pre-layout and for OCV pre-layout;
+> `POST_ROUTE_NO_SPEF` ->
+> `post_route_no_extraction` for routed OCV without SPEF; and
+> `POST_ROUTE_SPEF` -> `post_route_extracted` for routed OCV with SPEF. The
+> finding above is left as written because it was true of the run it describes,
+> whose tree is gone; it is a record, not a live request. **A run tree produced
+> BEFORE 2026-08-21 still shows exactly this
 > — measured 2026-08-22, the run trees on one host split on that date: those
 > whose `sta_*` reports carry the stamp refuse 0 `SCOPE_INCOMPLETE`, those whose
 > reports predate it refuse 48 each.** Re-running the flow is what clears an old
