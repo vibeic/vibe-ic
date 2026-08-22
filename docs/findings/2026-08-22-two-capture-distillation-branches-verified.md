@@ -1,14 +1,24 @@
-================================================================================
-jverify — independent verification of the two capture-distillation branches
-host 8hd-3 · 2026-08-22 · agent `jverify` · REPORT ONLY, nothing pushed or edited
-================================================================================
+# jverify — independent verification of the two capture-distillation branches
 
-================================================================================
-ACT ON THIS — the whole answer in one screen. Evidence for every line is below.
-================================================================================
+**Host** 8hd-3 · **date** 2026-08-22 · **agent** `jverify`
 
-  origin/jdistmat/matrix-distil  @ 00c2a6f33   >> LAND WITH FOUR THINGS FIXED
-  origin/capture/jdistchip-...   @ 3d2dff2c9   >> LAND WITH ONE THING FIXED
+**Standing:** an independent read of `origin/jdistmat/matrix-distil` and
+`origin/capture/jdistchip-chip-path-rules`, asked for by the person about to land
+them. The brief's hard rules were: report only, do not push to `main`, do not bump
+the version, do not edit either verified branch. **All three hold.** This document
+was later pushed on a branch of its own, on the requester's explicit instruction,
+so that the report has a home other than `/tmp` — it adds this one file and
+nothing else, and neither `main` nor either verified branch was touched.
+
+**Verdicts** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
+`jdistchip` LAND with F1 fixed. F14 is the only finding that stops anything.
+
+
+## ACT ON THIS — the whole answer in one screen. Evidence for every line is below.
+
+```text
+  origin/jdistmat/matrix-distil  @ facc28860   >> LAND WITH FOUR THINGS FIXED
+  origin/capture/jdistchip-...   @ c0e19ace9   >> LAND WITH ONE THING FIXED
 
   Neither is blocked by the other any more. The four-filename collision that
   made them mutually unlandable (F13) was ruled on by the author and I verified
@@ -340,10 +350,11 @@ author has since renamed it; see F7). With jdistmat's later additions the final
 population is 30 program files: 18 on jdistmat, 12 on jdistchip. Four filenames
 appeared on BOTH branches with different implementations for part of this
 exercise; that was F13 and it is resolved. All 30 are covered in the table.
+```
 
-================================================================================
-REPRODUCE THIS — the load-bearing numbers, as commands
-================================================================================
+## REPRODUCE THIS — the load-bearing numbers, as commands
+
+```text
 Every figure below can be re-derived without my worktrees. Substitute your own
 checkouts for $MAIN / $MAT / $CHIP. Write $P(<tree>) for
 <tree>/vibe-ic-marketplace/plugins/vibe-ic. Run with PYTHONDONTWRITEBYTECODE=1
@@ -417,11 +428,11 @@ and a TMPDIR outside $HOME.
   that grandfathers, a missing `--inventory` on one that needs it, and a dirty
   checkout under policy_direction_pin_check all produce verdicts that are not
   what the suite sees. Drive each program the way its wiring drives it.
+```
 
+## METHOD
 
-================================================================================
-METHOD
-================================================================================
+```text
 Each arm its own tree, its own TMPDIR, PYTHONDONTWRITEBYTECODE=1. Worktrees, one
 per tip measured:
     /tmp/jvM  main 81cd5321b
@@ -585,16 +596,11 @@ different halves of the question.
   every one to a cause rather than filing it — four were MY error, two are real
   findings. That breakdown is the most useful thing in this report and it is in
   "WHERE MY FIXTURES CAME UP GREEN" below.
+```
 
-================================================================================
-TABLE — 32 rows.  sweep rc = the checker run against the tree being shipped.
-Rows 1-22 are the two branches as they stood at the ORIGINAL SHAs. Rows 23-30
-are what jdistmat added while I was verifying; all are covered to the same four
-questions. Rows 23-26 were the F13 collisions and have since been RENAMED to
-`*_census` by the author — the row text describes them as I measured them, and
-F13 records the resolution I verified.
-================================================================================
+## TABLE — 32 rows.  sweep rc = the checker run against the tree being shipped. — Rows 1-22 are the two branches as they stood at the ORIGINAL SHAs. Rows 23-30 — are what jdistmat added while I was verifying; all are covered to the same four — questions. Rows 23-26 were the F13 collisions and have since been RENAMED to — `*_census` by the author — the row text describes them as I measured them, and — F13 records the resolution I verified.
 
+```text
 --- origin/jdistmat/matrix-distil -------------------------------------------
  #  checker
      red reproduced BY ME (Y/N) — what my own fixture produced
@@ -998,10 +1004,11 @@ SUMMARY OF THE TABLE
                                         0 of jdistchip's 12 — see F12. The four
                                         `*_census` files are excluded: rc 0 is
                                         correct by construction for a census.)
+```
 
-================================================================================
-WHERE MY FIXTURES CAME UP GREEN — six cases, four mine, two real
-================================================================================
+## WHERE MY FIXTURES CAME UP GREEN — six cases, four mine, two real
+
+```text
 This is the part of the exercise that found things, so it is written out.
 
 MINE (the checker was right and my fixture was wrong):
@@ -1043,10 +1050,11 @@ REAL (nothing documents the limit):
   (explicit_argument..., generated_values..., two_input_selectors...)
   -> FINDING F11. Those three sit between the two columns: the checker is
   right about the rule it states, and the rule it states is a word list.
+```
 
-================================================================================
-THE DISAGREEMENT TEST — 836 runs, the brief's named harm
-================================================================================
+## THE DISAGREEMENT TEST — 836 runs, the brief's named harm
+
+```text
 19 paired fixture trees (<name>/defect and <name>/remedy), every body authored
 by me from the rule's own predicate. All 22 checkers run over all 38 arms.
 
@@ -1075,10 +1083,11 @@ by me from the rule's own predicate. All 22 checkers run over all 38 arms.
     handed a tree that is not its subject REFUSED rather than certifying. That
     is the empty-denominator doctrine working across the set — with the
     exception F12 records.
+```
 
-================================================================================
-THE EMPIRICAL DUPLICATE PROBE
-================================================================================
+## THE EMPIRICAL DUPLICATE PROBE
+
+```text
 Reading docstrings answers "is there an existing program about this". It does
 not answer "does an existing program already fire on this". So I drove 25
 adjacent main programs over the defect and remedy arms:
@@ -1178,11 +1187,11 @@ adjacent main programs over the defect and remedy arms:
   against anything already on main, and no contradictions. The only duplicates
   anywhere in this report are the four the two branches create between
   THEMSELVES, which is F13.
+```
 
-================================================================================
-THE TWO CLAIMS THE BRIEF ASKED TO BE CHECKED HARDEST
-================================================================================
+## THE TWO CLAIMS THE BRIEF ASKED TO BE CHECKED HARDEST
 
+```text
 CLAIM 1 (jdistmat) — "all ten rule_name fields renamed to slugs, nothing
 deleted, the sentence moved to `title`."   VERIFIED, exactly as stated.
 
@@ -1240,10 +1249,11 @@ fix in my own tree and re-running the checker.
 
   Neither is a checker misreading something. Both are the exact shape the rule
   describes, and both fixes are minimal with the contract unchanged.
+```
 
-================================================================================
-FINDINGS
-================================================================================
+## FINDINGS
+
+```text
 Numbered in the order I found them, listed in order of severity. Read F5b
 before F1 and F15: it separates "rc 1, a fact about the tree" from "BLOCKS, an
 intent nothing fulfils", and both findings are about the first, not the second. F13 was the
@@ -2458,10 +2468,11 @@ F8  COSMETIC — test_generated_values...::test_the_landed_helpers_are_still_
     recognised emits `DeprecationWarning: invalid escape sequence '\s'` from
     `<unknown>:2`. The literal is in a PRE-EXISTING repo source file that the
     new checker parses. Suite noise, nothing more.
+```
 
-================================================================================
-THINGS I TRIED THAT DID NOT BREAK ANYTHING
-================================================================================
+## THINGS I TRIED THAT DID NOT BREAK ANYTHING
+
+```text
   * 22 hand-built defects and 22 hand-built remedies, in my own trees, not
     copied from the tests. Every red named the site; every remedy went green;
     stderr was empty on every red.
@@ -2489,11 +2500,11 @@ THINGS I TRIED THAT DID NOT BREAK ANYTHING
     intra-module call binding the corpus to the searching function. My first
     fixture omitted it and correctly passed. Honest under-report, matching its
     documented method.
+```
 
-================================================================================
-VERDICTS
-================================================================================
+## VERDICTS
 
+```text
 origin/jdistmat/matrix-distil  >> LAND WITH F15 + F14 + F9 + F12 FIXED
 
     Fifteen of its sixteen programs are sound IN THEIR PREDICATE, verified
@@ -2700,3 +2711,5 @@ Evidence, left in place, all clean:
      and detached.)
 Nothing was pushed. No version bumped. Neither branch was edited.
 --------------------------------------------------------------------------------
+```
+
