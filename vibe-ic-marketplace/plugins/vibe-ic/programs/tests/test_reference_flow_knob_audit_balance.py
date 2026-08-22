@@ -49,7 +49,10 @@ mod = importlib.import_module("phase3_one_shot_runner")
 _pl = importlib.import_module("_path_layout")
 
 _APPLIED_KEYS = ("place_density", "die_target_util", "repair_tns_percent",
-                 "cts_cluster_size", "cts_cluster_diameter")
+                 "cts_cluster_size", "cts_cluster_diameter",
+                 # the step-32 area ceiling + the power-recovery move
+                 "resizer_setup_max_util_pct", "resizer_hold_max_util_pct",
+                 "recover_power_pct")
 
 # The exact shape of the staged config that produced the measured 16-vs-14
 # imbalance: PnR knobs, synth knobs, a deliberately EMPTY declaration, and
@@ -500,11 +503,19 @@ class TestFlowBehaviourUnchanged:
         # (#541), so the two floorplan parameters stay at the phase-3 default.
         _stage(tmp_path, {"orfs_config.mk": _IMBALANCED_MK})
         a = mod._reference_flow_pnr_audit(tmp_path)
+        # The three `resizer_*` / `recover_power_pct` entries joined the
+        # vocabulary with the step-32 area ceiling (2026-08-20) and are None
+        # here because this fixture declares none of them — which is the whole
+        # point of restating the dict by hand: a NEW parameter has to make
+        # somebody look at what it is worth on a config that never mentions it.
         assert a["applied"] == {
             "place_density": None, "die_target_util": None,
             "repair_tns_percent": 100, "cts_cluster_size": 20,
             "cts_cluster_diameter": 50.0,
-            "cts_distance_between_buffers": None}
+            "cts_distance_between_buffers": None,
+            "resizer_setup_max_util_pct": None,
+            "resizer_hold_max_util_pct": None,
+            "recover_power_pct": None}
 
     def test_two_projects_same_config_served_identically(self, tmp_path):
         # chip-AGNOSTIC: the verdict follows the staged config, nothing else.
