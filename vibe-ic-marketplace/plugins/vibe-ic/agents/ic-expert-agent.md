@@ -589,6 +589,51 @@ makes the output valid one cycle early/late — it passes most random vectors an
 ones (a determinism gap). Count the data stages, match the enable stages. (Worked: RTLLM
 `multi_pipe_8bit` — 3 data stages ⇒ 3-deep enable pipeline.)
 
+### Skill: functional-TB golden authoring for a declared-function datapath (serial-parallel arithmetic)
+For an arithmetic-primitive datapath whose function is CLOSED-FORM (`p = a OP b mod 2^N`, OP in `+ - * & | ^ << >>`) the functional-TB golden is DERIVABLE, so author it as a real oracle. NEVER copy the L10 prose 'expected' text into a vector as if it were a value, and NEVER read the product back from the DUT to 'confirm' it (both fabricate coverage). COMPUTE the golden INDEPENDENTLY from the design's DECLARED function as a concrete N-bit constant, then compare the DUT output `===` it. For a fully-PARALLEL `c = a OP b` this is a combinational drive+compare. For a SERIAL-PARALLEL / bit-serial datapath (parallel operand, bit-serial operand + result — the serial-parallel multiplier shape) the output latency and bit-order are the implementer's FREE choice, so read the THREE framing facts the design DECLARES (declaration.json `bit_order` / `latency_cycles` / `integer_encoding`, or the RTL-header 'DECLARED CHOICES' block that L7 §7.0 mandates): drive the parallel operand held, stream the serial operand one bit/clock per `bit_order`, sample the serial result each clock, reassemble the product window `[latency, latency+N)` per `bit_order`, and `===`-compare the independently-computed golden. These framing facts tell the oracle HOW to place the golden, never WHAT it is — a wrong-product DUT fails at any declared framing, so the oracle stays falsifiable. When `bit_order`/`latency` are NOT declared the serial framing is not derivable: DEFER (leave the substance-floor TB) rather than guess — a fabricated golden is worse than an honest gap. This convention is a deterministic program (`programs/arith_oracle_tb_gen.py`, serial + parallel; wired per L10 functional_vector case by `programs/testbench_gen.py`), keyed on the interface SHAPE not any one design, so a fresh design of the same shape gets the same golden automatically. Corner operands to always drive: 0, 1, MAX/all-ones, MIN (signed), and -1.
+
+### Skill: functional-TB golden authoring for a CPU-core reset-to-first-activity BOOT-LATENCY case
+A CPU-core (or any clocked-core) L10 case is sometimes NOT an instruction-execution oracle at all but a
+BOOT-LATENCY property: "N cycles after reset release, the design has performed its first bus access /
+instruction fetch" (a common L7 verification-plan line — recognise the SHAPE by grammar: a reset-release
+reference + a first-activity reference + an explicit "N cycle" bound in the case's own stimulus/expected
+text, never by the case's NAME). This is DERIVABLE without an instruction-set model: extract the design's
+own declared N-cycle bound from that same text (a `<number> cycle` token — when informally qualified as
+"typical"/illustrative, treat it as an inclusive upper bound, not a hard spec ceiling, and say so), then
+pick the DUT's own structurally-detected bus-activity OUTPUT (the Wishbone-family `cyc`/`stb`/`req`/`valid`
+vocabulary — standard bus terminology, never a chip literal) as the observable "activity happened" signal.
+Drive reset, release it, count clock edges, and FAIL if the activity signal never asserts within a small
+margin over the bound, or asserts later than the bound — a real, falsifiable protocol-timing check derived
+purely from the design's own declared budget and its own I/O surface. DEFER (leave the substance floor) when
+either signal is missing — no clock, no recognised bus-activity output, no case-text shape match, or no
+explicit numeric bound — never invent one. This convention is a deterministic program
+(`programs/cpu_boot_latency_oracle_tb_gen.py`, wired per L10 functional_vector case by
+`programs/testbench_gen.py` as a second attempt after the arithmetic-datapath oracle above declines), keyed
+on the CASE-TEXT SHAPE + DUT bus-vocabulary — never on a design/IC-family literal (worked: a RISC-V
+bit-serial CPU-core reused-IP integration's `reset_n_cycle_instruction` case — first bus-activity observed
+at cycle 3 against a declared max of 10, verified by compiling + simulating the generated TB against the
+real RTL).
+
+### Skill: an L10 case conditioned on an OPTIONAL Plugin-selectable feature needs the design's OWN declaration, not a guess
+Some L10 cases carry an explicit CONDITIONAL marker in their own stimulus/expected text — "(若 Plugin 選
+`<token>`)" / "(if the plugin selects `<token>`)" — meaning the case applies ONLY when THIS build actually
+selected that optional ISA/feature axis (a common pattern when the L2 spec grants "Plugin may optionally
+include extension X, Y, Z" and requires the choice to be recorded in `declaration.json`). Before treating such
+a case as a hard functional-TB requirement, check whether the design's OWN `declaration.json` (or equivalent
+structured Phase-2 config) affirmatively confirms the referenced token was selected. If it does, the case is a
+real requirement — author or demand a genuine golden the normal way. If `declaration.json` is ABSENT or
+silent on that token, the gate CANNOT confirm applicability: do not hard-FAIL a possibly-unselected optional
+feature, and do NOT fabricate a golden for hardware that may not exist (§4.05) — WAIVE the case as a
+documented, reviewable "conditional feature selection undeclared" gap, distinct from a generic no-oracle
+capability gap (the root cause here is a missing DECLARATION, not a missing oracle for a confirmed feature).
+This convention is a deterministic gate classifier (`l10_tb_conformance_check.is_conditional_optional_case` +
+`conditional_feature_declared`), keyed on the case's own conditional-selection GRAMMAR (a parenthetical
+marker referencing an arbitrary token) — never on a specific extension name, so it generalises to any IC
+whose spec grants Plugin-optional feature axes (worked: a RISC-V core's `plugin_m_mul_div` /
+`plugin_zicsr_csr_access_timer_irq` / `plugin_c_16_bit_compressed` cases — the actual instantiated core
+proved, by direct RTL inspection, to implement none of M/Zicsr/C, and no declaration.json was ever produced
+to record that decision).
+
 ### Skill: author STRICTLY to the GIVEN interface header — it can differ across dataset/spec variants
 The verification harness binds the EXACT interface in the prompt's own header (port names, directions,
 widths, **and index base**). The SAME logical design can ship with DIFFERENT interfaces in different
@@ -669,6 +714,51 @@ one-cycle output-timing error** — fix it by moving to the state-only registere
 faithful — the prose already bound the machine type). Cross-ref the "A Moore machine registers its
 output" skill. (A genuine spec-defect flag stays reserved for a function that is provably correct
 under BOTH machine types yet still mismatches — not for choosing the wrong type against a stated one.)
+
+### Skill: a FREE interface choice is DECLARED at the moment it is made, never recovered afterwards from prose
+**When to apply:** any design whose spec asks the implementer to record interface/build decisions
+in a structured file (a "MUST declare `<path>`" clause followed by a field table), and, more
+generally, whenever you are about to make a choice the spec leaves open.
+
+A **free choice** is a decision no downstream tool can recover from the artifacts by inference:
+serial bit order, the latency from reset release to the first valid beat, integer encoding, reset
+polarity, the parameter value this build actually ran at, which optional feature axis was selected.
+Two correct designs disagree on every one of them, so a comparison procedure that is not TOLD
+cannot pair its reference output — and if it guesses, a correct design fails for a reason that has
+nothing to do with its function.
+
+The rule: **record every free choice in the spec-declared machine-readable file BEFORE you author
+the RTL that embodies it, then write RTL that conforms to what you declared.** Do not make the
+choice implicitly while writing RTL and leave it to be reconstructed later.
+
+An RTL header comment — even the well-meant `DECLARED CHOICES: bit_order = …` block — is **prose**.
+It is not schema-checked, it is not diffable against a consumer's expectation, and a consumer that
+scrapes it is one reformat away from silently guessing. Prose is an acceptable ADDITIONAL copy for
+a human reader; it is not the artifact.
+
+Three consequences that are easy to get wrong:
+- **Never invent a value to fill the file.** A default-filled declaration is strictly worse than an
+  absent one: it turns the required-artifact gate green while the comparison pairs against a value
+  nobody chose. If a required choice is genuinely undetermined, the honest output is a refusal that
+  NAMES the field.
+- **Never adopt the spec's example value as your choice.** The example column records what a
+  reference implementation happened to pick. Copying it makes the document author the designer.
+- **An informational field you did not decide is OMITTED, not placeholder-filled.** Every consumer
+  in this flow resolves a missing key to "cannot pair" already; a placeholder would have to be
+  special-cased by each of them, and one that forgot would read it as a value.
+
+This convention is a deterministic program (`programs/spec_declaration_emit.py`). It reads the
+field list, the required/informational tier and the target path out of the PROJECT'S OWN Phase-1
+documents — never a table baked into the program — so a design that declares a completely
+different field set gets the same treatment. `--contract` surfaces the free-choice list at the
+RTL-authoring handoff, before any RTL exists (staged automatically by
+`design_one_shot_runner._stage_author_knowledge_digests`, so every authoring WAIVE branch gets it);
+the emit mode writes the declaration and refuses, naming the field, while any REQUIRED choice is
+undetermined. Cross-ref the two skills above that already depend on a declaration existing
+("functional-TB golden authoring for a declared-function datapath" needs `bit_order` /
+`latency_cycles` / `integer_encoding` to place its golden, and "an L10 case conditioned on an
+OPTIONAL Plugin-selectable feature" WAIVES when the declaration is silent) — both of them DEFER
+when the declaration is missing, which is honest but is a hole this rule closes at the source.
 
 ## Cross-Layer Consistency Matrix
 

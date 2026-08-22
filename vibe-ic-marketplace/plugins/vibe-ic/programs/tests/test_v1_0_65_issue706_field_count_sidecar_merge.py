@@ -189,7 +189,7 @@ def test_chip_agnostic_guard():
     import subprocess as sp
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
     r = sp.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
-               capture_output=True, text=True, timeout=120)
+               capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

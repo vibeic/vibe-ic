@@ -67,7 +67,7 @@ def _seed_thin_input(project: Path, readme: str) -> None:
 def _run_runner(project: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(RUNNER), str(project)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=60,
     )
 
 

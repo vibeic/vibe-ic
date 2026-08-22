@@ -49,6 +49,9 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gate_utils import dir_parts_excluded  # shared RTL-scope contract
+
 
 @dataclass
 class Finding:
@@ -197,12 +200,44 @@ def check_file(path: Path) -> list[Finding]:
 
 
 def collect_files(path: Path) -> list[Path]:
+    """RTL sources under `path`, skipping the flow's own build/output trees.
+
+    This walked `path.rglob("*")` with NO exclusion of any kind. Given a PROJECT
+    directory — which is how the phase-2 umbrella invokes it — that reads every
+    emitted netlist in the tree.
+
+    MEASURED, edge_llm_accel x nangate45, this collector against the SAME
+    project as the tree's two other RTL collectors, at the same moment:
+
+        rtl_scan_scope.authoritative_rtl_files      6 files       51,587 bytes
+        gate_utils.find_rtl_files                  11 files  696,685,033 bytes
+        collect_files (here)                       35 files  1,735,802,924 bytes
+
+    A factor of 33,647. The 348 MB gate-level netlist is read FOUR times — as
+    `phase2/stage2/synth/netlist.v`, as `netlist_yosys.v` beside it, and once
+    more under each of the two `steps/` publication copies. Standalone,
+    `/usr/bin/time`: 39.0 s and 2.33 GB RSS to lint 3 files' worth of real RTL.
+    Under the umbrella's per-gate budget it TIMED OUT, and the phase-2 umbrella
+    FAIL halted the flow before place-and-route.
+
+    It is also semantically wrong for this consumer: a reset gap in a response
+    register is a property of authored RTL, and a flattened NAND/NOR/DFF netlist
+    has no such register to examine. The gate was paying 33,000x to read files
+    that cannot answer the question it asks.
+
+    Exclusion is delegated to `gate_utils.dir_parts_excluded` rather than to a
+    fourth private copy — three collectors with three different policies is how
+    this defect survived the fix that added `steps` to only one of them. An
+    explicit FILE argument is still honored verbatim, so pointing the gate at a
+    netlist on purpose still works.
+    """
     if path.is_file():
         return [path]
     if path.is_dir():
         return sorted(
             p for p in path.rglob("*")
             if p.is_file() and p.suffix in (".v", ".sv", ".vh")
+            and not dir_parts_excluded(p.relative_to(path).parts[:-1])
         )
     return []
 

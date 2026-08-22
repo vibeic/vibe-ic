@@ -12,14 +12,27 @@ bus ``x`` is parametric — so width collapsed to 1, the SERIAL-DEFER guard
 32-bit serial-parallel multiplier (FALSE-PASS / TRUE_REGRESSION of #745's own
 documented+tested contract).
 
+CAPABILITY UPGRADE (repo-gatekeeper, direct-push): the round-2 fix originally
+DEFERred the serial-parallel shape because the serial framing (bit-order +
+latency) was thought not closed-form-derivable. It now emits a REAL,
+SELF-CALIBRATING N-bit oracle: the golden is computed independently from the
+declared function and the serial framing is DISCOVERED from the DUT stream vs
+the golden (a wrong-product DUT matches no consistent framing → still fails).
+The anti-false-pass invariant this file protects is UNCHANGED and asserted by
+``_assert_real_serial_oracle``: the emitted oracle is NON-VACUOUS (declared at
+the resolved datapath width N=32, never the 1-bit collapse) and falsifiable —
+so a regression that re-collapsed the width to 1 (the original false-pass) still
+fails.
+
 This file pins:
-  (1) NEW-PATH reproduction — the PRODUCTION shape (NO declaration.json, ``x``
-      parametric, ``y``/``p`` literal 1-bit) now DEFERs (rc=2, no TB).
-  (2) §4.05 NO-LEAK — the genuine PARALLEL multiplier (the relaxation's positive
-      that the serial-DEFER must NOT mask) STILL EMITs a real oracle.
+  (1) NEW-PATH — the PRODUCTION shape (NO declaration.json, ``x`` parametric,
+      ``y``/``p`` literal 1-bit) now EMITs a REAL non-vacuous N=32 self-cal
+      oracle (was: vacuous N=1 false-pass; interim: DEFER).
+  (2) §4.05 NO-LEAK — the genuine PARALLEL multiplier STILL EMITs a real oracle,
+      and a no-oracle CLASS (CPU) STILL DEFERs (fail-closed unchanged).
   (3) #478 END-STATE — direct-write a tmp_path L9/L2 artifact set, invoke the
-      REAL ``arith_oracle_tb_gen.py`` via subprocess, assert the returncode is
-      the DEFER code (2) and no oracle TB was written to disk.
+      REAL ``arith_oracle_tb_gen.py`` via subprocess, assert rc=0 and a
+      non-vacuous oracle TB on disk.
 """
 from __future__ import annotations
 
@@ -58,6 +71,30 @@ def _oracle_tbs(project: Path) -> list:
     return sorted(sd.glob("tb_*_oracle.v")) if sd.is_dir() else []
 
 
+def _assert_real_serial_oracle(project: Path, *, width: int = 32) -> str:
+    """CAPABILITY UPGRADE (repo-gatekeeper, direct-push): the production
+    serial-parallel shape (parametric parallel operand + bit-serial operand +
+    bit-serial result) is no longer DEFERred — it now emits a REAL, self-
+    calibrating N-bit oracle. This helper pins the ANTI-FALSE-PASS invariant the
+    round-2 guard actually protects: the emitted oracle is NON-VACUOUS —
+    declared at the resolved datapath width N (NOT the 1-bit collapse that was
+    the original false-pass), with SEVERAL distinct golden constants and the
+    self-calibration search that makes it falsifiable — NOT a 4-vector N=1
+    always-pass. Returns the TB text for any further assertions."""
+    tbs = _oracle_tbs(project)
+    assert len(tbs) == 1, tbs
+    tb = tbs[0].read_text()
+    assert f"localparam integer N      = {width};" in tb, \
+        "serial oracle collapsed to the wrong datapath width (vacuous-N regression)"
+    assert "localparam integer N      = 1;" not in tb  # never the 1-bit collapse
+    # a genuinely falsifiable oracle: several distinct golden constants + the
+    # self-calibration search + the completion marker the runner greps.
+    assert tb.count("_gv[") >= 8, "too few golden vectors — coverage too thin"
+    assert "ORACLE_TB_DONE pass=" in tb
+    assert "_drive_capture" in tb and "_best" in tb  # self-calibration present
+    return tb
+
+
 # the PRODUCTION spm topology: parallel parametric x, serial 1-bit y/p, NO decl.
 _SPM_PORTS = [
     {"name": "clk", "direction": "input", "width": 1},
@@ -70,22 +107,26 @@ _SPM_PORTS = [
 ]
 
 
-# ── (1) NEW-PATH reproduction: production parametric-serial shape → DEFER ─────
-def test_production_no_declaration_parametric_serial_defers(tmp_path):
-    """The exact reopen repro: spm L9 with a parametric ``x`` bus + 1-bit serial
-    ``y``/``p`` and NO declaration.json must DEFER (rc=2), NOT emit a vacuous
-    N=1 oracle as PASS."""
+# ── (1) NEW-PATH: production parametric-serial shape → REAL self-cal oracle ──
+def test_production_no_declaration_parametric_serial_emits_real_oracle(tmp_path):
+    """CAPABILITY UPGRADE: the exact reopen repro — spm L9 with a parametric
+    ``x`` bus + 1-bit serial ``y``/``p`` and NO declaration.json — now emits a
+    REAL, self-calibrating N=32 oracle (functional_verified path), NOT the
+    vacuous N=1 oracle that was the original false-pass. The anti-false-pass
+    invariant is preserved by _assert_real_serial_oracle (N=32, non-vacuous,
+    falsifiable), so a regression that re-collapsed the width to 1 still fails."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
                           l2="p = (x * y) mod 2^N serial multiplier")
-    # production path writes no declaration.json
+    # production path writes no declaration.json — the oracle self-calibrates
+    # the serial framing, so no declaration is needed.
     assert not (project / "plugin_output" / "declaration.json").exists()
     assert not (project / "declaration.json").exists()
 
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
-    assert rc == 2, rep                       # DEFER, not exit-0 TB_EMITTED
-    assert rep["verdict"] == "DEFER"
-    assert "serial" in rep["reason"].lower()
-    assert _oracle_tbs(project) == []         # NO vacuous N=1 TB on disk
+    assert rc == 0, rep
+    assert rep["verdict"] == "TB_EMITTED"
+    assert rep.get("topology") == "serial_parallel"
+    _assert_real_serial_oracle(project, width=32)
 
 
 def test_resolve_width_does_not_collapse_to_one_with_parametric_bus(tmp_path):
@@ -162,11 +203,12 @@ def test_noleak_no_oracle_class_still_fail_closed(tmp_path):
 
 
 # ── (3) #478 END-STATE: real program via subprocess, returncode assert ───────
-def test_478_endstate_subprocess_production_serial_defers(tmp_path):
-    """Direct-write the production artifact set, invoke the REAL
-    arith_oracle_tb_gen.py as a subprocess, and assert the END-STATE: the CLI
-    returncode is the DEFER code (2), the printed verdict is DEFER, and NO
-    oracle TB was written to disk (no vacuous N=1 PASS)."""
+def test_478_endstate_subprocess_production_serial_emits(tmp_path):
+    """END-STATE via the REAL CLI: direct-write the production serial artifact
+    set, invoke arith_oracle_tb_gen.py as a subprocess, and assert the CLI
+    returns 0 (TB_EMITTED) and materializes exactly one NON-VACUOUS N=32 self-
+    calibrating oracle on disk (never the vacuous N=1 PASS the round-2 guard
+    protects against)."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
                           l2="p = (x * y) mod 2^N serial multiplier")
     prog = PROGRAMS / "arith_oracle_tb_gen.py"
@@ -174,12 +216,9 @@ def test_478_endstate_subprocess_production_serial_defers(tmp_path):
         [sys.executable, str(prog), str(project),
          "--ic-class", "digital_arithmetic_primitive"],
         capture_output=True, text=True)
-    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
-    payload = json.loads(r.stdout)
-    assert payload["verdict"] == "DEFER"
-    assert "serial" in payload["reason"].lower()
-    # END-STATE on disk: no oracle TB materialized
-    assert _oracle_tbs(project) == []
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert json.loads(r.stdout)["verdict"] == "TB_EMITTED"
+    _assert_real_serial_oracle(project, width=32)
 
 
 def test_478_endstate_subprocess_parallel_emits(tmp_path):
@@ -204,10 +243,12 @@ def test_478_endstate_subprocess_parallel_emits(tmp_path):
 
 
 # ── Step-2.7 remediation: prose-serial operand + fully-serial collapse ───────
-def test_745r2_prose_serial_operand_defers(tmp_path):
-    """Finding (HIGH): an operand whose WIDTH PROSE marks it serial (width=None,
-    not numeric 1) must trip the serial-defer guard — a numeric-only test let it
-    escape and ship a vacuous oracle."""
+def test_745r2_prose_serial_operand_emits_real_oracle(tmp_path):
+    """A serial-parallel shape whose serial operand/result are marked serial by
+    WIDTH PROSE (``bit-serial`` / ``serial``, width=None not numeric 1) is
+    correctly recognised as the serial-parallel shape and emits a REAL,
+    non-vacuous N=32 self-calibrating oracle (NOT a vacuous 1-bit oracle — the
+    original prose-escape false-pass is still guarded by the N=32 assertion)."""
     ports = [
         {"name": "clk", "direction": "input", "width": 1},
         {"name": "x", "direction": "input",
@@ -219,8 +260,9 @@ def test_745r2_prose_serial_operand_defers(tmp_path):
     proj = _mk_project(tmp_path, top="psm",
                        ports=ports, l2="p = (x * y) mod 2^N, 32-bit multiplier")
     rep, rc = aotg.generate(proj, "digital_arithmetic_primitive")
-    assert rc == 2 and rep.get("verdict") == "DEFER", (rc, rep)
-    assert _oracle_tbs(proj) == []
+    assert rc == 0 and rep.get("verdict") == "TB_EMITTED", (rc, rep)
+    assert rep.get("topology") == "serial_parallel"
+    _assert_real_serial_oracle(proj, width=32)
 
 
 def test_745r2_fully_serial_multiplier_defers(tmp_path):

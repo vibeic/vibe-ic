@@ -33,12 +33,12 @@ workspace; use a directory you already have (e.g. your project folder).
 export VIBEIC_DESIGNS="/path/to/your/designs"         # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
 
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.26          # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:latest          # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true           # "name already in use" = an old container exists; drop it first
-docker run -d --name vibeic-eda \
+docker run -d --name vibeic-eda --memory 48g --memory-swap 48g \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.26 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:latest --skip sleep infinity
 docker exec vibeic-eda yosys --version                # sanity check → prints a version (bare exec resolves since 0.2.12)
 ```
 
@@ -48,11 +48,17 @@ the container the same name (same `$VIBEIC_DESIGNS` mounts):
 ```bash
 [ -d "$VIBEIC_DESIGNS" ] || { echo "set VIBEIC_DESIGNS to an existing directory first"; exit 1; }
 docker pull hpretl/iic-osic-tools           # or the pinned tag in mcp-eda/INSTALL_GUIDE.md
-docker run -d --name vibeic-eda \
+docker run -d --name vibeic-eda --memory 48g --memory-swap 48g \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   hpretl/iic-osic-tools --skip sleep infinity
 ```
+
+> `--memory`/`--memory-swap` are not optional hygiene. Without them the container has no cgroup
+> limit, and `ulimit -v` inside the image is `unlimited` — so one runaway tool can allocate the
+> whole machine. Measured 2026-08-19: a yosys reached 109 GB on a 125 GB host and the kernel
+> killed the desktop session rather than the tool. Pinning `--memory-swap` to the same value
+> denies the container the host's swap too; the freeze before the crash was swap thrash.
 
 > **The bind-mounts are REQUIRED, not optional — a clean install with a bare `sleep
 > infinity` container will fail Phase 3.** The MCP-EDA tools address designs under
