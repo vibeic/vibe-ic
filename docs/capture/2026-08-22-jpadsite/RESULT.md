@@ -1102,6 +1102,43 @@ more on a side -- INCLUDING the 40 the design actually declares. It is not a
 substitute for a pin-out, and it is not a verdict on the declared grouping
 either; it is not offered as either one.
 
+WHAT THIS BRANCH CHANGES, BY IDENTIFIER
+========================================
+Derived from the diff a00f53f20..725f9352f, not from memory. The report
+described every one of these in prose and NAMED ALMOST NONE OF THEM -- a
+reviewer wanting to find the change in the code had nothing to grep for.
+`SIDE_ORIENT`, `CORNER_ORIENT` and the corrected header count appeared ZERO
+times in this file before this block.
+
+  _pad_ring.py                                          +286 / -26
+    parse_pad_site_declarations   reads upstream's PAD_FAKE_SITES form
+    discover_io_site_declarations the tech-view sibling of discover_io_lefs
+    _pdk_trees                    refactored out of discover_io_lefs
+    _FAKE_SITE_RE, _LIBS_TECH, _SITE_DECL_FILE   the declaration's grammar
+    SITE_SOURCE_LEF / _DECLARED   which view each site came from
+    DECLARED_SITE_CLASS           what make_fake_io_site produces: PAD
+    SIDE_ORIENT                   the placer's orientation for ALL FOUR sides
+                                  (was VERTICAL_SIDE_ORIENT, two sides)
+    CORNER_ORIENT                 the placer's four corner orientations
+    ROTATION_DEFAULT              librelane's R0
+    IoLibrary.resolve_site        LEF view first, then the declaration
+
+  pad_ring_gen.py                                       +226 / -20
+    ROTATION_VERTICAL_NOT_HONOURED   the disclosure record, in EVERY report
+                                     (was ROTATION_VERTICAL_INERT, which
+                                     asserted a falsehood in its own key)
+    + the rc=2 refusal for a declared non-default on ANY of the three
+      rotation variables, and side_orient/corner orientation taken from the
+      measured constants rather than computed
+
+  pad_ring_check.py                                     +22 / -5
+    uses resolve_site, so the gate cannot contradict its own producer about
+    which file it opened; adds the ambiguity finding
+
+  tests/test_pad_ring.py                                +629 / -1
+    64 tests -> 90. None deleted, none shortened, none rewritten -- established
+    by PARSING both revisions, not asserted.
+
 WHAT STANDS BETWEEN THIS DESIGN AND A FINISHED PAD RING, in order
 ==================================================================
 Every piece below is measured and appears somewhere in this report. NONE OF
