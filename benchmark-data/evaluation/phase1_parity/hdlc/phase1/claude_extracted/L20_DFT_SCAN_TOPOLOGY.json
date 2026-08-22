@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "HDLC / SDLC (ISO/IEC 13239) does not specify DFT / scan / BIST. Protocol-level self-checking (FCS + bit-stuffing detection + sequence-number checking + frame-type validity + FRMR error flags + XID/TEST diagnostic frames) provides system-level diagnostics. SoC-integrated HDLC controller IP (Zilog Z85230 SCC, Motorola QUICC MC68360 SCC, Infineon Falc56 framers, Xilinx LogiCORE HDLC) adds standard scan insertion at the integrator level."
-  }
-}
