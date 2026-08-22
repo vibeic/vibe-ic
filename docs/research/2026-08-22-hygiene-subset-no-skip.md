@@ -2147,3 +2147,48 @@ the 4 relevant repo-root files (§33), the 5 checker-importers (§34), and these
 19 `gatekeeper_review` reachers — 12 of them run here for the first time.
 Everything red anywhere in that union is red on the batch base too. Nothing new
 is attributable to this branch.
+
+## 36. The reds attributed one step further: all seven are red on CLEAN MAIN
+
+§33–§35 attributed every red found in the widened denominator against the batch
+BASE `546487a8a3` and concluded "pre-existing". That answered *is it mine* and
+stopped there. It did not answer the question the batch's holder actually needs:
+**did BATCH 67 introduce them, or does `main` already carry them?** Base-relative
+attribution cannot tell those apart, because the base IS the batch.
+
+Run against clean `origin/main` `81cd5321b0` — all four files present there:
+
+```
+tools/test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept        FAILED
+test_matrix_63x8_coverage::test_every_na_cell_asserts_a_live_precondition        FAILED
+test_matrix_63x8_coverage::test_no_cell_is_counted_enforced_while_…_is_red       FAILED
+test_pytest_per_file_junit::test_finite_domain_checkpoints_keep_one_long_…       FAILED
+test_pytest_per_file_junit::test_progressing_collection_may_outlive_many_…       FAILED
+test_pytest_per_file_junit::…_collect_import_activity_…[COLLECT_CHATTER]         FAILED
+test_orphan_scan_reads_the_landing_gate_runner::…_coordinator_unreachable        FAILED
+```
+
+**Seven for seven.** Every red the widened denominator turned up is red on
+`main` itself. **Batch 67 introduced none of them**, and neither did this
+branch. They are long-standing repo reds sitting in files that no plugin-scoped
+selection reaches — which is precisely why they can persist: the targeted
+selector cannot see repo-root `tools/` at all, and the four plugin files here
+are reached only through an import edge, the coupling §22 established a token
+census cannot follow.
+
+**Why this step was worth taking rather than stopping at "pre-existing".**
+"Not mine" and "not the batch's" are different claims, and only the second one
+tells the batch's holder whether these belong on the landing's ledger. Had any
+of the seven been green on `main` and red on the base, it would have been a
+batch-67 regression that nobody had attributed — the same class as the two
+`test_issue565` ids, and invisible to a base-relative check by construction.
+
+**Stated plainly for whoever inherits them:** seven reds, four files, all
+red on `main` today, none introduced by batch 67 or by this branch, and all
+sitting outside every routine selection. Three of the seven are visibly
+timing-shaped (`keep one long test item alive`, `outlive many stall windows`, a
+`deadline=time.monotonic()+3` fixture) and are candidates for the load
+sensitivity §13 measured; the other four are not, and are unexplained here. I am
+not fixing them — they are outside this brief and each would need its own
+attribution — but they are named, located, and dated so that finding them again
+costs a grep instead of a night.
