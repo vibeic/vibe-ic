@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "reason": "no substantiating reference-TB evidence — refusing a verdict-only PASS (#433): reference_tb step verdict=FAIL; transcripts found=0",
-  "design_identity": {
-    "design": "ibex",
-    "ic_name": "ibex",
-    "top": "ibex_top"
-  }
-}
