@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIL-STD-1553B (Military Data Bus)",
-  "otp_present": false,
-  "notes": "MIL-STD-1553B is a wire-level protocol spec; there is no OTP / fuse / configuration ROM at the protocol layer. Concrete 1553 Remote Terminal IP commonly uses straps or OTP to set the 5-bit RT address (often with a 6th parity-protect bit). Some RTs also use OTP to lock the BIT word, the Subaddress descriptor table defaults, or the redundant-bus assignment, but those are per-device design choices outside the scope of 1553B."
-}

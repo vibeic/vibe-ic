@@ -86,6 +86,7 @@ if str(_PROGRAMS) not in sys.path:
 import _evidence_independence as _ev_ind  # noqa: E402  (path bootstrap above)
 import _signoff_drc_format as _sdf  # noqa: E402  (ONE producer/dialect answer)
 import _waiver_entries as _we  # noqa: E402  (#519's ONE waiver reader)
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -1787,7 +1788,8 @@ class LadderReport:
                      "deferred_from")}
                 for t in waived_tiers(self.tiers)],
             "waiver_disclosures": list(self.waiver_disclosures),
-            "emitted_by": "signoff_ladder_run v0.1.51 (release-gate-wired)",
+            "emitted_by": _pmd.emitted_by("signoff_ladder_run",
+                                         "release-gate-wired"),
         }
 
 

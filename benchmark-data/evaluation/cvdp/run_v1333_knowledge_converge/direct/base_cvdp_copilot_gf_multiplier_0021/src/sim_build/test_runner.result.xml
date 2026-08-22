@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783361156" />
-    <testcase name="test_gf_mac" classname="test_gf_mult_8bit" file="/code/src/test_gf_mult_8bit.py" lineno="70" time="0.0008347034454345703" sim_time_ns="40.0" ratio_time="47921.211082547845" />
-  </testsuite>
-</testsuites>

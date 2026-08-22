@@ -785,7 +785,7 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
 
 
 def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
-                  safety_rtl: bool = False,
+                  safety_rtl: bool = False, flow_complete: bool = False,
                   waiver: Optional[Dict[str, Any]] = None,
                   role: Optional[str] = None) -> Scenario:
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_"))
@@ -796,6 +796,11 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
         project.mkdir()
         if seeded:
             _seed(project, declared_paths(step_id))
+        if flow_complete:
+            # everything the FLOW declares, not only this step's own
+            own = set(declared_paths(step_id))
+            _seed(project, [p for p in flow_declared_outputs()
+                            if p not in own])
         if rtl:
             rtl_path = project / P0_RTL_FILE
             rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -938,6 +943,59 @@ def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+# ══════════════════════════════════════════════════════════════════════
+# L6 — WAS THE SKIP LEGITIMATE, not merely disclosed
+# ══════════════════════════════════════════════════════════════════════
+#: Every path ANY step declares as a `required_outputs` alternative: the flow's
+#: own statement of what a COMPLETE run contains. 162 alternatives on the tree
+#: that added this leg.
+#:
+#: This is the discriminator this module's own "WHAT THIS CANNOT SEE" section
+#: says it lacks: "It cannot tell a legitimately-inapplicable step (step 14
+#: with no .ys script) from one that should have measured something and did
+#: not." L1-L5 all ask whether a skip is DISCLOSED. None asks whether it was
+#: ALLOWED. A disclosed skip that should never have been permitted is still a
+#: hole, and it is invisible here precisely because the disclosure is correct.
+#:
+#: THE RULE: a skip is legitimate only when it is keyed on something the flow
+#: NEVER PROMISES. If no step declares the artefact as a `required_outputs`
+#: entry, its absence is a genuine design fact — this IC has no analog blocks,
+#: no OTP, no .ys script — and skipping is the right answer. If some step DOES
+#: declare it, the flow asserts every complete run contains it, so its absence
+#: is a broken pipeline and "skip" converts a pipeline failure into a
+#: non-event on a tier that is not a failure.
+@lru_cache(maxsize=1)
+def flow_declared_outputs() -> Tuple[str, ...]:
+    out: List[str] = []
+    for sid in F.step_ids():
+        for entry in F.required_outputs(sid):
+            for alt in F.split_any_of(str(entry)):
+                if alt and alt not in out:
+                    out.append(alt)
+    return tuple(out)
+
+
+#: SHRINK-ONLY, and every entry carries the MEASURED tier it moves to once the
+#: flow's declared artefacts are present — which is the evidence that the skip
+#: was hiding something rather than reporting one.
+#:
+#: Landed armed rather than charging, on the same sequencing ground as
+#: vibe-ic#1070: `main` is red on 49 pytest failures with five agents
+#: repairing it, and three more red cells subtract from the only delta they
+#: have to read. A NEW member fails immediately; these three are named with
+#: their evidence and may only be DELETED, never added to.
+_DEFERRED_L6_SKIPS: Dict[str, str] = {
+    "12": "VACUOUS_PASS -> FAIL once the flow's declared artefacts exist — "
+          "the skip is standing in for a real failure",
+    "30": "VACUOUS_PASS -> PASS — keyed on an artefact step 30 never names but "
+          "another step declares (the SPEF; cf. this module's own note that "
+          "step 30's skip 'hinges on an artefact the step never names')",
+    "P0": "SKIPPED-CONDITION -> FAIL — the structural-RTL umbrella skips for "
+          "want of an artefact the flow guarantees",
+}
+
+
 @dataclass
 class Probe:
     step_id: Any
@@ -983,6 +1041,8 @@ def _probe_step(step_id) -> Probe:
     probe.gate_only_empty = _gate_only_on_empty(step_id)
     probe.scenarios["EMPTY"] = _run_scenario(step_id, "EMPTY", seeded=False)
     probe.scenarios["SEEDED"] = _run_scenario(step_id, "SEEDED", seeded=True)
+    probe.scenarios["FLOW_COMPLETE"] = _run_scenario(
+        step_id, "FLOW_COMPLETE", seeded=True, flow_complete=True)
     if _reads_an_rtl_directory(step_id):
         # A step that reads RTL CONTENT cannot be shown anything by the
         # path-seeder, which materialises `phase2/stage1/rtl` as a bare
@@ -1006,16 +1066,105 @@ def _probe_step(step_id) -> Probe:
     return probe
 
 
-@lru_cache(maxsize=1)
+#: Probes already built this session, keyed by normalised step id. Replaces the
+#: single ``lru_cache``d whole-sweep dict so a session that can only ask about
+#: ONE step pays for one step. See ``_probe_budget`` (vibe-ic#1412).
+_PROBE_CACHE: Dict[str, Probe] = {}
+
+#: The step ids THIS session is able to ask about, or ``None`` for "any of the
+#: 63" — the conservative default, and what every whole-suite run gets. Set once
+#: by the ``_probe_budget`` fixture below, from pytest's OWN collected items.
+_PROBE_BUDGET: Optional[Tuple[str, ...]] = None
+
+
+def _build_probes(ids: Tuple[Any, ...]) -> None:
+    """Probe every id not already cached, in parallel, and cache the results."""
+    todo = [s for s in ids if F.normalize_id(s) not in _PROBE_CACHE]
+    if not todo:
+        return
+    # This one pytest item deliberately batches many independent, real flow
+    # probes.  Expose FINITE completed-work checkpoints to the landing
+    # supervisor; do not emit time/output/CPU heartbeats.  When the private
+    # plugin is not loaded (ordinary direct pytest), this remains a no-op.
+    progress_plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(progress_plugin, "domain_progress", None)
+    scope = f"matrix-d6-probes:{len(_PROBE_CACHE)}:{len(todo)}"
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        for completed, probe in enumerate(pool.map(_probe_step, todo), start=1):
+            _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
+            if progress is not None:
+                progress(scope, completed, len(todo))
+
+
+def _budget_from(items) -> Optional[Tuple[str, ...]]:
+    """The step ids these collected pytest items can ask about, or ``None``.
+
+    ``None`` means "any of the 63" and is returned the moment ONE selected item
+    is not a per-cell parametrisation, because such an item is assumed to sweep.
+    A plain function, not the fixture body, so the rule can be exercised against
+    constructed item lists without a nested pytest session.
+    """
+    wanted: List[str] = []
+    for item in items:
+        params = getattr(getattr(item, "callspec", None), "params", None) or {}
+        sid = getattr(params.get("cell"), "step_id", None)
+        if sid is None:
+            return None
+        wanted.append(str(sid))
+    return tuple(dict.fromkeys(wanted))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _probe_budget(request):
+    """Record which steps this session CAN ask about, before any test runs.
+
+    THE COST OF A PROBE IS 63 SUBPROCESS-HEAVY SCENARIOS PER STEP, AND UNTIL
+    vibe-ic#1412 EVERY SESSION PAID ALL 63 OF THEM (see ``probe_for``).
+
+    The measured consequence is not slowness, it is a WRONG ANSWER. The
+    mutation ledger's LOCK 2 replays each (entry, step) pair by running the ONE
+    cell nodeid as its own pytest process — twice, baseline and mutant — eight
+    pairs at a time (``matrix_mutation_ledger.replay_many(..., jobs=8)``). Each
+    of those eight concurrent cell processes was building all 63 probes, each
+    probe fanning out 8 more threads of ``flow_compliance_check`` subprocesses,
+    every one of them bounded at ``_SUBPROCESS_TIMEOUT_S``. The bound fired on a
+    box the replay was contending with ITSELF for, the uncaught
+    ``TimeoutExpired`` failed the cell, and the ledger read that failure as the
+    cell's COLOUR: ``baseline_rc=1`` -> ``ALREADY_RED`` -> "the witness was red
+    before the edit". Nothing had measured the witness at all.
+
+    So the budget is read off pytest's own collection rather than guessed. An
+    item parametrised over a ``cell`` asks about exactly that cell's step; ANY
+    other selected item is assumed to sweep, which restores the previous
+    whole-flow behaviour byte for byte. A whole-suite run therefore probes all
+    63 in one parallel pass exactly as before; the ledger's single-nodeid run
+    probes one.
+    """
+    global _PROBE_BUDGET
+    _PROBE_BUDGET = _budget_from(request.session.items)
+
+
 def _all_probes() -> Dict[str, Probe]:
-    ids = list(F.step_ids())
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        probes = list(pool.map(_probe_step, ids))
-    return {F.normalize_id(p.step_id): p for p in probes}
+    """Every step's probe. Still one parallel pass; still all 63."""
+    _build_probes(tuple(F.step_ids()))
+    return {F.normalize_id(s): _PROBE_CACHE[F.normalize_id(s)]
+            for s in F.step_ids()}
 
 
 def probe_for(step_id) -> Probe:
-    return _all_probes()[F.normalize_id(step_id)]
+    """This step's probe, building no more of the sweep than the session needs.
+
+    Falls back to probing the step ALONE if it is outside the recorded budget,
+    so a caller this fixture did not anticipate gets a correct probe rather than
+    a ``KeyError`` — slower, never wrong.
+    """
+    key = F.normalize_id(step_id)
+    if key not in _PROBE_CACHE:
+        _build_probes(tuple(F.step_ids()) if _PROBE_BUDGET is None
+                      else _PROBE_BUDGET)
+        if key not in _PROBE_CACHE:
+            _build_probes((step_id,))
+    return _PROBE_CACHE[key]
 
 
 @lru_cache(maxsize=1)
@@ -1346,6 +1495,59 @@ def _leg5_waiver_channel(probe: Probe) -> List[str]:
     return problems
 
 
+
+def _leg6_skip_is_keyed_on_something_the_flow_never_promises(
+        probe: Probe) -> List[str]:
+    """L6 — WAS THE SKIP ALLOWED?  (not: was it disclosed)
+
+    L1-L5 all ask whether a skip is reported honestly. This asks whether it
+    should have been permitted at all, which is a different question and the
+    one this module's own "WHAT THIS CANNOT SEE" section says it cannot
+    answer: it "cannot tell a legitimately-inapplicable step (step 14 with no
+    .ys script) from one that should have measured something and did not".
+
+    Both fixtures name the SAME step and differ only in what is on disk:
+
+      SEEDED         every path the STEP'S OWN yaml names.
+      FLOW_COMPLETE  the same, plus every `required_outputs` alternative ANY
+                     step declares — the flow's own statement of what a
+                     complete run contains.
+
+    A step that skips under SEEDED and STOPS skipping under FLOW_COMPLETE was
+    skipping for want of an artefact the flow GUARANTEES. In a healthy run
+    that artefact exists, so the branch is reachable only when an upstream
+    step failed to deliver — and "skip" is then precisely the wrong verdict,
+    because it parks a broken pipeline on a tier that is not a failure.
+
+    A step that skips under BOTH is keyed on something the flow never
+    promises, which is a real design fact and a legitimate skip. Measured, and
+    it agrees with this module's own worked example without being told to:
+    step 14 skips under both and is LEGITIMATE; step 4 and FS1 likewise.
+    """
+    problems: List[str] = []
+    seeded = probe.scenarios.get("SEEDED")
+    full = probe.scenarios.get("FLOW_COMPLETE")
+    if not seeded or not full:
+        return problems
+    if seeded.status not in SKIP_TIERS:
+        return problems
+    if full.status in SKIP_TIERS:
+        return problems                       # legitimate: keyed on a non-promise
+    sid = F.normalize_id(probe.step_id)
+    if sid in _DEFERRED_L6_SKIPS:
+        return problems                       # named in the shrink-only register
+    problems.append(
+        f"L6 SKIP WAS NOT ALLOWED: step {sid} resolves to {seeded.status!r} "
+        f"with only its own declared paths present, but to {full.status!r} "
+        f"once the artefacts the FLOW declares are present. The skip is keyed "
+        f"on something some step promises to produce, so it is reachable only "
+        f"when the pipeline is already broken — and it reports that as a "
+        f"non-failure. A disclosed skip that should never have been allowed "
+        f"is still a hole."
+    )
+    return problems
+
+
 _LEGS = (
     ("L1 no unconditional pass", _leg1_no_unconditional_pass),
     ("L1b gate alone does not pass on nothing",
@@ -1358,6 +1560,8 @@ _LEGS = (
      _leg3c_skip_not_inside_the_executed_pass_numerator),
     ("L4 yaml skip surfaces", _leg4_yaml_surfaces),
     ("L5 waiver channel is machine-readable", _leg5_waiver_channel),
+    ("L6 skip was allowed, not merely disclosed",
+     _leg6_skip_is_keyed_on_something_the_flow_never_promises),
 )
 
 
@@ -1372,6 +1576,7 @@ def _params():
     return out
 
 
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d6_skip_discipline(cell):
     """Every skip / vacuous-pass surface of this step is conditioned on a
@@ -1456,6 +1661,9 @@ def leg_capability(step_id) -> Dict[str, bool]:
         # the only tier whose fold into `pass_count` it can observe.
         "L3c": any(sc.status == "VACUOUS_PASS"
                    for sc in probe.scenarios.values()),
+        # L6 needs a scenario that lands on a skip tier at all — the same
+        # subject L2 needs, asked of a different pair of fixtures.
+        "L6": any(sc.status in SKIP_TIERS for sc in probe.scenarios.values()),
         # L4 needs an optional clause or a step-level condition.
         "L4": any(c.kind == F.K_OPTIONAL for c in clauses) or bool(cond),
         # L5 needs an ENV_UNAVAILABLE role binding.
@@ -1901,3 +2109,108 @@ def matrix_cell_state(step_id) -> str:
     if _waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# L6's own guards: the denominator, and the register that forgives three cells
+# ══════════════════════════════════════════════════════════════════════
+_FLOW_DECLARED_OUTPUT_FLOOR = 162
+
+
+def test_d6_l6_flow_declared_output_denominator_is_disclosed():
+    """L6's discriminator is the set of artefacts the flow PROMISES.
+
+    If that set ever resolves to zero — `required_outputs` renamed,
+    restructured, or the splitter changed — FLOW_COMPLETE becomes identical to
+    SEEDED, every skip classifies as LEGITIMATE, and the leg goes green over
+    nothing. That is the starvation shape this whole campaign was convened
+    over, so the denominator is pinned as a FLOOR and stated out loud.
+    """
+    declared = flow_declared_outputs()
+    assert len(declared) >= _FLOW_DECLARED_OUTPUT_FLOOR, (
+        f"the flow-declared artefact set SHRANK to {len(declared)}, floor is "
+        f"{_FLOW_DECLARED_OUTPUT_FLOOR}. L6 cannot tell a guaranteed artefact "
+        f"from an unpromised one with an empty set, so it would classify "
+        f"every skip as legitimate and report a confident zero."
+    )
+
+
+def test_d6_l6_separates_legitimate_skips_from_illegitimate_ones():
+    """Both directions, on the real tree, in one measurement.
+
+    The leg is only worth anything if it DISCRIMINATES. A classifier that
+    called every skip legitimate would pass every cell; one that called every
+    skip illegitimate would be a rename of L2. So both classes must be
+    non-empty and the legitimate class must contain this module's own worked
+    example — step 14, which its docstring names as THE legitimately-
+    inapplicable step ("step 14 with no .ys script").
+    """
+    legit, illegit = [], []
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if not seeded or not full or seeded.status not in SKIP_TIERS:
+            continue
+        (legit if full.status in SKIP_TIERS else illegit).append(
+            F.normalize_id(sid))
+    assert legit, (
+        "no skip classified LEGITIMATE — the leg has collapsed into 'every "
+        "skip is a defect', which is L2 under another name")
+    assert illegit, (
+        "no skip classified ILLEGITIMATE — the leg cannot fire at all, and a "
+        "detector that has never fired is indistinguishable from no detector")
+    assert "14" in legit, (
+        f"step 14 is this module's own named example of a legitimately "
+        f"inapplicable step (no .ys script) and L6 classified it "
+        f"{'ILLEGITIMATE' if '14' in illegit else 'not at all'}; "
+        f"legitimate={sorted(legit)} illegitimate={sorted(illegit)}")
+
+
+def test_d6_l6_deferred_register_only_shrinks():
+    """`_DEFERRED_L6_SKIPS` is an admission, not an exemption.
+
+    Every entry must still describe a live illegitimate skip. The moment a
+    step is repaired — it stops skipping, or its skip becomes keyed on
+    something the flow does not promise — the entry stops describing anything
+    and this test reddens until it is deleted. A shrink-only register that can
+    outlive its debt is a permanent amnesty with extra steps.
+    """
+    stale = []
+    for sid in sorted(_DEFERRED_L6_SKIPS):
+        assert F.has_step(sid), f"register names unknown step {sid!r}"
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if seeded is None or seeded.status not in SKIP_TIERS:
+            stale.append(f"{sid} no longer skips under SEEDED "
+                         f"(status={seeded.status if seeded else None!r})")
+        elif full is not None and full.status in SKIP_TIERS:
+            stale.append(f"{sid}'s skip is now keyed on something the flow "
+                         f"does not promise (FLOW_COMPLETE={full.status!r}) — "
+                         f"it is legitimate, so delete the register entry")
+    assert not stale, (
+        "the deferred-skip register no longer describes live defects — it may "
+        "only SHRINK, and shrinking means deleting the entry: "
+        + "; ".join(stale))
+
+
+def test_d6_l6_the_register_is_the_only_thing_holding_those_cells_green():
+    """Paired control: remove the forgiveness and exactly those cells go red.
+
+    Without this, a future edit could quietly stop the leg charging anything
+    while the register still looked like it was tracking three known holes —
+    a register describing a debt that is no longer measured.
+    """
+    charged = set()
+    for sid in F.step_ids():
+        probe = probe_for(sid)
+        seeded = probe.scenarios.get("SEEDED")
+        full = probe.scenarios.get("FLOW_COMPLETE")
+        if not seeded or not full or seeded.status not in SKIP_TIERS:
+            continue
+        if full.status not in SKIP_TIERS:
+            charged.add(F.normalize_id(sid))
+    assert charged == set(_DEFERRED_L6_SKIPS), (
+        f"the register and the live measurement disagree: measured "
+        f"{sorted(charged)}, registered {sorted(_DEFERRED_L6_SKIPS)}")

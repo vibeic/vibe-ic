@@ -48,11 +48,13 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gf180_registry_assets_re
 # reproduces, which is the opposite of what this drift-net is for.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_container_image_provenance.py
 
-# A PUBLISHED sign-off run record: it states which image regenerated that IR
-# result. benchmark-data is read-only to the flow for exactly this reason — the
-# tag names the toolchain that produced the numbers beside it, so advancing it
-# would attribute those numbers to an image that never ran them.
-benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
+# (2026-08-07: the dedicated entry that was here for
+# benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
+# was removed when that cell was retired and replaced by
+# v1.9.96_gf180mcuD — the file it named no longer exists, the new cell has
+# no equivalent hand-authored correction note, and the blanket
+# `benchmark-data/*` rule below already covers every ghcr tag under
+# benchmark-data/ regardless, so nothing lost coverage.)
 
 # A MEASUREMENT NOTE, not an install pointer. The comment records what `docker
 # inspect` actually returned for a named image and docker version, while
@@ -134,3 +136,72 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_run_image_propagates_to_
 # what the test asserts about the emitted TCL is not, and that part follows the
 # code, not the anchor.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_per_spare.py
+
+# vibe-ic#789 — the docstring's "Measured in the shipped image (0.2.63)" section
+# is a real investigation record: asap7.lydrc's layer numbers, the exact GDS
+# layer/datatype pairs a real streamout produced with LEFDEF_MAP="", and the
+# 7,911,144 phantom nangate45 IMPLANT/VT/CONTACT items that DRC run reported.
+# None of it is a live pointer — every test in the file drives `step_gds`
+# against hand-built `PdkConfig` objects and monkeypatched docker/magic calls,
+# never a running container — so nothing here follows VERSION. Advancing the
+# tag would claim those exact numbers were read off an image that never ran
+# them, the same measurement-honesty violation as the entries above.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layermap_any_signoff_deck.py
+
+# fault_scan_chain_insert.py:468 — the 0.2.65 there is a MEASUREMENT RECORD, not
+# a live pointer. The comment states what a specific tool printed on a specific
+# image ("Internal scan chain successfully constructed. Length: 271"), and the
+# image is named so a reader can reproduce it. Advancing that tag with VERSION
+# would assert those exact lines came off an image that never produced them —
+# falsifying provenance to satisfy a sync check, which is the same
+# measurement-honesty violation the entries above exist to prevent.
+#
+# Registered rather than rewritten. If the measurement is ever REDONE on a newer
+# image, update the number and the tag together, in that order.
+vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
+
+# test_pdk_registry_asset_half_reads_the_pinned_image.py:48 — ghcr=9.9.9 is a
+# FIXTURE, deliberately a version that can never exist, used to prove the asset
+# half reads the PINNED image rather than whatever container is lying around.
+# Advancing it with VERSION would destroy the property the test exists to check:
+# a fixture that tracks the anchor cannot detect a resolver that also tracks the
+# anchor for the wrong reason.
+#
+# Restored after a rebase: resolving the .image-version-ignore conflict by
+# taking the base side dropped this entry, and the sync gate caught it — which
+# is what it is for.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_reads_the_pinned_image.py
+
+# not_verified_tier.py quotes an example SKIP MESSAGE in its docstring —
+# "image ghcr.io/vibeic/vibeic-eda:X.Y.Z not present; this half was NOT checked".
+# It is prose showing what a user sees, not a pull this repo performs, so --set cannot
+# rewrite it and every anchor bump would otherwise need a hand edit (measured: 0.2.89 ->
+# 0.2.96 -> 0.2.97 in one afternoon).
+vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
+
+# docs/research/wafer_space_id_cells.md — a RESEARCH MEASUREMENT RECORD, not an
+# install pointer. The line states which image the `/foss/pdks` search for `*ws_ip*`
+# was ACTUALLY discharged inside (0.2.88 — the one that carries /foss/pdks), next to
+# the second tree the same question was put to, and records that the search returned
+# no hits. Rewriting the tag to VERSION would claim the search was re-run against an
+# image it was never run on, and the finding ("no hits, so `ws` is the shuttle
+# operator, not a PDK vendor") would then cite evidence that does not exist. Nothing
+# pulls the tag; it is prose about a past run. Registered, not rewritten.
+#
+# BOUNDED BY THE EXACT PATH, per this file's own rule, for two measured reasons:
+#   * it is the ONLY file under docs/research/ carrying a pinned ghcr tag, so a
+#     directory glob buys no coverage today and would silently exempt the next
+#     research note that legitimately IS an install doc;
+#   * the other three ghcr refs in that document are
+#     `ghcr.io/wafer-space/gf180mcu-precheck` — a different org, already outside this
+#     drift-net, which only reads the vibeic image.
+#
+# NB: this comment deliberately does NOT spell the full vibeic ghcr ref. The
+# drift-net scans THIS FILE TOO, so a "helpful" clarification written here would
+# create a new drift target inside the exemption list itself.
+#
+# If the search is ever REDONE on a newer image, update the tag and the prose
+# together, in that order.
+# (This entry was written twice, independently, by two agents that never spoke; they
+#  reached the same verdict and each caught something the other missed. Both kept.)
+docs/research/wafer_space_id_cells.md

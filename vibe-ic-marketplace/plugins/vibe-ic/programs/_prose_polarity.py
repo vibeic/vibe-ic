@@ -38,20 +38,28 @@ stopped at nothing. The reach is one rule now, symmetric, with `extra_breaks`
 for the one thing that really is per-caller: what ends a RECORD in input that is
 not prose.
 
-`sentence_scope` HAS NO CALLER IN THIS TREE. Check it — `grep -rn sentence_scope`
-finds this definition, its tests, and a name string in the gate that enforces the
-consult, and nothing else. That, and not any argument about which inputs happen
-to be affected, is why correcting it moves no shipped verdict: the defect was
-latent, in the strong sense that no code path reached it. The five modules that
-do import this one take only `NEGATION_RE`, `DENIAL_CORE_RE`, `blank_bracketed`
-and `is_denied`, none of which this change touches.
+`sentence_scope` NOW HAS TWO CALLERS: `drc_vacuous_pass_check._record_span` and
+`l_doc_consumer_contract.framed_hits` (vibe-ic#1021 — the framing window there
+was a flat character count that crossed full stops, so a hit in one sentence
+borrowed its framing from the next; it now takes the reach from here rather
+than growing a private copy of "where does a sentence end"). It was written and
+corrected while the first caller was still an unlanded branch, and the sentence
+here used to say the function had no caller at all — true then, and the reason
+the correction moved no shipped verdict: the defect was latent, in the strong
+sense that no code path reached it. That sentence is retired rather than
+quietly left standing, because a claim a reader has to take on faith is the
+shape #712 exists to remove, and a test enforces the match.
 
-It was found while reviewing an unlanded branch that would have been the first
-caller. That branch clamped its own forward reach in its own file — the same
-divergence-by-private-copy this module exists to end, and the reason to fix the
-reach here rather than there. Whether that branch ever lands, the rule belongs in
-one place; a reader of THIS tree should not have to take the branch on faith, so
-nothing above depends on it.
+The caller is the reason `extra_breaks` exists, and the sequence is worth
+keeping: that branch first clamped its own forward reach IN ITS OWN FILE — the
+same divergence-by-private-copy this module exists to end. The reach was fixed
+here instead, the caller deleted its copy, and it now passes `("\\n", ". ",
+"; ")` as `extra_breaks` and nothing else. It was MEASURED identical over every
+span its corpus drives before the copy was removed.
+
+The other modules that import this one take `NEGATION_RE`, `DENIAL_CORE_RE`,
+`blank_bracketed` and `is_denied`, none of which the reach change touched —
+and, since #1021, `l_doc_consumer_contract` takes the reach itself.
 
 Note which way that half-written rule failed. Publishing a denied value (#706,
 #711) is loud once someone looks. Retracting a value nothing denied is SILENT:

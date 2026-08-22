@@ -43,11 +43,54 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import resolves however this is invoked
+import _docker_memory as _dmem  # every `docker run` carries the ceiling
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.63"
+# The image comes from THIS CHECKOUT's anchor — see `_eda_image.anchor_image`.
+# It used to
+# be a pinned literal kept in step by `sync_image_version.py`; the version it
+# pinned claimed to be "what the plugin was verified against", and nothing
+# ever verified that. vibeic-eda's own release gate does.
+#
+# Resolved LAZILY: at import time this would put a registry round-trip in
+# front of every `--help`, and offline imports would stall.
+import _eda_image as _img
+
+
+def default_image() -> str:
+    """The image THIS CHECKOUT names.
+
+    NOT `resolve()`. This program reports FAIL about the image's CONTENTS, so
+    asking the registry would let a third party's push change a blocking
+    verdict with no commit in this tree — the failure vibe-ic#927 exists to
+    prevent, and the one I reintroduced here before catching it.
+    """
+    img = _img.anchor_image()
+    if img is None:
+        # RC_CANNOT_CHECK, NOT the bare `SystemExit("...")` this first shipped
+        # with. A string argument exits 1, and 1 is this program's word for
+        # RC_DISAGREE — "the two STA engines do not agree". Nothing had been
+        # looked at. MEASURED on the branch: from a copy of `programs/` with no
+        # repo root (which is exactly how the plugin is INSTALLED, since
+        # `tools/vibeic-eda/VERSION` lives above the plugin directory) the
+        # refusal returned rc=1, so every end user would have read "the engines
+        # disagree" from a run that never opened an image.
+        #
+        # "I could not read it" and "I read it and it was bad" must never
+        # produce the same verdict, and of the two directions this one is worse:
+        # it invents a finding about silicon.
+        print("[CANNOT CHECK] sta_engine_parity_check: no "
+              "tools/vibeic-eda/VERSION in this checkout and no "
+              "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+              "reference whose bytes a third party controls. Pass --image "
+              "explicitly if that is what you mean.", file=sys.stderr)
+        raise SystemExit(RC_CANNOT_CHECK)
+    return img
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable
@@ -98,7 +141,9 @@ def _probe(image: str, entrypoint: str, commands: Tuple[str, ...],
         Path(d, "probe.tcl").write_text(tcl, encoding="utf-8")
         args = (["-no_init", "/w/probe.tcl"] if positional
                 else ["-no_init", "-exit", "/w/probe.tcl"])
-        rc, out, err = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+        rc, out, err = _run(["docker", "run", "--rm",
+                             *_dmem.docker_memory_flags(),
+                             "-v", f"{d}:/w",
                              "--entrypoint", entrypoint, image, *args],
                             timeout=300)
     if rc == 127:
@@ -165,7 +210,9 @@ def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
         for entry, positional in (("openroad", False), ("sta", True)):
             args = (["-no_init", "/w/eq.tcl"] if positional
                     else ["-no_init", "-exit", "/w/eq.tcl"])
-            rc, so, se = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+            rc, so, se = _run(["docker", "run", "--rm",
+                               *_dmem.docker_memory_flags(),
+                               "-v", f"{d}:/w",
                                "--entrypoint", entry, image, *args], timeout=300)
             vals = {}
             for line in (so or "").splitlines():
@@ -210,7 +257,8 @@ def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True) ->
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", default=None,
+                    help="EDA image; default: the current published one")
     ap.add_argument("--baseline", default=None,
                     help="JSON register of ALREADY-KNOWN divergences. Only NEW "
                          "ones fail; the recorded set is reported every run so "
@@ -218,7 +266,9 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
 
-    res = check(a.image, SUPERSET_COMMANDS)
+    # `--image` defaults to None so `--help` costs no registry call; the
+    # resolution happens here, once, when an image is actually needed.
+    res = check(a.image or default_image(), SUPERSET_COMMANDS)
     if a.json:
         from pathlib import Path
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)

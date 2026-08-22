@@ -108,13 +108,48 @@ from typing import List, Optional, Tuple
 from _pdk_via_analyzer import (_routing_index, parse_tech_lef,
                                patch_extents)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+
 #: The EDA image whose PDK trees this checker reads with `--from-image`. A LIVE
 #: pointer: registered in `tools/vibeic-eda/sync_image_version.py`'s
 #: `INSTALL_DOC_CANDIDATES`, so `--set` rewrites it and `--check` catches drift.
 #: The alternative — naming an image in a comment — is a string nothing
 #: resolves, which is how the first version of this file went red on the
 #: image-version gate.
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.63"
+# The image comes from THIS CHECKOUT's anchor — see `_eda_image.anchor_image`.
+# It used to
+# be a pinned literal kept in step by `sync_image_version.py`; the version it
+# pinned claimed to be "what the plugin was verified against", and nothing
+# ever verified that. vibeic-eda's own release gate does.
+import _eda_image as _img
+
+
+def default_image() -> str:
+    """The image THIS CHECKOUT names.
+
+    NOT `resolve()`. This program reports FAIL about the image's CONTENTS, so
+    asking the registry would let a third party's push change a blocking
+    verdict with no commit in this tree — the failure vibe-ic#927 exists to
+    prevent, and the one I reintroduced here before catching it.
+    """
+    img = _img.anchor_image()
+    if img is None:
+        # EXIT 2, this program's [REFUSE] code — the same one `main()` already
+        # returns for "no readable tech LEF", whose comment states the rule this
+        # obeys: "An unchecked PDK is not a clean PDK, so this refuses rather
+        # than reporting 0 findings." A bare `SystemExit("...")` exits 1, and 1
+        # here means a via patch was found NARROWER THAN ITS LAYER'S MINIMUM —
+        # a hard finding about a PDK nothing had read. MEASURED: from a copy of
+        # `programs/` with no repo root above it (how the plugin is installed)
+        # the refusal returned rc=1.
+        print("[REFUSE] pdk_via_patch_meets_layer_min_width_check: no "
+              "tools/vibeic-eda/VERSION in this checkout and no "
+              "VIBEIC_EDA_IMAGE override; refusing to fall back to a floating "
+              "reference whose bytes a third party controls. Pass --image "
+              "explicitly if that is what you mean.", file=sys.stderr)
+        raise SystemExit(2)
+    return img
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is
 #: `NangateOpenCellLibrary.tech.lef` — it was reported NOT MEASURED for exactly
@@ -254,7 +289,8 @@ def stage_from_image(image: str, dest: Path) -> Tuple[List[Path], str]:
               f' | while read -r f; do echo "###LEF $f"; cat "$f"; done')
     try:
         r = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "bash", image,
+            ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+             "--entrypoint", "bash", image,
              "-lc", script],
             capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -295,8 +331,9 @@ def main(argv=None) -> int:
                          "(repeatable); default is the last "
                          f"{_KEY_COMPONENTS} path components")
     ap.add_argument("--from-image", action="store_true",
-                    help=f"read the tech LEFs out of {DEFAULT_IMAGE}")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+                    help="read the tech LEFs out of the current published image")
+    ap.add_argument("--image", default=None,
+                    help="EDA image; default: the current published one")
     ap.add_argument("--routing-max-layer", default=None,
                     help="highest metal index (or layer name) signals are "
                          "routed on; a finding above it is MITIGATED")
@@ -314,9 +351,12 @@ def main(argv=None) -> int:
     if args.from_image:
         import tempfile
         tmp = tempfile.TemporaryDirectory()
-        got, why = stage_from_image(args.image, Path(tmp.name))
+        # Same reason as the `--help` note on the flag: resolve at use, not
+        # at parse, and reuse the one answer for the message below.
+        image = args.image or default_image()
+        got, why = stage_from_image(image, Path(tmp.name))
         readable += got
-        staged_note = why or f"{len(got)} tech LEF(s) from {args.image}"
+        staged_note = why or f"{len(got)} tech LEF(s) from {image}"
 
     seen, uniq = set(), []
     for p in readable:

@@ -126,9 +126,42 @@ echo "   cmd          : ${CMD[*]:-<image default>}   (entrypoint stays image-bak
 echo "== removing old container (if any)"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
+# --- memory ceiling --------------------------------------------------------
+# MEASURED 2026-08-19 across a seven-machine fleet: 45 EDA containers were
+# running with `HostConfig.Memory == 0`. A container with no cgroup limit does
+# not share the host's memory, it IS the host's memory, and `ulimit -v` inside
+# the image is `unlimited`, so a tool never gets an allocation failure it can
+# report. On two of those machines a yosys took the whole box — 54 GB apiece
+# for two siblings, then 109 GB for the survivor once the kernel had killed its
+# twin and freed the room — and what actually died was the desktop session,
+# because the OOM killer picks by oom_score_adj, not by who caused it.
+#
+# The ceiling comes from programs/_docker_memory.py so the shell and the Python
+# `docker run` callers cannot drift apart. Exit 2 from that helper means it
+# could not determine a ceiling; that is a REFUSAL, never a fallback to
+# unbounded — a safety guard whose failure mode is "no guard" reports success
+# while leaving exactly the configuration that took a host down.
+#
+#   VIBEIC_DOCKER_MEMORY=48g   explicit ceiling
+#   VIBEIC_DOCKER_MEMORY=0     opt out on purpose
+_MEMTOOL="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/../../vibe-ic-marketplace/plugins/vibe-ic/programs/_docker_memory.py"
+declare -a MEMFLAGS=()
+if [[ -f "$_MEMTOOL" ]]; then
+  if _memout="$(python3 "$_MEMTOOL" --flags 2>&1)"; then
+    while IFS= read -r _f; do [[ -n "$_f" ]] && MEMFLAGS+=( "$_f" ); done <<< "$_memout"
+  else
+    die "could not determine a container memory ceiling: ${_memout}"
+  fi
+else
+  die "missing ${_MEMTOOL} — refusing to create '${NAME}' with no memory ceiling.
+   Set VIBEIC_DOCKER_MEMORY=<size> to name one, or VIBEIC_DOCKER_MEMORY=0 to opt out."
+fi
+echo "   memory       : ${MEMFLAGS[*]:-<unlimited — opted out>}"
+
 declare -a RUN=( docker run -d --name "$NAME" )
 [[ -n "$USER_SPEC" ]] && RUN+=( -u "$USER_SPEC" )
 [[ -n "$WORKDIR"  ]] && RUN+=( -w "$WORKDIR" )
+[[ ${#MEMFLAGS[@]} -gt 0 ]] && RUN+=( "${MEMFLAGS[@]}" )
 RUN+=( "${BINDS[@]}" "$IMAGE" )
 [[ ${#CMD[@]} -gt 0 ]] && RUN+=( "${CMD[@]}" )
 

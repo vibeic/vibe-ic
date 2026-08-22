@@ -131,7 +131,19 @@ def scan_spef(path: Path) -> dict:
     """
     facts = {"has_header": False, "has_design": False,
              "d_nets": 0, "r_nets": 0,
-             "grounded_caps": 0, "coupling_caps": 0}
+             "grounded_caps": 0, "coupling_caps": 0,
+             # D9 (vibe-ic#1052 census). Counting records says nothing about
+             # what the records CONTAIN: scaling every number in the file left
+             # this gate's verdict unchanged, because a count does not move
+             # when a value does. A capacitance is a physical quantity and
+             # cannot be negative in any unit, under any extraction tool, for
+             # any technology -- so a negative one is not a wrong answer, it is
+             # not an extraction at all. NO ORACLE is consulted: nothing here
+             # knows what the value SHOULD be, only what it cannot be.
+             # Measured over every published SPEF in this repo before the rule
+             # was written: 114459 *CAP entries, 0 negative.
+             "negative_caps": 0, "negative_net_totals": 0,
+             "first_negative": ""}
     in_cap = False
     try:
         with path.open(errors="replace") as fh:
@@ -146,6 +158,15 @@ def scan_spef(path: Path) -> dict:
                         facts["has_design"] = True
                     if line.startswith("*D_NET"):
                         facts["d_nets"] += 1
+                        _t = line.split()
+                        if len(_t) >= 3:
+                            try:
+                                if float(_t[2]) < 0:
+                                    facts["negative_net_totals"] += 1
+                                    facts["first_negative"] = (
+                                        facts["first_negative"] or line[:90])
+                            except ValueError:
+                                pass
                     elif line.startswith("*R_NET"):
                         facts["r_nets"] += 1
                     # Any other directive ends a *CAP body: *RES, *END, the
@@ -161,6 +182,9 @@ def scan_spef(path: Path) -> dict:
                     float(toks[-1])
                 except ValueError:
                     continue
+                if float(toks[-1]) < 0:
+                    facts["negative_caps"] += 1
+                    facts["first_negative"] = facts["first_negative"] or line[:90]
                 if len(toks) == 3:
                     facts["grounded_caps"] += 1
                 else:
@@ -231,6 +255,21 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         if not facts["has_design"]:
             findings.append(Finding("WARNING", "MISSING_METADATA",
                                     f"{sf.name} missing *DESIGN or *DATE"))
+        # D9: a capacitance cannot be negative. ERROR, because a file carrying
+        # one is not a parasitic extraction that happens to be wrong -- it is
+        # not a parasitic extraction, and every downstream timing number
+        # denominated in it is about a circuit that cannot exist.
+        _neg = facts["negative_caps"] + facts["negative_net_totals"]
+        if _neg:
+            findings.append(Finding(
+                "ERROR", "NEGATIVE_PARASITIC",
+                f"{sf.name}: {_neg} negative capacitance value(s) "
+                f"({facts['negative_caps']} in *CAP bodies, "
+                f"{facts['negative_net_totals']} in *D_NET totals). A "
+                f"capacitance is non-negative in every unit and every "
+                f"technology, so this file is not an extraction",
+                details=facts["first_negative"]))
+
         if has_nets:
             stats["has_nets"] = True
         else:

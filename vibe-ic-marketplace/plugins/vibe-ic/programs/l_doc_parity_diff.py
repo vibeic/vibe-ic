@@ -48,6 +48,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 # Imported, never re-typed — see _IGNORED_ENVELOPE_KEY_PREFIXES.
 from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # Canonical L doc list — since v0.1.51, sourced from l_doc_taxonomy
@@ -525,7 +526,8 @@ def report_to_markdown(stats: List[LDocStats],
     out: List[str] = []
     out.append("# Phase 1 extractor parity diff")
     out.append("")
-    out.append("_Emitted by `l_doc_parity_diff.py` (v0.1.51). "
+    out.append(f"_Emitted by `l_doc_parity_diff.py` "
+               f"(v{_pmd.running_plugin_version()}). "
                "Doctrine: program output should match fresh-agent output; "
                "any divergence is either a program gap or a hallucination._")
     out.append("")
@@ -626,7 +628,7 @@ def _cli() -> int:
             json.dumps({
                 "stats": [asdict(s) for s in stats],
                 "findings": [f.as_dict() for f in findings],
-                "emitted_by": "l_doc_parity_diff v0.1.51",
+                "emitted_by": _pmd.emitted_by("l_doc_parity_diff"),
             }, indent=2), encoding="utf-8")
 
     halluc_count = sum(1 for f in findings if f.category == "HALLUCINATED")
