@@ -39,17 +39,31 @@ def _run(repo: Path, corpus: Path | None):
         capture_output=True, text=True, env=env, timeout=60)
 
 
+def _fix_line(r, what: str) -> str:
+    """The gate's `Fix:` line, or a FAILURE naming what was not reached.
+
+    This was `pytest.skip` at three sites. A skip here is a test that has gone
+    dark: the fixture CONSTRUCTS a corpus with a stale index precisely so the
+    stale-index branch is reached, so not reaching it is a broken construction,
+    not an environment this test should excuse. Skipping reported "passed" for
+    a run that checked nothing about the remedy -- which is the same shape as
+    the defect this whole module exists to catch.
+    """
+    if "Fix:" not in r.stdout:
+        raise AssertionError(
+            f"the {what} construction never reached the stale-index branch, so "
+            f"nothing about the remedy was checked. rc={r.returncode}\n"
+            f"stdout: {r.stdout.strip()[:400]}\nstderr: {r.stderr.strip()[:200]}")
+    return next(l for l in r.stdout.splitlines() if "Fix:" in l)
+
+
 def test_when_the_index_is_outside_this_repo_the_remedy_says_so(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     corpus_root = tmp_path / "corpus"
     _corpus(corpus_root, "# stale\n\nnothing that regenerates\n")
     r = _run(repo, corpus_root / "ic")
-    if "Fix:" not in r.stdout:
-        import pytest
-        pytest.skip(f"gate did not reach the stale-index branch: "
-                    f"{r.stdout.strip()[:200]}")
-    fix = next(l for l in r.stdout.splitlines() if "Fix:" in l)
+    fix = _fix_line(r, "outside-this-repo")
     assert "NOT this repository" in fix, fix
     assert "corpus clone" in fix, fix
     # and it must name the FILE, so the reader knows what to commit there
@@ -64,10 +78,7 @@ def test_the_remedy_never_says_the_path_twice(tmp_path):
     corpus_root = tmp_path / "corpus"
     _corpus(corpus_root, "# stale\n\nnothing that regenerates\n")
     r = _run(repo, corpus_root / "ic")
-    if "Fix:" not in r.stdout:
-        import pytest
-        pytest.skip("gate did not reach the stale-index branch")
-    fix = next(l for l in r.stdout.splitlines() if "Fix:" in l)
+    fix = _fix_line(r, "no-repetition")
     assert fix.count("INDEX.md") == 1, fix
 
 
@@ -92,8 +103,5 @@ def test_a_dotdot_spelling_does_not_make_an_outside_index_look_inside(tmp_path):
     assert spelled.resolve() == (corpus_root / "ic").resolve()
 
     r = _run(repo, spelled)
-    if "Fix:" not in r.stdout:
-        import pytest
-        pytest.skip(f"gate did not reach the stale-index branch: "
-                    f"rc={r.returncode} {r.stdout[-200:]}")
-    assert "NOT this repository" in r.stdout, r.stdout
+    fix = _fix_line(r, "dotdot-spelling")
+    assert "NOT this repository" in fix, fix

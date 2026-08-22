@@ -219,9 +219,12 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
         f"{G.MAX_BOUND_COMMITS}-commit ceiling, so NO legal max_commits can "
         "cover them and they can never again be legitimately acknowledged: "
         + ", ".join(f"{g} ({n} behind)" for g, n in unboundable)
-        + ". The row must be fixed, its `since` renewed as a visible act, or "
-        "the row removed because the gate is not genuinely red -- but it "
-        "cannot be left as it is.")
+        + ". Re-dating the row or raising the ceiling to make it fit is "
+        "REFUSED by standing ruling, so there are exactly two honest exits: "
+        "fix what the gate is reporting, or close the row because the finding "
+        "it acknowledges no longer exists -- and if a DIFFERENT finding exists "
+        "now, that is a NEW row dated to ITS first-red commit, which is not a "
+        "re-dating of this one. It cannot be left as it is.")
 
 
 def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
@@ -660,9 +663,24 @@ def test_an_unrecognised_state_is_not_adjudicable_rather_than_overdue():
 # --------------------------------------------------------------------------
 
 def _shallow_clone_of(src, dest, depth=1):
-    subprocess.run(["git", "clone", "--quiet", "--depth", str(depth),
-                    "--no-local", f"file://{src}", str(dest)],
-                   capture_output=True, text=True, check=False)
+    """A clone that IS shallow, or a failure saying why it is not.
+
+    The caller used to `pytest.skip` when this came back non-shallow, which is
+    a test gone dark: the whole point of the case below is the shallow arm, so
+    a run that could not build one checked nothing and reported "passed".
+    `--no-local` + `file://` is what makes `--depth` bite for a local source;
+    if that ever stops working the construction is broken and must say so.
+    """
+    proc = subprocess.run(["git", "clone", "--quiet", "--depth", str(depth),
+                           "--no-local", f"file://{src}", str(dest)],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, (
+        f"could not clone a shallow copy (rc={proc.returncode}): "
+        f"{proc.stderr.strip()[:300]}")
+    assert G.repository_is_shallow(dest) is not None, (
+        "git produced a clone with no `.git/shallow`, so `--depth` did not "
+        "bite and the shallow arm below would test nothing. "
+        f"stderr: {proc.stderr.strip()[:200]}")
     return dest
 
 
@@ -685,8 +703,6 @@ def test_a_shallow_repository_that_still_resolves_is_treated_as_normal(tmp_path)
 def test_a_truncated_clone_names_the_truncation_and_a_remedy(tmp_path):
     r, shas = _repo(tmp_path)
     shallow = _shallow_clone_of(r, tmp_path / "sh", depth=1)
-    if G.repository_is_shallow(shallow) is None:
-        pytest.skip("git did not produce a shallow clone here")
     led = tmp_path / "led.json"
     led.write_text(json.dumps({"acknowledged": [
         {"gate": "g", "since": shas[0], "max_commits": 1}]}), encoding="utf-8")
