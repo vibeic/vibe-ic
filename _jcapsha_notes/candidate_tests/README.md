@@ -30,6 +30,31 @@ a rectangular master occupies the same bounding box either way. It is there so
 the next author does not write that assertion, watch it pass, and believe the
 question is covered.
 
+## The three states, measured
+
+```
+current tree                RED    side N and side E derived with rotate_cw (a rotation)
+same test, fix applied to    GREEN  side N -> flip_x, side E -> flip_y
+a scratch copy                      (the repo tree was never modified)
+```
+
+The green half is not decoration. A test that goes red proves it detects
+something; only the green proves it detects the RIGHT thing and that a correct
+fix can satisfy it.
+
+## The version of this test that could never go green
+
+The first version asserted `rotate_cw(o, 2) == flipX(o)` — that the ROTATION
+helper should behave like a mirror. It was red on the broken tree, which looked
+like success. But `rotate_cw` is correctly named and correctly implemented, and
+a correct fix does not touch it: it adds a mirror and changes the CALL SITE. So
+that test would have stayed red after the bug was fixed — **unsatisfiable**.
+
+An unsatisfiable test gets muted, and muting it is indistinguishable from the
+defect being fixed. It was rewritten to look at the call site, which is what
+actually has to change. Recorded because the red looked exactly as convincing
+either way.
+
 ## An error this file caught in its own author
 
 The first version of the flip table had the `E` and `W` entries exchanged. The
