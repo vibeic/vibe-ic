@@ -1,0 +1,2 @@
+fault_scan_chain_insert: chain length=1580 internal + 75 boundary; input flops=1580; matches=True; skip_boundary=False (mode=auto); area 9378 -> 11151 instances (18.91%)
+SCAN_RC=0
