@@ -9,14 +9,20 @@ off a matrix that names zero corners.
 Rules (chip-AGNOSTIC — structural JSON shape only):
   * corners missing / not a list / EMPTY  → FAIL (an empty list is not a
     PVT matrix; say so instead of letting the filename carry the claim)
+    — UNLESS a durable single-corner stance attestation is present (#694),
+    in which case → SINGLE_CORNER_STANCE_DISCLOSED (exit 0, deferred /
+    PASS-with-review). The stance defers ONLY a genuinely single-corner
+    run that does NOT also claim multi-corner.
   * exactly 1 corner → exit 0 but verdict SINGLE_CORNER_ONLY — honest
     single-corner setup, must never be presented as multi-corner
   * >= 2 corners with distinct labels → MULTI_CORNER
   * a matrix that CLAIMS `multi_corner: true` with < 2 corners → FAIL
-    (self-contradictory claim)
+    (self-contradictory claim) — the stance attestation NEVER rescues a
+    contradictory multi-corner claim (§4.05 no-leak)
 
-Exit codes: 0 = OK (incl. SINGLE_CORNER_ONLY), 1 = FAIL, 2 = no
-pvt_matrix.json present (vacuous — the existence gate owns that).
+Exit codes: 0 = OK (incl. SINGLE_CORNER_ONLY /
+SINGLE_CORNER_STANCE_DISCLOSED), 1 = FAIL, 2 = no pvt_matrix.json present
+(vacuous — the existence gate owns that).
 """
 from __future__ import annotations
 
@@ -29,6 +35,42 @@ _CANDIDATES = (
     "phase2/stage2/constraints/pvt_matrix.json",
     "constraints/pvt_matrix.json",
 )
+
+# ORGANIC #694 — durable single-corner stance attestation. When the active
+# PDK ships <2 Liberty corners (common on a single-corner open PDK), the
+# runner emits this disclosure so a legitimate single-corner run defers
+# (PASS-with-review) instead of false-FAILing corner_count=0.
+_STANCE_CANDIDATES = (
+    "reports/phase3/single_corner_stance.json",
+    "reports/phase2/single_corner_stance.json",
+)
+
+
+def _load_single_corner_stance(project: Path) -> dict | None:
+    """Return a VALID, NON-CONTRADICTORY single-corner stance dict, else None.
+
+    §4.05 no-leak: a stance only counts if it (a) parses, (b) self-discloses
+    a single-corner stance, and (c) does NOT itself claim multi-corner. A
+    missing / malformed / multi-corner-claiming file returns None so the
+    empty-matrix FAIL stands."""
+    for rel in _STANCE_CANDIDATES:
+        p = project / rel
+        if not p.is_file():
+            continue
+        try:
+            d = json.loads(p.read_text(errors="replace"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(d, dict):
+            return None
+        # A stance that contradicts itself by claiming multi-corner is not a
+        # valid single-corner disclosure — refuse to defer on it.
+        if d.get("multi_corner_claimed") is True:
+            return None
+        if str(d.get("stance", "")).upper() == "SINGLE_CORNER_DISCLOSED":
+            return d
+        return None
+    return None
 
 
 def audit(project: Path) -> dict:
@@ -48,6 +90,30 @@ def audit(project: Path) -> dict:
                 "reason": f"{pvt_path.name} unparseable"}
     corners = data.get("corners")
     if not isinstance(corners, list) or not corners:
+        # §4.05 no-leak: a matrix that CLAIMS multi-corner while carrying
+        # <2 corners is a self-contradictory claim and STILL FAILs — the
+        # single-corner stance attestation must NEVER rescue it.
+        if data.get("multi_corner") is True:
+            _n = len(corners) if isinstance(corners, list) else 0
+            return {"verdict": "FAIL", "rc": 1, "corner_count": _n,
+                    "reason": ("matrix claims multi_corner=true with "
+                               f"{_n} corner(s) — self-contradictory claim "
+                               "(#442); a single-corner stance attestation "
+                               "does not rescue a multi-corner claim")}
+        # ORGANIC #694 — a disclosed single-corner stance defers (PASS-with-
+        # review) instead of false-FAILing a legitimate single-corner run.
+        stance = _load_single_corner_stance(project)
+        if stance is not None:
+            return {"verdict": "SINGLE_CORNER_STANCE_DISCLOSED", "rc": 0,
+                    "corner_count": len(corners) if isinstance(corners, list)
+                    else 0,
+                    "stance_corners": stance.get("corners"),
+                    "review_required": True,
+                    "reason": ("fewer than 2 Liberty corners available; a "
+                               "durable single-corner stance is disclosed "
+                               "(#694) — deferred / PASS-with-review, NOT a "
+                               "multi-corner sign-off. Stage ss/tt/ff libs "
+                               "for production tapeout.")}
         return {"verdict": "FAIL", "rc": 1,
                 "corner_count": 0,
                 "reason": ("corners is empty/missing — an empty list is "

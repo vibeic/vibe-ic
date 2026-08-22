@@ -7,18 +7,33 @@ MIXED-DRIVER nets (same net has both a continuous `assign` AND a procedural
 ORGANIC #546 — runner sv2v fallback must include this post-processing step.
 
 ALGORITHM (chip-AGNOSTIC, no class/IC-name literals):
-  1. Collect all nets driven by `assign <net> = ...;` (continuous assigns).
+  0. Partition the flattened file into per-module scopes (`module`/`macromodule`
+     … `endmodule`, nesting-aware, comment/string-safe).  ALL detection and
+     removal below is done INDEPENDENTLY within each module scope.
+  1. Collect all nets driven by `assign <net> = ...;` (continuous assigns)
+     WITHIN a module.
   2. Collect all nets driven inside `always @(...)` / `always_ff` / `initial`
-     blocks (procedural).
-  3. A net in BOTH sets is a mixed-driver net.
-  4. For each mixed-driver net: REMOVE its `assign` line.  The procedural
-     driver (always/initial) is the real synchronous driver; the `assign` is
-     typically a sv2v-generated initialisation artefact.
+     blocks (procedural) WITHIN the SAME module.
+  3. A net in BOTH sets IN THE SAME MODULE is a mixed-driver net.
+  4. For each mixed-driver net: REMOVE its `assign` line — but ONLY inside the
+     module that has the conflict.  The procedural driver (always/initial) is
+     the real synchronous driver; the `assign` is typically a sv2v-generated
+     initialisation artefact.
   5. Write the repaired content (in-place or to stdout).
+
+WHY MODULE SCOPING IS MANDATORY (#200):
+  sv2v emits every module into ONE flattened file.  A port name that is
+  `output reg` (procedural) in module A and `assign`-driven in a DIFFERENT
+  module B is TWO different nets — B's continuous assign is its ONLY, legal
+  driver.  A file-wide intersection cross-matches them and deletes B's
+  legitimate driver (this silently broke ibex: instr_req_o / data_req_o lost
+  their only driver).  Cross-module same-name nets are NEVER cross-matched.
 
 GUARANTEE:
   * A file with NO mixed-driver nets is byte-identical after this pass
     (the NEGATIVE test: unmodified single-driver files are not changed).
+  * A net driven both ways only across DIFFERENT modules is left untouched;
+    only a genuine same-module mixed driver has its `assign` removed.
   * Only full-line `assign <net> = ...;` statements are removed.  Multi-line
     assigns, `assign {a, b} = ...`, or `assign` inside always blocks are
     NOT touched (regex is anchored + requires the net name to be a plain
@@ -142,32 +157,167 @@ def _collect_procedural_lvalues(text: str) -> Set[str]:
     return lvalues
 
 
+# ──────────────────────────────────────────────────────────────────────
+# #200 — module-scope partitioning
+# ──────────────────────────────────────────────────────────────────────
+# A "segment" is a maximal run of characters belonging to the same innermost
+# module scope.  scope_id is an int identifying a module instance, or None for
+# text outside any module (between modules, `define`s, etc.).  The concatenation
+# of every segment's slice reconstructs the file byte-for-byte, so untouched
+# scopes (and all out-of-module text) are preserved exactly.
+_MOD_START_KW = frozenset({"module", "macromodule"})
+_MOD_END_KW = "endmodule"
+
+
+def _module_segments(text: str):
+    """Partition `text` into (scope_id, start, end) segments where scope_id is
+    the innermost enclosing module (None = outside any module).  Comment- and
+    string-safe so `module`/`endmodule` inside `//`, `/* */`, or "..." are not
+    mistaken for real boundaries.  Nesting-aware (SV nested modules degrade to
+    correct innermost attribution; sv2v output is flat, which is the exact
+    top-level-per-module case)."""
+    n = len(text)
+    events = []  # (pos, kind, kw_end)  kind in {"start", "end"}
+    i = 0
+    while i < n:
+        c = text[i]
+        # line comment
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i + 2)
+            i = n if j == -1 else j
+            continue
+        # block comment
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        # string literal
+        if c == '"':
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        # identifier / keyword — the preceding char is guaranteed a
+        # non-identifier here, so this is a whole-word left boundary.
+        if c.isalpha() or c == "_":
+            k = i + 1
+            while k < n and (text[k].isalnum() or text[k] == "_"):
+                k += 1
+            word = text[i:k]
+            if word == _MOD_END_KW:
+                events.append((i, "end", k))
+            elif word in _MOD_START_KW:
+                events.append((i, "start", k))
+            i = k
+            continue
+        i += 1
+
+    segments = []
+    cursor = 0
+    stack = [None]  # innermost scope; None = outside any module
+    next_id = 1
+    for pos, kind, kw_end in events:
+        if kind == "start":
+            if pos > cursor:
+                segments.append((stack[-1], cursor, pos))
+            stack.append(next_id)
+            next_id += 1
+            cursor = pos  # the `module` keyword belongs to the new scope
+        else:  # end — the `endmodule` keyword belongs to the closing scope
+            if kw_end > cursor:
+                segments.append((stack[-1], cursor, kw_end))
+            if len(stack) > 1:
+                stack.pop()
+            cursor = kw_end
+    if cursor < n:
+        segments.append((stack[-1], cursor, n))
+    return segments
+
+
+def _scope_texts(text: str):
+    """Return {scope_id: [segment_text, ...]} for every real module scope."""
+    by_scope = {}
+    for sid, a, b in _module_segments(text):
+        if sid is None:
+            continue
+        by_scope.setdefault(sid, []).append(text[a:b])
+    return by_scope
+
+
+def _scope_mixed_nets(seg_texts) -> Set[str]:
+    """Mixed-driver nets within ONE module scope: nets driven both by a
+    continuous assign AND procedurally, both inside the same module."""
+    ca: Set[str] = set()
+    pv: Set[str] = set()
+    for s in seg_texts:
+        ca |= _collect_continuous_assigns(s)
+        pv |= _collect_procedural_lvalues(s)
+    return ca & pv
+
+
 def mixed_driver_nets(text: str) -> FrozenSet[str]:
-    """Return the set of net names that have BOTH a continuous assign and
-    a procedural driver — these are the mixed-driver (illegal in Verilog) nets.
-    Chip-AGNOSTIC.
+    """Return the set of net names that have BOTH a continuous assign and a
+    procedural driver INSIDE THE SAME MODULE — these are the mixed-driver
+    (illegal in Verilog) nets.  A same-named net that is assign-driven in one
+    module and procedurally-driven in a DIFFERENT module is NOT mixed and is
+    never reported.  Chip-AGNOSTIC.
     """
-    ca = _collect_continuous_assigns(text)
-    pv = _collect_procedural_lvalues(text)
-    return frozenset(ca & pv)
+    result: Set[str] = set()
+    for texts in _scope_texts(text).values():
+        result |= _scope_mixed_nets(texts)
+    return frozenset(result)
+
+
+def _remove_assigns(seg_text: str, nets: Set[str]) -> str:
+    """Remove full-line `assign <net> = ...;` statements for `nets` from a
+    single scope segment.  Conservative: only plain-identifier lvalue assigns.
+
+    The statement terminator tolerates a trailing line comment
+    (`assign x = 0;  // note`).  Without that, the non-greedy `.*?;` under
+    DOTALL would treat the comment as "no newline yet" and keep extending
+    across newlines to the NEXT `;`, swallowing subsequent legitimate
+    statements — another way this pass could delete valid code."""
+    if not nets:
+        return seg_text
+    escaped = "|".join(re.escape(n) for n in sorted(nets))
+    _rm_re = re.compile(
+        r"^(\s*)assign\s+(?:" + escaped + r")\s*="
+        r".*?;[^\S\n]*(?://[^\n]*)?\r?\n",
+        re.MULTILINE | re.DOTALL,
+    )
+    return _rm_re.sub("", seg_text)
 
 
 def fixup(text: str) -> str:
-    """Return the repaired Verilog text.  Mixed-driver assign lines are
-    removed; single-driver files are returned byte-identical.
-    Chip-AGNOSTIC.
+    """Return the repaired Verilog text.  Mixed-driver assign lines are removed
+    PER MODULE SCOPE; single-driver files are returned byte-identical.  A net
+    driven both ways only across DIFFERENT modules is left untouched — only a
+    genuine same-module conflict has its `assign` removed.  Chip-AGNOSTIC.
     """
-    nets = mixed_driver_nets(text)
-    if not nets:
-        return text
-    # Build a pattern matching the assign lines to remove.
-    escaped = "|".join(re.escape(n) for n in sorted(nets))
-    _rm_re = re.compile(
-        r"^(\s*)assign\s+(?:" + escaped + r")\s*=.*?;\s*\n",
-        re.MULTILINE | re.DOTALL,
-    )
-    fixed = _rm_re.sub("", text)
-    return fixed
+    segments = _module_segments(text)
+    # Compute the mixed-driver set for each module scope independently.
+    by_scope = {}
+    for sid, a, b in segments:
+        if sid is None:
+            continue
+        by_scope.setdefault(sid, []).append(text[a:b])
+    scope_nets = {sid: _scope_mixed_nets(t) for sid, t in by_scope.items()}
+    if not any(scope_nets.values()):
+        return text  # byte-identical guarantee for clean files
+    out: List[str] = []
+    for sid, a, b in segments:
+        seg = text[a:b]
+        nets = scope_nets.get(sid) if sid is not None else None
+        if nets:
+            seg = _remove_assigns(seg, nets)
+        out.append(seg)
+    return "".join(out)
 
 
 def fixup_file(path: Path) -> bool:

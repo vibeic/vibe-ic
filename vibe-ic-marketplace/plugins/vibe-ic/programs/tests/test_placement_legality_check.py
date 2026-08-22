@@ -23,6 +23,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 SCRIPT = Path(__file__).parent.parent / "placement_legality_check.py"
 assert SCRIPT.exists()
@@ -224,8 +225,7 @@ def test_skip_when_not_a_dir(tmp_path):
 # ── Real artefact regression (if present in the tree) ──────────────────
 
 def test_real_placed_def_if_present():
-    real = Path("/home/reyerchu/vibe-ic/benchmark-data/ic/"
-                "subservient_v0125_fresh")
+    real = require_repo("benchmark-data/ic/subservient_v0125_fresh")
     if not (real / _PNR / "placed.def").is_file():
         return  # tree not present in this checkout — skip silently
     r = _run(real)
