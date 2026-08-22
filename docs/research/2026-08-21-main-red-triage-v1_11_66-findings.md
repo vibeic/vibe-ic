@@ -5267,6 +5267,611 @@ document is a version of that question not being asked; this is the last one, an
 it was in my own conclusion.
 
 
+## M98 — the corpus pointer NEVER closes anything. It is a measurement enabler, and D3 was the outlier
+
+M97 left one question open: is D3's `61 skipped` a property of that dimension or
+of the whole matrix? **Ran all nine other dimension files both ways.**
+
+    9 dimension files, NO pointer     3 failed, 956 passed, 3 skipped, 8 xfailed  (460s)
+    9 dimension files, WITH pointer   5 failed, 956 passed, 0 skipped, 9 xfailed  (780s)
+
+    CLOSED:    0
+    REVEALED:  2
+
+**D3 IS THE OUTLIER, decisively: 61 skips against 3 across nine other files.** The
+matrix is not broadly under-measured; one dimension was, and it happened to be the
+one carrying the reds I had been quoting.
+
+**AND THE MATRIX REDS LIVE IN EXACTLY TWO OF TEN FILES:**
+
+    test_matrix_d3_outputs_produced.py       6 -> 11  with the pointer
+    test_matrix_63x8_coverage.py             3 ->  5  with the pointer
+    d1, d2, d4, d5, d6, d7, d8, d9          ALL GREEN, both arms
+
+**THE RULE THIS ESTABLISHES, and it is the useful part:** across four A/B pairs
+now — D3, the nine dimensions, the closing regression, and the `0.5ic` replay —
+**setting `VIBE_IC_BENCHMARK_DATA` has closed ZERO tests and revealed SEVEN.** It
+is not a fix and it must never be quoted as one. **It converts NOT-MEASURED into
+measured**, and what it measures was already red; the pointer just stopped the
+suite from being quiet about it.
+
+**That cuts both ways and the second way is the one to keep.** A reader could take
+"the pointer reveals 7 more reds" as a reason not to set it. The opposite is true:
+**64 cells were reporting nothing, and every red count taken without the pointer —
+including all of mine — was taken over a denominator that excluded them.** A gate
+that skips is not a gate that passes, and this document has said so about other
+people's code eleven times.
+
+**Newly named by this measurement**, in `test_matrix_63x8_coverage.py`:
+`test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved` and
+`test_the_enforcement_census_is_reported_for_humans`, both failing with *"the
+nested outcome run produced red test report(s) outside the matrix cell"* — which
+is a third cause, distinct from the `home`-root group and from the allowlist
+group, and **not previously recorded anywhere in this document.**
+
+
+## M99 — M98's "third cause" is the FIRST cause propagating. Corrected within the hour
+
+M98 closed by naming two newly-surfaced reds as *"a third cause, distinct from the
+`home`-root group and from the allowlist group, and not previously recorded
+anywhere."* **I read the message and not its payload. It is not a third cause.**
+
+The full assertion names its own source:
+
+> the nested outcome run produced red test report(s) **outside the matrix cell
+> join**. Its rc=1 is not completely represented by the cell census, so this run
+> is **NORECORD**: [`test_d3_evidence_is_live_wherever_the_run_root_exists`,
+> `test_d3_the_compliance_audit_does_not_create_declared_outputs`]
+
+**Both named reports are D3 reds that the corpus pointer revealed** — two of the
+exact five in M96. So `test_matrix_63x8_coverage.py` is not failing of its own
+accord; **it is refusing to certify a census while a nested run produced reds it
+cannot account for.** That is the gate working, not a defect in it.
+
+**Corrected accounting for what the pointer surfaces:**
+
+    5 revealed in D3          root
+    2 revealed in 63x8        DOWNSTREAM of two of those five
+    -------------------------------------------------
+    7 test failures, 5 causes, ONE group
+
+**And the correct reading is the opposite of alarming.** A census gate that went
+green while its own nested run was red would be the defect. This one goes
+**NORECORD** and says which reports it could not place — *"could not look"
+reported as such, not as clean. Rule 9, again, implemented by the repository and
+not by me.*
+
+**Why I got it wrong, and it is the same shape as the `61 skipped`.** The failure
+message's FIRST line describes a symptom (`the nested outcome run produced red
+test report(s)`) and its payload names the cause. I grouped on the first line
+because it was distinct-sounding, and the payload was one `re.search` away. **A
+distinct-sounding message is not a distinct cause, and I have now made that
+mistake in both directions in one document** — collapsing six items into one root
+(correctly, M91) and splitting one root into a phantom third (wrongly, here).
+
+
+## M100 — the "undocumented" vacuity trio is M45's defect. Five reds, one cause, one line
+
+M95 listed 3 structured-vacuity reds as **undocumented** and 2 coverage-bridge
+reds as documented, and treated them as separate rows. **Read side by side, all
+five are about Step 4 and the same conditional.**
+
+| test | what it says |
+|---|---|
+| `GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran` | `assert 'VACUOUS_PASS' != 'VACUOUS_PASS'` — the sim RAN and the step is still labelled vacuous |
+| `the_shipped_step_names_the_one_clause_that_examined_nothing` | Step 4's record has no `partial_vacuity_disclosed`; *"one silent pass traded for"* unanimity |
+| `the_other_self_aware_shipped_gate_also_reaches_the_tier` | *"the tier was granted without stating the count it was granted on"* |
+| `e2e_oracle_pass_lifts_step4_out_of_skipped_condition` | wants `WAIVED-DEFERRED`, gets `[VACUOUS-PASS] Step 4` |
+| `e2e_oracle_pass_is_deferred_not_counted_without_coverage` | wants `WAIVED-DEFERRED`, gets `[VACUOUS-PASS] Step 4` |
+
+**One conditional produces all five** (`flow_compliance_check.py:10057`):
+
+```python
+if (passed and waiver_hints and not non_hint_reasons
+        and not skip_hints and not vacuous_hints):
+```
+
+**Step 4 carries a waiver hint AND a vacuous hint** — `professional_tb_check`
+signals `VACUOUS_PASS (input not applicable)`, and 2 of 6 clauses declare
+NOT-APPLICABLE. So `not vacuous_hints` is false, the WAIVED-DEFERRED branch is
+declined, and the step resolves `VACUOUS_PASS` with no partial-vacuity disclosure
+set. **That is M45, verbatim, and M45 attached it to two reds.** It owns five.
+
+**Same shape as the flow-gate item**, which section C priced at 3 reds and M95
+measured at 6. **Twice now, a cause I had correctly diagnosed was recorded with
+half its blast radius**, because I stopped counting at the tests I happened to be
+looking at when I diagnosed it.
+
+**M46'S WARNING NOW COVERS FIVE TESTS, NOT TWO, AND IT MATTERS MORE FOR IT.**
+*"Do not fix by asserting `VACUOUS-PASS`"* — that turns all five green while
+deleting the waiver-path coverage they exist to hold. **A one-character change to
+`:10057` (dropping `and not vacuous_hints`) would also turn all five green**, and
+would silently convert every step carrying both hints from "vacuous" to "waived",
+which is the opposite of the disclosure this gate was built for. **The five are
+red because the code is doing what it was told; whether it was told the right
+thing is the owner's call, and it is ONE call, not five.**
+
+
+## M101 — the consolidated census: 34 reds, 6 causes, measured rather than accumulated
+
+Twice this document recorded a correctly-diagnosed cause with **half its blast
+radius** (the flow-gate item at 3 when it owns 6, M95; the vacuity conditional at
+2 when it owns 5, M100). That is a census defect, not a diagnosis defect, so here
+is the census — assembled from the runs above, deduplicated by node id.
+
+**34 distinct failing test ids across 10 files**, every one measured on this host
+at HEAD with the corpus pointer set.
+
+| n | cause | how established | where |
+|--:|---|---|---|
+| **11** | D3 outputs: 6 cite `home` run roots no corpus supplies; **5 are visible only once the corpus is pointed at all** | A/B with and without `VIBE_IC_BENCHMARK_DATA`, sets diffed | M86/M87/M96 |
+| **6** | the closed 7-name env allowlist — a test control that can no longer cross into the arm | `grep -c` per name in the runner; remedy built and executed | M91/M92 |
+| **5** | `flow_compliance_check.py:10057` — `not vacuous_hints` declines the WAIVED-DEFERRED branch for Step 4 | five payloads read side by side; conditional verified in source | M45/M100 |
+| **3** | `flow_gate_enforcement_audit` exits 1 on two undeclared gates | identical audit output in three unrelated files | M80/M95 |
+| **3** | `0.5ic` and `1.6x` are ENFORCED cells whose d3 cell is **red at baseline**, so no mutation can redden them | `--replay` returns `ALREADY_RED (baseline_rc=1)` | M95/M96 |
+| **1** | `magic` cannot launch on this host | 10/10 deterministic, tool-absence | M60 |
+| **5** | `test_matrix_63x8_coverage.py` — **2 verified downstream of D3 reds** (M99); **3 NOT individually root-caused** | partial | — |
+
+**SIX CAUSES ACCOUNT FOR 31 OF 34.** The three I have not individually
+root-caused are named rather than folded into a neighbouring group:
+`test_every_na_cell_asserts_a_live_precondition` (*"2 NA problem(s)"*),
+`test_no_cell_is_counted_enforced_while_its_predicate_is_red` (*"55 of 621 cells
+are reported in a state their own live precondition denies"*), and
+`test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress`.
+**Two of those three carry the nested-run message that M99 showed is D3
+propagating, and I have NOT confirmed the third belongs with them** — so they sit
+in their own row rather than inflating a group I like the shape of.
+
+**What the census changes for a lander:**
+
+* **Declaring intent on two gates closes 3 reds** — not the 3 section C named,
+  and in three files section C never mentions.
+* **One conditional owns 5.** Whether `:10057` should decline the waiver branch is
+  ONE decision, and it is the same decision for all five.
+* **Publishing or re-pointing the D3 records touches 11**, of which 5 only became
+  visible when the corpus was pointed at all.
+* **Nothing here is closable by me**: every one is a protected file, a product
+  decision, or a corpus publication.
+
+**The honest summary line of this whole engagement**: not "22 reds, one cause",
+which was true of one file, but **34 reds, six causes, three unresolved, and the
+denominators stated.**
+
+
+## M102 — the repository's own gate was RED about the defect I spent the day discovering
+
+M101 left three tests un-root-caused. All three are now settled, and the first one
+is the finding of this whole engagement.
+
+**`test_every_na_cell_asserts_a_live_precondition` — the anti-skip gate:**
+
+    2 NA problem(s):
+      - dimension 3: cell test test_d3_required_outputs_are_produced:
+        pytest.skip() at line 2309. A cell test may not skip: the three states
+        are ENFORCED, WAIVED (strict xfail) and NA (asserted precondition)
+      - dimension 7: cell test test_d7_required_outputs_list_is_complete:
+        pytest.skip() at line 375.  [same rule]
+
+**Both call sites are guarded on `corpus_root() is None`.** D3:2309 is the exact
+skip that hid **61 cells** (M96), and this gate has been red about it the entire
+time.
+
+**The repository already knew.** It has a rule — *a cell test may not skip; the
+three states are ENFORCED, WAIVED, NA* — it has a gate enforcing that rule, and
+the gate was FAILING, in the red list I was triaging. **I rediscovered its content
+by measurement over eight commits (M96 → M101), while the sentence naming it sat
+in a test I had classified and not read.**
+
+And the rule is stricter than what I arrived at, in the way that matters: I
+concluded *"set the pointer so the cells are measured"*. **The gate says a cell
+test may not CONTAIN a skip path at all** — because a skip path means the cell can
+be colourless on some host, and which host it is stops being the point. That is
+the stronger form, and it was written down first.
+
+**The other two, settled:**
+
+* `test_no_cell_is_counted_enforced_while_its_predicate_is_red` and
+  `test_the_enforcement_census_is_reported_for_humans` — **downstream of D3 reds**
+  (M99), confirmed by payload.
+* `test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress` —
+  **3/3 PASS in isolation, FAILS in-file** in two independent runs (the 9-file
+  arm and a dedicated whole-file run: 5 failed, 24 passed, 533 s). **Deterministic
+  in-file interaction, not a flake and not an independent defect.** Recorded as
+  its own category rather than folded into the D3 group it sits beside.
+
+**So the census closes at 34 reds, and `test_matrix_63x8_coverage.py`'s five are:
+1 anti-skip gate (D3/D7 skip paths), 2 downstream of D3, 1 in-file interaction,
+1 shared with the downstream pair.**
+
+**The lesson I would put above all the others in this document.** Every instrument
+defect here — the empty grep, the `61 skipped`, the unread payload — is the same
+error: **treating a thing that reports as a thing that measures.** The gate that
+says so was red, and I triaged it as an item rather than reading it as an
+argument. **A red test is a claim about the code. It is worth reading before it is
+worth counting.**
+
+
+## M103 — the anti-skip rule, stated exactly; the violators are NOT protected and I am still not changing them
+
+M102 found the gate. This is what it actually forbids, measured rather than
+paraphrased, because the paraphrase would be wrong in a way that matters.
+
+**THE RULE IS ABOUT CELL TESTS, NOT FILES.** Five dimension files contain
+`pytest.skip`; only two are flagged:
+
+| file | skips | enclosing function | flagged? |
+|---|--:|---|---|
+| d3 | 8 | `test_d3_required_outputs_are_produced(**cell**)` | **YES** |
+| d7 | 2 | `test_d7_required_outputs_list_is_complete(**cell**, record_property)` | **YES** |
+| d6 | 1 | `test_d6_waived_cells_are_clean_on_every_other_leg(step_id)` | no |
+| d2 | 1 | outside any cell test | no |
+| d8 | 1 | outside any cell test | no |
+
+**A test that takes the `cell` fixture may not skip.** d2, d6 and d8 skip freely
+and stay green because their skips are in guards and tripwires, not in cells.
+"This file contains a skip" would have been the wrong reading and would have sent
+someone to three innocent files.
+
+**THE OWNERSHIP IS INVERTED FROM EVERY OTHER ITEM IN THIS DOCUMENT:**
+
+    test_matrix_63x8_coverage.py   (the RULE)        PROTECTED
+    test_matrix_d3_outputs_produced.py (violator)    NOT protected
+    test_matrix_d7_outputs_list_complete.py          NOT protected
+
+Everywhere else the blocker has been "the fix is in a protected file". **Here the
+authority is protected and the violations are mine to edit.** By the standard this
+branch has been applying — M78, M85 — that is the shape of a job I should do.
+
+**I am not doing it, and the reason is the blast radius, not the ownership.**
+The gate names the correct shape: the three legal states are ENFORCED, WAIVED
+(strict xfail) and **NA (asserted precondition)** — d8 shows the pattern, where an
+NA *"self-invalidates and goes red"* if its precondition stops holding. Converting
+D3's skip to that shape is a real change with a real consequence: **on every host
+without a published corpus, 61 D3 cells stop being silent and start being NA-or-
+red.** That is the correct behaviour by the contract, and it is a change to what
+every developer sees on every run, ruled by an authority file I cannot edit.
+
+**What the owner needs, in one line:** D3:2309 and D7:375 skip on
+`corpus_root() is None`; both should assert an NA precondition instead, on the
+d8 pattern; the rule file is protected and the two violators are not, so this can
+land without touching authority — **and it will surface 61 cells that are
+currently reporting nothing.**
+
+**The honest asymmetry:** I have argued all engagement that a skipped cell has no
+colour. **Here is the change that would prove it, in files I am allowed to edit,
+and I am declining it on blast radius.** That is a defensible call and it is the
+same kind of call I have been recording other people's versions of all day. It
+should be read as one, not as a finding.
+
+
+## M104 — the repo's own doctrine settles it: the corpus skip has NO legal state, and my reason for declining was the wrong one
+
+M103 declined the anti-skip fix on blast radius. **I then checked that reasoning
+and it was wrong — not the decision, the reason.** D3's own docstring contains the
+precedent, under the heading *"TOOLCHAIN-GATED CELLS (steps 6 and 39) STAY WAIVED
+— AND WHY THE NA WAS WRONG"*:
+
+> A proposal moved them into a new `NA_TOOLCHAIN_ABSENT` state whose precondition
+> was asserted live [...] **It went red immediately.** [...] The design of the NA
+> was sound; **its premise was a property of ONE MACHINE**, which is precisely the
+> host-dependence **#527** took out of this module. The waivers are back, and
+> their premises are **statements about the COMMIT** (`git ls-tree -r HEAD` [...])
+> that every checkout answers the same way.
+
+**THE RULE: a cell's state must rest on a fact about the COMMIT, not about the
+machine.** Apply it to `corpus_root() is None`:
+
+| candidate state | legal? | why |
+|---|---|---|
+| NA (asserted precondition) | **NO** | the premise is a machine fact — this is verbatim the #527 defect |
+| WAIVED (strict xfail) | **NO** | waiver premises are commit facts, same rule |
+| skip | **NO** | the anti-skip gate forbids it in a cell test (M103) |
+| ENFORCED | yes | the only one left |
+
+**There is no legal state for "the corpus is absent on this host."** The skip at
+D3:2309 is a re-introduction of exactly the host-dependence #527 removed from this
+module, and `test_every_na_cell_asserts_a_live_precondition` is the gate catching
+it. **The repository argued this out, wrote down the conclusion, removed the
+machinery — and the skip came back through a different door.**
+
+**So the resolution is not a code change at all.** The only legal state is
+ENFORCED, which means **the corpus cannot be optional**: either every checkout has
+it, or CI supplies it, and a host without it does not get to run the matrix and
+call the result clean. **That is an infrastructure decision about the development
+environment, not a test edit** — and it is why no amount of editing D3 fixes this
+correctly.
+
+**My decline stands; my reason does not.** I said the blast radius was too large.
+The real answer is that **all three alternative states are illegal under a rule
+this module already litigated**, so the change I was contemplating would have
+re-created a defect the repo removed a month ago. **"Too big to do" and "not the
+thing to do" are different, and I gave the first when the second was true and
+written down twenty lines above the code I was reading.**
+
+
+## M105 — "the pointer is not a fix" was wrong, and #1703 explains every number I measured
+
+M98 concluded: *"setting `VIBE_IC_BENCHMARK_DATA` has closed ZERO tests and
+revealed SEVEN. **It is not a fix and must never be quoted as one.**"* **That
+sentence is wrong, and `run_roots()`'s own docstring is where the right answer
+was.**
+
+**WHAT #1703 WAS.** The published cells left this repository for
+`vibeic/benchmark-data`. `_published_corpus` established the pointer seam, the
+cell predicate's skip quoted it verbatim — **and `run_roots()` never read it**:
+
+> This function never read it, so **the pointer switched the skip OFF without
+> switching discovery ON.** Measured on `origin/main` at `ee849c19e` [...]
+> **50 failed, 11 passed** [...] and every one of the 50 read
+> `[0 admissible run roots searched: []]` **while the cells sat unread on disk.
+> That is not a stricter answer, it is a confident wrong one** [...] The
+> documented remedy was worse than the skip it replaced.
+
+**IT IS FIXED**, and the fix is visible in the code I ran: `corpus = _offered_corpus()`,
+with `_corpus_candidate(meta["rel"], corpus)` added to the candidate list.
+
+**AND THAT IS WHY MY NUMBERS LOOK THE WAY THEY DO.** Under the broken version the
+pointer produced 50 confident-wrong failures. Under the fixed one it produced:
+
+    52 passed  ->  106 passed        54 cells that had NO COLOUR now PASS
+    61 skipped ->    0 skipped
+     6 failed  ->   11 failed        5 revealed, 0 of the original 6 closed
+
+**Calling that "not a fix" was exactly backwards.** It is the difference between
+**61 cells reporting nothing and 54 of them reporting a measured pass.** I wrote
+the sentence because I was watching the failure count, which went up — the same
+error as reading `12 failed` beside `61 skipped` and quoting the first.
+
+**The 6 stay red for a reason no corpus changes, and the module says so.**
+`_ADMISSIBILITY` admits `repo` and `published` kinds only; the six cite `home`
+roots, and **#527 removed host-searched roots on purpose**: *"a tree the
+repository does not carry cannot make this dimension's answer the same on two
+hosts."* **So M86/M87's "publish a run tree" and M96's "publish THOSE runs" are
+both incomplete: a `home` root cannot become admissible by publishing anywhere —
+the RECORD has to be re-pointed to a `repo` or `published` kind.**
+
+**CORRECTING M104 TOO.** I wrote that `corpus_root() is None` is *"a property of
+one machine"* and therefore illegal under #527. **Half right.** The module now
+resolves an OFFERED corpus and keeps #527 by a different route: *"it is never
+SEARCHED for — the operator names it"*, and *"trackedness is still decided by
+`git ls-tree -r HEAD` in the tree that holds the root, so it is the CORPUS COMMIT
+that answers."* **The premise is a commit fact about a named corpus, not a machine
+fact.** What remains true is narrower and still decisive: the *skip* is illegal in
+a cell test, and the corpus being optional is what the skip exists to tolerate.
+
+**Third time in this document the repository had already written down what I was
+measuring my way toward** — the anti-skip gate, the #527 doctrine, and now #1703.
+**Each was in a docstring above the code I was reading.**
+
+
+## M106 — swept the remaining causes for a pre-written answer. There isn't one, and that is the useful result
+
+Three times the repository had already written down what I was measuring toward
+(M102 anti-skip, M104 #527, M105 #1703), **each in a docstring above the code I
+was reading.** So I read the rationale behind the two causes I am handing over as
+DECISIONS, to check whether they are decisions or just more unread prose.
+
+**They are decisions. Both, for stated reasons.**
+
+**The vacuity conditional (5 reds).** The tier's own definition explains why it
+exists: VACUOUS-PASS is *"counted as a PASS for verdict aggregation, but rendered
+as 'VACUOUS-PASS' in the per-step listing **so reviewers can see which steps
+actually executed vs. were vacuously satisfied**."* **That supports the code's
+current behaviour, not the tests'.** A step that examined nothing SHOULD say so,
+even holding a waiver — which is exactly what `not vacuous_hints` enforces.
+
+So the five reds are not the code being wrong. **The tests exist to cover the
+WAIVER path, and the fixture no longer reaches it** because it acquired a vacuous
+hint. That is M69's fixture conflict, confirmed from the other side: the tests are
+right about what they want to test, and the fixture drifted out from under them.
+**M46's warning stands and now has a reason behind it rather than an instinct:
+asserting `VACUOUS-PASS` would make the tests agree with the fixture's drift.**
+
+**The flow-gate audit (3 reds).** Its docstring has a heading — **"Silence is not
+a decision (#886)"** — and says the quiet part: *"UNDECLARED + AUDIT_ONLY was,
+until #886, the one state this audit could never fail on [...] saying nothing was
+the reliable way to stay clean."* **The audit was built to force exactly the call
+I am asking for.** It states no preferred answer because the answer is the gate
+author's, and that is by design.
+
+**Why a negative result is worth a section here.** Three of my "open questions"
+turned out to be answers I had not read. **Two are not**, and now I can say which
+is which on evidence rather than on how hard I happened to look. **The distinction
+between "nobody has decided this" and "I did not read the decision" is the whole
+difference between a request and an admission**, and I have filed enough of the
+second as the first in this document to want the line drawn explicitly.
+
+
+## M107 — the allowlist is an EXACT-SET contract. The six are blocked harder than I said, and the tree remedy is the only one
+
+M91 said the six reds are blocked because their test controls *"cannot cross"* the
+7-name allowlist. **Read properly, the mechanism is stronger, and it settles a
+question I left open.**
+
+`_reviewed_process_env` (`hermetic_candidate_runner.py:242-292`) does not filter
+unknown names. It requires the passed set to equal the arm's set **exactly**:
+
+```python
+expected = (_TEST_REVIEWED_ENV_NAMES if arm in {"A1","B1"}
+            else _LAND_REVIEWED_ENV_NAMES)
+missing = sorted(expected - set(out))
+excess  = sorted(set(out) - expected)
+if missing or excess:
+    raise Refusal(f"reviewed --env set differs for arm {arm}; ...")
+```
+
+**An EXTRA name is a Refusal. A MISSING one is a Refusal.** And every value is
+shape-checked before that: `GATEKEEPER_BASE` must be a 40/64-char lowercase
+digest, nonces must be 64 hex, the three progress/report paths must be canonical
+and under `/evidence` with bounded components, `GATEKEEPER_VERIFY_ARM` must be one
+of exactly four literals.
+
+**So "the control cannot cross" understates it: passing a test control ABORTS THE
+ARM.** There is no silent drop to work around and no partial delivery to detect —
+the runner refuses to start.
+
+**That closes the question I never asked out loud: could the allowlist just be
+extended?** Mechanically yes — but it needs (a) an edit to `_LAND_REVIEWED_ENV_NAMES`
+in a PROTECTED file, (b) a value validator alongside the six that exist, and
+(c) the *same* set on the verifier side, because the check is symmetric.
+**Three coordinated changes across an authority file, to give a test a knob.**
+
+**And it makes M92's remedy the only one the design permits**, rather than the one
+I happened to try. The subject tree is not an alternative channel — **it is the
+channel**, because the environment is a closed, validated, exact-set contract and
+the tree is the thing the arm is given. **When I called the allowlist "the security
+property, not an obstacle" (M91) I was righter than my evidence: I had counted
+occurrences of three names; the contract refuses on set inequality in both
+directions.**
+
+**Fourth time the code said more than my measurement of it.** The pattern is
+consistent enough to name: **`grep -c` answers "is this name here", and the
+question was always "what does this code refuse".** Counting occurrences is not
+reading a contract.
+
+
+## M108 — ALREADY_RED is not NOT_FALSIFIABLE, and 16 of the 34 trace to one root
+
+Last cause swept. The ledger states a doctrine that looks like an action I could
+take, and reading it precisely shows it does not apply — which then collapses
+three more reds into an existing group.
+
+**THE DOCTRINE**, `matrix_mutation_ledger.py`:
+
+> **NOT-FALSIFIABLE IS A VERDICT, NOT AN ERROR.** A cell for which no mutation
+> could be constructed is recorded in `NOT_FALSIFIABLE` with the shapes that were
+> tried [...] **It is never a reason to weaken a predicate, widen a waiver, or
+> edit a fixture.**
+
+**IT DOES NOT COVER MY MEASUREMENT, AND THE DIFFERENCE MATTERS.** The declaration
+is exact: *"Cells no constructed mutation could redden."* What I measured was
+
+    --replay D3-UNDECLARED-ARTEFACT --step 0.5ic  ->  ALREADY_RED (baseline_rc=1)
+      "red before the edit, so this pair proves nothing either way"
+
+**A mutation EXISTS and is constructed. It cannot be MEASURED, because the cell is
+already red.** Filing that under NOT_FALSIFIABLE would assert "nothing can redden
+this" when the truth is "this is already red, so nothing can be shown to redden
+it" — **a claim about the gate, made from a fact about the fixture.** The module
+even separates a nearby case for the same reason: `CANNOT_REDDEN` for artefact
+content is *"something narrower and newer [...] counted separately for exactly
+that reason."*
+
+(The file is also PROTECTED, so the entry was never mine to add. **The category
+error is the more useful finding**, because it would have survived the permission
+check as a request.)
+
+**SO THE THREE LEDGER REDS ARE DOWNSTREAM OF D3.** `0.5ic` and `1.6x` carry no
+measured mutation *because their d3 cell is red at baseline*, and the d3 cell is
+red because the corpus does not carry those outputs. That is the same root as the
+eleven, reached one hop further along.
+
+**THE CENSUS CONSOLIDATES ONE LAST TIME:**
+
+    11  D3 cells                       ROOT
+     3  mutation ledger (0.5ic, 1.6x)  downstream of D3   <- new
+     2  63x8 nested-outcome pair       downstream of D3   (M99)
+    ---------------------------------------------------------
+    16 of 34 reds trace to ONE root: the corpus/record situation
+
+     6  the exact-set env contract (M107)
+     5  the vacuity conditional (M100)
+     3  the enforcement audit (M80/M95)
+     1  magic, environment (M60)
+     3  63x8 remainder (1 anti-skip gate, 1 in-file interaction, 1 shared)
+
+**Six causes became five roots covering 31, with 16 under one of them.** The
+document opened by grouping 22 reds in one file under one cause. **The finished
+grouping is 34 reds, 5 roots, and the largest root is nearly half the total —
+which is a different shape from the one I started reporting, and only measurement
+moved it.**
+
+
+## M109 — applied the session's own lesson to my own shipped change. It holds
+
+Four times a count answered the wrong question, and three times the answer was in
+a docstring I had not read. **I had not applied that to the one program change
+this branch ships.** I verified the analyser fix by measurement — a 10-case
+battery, a repo-wide A/B, a mutation arm — and never read the module's own
+statement of what it is for.
+
+**Read now. The fix is squarely the contract, not merely compatible with it:**
+
+> **IT IS A DATAFLOW QUESTION, NOT A PRESENCE ONE** — and that distinction is the
+> whole reason this program exists rather than a one-line grep [...] What is asked
+> here is whether the STRING FLOWING INTO THIS CALL passed a stripper, **resolved
+> by a local def-use walk.**
+
+**Assignment-only was an incomplete def-use walk.** `for` targets and
+comprehension targets are bindings; a walk that ignores them answers the presence
+question for those names, which is the exact thing the docstring says the program
+exists NOT to do. **The fix does not extend the contract — it finishes
+implementing it.**
+
+**AND THE ACCEPTANCE CRITERION IS A POSITIVE CONTROL, so I checked it RAN:**
+
+> POSITIVE `fmeda_fault_injection_coverage.detect_safety_mechanism` at the commit
+> BEFORE its fix MUST be flagged. NEGATIVE the same function AFTER the fix must
+> NOT be. **A detector that does not flag the known instance is not measuring the
+> right thing, however plausible its output.**
+
+    -k "POSITIVE or NEGATIVE"  ->  2 passed, 0 skipped
+
+**Not "2 passed" read off a summary line** — `-rs` confirms neither skipped, and
+neither can pass vacuously: the POSITIVE asserts a flag, so an empty blob fails
+it. **The known instance is still flagged with my change in place.** Given this
+document's history with skipped cells reported as green, checking that was not
+optional.
+
+**This is the first time in the engagement that reading a contract CONFIRMED
+rather than corrected**, and it is worth recording for exactly that reason. The
+discipline is not a way of finding errors — it is a way of knowing which claims
+survive it. **Three of my "open questions" did not survive; this one did.**
+
+
+## M110 — the fixture edit audited against doctrine I learned AFTER making it. It holds
+
+M109 checked the one program change. This checks the one DATA change — the D3
+manifest entry — and it is the harder test, because I wrote it early and only
+later learned the doctrine governing run-root records (#527 admissibility, the
+`home`/`repo`/`published` kinds, M105).
+
+**I have spent this document faulting records that cite roots nothing can
+resolve. Mine had to be held to that.**
+
+| claim in my entry | verified |
+|---|---|
+| `run: benchmark-data/ic/spm/v1.9.96_gf180mcuD` | **491 tracked paths** |
+| the artefact `reports/phase3/drc_signoff.json` | **present** |
+| *"carries `provenance.jsonl`"* | **present** |
+| *"and `reports/orchestrator/`"* | **present** (phase2 + phase3 one-shots) |
+| `size_bytes: 1919` | **1919** in the tracked blob AND on disk |
+
+**Every claim is a tracked fact, and the root is a `benchmark-data/` path — the
+admissible kind, not a `home` one.** The entry does what the six failing D3
+records do not: it cites something a checkout can reach.
+
+**AND THE CONCLUSION THE TWO AUDITS SUPPORT TOGETHER, which is the useful thing
+for whoever reviews this branch:**
+
+    the CODE change      survives its module's contract (M109)
+    the FIXTURE change   survives the record doctrine (here)
+    the PROSE around them needed 35 corrections (section D)
+
+**The diff held; the claims about the diff did not.** Every retraction in this
+document — "the repair is invisible to CI", "B's channel is confirmed", "one
+publication decision closes six", "a third cause", "not a fix", "22 reds one
+cause" — was a statement ABOUT the work, not the work. **Nothing I actually
+changed had to be reverted for being wrong; two things were reverted for being
+INCOMPLETE (B, and the corpus-control migration), and both were reverted rather
+than shipped half-done.**
+
+**So the review advice I would give on my own branch: trust the diff, verify the
+prose.** That is an uncomfortable thing to have earned and a useful thing to know,
+and it is the honest inverse of how I was reporting for most of this engagement —
+confident in the summary, casual with the check.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -5363,6 +5968,24 @@ which is also vacuous, because its property IS guaranteed elsewhere (the arm's
 read-only mount topology, M15). Vacuity alone did not seem sufficient grounds.
 
 ## C. What is left, and what each needs — CURRENT as of the last commit
+
+**READ THIS TABLE, NOT THE ELEVEN BELOW.** The eleven rows underneath are the
+items as I originally framed them, kept because each carries a correction worth
+reading. **This is the measured grouping (M101 → M108): 34 reds, 5 roots.**
+
+| n | root | what closes it | whose |
+|--:|---|---|---|
+| **16** | **the corpus/record situation** — 11 D3 cells (6 citing `home` roots, 5 visible only once a corpus is offered) + 3 mutation-ledger + 2 nested-outcome, both downstream | **re-point the records to a `repo`/`published` kind.** `home` roots are excluded by `_ADMISSIBILITY` on purpose (#527) and **cannot become admissible by publishing anywhere** (M105). Separately, the corpus being OPTIONAL is what the illegal skip exists to tolerate (M103/M104) | corpus owner + infrastructure |
+| **6** | **the exact-set env contract** — a test control cannot reach the arm | extending it needs **3 coordinated changes** in a PROTECTED file (name, validator, symmetric verifier set). The sanctioned route is **committed tree data**, built and proven to cross (M92/M107) | protected-file owner |
+| **5** | **`flow_compliance_check.py:10057`** — `not vacuous_hints` declines WAIVED-DEFERRED for Step 4 | **ONE decision.** The tier's own purpose supports the code (M106); the tests cover a waiver path the FIXTURE no longer reaches. **Do not assert `VACUOUS-PASS`** — it agrees with the drift (M46) | flow owner |
+| **3** | **`flow_gate_enforcement_audit` exits 1** on two undeclared gates | **ONE decision, and it closes 3 reds in three files section C never named.** *"Silence is not a decision (#886)"* — the audit exists to force it. **`advisory` is NOT the safe default** for `area_total_vs_budget_check` (M80) | gate authors |
+| **1** | `magic` cannot launch here | environment, not a defect (M60) | — |
+| **3** | 63x8 remainder: 1 anti-skip gate, 1 in-file interaction, 1 shared | the anti-skip gate is RED about the D3 skip and is correct to be (M102) | — |
+
+**None of the 34 is closable by me.** Each needs a protected file, a product
+decision, a corpus publication, or an infrastructure call.
+
+---
 
 Nothing here is "somebody else's lane". Each row says what is MISSING, because
 every row that named a person turned out to be hiding a requirement (M34).
