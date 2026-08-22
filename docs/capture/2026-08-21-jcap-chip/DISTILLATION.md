@@ -605,3 +605,39 @@ finding was narrower than its docstring. It was not — the list was simply cut 
 Truncation is not absence, which is the same mistake as every other one in this
 file, and the second time in two turns that a display artefact nearly reversed a
 correct conclusion.
+
+### The drv dispute is RESOLVED: the producer exists, outside the scanned scope
+
+Chasing the last possibility — that the 63 records were historical, emitted by a
+producer since removed, in which case their gate would be right about the tree and
+MY gate would be crediting dead artefacts — found the producer alive:
+
+    ppa-crosslayer/tools/drv_records.py:73
+        _CHECKS = (("timing.drv.max_tran_violations", "max_slew",  "set_max_transition"),
+                   ("timing.drv.max_cap_violations",  "max_capacitance", "set_max_capacitance"),
+                   ("timing.drv.max_fanout_violations","max_fanout","set_max_fanout"))
+
+    ppa-crosslayer/tools/drv_records.py:156
+        r = {"schema": "vibeic.ppa.metric.v1", "metric": metric,
+             "status": "MEASURED" if value is not None else "NOT_MEASURED", ...}
+
+It declares all three names explicitly, emits canonical records, hashes its source
+artefact, and is the origin of the 63 MEASURED rows across 21 trials.
+
+**So the FAIL is a SCOPE artefact.** Their gate counts "18 emitting modules" — the
+plugin's `programs/` — and this producer lives under `ppa-crosslayer/tools/`,
+outside the directory it scans. Its premise is true of its scan root and false of
+the repository. Nobody misread anything; the population boundary excluded a real
+member, silently.
+
+That is the same defect this lane fixed in itself twice: the `test_*` exclusion
+that hid a checker from its own family, and the Python-only writer scan that could
+not see a shell writer. **A gate's undisclosed boundary is the one that bites** —
+stated earlier in this file about my own gates, and it turns out to be the whole
+of this dispute.
+
+**For the assembler:** the drv axis is provable, by a live producer, with 63
+records to show for it. The remedy is a scope question — either the gate widens to
+the trees that actually emit metric records, or it states that it speaks only for
+`programs/` and stops concluding "on any design, ever" from that. Still another
+lane's program; still not repaired here.
