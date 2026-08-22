@@ -194,73 +194,145 @@ green by putting a routed DEF where the producer would find it, without a
 converged run behind it, is the exact defect the withdrawal commit removed four
 cells for.
 
-## One defect found while proving the above, filed not fixed
+## The first defect found while proving the above: filed as #1764, and FIXED in the base
 
-`routed_def_corpus.main()` hardcodes `may_be_absent=True` when it calls
-`_corpus_location.refuse()`. That module's own contract says the opposite, in
-its docstring: *"THE OPT-IN IS A FLAG THE CALL SITE PASSES, NEVER A DEFAULT …
-an rc 0 for a scan that did not happen is the false certificate this whole gate
-suite exists to remove, and the only thing keeping it from becoming the general
-answer is that somebody has to type it."* Every sibling consumer takes it as a
-CLI flag — `gatekeeper-land.sh` passes `--corpus-may-be-absent` to
-`benchmark_evidence_structure_check.py` explicitly.
+**This section is a correction of itself, and the correction is the load-bearing
+part.** What stood here reported a live defect. It was real when it was measured
+— on `origin/main` @ `81cd5321b` — and it is **repaired on `a4caccefe`
+(v1.11.69), which is the base this branch stands on.** Leaving the report as
+written would have shipped a citation whose target no longer exists, inside the
+document whose whole subject is a gate that says something untrue about its own
+state.
 
-The consequence is that two of the four outcomes `_corpus_location` exists to
-keep apart reach the dispatcher as the same bytes, rc 0 with zero items:
+### What was reported, and was true then
+
+`routed_def_corpus.main()` passes `may_be_absent=True` to
+`_corpus_location.refuse()`, which answered **rc 0** — so two of the four
+outcomes `_corpus_location` exists to keep apart reached the dispatcher as the
+same bytes:
 
 | situation | producer stdout/rc | row the reader sees |
 |---|---|---|
 | corpus supplied, measured, contains no routed DEF | rc 0, 0 items | `is EMPTY — nothing was checked over it` |
-| no corpus supplied, nothing scanned at all | rc 0, 0 items | `is EMPTY — nothing was checked over it` |
+| no corpus supplied, nothing scanned at all | rc 0, 0 items | *identical* |
 
-Both were reproduced above. In the second row that sentence asserts a
-measurement that was never taken; the producer says so on **stderr**
-(`NO_CORPUS: … point VIBE_IC_BENCHMARK_DATA at a clone to make this gate check
-something`) and the roll-up does not carry it. Today, on `origin/main` with no
-pointer set, the one blocking row on the board states the wrong reason for its
-own redness — which is why this reads as a publishing question when it is first
-a configuration question.
+Filed as **#1764**.
 
-The fix is to give the producer the flag its own module contract requires,
-default `False`, and decline it at the hygiene wiring site. Then an unconfigured
-checkout is rc 2 with the missing input named, and `EMPTY` is only ever printed
-over a corpus that was actually read. **It moves rc 0 to rc 2 — strictly harder
-to satisfy, never a pass** — but it edits two protected authority files, so it
-belongs to a base-authorised transition and not to this commit.
+### What the base does now, re-measured on this worktree 2026-08-22
+
+```
+$ env -u VIBE_IC_BENCHMARK_DATA python3 tools/ci/routed_def_corpus.py --repo .
+[routed-def corpus] NO_CORPUS: nothing at …/benchmark-data/ic and
+  VIBE_IC_BENCHMARK_DATA is unset. … NOTHING WAS SCANNED, 0 routed DEF(s) were
+  examined and nothing is claimed about them …
+[routed-def corpus] NOT FOUND (rc 3): no corpus was resolved, so no index was
+  opened and 0 routed DEF(s) is the ABSENCE of a measurement, not a measurement
+  of zero.
+rc=3
+
+$ VIBE_IC_BENCHMARK_DATA=<clone> python3 tools/ci/routed_def_corpus.py --repo .
+[routed-def corpus] MEASURED EMPTY: git's index at <clone> was read under 'ic'
+  and it publishes no */*/phase3/stage3/pnr/routed.def. This IS a measurement …
+  and it is NOT the same state as a corpus that could not be found (rc 3).
+rc=0
+```
+
+`NO_CORPUS_RC = 3` in `tools/ci/routed_def_corpus.py` and
+`GATE_DISPATCH_ABSENT_RC=3` in `tools/ci/_gate_dispatch.sh` are the same number
+in two languages, pinned against drift by
+`test_the_absent_exit_code_is_one_number_in_two_languages`; the two states are
+pinned apart by `test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict`
+and `test_the_dispatcher_gives_absent_and_empty_different_rows`.
+
+### And the repair taken was the OPPOSITE of the one proposed here
+
+This document proposed defaulting `may_be_absent` to `False`, which would make
+an unconfigured checkout **rc 2**. `routed_def_corpus.main()` now carries the
+reason that was declined, at the call site:
+
+> vibe-ic#1764 argued for reversing it; reversing it would have made an absent
+> corpus borrow the FAILED PRODUCER row instead, which is a second wrong
+> sentence rather than the missing one.
+
+rc 3 gives the absent state a row of its own rather than borrowing another
+state's. Still blocking, still never a pass, and correct about **which** state
+it is in — which rc 2 would not have been. The proposal here was tightening in
+the right direction and wrong about the destination.
+
+### What this does to the adjudication: it removes a hedge
+
+The superseded text ended: *"Today, on `origin/main` with no pointer set, the one
+blocking row on the board states the wrong reason for its own redness — which is
+why this reads as a publishing question when it is first a configuration
+question."* **That is no longer true, and its falsity strengthens everything
+above it.**
+
+The row this document adjudicates reads `[population: producer rc 0, 0 items]`.
+On this base, rc 0 out of this producer can mean one thing only: an index was
+opened, read, and publishes no routed DEF. An unconfigured checkout cannot reach
+that row at all — it reaches the rc 3 row instead. So the redness is not a
+configuration artefact: it is a measurement, and the question it poses is exactly
+the publishing question the rest of this document answers.
 
 ## A second defect, found by writing the guard this adjudication rests on
 
 The argument above leans on one structural fact: an `uncheckable_until` armed in
 front of an attested-population loop **cannot** be consumed by the population
-refusal, because `_dispatch` mode 2 rejects it. That fact was **unpinned** —
-every existing empty-corpus test drives the loop with no exemption armed
-(`test_empty_corpus_gate_keeps_the_array_invariant`,
-`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_...`), so deleting
-the branch that rejects it changes none of their verdicts.
+refusal, because `_dispatch` mode 2 rejects it.
 
-Stated precisely, because the two halves were measured separately. In place on
-this branch those three files are green (24 passed, 1 xfailed, together with the
-new one). Against the mutated dispatcher they are **verdict-identical to the
-control**: repointed at the mutant, 4 failed / 17 passed; repointed at an
-unmutated copy, the same 4 failed / 17 passed. Those four failures are the
-repointing harness, not the mutation — the files build their own repo scaffold
-and an absolute dispatcher path breaks it — which is exactly why the control arm
-was run before believing the mutant arm. The mutation moves nothing in them.
+**CORRECTED, and against this branch's own base.** An earlier revision of this
+section called that fact *unpinned*. It was, when the earlier lineage of this
+investigation measured it — and it stopped being so a few hours later, before
+this branch was cut, in the landing that closed #1763:
+`test_routed_def_corpus_dispatch.py::test_a_population_refusal_cannot_buy_an_uncheckable_exemption`
+(`e1b98d8f9`, 2026-08-22 00:06). Shipping the claim would have been a citation
+whose target had already been built. So it is replaced by a measurement of
+**who actually catches the mutation**, taken by deleting the mode-2 `elif` from
+the TRACKED dispatcher and restoring it with a reverse edit —
+`sha256 e4088103…` byte-identical before and after, `git status` clean:
 
-`test_population_refusal_cannot_be_bought_off.py` pins it. Measured by deleting
-that one `elif` from a **copy** of the dispatcher (the tracked file was not
-touched; `sha256 bc52987b…` unchanged before and after):
+| test | control | mode-2 arm deleted |
+|---|---|---|
+| base `test_a_population_refusal_cannot_buy_an_uncheckable_exemption` | pass | **FAIL** |
+| `…cannot_be_bought_off::test_an_exemption_cannot_buy_off_an_empty_population_refusal` | pass | **FAIL** |
+| `…cannot_be_bought_off::test_a_refused_exemption_does_not_leak_onto_the_next_gate` | pass | pass |
+
+The guard is not a free edit any more, and **this branch is not what made it
+so.** What `test_population_refusal_cannot_be_bought_off.py` adds over the base
+test should therefore be read as two things and not four:
+
+* **ARM A2** states the record/console contradiction below as a DEFECT to be
+  repaired rather than as behaviour to be characterised, with a `strict` xfail
+  that XPASSes the day it is fixed. Now filed as **#1770**.
+* **ARM C** pins that a refused exemption does not leak onto the NEXT gate (the
+  #584 property, on the mode-2 path). Row 3 above shows it survives this
+  mutation — which is the honest way to say it is about something else.
+* **ARMs A and B overlap the base test's subject.** They drive the dispatcher
+  without `--shard`, so they are an independent driver rather than new subject
+  matter. Kept as controls; not claimed as coverage this branch introduced.
+
+The half of the original paragraph that holds: the three general empty-corpus
+files (`test_empty_corpus_gate_keeps_the_array_invariant`,
+`test_issue1025_empty_corpus_sweep_blocks`, `test_issue1075_…`) do all drive the
+loop with no exemption armed and are verdict-identical across the mutation.
+That is why the base test had to be written at all.
+
+Re-measured on this base, driving the real dispatcher over an attested-population
+loop with `uncheckable_until 2999-01-01` armed in front of it, against a **copy**
+carrying the deletion (tracked file untouched, same `sha256 e4088103…` after):
 
 | | guard present | `elif` deleted |
 |---|---|---|
 | exit code | **2** | **0** |
 | `wiring_errors` | 1 entry | `[]` |
-| roll-up says | `NOT a pass` | `(exempt until 2999-01-01)` |
+| roll-up says | `NOT CHECKED (rc 2, BLOCKING; no exemption)` | `1 NOT CHECKED — this is NOT a pass` |
 | `not_checked_unexempted` | `[]` | `[]` |
 | row `exempt_until` | `2999-01-01` | `2999-01-01` |
 
 One deleted `elif` turns the only blocking row on the board into a silent
-exit-0 pass with a date on it.
+**exit-0 pass**. Note what the roll-up does NOT do on this base: it still
+prints `this is NOT a pass` while exiting 0, so the sentence and the exit
+code disagree, and every automated consumer reads the exit code.
 
 **And look at the bottom two rows: they are identical in both columns.** The
 dispatcher raises the wiring error and then appends the date to `GATE_EX_UNTIL`
@@ -282,8 +354,13 @@ forever.
 
 The fix is one line — append `""` instead of `$ex_until` on the refused branch,
 which is strictly tightening and cannot turn any red green. `_gate_dispatch.sh`
-is a protected authority file, so it is **filed, not fixed**, and pinned as a
-`strict` xfail that will go RED (XPASS) the day it is repaired.
+is a protected authority file, so it is **filed as #1770, not fixed**, and
+pinned as a `strict` xfail that will go RED (XPASS) the day it is repaired.
+The issue also names the base test that moves with it:
+`test_a_population_refusal_cannot_buy_an_uncheckable_exemption` asserts the
+hazard AS current behaviour, so the repair reddens it and inverts its last two
+assertions. A fix that updated only one of the two files would leave the suite
+red either way.
 
 ## Correction: the satisfaction condition was unreachable
 
