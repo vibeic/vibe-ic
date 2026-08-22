@@ -6281,10 +6281,23 @@ repeats — which is exactly the failure the section-count command had.
 **`highest M` — SOUND**, and now agrees with the corrected section count instead
 of contradicting it.
 
-**One of four was wrong, and it was the one whose answer I quoted most.** The
-three that survived are the ones I never leaned on; the broken one produced the
-figure in the title, in summaries, and in the header block that exists to stop
-figures decaying.
+**One of four was wrong, and it was the one whose answer had been corrected most
+often.** Counted, because the first version of this paragraph said *"the one whose
+answer I quoted most"* and **that does not survive counting**:
+
+    section count answer, quoted in this document now :  0
+    corrections count                                 :  2
+    image-lane pair (NOT one of the four commands)    : 23
+
+**The section count's answer appears ZERO times today — because I deliberately
+removed it from the title** (the header says so, and says why). The true claim is
+historical: it is the figure I corrected **three times** (32 → 57 → 69) before
+deleting it, which is precisely why a command was published to replace it. **The
+command inherited the importance the number had, and then nobody ran it.**
+
+**"The one I quoted most" was a rhetorical shape, not a measurement** — and the
+figure that IS quoted most (the image-lane pair, 23 times) is not one of the four
+commands at all.
 
 **That is not a coincidence and it is worth naming.** A command whose output you
 publish repeatedly is the one whose brokenness costs most and the one you are
