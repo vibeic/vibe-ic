@@ -1,11 +1,58 @@
 # jcap-chip, distilled — the thirteen Bucket-A rules as programs that bite
 
 agent `jdistchip` · branch **`capture/jdistchip-chip-path-rules`**, cut from
-`81cd5321b` = `origin/main` = v1.11.68. **No version bump. Nothing pushed to
+`81cd5321b` (= `origin/main` at v1.11.68 when this lane started; main has since
+moved to v1.11.69 and everything below was RE-MEASURED against it — see
+*RE-MEASURED against main at v1.11.69*). **No version bump. Nothing pushed to
 `main`. No baseline written.**
 
 `RESULT.md` in this folder is the CAPTURE; this file is what happened when its
 thirteen Bucket-A records were turned into enforcement.
+
+---
+
+## If you are landing this, read this first
+
+The rest of this file is CHRONOLOGICAL — it records findings in the order they
+were made, including the ones that turned out to be wrong and were retracted.
+That is deliberate, but it is a bad shape for acting on. The actionable state:
+
+**Nothing blocks.** Five gates sit at rc=1 in the composed tree (three from the
+census lane, two from this one) and **none of the five is wired** into any runner,
+hook or workflow. All five reds are real findings about the tree; all five surface
+in d9 census runs. See *Five red gates in the composed tree, and NONE of them
+blocks anything*.
+
+**Merging needs one recipe, three steps, all load-bearing.** Four conflicts
+remain against either tip and they are all generated counter files; composed truth
+is on NEITHER side, so they must be REGENERATED, never hand-merged or picked.
+Step 3 must be driven by the drift test's own output, not a remembered list. See
+*Composing with the census lane*.
+
+**Four things need a decision and none of them is work I could do:**
+
+1. Five flow-declared outputs have two writers each; a sixth
+   (`reports/spare_cell_coverage.json`) already has its owner named by the flow.
+   `only_the_declaring_step_writes_its_output` stays red until these resolve and
+   must not be wired blocking before then.
+2. Whether to wire any of these twelve gates as blocking at all.
+3. `STA_BASIS` needs a third value: `POST_CTS` normalises to `None`, which is
+   indistinguishable from unstamped, so `clock_tree.rpt` cannot answer honestly.
+4. The census lane's `gate_proof_vocabulary_has_a_producer` FAILs on `drv` because
+   the producer (`ppa-crosslayer/tools/drv_records.py`) lives outside the tree it
+   scans. Widen the scan or narrow the claim. See *The drv dispute is RESOLVED*.
+
+**One number is a confirmed defect and is worth acting on independently of all
+the above:** the published power figure is measured on every one of 60 arms and
+every measurement is of the pre-PnR netlist, so it cannot move under any lever —
+0.306 mW against 0.573 mW post-route. Both lanes found it, from opposite
+directions. See *The two lanes independently confirm each other on the power
+number*.
+
+Sections are referenced by TITLE, not line number, because line-anchored
+citations rot the moment anything is inserted above them.
+
+---
 
 ## Outcome
 
