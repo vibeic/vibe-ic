@@ -1653,3 +1653,48 @@ def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
     # reason passed it 3/3.
     _assert_no_retracted_claim(printed, "the console line")
     _assert_no_retracted_claim(rep["reason"], "the refusal reason")
+
+
+@pytest.mark.parametrize("kind,was,now", [("pad", "FS", "S"),
+                                          ("corner", "FN", "E")])
+def test_the_gate_refuses_a_mirror_written_where_the_report_says_a_rotation(
+        tmp_path, kind, was, now):
+    """THE CORRECTION WAS UNENFORCED IN THE ARTEFACT IT IS ABOUT.
+
+    Three commits on this branch moved NORTH and two corners from a ROTATION to
+    the MIRROR the placer produces. Nothing then stopped `padring.def` from
+    carrying the rotation again: every check in `pad_ring_check` re-derives the
+    FOOTPRINT from the DEF orientation, and a mirror and a rotation share a
+    bounding box. MEASURED on the gate before this rule existed — north pad
+    FS -> S, and corner FN -> E — each left it rc 0 with ZERO findings.
+
+    Which is the exact failure mode part 3 of the flow owner's ruling names:
+    the fit arithmetic cannot see it and a DEF reader deriving pin positions
+    can. This test asserts the blindness is gone AND asserts the premise that
+    made it blind, so the rule cannot be quietly replaced by an extent check.
+    """
+    root = _project(tmp_path)
+    assert _gen(root) == 0
+    # the good path passes, so the refusal below is the rule firing and not
+    # the fixture being broken
+    assert _chk(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    if kind == "pad":
+        entry = next(p for p in rep["pads"] if p["side"] == "N")
+    else:
+        entry = next(c for c in rep["corners"] if c["position"] == "SE")
+    assert entry["orient"] == was
+
+    # PREMISE: the swap is invisible to every extent-based check in the gate.
+    size = (75.0, 350.0) if kind == "pad" else (355.0, 355.0)
+    assert PR.footprint(size, was, UNITS) == PR.footprint(size, now, UNITS), (
+        f"premise: {was} and {now} must share a bounding box, or this test "
+        f"would be proving the footprint check rather than the orientation one")
+
+    line = _line(root, entry["instance"])
+    assert line.rstrip().endswith(f"{was} ;")
+    _edit_def(root, line, line.rsplit(" ", 2)[0] + f" {now} ;")
+    assert _chk(root) == 1
+    assert "PAD_ORIENT_DISAGREES_WITH_DEF" in _rules(root)
+    assert "a mirror is not a rotation" in " ".join(
+        f["message"] for f in _report(root)["findings"])
