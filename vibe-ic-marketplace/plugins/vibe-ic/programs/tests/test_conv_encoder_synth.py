@@ -141,3 +141,23 @@ def test_a_plainly_stated_prompt_still_yields_both():
     """The control arm: a fix that refused everything would pass the rest."""
     assert _gens('The encoder uses g1 = "111" and g2 = "101".') \
         == [(1, "111"), (2, "101")]
+
+
+def test_a_retired_constraint_length_is_not_read_as_stated():
+    """K and the generators together ARE the code. The generators were guarded
+    first and K beside them was not -- two readers of one prompt deciding one
+    encoder between them."""
+    import conv_encoder_synth as M
+    assert M._parse_K("The constraint length K = 7 is no longer used.\n"
+                      "Use K = 5.") == 5
+
+
+def test_a_negated_constraint_length_is_not_read():
+    import conv_encoder_synth as M
+    assert M._parse_K("The encoder does not use constraint length K = 7.") is None
+
+
+def test_a_plainly_stated_constraint_length_is_still_read():
+    """The control arm."""
+    import conv_encoder_synth as M
+    assert M._parse_K("The encoder has constraint length K = 7.") == 7
