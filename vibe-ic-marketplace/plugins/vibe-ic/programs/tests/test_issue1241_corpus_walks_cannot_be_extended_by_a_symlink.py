@@ -56,6 +56,8 @@ HH = _load("_sym_hh", "ppa_head_to_head_check.py")
 CC = _load("_sym_cc", "ppa_contract_check.py")
 FC = _load("_sym_fc", "ppa_feasibility_check.py")
 PI = _load("_sym_pi", "ppa_problem_integrity_check.py")
+MC = _load("_sym_mc", "ppa_measurement_check.py")
+PC = _load("_sym_pc", "ppa_pareto_check.py")
 
 import _ppa_corpus as corpus_seam  # noqa: E402  the shared walk
 
@@ -90,7 +92,40 @@ WALKS = [
       "allow_waivers": False}),
     ("contract_pairs", _seam_walk(PI.is_contract),
      {"schema": "vibeic.ppa.contract.v1", "run_label": "x"}),
+    ("coverage_bundles", _seam_walk(MC.is_bundle),
+     {"schema": 'vibeic.ppa.metric_bundle.v1', "records": [], "expected": []}),
+    ("pareto_candidate_sets", _seam_walk(PC.is_candidate_set),
+     {"schema": "vibeic.ppa.candidates.v1", "candidates": [],
+      "required_views_by_axis": {}, "required_views": [], "limits": {},
+      "allow_waivers": False}),
 ]
+
+#: The program each row is about, so the table's completeness can be MEASURED
+#: against the programs directory rather than asserted by the comment above it.
+COVERS = {
+    "head_to_head": "ppa_head_to_head_check.py",
+    "contract": "ppa_contract_check.py",
+    "candidates": "ppa_feasibility_check.py",
+    "contract_pairs": "ppa_problem_integrity_check.py",
+    "coverage_bundles": "ppa_measurement_check.py",
+    "pareto_candidate_sets": "ppa_pareto_check.py",
+}
+
+
+def _programs_that_walk_a_corpus():
+    """Every ppa_* program that opens a corpus, read off the source.
+
+    A program walks a corpus if it reaches the shared seam (`_ppa_corpus`) or
+    carries its own walk (`corpus_records`). Derived here rather than listed,
+    because a LIST is the thing that goes quietly out of date -- which is
+    exactly what happened to WALKS.
+    """
+    out = set()
+    for f in sorted(PROGRAMS.glob("ppa_*.py")):
+        src = f.read_text(encoding="utf-8", errors="replace")
+        if "_ppa_corpus" in src or "\ndef corpus_records" in src:
+            out.add(f.name)
+    return out
 
 
 def _scene(tmp_path, doc):
@@ -135,3 +170,30 @@ def test_the_real_document_is_found_at_all(tmp_path):
     for label, walk, doc in WALKS:
         found = {p.name for p in walk(_scene(tmp_path / label, doc))}
         assert "real.json" in found, f"{label} found no ordinary document"
+
+
+def test_the_table_covers_every_program_that_walks_a_corpus():
+    """THE TABLE'S OWN BLIND SPOT, and it had one.
+
+    The comment above WALKS said "one row per corpus walk on this branch, so a
+    walk added later without a row here is visibly missing". It was a COMMENT.
+    Two walks were added later -- `ppa_pareto_check --corpus` and
+    `ppa_measurement_check --corpus`, both reaching `_ppa_corpus.collect` -- and
+    nothing was visible about it: the file went on holding the symlink property
+    for FOUR of SIX walks while reading as though it held it for all of them.
+
+    MEASURED off the programs directory, not restated here, because a list is
+    the thing that goes out of date and a derived set is not.
+    """
+    walk_programs = _programs_that_walk_a_corpus()
+    covered = {COVERS[label] for label, _, _ in WALKS}
+    missing = sorted(walk_programs - covered)
+    assert not missing, (
+        "a ppa_* program opens a corpus and no row in WALKS holds the symlink "
+        "property for it:\n  " + "\n  ".join(missing))
+    stale = sorted(covered - walk_programs)
+    assert not stale, (
+        "WALKS names a program that no longer walks a corpus; a row that "
+        "outlives its subject is the one that gets believed:\n  "
+        + "\n  ".join(stale))
+    assert walk_programs, "no ppa_* program walks a corpus — the detector has gone dark"
