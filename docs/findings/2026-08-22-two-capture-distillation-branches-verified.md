@@ -13,10 +13,14 @@ nothing else, and neither `main` nor either verified branch was touched.
 **Verdicts, as given** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
 `jdistchip` LAND with F1 fixed. F14 is the only finding that stops anything.
 
-**Both branches landed on main (v1.11.70, `ae78abb28`) during this work.** F14
-was fixed the right way — converted, not registered — and main's wired suite is
-byte-identical to before. F15, F1, F9, F12 and F17 landed unfixed; none is
-wired, so none blocks. The first section below carries the measurements.
+**Both branches landed on main (v1.11.70, `ae78abb28`) during this work** — but
+**neither TIP landed.** Five commits were left behind, every one of them
+test- or gate-hardening, including the fix that made `signoff_report_states_its_
+stage` detect the incident it was written for. That gate is green on main
+because main has the OLD one. F14 was fixed the right way — converted, not
+registered — and main's wired suite is byte-identical to before. F15, F1, F9,
+F12 and F17 landed unfixed; none is wired, so none blocks. **The first section
+below is the live status and supersedes the branch verdicts.**
 
 
 ## THEY LANDED WHILE I WAS WRITING — status at main ae78abb28
@@ -87,10 +91,45 @@ F15 AND F1 LANDED UNFIXED, and both are red on main right now:
     F15 — assert that excluding the consumer removes NAMES, which it still does
     (191 against 195), rather than that some axis stays unprovable.
 
+NEITHER BRANCH TIP ACTUALLY LANDED — FIVE COMMITS WERE LEFT BEHIND, ALL OF
+THEM TEST-STRENGTHENING. `git merge-base --is-ancestor` says so for both:
+
+    chip   c0e19ace9  NOT an ancestor of main   2 commits missing
+    matrix facc28860  NOT an ancestor of main   3 commits missing
+
+        4445f34a2  fix(signoff gate): it passed on the incident that motivated it
+        c0e19ace9  test(rc contract): a vacuity guard, because my own
+                   registration proved nothing
+        ddd0a6e91  test: no instrument may let a traceback escape — the sweep
+        634a96a71  test(declared_invocation): guard the corpus sweep, the one
+                   suite that did not
+        facc28860  test: a real verdict owes a denominator
+
+    Every one hardens a test or a gate. Nothing was lost from the RULES; what
+    was lost is the part of each branch that stops those rules going vacuous —
+    which is precisely the part this report spent the day arguing matters.
+
+    MEASURABLE CONSEQUENCE, not an inference. `test_chip_path_rules_rc_contract`
+    collects 40 tests on the chip tip and 36 on main. The four that vanished are
+    the ones covering a gate's SECOND scanning arm: the tip maps each rule to a
+    TUPLE of every scanning function, main maps it to one string, and the tip's
+    comment says why — "an arm that is not in this map is an arm whose traceback
+    can still escape ... `signoff_report_states_its_stage` is the live case".
+    Main's copy of that file is byte-identical to the branch at 317cef847, two
+    commits before its tip.
+
+    AND IT CORRECTS SOMETHING I WROTE THIS MORNING. I recorded that
+    `signoff_report_states_its_stage` "went GREEN in landing, its three unstamped
+    reports having been stamped". That is FALSE and it is false in the flattering
+    direction. The gate is green on main because main has the OLD gate: the fix
+    that gave it a sibling-stamp arm is 4445f34a2, which did not land.
+    `grep -c sibling_stamp_gaps` returns 2 on the chip tip and 0 on main. Main
+    ships the version whose own commit message says it "passed on the incident
+    that motivated it", and I read its silence as success.
+
 ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
-25 / 6 / 1). One went GREEN in landing — `signoff_report_states_its_stage`, rc 1
-on the chip tip and rc 0 on main, its three unstamped reports having been
-stamped. The five that are red:
+25 / 6 / 1), and the single difference is that regression, not an improvement.
+The five that are red:
 
     gate_proof_vocabulary_has_a_producer ....... F15, and the verdict is FALSE
     only_the_declaring_step_writes_its_output .. F1, findings true, undisposed
