@@ -207,3 +207,65 @@ thing this audit had done by hand, done by the checker instead.
 
 No verdict changed in this round either. What changed is that the file can no longer
 report a green it has not earned.
+
+---
+
+## Third round: a check over nothing passes, and 20 rows of the consumable rest on one
+
+jharv2 applied the blinding standard to `evidence_contract.py` and found its
+absent-file branch had **no case at all** — nothing in its red→green→red proof ever
+exercised it, so it could have been `ok = True` throughout. I turned the same
+question on the file a downstream executor actually reads.
+
+`verdicts_joined.tsv` carries this as the sole basis for LANDED — the verdict that
+means "already on main, safe to delete":
+
+```
+all 0 file(s) this tree changed hash-match main a00f53f20 byte for byte
+```
+
+**A universal over an empty set is true of everything.** It reads like a measurement
+and is a tautology. For two rows it is not merely vacuous but **false**, measured
+against current main:
+
+| path | joined view says | actually owns |
+|---|---|---|
+| `/home/reyerchu/_jd3` | all 0 files changed → LANDED | **3 files, all 3 differ, +212 lines** |
+| `/home/reyerchu/AI_IC_design/wt_jwire2` | all 0 files changed → LANDED | **9 files, all 9 differ, +1683 lines** |
+| `/home/reyerchu/_a1456` | all 0 files changed → LANDED | 0 committed, **1 uncommitted edit on no ref** |
+
+All three are RECOVER in `verdicts_shard_c.tsv` with sha256 evidence that re-hashes
+correctly against current main — `_jd3`'s named file hashes to `ac6c915e9083e606` on
+main, exactly as its evidence states. The third is the subtler one: its committed
+tree really is empty, so "0 files changed" is true of the *wrong question*, and the
+bytes that matter are uncommitted and on no ref anywhere.
+
+`bin_jharv3/vacuous_universal.py` gates the class. Over the joined view and all
+three shard files, 96 deletion-bound rows examined:
+
+```
+  vacuous universals: 29     (joined 20, shard a 9)
+  stale main cites  : 55     (joined 44, shard a 11)
+  shard b: 0 and 0           shard c: 0 and 0
+```
+
+**Every one of the joined view's 44 deletion-bound rows cites `a00f53f20`**, which is
+not current main. Judging deletion against a main that has moved is the exact mistake
+the re-judgement was ordered to correct, and it survived into the consumable.
+
+Its self-test holds each guarantee to both arms — unblinded catches, blinded misses,
+and it stays quiet on a clean row:
+
+```
+  vacuous   unblinded=1 blinded=0 clean=0   LOAD-BEARING
+  stale     unblinded=1 blinded=0 clean=0   LOAD-BEARING
+```
+
+The same shape has now appeared four times in this job: the A4 duplicate rule that
+would make every worktree collide on an empty owned-set, jharv2's negative control
+that corrupted nothing, my survivability check that could be deleted without the
+harness noticing, and these 29 rows. A check over nothing passes.
+
+**Nothing here changes a shard-C verdict.** Shard C is clean on both guarantees. What
+this says is that an executor reading `verdicts_joined.tsv` would delete three
+directories this shard verified as holding work that is not on main.
