@@ -48,18 +48,58 @@ renewed; both remain expired and both therefore refuse a landing.
 > prints "nothing is claimed" and is recorded PASS is the vacuous pass the
 > owner's ruling names.
 >
-> ### Which makes the ruling's SECOND branch the one that applies
+> ### CORRECTION: "the return code is wrong" was MY error, and the repo already
+> ### decided this
 >
-> The population is genuinely empty for any checkout not accidentally sitting
-> under a stray `benchmark-data/`, so per the ruling these must report **rc=2
-> NOT CHECKED with the measured population count**, not rc=0 PASS. The message
-> already exists in both gates; only the return code is wrong.
+> An earlier draft of this section said the two gates "must report rc=2 NOT
+> CHECKED; only the return code is wrong". That is wrong and it contradicts a
+> deliberated position I had not read.
 >
-> **This is not yet implemented, deliberately.** Flipping rc 0 -> 2 on an
-> absent corpus is a repo-wide behaviour change that turns vacuous passes into
-> blocking NOT CHECKEDs, and there are tests that pin the opposite. The blast
-> radius must be measured before it is changed, and that measurement is not
-> this document.
+> `NO_CORPUS (rc 0)` is reachable ONLY when the CALL SITE opts in with
+> `--corpus-may-be-absent`. It is never a default. `repo_hygiene_gates.sh`
+> passes it at 20 sites, each with a written justification citing the v1.10.56
+> corpus move (vibe-ic#1710), and at line 117 it documents a gate where the
+> flag is DELIBERATELY withheld for precisely the reason I was about to
+> re-raise: *"rc 0 here would be this gate printing a PASS over a population it
+> never opened"*.
+>
+> The flag does not silence anything. Quoting the call site: a
+> `$VIBE_IC_BENCHMARK_DATA` that is set and broken is STILL `UNDETERMINED`, a
+> corpus that IS supplied is STILL fully adjudicated, and a corpus present but
+> holding no L-doc is `UNDETERMINED` rather than a comparison against zero. The
+> only thing it converts is nothing-anywhere, into a NO_CORPUS that STATES 0
+> documents were examined. Before the flag, these gates refused rc 2 on every
+> landing after v1.10.56 — which is the breakage it was introduced to fix.
+>
+> So the gates are right, the flag is right, and I am not proposing to change
+> either.
+>
+> ### THE GAP THAT SURVIVES THE CORRECTION
+>
+> What remains is one level up, in the AGGREGATION rather than the gate. The
+> dispatcher records a NO_CORPUS gate in the same `PASS` bucket as a gate that
+> actually adjudicated something, so the run's closing sentence reads
+>
+>     all 93 gate(s) passed
+>
+> for a run in which two of them opened nothing. The gate said "NOTHING WAS
+> SCANNED ... nothing is claimed about them" and the summary answered "passed".
+> The machinery to say otherwise already half exists — the same run prints
+> *"1 loop corpus expanded over 0 item(s) — NOTHING was checked over"* — but
+> that is `GATE_CORPUS_STATE` in `tools/ci/_gate_dispatch.sh:1374`, which
+> tracks LOOP CORPORA, not gates. It is careful where it applies — it refuses
+> to call an absent corpus "EXPANDED with 0 items" because *"a consumer reading
+> `items: 0` off an EXPANDED row is reading a measured population, and there
+> was none"*. That is exactly the distinction wanted here. But a NON-loop gate
+> that exits rc 0 NO_CORPUS gets no equivalent: the per-gate vocabulary is
+> PASS / FAIL / NOT_CHECKED / WROTE_CORPUS / LISTED / OTHER_SHARD /
+> OUT_OF_SCOPE / QUEUED, and it lands in PASS. `hygiene_finding_delta`'s
+> `PROCESS_STATES` then counts it among the gates that "actually ran".
+>
+> The honest fix is therefore a DISPATCH state, not a return code: NO_CORPUS
+> should be recorded and counted separately, so "93 passed" cannot absorb it.
+> That is a smaller change than the one I first proposed and it does not
+> reopen #1710.
 >
 > ### Consequence for the two ledger rows
 >
