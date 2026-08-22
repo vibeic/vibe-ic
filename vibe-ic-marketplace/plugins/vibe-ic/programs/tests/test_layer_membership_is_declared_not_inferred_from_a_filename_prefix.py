@@ -135,3 +135,12 @@ def test_the_shipped_tree_is_RED_and_that_is_the_point():
         f"gate.\n{r.stdout}")
     assert "layer `ppa`" in r.stdout
     assert "power_total_vs_budget_check.py" in r.stdout
+    # THE POPULATION, PINNED ALONGSIDE THE MEMBER. The member assertion above
+    # cannot notice the layer GROWING: when the merge with main a4caccefe took
+    # the gap from 5 outside to 6, this test still passed and said nothing.
+    # A count pin without a member set is the defect
+    # `population_pin_without_its_member_set` reports; a member set without a
+    # count is the half that cannot see growth. Keep BOTH.
+    # If this fails, RE-DERIVE the finding -- do not edit the number to fit.
+    assert "glob 20, relation 26, 6 outside" in r.stdout, (
+        f"the ppa layer population moved; re-derive the finding\n{r.stdout}")
