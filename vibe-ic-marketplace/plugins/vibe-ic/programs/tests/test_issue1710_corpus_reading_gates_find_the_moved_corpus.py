@@ -670,8 +670,9 @@ def test_default_named_never_leaves_the_repository(tmp_path):
     machine whose $HOME happens to carry a `benchmark-data/`, the gate scanned
     THAT tree and `resolve()` then declined the caller's pointer in favour of
     it — so the same commit produced different verdicts on different machines.
-    MEASURED on main a4caccefe, same host, two clones: 15 failed under
-    /home/reyerchu/... and 42 passed under /var/tmp/... .
+    MEASURED on main a4caccefe, same host, two clones: 15 failed under a
+    checkout below $HOME (which carried a benchmark-data/) and 42 passed under
+    one below /var/tmp (which did not).
 
     Bounded at the repository root, the stranger above the checkout is
     invisible and the answer depends only on the repository.

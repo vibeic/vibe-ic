@@ -152,12 +152,12 @@ def default_named(start: Path, rel: str) -> Path:
 
     MEASURED on main a4caccefe, the SAME commit, the SAME host, two clones:
 
-        clone at /home/reyerchu/_1710/vibe-ic   (an ancestor, /home/reyerchu,
-                                                 carries benchmark-data/)
+        clone at $HOME/<work>/vibe-ic   (an ancestor, $HOME, carries a
+                                         benchmark-data/ checkout)
             test_issue1710_...py -> 15 failed, 27 passed
             and the gate announced: "scanning the corpus at the named root
-            (/home/reyerchu/benchmark-data/ic); VIBE_IC_BENCHMARK_DATA=<the
-            corpus the TEST built> is set and NOT followed"
+            ($HOME/benchmark-data/ic); VIBE_IC_BENCHMARK_DATA=<the corpus the
+            TEST built> is set and NOT followed"
         clone at /var/tmp/j1710/vibe-ic         (no such ancestor)
             same file -> 42 passed
 
