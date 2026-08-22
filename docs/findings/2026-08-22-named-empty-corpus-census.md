@@ -212,3 +212,54 @@ a bound pointer at a zero-cell corpus kills its import.
 configuration, fails collection identically on `origin/main` — the sibling is
 what repairs it. So this branch is safe to land in any order; only the
 verification of its hermeticity half waits.
+
+## Closing the "is it blocking?" thread: the machinery is correct, and it says UNKNOWN
+
+The earlier section left this open — *"the reachability is measured; the
+consequence is not"* — and named the full hygiene set (~3750s) as the only way
+to close it. That was right, and here is why, so the next reader does not walk
+the same path again.
+
+**The subtraction rule is real and pinned.** `hygiene_finding_delta` asks *"which
+findings exist on the candidate that are not on the base?"*, so a failure present
+on both arms is inherited and does not block. Measured, not read:
+`test_an_inherited_finding_does_not_block` plus the whole of
+`test_inherited_red_deadline.py` — **15 passed** on clean `main`. The
+citation-routing rc 2 is identical on `main` and on this branch, so it is
+inherited by construction.
+
+**Inherited is not the same as unowned, and the repo already knows it.**
+`test_inherited_red_deadline.py` exists because `flow-gate enforcement audit`
+stayed red across *"nine days, 704 commits and 96 version-bearing landings"* and
+every landing was correct to allow it. The deadline — `max_commits` in
+`tools/ci/gate_red_since.json`, adjudicated by `gate_red_since_check` — *"already
+existed and nothing ever opened it, because a row is voluntary and pure cost so
+no row is ever written"*. The forcing function now lives in
+`landing_merge_verdict`, deliberately outside the hygiene suite, because *"a
+refusal wired inside the suite would be a gate in the suite, red on both arms
+from its first landing, and subtracted by this very rule"*.
+
+`tools/ci/gate_red_since.json` carries exactly **one** row today —
+`flow-gate enforcement audit`. There is no row for `citation routing is true`.
+
+**So the open question is well-formed, and it is conditional.** *If* the
+citation-routing gate is red on both arms in a real landing, then it is an
+inherited blocking red with no acknowledgement row and no deadline. The `if` is
+what cannot be settled here: `gate_red_since_check` requires `--record`, a real
+hygiene summary, and `landing_merge_verdict` refuses to guess without one —
+
+> the inherited-red deadline was NOT evaluated … whether a gate red on both arms
+> is owned by a live deadline is **UNKNOWN** here
+
+**That is the correct behaviour and this probe found no defect in it.** Silence
+there would be *"indistinguishable from 'every inherited red is owned'"*, and the
+program says so in those words rather than defaulting to the comfortable answer.
+
+**The exact invocation that would resolve it**, for whoever is authorised to
+spend the run: produce hygiene summary records for `origin/main` and for the
+candidate with `VIBE_IC_BENCHMARK_DATA` bound as
+`gatekeeper_review._published_corpus_binding` binds it, then
+`gate_red_since_check --record <candidate summary> --ledger
+tools/ci/gate_red_since.json --repo <repo>`. If `citation routing is true`
+appears red on both, it needs a row — or, better, the repair on this branch plus
+whatever makes its subject present again.
