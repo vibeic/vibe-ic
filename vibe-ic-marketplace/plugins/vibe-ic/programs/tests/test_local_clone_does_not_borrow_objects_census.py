@@ -6,6 +6,7 @@ being true of whatever git the container ships.
 """
 from __future__ import annotations
 
+import shutil
 import json
 import subprocess
 import sys
@@ -218,3 +219,26 @@ def test_the_census_never_blocks_by_default():
     assert "[CENSUS]" in r.stdout
     assert "the gate is programs/%s.py" % _RULE in r.stdout, (
         "the census must name the gate that does the refusing")
+
+
+def test_a_count_over_an_empty_population_is_undetermined():
+    """`[CENSUS] 0 site(s)` is honest only if something was read.
+
+    Over a tree this program parsed NOTHING, a count of 0 is
+    indistinguishable from a clean result. Measured before the guard: rc 0 --
+    and still 0 under `--strict`, so "--strict is where a caller asks for the
+    refusal" did not cover it either. Exiting 0 is a census's contract for a
+    REAL population, not a licence to report over none.
+    """
+    root = Path(tempfile.mkdtemp(prefix="csz_"))
+    try:
+        (root / ".git").mkdir()
+        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+         / "tests").mkdir(parents=True)
+        r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                           capture_output=True, text=True, timeout=900)
+        assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}"
+        assert "NOT a pass" in r.stdout, r.stdout
+        assert "[CENSUS] 0 site(s)" not in r.stdout, r.stdout
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
