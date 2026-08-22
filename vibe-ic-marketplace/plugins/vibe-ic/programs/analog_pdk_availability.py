@@ -360,16 +360,42 @@ def resolve_pdk(target: Optional[str], project=None,
     container-less, project-less call that finds nothing → available=False,
     probe_ok=False."""
     tnorm = (target or "").strip()
-    if not tnorm:
-        return {"available": False, "probe_ok": False, "target": target,
-                "family": None, "matched_dir": None, "source": None,
-                "rung": None, "reason": "no target"}
 
     # ── rung 1: project-staged custom PDK (checked first, local-FS, cheap) ──
+    #
+    # vibe-ic#576 — MOVED ABOVE THE `no target` GUARD, which used to return
+    # before this and made rung 1 unreachable without an L19 declaration.
+    #
+    # Rung 1 detects by GLOB over `input/pdk/` (the canonical axes
+    # `pdk_analog_completeness_check` enforces). The target string is carried
+    # into the RESULT for the record; it is not an input to the detection.
+    # Measured by calling `_resolve_project_custom_pdk` directly on a fixture
+    # staging exactly those globs:
+    #
+    #     target=None          -> available=True  rung=1
+    #     target="custom_node" -> available=True  rung=1
+    #
+    # Identical. So a project whose assets are all on disk was being refused by
+    # a guard protecting a decision its own subject does not participate in —
+    # and `analog_one_shot_runner._try_native_a6_pv` then abandoned native
+    # per-block PV before naming a tool.
+    #
+    # The guard stays for rungs 2 and 3, which genuinely need a family name to
+    # match against an installed directory.
     if project is not None:
         r1 = _resolve_project_custom_pdk(Path(project), target)
         if r1["available"]:
             return r1
+
+    if not tnorm:
+        # Nothing staged AND nothing declared. Distinct reason from the
+        # pre-#576 "no target": that one could not tell "no declaration" from
+        # "no declaration and no assets either", and only the second is a real
+        # dead end.
+        return {"available": False, "probe_ok": False, "target": target,
+                "family": None, "matched_dir": None, "source": None,
+                "rung": None,
+                "reason": "no target declared and no project-staged PDK found"}
 
     # ── rung 2: container-installed PDK family ──────────────────────────────
     # Cache ONLY the real docker-probe path (expensive). An injected lister

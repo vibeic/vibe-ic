@@ -41,6 +41,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -64,6 +65,11 @@ _MEM_DECL = re.compile(
 
 # initial block body
 _INITIAL = re.compile(r"\binitial\b\s*begin(.*?)\bend\b", re.DOTALL)
+
+# `$readmemh("file", mem)` / `$readmemb(...)`. The FIRST argument is deliberately
+# unconstrained — in real designs it is often a parameter or a macro, not a literal —
+# because what decides the question is the TARGET MEMORY, not where the data lives.
+_READMEM = re.compile(r"\$readmem[hb]\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)")
 
 
 def scan_file(path: Path) -> List[Finding]:
@@ -133,6 +139,21 @@ def scan_file(path: Path) -> List[Finding]:
             continue
 
         mem_name, ass_match = hit
+
+        # NOT A DEFECT when this same initial body then loads the SAME memory from an
+        # external file: the zeroing loop is a benign prologue and the array's real
+        # contents come from `$readmem*`, which IS remediation (B) that this program's
+        # own fix_hint recommends. Measured on a real design: the flagged code already
+        # did exactly what the hint asks for, and the gate failed the whole cell for it.
+        #
+        # Deliberately narrow — keyed on the SAME memory, not on the mere PRESENCE of a
+        # `$readmem*` call. A body that zeroes `mem` and loads `other` is still the
+        # defect and must still fire; so is a body with no `$readmem*` at all. Both are
+        # regression-pinned in programs/tests/test_rom_init_lint.py.
+        loaded = {m.group(1) for m in _READMEM.finditer(body)}
+        if mem_name in loaded:
+            continue
+
         # Compute line number of the offending assignment
         off_line = body_start_line + body[: ass_match.start()].count("\n")
 
@@ -172,9 +193,7 @@ def main(argv: List[str] | None = None) -> int:
         all_findings.extend(scan_file(path))
 
     if args.json:
-        Path(args.json).write_text(
-            json.dumps([asdict(x) for x in all_findings], indent=2)
-        )
+        atomic_write_text(Path(args.json), json.dumps([asdict(x) for x in all_findings], indent=2))
 
     if not all_findings:
         print("rom_init_lint: OK — no Quartus-unsafe ROM initializers found")
