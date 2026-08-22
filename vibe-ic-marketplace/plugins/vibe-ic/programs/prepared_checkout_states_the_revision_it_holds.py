@@ -30,8 +30,15 @@ SOURCE ARM (default)   every site that selects a REVISION with `git checkout`
                        a lie in the flattering direction.
 
 RUNTIME ARM (--root)   given a prepared checkout and the revision it is supposed
-                       to hold, confirm it against the tree itself, and when the
-                       upstream is named, against the upstream too.
+                       to hold, confirm it.
+
+                       A 40-hex SHA is absolute and is resolved in the tree. A
+                       REF NAME is resolved AT THE UPSTREAM and never against the
+                       tree's own copy of it, because the tree's copy is the
+                       thing that goes stale — and a stale ref resolves perfectly
+                       well, which is why this must not be a fallback. Without
+                       --upstream a name cannot be confirmed at all, and that is
+                       rc 2, not a pass.
 
 DID NOT LOOK IS NOT LOOKED AND FOUND NOTHING
 ============================================
@@ -52,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -176,6 +184,14 @@ def audit_source(root: Path) -> Tuple[List[Finding], List[str], int]:
 
 # --------------------------------------------------------------- runtime arm
 
+_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _is_sha(rev: str) -> bool:
+    """True for an absolute object name. A sha means the same thing everywhere."""
+    return bool(_SHA.match(rev.strip()))
+
+
 def confirm_revision(root: Path, expect: str,
                      upstream: Optional[str] = None) -> Tuple[int, str]:
     """(rc, sentence) — does `root` hold `expect`?"""
@@ -188,6 +204,51 @@ def confirm_revision(root: Path, expect: str,
     if rc != 0 or not head:
         return 2, (f"NOT CHECKED — {root} has no resolvable HEAD "
                    f"(an empty or broken repository). Not a pass.")
+    # A SYMBOLIC EXPECTATION IS RESOLVED AT THE UPSTREAM, NEVER AGAINST THE
+    # TREE'S OWN COPY OF IT. This is the whole measured defect and the first
+    # version of this function got it backwards.
+    #
+    # MEASURED against a real pair of repositories: clone `up` while its `main`
+    # is A, advance upstream `main` to B (the commit under test), leave the
+    # clone's HEAD at A. The clone does NOT contain B. Asking this function for
+    # `main` resolved `main` INSIDE THE CLONE -- which is a stale ref that
+    # resolves perfectly well to A -- so want == head and it answered
+    #
+    #     CONFIRMED -- <clone> holds c6c0f8390bb8, which is 'main'.   rc 0
+    #
+    # A false pass on precisely the case this program exists for: "automation
+    # prepares a checkout by cloning a branch NAME from a local path, the local
+    # branch position is stale, and the commit under test is absent from the
+    # resulting tree." A stale ref never fails to resolve, so the upstream
+    # fallback below could never fire.
+    #
+    # A 40-hex sha is absolute and means the same thing everywhere, so it is
+    # still resolved locally. A NAME means "whatever the upstream calls that
+    # today", and only the upstream can say.
+    if not _is_sha(expect):
+        if not upstream:
+            return 2, (f"NOT CHECKED — {expect!r} is a REF NAME, and the only "
+                       f"copy of it here is {root}'s own, which is exactly the "
+                       f"thing that goes stale. A name cannot be confirmed "
+                       f"against the tree being checked. Pass --upstream to say "
+                       f"where {expect!r} is defined. Not a pass.")
+        urc, uout = _git(root, ["ls-remote", upstream, expect])
+        if urc != 0 or not uout:
+            return 2, (f"NOT CHECKED — {expect!r} could not be resolved at "
+                       f"{upstream}, so what {root} should hold was never "
+                       f"established. A checkout that cannot prove its revision "
+                       f"is undetermined, not correct.")
+        want = uout.split()[0]
+        if head == want:
+            return 0, (f"CONFIRMED — {root} holds {head[:12]}, which is what "
+                       f"{upstream} calls {expect!r}.")
+        present = _git(root, ["cat-file", "-e", want])[0] == 0
+        return 1, (f"REFUTED — {root} holds {head[:12]}, but {upstream} says "
+                   f"{expect!r} is {want[:12]}"
+                   f"{'' if present else ', which this tree does not even contain'}"
+                   f". The tree was prepared for a revision it does not hold, so "
+                   f"every gate run in it measured a different commit.")
+
     rc, want = _git(root, ["rev-parse", "--verify", "--quiet", f"{expect}^{{commit}}"])
     if rc != 0 or not want:
         # The tree does not contain the revision at all. That is exactly the

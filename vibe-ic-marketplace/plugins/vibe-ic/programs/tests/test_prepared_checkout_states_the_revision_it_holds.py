@@ -97,21 +97,87 @@ def test_absent_revision_without_upstream_is_not_checked(tmp_path):
     assert "NOT CHECKED" in out
 
 
-def test_absent_revision_with_reachable_upstream_is_refuted(tmp_path):
-    """Once the upstream CAN name the revision, undetermined becomes refuted."""
-    upstream, shas = _repo(tmp_path, "up")
+def _stale_pair(tmp_path):
+    """THE MEASURED SCENARIO, built exactly.
+
+    Clone `up` while its `main` is A; advance upstream `main` to B (the commit
+    under test); leave the clone's HEAD at A. The clone does NOT contain B, and
+    the clone's OWN `main` ref still resolves — to A. That resolvable stale ref
+    is the whole trap.
+    """
+    up, shas_a = _repo(tmp_path, "up")
     clone = tmp_path / "clone"
-    subprocess.run(["git", "clone", "-q", str(upstream), str(clone)],
+    subprocess.run(["git", "clone", "-q", str(up), str(clone)],
                    capture_output=True, env=_env(tmp_path))
-    _git(clone, "checkout", "-q", "--detach", shas[0], tmp_path=tmp_path)
-    _git(upstream, "branch", "-q", "later", shas[1], tmp_path=tmp_path)
-    # Drop the object locally so `later` genuinely does not resolve in the clone.
-    rc, out = _run("--root", clone, "--expect", "refs/heads/later",
-                   "--upstream", str(upstream))
-    assert rc in (0, 1, 2), out
-    # The point being asserted: whichever it is, it is never a silent pass with
-    # an unnamed revision.
-    assert ("CONFIRMED" in out) or ("REFUTED" in out) or ("NOT CHECKED" in out)
+    before = _git(clone, "rev-parse", "HEAD", tmp_path=tmp_path).stdout.strip()
+    (up / "f.txt").write_text("under-test\n")
+    _git(up, "add", "f.txt", tmp_path=tmp_path)
+    _git(up, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm",
+         "the commit under test", tmp_path=tmp_path)
+    after = _git(up, "rev-parse", "HEAD", tmp_path=tmp_path).stdout.strip()
+    assert before != after
+    assert _git(clone, "cat-file", "-e", after,
+                tmp_path=tmp_path).returncode != 0, (
+        "fixture is wrong: the clone already contains the commit under test")
+    assert _git(clone, "rev-parse", "main",
+                tmp_path=tmp_path).stdout.strip() == before, (
+        "fixture is wrong: the clone's own `main` is not stale")
+    return up, clone, before, after
+
+
+def test_a_stale_branch_name_is_refuted_not_confirmed(tmp_path):
+    """THE REGRESSION THAT MATTERS.
+
+    This program shipped ANSWERING CONFIRMED here. It resolved the ref name
+    inside the checkout, where a stale `main` resolves perfectly well, so
+    want == head and the upstream fallback could never fire — a false pass on
+    precisely the case the program exists for. The test that was here asserted
+    `rc in (0, 1, 2)`, which excludes only 3, and so pinned nothing.
+    """
+    up, clone, before, after = _stale_pair(tmp_path)
+    rc, out = _run("--root", clone, "--expect", "main", "--upstream", up)
+    assert rc == 1, f"a stale branch name was not refuted:\n{out}"
+    assert "REFUTED" in out
+    assert before[:12] in out and after[:12] in out
+    assert "does not even contain" in out
+
+
+def test_a_ref_name_without_an_upstream_cannot_be_confirmed(tmp_path):
+    """A name resolved only against the tree being checked proves nothing, and
+    that is NOT CHECKED rather than a pass."""
+    _up, clone, _b, _a = _stale_pair(tmp_path)
+    rc, out = _run("--root", clone, "--expect", "main")
+    assert rc == 2, f"a name with no upstream was not undetermined:\n{out}"
+    assert "REF NAME" in out
+    assert "Not a pass" in out
+
+
+def test_a_correct_branch_name_is_confirmed(tmp_path):
+    """BIDIRECTIONAL: when the tree really does hold what the upstream names,
+    the same call must go green — otherwise the rule is a ban on names."""
+    up, _shas = _repo(tmp_path, "up")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(up), str(clone)],
+                   capture_output=True, env=_env(tmp_path))
+    rc, out = _run("--root", clone, "--expect", "main", "--upstream", up)
+    assert rc == 0, out
+    assert "CONFIRMED" in out
+
+
+def test_an_absolute_sha_is_still_resolved_locally(tmp_path):
+    """A sha means the same thing everywhere, so it needs no upstream."""
+    _up, clone, before, _after = _stale_pair(tmp_path)
+    rc, out = _run("--root", clone, "--expect", before)
+    assert rc == 0, out
+    assert "CONFIRMED" in out
+
+
+def test_an_unreachable_upstream_is_not_checked(tmp_path):
+    _up, clone, _b, _a = _stale_pair(tmp_path)
+    rc, out = _run("--root", clone, "--expect", "main",
+                   "--upstream", str(tmp_path / "no-such-remote"))
+    assert rc == 2, out
+    assert "NOT CHECKED" in out
 
 
 def test_not_a_repository_is_not_checked(tmp_path):
