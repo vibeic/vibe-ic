@@ -16,7 +16,7 @@ with no entry point, and the oldest handoff predates the verdict files entirely.
 
 Verdicts in `verdicts_all.tsv`: RECOVER 1226, LANDED 184, ABANDON 29.
 
-`RECOVER` = keep. `LANDED` and `ABANDON` **authorise deletion** — 225 rows do.
+`RECOVER` = keep. `LANDED` and `ABANDON` **authorise deletion** — 230 rows do.
 
 ## 2. Before deleting anything: `bin_jharv2/predelete_guard.sh`
 
@@ -72,12 +72,12 @@ that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
 ## 4c. Every deletion-bound row now has a recorded guard result
 
-**225 of 225.** An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
+**230 of 230** — 229 measured, 1 honestly UNVERIFIABLE (its directory is gone from all seven hosts). An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
 
 | file | rows | covers |
 |---|---|---|
 | `JOINED_DELETION_GUARD_RESULTS.tsv` | 49 | the roster's deletion-bound rows |
-| `EXTRAS_DELETION_GUARD_RESULTS.tsv` | 173 | the extras' — all SAFE |
+| `EXTRAS_DELETION_GUARD_RESULTS.tsv` | 178 | the extras' — all SAFE |
 | `shard_c/108_DROP_guard_results.tsv` | 30 | host 108's DROP rows |
 
 A peer later re-verdicted 12 rows RECOVER → LANDED on `.120`, and `verdicts_all is reproducible`
