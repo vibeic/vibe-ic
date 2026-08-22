@@ -73,6 +73,8 @@ import json
 import os
 import re
 import sys
+
+import _atomic_artefact as _atomic
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -286,7 +288,7 @@ def main(argv=None) -> int:
 
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.json).write_text(json.dumps(res, indent=2) + "\n", encoding="utf-8")
+        _atomic.write_json(Path(a.json), res)
 
     cen = res["census_unpinned"]
     print(f"[CENSUS] {len(cen)} program(s) cite an upstream flow file BY PACKAGE PATH "

@@ -89,6 +89,8 @@ import hashlib
 import json
 import re
 import sys
+
+import _atomic_artefact as _atomic
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
@@ -486,17 +488,17 @@ def main(argv=None) -> int:
         print(f"NOT DETERMINED: {exc}", file=sys.stderr)
         if a.json:
             Path(a.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(a.json).write_text(json.dumps(
-                {"gate": "upstream_contract_parity_check",
-                 "verdict": "NOT_DETERMINED",
-                 "undetermined": [str(exc)]}, indent=2) + "\n")
+            _atomic.write_json(Path(a.json),
+                               {"gate": "upstream_contract_parity_check",
+                                "verdict": "NOT_DETERMINED",
+                                "undetermined": [str(exc)]})
         return 2
 
     report["gate"] = "upstream_contract_parity_check"
     report["register"] = str(a.register)
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.json).write_text(json.dumps(report, indent=2) + "\n")
+        _atomic.write_json(Path(a.json), report)
 
     # The denominator is printed on every run, at every verdict.
     for eid, counts in report["per_entry"].items():

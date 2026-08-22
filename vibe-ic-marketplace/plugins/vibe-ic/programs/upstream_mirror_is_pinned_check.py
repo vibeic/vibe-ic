@@ -61,6 +61,8 @@ import json
 import re
 import sys
 import warnings
+
+import _atomic_artefact as _atomic
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -254,7 +256,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     res = scan(programs)
     if a.json:
-        Path(a.json).write_text(json.dumps(res, indent=2) + "\n")
+        _atomic.write_json(Path(a.json), res)
 
     print(f"=== {PROGRAM} ===")
     print(f"  files parsed        : {res['files_parsed']}")

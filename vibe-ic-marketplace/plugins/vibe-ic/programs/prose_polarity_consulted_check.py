@@ -255,6 +255,22 @@ _NOT_PROSE: Dict[str, str] = {
         "English design documents, where denial is spellable and was spelled; "
         "the direct precedents here are `digital_hardmacro_gen::read_interface` "
         "(DEF PINS) and `digital_hardmacro_check::parse_lef` above.",
+    "_area_unit::liberty_areas":
+        "Liberty cell attributes. The matched text is a production of the "
+        "Liberty grammar — `cell (NAME) { ... area : 1.23; ... }` — written by "
+        "a characterisation tool, and Liberty gives no form that DENIES an "
+        "attribute: there is no way to spell 'this cell's area is NOT 1.23'. "
+        "An attribute either appears inside the cell block or it does not, and "
+        "absence is already how this function reports it — the cell is simply "
+        "not a key in the returned dict, and `main` turns too few common cells "
+        "into a stated `reason` rather than into a unit decision. This is the "
+        "same class as the already-exempted `_pad_ring::parse_def` (DEF) and "
+        "`digital_hardmacro_gen::read_interface` (DEF PINS). The two defects "
+        "this gate was built from (#706 pdk_target, #711 die_area_budget_um) "
+        "both read English design documents, where denial is spellable and was "
+        "spelled; consulting `_prose_polarity` on a Liberty attribute would add "
+        "a branch that can never fire, and a call that can never fire is a "
+        "green light rather than a check.",
 }
 
 

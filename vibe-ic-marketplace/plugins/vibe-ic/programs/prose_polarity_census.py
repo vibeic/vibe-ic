@@ -220,6 +220,8 @@ from typing import Dict, List, Set, Tuple
 
 import re
 
+import _atomic_artefact as _atomic
+
 import prose_polarity_consulted_check as _gate
 
 #: Captured at import, BEFORE anything can patch the module attribute.
@@ -512,8 +514,7 @@ def main(argv: List[str] | None = None) -> int:
         else:
             try:
                 args.json.parent.mkdir(parents=True, exist_ok=True)
-                args.json.write_text(json.dumps(report, indent=2) + "\n",
-                                     encoding="utf-8")
+                _atomic.write_json(args.json, report)
             except OSError as e:
                 print(f"USAGE_ERROR: {TOOL}: --json {args.json} could not be "
                       f"written: {e.strerror or e}", file=sys.stderr)

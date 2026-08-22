@@ -66,6 +66,8 @@ import ast
 import json
 import re
 import sys
+
+import _atomic_artefact as _atomic
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -202,9 +204,8 @@ def main(argv=None) -> int:
     for k, v in denom.items():
         print(f"  {k.replace('_', ' ')}: {v}")
     if a.json_out:
-        Path(a.json_out).write_text(
-            json.dumps({"findings": findings, "denominator": denom}, indent=2),
-            encoding="utf-8")
+        _atomic.write_json(Path(a.json_out),
+                           {"findings": findings, "denominator": denom})
 
     if findings:
         print(f"\n[CENSUS] {len(findings)} program(s) emit a verdict and are "
