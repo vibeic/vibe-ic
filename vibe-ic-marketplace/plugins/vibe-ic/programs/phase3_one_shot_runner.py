@@ -32704,6 +32704,95 @@ def step_digital_hardmacro_gen(project: Path,
                       msg, out)
 
 
+def _canonical_step_condition(project: Path, step_id: str
+                              ) -> Tuple[Optional[bool], str]:
+    """Read one step's applicability from the canonical flow declaration.
+
+    This deliberately delegates the predicate to ``flow_compliance_check``'s
+    own evaluator. Re-stating 37.5ic's router paths in this runner would give
+    the producer and its consumer two definitions of the chip path, and a
+    future edit could make the runner generate release documents for a step
+    the audit says did not run.
+    """
+    flow_def = PROGRAMS_DIR.parent / "flow" / "phase1_phase2_phase3.yaml"
+    try:
+        import yaml
+        import flow_compliance_check as _fcc
+        doc = yaml.safe_load(flow_def.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — an unreadable contract is named
+        return None, f"cannot read canonical flow condition: {exc}"
+
+    found: List[Dict[str, Any]] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if str(node.get("id")) == str(step_id):
+                found.append(node)
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(doc)
+    if len(found) != 1:
+        return None, (f"canonical step {step_id} resolved {len(found)} times; "
+                      "producer applicability is unknown")
+    condition = found[0].get("condition") or {}
+    try:
+        applies = bool(_fcc._check_condition(project, condition))
+    except Exception as exc:  # noqa: BLE001 — fail closed, never guess a path
+        return None, f"cannot evaluate canonical step {step_id} condition: {exc}"
+    return applies, f"canonical step {step_id} condition {'met' if applies else 'not met'}"
+
+
+def step_tapeout_docs_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ic's release-document producer.
+
+    The program remains the step's blocking gate clause because it carries a
+    real release verdict. This call is the producer dispatch: it runs before
+    the final compliance audit, so the auditor consumes already-produced HTML
+    instead of being the first thing to create its own required outputs.
+
+    Like ``step_digital_hardmacro_gen``, this producer row does not replace the
+    gate. A producer refusal is recorded as SKIP here and is then rejected by
+    37.5ic's existing ``program_exit_zero`` clause and required-output check.
+    """
+    t0 = time.time()
+    applies, why = _canonical_step_condition(project, "37.5ic")
+    if applies is None:
+        return StepResult("tapeout_docs_gen", "BLOCKED", time.time() - t0,
+                          why)
+    if not applies:
+        return StepResult("tapeout_docs_gen", "SKIP", time.time() - t0,
+                          why)
+
+    prog = PROGRAMS_DIR / "tapeout_docs_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("tapeout_docs_gen", "BLOCKED", time.time() - t0,
+                          f"producer not present: {prog}")
+    out_dir = project / "reports" / "phase3" / "docs"
+    cmd = [sys.executable, str(prog), "--project", str(project),
+           "--out-dir", str(out_dir)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("tapeout_docs_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
+    detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
+    status = "PASS" if cp.returncode == 0 else (
+        "SKIP" if cp.returncode == 1 else "ENV_UNAVAILABLE")
+    outputs = ([str(p) for p in sorted(out_dir.glob("*.html"))]
+               if out_dir.is_dir() else [])
+    return StepResult("tapeout_docs_gen", status, time.time() - t0,
+                      detail, outputs,
+                      {"producer_rc": cp.returncode,
+                       "flow_step": "37.5ic"})
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -42156,6 +42245,12 @@ def main() -> int:
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.
     plan.append(step_canonicalize_artefacts(
         project, effective_top, pdk, args.container))
+
+    # Canonical step 37.5ic — dispatch the release-document producer on the
+    # chip path before the compliance auditor evaluates the step's gate. The
+    # producer reads 37.5ic's condition from the canonical YAML, so this call
+    # cannot drift into the mutually-exclusive 37.5ip path.
+    plan.append(step_tapeout_docs_gen(project))
 
     # Canonical step 37.5ip — the cell/IP path terminal. The four-view kit is
     # what an IP delivery IS, and until this was wired nothing this flow

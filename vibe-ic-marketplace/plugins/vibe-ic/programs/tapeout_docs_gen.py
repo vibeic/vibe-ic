@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """tapeout_docs_gen.py — emit the release documents for a tape-out candidate.
 
-ENFORCEMENT: advisory — no runner spawns this program inline, so its exit status
-cannot stop step 37.5ic while step 37.5ic is running. That is the ONLY axis this
+ENFORCEMENT: advisory — the phase-3 runner now spawns this program as 37.5ic's
+producer, but deliberately records a producer refusal without treating that
+producer row as the gate verdict. The existing `program_exit_zero` clause runs
+afterward and is the channel that blocks the flow. That is the ONLY axis this
 token names and the one `flow_gate_enforcement_audit` measures. Its peer clause
 on the same step, `tapeout_precheck`, carries the same token for the same reason
 and about the same channel. The other two axes are unchanged:
