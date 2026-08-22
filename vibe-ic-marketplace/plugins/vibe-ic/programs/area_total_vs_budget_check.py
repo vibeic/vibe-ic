@@ -12,19 +12,55 @@ PDKs was added to this file, the repo-wide gate returned PASS over 1544 files, a
 this file's own test was red. The rule was real and invisible. Identify a library by
 its cell count and the registry population it came from, never by its name.
 
-ENFORCEMENT: advisory — no runner spawns this gate inline, so its exit status
-cannot stop step 9 while step 9 is running. That is the ONLY axis this token
-names and the one `flow_gate_enforcement_audit` measures. The other two axes are
-unchanged, and are stated here so the declaration can never be read as
-permission to defang the gate:
+ENFORCEMENT: blocking — `phase3_one_shot_runner.step_synth` spawns this gate
+inline and returns `StepResult(..., "FAIL", ...)` on rc 1, so its verdict can
+stop the step it guards while that step is running. `flow_gate_enforcement_audit`
+measures the wiring as INLINE_BLOCKING.
 
-  * FLOW SLOT — unchanged and BLOCKING. Step 9 wires this clause in
-    `program_exit_zero`, never `advisory_program_exit_zero`.
-  * VERDICT SEVERITY — unchanged. rc 1 when the cell area exceeds the declared
-    die, rc 2 on INCOMPLETE. See "INCOMPLETE EXITS 2, NOT 0" below.
+IT WAS `advisory` UNTIL 2026-08-22, and every word of that declaration was true
+when written: no runner spawned it, so it could describe a run and never stop
+one. Three things had to change first and all three are recorded below — the
+producer had to hand over the library it synthesised against, the figure's unit
+had to be ESTABLISHED from evidence rather than assumed, and only then was there
+a verdict worth carrying inline. This token now records the wiring that exists,
+not an intention.
 
-WHY ADVISORY, MEASURED RATHER THAN PREFERRED
---------------------------------------------
+NO FLOW EDIT WAS MADE OR NEEDED. The clause stays exactly where the flow declares
+it, in step 9's `program_exit_zero`. Step 9's declared output IS
+`phase2/stage2/synth/stats.json`, and the phase-3 synthesis is what finally
+writes an AREA into it: step 9's other producer maps to generic primitives and
+yosys prints no area line at all. So the gate is enforced at the point its input
+becomes real, which is the same step, not a different one.
+
+ONLY rc 1 STOPS THE STEP, and the bound is deliberate:
+
+  rc 1  the design's synthesised cell area exceeds the die area IT declared.
+        A fact about the design, knowable at synthesis rather than at streamout,
+        and a FAIL of the step.
+  rc 0  compared, and it fits.
+  rc 2  INCOMPLETE — most often "no ceiling declared", which is the state of 176
+        of the 177 published L19 copies. Making that non-green would turn almost
+        every run non-green over a requirement nobody wrote. It is DISCLOSED in
+        the step's detail and does not stop the step. WHETHER THE FLOW SHOULD
+        DEMAND A DECLARED DIE BUDGET IS A PRODUCT DECISION AND IS DELIBERATELY
+        NOT TAKEN HERE — it is the one thing still standing between this gate
+        and answering on every run.
+
+THE OTHER TWO AXES ARE UNCHANGED, stated so this token can never be read as
+permission to move anything: the FLOW SLOT is `program_exit_zero` and stays
+there, and the VERDICT SEVERITY is unchanged — rc 1 on a real finding, rc 2 on
+INCOMPLETE.
+
+A NOTE ON WHAT DID NOT CATCH THIS. While the wiring existed and this file still
+said `advisory`, `flow_gate_enforcement_audit` exited 0. Its `contradiction`
+class is one-directional — it fails a gate that DECLARES blocking and is wired
+audit-only, and says nothing about one wired blocking that declares advisory.
+That asymmetry is disclosed here rather than left for the next reader to
+discover, and the test beside this file pins the declaration against the
+MEASURED wiring in both directions.
+
+HOW IT GOT HERE, MEASURED AT EVERY STEP
+---------------------------------------
 The inline wiring this repo uses — `phase3_one_shot_runner.
 _DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` — turns rc 0 into PASS
 and rc 1 into a FAIL of the run. Through its step-9 clause this gate can reach

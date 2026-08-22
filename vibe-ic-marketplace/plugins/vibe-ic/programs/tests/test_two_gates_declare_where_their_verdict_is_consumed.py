@@ -71,9 +71,14 @@ _AUDIT = _PROGRAMS / "flow_gate_enforcement_audit.py"
 #: (gate, flow step it guards, the slot it is wired in). The slot is DATA, not a
 #: constant: `advisory` answers the RUNNER axis and must never be quoted as
 #: licence to move either clause out of the flow's blocking slot.
+#: (gate, flow step, slot, DECLARED intent). The intent is DATA now, not a
+#: constant: `area_total_vs_budget_check` was declared `advisory` when this file
+#: was written and is `blocking` since its wiring landed, while
+#: `tapeout_docs_gen` is still `advisory`. Sharing one expected value hid that
+#: difference and would have let either drift onto the other's answer.
 _GATES = (
-    ("area_total_vs_budget_check", "9", "program_exit_zero"),
-    ("tapeout_docs_gen", "37.5ic", "program_exit_zero"),
+    ("area_total_vs_budget_check", "9", "program_exit_zero", "blocking"),
+    ("tapeout_docs_gen", "37.5ic", "program_exit_zero", "advisory"),
 )
 
 #: 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces (the
@@ -117,15 +122,15 @@ def _flow_command(gate: str) -> str:
 
 # ───────────────────────────────────────────── axis 1: the declaration exists
 
-@pytest.mark.parametrize("gate,_step,_slot", _GATES)
-def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot):
+@pytest.mark.parametrize("gate,_step,_slot,intent", _GATES)
+def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot, intent):
     """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
     audit calls to decide DECLARED vs UNDECLARED, so this cannot pass on a
     declaration the audit would not see — one below the 4000-character window,
     one indented past a marker it does not accept, or one that is prose about
     the token rather than the token opening a line."""
     mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, gate) == "advisory", (
+    assert mod.declared_intent(_PROGRAMS, gate) == intent, (
         f"{gate} does not state where its verdict is consumed in a form the "
         f"audit reads: `ENFORCEMENT: advisory|blocking` opening a line in the "
         f"first 4000 characters, or a lone `\"verdict_mode\"` literal")
@@ -133,9 +138,9 @@ def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot):
 
 # ────────────────────────────────── axis 2: the declaration bought no demotion
 
-@pytest.mark.parametrize("gate,step,slot", _GATES)
+@pytest.mark.parametrize("gate,step,slot,_intent", _GATES)
 def test_the_declaration_did_not_move_the_gate_between_flow_slots(
-        gate, step, slot):
+        gate, step, slot, _intent):
     """THE PAIRED HALF OF THE DECLARATION.
 
     `advisory` answers "no runner spawns this inline". It is NOT a statement
@@ -180,9 +185,9 @@ def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
     contradicting = {c["gate"] for c in rep["contradictions"]}
     orphaned = {o["gate"] for o in rep["orphaned"]}
     rows = {r["gate"]: r for r in rep["gates"]}
-    for gate, step, slot in _GATES:
+    for gate, step, slot, intent in _GATES:
         assert gate in rows, f"{gate} is not in the flow definition at all"
-        assert rows[gate]["declared"] == "advisory", rows[gate]
+        assert rows[gate]["declared"] == intent, rows[gate]
         assert rows[gate]["slots"] == [slot], (step, rows[gate])
         assert gate not in undeclared
         assert gate not in contradicting
@@ -198,7 +203,7 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
     not INTO it."""
     doc = json.loads(_BASELINE.read_text())
     recorded = set(doc["undeclared_known"])
-    for gate, _step, _slot in _GATES:
+    for gate, _step, _slot, _intent in _GATES:
         assert f"undeclared::{gate}" not in recorded, (
             f"{gate} was recorded as debt instead of declaring an intent")
         assert f"undeclared::{gate}.py" not in recorded, gate
@@ -207,7 +212,7 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
         f"the shrink-only register grew: {prev} -> {len(recorded)}")
     for key in ("scope_expanded", "undeclared_scope_expanded"):
         reason = doc.get(key) or ""
-        for gate, _step, _slot in _GATES:
+        for gate, _step, _slot, _intent in _GATES:
             assert gate not in reason, (
                 f"the {key} reason names {gate}, so the register was widened "
                 f"to absorb it instead of the gate declaring an intent")
@@ -774,3 +779,96 @@ def test_the_control_declaring_blocking_without_the_wiring_still_fails(
 
 if __name__ == "__main__":
     sys.exit(pytest.main([str(Path(__file__).resolve()), "-v"]))
+
+
+# ═════════════════════════ THE WIRING, AND THAT IT CAN GO RED (2026-08-22)
+#
+# `area_total_vs_budget_check` is DECLARED blocking and WIRED inline. A wiring
+# nobody can make fail is not a wiring, so this section proves the red three
+# ways and is honest about the one thing it does not execute: `step_synth`
+# itself needs a real synthesis, so what is executed here is the verdict the
+# wiring consumes and the branch that consumes it, not the whole step.
+
+def test_the_wiring_is_measured_as_inline_blocking_by_the_audit():
+    """The repo's OWN instrument for "can this gate stop the step". It parses
+    the runner and asks whether the exit status reaches a control-flow
+    decision — the exact question `advisory` used to answer no to."""
+    mod = _audit_mod()
+    rep = mod.audit(_FLOW, _PROGRAMS)
+    row = {r["gate"]: r for r in rep["gates"]}["area_total_vs_budget_check"]
+    assert row["enforcement"] == "ENFORCED", row
+    assert row["wiring"] == "INLINE_BLOCKING", row
+    assert row["declared"] == "blocking", row
+    assert row["slots"] == ["program_exit_zero"], (
+        "the wiring is not permission to move the clause out of the flow's "
+        "blocking slot")
+
+
+def test_the_verdict_the_wiring_consumes_really_is_rc_one(tmp_path):
+    """EXECUTED, not asserted. The wiring branches on rc 1 from a real
+    subprocess, so this runs that subprocess on a project whose declared die
+    cannot hold its own synthesised area — the only input that makes the step
+    fail — and on one that fits, so a gate that failed everything would not
+    satisfy it."""
+    def _project(root: Path, budget: str) -> Path:
+        (root / "phase2/stage2/synth").mkdir(parents=True)
+        (root / "generated_docs").mkdir(parents=True)
+        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
+            "schema": "vibeic.synth.stats.v1",
+            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
+            "chip_area": 25282.1184, "chip_area_unit": "um^2",
+            "cell_count": 349, "includes_submodules": False,
+            "selection": {"rule": "top", "why": "top module"}}))
+        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+            json.dumps({"fields": {"die_area_budget_um": budget}}))
+        return root
+    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
+    over = subprocess.run(
+        [sys.executable, prog, str(_project(tmp_path / "o", "10x10"))],
+        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert over.returncode == 1, (over.returncode, over.stdout[-600:])
+    fits = subprocess.run(
+        [sys.executable, prog, str(_project(tmp_path / "f", "1000x1000"))],
+        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert fits.returncode == 0, (fits.returncode, fits.stdout[-600:])
+
+
+def test_the_runner_turns_that_rc_one_into_a_failed_step():
+    """The branch that consumes it, read from the runner's AST rather than
+    from a line number. Three things must all hold, and each has been a way
+    this class of wiring was silently defanged before: the gate is SPAWNED, the
+    rc is COMPARED to 1, and that comparison returns a FAIL StepResult rather
+    than merely logging."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    assert fn is not None, "phase3_one_shot_runner.step_synth is gone"
+    body = ast.get_source_segment(src, fn) or ""
+    assert "area_total_vs_budget_check.py" in body, (
+        "step_synth no longer spawns the gate, so nothing can stop the step")
+    seg = body.split("area_total_vs_budget_check.py", 1)[1]
+    assert "returncode == 1" in seg, (
+        "the gate's exit status no longer reaches a comparison; a runner that "
+        "spawns a gate and discards its status is vibe-ic#884's defect")
+    tail = seg.split("returncode == 1", 1)[1][:800]
+    assert '"FAIL"' in tail, (
+        "rc 1 no longer returns a FAIL StepResult — the verdict is computed "
+        "and dropped, which is exactly what `advisory` used to mean")
+
+
+def test_only_rc_one_stops_the_step_and_the_bound_is_deliberate():
+    """rc 2 is "no ceiling declared" for 176 of 177 published L19 copies.
+    If that ever starts stopping the step, almost every run goes non-green over
+    a requirement nobody wrote — a product decision this wiring deliberately
+    did not take. Pinned so it cannot be taken silently."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    seg = (ast.get_source_segment(src, fn) or "").split(
+        "area_total_vs_budget_check.py", 1)[1][:2000]
+    assert "returncode != 0" not in seg, (
+        "the wiring now stops the step on ANY non-zero rc, which makes rc 2 "
+        "INCOMPLETE — the state of nearly every published run — a failure")
+    assert "INCOMPLETE" in seg, (
+        "the non-blocking rc-2 outcome is no longer disclosed in the step's "
+        "detail, so a run that could not be compared reads like one that was")
