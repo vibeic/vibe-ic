@@ -45,6 +45,18 @@ def test_clean_plugin_passes(tmp_path: Path) -> None:
     assert findings == []
 
 
+def test_pytest_runtime_cache_is_not_source_or_part_of_the_denominator(tmp_path: Path) -> None:
+    """Running pytest first must not change the commit-derived NDA census."""
+    root = _mk_plugin(tmp_path, {
+        "programs/widget.py": "x = 1\n",
+        ".pytest_cache/README.md": f"runtime cache {_FOUNDRY}\n",
+    })
+    v, findings = audit(root)
+    assert v == "PASS", findings
+    from programs import source_chip_agnostic_check as check
+    assert check.SCAN_CENSUS["nda_files_found"] == 1, check.SCAN_CENSUS
+
+
 def test_chip_sku_in_program_caught(tmp_path: Path) -> None:
     # EXAMPLE_CHIP is a stand-in SKU token supplied via extra_tokens so the
     # gate exercises its forbidden-token matching on a program-file comment.
@@ -167,7 +179,7 @@ def test_git_grep_sku_is_zero() -> None:
     try:
         proc = subprocess.run(
             ["git", "grep", "-icE", alt, "--", "plugins/vibe-ic"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=120)
+            cwd=str(repo_root), capture_output=True, text=True, timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("git not available")
     # `git grep -c` prints one `path:count` line per matching file; exit 1 == no

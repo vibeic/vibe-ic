@@ -41,6 +41,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
+import _analog_a_check_common as _acc
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
@@ -56,6 +58,34 @@ class StepResult:
     # v1.6.171 (#60 P1-6) — structured extras for deterministic-stub
     # provenance (stub_paths / extraction_strategy / low_confidence).
     extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str, block: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in the other three runners: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that it
+    would have fallen through that function's catch-all `return "PASS"` and a
+    refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove. Measured on this ladder specifically: a
+    refusal is neither FAIL, nor VACUOUS_PASS, nor PASS_STRUCTURE_ONLY, nor
+    WAIVED/SKIP, so every one of the four tiers above the catch-all would have
+    declined it and an all-refused analog track would have scored a clean PASS.
+
+    NOTE the shape difference from `design_one_shot_runner._preflight_refusal`:
+    this runner's `StepResult` carries a `block` as its SECOND positional field,
+    so the row is built with it rather than assuming the phase-2 signature.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, block, _spf.REFUSAL_STATUS, 0.0, detail,
+                          extras=extras)
+    return _mk
+
+
+# Statuses that must NOT reach a green verdict. `BLOCKED` is `step_preflight`'s
+# refusal status; the rest is this runner's pre-existing FAIL tier, unchanged.
+_FAIL_STATUSES = ("FAIL", _spf.REFUSAL_STATUS)
 
 
 _AI_STEP_NAMES = (
@@ -201,9 +231,16 @@ def _try_native_a6_pv(project: Path, block: str, container: str):
         import analog_pdk_availability as _apa
     except Exception:
         return None
+    # vibe-ic#576 — NO `if not declared: return None` here.
+    #
+    # `resolve_pdk` now tries rung 1 (project-staged custom PDK, detected by
+    # GLOB over `input/pdk/`) BEFORE it needs a target, so a project that
+    # stages its own sign-off decks reaches native per-block PV without an L19
+    # declaration. Guarding here would re-close the door the resolver just
+    # opened — and silently: this function returns None, which the caller reads
+    # as "the native path does not apply", so the design's own staged decks
+    # were never run and no tool was ever named.
     declared = _declared_l19_target(project)
-    if not declared:
-        return None
     try:
         res = _apa.resolve_pdk(declared, project=str(project),
                                container=container)
@@ -398,6 +435,219 @@ def _emit_deterministic_stub(project: Path, bname: str,
     return written
 
 
+# ── A1-A3 deterministic producers ─────────────────────────────────────────
+# The FIRST track for the three steps that had none. Each records its own
+# honest absence in a named gap file when it declines, and each stamps its
+# provenance into the artefact it writes.
+_A1_A3_PRODUCERS: Dict[str, Dict[str, Any]] = {
+    "A1_spec_extract": {
+        "program": "analog_a1_spec_emit.py",
+        "status": "PASS_WITH_REAL_EXTRACT",
+        "strategy": "l5_structured_bind",
+        "gap": "spec_gap.json",
+    },
+    "A2_topology_select": {
+        "program": "analog_a2_topology_emit.py",
+        "status": "PASS_WITH_DERIVED_TOPOLOGY",
+        "strategy": "type_topology_library",
+        "gap": "topology_gap.json",
+    },
+    "A3_netlist_gen": {
+        "program": "analog_a3_netlist_emit.py",
+        "status": "PASS_WITH_REAL_NETLIST",
+        "strategy": "topology_ir_render",
+        "gap": "netlist_gap.json",
+        "takes_container": True,
+        # Simulate the emitted deck inside the flow, not only when a human
+        # remembers the flag. Safe by the producer's own contract: an
+        # unreachable container is recorded as NOT_VERIFIED_NO_SIMULATOR and
+        # the netlist is still emitted, so this can never turn A3 into a FAIL
+        # the gate has not itself found — it can only stop a deck that does
+        # not converge from being shipped as an artefact.
+        "extra_args": ["--verify-sim"],
+    },
+}
+
+# What each A-step's artefacts are called, so `StepResult.output_files` can
+# stop being `[]` on every path including PASS. The runner's own record never
+# named what a step produced, which is how a step could be reported done while
+# nothing on disk backed it.
+_STEP_ARTEFACTS: Dict[str, tuple] = {
+    "A1_spec_extract": ("spec.json",),
+    "A2_topology_select": ("topology.md", "topology.json"),
+    "A3_netlist_gen": ("{block}.sp", "tb_{block}.sp",
+                       "netlist_provenance.json"),
+    "A4_corner_sweep": ("corner_results.json",),
+    "A5_layout": ("layout.mag",),
+    "A7_post_layout_resim": ("pre_vs_post.json",),
+    "A9_hw_verify": ("hw_measurements.json",),
+}
+
+
+def _step_outputs(project: Path, block: str, step_name: str) -> List[str]:
+    """Project-relative paths of the step's artefacts that actually EXIST.
+    Only files on disk are listed — this must never assert an output the step
+    did not produce."""
+    out: List[str] = []
+    bdir = _pl.analog_dir(project) / block
+    for pattern in _STEP_ARTEFACTS.get(step_name, ()):  # noqa: SIM118
+        p = bdir / pattern.format(block=block)
+        if p.is_file():
+            try:
+                out.append(str(p.relative_to(project)))
+            except ValueError:                          # pragma: no cover
+                out.append(str(p))
+    return out
+
+
+# ── the disclosure a PASSING gate prints, and where it lands ──────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   When a step certifies an artefact whose content came from a library
+#   default, the run record must SAY SO — as the step's own disposition, not
+#   as a plain pass with the disclosure dropped on the floor.
+#
+# The token is a LINE-START sentinel on stdout, the same shape as this repo's
+# `VACUOUS_PASS:`, and it is read whether or not the gate passed.
+_STRUCTURE_ONLY_SENTINEL = "STRUCTURE_ONLY:"
+#: The per-step artefacts whose record answers "what is in it?", and the key
+#: inside each. An ORDERED, nearest-first chain per step: a step's OWN record
+#: outranks anything it inherits, because only its producer can state what
+#: THAT file contains. Every shape is read from an artefact and never inferred
+#: here; a link that names no content is skipped, not accepted, so a chain can
+#: only ever find an answer a producer actually wrote down.
+#:
+#: A7 has a chain rather than a single source because no producer writes the
+#: field into `pre_vs_post.json`, while the pre-layout corner result the
+#: comparison is against — the artefact `analog_a4_corner_sweep_check` is the
+#: gate of record for — carries it. Until this entry existed, the runner
+#: recorded a PASS_STRUCTURE_ONLY A7 step with EMPTY extras: it read the
+#: gate's sentinel and then had nothing to say about what the step contained,
+#: which is the same defect one layer down.
+#:
+#: ORDER IS NOT ENOUGH FOR A7, and `_CONTENT_CEILINGS` below is why. Its
+#: nearest link is AI-authored; being nearest must not make it AUTHORITATIVE.
+_CONTENT_SOURCES: Dict[str, tuple] = {
+    "A3_netlist_gen": (("netlist_provenance.json", ("_provenance",
+                                                    "design_content")),),
+    "A4_corner_sweep": (("corner_results.json", ("design_content",)),),
+    "A7_post_layout_resim": (("pre_vs_post.json", ("design_content",)),
+                             ("corner_results.json", ("design_content",))),
+}
+#: The answers that NAME a content — IMPORTED from the gates' own whitelist,
+#: never restated. A second copy here would be free to drift from the one the
+#: gates certify on, and the runner would record a content the gate refuses.
+#: (A whitelist and not a blacklist for the reason stated where it is defined:
+#: a blacklist certifies the next token nobody has thought of yet.)
+_CONTENT_DISCLOSED = _acc.DESIGN_CONTENT_DISCLOSED
+
+
+def _structure_only_disclosure(cp) -> Optional[str]:
+    """The gate's structure-only line, or None. Reads stdout AND stderr for
+    the same reason the flow auditor concatenates them: which stream a gate
+    uses is not part of the contract, and a disclosure missed because it went
+    to the other one is a disclosure that does not exist."""
+    for stream in ((cp.stdout or ""), (cp.stderr or "")):
+        for line in stream.splitlines():
+            if line.startswith(_STRUCTURE_ONLY_SENTINEL):
+                return line.strip()
+    return None
+
+
+# ── AND WHERE A CHAIN IS CAPPED ───────────────────────────────────────────
+# THE RULE, with no tool, step or block name in it, and it is the gates' rule
+# applied to the RUN RECORD:
+#
+#   A derived artefact may CONFIRM or LOWER the content its baseline records.
+#   It may never RAISE it.
+#
+# WHY THE RUN RECORD NEEDS IT SEPARATELY. The chain above is ordered
+# nearest-first, and for A7 the nearest link is `pre_vs_post.json` — a file the
+# `analog-extraction-resim` SKILL authors and no deterministic producer writes
+# the field into. The GATE was measured certifying a design-bound pass off that
+# token over a silent baseline; this function reads the same two files in the
+# same order, so it would have recorded `design_content: structure_and_geometry`
+# beside a step the gate had just refused, or beside a PASS_STRUCTURE_ONLY
+# status — a run record contradicting itself in two adjacent fields.
+#
+# Only the ceiling ARTEFACT is named here. The ranking itself is imported from
+# the gates' own module, for the reason `_CONTENT_DISCLOSED` is: a second copy
+# is free to drift, and then the runner records a tier the gate refuses.
+_CONTENT_CEILINGS: Dict[str, tuple] = {
+    "A7_post_layout_resim": (("corner_results.json", ("design_content",)),),
+}
+
+
+def _first_disclosed(project: Path, block: str, chain: tuple) -> tuple:
+    """``(token, path)`` of the first artefact in *chain* whose record NAMES a
+    content, or ``(None, None)``. A link that names nothing is skipped, not
+    accepted, so a chain can only ever find an answer a producer wrote down."""
+    for name, keys in chain:
+        path = _pl.analog_dir(project) / block / name
+        if not path.is_file():
+            continue
+        try:
+            doc: Any = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for k in keys:
+            if not isinstance(doc, dict):
+                doc = None
+                break
+            doc = doc.get(k)
+        if doc in _CONTENT_DISCLOSED:
+            return doc, path
+    return None, None
+
+
+def _content_extras(project: Path, block: str,
+                    step_name: str) -> Dict[str, Any]:
+    """`design_content` for a step's own artefact, READ from that artefact and
+    BOUNDED by what the gate of record's own subject supports.
+
+    Empty for a step that has no such record — this must never assert an
+    answer the producer did not write down, which is the whole point of the
+    field.
+    """
+    chain = _CONTENT_SOURCES.get(step_name)
+    if not chain:
+        return {}
+    token, path = _first_disclosed(project, block, chain)
+
+    ceiling_chain = _CONTENT_CEILINGS.get(step_name)
+    if ceiling_chain is not None:
+        c_token, c_path = _first_disclosed(project, block, ceiling_chain)
+        if (_acc.content_rank(_acc.classify_design_content(token))
+                > _acc.content_rank(_acc.classify_design_content(c_token))):
+            # The derived artefact out-claimed its own baseline. The baseline's
+            # answer is the record — including when the baseline named nothing,
+            # in which case there IS no record and the extras stay empty.
+            token, path = c_token, c_path
+
+    if token is None or path is None:
+        return {}
+    # CLASSIFIED, not compared: the raw tokens are the PRODUCER's vocabulary
+    # and this is a consumer. `_acc.CONTENT_STRUCTURE_ONLY` is the class the
+    # gates rank on, and reading it through the same classifier is what stops
+    # this record from naming a tier the gate refuses.
+    return {"design_content": token,
+            "structure_only": (_acc.classify_design_content(token)
+                               == _acc.CONTENT_STRUCTURE_ONLY),
+            "design_content_source": str(path.relative_to(project))}
+
+
+def _producer_gap(project: Path, block: str,
+                  prod: Dict[str, Any]) -> Optional[str]:
+    """The gap file a declining producer wrote, if it wrote one."""
+    p = _pl.analog_dir(project) / block / str(prod.get("gap") or "")
+    if p.is_file():
+        try:
+            return str(p.relative_to(project))
+        except ValueError:                              # pragma: no cover
+            return str(p)
+    return None
+
+
 def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     args=None
                     ) -> StepResult:
@@ -437,6 +687,89 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         "A8_hardmacro_gen":     "analog-hardmacro-gen",
         "A9_hw_verify":         "analog-hw-measure",
     }
+    # A8-d3 — PRODUCE the fourth declared A8 artefact before its gate runs.
+    # A8 declares .lef/.lib/.v/.gds; this runner's stub emitter and the
+    # `analog-hardmacro-gen` skill both write the first three and NEITHER
+    # writes the .gds, and `analog_a8_hardmacro_gen_check` only inspects the
+    # LEF/LIB/V triple — so the declared layout was produced by nothing and
+    # nothing downstream noticed. `analog_hardmacro_gds_emit` streams the A5
+    # layout.mag out with Magic against the technology the layout itself
+    # names. Deliberately NON-BLOCKING and pre-gate, in the same shape as
+    # A4's `analog_real_corner_sweep` fall-through: an unreachable container
+    # is its disclosed rc=2 and must not turn A8 into a FAIL that the gate
+    # below has not itself found. A deterministic-stub layout is skipped by
+    # the producer, so PASS_WITH_STUB is untouched.
+    #
+    # THIS IS THE ONLY PRODUCTION SITE. The producer was briefly also wired
+    # into A8's flow gate; that was withdrawn on 2026-07-28 because
+    # `flow_compliance_check` is the acceptance auditor and an auditor that
+    # writes a declared required_output into the tree it audits certifies its
+    # own output. Producing here — inside the runner that OWNS the step —
+    # keeps the artefact in the run and out of the audit. Guarded by
+    # test_analog_hardmacro_gds_emit
+    # .test_the_analog_runner_invokes_this_producer_at_a8_and_only_there,
+    # which asserts the dispatched argv rather than grepping this file.
+    if step_name == "A8_hardmacro_gen":
+        gds_prog = PROGRAMS_DIR / "analog_hardmacro_gds_emit.py"
+        if gds_prog.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(gds_prog), str(project),
+                     "--block", bname,
+                     "--container",
+                     (getattr(args, "container", None)
+                      or os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                        "vibeic-eda"))],
+                    capture_output=True, text=True, timeout=1800)
+            except (OSError, subprocess.SubprocessError):
+                # Producing is not a verdict; the A8 gate below still reports
+                # the missing artefact on its own evidence.
+                pass
+
+        # A8 is also the moment the design's OWN macro LEFs first EXIST, and
+        # that is the missing half of v1.8.95.
+        #
+        # `l21_macro_supply_rail_synth` derives the power-intent rails from
+        # hard-macro LEFs. v1.8.79 landed it with no caller; v1.8.95 gave it
+        # one and widened its search to all five roots the consumer harvests
+        # from. Both are correct and both are real. But the single call site is
+        # in `phase1_doc_one_shot_runner` — and for a design whose hard macros
+        # are its OWN analog blocks, those LEFs are written HERE, at A8, in
+        # Phase 3. At Phase-1 time there is nothing to read. Measured on a real
+        # mixed-signal cell, same program, same project, two moments:
+        #
+        #   at Phase 1 (blind run)   verdict: NOT_APPLICABLE
+        #                            0 hard macro(s) with PG pins across
+        #                            0 LEF file(s), 0 master(s)
+        #   after A8 (LEFs present)  2 macro(s) in scope, 1 power pin(s),
+        #                            1 ground pin(s), 2 rail(s) ADDED
+        #                            -> all 3 macro PG pins classify
+        #                               `declared_rail` instead of `undeclared`
+        #
+        # So the producer fires exactly once, in the one phase where the
+        # evidence it needs cannot exist for this class of design, and never
+        # again. A vendor macro staged into `input/pdk_local/` before the run
+        # is covered; a design that GENERATES its macros is not.
+        #
+        # The existing wiring test cannot see this and is not wrong to miss it:
+        # every one of its fixtures stages the LEF before invoking the synth,
+        # which is the vendor case. The gap is TEMPORAL, not locational, so
+        # only a second call site at the moment of production closes it.
+        #
+        # Idempotent by construction (it only ADDS rails not already declared,
+        # tested against the consumer-visible key set), so running it once per
+        # A8 block is safe and the last block sees every LEF. Fail-open in the
+        # same shape as the GDS producer above: deriving rails must never turn
+        # A8 into a FAIL the gate has not itself found.
+        rail_prog = PROGRAMS_DIR / "l21_macro_supply_rail_synth.py"
+        if rail_prog.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(rail_prog), str(project), "--apply"],
+                    capture_output=True, text=True, timeout=300)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
     det = det_progs.get(step_name)
     skill = skill_map.get(step_name, "(no skill mapped)")
     if det and det.is_file():
@@ -458,9 +791,115 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if "VACUOUS_PASS" in cp.stdout:
                 return StepResult(step_name, bname, "VACUOUS_PASS",
                                   time.time() - t0, stdout_tail)
+            # THE SECOND SENTINEL, read exactly like the first. A gate that
+            # PASSED can still be saying that the artefact it certified came
+            # from a library default, and until this branch existed the runner
+            # recorded that step as a plain PASS with EMPTY extras — the
+            # disclosure the gate printed reached no consumer, which is the
+            # same defect one layer down: a signal that exists and is not read.
+            # Measured: `grep -c STRUCTURE` over this runner's own report was 0
+            # on a project whose every A3/A4 artefact disclosed a library
+            # default.
+            so = _structure_only_disclosure(cp)
+            if so:
+                return StepResult(step_name, bname, "PASS_STRUCTURE_ONLY",
+                                  time.time() - t0, so,
+                                  output_files=_step_outputs(project, bname,
+                                                             step_name),
+                                  extras=_content_extras(project, bname,
+                                                         step_name))
             return StepResult(step_name, bname, "PASS",
-                              time.time() - t0, stdout_tail)
+                              time.time() - t0, stdout_tail,
+                              output_files=_step_outputs(project, bname,
+                                                         step_name),
+                              extras=_content_extras(project, bname,
+                                                     step_name))
         if cp.returncode == 2:
+            # A1-A3 PRODUCERS — the deterministic first track, in exactly the
+            # shape A4's real-sim bypass below already uses: run BEFORE the
+            # stub fallback, then re-run the gate and let IT decide.
+            #
+            # Until these existed, A1-A3 were skill-only steps: the gate found
+            # no artefact, returned rc 2, and the runner reported WAIVED for
+            # every block of every run. Meanwhile `programs/` shipped four
+            # checkers for a netlist and no program that generates one.
+            #
+            # Producing is NOT a verdict. A producer crash or a producer that
+            # honestly declines (rc 2) leaves the step exactly where the gate
+            # left it — WAIVED — with the gap file named in `detail` so the
+            # caller can see WHY the deterministic track stood down and which
+            # skill it handed off to.
+            prod = _A1_A3_PRODUCERS.get(step_name)
+            if prod:
+                pprog = PROGRAMS_DIR / prod["program"]
+                if pprog.is_file():
+                    pcmd = [sys.executable, str(pprog), str(project),
+                            "--block", bname]
+                    if prod.get("takes_container"):
+                        pcmd += ["--container",
+                                 (getattr(args, "container", None)
+                                  or os.environ.get(
+                                      "VIBEIC_ANALOG_CONTAINER",
+                                      "vibeic-eda"))]
+                    pcmd += list(prod.get("extra_args") or [])
+                    try:
+                        pcp = subprocess.run(pcmd, capture_output=True,
+                                             text=True, timeout=1800)
+                    except (OSError, subprocess.SubprocessError):
+                        pcp = None
+                    if pcp is not None and pcp.returncode == 0:
+                        cp_prod = subprocess.run(cmd, capture_output=True,
+                                                 text=True, timeout=1800)
+                        if cp_prod.returncode == 0:
+                            tail = (pcp.stdout.strip().splitlines()[-1]
+                                    if pcp.stdout else "produced")
+                            # The gate certified it. What it certified is the
+                            # gate's own disclosure to make, and the run record
+                            # carries it rather than a bare producer status.
+                            so = _structure_only_disclosure(cp_prod)
+                            return StepResult(
+                                step_name, bname,
+                                "PASS_STRUCTURE_ONLY" if so
+                                else prod["status"],
+                                time.time() - t0, so or tail,
+                                output_files=_step_outputs(project, bname,
+                                                           step_name),
+                                extras={
+                                    "extraction_strategy": prod["strategy"],
+                                    "low_confidence": False,
+                                    "producer": prod["program"],
+                                    **_content_extras(project, bname,
+                                                      step_name),
+                                })
+                    gap = _producer_gap(project, bname, prod)
+                    if gap:
+                        return StepResult(
+                            step_name, bname, "WAIVED", time.time() - t0,
+                            (f"deterministic producer declined and RECORDED "
+                             f"why: {gap} — invoke skill `{skill}`"),
+                            extras={"gap_path": gap,
+                                    "producer": prod["program"],
+                                    "producer_rc": (pcp.returncode
+                                                    if pcp else None)})
+                    # NO gap file. Until the producers were given a distinct
+                    # usage exit code this fell through to the same WAIVED as
+                    # an honest gap, so a producer that never examined the
+                    # project — a wrong flag, rc 2, nothing written — read
+                    # exactly like one that examined it and stood down for a
+                    # stated reason. The step is still not produced, so it is
+                    # still WAIVED; what changes is that the record now says
+                    # the producer ERRORED and names the code, instead of
+                    # reporting the gate's "artefact missing, invoke skill".
+                    if pcp is not None and pcp.returncode not in (0, 2):
+                        return StepResult(
+                            step_name, bname, "WAIVED", time.time() - t0,
+                            (f"deterministic producer ERRORED rc="
+                             f"{pcp.returncode} and wrote NO gap file — this "
+                             f"is not an honest gap: "
+                             f"{(pcp.stderr or '').strip().splitlines()[-1] if (pcp.stderr or '').strip() else 'no stderr'}"),
+                            extras={"producer": prod["program"],
+                                    "producer_rc": pcp.returncode,
+                                    "producer_error": True})
             # v1.6.214 (ORGANIC-20260512) — BEFORE the stub fallback,
             # try a REAL ngspice sweep via analog_real_corner_sweep.py.
             # chip-AGNOSTIC: only kicks in when (a) docker container
@@ -483,23 +922,79 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                               "sky130")]
                     rs_cp = subprocess.run(rs_cmd, capture_output=True,
                                             text=True, timeout=600)
-                    if rs_cp.returncode == 0:
-                        # Real ngspice wrote corner_results.json — re-run
-                        # the substance gate; PASS means real sim
-                        # converged AND met spec_results.status==PASS.
+                    # Re-run the substance gate whenever the sweep left an
+                    # artefact behind — not only when the sweep exited 0.
+                    #
+                    # WHY (measured on a real run). The sweep now REFUSES to simulate a
+                    # block whose A3 netlist is absent and records that refusal
+                    # in corner_results.json (status BLOCKED, blocked_on
+                    # A3_netlist_gen). Exiting non-zero, it used to fall
+                    # straight through to the WAIVED branch below — and WAIVED
+                    # says "artefact not yet emitted", which would now be false:
+                    # the artefact exists and states a named blocker. The
+                    # runner's record must agree with what is on disk, so the
+                    # gate's verdict on that artefact is what gets reported.
+                    # A step blocked on its upstream lands as a NAMED FAIL
+                    # rather than an anonymous deferral no reader can act on.
+                    cr = (project / "phase3" / "analog" / bname
+                          / "corner_results.json")
+                    if rs_cp.returncode == 0 or cr.is_file():
                         cp_real = subprocess.run(cmd, capture_output=True,
                                                   text=True, timeout=1800)
                         if cp_real.returncode == 0:
+                            # PASS means real sim converged AND met
+                            # spec_results.status==PASS AND its deck came from
+                            # A3's netlist (the gate's provenance rules).
                             tail = (rs_cp.stdout.strip().splitlines()[-1]
                                     if rs_cp.stdout else "PASS")
+                            # WHAT was measured, READ from the artefact rather
+                            # than assumed. The sweep can only reach a gate PASS
+                            # from a design-derived deck, but the run record
+                            # should SAY which circuit that was instead of
+                            # leaving a reader to infer it from a gate rc.
+                            try:
+                                _doc = json.loads(cr.read_text())
+                            except Exception:
+                                _doc = {}
+                            # `real ngspice on <deck>` names WHERE the deck
+                            # came from and says nothing about WHAT IS IN IT —
+                            # the same silence, one layer up, that this whole
+                            # track started from. The gate's disclosure decides
+                            # the step's disposition.
+                            so = _structure_only_disclosure(cp_real)
+                            _on = (f"real ngspice on "
+                                   f"{_doc.get('netlist_source') or 'an unnamed deck'}")
                             return StepResult(
-                                step_name, bname, "PASS_WITH_REAL_SIM",
+                                step_name, bname,
+                                "PASS_STRUCTURE_ONLY" if so
+                                else "PASS_WITH_REAL_SIM",
                                 time.time() - t0,
-                                f"real ngspice: {tail}",
+                                # BOTH facts, disclosure FIRST: the console
+                                # line is truncated, so whichever comes first
+                                # wins the visible slot, and "what is in it"
+                                # is the newer news. WHICH deck stays in the
+                                # sentence — it is the other half a reviewer
+                                # needs and neither replaces the other.
+                                (f"{so} — {_on}" if so else f"{_on}: {tail}"),
+                                output_files=[str(cr.relative_to(project))],
                                 extras={
                                     "extraction_strategy": "real_ngspice",
+                                    "design_traceable": bool(
+                                        _doc.get("design_traceable")),
+                                    "netlist_source": _doc.get("netlist_source"),
+                                    "deck_source": _doc.get("deck_source"),
                                     "low_confidence": False,
+                                    **_content_extras(project, bname,
+                                                      step_name),
                                 })
+                        if cp_real.returncode == 1:
+                            tail = (cp_real.stdout.strip().splitlines()[-1]
+                                    if cp_real.stdout
+                                    else (rs_cp.stderr.strip().splitlines()[-1]
+                                          if rs_cp.stderr else "FAIL"))
+                            return StepResult(
+                                step_name, bname, "FAIL",
+                                time.time() - t0, tail)
 
             # v1.6.171 (#60 P1-6) — when ANALOG_DETERMINISTIC_STUBS=1
             # OR --allow-deterministic-stubs is set, emit a minimal
@@ -590,6 +1085,53 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                       f"caller should invoke skill `{skill}`")
 
 
+def _aggregate_verdict(plan: List[StepResult]) -> str:
+    """The analog track's top-level verdict.
+
+    v1.6.129 (#50 Fix 2) — VACUOUS_PASS must NOT roll up into PASS.
+    Severity ladder (highest first):
+      FAIL          — any step explicitly failed, OR was BLOCKED by the
+                      pre-flight (see `_preflight_refusal`: a refusal is not a
+                      FAIL of the step, but it is certainly not green, and this
+                      function's catch-all `return "PASS"` is exactly where an
+                      unenumerated status goes to become one).
+      VACUOUS_PASS  — at least one step was VACUOUS_PASS (gate inapplicable)
+                      AND no step actually PASSed. Top-level verdict downgraded
+                      to VACUOUS_PASS so downstream sign-off gates see it as
+                      "no real evidence" rather than confirmed PASS.
+      PASS_STRUCTURE_ONLY — see `_STRUCTURE_ONLY_SENTINEL`.
+      PASS_WITH_WAIVERS — has WAIVED/SKIP, but at least one PASS (real evidence
+                      exists for some block). VACUOUS_PASS leaves are ALSO a
+                      waiver tier in this label-honest mode.
+      PASS          — every step is a real PASS.
+
+    EXTRACTED from `main()` unchanged except for the BLOCKED tier, so a control
+    can assert the non-greenness directly instead of re-running the whole
+    runner to observe it. Chip-AGNOSTIC.
+    """
+    has_fail = any(s.status in _FAIL_STATUSES for s in plan)
+    has_vacuous = any(s.status == "VACUOUS_PASS" for s in plan)
+    has_waiver = any(s.status in ("WAIVED", "SKIP") for s in plan)
+    has_real_pass = any(s.status == "PASS" for s in plan)
+    # STRUCTURE-ONLY joins the ladder BELOW a waiver-free pass and ABOVE
+    # nothing: the step ran and produced its declared artefact from a library
+    # default. It is not a real pass (every number measured on it is a number
+    # about the default), it is not vacuous (the gate examined something), and
+    # it is not a FAIL — a run honest about its ceiling must not score below
+    # one that invented content to fill the gap, or the next run stops being
+    # honest. Counted here so the top-level verdict cannot round it up.
+    structure_only = [s for s in plan if s.status == "PASS_STRUCTURE_ONLY"]
+    if has_fail:
+        return "FAIL"
+    if has_vacuous and not has_real_pass and not structure_only:
+        return "VACUOUS_PASS"
+    if structure_only:
+        return "PASS_STRUCTURE_ONLY"
+    if has_vacuous or has_waiver:
+        return "PASS_WITH_WAIVERS"
+    return "PASS"
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
@@ -673,46 +1215,96 @@ def main() -> int:
             + "\n", encoding="utf-8")
 
     plan: List[StepResult] = []
-    for blk in blocks:
-        for step_name in _AI_STEP_NAMES:
-            sr = step_for_block(project, blk, step_name, args=args)
-            plan.append(sr)
-            print(f"  {sr.status:6} {step_name:24} block={sr.block:16} "
-                  f"{sr.detail[:60]}")
 
-    # v1.6.129 (#50 Fix 2) — VACUOUS_PASS must NOT roll up into PASS.
-    # Severity ladder (highest first):
-    #   FAIL          — any step explicitly failed
-    #   VACUOUS_PASS  — at least one step was VACUOUS_PASS (gate
-    #                   inapplicable) AND no step actually PASSed.
-    #                   Top-level verdict downgraded to VACUOUS_PASS so
-    #                   downstream sign-off gates see it as "no real
-    #                   evidence" rather than confirmed PASS.
-    #   PASS_WITH_WAIVERS — has WAIVED/SKIP, but at least one PASS
-    #                       (real evidence exists for some block).
-    #                       VACUOUS_PASS leaves are ALSO a waiver tier
-    #                       in this label-honest mode.
-    #   PASS          — every step is a real PASS.
-    # Chip-AGNOSTIC.
-    has_fail = any(s.status == "FAIL" for s in plan)
-    has_vacuous = any(s.status == "VACUOUS_PASS" for s in plan)
-    has_waiver = any(s.status in ("WAIVED", "SKIP") for s in plan)
-    has_real_pass = any(s.status == "PASS" for s in plan)
-    if has_fail:
-        verdict = "FAIL"
-    elif has_vacuous and not has_real_pass:
-        verdict = "VACUOUS_PASS"
-    elif has_vacuous or has_waiver:
-        verdict = "PASS_WITH_WAIVERS"
-    else:
-        verdict = "PASS"
+    def _dispatched(sr: StepResult) -> None:
+        plan.append(sr)
+        print(f"  {sr.status:6} {sr.name:24} block={sr.block:16} "
+              f"{sr.detail[:60]}")
+
+    for blk in blocks:
+        _bname = blk.get("name") or blk.get("type") or "unknown"
+        # ── PRE-FLIGHT, ONE SITE PER CANONICAL A-STEP ─────────────────────
+        # Written out rather than looped, for the reason the wiring control
+        # (`test_step_preflight.test_every_declared_site_is_wired_at_a_real_
+        # call_site`) exists: a site name reached only through a loop variable
+        # is a site no reader — and no static control — can confirm is wired.
+        # The order below IS `_AI_STEP_NAMES` and IS the `RUNNER_PLANS` site
+        # order, which is what makes "has this producer already had its
+        # chance?" answerable at each site.
+        #
+        # PER-BLOCK, and honest about what that does and does not bind: the
+        # flow declares A2's input as `phase3/analog/*/topology.md`, whose `*`
+        # is the BLOCK directory. The pre-flight probes the pattern AS
+        # DECLARED, so on a MULTI-BLOCK design block 2's A2 is satisfied by
+        # block 1's topology.md. That is the wildcard-does-not-bind defect,
+        # which is not this change's to fix; `_preflight_note` puts the block
+        # in the ledger so the under-binding is visible in the record instead
+        # of being invisible in it.
+        _note = f"block={_bname}"
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A1",
+            _preflight_refusal("A1_spec_extract", _bname),
+            step_for_block, project, blk, "A1_spec_extract", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A2",
+            _preflight_refusal("A2_topology_select", _bname),
+            step_for_block, project, blk, "A2_topology_select", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A3",
+            _preflight_refusal("A3_netlist_gen", _bname),
+            step_for_block, project, blk, "A3_netlist_gen", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A4",
+            _preflight_refusal("A4_corner_sweep", _bname),
+            step_for_block, project, blk, "A4_corner_sweep", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A5",
+            _preflight_refusal("A5_layout", _bname),
+            step_for_block, project, blk, "A5_layout", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A6",
+            _preflight_refusal("A6_block_pv", _bname),
+            step_for_block, project, blk, "A6_block_pv", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A7",
+            _preflight_refusal("A7_post_layout_resim", _bname),
+            step_for_block, project, blk, "A7_post_layout_resim", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A8",
+            _preflight_refusal("A8_hardmacro_gen", _bname),
+            step_for_block, project, blk, "A8_hardmacro_gen", args=args,
+            _preflight_note=_note))
+        _dispatched(_spf.gate(
+            project, "analog_one_shot_runner", "A9",
+            _preflight_refusal("A9_hw_verify", _bname),
+            step_for_block, project, blk, "A9_hw_verify", args=args,
+            _preflight_note=_note))
+
+    verdict = _aggregate_verdict(plan)
+    structure_only = [s for s in plan if s.status == "PASS_STRUCTURE_ONLY"]
     summary = {
         "phase": "analog",
         "project": str(project),
         "blocks": [b.get("name") or b.get("type") for b in blocks],
         "steps": [asdict(s) for s in plan],
         "verdict": verdict,
+        # NAMED, not only counted: a reader who sees the tier needs to know
+        # which step of which block produced it without opening nine records.
+        "structure_only_steps": [f"{s.block}/{s.name}" for s in structure_only],
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # The analog A1-A9 track is driven standalone for analog-only cells, which
+    # therefore had no steps tree at all. Best-effort, non-gating; recorded in
+    # reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="analog_one_shot_runner")
     out = _pl.report_path(project, "analog_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

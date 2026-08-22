@@ -34,6 +34,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
@@ -69,11 +79,26 @@ def _report_db(category_counts: dict) -> str:
 
 
 def _base_project(tmp_path: Path) -> Path:
-    """gds + netlist + timing always present; DRC supplied per-test."""
+    """gds + netlist + timing + genuine-match LVS always present; DRC
+    supplied per-test.
+
+    2026-07-27: tapeout mode gained a fifth pillar (LVS). This suite pins the
+    rc/sentinel/waiver-accounting CONTRACT, not the pillar set, so the base
+    fixture now carries a genuine netgen match — without it every case here
+    would collapse onto FAIL and stop discriminating the three tiers."""
     tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "chip_top.gds").write_text("HEADER")
+    _gdsii.write_declared_streamout(tmp_path, "chip_top.gds")
     (tmp_path / "chip_top_synth.v").write_text("module chip_top();endmodule\n")
     (tmp_path / "sta_timing.rpt").write_text("slack 0.1\n")
+    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports/phase3/lvs.rpt").write_text(
+        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about the rc / sentinel / waiver-accounting
+    # contract, so it carries a PROVED SI verdict — without one every case
+    # here would collapse onto the SI refusal and stop discriminating what it
+    # exists to pin.
+    _si_signoff_fixture.write_proved_si_report(tmp_path)
     return tmp_path
 
 
@@ -94,7 +119,7 @@ def _clean_project(tmp_path: Path) -> Path:
 
 
 def _fail_project(tmp_path: Path) -> Path:
-    """No DRC report at all → 3/4 evidence → FAIL."""
+    """No DRC report at all → 4 of 5 evidence → FAIL."""
     return _base_project(tmp_path)
 
 

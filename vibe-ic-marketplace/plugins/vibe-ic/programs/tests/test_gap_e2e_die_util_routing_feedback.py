@@ -62,9 +62,15 @@ class TestLoosenLadderConstants:
         assert mod._PNR_UPSIZE_RETRIES == 3
 
     def test_retry_iters_covers_every_bounded_path(self):
-        # initial + upsize budget + one downsize + (ladder-1) loosen steps.
+        # initial + upsize budget + one downsize + the loosen ladder's own rung
+        # bound. #914 — the ladder no longer terminates on the AUTHORED ladder's
+        # length (that was a budget masquerading as a measurement), so the loop
+        # budget is pinned to the ladder's bound rather than to the schedule.
+        # The relationship, not the arithmetic, is the load-bearing part: the
+        # loop guard is SHARED, so a budget below the ladder's own bound would
+        # make the guard — not the ladder's criterion — decide the outcome.
         expected = (1 + mod._PNR_UPSIZE_RETRIES + 1
-                    + (len(mod._ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + mod._ROUTE_LOOSEN_MAX_RUNGS)
         assert mod._PNR_RETRY_ITERS == expected
 
 
@@ -310,11 +316,17 @@ def _loosen_records(res):
             if r.get("direction") == "loosen"]
 
 
-# Every simulated OpenROAD run carries the PG_CONNECT_AUDIT line a real one
-# emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
-# feedback loop, so they must not also trip the PG-connect gate — a routed
-# design whose supply connectivity was never measured is BLOCKED, by design.
-_PG_OK = "PG_CONNECT_AUDIT: total=600 unconnected=0 masters=\n"
+# Every simulated OpenROAD run carries the PG_NET_OWNERSHIP_AUDIT line a real
+# one emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
+# feedback loop, so they must not also trip the PG net-ownership gate — a routed
+# design whose PG terminals were never counted is BLOCKED, by design.
+#
+# The marker was called PG_CONNECT_AUDIT (field `unconnected=`) through v1.9.62,
+# a name that asserted connectivity its predicate never tested; see
+# `_build_pg_reconnect_tcl`. Both spellings parse so a resumed run can still
+# read its cached log; the fixture uses the current one so it stays a faithful
+# stand-in for what the emitter actually writes today.
+_PG_OK = "PG_NET_OWNERSHIP_AUDIT: total=600 no_net=0 masters=\n"
 
 _R_NONCONV = (0, "[INFO DRT-0199] Number of violations = 40.\n"
                  "[INFO DRT-0199] Number of violations = 45.\n" + _PG_OK, "")
