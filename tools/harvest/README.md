@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 24 markdown files and 70 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 24 markdown files and 71 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -58,6 +58,12 @@ nothing lands in the delete bucket by construction.
 
 ## 5. Still open, and not mine to close
 
+- **49 deletion-bound rows in `verdicts_joined.tsv` carry no preservation citation** — nor do the
+  12 in `verdicts_shard_a.tsv`, 20 in `verdicts_shard_c.tsv` or 12 in
+  `verdicts_unreachable_resolved.tsv`. Their verdicts may be perfectly correct; the point is that
+  deleting on them rests on no statement that the content survives the directory. Only my rows make
+  that claim in a checkable form, and on 2026-08-22 every ref mine cited had been deleted from
+  origin — see `RESCUE_REANCHOR.md`. Run `bin_jharv2/predelete_guard.sh` on any of them first.
 - The 12 corrections are **not applied**. `verdicts_joined.tsv`, `verdicts_shard_a.tsv` and
   `verdicts_unreachable_resolved.tsv` still carry the rows they contradict.
 - `bin_jharv2/extras_coverage.py` stays RED against `verdicts_joined.tsv`, correctly: those 1083
@@ -71,7 +77,10 @@ nothing lands in the delete bucket by construction.
 
     bash tools/harvest/bin_jharv2/check_all.sh
 
-Seven gates, runnable from a fresh checkout, no fleet access needed. Each declares the exit code it
+Eight gates. Seven need nothing but the checkout; `live_ref_citation_check.py` needs the network,
+because a survivability citation can only be verified against `git ls-remote` — the authority — and
+offline it REFUSES rather than passing. On 2026-08-22 every `harvest/rescue-*` ref had been deleted
+from origin while this clone's `refs/remotes` still listed 529 of them; see `RESCUE_REANCHOR.md`. Each declares the exit code it
 is **expected** to produce — `extras_coverage.py` is expected to FAIL, because those 1083 rows really
 are absent from `verdicts_joined.tsv`. A stub that makes it pass is reported as a failure, so a
 known-open item cannot be quietly closed. The runner asserts its own denominator: fewer gates run
