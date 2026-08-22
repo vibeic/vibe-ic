@@ -432,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J85). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J86). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -3238,6 +3238,26 @@ against a predicted 2 344 − 2 055 = **289**.
 | **B. reorder: rung 6 before rung 5** | **1** instance swapped, 79.03 µm² — its clock ROOT weakened | 13 h → 16 min | none |
 | **C. skip rung 5 when the residual entering it exceeds N** | none at N > 1 | 13 h → 16 min | **N**, and choosing it is the judgment |
 | **D. bound rung 5 by time** | none | 13 h → bound + 16 min | a timeout, which OpenROAD's `detailed_placement` does not expose |
+
+**★ AND A FIFTH OPTION, measured after the four above were written (J86).** A 79-second
+probe settles the mechanism the first four were arguing around. `-root_buf` **does not
+mean "the root"** — CTS instantiates whatever it names **~2 052 times**, at the root of
+every subtree. Three variants on the arm's own `placed.def`, all printing `Created 2363
+clock buffers` / `Max level 11`, so the tree is the same shape in each:
+
+| variant | `-buf_list` | `-root_buf` | root-master instances |
+|---|---|---|---|
+| baseline (the arm's own) | `{clkbuf_4}` | `clkbuf_16` (50 sites) | **2 054** — reproduces the arm's 2 055 to 0.05 % |
+| wide buf_list | `{1 2 4 8 12}` | `clkbuf_16` | **2 054 — unchanged, not by one instance** |
+| narrow root | `{clkbuf_4}` | `clkbuf_8` (26 sites) | **2 052 × clkbuf_8; only 2 at the bound** |
+
+| **E. name a `-root_buf` that fits the measured bound** | **none measured — skew 4.86 → 4.50 (−7.4 %), max network latency 7.61 → 6.92 (−9.1 %), same 2 363 buffers, same 11 levels** | **the 2 055 never exist; nothing at the bound to legalize** | **none** |
+
+**Option E is not merely cheaper than A–D; on this design it is better on every number
+measured.** At 2 052 instances the clock net's load is mostly the buffers themselves, so
+a 50-site buffer's own input capacitance costs more delay than its extra drive buys.
+**It is still one design, one PDK and post-CTS skew rather than post-route**, which is
+why it is a row in this table and not a patch.
 
 **What I did NOT do.** Nothing was reordered, no `-root_buf` was changed, no cell was
 downsized by hand, and no arm was stopped to make a point. **B costs the control a real

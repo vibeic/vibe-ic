@@ -6735,3 +6735,98 @@ including the emitted-`pnr.tcl` syntax suite. No version bump.
 Branch `next/placeability-bound-is-printed-and-never-consulted` @ **`4d1de0e2c`**.
 
 **No verdict moves.** All six stand.
+
+---
+
+## J86 — the mechanism, settled in 79 seconds: `-root_buf` is not the root, it is ~2 052 of them
+
+J84 measured that CTS instantiated the root master 2 055 times on one design and once on
+another. J85 established that nothing checks it. Neither said WHY. Two mechanisms were
+registered at **17:35:42**, before any probe ran, with different fixes:
+
+* **H1 — buf_list poverty.** `-buf_list` names ONE cell; when a subtree needs more drive
+  than it gives, CTS reaches for the root master. Fix: widen `-buf_list`.
+* **H2 — `-root_buf` is used per SUBTREE, not per tree.** Fix: name a narrower root.
+
+Three probes on the arm's own `placed.def`, each **79 seconds**, `docker run` in a fresh
+container, stopping after CTS and a census — no legalizer, no ladder:
+
+```
+                 -buf_list                -root_buf      census
+baseline         {clkbuf_4}               clkbuf_16      2054 x clkbuf_16 (50 sites)
+                                                          683 x clkbuf_4
+wide_buflist     {1 2 4 8 12}             clkbuf_16      2054 x clkbuf_16   UNCHANGED
+                                                          483 x clkbuf_12, 369 x clkbuf_4,
+                                                          247 x clkbuf_1
+narrow_root      {clkbuf_4}               clkbuf_8       2052 x clkbuf_8  (26 sites)
+                                                            2 x clkbuf_16
+                                                          683 x clkbuf_4
+```
+
+**All three printed `Created 2363 clock buffers` and `Max level of the clock tree: 11`.**
+The tree is the same shape in every variant; only the MASTER changes.
+
+**ENTRY CONTROL E HOLDS**: the baseline reproduces the arm's 2 055 as **2 054**, 0.05 %
+apart, from a DEF written four hours earlier by a different run.
+
+**P7 REFUTED, and not narrowly.** Widening `-buf_list` from one cell to five did not move
+the root-master count by **one instance** — 2 054 before, 2 054 after. The extra masters
+were used for the non-root part (clkbuf_4's 683 became a 1 099-cell mix). **Drive-ladder
+poverty is not the mechanism.**
+
+**P8 HELD.** With `-root_buf clkbuf_8` the count of the NAMED master is **2 052**, and
+`clkbuf_16` falls to **2**. CTS instantiates whatever `-root_buf` names, ~2 052 times.
+**`-root_buf` does not mean "the root". It means "the root of every subtree".**
+
+**P9 HELD.** In that variant the widest clock master used in quantity is **26 sites**,
+comfortably inside the 48-site inter-tap free run, and only **2** instances sit at the
+50-site placeability bound.
+
+### P10 — the cost, registered before it was measured, and it did not go the way I hedged
+
+The swap halves the root buffer's drive, so the open question was timing. P10 said the
+narrow-root tree's skew would be **within 2×** of the baseline's.
+
+```
+                          baseline (clkbuf_16 root)   narrow (clkbuf_8 root)
+rise->rise clock skew              4.86                       4.50    -7.4 %
+network latency, max               7.61                       6.92    -9.1 %
+network latency, min               2.75                       2.42
+setup skew                        -0.19                      -0.34
+clock buffers created              2363                       2363    identical
+max level of the tree                11                         11    identical
+```
+
+**It is not within 2×; it is BETTER on every measure.** Which is explicable rather than
+surprising: at 2 052 instances the clock net's load is mostly the buffers themselves, and
+a 50-site buffer's own input capacitance costs more delay than its extra drive buys.
+
+### What this settles, and what it does not
+
+**Settled**: the 2 055 is not a size effect, not a fanout effect and not a drive-ladder
+effect. It is the flow naming, as `-root_buf`, a master that sits exactly at the
+placeability bound its own cap measured — and CTS then using that master 2 052 times.
+**A 79-second probe answers what five arms have been inside a legalizer for up to
+thirteen hours failing to work around.**
+
+**Not settled**: this is **one design, one PDK, post-CTS skew rather than post-route**,
+and the drive reduction could plausibly hurt a design whose clock load is dominated by
+sinks rather than by buffers. **No `-root_buf` was changed in the flow**, no arm was
+touched, and the change is NOT authored on this evidence — it is added to §8's decision
+as a fifth option with its costs measured rather than estimated.
+
+### And my own census counter was wrong, in the way that is hardest to see
+
+The probe printed, under a census listing **2 054 instances at 50.0 site(s)**:
+
+```
+CENSUS_TOTAL clkbuf instances=2737 at-or-over-50-sites=0
+```
+
+**Zero, directly beneath the data that contradicts it.** `28.000 / 0.56` is
+**49.99999999999999** in floating point, so `>= 50.0` is false, while the per-line
+`%5.1f` rounds to `50.0` and reads as agreement. The per-instance census is correct and
+is what every number above rests on; the aggregate is not, and it is reported rather than
+quietly dropped because **a summary that disagrees with the rows above it is the one
+thing a reader will not re-derive**. Same family as J83's tolerance-larger-than-signal
+and J78's answer-depends-on-when-you-ask: rules that look like measurements and are not.
