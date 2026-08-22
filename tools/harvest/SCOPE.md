@@ -78,3 +78,32 @@ each verified absent from origin before inclusion, preserved at
 (The paths inside that commit carry a doubled `preserved/preserved/` prefix — a cosmetic slip in the
 tree builder. The files and the manifest are correct; recording it here rather than leaving a reader
 to wonder whether the duplication means something.)
+
+## Dangling objects — measured, and deliberately not swept
+
+`git fsck --dangling` finds commits unreachable from every ref **and** absent from the reflog. The
+reflog sweep cannot see those by definition, so they are a genuinely separate category. Measured on
+.105: **17 vibe-ic stores hold dangling commits**, several with 2000+.
+
+They are **not swept**, for three reasons, in order of weight:
+
+1. **Nothing in this harvest puts them at risk.** The verdicts decide whether a *worktree directory*
+   is deleted. A dangling object is already unreachable — git treats it as garbage today, with or
+   without any decision of mine. Preserving it is a different job with a different owner.
+2. **A large fraction is my own cleanup residue.** Sampling one store: **55 of the first 200 dangling
+   commits are the empty `rescue(reflog-…)` anchors I pushed and then removed** earlier today. A
+   wholesale sweep would mostly re-preserve my own mistake.
+3. **Indiscriminate sweeping is how the cross-repo incident happened.** The remaining dangling
+   objects are mostly intermediate rebase and amend states. Anchoring thousands of them wholesale,
+   on the reasoning that "it might matter", is exactly the move that put refs on 15 unrelated
+   repositories — see `REFLOG_SWEEP_INCIDENT.md`.
+
+If someone does want them, the measurement stands and the method is the one used for reflog
+orphans: anchor in place, push from the host, group targets by origin URL, and verify each anchor is
+non-empty before it goes anywhere.
+
+**One correction to my own reading while checking this:** I initially concluded that
+`/home/reyerchu/jred5-work` had slipped through the vibe-ic scope filter, because its dangling
+commits carry subjects from an unrelated UI project. Its origin is
+`https://github.com/vibeic/vibe-ic.git` — the filter was right and I was wrong. Foreign-looking
+objects in a correctly-scoped store are not evidence of a scoping bug.
