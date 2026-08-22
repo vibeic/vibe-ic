@@ -28,9 +28,11 @@ of RTL files it left behind and their SHA-256 digests.  Before the next
 generation clobbers anything, :func:`classify` compares the current
 ``rtl/`` against that record:
 
-``empty``      no RTL present — generate freely.
-``generated``  every file matches the ledger — the generator owns this
-               tree, regenerate exactly as before.
+``empty``      no RTL present and no validated non-empty ledger — generate
+               freely.
+``generated``  every present file matches the ledger, including a tree whose
+               stamped files were all removed — the generator owns this tree;
+               regeneration can be bound to the recorded digests.
 ``authored``   a file was added or its bytes changed since the runner
                last left the tree — someone authored here.
 ``unknown``    RTL is present but no ledger exists, so the generator
@@ -131,16 +133,34 @@ def stamp(project: Path, generator: Optional[str] = None) -> Dict[str, Any]:
 
 def load_ledger(project: Path) -> Optional[Dict[str, Any]]:
     lp = ledger_path(project)
-    if not lp.is_file():
+    # A provenance record is authority, not merely input data.  Following a
+    # symlink here would let bytes outside the project assert ownership of the
+    # live RTL tree.
+    if lp.is_symlink() or not lp.is_file():
         return None
     try:
         data = json.loads(lp.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    if not isinstance(data, dict) or data.get("schema") != SCHEMA_VERSION:
+    if (not isinstance(data, dict)
+            or type(data.get("schema")) is not int
+            or data.get("schema") != SCHEMA_VERSION):
         return None
-    if not isinstance(data.get("files"), dict):
+    files = data.get("files")
+    if not isinstance(files, dict):
         return None
+    # stamp() can only produce normalized relative POSIX paths and lowercase
+    # SHA-256 digests.  Enforce that exact shape before a removed-only ledger is
+    # allowed to prove that a now-empty tree was generator-owned.
+    for rel, digest in files.items():
+        if (not isinstance(rel, str) or not rel
+                or Path(rel).is_absolute()
+                or Path(rel).as_posix() != rel
+                or any(part in ("", ".", "..") for part in Path(rel).parts)
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)):
+            return None
     return data
 
 
@@ -155,11 +175,44 @@ def classify(project: Path) -> Tuple[str, str, Dict[str, Any]]:
     rtl_dir = _rtl_dir(project)
     current = _relmap(rtl_dir)
 
+    lp = ledger_path(project)
+    ledger_claim_present = lp.exists() or lp.is_symlink()
+    ledger = load_ledger(project)
+    if ledger is None:
+        ledger_claim_present = (
+            ledger_claim_present or lp.exists() or lp.is_symlink())
     if not current:
+        recorded: Dict[str, str] = ((ledger or {}).get("files") or {})
+        if recorded:
+            # Deleting the last generated RTL file is the same provenance state
+            # as deleting one of several: the surviving, validated ledger still
+            # owns the absent paths.  Callers can now bind any restoration to the
+            # recorded digest instead of mistaking the tree for never-generated
+            # EMPTY state and emitting changed bytes unconditionally.
+            removed = sorted(recorded)
+            return (
+                GENERATED,
+                f"all {len(removed)} provenance-stamped RTL file(s) were "
+                "removed; the validated generator ledger remains available "
+                "for digest-bound restoration.",
+                {"file_count": 0, "removed": removed,
+                 "removed_digests": {rel: recorded[rel] for rel in removed},
+                 "ledger_generator": ledger.get("generator"),
+                 "ledger_stamped_at": ledger.get("stamped_at")},
+            )
+        if ledger is None and ledger_claim_present:
+            return (
+                UNKNOWN,
+                f"rtl/ holds no RTL files, but provenance ledger "
+                f"{LEDGER_NAME} is present and invalid or unreadable. It may "
+                "describe a removed generated tree, so fresh generation is "
+                "refused rather than bypassing its unavailable digests.",
+                {"file_count": 0, "ledger_present": True,
+                 "ledger_valid": False},
+            )
         return (EMPTY, "rtl/ holds no RTL files — nothing to preserve.",
                 {"file_count": 0})
 
-    ledger = load_ledger(project)
     if ledger is None:
         return (
             UNKNOWN,
@@ -203,6 +256,7 @@ def classify(project: Path) -> Tuple[str, str, Dict[str, Any]]:
         f"all {len(current)} RTL file(s) match the provenance ledger — "
         f"generator-produced, safe to regenerate.",
         {"file_count": len(current), "removed": removed,
+         "removed_digests": {rel: recorded[rel] for rel in removed},
          "ledger_generator": ledger.get("generator"),
          "ledger_stamped_at": ledger.get("stamped_at")},
     )

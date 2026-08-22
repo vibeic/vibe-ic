@@ -123,6 +123,136 @@ def _power_up_fixed(sample: Path, td: str) -> str:
         return str(sample)
 
 
+# ── vibe-ic#1745 (1/2) — the submission must not be able to write the verdict ─
+#
+# PASS is decided by matching `pass_regex` against the SIMULATION's stdout, and
+# the DUT shares that stdout with the testbench. So the thing being measured can
+# print the sentence the instrument reads. MEASURED upstream: two submissions
+# carrying IDENTICAL WRONG LOGIC scored 50% because the second added one
+# `initial $display(<the harness's own pass sentence>)`; the simulator reported a
+# nonzero mismatch count for BOTH. The honest-wrong control FAILS, so the check
+# was not vacuous — it was FORGEABLE, which is worse: it discriminates correctly
+# right up until someone forges it.
+#
+# The gate runs BEFORE the sample is compiled or run, so a forged submission
+# never reaches the regex at all. Its result is a COUNTED FAIL (an attempted,
+# wrong answer), never a SKIP: taking it out of the denominator would pay the
+# forger exactly what the forgery was for.
+
+
+def harness_verdict_forgery(sample_path, args: dict) -> Optional[dict]:
+    """The forgery-gate verdict for one submitted file, or None when it is clean.
+
+    Also None when the gate itself could not run (module absent, no pass_regex).
+    That direction is deliberate and disclosed: an unavailable gate must not
+    MANUFACTURE a FAIL. This gate can only ever remove a forged PASS.
+    """
+    if not args.get("pass_regex"):
+        return None
+    try:
+        import harness_verdict_forgery_gate as _hvfg
+    except Exception:
+        return None
+    res = _hvfg.gate_file(sample_path, args["pass_regex"], args.get("fail_regex"))
+    if res.get("verdict") != _hvfg.FORGERY:
+        return None
+    return {"detail": res["reason"], "findings": res["findings"]}
+
+
+# ── vibe-ic#1745 (2/2) — THREE states, never two ─────────────────────────────
+#
+# attempted-and-passed / attempted-and-failed / NEVER ATTEMPTED. Upstream
+# reported two, and the missing one was the FAVOURABLE state: not-attempted
+# silently became not-counted rather than not-passed (measured: 1 real attempt +
+# 3 unattempted reported a pass rate of 50.00 over a denominator of 1 — no row,
+# no warning). Same defect class as an absent baseline counted as a zero.
+NEVER_ATTEMPTED_REASON = "no_sample"
+ATTEMPT_STATES = ("attempted_passed", "attempted_failed",
+                  "skipped_tool_gap", "never_attempted")
+
+
+def attempt_state(r: dict) -> str:
+    """The ONE state a result row is in. Never-attempted is tested FIRST, so a
+    row that produced nothing can never be re-labelled into a state that leaves
+    the denominator."""
+    if r.get("reason") == NEVER_ATTEMPTED_REASON:
+        return "never_attempted"
+    if r.get("verdict") == "PASS":
+        return "attempted_passed"
+    if r.get("verdict") == "SKIP":
+        return "skipped_tool_gap"
+    return "attempted_failed"
+
+
+def attempt_census(results, ident: str = "design") -> dict:
+    """The three-state census, emitted UNCONDITIONALLY — including all-zero, so
+    `never_attempted: 0` is a MEASUREMENT rather than the absence of one.
+
+    The four buckets are disjoint and exhaustive by construction (one pure
+    function of a row), so the identity below is an accounting statement about
+    the emitted numbers, not a hope. `accounting_violations` lists any row that
+    produced NO submission yet carries a verdict that would take it OUT of the
+    denominator — the exact silent drop this restores. A caller that finds one
+    must refuse to publish rather than print the flattered rate.
+    """
+    buckets = {k: [] for k in ATTEMPT_STATES}
+    for r in results:
+        buckets[attempt_state(r)].append(str(r.get(ident, "?")).split("/")[-1])
+    counts = {k: len(v) for k, v in buckets.items()}
+    total = len(results)
+    violations = [str(r.get(ident, "?")).split("/")[-1] for r in results
+                  if r.get("reason") == NEVER_ATTEMPTED_REASON
+                  and r.get("verdict") in ("PASS", "SKIP")]
+    return {
+        "total": total,
+        "attempted": total - counts["never_attempted"],
+        **counts,
+        "never_attempted_ids": buckets["never_attempted"],
+        "identity": ("attempted_passed + attempted_failed + skipped_tool_gap + "
+                     "never_attempted == total"),
+        "identity_holds": sum(counts.values()) == total,
+        "accounting_violations": violations,
+    }
+
+
+def apply_scorer_substitution_gap(results, gap_ids, ident: str,
+                                  host_iverilog_version: str) -> list:
+    """Flip registry-declared tool-gap FAILs to SKIP — but NEVER a row that was
+    never attempted (vibe-ic#1745).
+
+    A tool gap is a statement about the SIMULATOR's coverage of the testbench. It
+    cannot be a statement about a submission that does not exist: there is nothing
+    for the simulator to have failed on. Flipping a `no_sample` row did two things
+    at once — it took the problem OUT of the denominator (`n_eff = n - nskip`),
+    and it OVERWROTE the `reason` the never-attempted disclosure is derived from,
+    so the problem also vanished from the partially-authored warning. The
+    unfavourable state disappeared and the rate went up, with nothing printed.
+
+    Returns the ids actually flipped.
+    """
+    flipped = []
+    for r in results:
+        leaf = str(r.get(ident, "")).split("/")[-1]
+        if leaf not in gap_ids or r.get("verdict") == "PASS":
+            continue
+        if r.get("reason") == NEVER_ATTEMPTED_REASON:
+            r["scorer_substitution_gap_refused"] = (
+                "never attempted — a tool gap cannot excuse a submission that "
+                "does not exist; stays a counted FAIL, stays in the denominator")
+            continue
+        r["scorer_substitution_gap"] = True
+        r["original_verdict"] = r["verdict"]
+        r["original_reason"] = r.get("reason", "")
+        r["verdict"] = "SKIP"
+        r["reason"] = (
+            "scorer_substitution_gap — TB uses an SV-2012 feature "
+            f"unavailable in host iverilog {host_iverilog_version}; "
+            "not counted against pass rate per "
+            "open-benchmark-methodology § 3")
+        flipped.append(leaf)
+    return flipped
+
+
 def _load_bench(name: str) -> dict:
     reg = json.loads(_registry_path().read_text())
     entry = reg.get("benchmarks", {}).get(name)
@@ -1662,6 +1792,12 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     res = _score_shape_b_impl(design, samples, dataset, layout, args)
     if res.get("verdict") != "FAIL":
         return res
+    # vibe-ic#1745: a forged submission was refused BEFORE any simulation, so
+    # there is no failure here for the dataset to be blamed for. Skip the
+    # golden-audit entirely — running it would only invite a dataset_defect
+    # annotation onto a verdict about the submitter.
+    if res.get("reason") == "harness_verdict_forgery":
+        return res
     if res.get("reason") == "compile_error":
         defect, reason = _unsatisfiable_tb_compile_audit_shape_b(
             design, dataset, layout, res.get("log", ""))
@@ -1703,6 +1839,14 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
     tb = dataset / design / layout["tb_filename"]
     if sample is None:
         return {"design": design, "verdict": "FAIL", "reason": "no_sample"}
+    # vibe-ic#1745 — BEFORE the compile, so a forged submission never reaches
+    # the pass_regex at all.
+    forged = harness_verdict_forgery(sample, args)
+    if forged:
+        return {"design": design, "verdict": "FAIL",
+                "reason": "harness_verdict_forgery",
+                "forgery_detail": forged["detail"],
+                "forgery_findings": forged["findings"]}
     if not tb.is_file():
         return {"design": design, "verdict": "FAIL", "reason": "no_testbench"}
     with tempfile.TemporaryDirectory() as td:
@@ -1975,6 +2119,8 @@ def _score_shape_c(prob: str, samples: Path, dataset: Path,
     silently charged to the model. Verdict is NOT changed — flag only (dual
     report in main()); never inflate the pass rate."""
     res = _score_shape_c_impl(prob, samples, dataset, layout, args)
+    if res.get("reason") == "harness_verdict_forgery":
+        return res      # vibe-ic#1745 — see the Shape-B wrapper for why
     if res.get("verdict") == "FAIL":
         gref = _golden_ref_self_compiles(prob, dataset, layout)
         if gref is False:
@@ -2012,6 +2158,14 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
     ref = dataset / f"{prob}{layout['ref_suffix']}" if layout.get("ref_suffix") else None
     if not sample.is_file():
         return {"problem": prob, "verdict": "FAIL", "reason": "no_sample"}
+    # vibe-ic#1745 — BEFORE the compile, so a forged submission never reaches
+    # the pass_regex at all.
+    forged = harness_verdict_forgery(sample, args)
+    if forged:
+        return {"problem": prob, "verdict": "FAIL",
+                "reason": "harness_verdict_forgery",
+                "forgery_detail": forged["detail"],
+                "forgery_findings": forged["findings"]}
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
@@ -2162,18 +2316,10 @@ def main():
     # field lives in BENCHMARK_REGISTRY.json. Empty list (= no gap) is the default.
     gap_ids = set(entry.get("scorer_substitution_gap", []))
     if gap_ids:
-        for r in results:
-            leaf = r[ident].split('/')[-1]
-            if leaf in gap_ids and r["verdict"] != "PASS":
-                r["scorer_substitution_gap"] = True
-                r["original_verdict"] = r["verdict"]
-                r["original_reason"] = r.get("reason", "")
-                r["verdict"] = "SKIP"
-                r["reason"] = (
-                    "scorer_substitution_gap — TB uses an SV-2012 feature "
-                    f"unavailable in host iverilog {host_iverilog_version}; "
-                    "not counted against pass rate per "
-                    "open-benchmark-methodology § 3")
+        # vibe-ic#1745: the flip REFUSES a never-attempted row — see
+        # apply_scorer_substitution_gap.
+        apply_scorer_substitution_gap(results, gap_ids, ident,
+                                      host_iverilog_version)
 
     # Honesty audit (opt-in via scorer_args.verify_discriminating): flag any PASS
     # whose TB is non-discriminating (a constant-0 stub also passes it). These are
@@ -2247,6 +2393,21 @@ def main():
     n_nosamp, nosamp_problems, pct_authored, partially = \
         no_sample_disclosure(results, n, npass, ident)
     n_authored = n - n_nosamp
+    # vibe-ic#1745 — the three-state census, computed BEFORE anything is written
+    # and REFUSED rather than published if a never-attempted row has been given a
+    # verdict that takes it out of the denominator.
+    census = attempt_census(results, ident)
+    n_forged = sum(1 for r in results
+                   if r.get("reason") == "harness_verdict_forgery")
+    forged_ids = [str(r.get(ident, "?")).split("/")[-1] for r in results
+                  if r.get("reason") == "harness_verdict_forgery"]
+    if census["accounting_violations"] or not census["identity_holds"]:
+        raise SystemExit(
+            "REFUSING TO PUBLISH A RATE (vibe-ic#1745): a problem that produced "
+            "NO submission carries a verdict that removes it from the "
+            "denominator, so the headline would count it as not-measured rather "
+            "than not-passed. Offending ids: "
+            f"{census['accounting_violations']}; census={census}")
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -2278,6 +2439,10 @@ def main():
         # The one bit a reader most needs and currently has to reconstruct by
         # counting the `results` array by hand.
         "partially_authored": partially,
+        # vibe-ic#1745 — the third state, always present, with its own identity.
+        "attempt_census": census,
+        "harness_verdict_forgery_count": n_forged,
+        "harness_verdict_forgery_problems": forged_ids,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -2296,6 +2461,18 @@ def main():
               f"Of the {n_authored} authored: "
               f"{summary['pass_at_1_excluding_no_sample_pct']}%. "
               f"Missing: {summary['no_sample_problems']}")
+    # UNCONDITIONAL (vibe-ic#1745): a three-state line printed only when the
+    # third state is non-zero is a line whose absence means two different things.
+    print(f"  attempts: {census['attempted_passed']} passed, "
+          f"{census['attempted_failed']} failed, "
+          f"{census['never_attempted']} NEVER ATTEMPTED, "
+          f"{census['skipped_tool_gap']} tool-gap skipped "
+          f"(of {census['total']} in scope)")
+    if n_forged:
+        print(f"  ⚠ {n_forged} submission(s) REFUSED BEFORE SCORING — the RTL "
+              f"prints the scorer's own PASS verdict text, so its simulation "
+              f"output is not evidence about the circuit. Counted as attempted "
+              f"FAILs, never excluded: {forged_ids}")
     if nd_pass:
         print(f"  ⚠ discriminating-TB audit: {nd_pass} PASS have a NON-DISCRIMINATING TB "
               f"(a constant-0 stub also passes — benchmark TB defect, counted under the "

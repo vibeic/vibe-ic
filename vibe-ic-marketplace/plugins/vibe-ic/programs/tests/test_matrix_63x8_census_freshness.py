@@ -45,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+from typing import Dict
 
 import pytest
 
@@ -74,25 +75,35 @@ def _block() -> str:
     return text[start:stop + len(END)]
 
 
-def _total_row(block: str):
-    """``(own, substituted, undeclared, contradicted, waived, na)``.
+#: The bold figures in the generated ``**total**`` row, in printed order.
+#: ``NOT MEASURED`` is the seventh and it is the whole of vibe-ic#1296: without
+#: it the row published 451 of 504 cells, because `_join_axes` had learned to
+#: emit ``-SKIPPED`` and the table had no column that could hold it.
+TOTAL_COLUMNS = ("own", "substituted", "undeclared", "contradicted",
+                 "not_measured", "waived", "na")
 
-    Six figures, not five. CONTRADICTED became a column of its own when the
-    three ENFORCED columns were moved onto the enforcement axis: they now span
-    the ENFORCED cells only, so without a column of its own a contradicted cell
-    would appear in no column at all and the row would silently drop 28 cells.
+
+def _total_row(block: str) -> Dict[str, int]:
+    """The published total row as ``{column: figure}``.
+
+    SEVEN figures, not six and not five. Each widening happened because a label
+    the census can emit had no column, so cells carrying it appeared in none:
+    CONTRADICTED when the three ENFORCED columns moved onto the enforcement
+    axis, NOT MEASURED when a predicate that declines to run stopped being
+    filed as a contradiction. Returned as a MAPPING rather than a tuple so that
+    the next widening is a KeyError at the reader, not a silent re-binding of
+    every name after the one that moved.
     """
     m = re.search(
         r"\|\s*\*\*total\*\*\s*\|[^|]*\|"
-        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|"
-        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
+        + r"\s*\*\*(\d+)\*\*\s*\|" * len(TOTAL_COLUMNS),
         block)
     assert m, (
-        f"no ``**total**`` row with six bold figures found in the generated "
-        f"census block. The published total is the number people quote; if it "
-        f"cannot be parsed it cannot be checked.\n{block[:1200]}"
+        f"no ``**total**`` row with {len(TOTAL_COLUMNS)} bold figures found in "
+        f"the generated census block. The published total is the number people "
+        f"quote; if it cannot be parsed it cannot be checked.\n{block[:1200]}"
     )
-    return tuple(int(g) for g in m.groups())
+    return dict(zip(TOTAL_COLUMNS, (int(g) for g in m.groups())))
 
 
 def test_the_census_block_is_present_and_marked_generated():
@@ -340,47 +351,65 @@ def test_the_published_total_equals_the_live_census():
     A second opinion taken from the same mistaken premise is not a second
     opinion.
     """
-    own, substituted, undeclared, contradicted, waived, na = _total_row(_block())
+    row = _total_row(_block())
     states = {k: v.label for k, v in CV.enforcement_census().items()}
     subs = {k: v for k, v in CV.substitution_census().items()
             if states.get(k) == "ENFORCED"}
+    # Counted by SUFFIX, not by a hand-typed list of the labels that exist today.
+    # `_join_axes` gained `-SKIPPED` after this test was written and every
+    # figure here kept comparing equal, because none of them was looking at a
+    # label nobody had enumerated (vibe-ic#1296).
     live = {
         "ENFORCED": sum(1 for v in states.values() if v == "ENFORCED"),
         "CONTRADICTED": sum(
-            1 for v in states.values() if v == "ENFORCED-CONTRADICTED"),
+            1 for v in states.values() if v.endswith("-CONTRADICTED")),
+        "NOT_MEASURED": sum(
+            1 for v in states.values() if v.endswith("-SKIPPED")),
         "WAIVED": sum(1 for v in states.values() if v == "WAIVED"),
         "NA": sum(1 for v in states.values() if v == "NA"),
     }
     live_split = {b: sum(1 for v in subs.values() if v == b) for b in SUB.BUCKETS}
-    assert (own, substituted, undeclared) == (
+    assert (row["own"], row["substituted"], row["undeclared"]) == (
         live_split[SUB.OWN_MECHANISM],
         live_split[SUB.SUBSTITUTED],
         live_split[SUB.UNDECLARED_BUCKET],
     ), (
-        f"the published ENFORCED split "
-        f"(own={own}, substituted={substituted}, undeclared={undeclared}) "
+        f"the published ENFORCED split (own={row['own']}, "
+        f"substituted={row['substituted']}, undeclared={row['undeclared']}) "
         f"does not reproduce; the tree says {live_split}")
-    assert (waived, na) == (live["WAIVED"], live["NA"]), (
-        f"the published WAIVED/NA ({waived}/{na}) does not reproduce; the tree "
-        f"says {live['WAIVED']}/{live['NA']}")
-    assert contradicted == live["CONTRADICTED"], (
-        f"the published CONTRADICTED ({contradicted}) does not reproduce; the "
-        f"tree says {live['CONTRADICTED']}")
-    assert own + substituted + undeclared == live["ENFORCED"], (
+    assert (row["waived"], row["na"]) == (live["WAIVED"], live["NA"]), (
+        f"the published WAIVED/NA ({row['waived']}/{row['na']}) does not "
+        f"reproduce; the tree says {live['WAIVED']}/{live['NA']}")
+    assert row["contradicted"] == live["CONTRADICTED"], (
+        f"the published CONTRADICTED ({row['contradicted']}) does not "
+        f"reproduce; the tree says {live['CONTRADICTED']}")
+    assert row["not_measured"] == live["NOT_MEASURED"], (
+        f"the published NOT MEASURED ({row['not_measured']}) does not "
+        f"reproduce; the tree says {live['NOT_MEASURED']}. A cell whose "
+        f"predicate declined to run is not coverage and is not a defect — it "
+        f"is UNKNOWN, and it has to be published as such")
+    assert row["own"] + row["substituted"] + row["undeclared"] == live["ENFORCED"], (
         f"the three ENFORCED columns sum to "
-        f"{own + substituted + undeclared}, but {live['ENFORCED']} cells are "
-        f"ENFORCED — some cell is in no column or in two")
+        f"{row['own'] + row['substituted'] + row['undeclared']}, but "
+        f"{live['ENFORCED']} cells are ENFORCED — some cell is in no column "
+        f"or in two")
     # THE ONE THAT WOULD HAVE CAUGHT THE FOLD. Every assertion above compares a
     # published figure to a live figure, so all of them stayed green while the
     # headline said 453 and the row said 481: no single one of them spans both
-    # the headline and the row. This does -- the six columns must account for
+    # the headline and the row. This does -- the columns must account for
     # every cell exactly once.
-    assert own + substituted + undeclared + contradicted + waived + na == len(states), (
-        f"the published columns account for "
-        f"{own + substituted + undeclared + contradicted + waived + na} cells "
-        f"but the matrix has {len(states)}. A published row that does not "
-        f"partition is how a contradicted cell hides inside an enforcement "
-        f"figure.")
+    #
+    # It caught the NEXT one too, and was left red rather than heeded: MEASURED
+    # on `7c376e348` it read `451 cells but the matrix has 504`, the 53 missing
+    # being every cell whose predicate could not run. That is what a partition
+    # check is FOR, so the remedy is a column for them, never a wider tolerance
+    # here.
+    printed = sum(row[c] for c in TOTAL_COLUMNS)
+    assert printed == len(states), (
+        f"the published columns account for {printed} cells but the matrix has "
+        f"{len(states)}. A published row that does not partition is how a "
+        f"contradicted — or an unmeasurable — cell hides inside an enforcement "
+        f"figure. Published: {row}")
 
 
 def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
@@ -415,7 +444,8 @@ def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
     )
 
     block = _block()
-    own, substituted_n, undeclared, _, _, _ = _total_row(block)
+    row = _total_row(block)
+    own, substituted_n = row["own"], row["substituted"]
     assert substituted_n == len(substituted), (
         f"the block publishes {substituted_n} substituted cells; the tree "
         f"measures {len(substituted)}")

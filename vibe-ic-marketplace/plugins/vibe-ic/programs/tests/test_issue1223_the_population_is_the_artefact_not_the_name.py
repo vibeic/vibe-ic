@@ -308,8 +308,14 @@ def test_a_re_record_does_not_erase_a_hand_written_provenance_note(tmp_path):
     doc["runs_swept"] = 999                      # a stale MEASUREMENT
     bl.write_text(json.dumps(doc, indent=2) + "\n")
 
+    # The hand-set 999 is a count this write LOWERS back to what the sweep
+    # measures, and a fall needs a written reason (vibe-ic#1704) whatever put
+    # the higher number there.
     assert _run("--corpus", str(corpus), "--baseline", str(bl),
-                "--write-baseline").returncode == 0
+                "--write-baseline", "--shrink-reason",
+                "vibe-ic#1223 fixture: re-recording over a runs_swept this "
+                "test set by hand, so the recorded denominator returns to the "
+                "one the sweep actually measured.").returncode == 0
     after = json.loads(bl.read_text())
     assert after["_provenance"] == "hand-written, must survive", after
     assert after["runs_swept"] == 1, (

@@ -91,8 +91,27 @@ def _mk_run(corpus: Path, rel: str, n_findings: int) -> Path:
     return corpus / rel
 
 
+#: Every re-record BELOW a previous count needs a written reason (vibe-ic#1704).
+#: These fixtures re-record deliberately, so they supply one; the reason itself
+#: is what the operator states, and its CONTENT is not this module's subject —
+#: `test_issue1704_a_shrink_needs_a_stated_reason` is where the requirement is
+#: pinned in both directions.
+_FIXTURE_SHRINK_REASON = (
+    "synthetic fixture for vibe-ic#1202: this re-record follows a deliberate "
+    "withdrawal or repair staged by the test itself, and the decomposition it "
+    "asserts is the subject under examination here.")
+
+
 def _write_baseline(corpus: Path, bl: Path) -> dict:
-    r = _run("--corpus", str(corpus), "--baseline", str(bl), "--write-baseline")
+    r = _run("--corpus", str(corpus), "--baseline", str(bl), "--write-baseline",
+             "--shrink-reason", _FIXTURE_SHRINK_REASON)
+    if r.returncode != 0 and "lowers nothing" in r.stderr:
+        # The FIRST write of a fixture register lowers nothing, and a reason on
+        # a write that authorised no drop is refused as a standing
+        # authorisation. Retry without it rather than teach every caller which
+        # of its writes is the first one.
+        r = _run("--corpus", str(corpus), "--baseline", str(bl),
+                 "--write-baseline")
     assert r.returncode == 0, f"fixture: baseline write failed\n{r.stdout}{r.stderr}"
     return json.loads(bl.read_text())
 
