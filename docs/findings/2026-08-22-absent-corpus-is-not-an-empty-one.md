@@ -413,3 +413,52 @@ should be settled. `PYTHONDONTWRITEBYTECODE=1`, both arms in clean worktrees,
   reproduce. So the earlier reading is confirmed by measurement rather than left
   as an inference: the branch introduces no red in that file and repairs none,
   and the gap was scheduling noise.
+
+## Corpus sweep, widened to every file that reads the changed machinery
+
+The sweep above covered 43 files chosen by hand. Re-derived mechanically instead,
+so the population is a query rather than a judgement call — every `test_*.py`
+under `programs/tests` and `tools/ci` matching
+
+    gate_dispatch_over | _gate_dispatch\.sh | GATE_CORPUS_STATE |
+    routed_def_corpus | repo_hygiene_gates\.sh | hygiene_finding_delta |
+    repo_hygiene_parallel
+
+which is **79 files**. Run on this branch at `54072d58b`, and every red re-run on
+a pristine `origin/main` worktree at `81cd5321b`.
+
+| set | files | branch | `origin/main` |
+|---|---|---|---|
+| `programs/tests` | 75 | 1509 passed, 18 skipped, **8 failed** | the same 8 IDs red |
+| `tools/ci` | 3 | 37 passed, **4 failed** | **identical**: 37 passed, same 4 IDs |
+| `test_landing_merge_verdict.py` | 1 | 125 passed, **9 failed** | **identical**: same 9 IDs |
+
+**Every red is red on `origin/main` too, ID for ID. This branch introduces
+none.** That is the brief's *"whatever you change must run clean on the current
+repo"*, measured over the mechanically-derived population rather than a chosen
+one.
+
+The 8 in `programs/tests` are all gate-declaration/orphan-audit debt unrelated to
+corpora: `test_issue1035_five_gates_declare_where_they_are_enforced` (2),
+`test_issue1235_coverage_gate_declares_where_it_is_enforced`,
+`test_issue1241_vendored_attribution_wired`,
+`test_macro_obs_gate_enforcement_declared`,
+`test_orphan_scan_reads_the_landing_gate_runner`,
+`test_three_orphan_checkers_have_a_machine_runner`,
+`test_v1_9_63_issue693_repo_process_family_wiring`.
+
+One of those eight needs its own note, because a careless reading of the first
+`main` run would have called it a difference. `test_three_orphan_checkers_have_a_
+machine_runner::test_the_audit_returns_a_clean_verdict` came back **ERROR** on
+`main` where it was **FAILED** on the branch. It is not a behaviour difference:
+its module-scoped fixture shells out to `checker_execution_wiring_audit.py` under
+a **60-second** ceiling, and the first `main` run was taken while host load rose
+past 100, so the audit was killed before it could produce a verdict. Re-run with
+both arms started **simultaneously**, under identical load: **`1 failed` on each,
+in 83.7s and 82.1s.** Same ID, same outcome, both trees. The ERROR was the
+timeout ceiling, not the change — recorded rather than left as an unexplained
+asymmetry, since "red on one tree and errored on the other" is exactly the shape
+a real regression would also have.
+
+`test_gate_process_attestation.py`, the ordering intermittent the earlier record
+documents, passed on this run.
