@@ -65,9 +65,42 @@ def _git(root, *args):
                           capture_output=True, text=True)
 
 
+def _require_git(root):
+    """SKIP, naming what could not be read, when there is no repository here.
+
+    THE DEFECT THIS FIXES, found in the CI-image lane. Every row below resolves
+    references with `git`. The container runs against a STAGED COPY of the tree
+    with no `.git` in it, so every git call failed, every sha read as
+    unresolvable and every branch as dead -- and the rows reported that as
+    "your document's references are dead". That is "I could not look" turned
+    into a finding about the tree, which is the one thing a check of this kind
+    must never do. It is also exactly the wholesale-failure shape that made my
+    first control for these rows worthless.
+
+    So the inability to look is separated from the finding, and it NAMES what it
+    could not read rather than saying only that it could not.
+
+    ALL THREE rows gate on this, including the one that touches no git: "the
+    cited path is not here" means "the document is wrong" only in a COMPLETE
+    checkout. In a staged subset the path can be absent because the copy is
+    partial. Presence of a repository is the cheapest available proxy for "this
+    tree is complete enough for absence to mean something".
+    """
+    probe = _git(root, "rev-parse", "--git-dir")
+    if probe.returncode != 0:
+        pytest.skip(
+            f"NOT OBSERVED: {root} is not a git repository (git rev-parse "
+            f"--git-dir exited {probe.returncode}: "
+            f"{probe.stderr.strip().splitlines()[:1]}), so no sha, path or "
+            f"branch cited by the report could be RESOLVED here. This is a "
+            f"fact about the checkout -- a staged copy with no .git, as the "
+            f"container lane uses -- and not about the document.")
+
+
 def test_every_sha_the_report_cites_resolves_to_a_commit():
     """A 9-hex token in the prose that names no object is a dead citation."""
     root = _repo_root()
+    _require_git(root)
     text = _report().read_text(encoding="utf-8")
     shas = sorted(set(re.findall(r"\b[0-9a-f]{9}\b", text)))
     assert shas, "no shas cited at all; this row would pass vacuously"
@@ -81,6 +114,13 @@ def test_every_sha_the_report_cites_resolves_to_a_commit():
 def test_every_repo_path_the_report_cites_exists():
     """A path in backticks that is not there sends a reader hunting."""
     root = _repo_root()
+    # Gated on git for the SAME reason as the two rows that resolve refs, and
+    # the reason is not obvious: this row touches no git. But "the path is not
+    # here" means "the document is wrong" ONLY in a complete checkout. In a
+    # staged subset -- what the container lane mounts -- a cited path can be
+    # absent because the copy is partial, and reporting that as a defect in the
+    # document is the same conflation one step over.
+    _require_git(root)
     text = _report().read_text(encoding="utf-8")
     paths = sorted(set(re.findall(
         r"`((?:vibe-ic-marketplace|tools|ppa-[a-z-]+|docs)/[A-Za-z0-9._/-]+)`",
@@ -100,6 +140,7 @@ def test_a_cited_branch_either_resolves_or_is_said_to_be_gone():
     carry a nearby word saying it does not.
     """
     root = _repo_root()
+    _require_git(root)
     text = _report().read_text(encoding="utf-8")
     lines = text.splitlines()
     cited = sorted(set(re.findall(
