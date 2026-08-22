@@ -38,6 +38,26 @@ FS twenty times (19 north pads + NW corner), FW nineteen (west), N twenty-one
 (20 south + SW corner), S once (NE corner), W nineteen (east) -- 81 components.
 The pre-fix DEF contains no FN or FS at all.
 
+AND I TRIED TO EXTEND THE SAME CHECK TO POSITIONS AND COULD NOT. Orientations
+were computable-and-wrong; positions are computed the same way, by this step's
+Python transcription of upstream's `pad_cfg.tcl` spacing algorithm, and they
+DO affect fit. The obvious probe does not work: `place_pad -location` TAKES the
+position as an argument, so OpenROAD places a pad exactly where the caller says.
+In upstream's flow that caller is `pad_cfg.tcl` itself. Measured: asking for 381
+um got 762000 DBU back, which is 381 um at the tech LEF's 2000 DBU/um -- the
+tool echoing my own number, not computing one. SO THE POSITION ARITHMETIC
+REMAINS A TRANSCRIPTION, NOT A COMPARISON. What backs it is that the two
+load-bearing lines of `pad_cfg.tcl` are quoted verbatim and verified
+character-exact in the pinned image (`evidence/every_published_command_runs.txt`),
+and that is weaker than the orientation evidence, which is now an A/B.
+
+ONE THING THAT PROBE DID SETTLE. OpenROAD's tech LEF is 2000 DBU/um and this
+step's DEF declares 1000 -- a factor of two that would double or halve a die if
+they were ever mixed. They are not: `_pad_ring` READS `UNITS DISTANCE MICRONS`
+out of the DEF and raises `DefError` if the record is absent, rather than
+assuming a value, and every figure in the artefact divides by that same number
+(2262000/1000 = 2262 um, 75000/1000 = 75 um).
+
 THE PASS AT THE TOP OF THIS FILE STANDS: the geometry never depended on these.
 The published artefacts have been REGENERATED with the corrected code and the
 gate re-run on them (rc 0).
