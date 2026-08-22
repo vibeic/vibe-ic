@@ -2,6 +2,26 @@
 """
 phase1_coverage_report_present_check.py — gate (BACKLOG-v13 Wave 5).
 
+ENFORCEMENT: advisory
+
+  This answers ONE question: does a RUNNER spawn this gate inline, where its
+  rc could stop the step as it happens? It does not — no entry in `_RUNNERS`
+  invokes it — and `advisory` is `flow_gate_enforcement_audit`'s token for
+  that answer. #1219 wired this gate into D1's `program_exit_zero` slot, which
+  is a DIFFERENT axis: there `flow_compliance_check` fails the step on rc=1.
+
+  So this line is NOT a demotion, and must never be read as one. The
+  "non-waivable / HARD threshold" paragraph below is a claim about VERDICT
+  SEVERITY and is untouched — the gate still exits 1 on a violation. Stating
+  severity while saying nothing about the enforcement axis is exactly the #886
+  defect; two gates hit it before this one (`test_macro_obs_gate_enforcement_
+  declared.py`). In particular this line is not permission to move the clause
+  to `advisory_program_exit_zero`, where the finding is recorded and the step
+  passes anyway; the companion test pins the slot so that move fails loudly.
+
+  Making it ENFORCED is an owner's call with real blast radius — 142 of the
+  flow's 159 gates are AUDIT_ONLY — not a side effect of declaring intent.
+
 Wave 23 (v0.119.55) — extraction coverage is non-waivable. 100% is
 the HARD acceptance threshold for Phase 1 (doc-extraction). If a literal cannot be
 extracted by the auto-discovery patterns, the agent MUST add a
@@ -263,9 +283,24 @@ def _check(project: Path) -> tuple[int, str]:
                 "phase1_coverage_report_present_check: SKIP — "
                 "facts.yaml marks `phase1_skipped_path_a: true` "
                 "(Wave 36 Path A flow)")
-        return 0, ("phase1_coverage_report_present_check: SKIP — "
+        # vibe-ic#1185 — A DECLINE-TO-LOOK MUST NOT BE COUNTED AS A PASS.
+        #
+        # This returned 0 with a bare `SKIP —` line, and `flow_compliance_check`
+        # reads only the return code plus a LINE-START `VACUOUS_PASS` /
+        # `PASS_WITH_WAIVERS` sentinel (`:3658`, `line.lstrip().startswith`).
+        # So the self-declared skip had no channel to the tier at all: the step
+        # resolved PASS while this clause had examined nothing. #1185 measured
+        # exactly that on `test_matrix_d6_skip_discipline[step1]`.
+        #
+        # rc 2 is this program's OWN existing convention for "cannot look" (it
+        # already returns 2 for a missing project dir, `:239`) and is what
+        # `flow_compliance_check:3056` documents as the input-missing skip.
+        # Both channels are used, because either alone is one edit away from
+        # being silently dropped.
+        return 2, ("VACUOUS_PASS: phase1_coverage_report_present_check: SKIP — "
                    "Phase 1 (doc-extraction) not attempted and no input/docs/ "
-                   "(bare-skeleton project)")
+                   "(bare-skeleton project) — nothing was measured, and this "
+                   "is NOT a pass over the coverage report")
 
     md = _pl.report_path(project, "extraction_coverage_report.md")
     js = _pl.report_path(project, "extraction_coverage_report.json")
@@ -328,12 +363,17 @@ def _check(project: Path) -> tuple[int, str]:
         )
 
     if pct is None or total in (None, 0):
-        # Report exists but no patterns/L docs were available — treat
-        # as silent skip so we don't penalize empty-pattern projects.
-        return 0, (
-            "phase1_coverage_report_present_check: SKIP — "
-            "report present but coverage not measured "
-            f"(hit={hit}, total={total})"
+        # vibe-ic#1185 — the SECOND decline-to-look, and its own comment used to
+        # say so: "treat as silent skip so we don't penalize empty-pattern
+        # projects". Not penalising an empty-pattern project is right; reporting
+        # it as a PASS over a coverage report that was never measured is not.
+        # The report EXISTS here but carries no measurement, so this gate has
+        # still examined nothing — same state, same disclosure.
+        return 2, (
+            "VACUOUS_PASS: phase1_coverage_report_present_check: SKIP — "
+            "report present but coverage NOT measured "
+            f"(hit={hit}, total={total}) — nothing was measured, and this is "
+            "NOT a pass over the coverage report"
         )
 
     try:
