@@ -33,11 +33,16 @@ nothing else, and neither `main` nor either verified branch was touched.
          programs write their `--json` non-atomically.
          VERDICT VALIDATED END TO END, not asserted. I converted all 20 in a
          throwaway worktree: the gate goes rc 1 -> rc 0, the 28 wired landing
-         invocations become IDENTICAL TO MAIN, and the branch's own 20 test
-         files still pass (206 tests). Use the repo's `from _atomic_artefact
-         import write_json as ...` idiom — a bare import leaves the name
-         unresolved and the program degrades to rc 2 — verify the IMPORT landed
-         and not just the string, and COMMIT before running the suite:
+         invocations become IDENTICAL TO MAIN, and — the only evidence here
+         that touches the converted code — all 20 run with `--json` pre and
+         post with identical rc and BYTE-IDENTICAL artefacts. Do NOT rely on
+         the suite being green: it is (233 tests at today's tip) and it stays
+         green on a conversion applied WRONGLY — see F17. Use the repo's
+         `from _atomic_artefact import write_text as atomic_write_text` idiom:
+         these sites write TEXT, not the `write_json` I first named. A bare
+         import leaves the name unresolved and degrades the program to rc 2,
+         so verify the IMPORT landed and not just the string, and COMMIT
+         before running the suite:
          policy_direction_pin_check returns an untolerated rc 2 against a dirty
          checkout. Do NOT register the 20 instead: the gate permits it, the
          suite refuses it.
@@ -48,6 +53,9 @@ nothing else, and neither `main` nor either verified branch was touched.
          together take the gate to rc 0. Careful with the second: a substring
          test for the schema id re-admits the CONSUMER and breaks two
          discrimination tests. The predicate is "writes metric records".
+         I BUILT IT on 2026-08-22 and it is worse than this line says — see
+         F15+ below: THREE tests encode the false verdict, one of which no
+         passing tree can satisfy.
     F9   A gate's docstring claims a predicate its code does not have: 31 live
          sites of its own class are invisible to it, and its PASS line asserts
          something untrue of this tree. REMEDY TESTED: ~60 lines takes findings
@@ -77,13 +85,6 @@ nothing else, and neither `main` nor either verified branch was touched.
          satisfy it. I implemented the two-part remedy and measured it: gate
          rc 1 -> 0, 0 unprovable axes, consumer still excluded, both real
          producers admitted, 3 of 8 tests red. Repair is cheap and named below.
-    F1+  Its remedy, by contrast, is SAFE and I can say so with a control
-         rather than an assertion. Re-built at c0e19ace9: 10 lines + 1 test-
-         helper line, advisory rc 0 with all six findings still printed,
-         `--strict` rc 1, 61 tests passing. Then I broke the property it is
-         sold on — kept the advisory rc and SUPPRESSED the findings — and the
-         branch's own tests caught it, 2 of 61 red. That is the difference from
-         F14, whose remedy can be applied wrongly and pass 233 tests.
 
   jdistchip:
     F16  three gates never return 1 on ANY revision of main I tested, including
@@ -95,10 +96,18 @@ nothing else, and neither `main` nor either verified branch was touched.
          on, with six findings I verified one by one as real, and it is the only
          file on the branch with no repository-sweep test. Four fixes to the
          instrument have landed since; none addressed this. REMEDY TESTED: the
-         advisory route is ~8 lines in the program plus ONE in the test helper,
-         after which 57 tests pass and all six findings are still printed on
-         every run. NOT "inventory them": that program has no inventory
-         mechanism at all, so that route means building one first.
+         advisory route is 10 lines in the program plus ONE in the test helper,
+         after which 61 tests pass and all six findings are still printed on
+         every run. (8 lines / 57 tests were the figures at f3f0beeb6; the
+         branch has added tests since.) NOT "inventory them": that program has
+         no inventory mechanism at all, so that route means building one first.
+    F1+  Its remedy, by contrast, is SAFE and I can say so with a control
+         rather than an assertion. Re-built at c0e19ace9: 10 lines + 1 test-
+         helper line, advisory rc 0 with all six findings still printed,
+         `--strict` rc 1, 61 tests passing. Then I broke the property it is
+         sold on — kept the advisory rc and SUPPRESSED the findings — and the
+         branch's own tests caught it, 2 of 61 red. That is the difference from
+         F14, whose remedy can be applied wrongly and pass 233 tests.
 
   IMPORTANT QUALIFIER, and it changes how the rest reads: apart from F14,
   NOTHING HERE BLOCKS ANYTHING TODAY. Five gates sit at rc 1 in composition and
