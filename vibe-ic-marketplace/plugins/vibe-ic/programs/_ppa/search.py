@@ -1030,6 +1030,54 @@ def audit_manifest(man: Dict[str, Any]) -> List[Dict[str, str]]:
                     f"{len(FEASIBILITY_TERMS)} terms and is not an "
                     "eligibility verdict.")
 
+    #: ELIGIBILITY MAY NOT REST ON ECO SILENCE.
+    #:
+    #: `ELIGIBLE_ON_A_PARTIAL_VECTOR` above accepts NOT_APPLICABLE beside PASS,
+    #: and `test_not_applicable_is_an_acceptable_term_state` states the rule it
+    #: is accepting under: "a term the contract PROVES does not apply is not a
+    #: missing check". PROVES is the load-bearing word. On `eco_readiness`,
+    #: NOT_APPLICABLE has two causes and only one of them is a proof:
+    #:
+    #:     NOT_REQUIRED / NOT_APPLICABLE_ON_IP_PATH   somebody decided, or the
+    #:         design is a hardmacro delivery. A proof. Eligibility is licensed.
+    #:     NOT_DECLARED                               nobody was asked and no
+    #:         route was resolved. An ABSENCE wearing a proof's label.
+    #:
+    #: Until the toolchain block carried `feasibility_eco_state` the audit could
+    #: not tell them apart, so accepting both was the only thing it COULD do.
+    #: It can tell them apart now, from the document alone -- which is this
+    #: function's whole contract, since an audit that needed the original run
+    #: could not be applied to a manifest somebody else published.
+    #:
+    #: MEASURED, and this is the shape it exists for: `ppa_search_run` already
+    #: PRINTS "[CANNOT CHECK] ... a candidate that deleted this design's
+    #: spare/ECO population is published ELIGIBLE by it" on exactly this run,
+    #: and the manifest then audited clean. A report may not publish a sentence
+    #: its own audit refuses.
+    #:
+    #: This is deliberately NOT a refusal at policy load and NOT an UNDETERMINED
+    #: verdict. Both were built and measured: the verdict change makes every
+    #: candidate on an ECO-silent contract unadjudicable, so no head-to-head can
+    #: ever be defended; the load refusal invents a category the module does not
+    #: have -- an under-declared policy is allowed to RUN and return
+    #: UNDETERMINED (`test_a_policy_declaring_no_view_adjudicates_nothing...`).
+    #: The candidate verdict here is untouched. What is refused is the PUBLISHED
+    #: CLAIM of eligibility, at the boundary where it becomes one.
+    tc = man.get("toolchain") or {}
+    if tc.get("feasibility_eco_state") == "NOT_DECLARED":
+        n = sum(1 for c in cands if isinstance(c, dict)
+                and (c.get("feasibility") or {}).get("verdict") == FEAS_ELIGIBLE)
+        if n:
+            bad("ELIGIBLE_ON_AN_UNDECLARED_ECO_STANCE",
+                f"{n} candidate(s) are published ELIGIBLE, but this run "
+                "declared no design-for-ECO requirement and resolved no "
+                "delivery path, so their eco_readiness term reads "
+                "NOT_APPLICABLE because nobody was asked -- not because "
+                "anything proved it does not apply. A candidate that deleted "
+                "this design's spare/ECO population is indistinguishable here "
+                "from one that kept every cell. Declare the requirement, or "
+                "supply --project so the route decides.")
+
     fi = man.get("frontier_input")
     if not isinstance(fi, dict):
         bad("NO_FRONTIER_INPUT", "frontier_input absent: nothing states which "
