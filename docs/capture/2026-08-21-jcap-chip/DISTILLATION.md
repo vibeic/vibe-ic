@@ -751,3 +751,42 @@ citation, or a version stamp used as an identity. Wiring status belongs in the
 RECORD, where it is dated and where a reader knows to re-derive it; it is stated
 for all twelve above, with the method (`grep tools/ .github/`) so it can be
 re-run rather than believed.
+
+### The two lanes independently confirm each other on the power number
+
+The drv axis is where the lanes disagreed. This is where they converge, and it is
+the stronger result of the two.
+
+Their `metric_constant_across_differing_arms_is_not_measured` reports, over
+`ppa-e2e/search/trials.json`, 7 axes holding ONE value across 60 arms with 60
+distinct levers. One of them:
+
+    power.total_w = 0.000306   (60 arms, 60 distinct levers)
+
+**0.000306 W is 0.306 mW** — the exact number this lane's own record names as the
+defect behind `declared_basis_matches_the_session_inputs`:
+
+> The shipped power report's own header claimed post-layout numbers; its session
+> linked a netlist carrying 287 standard-cell instances and read no parasitics,
+> while the routed netlist carries 3373. … 0.306 mW shipped against 0.573 mW
+> post-route.
+
+Two instruments, written by two lanes that could not see each other's trees,
+reaching the same artefact from OPPOSITE directions:
+
+* **cause side (this lane)** — the header claims post-layout and the session
+  loaded no parasitics, therefore the number CANNOT move when the layout moves;
+* **effect side (theirs)** — the number DOES NOT move across 60 differing arms,
+  therefore it was not measured under the lever.
+
+Neither instrument can see what the other sees. Mine reads one session's declared
+inputs and knows nothing about arms; theirs reads 60 arms and knows nothing about
+what any session linked. That they land on the same six digits is the best
+evidence available that both rules are about something real, and it is worth more
+than either verdict alone — the same lesson the drv disagreement taught, with the
+sign reversed.
+
+One thread left open rather than over-claimed: their run also holds
+`design.instance.count = 488` constant across the same 60 arms, and 488 is neither
+the 287 the pre-layout session linked nor the 3373 the routed netlist carries. I
+do not know what 488 counts. It is recorded here as a question, not a finding.
