@@ -2237,3 +2237,59 @@ each was cheap once asked. The reason it kept being missed is that "pre-existing
 FEELS terminal: it closes the question of blame, which is the question an author
 naturally asks, and leaves open the question of inventory, which is the one the
 person holding the landing actually needs.
+
+## 38. The guard's headline claim, proved by constructing the hole
+
+The seam guard exists for one sentence in §4: *the cheapest way to clear the
+failing test is to spell the flag `--gate-record-in`, keep
+`dest="hygiene_record_in"`, and change nothing else.* Every check of that guard
+so far has been against the flag that ACTUALLY SHIPPED — red on the batch, green
+on the fix. **The rename it was built to stop had never been constructed.** A
+guard verified only against the case that already exists is verified against the
+past.
+
+So it was built, in a scratch copy of the plugin, exactly as §4 describes:
+
+```python
+ap.add_argument("--gate-record-in", dest="hygiene_record_in", default=None, …)
+ap.add_argument("--gate-record-rc", dest="hygiene_record_rc", type=int, …)
+```
+
+None of the three literal strings the older test forbids — `--hygiene`,
+`--skip-hygiene`, `--no-hygiene` — appears anywhere in it.
+
+**The hole is real. The old test does not see it:**
+
+```
+test_issue538…::test_the_cli_offers_no_way_to_skip_the_hygiene_set   1 passed
+```
+
+A skip button, fully reachable from `argv`, with the repository's own no-skip
+test green over it. That is the §4 hypothesis demonstrated rather than argued.
+
+**The seam guard catches it:**
+
+```
+3 failed, 3 passed, 1 skipped
+  test_no_command_line_option_can_supply_a_hygiene_result            FAILED
+  test_the_flag_is_rejected_by_the_shipped_program[--gate-record-in] FAILED
+  test_the_flag_is_rejected_by_the_shipped_program[--gate-record-rc] FAILED
+```
+
+Three independent nodes, by two independent routes: the seam check reads the
+parser's `dest` values against `review()`'s signature and does not care what the
+flag is called, and the two behavioural nodes drive the renamed spellings
+through the shipped CLI and find them ACCEPTED where they must be rejected.
+Those two parametrisations were noted in §5 as passing on both trees — "they
+guard the rename that nobody has taken" — and this is that rename, taken, with
+both of them biting.
+
+**Why this was the missing control.** Everything else about the guard was
+negative evidence: red without the fix, green with it, non-vacuous when the seam
+is deleted. None of that shows it catches the specific evasion it was written
+for, because that evasion never existed in any tree it was run against. This is
+the positive control — construct the defect the guard claims to stop, and watch
+it stop it. It is also the last claim in this document that was resting on
+argument rather than measurement.
+
+The scratch copy was deleted; nothing under `programs/` was touched.
