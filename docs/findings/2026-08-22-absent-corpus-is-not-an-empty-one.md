@@ -888,3 +888,58 @@ of `origin/main` and a clean checkout of the branch, `PYTHONDONTWRITEBYTECODE=1`
 The 21 are the pre-existing reds §2b names and neither was touched.  Counts are
 reported alongside IDs and the conclusion rests on the IDs, because a total is
 the one number that moves for reasons unrelated to the change.
+
+### 9. Re-derived at `094314767` by a session that inherited none of the above
+
+Everything before this section was measured by the session that wrote it.  A
+record that only its own author has ever run is a claim, not a measurement, so
+the whole of it was re-derived from the branch head on a fresh detached worktree,
+`PYTHONDONTWRITEBYTECODE=1`, nothing reused.
+
+**The two states at the producer** — driven directly, `origin/main`'s
+`tools/ci/routed_def_corpus.py`, the same helper the dispatcher calls:
+
+| state | rc | items | the sentence it prints |
+|---|---|---|---|
+| **A** no `benchmark-data/`, `VIBE_IC_BENCHMARK_DATA` unset | **3** | 0 | *"NOT FOUND (rc 3): no corpus was resolved, so no index was opened and 0 routed DEF(s) is the ABSENCE of a measurement, not a measurement of zero. The line above names what was looked for."* |
+| **B** corpus resolved, index carries no routed DEF | **0** | 0 | *"MEASURED EMPTY: git's index at … was read under 'ic' and it publishes no `*/*/phase3/stage3/pnr/routed.def`. This IS a measurement … and it is NOT the same state as a corpus that could not be found (rc 3)."* |
+
+A names **what it looked for**; B names **the index it read**.  That is the
+deliverable's first requirement, and it is met in the producer's own words.
+
+**Neither is a pass.**  Both states through the real `_gate_dispatch.sh`:
+`gate_dispatch_finish` → **rc 2 in both**, `expansion` `NO_CORPUS` vs `EXPANDED`,
+and two different rows — *"was NOT FOUND — nothing was opened to check"* against
+*"is EMPTY — nothing was checked over it"*.  #1763's row is the second one and it
+is unchanged, word for word.
+
+**The red, re-derived on this tree** rather than quoted from an older one.  The
+one-line collapse — `return NO_CORPUS_RC` → `return 0` in
+`routed_def_corpus.main()`, which is exactly the state before the fix — takes
+`test_routed_def_corpus_dispatch` from 23 passed to **5 failed, 18 passed**:
+
+    test_an_unconfigured_moved_corpus_is_explicit_no_corpus
+    test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict
+    test_the_dispatcher_gives_absent_and_empty_different_rows
+    test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND
+    test_an_absent_corpus_does_not_close_the_hygiene_dag_green
+
+Both states are pinned, and each of the five names a different consumer of the
+distinction, so no single test is carrying it alone.
+
+**One claim did not survive re-measurement**, and §7 now states it as measured:
+the landing-transition authorizer is held by **two** in-predicate guards, not by
+the `expansion` equality alone.  The correction makes the position stronger, not
+weaker — but it was asserted before it was measured, which is the failure mode
+this whole file is about.
+
+| sweep | branch `094314767` | pristine `origin/main` `a4caccefe` |
+|---|---|---|
+| `test_routed_def_corpus_dispatch` + `test_corpus_location` + `test_repo_hygiene_parallel` | **82 passed** | — |
+| `test_adversarial_agent` (the other reader of `docs/findings/`) | 9 passed, 13 skipped | — |
+| whole `tools/` suite | 863 passed, 6 skipped, **21 failed** | 863 passed, 6 skipped, **21 failed** |
+| `diff` of the two sorted `FAILED` ID lists | **empty** | |
+
+The 21 are the pre-existing reds §2b names.  The conclusion rests on the ID
+diff; the totals are reported beside it because a total is the one number that
+moves for reasons unrelated to the change.
