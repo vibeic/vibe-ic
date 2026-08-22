@@ -220,7 +220,7 @@ This assembly was built to MEASURE and was not pushed anywhere. Assembling and
 landing the batch belongs to whoever owns it; this section says only that the
 path is clear and where it is not.
 
-## 7. The one blocker, sized: 11 entries need their two authors
+## 7. [SUPERSEDED BY §8] The one blocker, sized as 11 entries -- it is one
 
 > **SUPERSEDED BY §8.** The count below is wrong: it was measured by KEY,
 > and the key is the field that moved. Measured by CONTENT, eleven of the
@@ -397,8 +397,9 @@ both exit 0, and the four modules that exercise this work pass 175 / 9 skipped.
 
 **FIFTEEN of the sixteen frozen branches are in it. The absent one is
 `fix/jppafind-inert-ppa-gates`** -- flagged here because it is on the freeze list
-and merged clean in every test this document ran, so its absence looks unintended
-rather than decided.
+and merged clean in every test this document ran. **§10 CORRECTS THE READING
+BELOW: the absence is real but not unintended -- `jppafind` is assembled into
+`land/batchbig-assembled`, and §11 reconciles the two in one merge.**
 
 The `jppafind` absence is stated with more care than the rest of this document,
 because acting on it means re-assembling. It was tested TWO independent ways, after
