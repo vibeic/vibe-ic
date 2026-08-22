@@ -4692,15 +4692,27 @@ def test_d3_the_publish_scope_predicate_answers_both_ways():
 #: including the blind one, where six of the eight cells it covers are red and
 #: nothing tells the reader the other ten are standing on borrowed evidence.
 #:
-#: THAT IS THE THING THIS PIN EXISTS TO SAY. Measured on this commit: 24 entries
-#: in 16 ENFORCED cells cannot be published by the program. Six of them are the
-#: six red cells. The other eighteen RESOLVE — against tracked artefacts under
-#: prefixes the publisher does not stage, i.e. the pre-program hand-staged trees
-#: :data:`_PUBLISH_GAP` names. Re-publishing those cells with the program
-#: instead of by hand does not lose evidence that was merely mislaid; it takes
-#: eighteen entries from evidenced to unevidenced in one commit, and the six
-#: reds become twenty-four. A population that can quadruple on a publish is one
-#: a reader has to be told about BEFORE the publish, not after.
+#: THAT IS THE THING THIS PIN EXISTS TO SAY. Measured on this commit, with a
+#: corpus bound and every one of the 24 run through :func:`check_entry`:
+#:
+#:     16  PRODUCED [LIVE]
+#:      6  NOT PRODUCED [FIXTURE]   <- exactly UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT
+#:      2  NOT PRODUCED [LIVE]      <- step 0.5ic, recorded UNPROVEN, so FIXTURE
+#:                                     never applies and the other pin cannot
+#:                                     see them however the corpus moves
+#:
+#: The SIXTEEN resolve against tracked artefacts under prefixes the publisher
+#: does not stage — i.e. the pre-program hand-staged trees :data:`_PUBLISH_GAP`
+#: names. Re-publishing those cells with the program instead of by hand does not
+#: lose evidence that was merely mislaid; it takes sixteen entries from
+#: evidenced to unevidenced in one commit, and the eight not-produced become
+#: twenty-four. A population that can triple on a publish is one a reader has to
+#: be told about BEFORE the publish, not after.
+#:
+#: (An earlier revision of this comment said "eighteen" and "twenty-four". Both
+#: were arithmetic from the failing-cell list rather than from the entries: two
+#: of step 0.5ic's four missing entries are unpublishable and they are not among
+#: the six. Corrected against the per-entry measurement above.)
 #:
 #: It is a pin and not a count: a number measured on one day is the shape this
 #: module refuses everywhere else.

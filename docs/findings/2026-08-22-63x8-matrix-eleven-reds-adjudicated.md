@@ -132,22 +132,31 @@ else in the entry changed.
 
 ### A LATENT red the pin does not cover, found while checking it
 
-`publishable()` is False for **nine** declared entries across the same six steps, not
-six. The three the pin omits are currently evidenced, and only by legacy hand-staged
-cells:
+The pin is a snapshot of what is UNEVIDENCED, which depends on which corpus is
+bound — that is why its guard is `@needs_corpus`. Being UNPUBLISHABLE depends on
+neither: it is the flow declaration against the publish scope. Measured over the whole
+flow with the pointer unset, `publishable()` is False for **40** declared entries, of
+which **24 sit in cells dimension 3 ENFORCES** (the other 16 are in dormant NA cells).
+
+Each of the 24 run through `check_entry` with the corpus bound:
 
 ```
-15  'phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done'          publishable=False
-19  'phase3/stage3/cts/clock_tree.rpt'                                 publishable=False
-32  'phase3/stage3/eco/eco_log.json OR .../no_eco_needed.flag'         publishable=False
+16  PRODUCED [LIVE]
+ 6  NOT PRODUCED [FIXTURE]   <- exactly UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT
+ 2  NOT PRODUCED [LIVE]      <- step 0.5ic, recorded UNPROVEN, so the FIXTURE
+                                branch never applies and the other pin cannot
+                                see them however the corpus moves
 ```
 
-All three resolve today at `benchmark-data/ic/subservient`, a hand-staged cell — which
-is exactly what `_PUBLISH_GAP` warns of: *"the tracked artefacts under this prefix all
-come from pre-program hand-staged trees."* **Re-publishing those cells with the
-program instead of by hand turns three more entries unevidenced.** The pin is a
-snapshot of what is unevidenced today, not of what is unpublishable; the second set is
-50% larger.
+The sixteen resolve against tracked artefacts under prefixes the publisher does not
+stage — exactly what `_PUBLISH_GAP` warns of: *"the tracked artefacts under this
+prefix all come from pre-program hand-staged trees."* **Re-publishing those cells with
+the program instead of by hand takes sixteen entries from evidenced to unevidenced in
+one commit, and the eight not-produced become twenty-four.**
+
+_Correction: an earlier revision of this section said nine and three. Those were
+arithmetic off the failing-cell list rather than off the entries; the numbers above are
+per-entry measurements._
 
 ## Red 10 — a doctrine collision, bisected to one commit
 
