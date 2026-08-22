@@ -3,7 +3,7 @@
 `verdicts_all.tsv` holds 1439 decided worktrees. That is not "all the vibe-ic checkouts on the
 fleet", and nothing in the file says so — this does.
 
-## Measured 2026-08-22, full-depth filesystem census, six reachable hosts
+## Measured 2026-08-22, filesystem census, all seven reachable hosts (one bounded)
 
 | host | checkouts on disk | carrying a verdict | not judged |
 |---|---|---|---|
