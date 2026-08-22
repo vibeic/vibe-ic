@@ -550,11 +550,27 @@ wrong is the arithmetic printed beside a correct verdict — which is the more
 dangerous shape, because a reader checking the sums finds them self-consistent
 and stops.
 
-**What should happen to it.** The newer record already carries the right numbers,
-so the repair is to correct the landed file's three figures — 20 → 25, 9 → 3,
-11 → 22 — and drop its "9-vs-9 coincidence" remark, which is moot at 3. That is
-an edit to a landed document on `main`, which this branch may not make, so it is
-recorded here rather than performed.
+**Done on this branch, not deferred.** An earlier draft of this section said the
+repair *"is an edit to a landed document on `main`, which this branch may not
+make, so it is recorded here rather than performed."* That was a misreading of my
+own constraint: the rule is **do not push to `main`**, not "do not change a file
+that lives on `main`" — this branch already edits `_published_corpus.py` and
+`benchmark_evidence_structure_check.py`, both of which live there. A branch is
+precisely the mechanism for proposing such a change. So it is performed:
+
+`docs/findings/2026-08-21-routed-def-corpus-is-empty-adjudication.md` now reads
+25 / 3 / 22 with `run_tolerating_uncheckable x25`, the derived "at most 16"
+becomes "at most 21" (25 − the 4 inside `_per_published_cell_gates`, re-counted
+at `a4caccefe` and still 4), and the "9-vs-9 coincidence" paragraph is rewritten:
+at **3** the coincidence does not exist, and the caution it argued for stands
+without it.
+
+**The correction is visible, not silent.** A block quote in the file states what
+the passage previously read, that those are `81cd5321b`'s values, that they were
+already wrong at the landing commit `fed57f213` rather than merely aged, and the
+counting method — because a corrected number with no history is the next reader's
+unverifiable claim, and this record's whole subject is figures that cannot be
+traced to a tree.
 
 *Three passes were needed before my own count was right, and it is worth saying
 how, because a one-pass `grep` beside a structured file is how the landed figure
