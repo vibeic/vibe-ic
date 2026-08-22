@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1181
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1181)
+- **Total programs (excluding helpers / shims):** 1182
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1182)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1172 |
+| `any` | 1173 |
 
 ## Alphabetical listing
 
@@ -891,6 +891,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
+| `published_absence_claim_is_rechecked_against_the_tree` | any | — | A published reason string that names a path as ABSENT, and it exists. |
 | `published_record_staleness_check` | any | — | a landed gate rule does not reach the records the gate already published. |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style). |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
@@ -1253,7 +1254,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1172 programs)
+### `any` (1173 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2115,6 +2116,7 @@ _(no programs in this group)_
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
+- `published_absence_claim_is_rechecked_against_the_tree` — A published reason string that names a path as ABSENT, and it exists.
 - `published_record_staleness_check` — a landed gate rule does not reach the records the gate already published.
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style).
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
