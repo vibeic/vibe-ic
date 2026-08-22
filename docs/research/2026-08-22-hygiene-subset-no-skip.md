@@ -2412,3 +2412,48 @@ text already flags as such. This is a flow-level finding, reported with its
 reproduction (`ci_targeted_test_select.py --base <ref>`, compare `--mode
 reference` against the default) and not taken further, for the same reason as
 §18 and §28.
+
+### The blind spot is systemic, measured — and scoped to what that measurement supports
+
+§39 established the gap for ONE module. Whether it is a quirk of
+`gatekeeper_review` or a property of the selector is the more useful question,
+and it is one command:
+
+```
+test files in programs/tests/                       2751
+containing spec_from_file_location(…) or _load(…)    409   (15%)
+```
+
+**One test file in seven reaches its subject by a route import-edge analysis
+cannot follow.** That is not a `gatekeeper_review` quirk; it is a house style —
+and a reasonable one, since a path-load is how you import a `programs/` script
+that is not on `sys.path`.
+
+**Scoped precisely, because the number is an upper bound and saying otherwise
+would be the n=1 error again.** 409 is the count of files containing at least
+one path-load. It does NOT follow that 409 files are invisible: a file may
+path-load one module and plainly import another, and only the path-loaded edge
+is lost. What the measurement supports is:
+
+* the route is common, not exceptional — 15% of the tree, so any conclusion
+  drawn from "imported by N" is drawn from a sample, not a population;
+* wherever a file's ONLY edge to a changed module is a path-load, that file is
+  invisible to the selector AND absent from the gap report that exists to name
+  what the selector dropped;
+* `gatekeeper_review` is a measured instance of exactly that: 9 plain-import
+  consumers, 20 by any route, and the report says `NOT selected 0`.
+
+**Why this matters more than the individual miss.** A bounded selection is
+fine — that is the whole design, and #565's disclosure is what makes it
+honest. The disclosure is what fails: it is computed by the same analysis it is
+meant to audit, so it cannot report the class of miss it exists to report. **An
+auditor implemented in terms of the thing it audits will always find that thing
+complete.** That is the same defect as a gate reading its own ledger, which
+this repository has a memory about, arriving in the one place designed to
+prevent it.
+
+Reported, not fixed: the remedy is either a second analysis for the audit (a
+path-load census is 15 lines) or an honest denominator in the report
+("N of M consumers analysed"). Both are flow-level changes to a shipped gate,
+and which one is right is an owner decision — the same boundary as §18, §28
+and §39.
