@@ -86,6 +86,24 @@ literals it accepts.
 SAME corner. A field a producer could not establish is OMITTED and the reason is
 recorded outside `scope`; the refusal that follows is the correct outcome.
 
+**And an absent key that says nothing is the same silence one field over.** A
+producer that omits a key it could not establish MUST name it in `scope_gaps`
+with the sentence for why — "this view has no RC corner axis" and "nobody
+recorded one" are different facts and a reader cannot tell them apart from a
+hole. `_ppa/timing._gaps_for` is the enforcement in the producer and
+`schemas/ppa/timing_rows.v1.schema.json` is the machine-checkable half.
+
+Measured 2026-08-22, over 12 real run trees on one host: `_ppa/timing._scope`
+emitted all eight keys always, `null` for the unestablished, on the written
+ground that "an omitted key and a null key are different claims to a reader,
+and only one of them is true". Both halves of that are right and the conclusion
+was backwards. 152 rows were refused `SCOPE_SENTINEL` by the very validator on
+the other side of this document, and 44 more sat refused in the committed
+corpus `ppa-crosslayer/records/trials/b000/records_flat.json`. Two lanes held
+opposite rules; the rule is the one that can REFUSE. Guards:
+`tests/test_ppa_timing.py::test_no_scope_key_is_ever_null_and_every_absent_one_says_why`
+and `::test_no_row_this_module_emits_carries_a_scope_sentinel`.
+
 **A record that may enter a numeric comparison must CARRY its unit.** Absent or
 empty is refused (`NO_UNIT`); it is never inferred from the name. The name is a
 cross-check on a declared unit, not a substitute for one.
@@ -136,15 +154,64 @@ name one artefact and every timing row was emitted — and refused — twice.
 **A parser never settles a conflict and neither does an index.** The backend
 emits BOTH readings with different `source.path`
 (`_ppa/backends/__init__.py`), the index DETECTS the disagreement, and settling
-it is a declared authority decision in `_ppa/contract.py`
-(`policy.resolvable_fact_keys`, opt-in and named). Moving the artefact into
-`scope` to make the collision go away is NOT a fix: it converts a detected
+it is a declared authority decision in `_ppa/contract.py`. Moving the artefact
+into `scope` to make the collision go away is NOT a fix: it converts a detected
 conflict into two facts that quietly never compare again.
+
+There are TWO such declarations and they work at different scales.
+`policy.resolvable_fact_keys` settles a CONTRACT fact claimed by two
+declaration sources (sdc vs l19_spec vs runner).
+`METRIC_ARTEFACT_AUTHORITY` settles a METRIC RECORD read from two artefacts of
+ONE tool. Both are opt-in BY NAME — never by prefix, which is a hole that
+widens every time someone adds a key underneath it — both name their loser, and
+both default to refusing.
+
+**The declaration says which ARTEFACT, and it is a measurement.** Measured
+2026-08-22: `openroad.log` and `openroad.metrics.json` disagreed on
+`route.wirelength.um`, `route.via.count` and `route.drc.violation.count` in 17
+records across 12 real run trees, and `_ppa/contract.py` carried no declaration
+to settle any of them, so the gate's own instruction pointed at an empty table.
+`routed.def` is the database that ships; counting via placements in it, the
+JSON's last entry matches in 10 of 10 uncontaminated runs and the log's last
+printed total in 6 — and in none of the 4 where the two differ. The mechanism
+is in the log: `postroute_antenna_repair` inserts a diode and calls
+`detailed_route` again, appending to the JSON while printing no `Total wire
+length` summary; on one run `routed_preantenna.def` carries 1944 vias (the
+log's number) and `routed.def` carries 1951 (the JSON's). For the DRC count the
+tool states the rule itself: *"Post-route verification found N violation(s)
+that the routing loop did not report (M in-loop). The published result is the
+verified one."* The direction is NOT uniform — one run moves 824556 → 821064 —
+so the rule is not "take the larger", it is "the JSON's last entry is the
+database that ships".
+
+**A resolution never deletes the loser.** The overridden reading's value,
+artefact path and hash are written to `source.overridden_by_authority` beside
+the winner, with `source.authority` naming the declaration and its reason. A
+reading that carries NO number may be overridden but can never WIN: an artefact
+that could not report a figure has not contradicted one that did, and letting
+rank alone decide would throw away the only measurement in the group and call
+it an authority decision. Guard:
+`tests/test_ppa_metric_artefact_authority.py`.
 
 **If two readings really are one reading, the SCOPE is wrong — fix that.** A
 metric emitted once per reported path under one scope
 (`timing.*.worst_path_slack_ns`, three values, one view) is not a conflict and
 not corroboration; the scope is missing the field that tells the readings apart.
+
+**And the field that tells them apart has to actually tell them apart.** The
+first repair gave each path row its `path_startpoint`/`path_endpoint`, which
+fixed the corpus's 8 `SAME_ARTEFACT_TWO_VALUES` refusals — but it asked whether
+the artefact PRINTED two names, never whether the two names were UNIQUE in the
+view. Nothing stops OpenSTA reporting two paths of one group that share both,
+and when it does the rows carry one scope and the original defect is back
+verbatim. Reproduced on a two-path stamped report 2026-08-22; measured at 0
+occurrences across 2572 path identities in every STA report on one host, so it
+is a hole in the rule rather than a defect anyone has hit. Names that two rows
+share are DROPPED for that group and the volatile ordinal is used instead — a
+shared name is not a weaker identity, it is a wrong one, and a cross-arm
+comparison over an ordinal correctly REFUSES rather than comparing two paths
+that cannot be shown to be the same path. Guard:
+`tests/test_ppa_timing.py::test_two_paths_sharing_one_name_pair_do_not_share_one_identity`.
 
 ### 2.2 Required views are declared PER AXIS
 

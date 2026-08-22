@@ -186,11 +186,24 @@ def test_the_matrix_is_not_collapsed_to_one_row(tmp_path):
     assert setup[0]["scope"] != hold[0]["scope"]
 
 
-def test_every_row_carries_all_eight_scope_keys(tmp_path):
-    """A number without its scope cannot be compared with anything.
+def test_no_scope_key_is_ever_null_and_every_absent_one_says_why(tmp_path):
+    """A number without its scope cannot be compared with anything -- and a
+    scope key spelled `null` is WORSE than one that is absent.
 
-    All eight keys are always present: an omitted key and a null key are
-    different claims to a reader, and only one of them is true.
+    This assertion was the opposite until v1.11.69: "all eight keys are always
+    present; an omitted key and a null key are different claims to a reader and
+    only one of them is true". Both halves of that sentence are right and the
+    conclusion drawn from it was wrong. `null == null`, so two rows that could
+    not read their RC corner compared as rows taken at the SAME RC corner, and
+    `_ppa/metrics.validate` -- the layer that can REFUSE -- has called that
+    spelling `SCOPE_SENTINEL` since v1.11.53, as does PPA_INTERFACES section 2.
+    MEASURED over 12 real run trees before the change: 152 rows refused, every
+    one of them from this module.
+
+    So the rule is stricter now, not looser. A key is present WITH A VALUE, or
+    it is absent WITH A REASON in `scope_gaps` -- the reason lives outside
+    `scope` precisely because nothing outside `scope` can make two records
+    compare equal.
 
     A row MAY carry more than the eight, and the set of extras is CLOSED: only
     `timing.*.worst_path_slack_ns` may add one, and only from
@@ -205,13 +218,28 @@ def test_every_row_carries_all_eight_scope_keys(tmp_path):
                                "sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
     rows, _ = timing.timing_rows(proj)
     assert rows
+    # NOT VACUOUS: this specimen leaves keys genuinely unestablished (neither
+    # report stamps a mode, and the multi-corner one stamps no basis), so the
+    # absent-key arm below has something to fire on.
+    assert any(set(timing._SCOPE_KEYS) - set(r["scope"]) for r in rows), \
+        "the fixture established every key, so the absent-key rule was untested"
     for r in rows:
         keys = set(r["scope"])
-        assert keys >= set(timing._SCOPE_KEYS), r
         extras = keys - set(timing._SCOPE_KEYS)
         assert extras <= set(timing._PATH_SCOPE_KEYS), r
         if extras:
             assert r["metric"].endswith(timing._PATH_METRIC_SUFFIX), r
+        # THE SENTINEL, forbidden by spelling. `""` too: `"" == ""` compares
+        # equal exactly the way `None == None` does.
+        for k in keys:
+            assert r["scope"][k] is not None and r["scope"][k] != "", \
+                "scope.%s is a sentinel, not a value: %r" % (k, r)
+        # EVERY ABSENT KEY EXPLAINED. An unexplained hole is the same invisible
+        # claim as a null, moved one field over.
+        gaps = r.get("scope_gaps", {})
+        for k in set(timing._SCOPE_KEYS) - keys:
+            assert gaps.get(k), \
+                "scope.%s is absent and nothing says why: %r" % (k, r)
         assert r["schema"] == "vibeic.ppa.metric.v1"
         assert r["status"] in (timing.MEASURED, timing.NOT_MEASURED,
                                timing.INVALID)
@@ -292,8 +320,11 @@ def test_the_stage_is_never_guessed_when_the_report_does_not_stamp_it(tmp_path):
     rows, _ = timing.timing_rows(proj)
     assert rows
     for r in rows:
-        assert r["scope"]["stage"] is None
-        assert "stage" in r.get("scope_gaps", {}), \
+        assert "stage" not in r["scope"], \
+            "an unestablished stage is ABSENT, never null: two nulls compare " \
+            "equal and would make a synthesis number and a post-route number " \
+            "the same fact"
+        assert r.get("scope_gaps", {}).get("stage"), \
             "an absent stage must say WHY it is absent"
 
 
@@ -324,8 +355,8 @@ def test_the_mode_is_not_chosen_when_the_run_declares_several(tmp_path):
     proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER},
                     pvt={"modes": ["functional", "scan"]})
     rows, _ = timing.timing_rows(proj)
-    assert all(r["scope"]["mode"] is None for r in rows)
-    assert any("mode" in r.get("scope_gaps", {}) for r in rows)
+    assert all("mode" not in r["scope"] for r in rows)
+    assert all(r.get("scope_gaps", {}).get("mode") for r in rows)
 
     proj2 = _project(tmp_path / "one", {"sta_spef_multicorner.rpt": MULTICORNER},
                      pvt={"modes": ["functional"]})
@@ -459,13 +490,21 @@ def test_an_ambiguous_stem_refuses_rather_than_picking():
 
 def test_the_design_wide_worst_is_not_attributed_to_a_clock(tmp_path):
     """`report_worst_slack` is design-wide within a corner. Attributing it to
-    whichever clock appears first in the 3-path dump would be fabrication, so
-    its `scope.clock` is null -- meaning "aggregate over all clocks", never
-    "unknown clock"."""
+    whichever clock appears first in the 3-path dump would be fabrication.
+
+    It used to say so as `scope.clock: null`, meaning "aggregate over all
+    clocks". That spelling cannot carry the distinction: `null == null`, so an
+    aggregate-over-all-clocks row and a row whose clock nobody could read
+    compared as the same fact. The key is now ABSENT and `scope_gaps.clock`
+    carries the sentence -- where it cannot make anything compare equal."""
     proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
     rows, _ = timing.timing_rows(proj)
-    for r in _by_metric(rows, "timing.setup.worst_slack_ns"):
-        assert r["scope"]["clock"] is None
+    got = _by_metric(rows, "timing.setup.worst_slack_ns")
+    assert got
+    for r in got:
+        assert "clock" not in r["scope"], r
+        why = r.get("scope_gaps", {}).get("clock", "")
+        assert "not_applicable" in why and "design-wide" in why.lower(), why
 
 
 def test_a_per_clock_row_exists_only_where_a_path_group_names_one(tmp_path):
@@ -691,7 +730,14 @@ def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
         "value": 0.0,                     # <- the forbidden sentinel
         "unit": "ns",
         "reason": "no paths analysed",
-        "scope": {k: None for k in timing._SCOPE_KEYS},
+        # A REAL scope, not `{k: None}`: the all-null spelling this used to
+        # carry is itself forbidden now (SCOPE_SENTINEL / the schema's
+        # no-null rule), so the positive control below would have been
+        # rejected for the wrong reason and the test would have proven
+        # nothing about the sentinel it is aimed at.
+        "scope": {"stage": "post_route_extracted", "mode": "functional",
+                  "process": "ss", "voltage_v": 1.6, "temperature_c": 100.0,
+                  "rc_corner": "min", "clock": "clk", "check": "hold"},
         "source": {"path": None, "sha256": None, "tool": "opensta",
                    "tool_commit": None, "parser": "x", "parser_sha256": None},
     }
@@ -914,3 +960,122 @@ def test_two_DIFFERENT_reports_of_one_name_are_both_read(tmp_path):
     found = timing.discover_reports(tmp_path, collapsed)
     assert len(found) == 2, found
     assert collapsed == []
+
+
+# ── v1.11.69: the two producer defects the PPA measurement coverage gate saw ─
+#
+# `PPA measurement coverage` was pointed at a real corpus for the first time in
+# v1.11.69 and refused 54 of 148 records in
+# `ppa-crosslayer/records/trials/b000/records_flat.json`: 44 SCOPE_SENTINEL,
+# 8 SAME_ARTEFACT_TWO_VALUES, 2 CONFLICTING_RECORD. The two below are this
+# module's share of that. Each is written so that reverting the producer change
+# makes it RED, and each was PROVEN red that way before being committed.
+
+#: Two reported paths of one group that share BOTH endpoint names. The report
+#: is STAMPED so `stage` is established and the rows reach the identity check
+#: rather than stopping at SCOPE_INCOMPLETE -- an unstamped fixture would have
+#: made this test pass for the wrong reason.
+SAME_ENDPOINTS_TWICE = """\
+tns max 0.00
+wns max 0.00
+worst slack max 5.20
+Startpoint: u_a/q (rising edge-triggered flip-flop clocked by clk)
+Endpoint: u_b/d (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+  5.20   slack (MET)
+Startpoint: u_a/q (rising edge-triggered flip-flop clocked by clk)
+Endpoint: u_b/d (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+  5.32   slack (MET)
+STA_BASIS: POST_ROUTE_SPEF
+STA_SIGNOFF_CORNER: SS
+STA_BASIS_LIBERTY: /pdks/x_fd_sc_hd__ss_100C_1v60.lib
+"""
+
+
+def test_two_paths_sharing_one_name_pair_do_not_share_one_identity(tmp_path):
+    """CLASS 2, the half `_path_scope` missed until v1.11.69.
+
+    v1.11.53 gave each reported path its endpoints as scope, which fixed the
+    corpus's 8 SAME_ARTEFACT_TWO_VALUES refusals. It asked whether the artefact
+    PRINTED two names; it never asked whether the two names were UNIQUE in the
+    view. Nothing stops OpenSTA reporting two paths of one group that share
+    both -- and when it does, the rows carry one scope, one artefact yields two
+    numbers for one identity, and the original defect is back verbatim.
+
+    REPRODUCED on this checkout before the fix: this fixture produced two rows
+    with byte-identical scope and `_ppa/metrics.MetricIndex` refused the second
+    `SAME_ARTEFACT_TWO_VALUES`.
+
+    The fix drops the shared names rather than keeping them beside an ordinal:
+    a name two rows share is not a weaker identity, it is a wrong one.
+    """
+    from _ppa import metrics as _M
+    proj = _project(tmp_path, {"sta_spef_based.rpt": SAME_ENDPOINTS_TWICE},
+                    pvt={"modes": ["functional"]})
+    rows, _ = timing.timing_rows(proj)
+    path_rows = [r for r in rows
+                 if r["metric"].endswith(timing._PATH_METRIC_SUFFIX)]
+    # NOT VACUOUS: the specimen prints two paths on purpose, and a run that
+    # produced one row would satisfy "no two rows collide" trivially.
+    assert len(path_rows) == 2, path_rows
+    assert sorted(r["value"] for r in path_rows) == [5.20, 5.32]
+
+    scopes = [cj.digest_of(r["scope"]) for r in path_rows]
+    assert len(set(scopes)) == 2, (
+        "two paths the artefact could not tell apart were given ONE identity: %r"
+        % path_rows)
+    # The shared names are gone, not kept beside a volatile key.
+    for r in path_rows:
+        assert "path_ordinal" in r["scope"], r
+        assert "path_startpoint" not in r["scope"], r
+        assert "path_endpoint" not in r["scope"], r
+
+    # And the consumer that refused this corpus must now accept it.
+    index = _M.MetricIndex()
+    for r in path_rows:
+        index.add(r)                      # raises SAME_ARTEFACT_TWO_VALUES if not
+    assert len(index) == 2
+
+
+def test_no_row_this_module_emits_carries_a_scope_sentinel(tmp_path):
+    """CLASS 3, end to end, through the consumer that does the refusing.
+
+    44 of the corpus's 54 refusals were `scope.clock` or `scope.rc_corner`
+    holding null, and 152 more were measured over 12 real run trees on this
+    host before the fix. This asserts the property at the seam that matters:
+    every row this module emits is offered to `_ppa/metrics.validate`, and not
+    one of them may come back SCOPE_SENTINEL.
+
+    The fixture set is chosen so keys are genuinely unestablished -- the
+    multi-corner report stamps no basis, `NO_PATHS` names no RC corner, and no
+    design-wide row has a clock -- so a producer that went back to writing
+    nulls would light this up rather than slip past an easy specimen.
+    """
+    from _ppa import metrics as _M
+    proj = _project(
+        tmp_path,
+        {"sta_spef_multicorner.rpt": MULTICORNER,
+         "sta_mcorner_ocv.rpt": NO_PATHS,
+         "sta_spef_based.rpt": SINGLE_CORNER_STAMPED},
+        stances={"mcorner_ocv_stance.json":
+                 {"setup_process_corner": "SS", "hold_process_corner": "FF"}},
+        pvt={"modes": ["functional"]})
+    rows, _ = timing.timing_rows(proj)
+    assert rows
+
+    offenders = []
+    for r in rows:
+        codes = [c for c, _ in _M.validate(r)]
+        if "SCOPE_SENTINEL" in codes:
+            offenders.append((r["metric"], r["scope"]))
+    assert offenders == [], (
+        "%d row(s) still spell an unestablished scope key as null: %r"
+        % (len(offenders), offenders[:3]))
+    # NOT VACUOUS, and checked AFTER the rule above so a producer that went
+    # back to nulls fails on the rule rather than on this guard: keys really
+    # are missing in this fixture, so the omit-and-explain path is the one
+    # under test and not a formality.
+    assert any(set(timing._SCOPE_KEYS) - set(r["scope"]) for r in rows)
