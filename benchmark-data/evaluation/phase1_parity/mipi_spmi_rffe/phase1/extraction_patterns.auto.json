@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "mipi_spmi_rffe_spec.txt": [
-    {
-      "literal": "9. V",
-      "label": "auto-discovered (numeric_unit)"
-    }
-  ]
-}
