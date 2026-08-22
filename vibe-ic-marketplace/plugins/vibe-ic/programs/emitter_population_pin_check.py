@@ -180,19 +180,40 @@ admission:
 Each of those 24 is correctly undecidable -- a program that states no `of N ...`
 anywhere offers nothing for a pin to disagree with -- and the reach sentence
 already in the verdict describes them exactly. Reaching them means calling
-`pins_of` on every parsed test instead of on the 227 that clear `em`: measured
-3.65s on top of 9.5s, +37%. The previous commit refused a +41% walk to carry one
+`pins_of` on every parsed test instead of on the 227 that clear `em`: 3.58s on
+top of 9.47s, +38%. The previous commit refused a +42% walk to carry one
 disclosure number, and this is the same trade at the same price, so it gets the
 same answer. Reproduce either figure by walking `tests/` with `pins_of`.
 
-DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's 82
-emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`, `MHz`,
-`APs`, `Cat`. A pin matching one of those would produce a comparison, and a
-comparison against junk can produce a WRONG red -- the worst outcome this file
-has. Measured: no test in the corpus pins any of the nine, so the risk is
-theoretical rather than live. Tightening `PHRASE` on no evidence of harm would
-narrow the extractor to fix a fault nobody has, which is the trade this file
-argues against everywhere else, so it is recorded and not acted on.
+BOTH ARE MEDIANS OF FIVE, and that is not pedantry. Both figures were first
+taken from a SINGLE run, and both are the whole reason work was refused rather
+than done -- a decision resting on one timing rests on whatever else the machine
+was doing that second. Re-measured at this tip: the program 9.36-9.58s and
+222 MB peak RSS across five runs, the `pins_of` sweep 3.57-3.61s, the
+`emitted_script_of` walk 3.98-4.06s. They held, and the walk was understated:
+41% was really 42%. Elsewhere on this branch a single timing did NOT hold -- one
+19.4s reading of the census gate against three of 10.9-11.3s at the same load --
+so the habit is worth the seconds it costs.
+
+DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's
+81 emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`,
+`MHz`, `APs`, `Cat`. A pin matching one of those would produce a comparison,
+and a comparison against junk can produce a WRONG red -- the worst outcome
+this file has. Measured: no test in the corpus pins any of the nine, so the
+risk is theoretical rather than live. Tightening `PHRASE` on no evidence of
+harm would narrow the extractor to fix a fault nobody has, which is the trade
+this file argues against everywhere else, so it is recorded and not acted on.
+
+(81, not the 82 an earlier revision of this paragraph recorded. The missing
+one is `links dangling`, and it is the comment rule working on the shipped
+tree rather than on a fixture: `benchmark_evidence_publish.py` emits
+
+    # directory was later renamed: 83 of 83 links dangling. Measured on the
+
+and that sentence is a HISTORY, not a claim the script makes. Before
+`_in_an_emitted_comment`, 83 was a value that emitter "states", so a test
+pinning the retired 83 would have matched it and raised nothing. One phantom
+claim, in a corpus of 1238 programs, and it was live.)
 
 
 The other three state a membership and never state a threshold, so there is no
@@ -621,6 +642,18 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
                      or up.func.attr.startswith("assertIsNot")
                      or up.func.attr == "assertFalse"):
             return up.func.attr
+        # THE STOP IS FOR CLARITY, NOT FOR CORRECTNESS, and that is measured
+        # rather than assumed: every form this walk tests for -- UnaryOp,
+        # Compare, Call -- is an `ast.expr`, and an expression is never the
+        # parent of a statement. Counted over this tree: 602,938 edges whose
+        # child is a statement, across 3,965 files; their parents are
+        # statements (491,973), Module (104,129) and ExceptHandler (6,836),
+        # and ZERO are expressions. So nothing the walk looks for can appear
+        # above this point and deleting the stop cannot change an answer --
+        # which is why the mutation sweep could not kill it. Keeping it says
+        # where the question ends. `test_the_statement_stop_rests_on_a_true
+        # _premise` fails if a form that is NOT an expression is ever added
+        # to the walk, because that is what would make this reasoning false.
         if isinstance(up, ast.stmt):
             return None
         cur = up
