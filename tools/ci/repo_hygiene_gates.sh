@@ -1073,7 +1073,7 @@ run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_
 # The checker now refuses to call that state a PASS (rc 2 with the count), so
 # this line cannot go green until a contract-carrying report is committed, and
 # it goes green by itself on the first one that is.
-uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed"
+uncheckable_until 2027-02-28 "IT IS A MISSING PREREQUISITE, AND THIS DECLARATION USED TO DENY BEING ONE. Measured 2026-08-22: the gate prints \`--dir <ROOT>/benchmark-data is not a directory\` — it opens NO report. The previous wording said \"KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key\", which is a claim about the CONTENT of reports nothing read; it was plausibly true before v1.10.56 moved benchmark-data to its own repository, and has been a statement about an absent tree ever since. It also promised to go \"green by itself on the first contract-carrying report committed\" — it cannot, because no report committed HERE is in the directory it opens. MISSING INPUT, NAMED: a readable benchmark-data corpus, i.e. VIBE_IC_BENCHMARK_DATA pointed at a clone of the published-corpus repository. NOT given --corpus-may-be-absent deliberately: that flag returns rc 0 NO_CORPUS, which is a pass printed over a population nobody opened"
 run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
     python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
@@ -1157,7 +1157,7 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # therefore "this clone cannot answer", which is the normal state for a
 # developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
 # complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
-uncheckable_until 2027-02-28 "needs a COMPLETE clone: it REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; CI checks out complete and genuinely checks. A hand-edited figure is still rc 1"
+uncheckable_until 2027-02-28 "needs a COMPLETE clone AND the artefact to have been generated, and only the first half used to be stated. It REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; a hand-edited figure is still rc 1. MEASURED 2026-08-22 on a COMPLETE checkout (git rev-parse --is-shallow-repository = false): rc 2 anyway, and the reason is not depth — \`docs/ENGINEERING_EVIDENCE.md does not exist\`. That file is NOT tracked (git ls-files finds none), so on any clean checkout it is absent until \`python3 tools/gen_engineering_evidence.py\` has run. Blaming shallowness alone sends a reader to check their clone depth when the answer is that nothing generated the file yet"
 run_tolerating_uncheckable "engineering evidence fresh" \
     "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
