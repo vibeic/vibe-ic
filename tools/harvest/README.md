@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 39 markdown files and 97 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 39 markdown files and 98 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
