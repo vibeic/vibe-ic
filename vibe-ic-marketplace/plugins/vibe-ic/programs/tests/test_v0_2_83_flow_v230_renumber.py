@@ -60,7 +60,11 @@ def test_renumbered_steps_kept_identity():
     assert "Gate-Level Simulation" in _STEPS[29]["name"]
     assert "SPICE" in _STEPS[30]["name"]
     assert "Physical" in _STEPS[31]["name"] or "DRC" in _STEPS[31]["name"]
-    assert "ECO" in _STEPS[32]["name"]
+    # v1.8.87 renamed step 32: it was labelled an ECO step, but what it runs is
+    # a multi-corner repair_design + repair_timing + reroute pass, and its skill
+    # moved from eco-plan to sta-review to match. The identity this line pins is
+    # "step 32 is the post-route timing repair", not the old word.
+    assert "timing repair" in _STEPS[32]["name"].lower()
     assert "Power" in _STEPS[33]["name"]
     assert "fill" in _STEPS[34]["name"].lower()
     assert "DFM" in _STEPS[35]["name"]

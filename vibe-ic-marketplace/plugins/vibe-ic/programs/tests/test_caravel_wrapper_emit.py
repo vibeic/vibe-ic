@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("caravel_wrapper_emit")
 
 
@@ -153,7 +154,7 @@ class TestEmitWrapper:
     def test_emit_includes_attribution(self):
         w = mod.emit_wrapper(_spm_pin_map())
         assert "caravel_wrapper_emit.py" in w
-        assert "v0.1.51" in w
+        assert f"v{shipped_plugin_version()};" in w
 
     def test_pin_map_comment_lists_assignments(self):
         w = mod.emit_wrapper(_spm_pin_map())

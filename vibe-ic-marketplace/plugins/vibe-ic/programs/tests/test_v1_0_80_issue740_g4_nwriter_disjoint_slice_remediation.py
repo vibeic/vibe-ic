@@ -117,7 +117,7 @@ def test_caseE_verilator_ground_truth_zero_multidriven(tmp_path):
     p.write_text(CASE_E)
     out = subprocess.run(
         ["verilator", "--lint-only", "-Wall", str(p)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert "MULTIDRIVEN" not in (out.stdout + out.stderr)
 
 
@@ -187,7 +187,7 @@ def test_guard_different_clock_domains_still_warns_pure():
 def test_chip_agnostic_source():
     guard = PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run([sys.executable, str(guard), str(PLUGIN)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
