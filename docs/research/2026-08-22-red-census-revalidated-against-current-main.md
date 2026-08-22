@@ -404,3 +404,49 @@ I could see** — after the flow-gate token, "publish a run tree", and the liar
 census. **The pattern is now consistent enough to state as a finding about the
 method rather than about any one item: when I could see exactly two options, the
 real answer was outside both, four times out of four.**
+
+---
+
+# Part 8 — the D3 group's THIRD remedy, checked at last: available to me, and FORBIDDEN to me
+
+Having just recorded that a two-option list means the third was not found, I
+applied it to the largest group. **The D3 test names THREE remedies and I had only
+ever examined two:**
+
+> *"Close it by **re-pointing the record** at a root that carries the artefact, by
+> **publishing a run tree** that does, or by **waiving the cell through the one
+> waiver registry with the disclosure** — never by widening the skip."*
+
+* **publish** — refuted (Part 1 / M105): `home` roots are excluded by
+  `_ADMISSIBILITY` on purpose, so publishing anywhere leaves them untouched.
+* **re-point** — what the census recommends.
+* **waive** — **never examined until now.**
+
+**MEASURED:**
+
+    matrix_63x8/waivers.py                     NOT protected
+    test_d3_waivers_meet_the_registry_bar      asserts a shared VALIDATOR passes,
+                                               "not by hope"
+
+**So the third remedy is the only one of the three I could physically perform** —
+the other two need data or records I do not own, and this one is an unprotected
+file with a validator that would catch a malformed entry.
+
+**AND IT IS THE ONE THE BRIEF EXPLICITLY FORBIDS.** The standing constraint is
+*"never weaken a predicate, **widen a waiver**, or edit a fixture to suit"*, and
+the test's own line ends *"never by widening the skip"*. **A waiver here would make
+16 reds disappear without any of them being answered.**
+
+**That is a THIRD category, distinct from the two this document keeps
+distinguishing.** It is not *blocked* (I can do it) and not *out of scope* (it is
+squarely a test-registry edit). **It is available, effective, and prohibited** —
+and the prohibition is the entire reason the census has value. A triage that may
+waive its own findings is not a triage.
+
+**Recorded because the owner is not bound by my brief.** Waiving with disclosure
+is a legitimate move for whoever owns the corpus decision, and the registry is
+built to make it a recorded, validated act rather than a quiet one. **They should
+know it is on the table; I should not be the one to put it there.**
+
+**This closes the survey: all three named remedies for the 16-red group are now
+examined**, one refuted by measurement, one recommended, one available-and-declined.
