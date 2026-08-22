@@ -33,7 +33,6 @@ Usage:
             [--max-eco 3]
             [--skip-hardware]
             [--skip-phase1]
-            [--skip-phase2]
             [--skip-analog]
             [--skip-phase3]
             [--die-um 1500x1500]
@@ -125,6 +124,66 @@ def _capture_container_image(project: Path, container: str,
             "left as set")
     try:
         out = _pl.reports_dir(project) / "container_image.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    return rec
+
+
+def _capture_pdk_revision(project: Path, container: str) -> Dict[str, Any]:
+    """Record WHICH PDK REVISION this run signed off against, into
+    `reports/pdk_revision.json`.
+
+    THE OTHER HALF OF `_capture_container_image`. That function exists because
+    a run's tool identity was unrecorded and every sign-off number was
+    therefore unattributable to a toolchain. The PDK half of the same claim was
+    unrecorded too, and worse: every place a run said anything about its PDK
+    said the REQUEST — `--pdk <name>`, `env_PDK_ROOT`, the registry entry, the
+    published cell's own directory name. None of them names the revision the
+    tools actually read, so two runs against a re-pulled volume are identical
+    in the record and were measured against different data.
+
+    Called AFTER the phases, not before, and the order is load-bearing:
+    `pdk_revision_resolve --from-run` derives the trees from the absolute
+    library paths in the run's OWN tool logs — what RAN, rather than what was
+    configured — and those logs do not exist yet at the point the image
+    identity is taken.
+
+    BEST-EFFORT FOR THE RUN, BLOCKING AT PUBLISH. This never fails a run: the
+    record's job is to state what was found, including "NOT DETERMINED", and a
+    run that halted early or was told --skip-phase3 legitimately has no PDK to
+    name. `benchmark_evidence_publish` is where the record becomes a
+    requirement, because that is the act — publishing a sign-off number — that
+    the missing revision makes unreproducible.
+    """
+    out = _pl.reports_dir(project) / "pdk_revision.json"
+    try:
+        import pdk_revision_resolve as _prr
+        fs = _prr.Fs(container)
+        trees, scanned = _prr.candidate_trees_from_run(project, fs)
+        resolved = [_prr.resolve_tree(fs, t) for t in trees]
+        rec = _prr.build_record(
+            resolved, f"container:{container}", "run tool logs",
+            note=(f"derived from {scanned} tool log(s) under {project}; "
+                  f"{len(trees)} tree(s) offered a declared-revision artefact"))
+        if not trees:
+            rec["reason"] = (
+                f"no PDK tree was derivable from this run: {scanned} tool "
+                f"log(s) scanned, none naming an absolute library path under a "
+                f"tree that declares a revision. A run with no physical "
+                f"implementation is in this state legitimately; a run that "
+                f"placed and routed is not.")
+    except Exception as exc:                                # noqa: BLE001
+        rec = {"schema": 1,
+               "resolved": False,
+               "revision": None,
+               "trees": [],
+               "read_in": f"container:{container}",
+               "derived_from": "run tool logs",
+               "reason": f"the PDK revision could not be resolved: "
+                         f"{type(exc).__name__}: {exc}"}
+    try:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n")
     except OSError:
@@ -535,15 +594,6 @@ def main() -> int:
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-phase1", action="store_true")
-    #: vibe-ic#1734 — the missing member of this set. `--skip-phase1`,
-    #: `--skip-phase3`, `--skip-analog` and `--skip-hardware` all existed;
-    #: phase2 alone could not be skipped, so a caller who wanted to exercise the
-    #: phase1 DISPATCH DECISION had to pay for a full phase2 run it never
-    #: inspected (~128 s of the ~211 s worst case measured in
-    #: test_vibe_ic_one_shot_runner.py). Same semantics as its siblings: the plan
-    #: still RECORDS the phase, as SKIPPED, so a reader can tell "skipped on
-    #: purpose" from "never reached" — the distinction `halted_at` already keeps.
-    p.add_argument("--skip-phase2", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
     p.add_argument("--die-um", default="auto",
@@ -821,7 +871,7 @@ def main() -> int:
         advisories.append(f"flow {flow_top_note}")
 
     # ---------------- Phase 2 ----------------
-    if not halted_at and not args.skip_phase2:
+    if not halted_at:
         runner = _phase_runner("phase2")
         p2_args = [str(project),
                    "--top-name", flow_top,
@@ -973,6 +1023,16 @@ def main() -> int:
     else:
         plan.append(("mixed_signal", "SKIPPED", 0))
 
+    # ---------------- What this run signed off AGAINST ----------------
+    # Taken here rather than beside the image capture because it reads the
+    # run's own tool logs, which do not exist until the phases have run.
+    _pdk_rec = _capture_pdk_revision(project, args.container)
+    if not _pdk_rec.get("resolved"):
+        advisories.append(
+            f"PDK revision NOT RECORDED: {_pdk_rec.get('reason')} — this run's "
+            f"sign-off cannot be re-derived, and benchmark_evidence_publish "
+            f"will REFUSE to stage it (see reports/pdk_revision.json)")
+
     # ---------------- Aggregate ----------------
     digital_verdicts = [v for n, v, _ in plan
                         if n not in ("analog", "mixed_signal")
@@ -990,6 +1050,9 @@ def main() -> int:
         # published number is attributable to a toolchain without a second
         # file lookup.
         "container_image": _img_rec,
+        # WHICH PDK REVISION the run signed off against — the other half of
+        # the same attribution, and the half nothing recorded before.
+        "pdk_revision": _pdk_rec,
         "verdict": overall,
     }
     # v1.6.32: emit canonical final_summary.md (best-effort). Note that

@@ -380,24 +380,28 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # one-file diff that switches the mechanism off (`max_commits:
     # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
     "test_gate_red_since_check.py",
-    # vibe-ic#1734 — the same reachability argument, arriving through a TEST
-    # file. What this guard pins is that `ci_harness_timeout_ceiling_check.py`
-    # cannot be silenced by a marker: a `pytestmark = pytest.mark.timeout(0)`
-    # must retire neither a finding nor a RECORDED ADVISORY. The diff that
-    # reintroduces the defect is a ONE-LINE edit to some other test file, and
-    # no test is NAMED after that file, so MEASURED with this selector on
-    # exactly that diff (the line prepended to
-    # `programs/tests/test_matrix_mutation_ledger.py`): 18 tests selected, this
-    # guard NOT among them — while `tools/ci/repo_hygiene_gates.sh` ran the
-    # gate and returned rc=0 PASS. The PR that installs the silencer is
-    # precisely the PR whose changed-file set cannot reach the test that
-    # guards it. ~4 s.
+    # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
+    # with the real selector, at 7c376e348, one throwaway commit each:
     #
-    # The floor is the SECOND copy, not the only one: the same assertions run
-    # inside the gate program itself (`self_check`), which
-    # `repo_hygiene_gates.sh` invokes on every landing. A guard for a change
-    # whose purpose is to make something SKIP has to be wired at the layer that
-    # always runs, not at the layer the change itself selects.
+    #   adding `pytestmark = pytest.mark.timeout(2700)` to ONE test file
+    #     -> 18 files selected, this guard NOT among them
+    #   raising `DEFAULT_STALL_AFTER` in `programs/pytest_per_file_junit.py`
+    #     -> 43 files selected, this guard NOT among them
+    #
+    # The first is the defect itself: `ci_harness_timeout_ceiling_check.py`
+    # exists to stop a test declaring a bound it can outlive, and the PR that
+    # reintroduces an exemption is a one-line edit to a test file, which
+    # selects the test named after that file and not this one. The second is
+    # the ceiling's own input — the stall window is resolved from the driver,
+    # so a diff that raises it moves this gate's verdict without selecting it.
+    #
+    # For completeness, because the negative matters as much: a diff touching
+    # `tools/gatekeeper-land.sh` DOES select it (72 files), via
+    # `_REPO_TOOL_DIRS` below. That lane was already covered; these two were
+    # not. The program additionally self-checks before every scan, so the two
+    # layers are independent — this roster entry covers the case where the
+    # program's own test is what must run, and the self-check covers the case
+    # where the program runs at all.
     "test_ci_harness_timeout_ceiling_check.py",
 )
 

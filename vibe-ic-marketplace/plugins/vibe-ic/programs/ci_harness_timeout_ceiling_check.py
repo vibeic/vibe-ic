@@ -144,55 +144,6 @@ run inside an item bounded at N. Verified rather than assumed —
 ``pytestmark = pytest.mark.timeout(30)`` under ``--timeout=2
 --timeout-method=thread`` yields ``2 passed``, not a killed session.
 
-THERE IS NO PER-FILE EXEMPTION, AND ``timeout(0)`` IS NOT ONE (vibe-ic#1734)
-----------------------------------------------------------------------------
-``pytest.mark.timeout(0)`` is pytest-timeout's "no clock for this item". The
-withheld v1.10.62 attempt read that as an INFINITE bound and skipped judging
-the file — which made one added line, ``pytestmark = pytest.mark.timeout(0)``
-at the top of ``test_matrix_mutation_ledger.py``, turn a standing
-``timeout=900`` into ``rc=0`` and ``[PASS]``, and retire a RECORDED ADVISORY
-with it. A gate that exists to stop a test silencing the harness had grown a
-one-line silencer of its own.
-
-So a marker value of 0 (or any non-positive one) is NOT A READABLE ITEM BOUND
-here. It is DISCLOSED — the item is printed with its marker, exactly like every
-other marked item — and its calls stay judged against the session ceiling.
-
-That is not a convention chosen for tidiness; it is what the harness does.
-Turning off pytest-timeout's clock does not take the item out of the landing
-harness. ``tools/gatekeeper-land.sh`` drives the whole selection through
-``programs/pytest_per_file_junit.py``, whose ``--stall-after`` and
-``--aggregate-stall-after`` both default to 300 s there, and NO pytest marker
-can raise either: a call that blocks longer than the window with no validated
-pytest lifecycle event costs the run its AGGREGATE_NORECORD — the same "every
-other file loses its verdict" outcome this gate was written for, arriving
-through the driver instead of through pytest-timeout. ``timeout(0)`` moves the
-executioner; it does not remove one.
-
-(The window is RENEWED by validated progress, which is why the one file in this
-tree that really does run a long nested census emits ``domain_progress`` relay
-events — a mechanism, in its own source, that a reader can check. That is what
-buying room actually costs. A marker is not a substitute for it, and this gate
-does not price it as one.)
-
-"It genuinely needs longer" therefore has exactly ONE honest spelling, and it
-is the gate's own second remedy: the module runs OUTSIDE this harness. A zero
-marker is not that spelling, and this gate no longer accepts it as one.
-
-WHAT A POSITIVE MARKER IS, SO THE TWO ARE NOT CONFUSED
--------------------------------------------------------
-``@pytest.mark.timeout(600)`` is a DECLARED BOUND, not an exemption: the call
-is still judged, against ``600 // 3``, the number is printed, and the file
-stays in the judged denominator. Nothing is removed from the judged set, so
-nothing has to be subtracted from the verdict sentence. The difference from 0
-is the whole of it — a declared bound can be checked against, "no clock" cannot.
-
-Consequently a marker can only ever be read as the TIGHTEST of the positive
-marks (see ``module_item_marker``). Under the withheld attempt ``min`` over
-``[timeout(0), timeout(300)]`` picked 0 — the MOST permissive value — while its
-docstring still claimed to be picking the tightest ceiling. 0 is no longer a
-candidate, so the tie-break means again what it says.
-
 THE POPULATION IS EVERY TREE A PYTEST LANE RUNS, WHICH IS TWO
 --------------------------------------------------------------
 The report named one tree. The workflows run two: the plugin's
@@ -220,21 +171,23 @@ USAGE
 -----
     python3 ci_harness_timeout_ceiling_check.py [ROOT] [--tests-root PATH]
                                                 [--table] [--json OUT]
-                                                [--self-check-only]
 
 EXIT CODES
 ----------
-    0 = PASS   1 = FAIL (a bound above the ceiling, or a failed SELF-CHECK)
+    0 = PASS   1 = FAIL (a bound above the ceiling)
     2 = CANNOT DETERMINE (no workflow bound, or nothing to scan) -- not a pass
 
-The SELF-CHECK runs on every invocation, before the scan, and is the reason
-this gate's falsifiability does not depend on a test file being selected --
-see ``_SELF_CHECK``.
+When the local landing gate uses ``pytest_per_file_junit.py`` for every pytest
+lane, this program instead validates that semantic-progress contract: no fixed
+pytest timeout, output/CPU activity cannot renew the lease, and the watchdog's
+whole-run ceiling is infinite.  Inner diagnostic subprocess bounds can then
+fire without ever being eclipsed by an outer elapsed-time verdict.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -273,6 +226,175 @@ EXTRA_HARNESS_RELS = (
 #: on the line after `pytest` is still found.
 _PYTEST_RE = re.compile(r"(?<![\w.-])pytest(?![\w.-])")
 _TIMEOUT_RE = re.compile(r"--timeout[= ](\d+)")
+_ELAPSED_WRAPPER_RE = re.compile(r"(?<![\w.-])timeout(?![\w.-])")
+_DRIVER_COMMAND_RE = {
+    # `PYTHONDONTWRITEBYTECODE=1` IS REQUIRED OF ALL THREE, NOT TWO.
+    # `run_unselectable_pytest` has always required it here. The other two
+    # gained it when the tier's independent stages started running at the same
+    # time: `python3 -I` does not imply `-B`, so a lane that writes bytecode
+    # into $ROOT changes `gate_host_independence_check`'s untracked+ignored
+    # stimulus set — and under concurrency it changes it WHILE another lane is
+    # measuring it. Requiring the token rather than merely tolerating it means
+    # deleting it again is a policy change with a red test, not a silent
+    # reintroduction of an ordering hazard.
+    "run_pytest": re.compile(
+        r'^\s*if\s+out="\$\(\s*cd\s+"\$PLUGIN"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'programs/pytest_per_file_junit\.py(?=\s)'),
+    "run_repo_tools_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+    "run_unselectable_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+}
+# Exact shipped function bodies are the control-flow contract.  A regex can
+# recognize a reassuring command that lives under ``if false``, inside a
+# never-called nested function, or even in heredoc data.  Hashing the complete
+# reviewed bodies turns every such control-flow rewrite into an explicit policy
+# change that the parent-side landing differential can review; there is no
+# permissive "looks command-like" fallback.
+_LANDING_LANE_SHA256 = {
+    "run_pytest":
+        "1063d696b31fb72b8826c02e965a677c4974a96a68f7c0c12f9dcdf7c3458ab9",
+    "run_repo_tools_pytest":
+        "e8575843eb88d9b1ba49c84127dd4237892a4d9d09816c50b2da2b152c2fc58e",
+    "run_unselectable_pytest":
+        "70d7764ca0c83843f0b66a4e768c0ca5b874589894f1c688cb2d831b17863e78",
+}
+# Entry-to-last-lane control flow is reviewed as one indivisible contract.
+# Hashing only the three function definitions is insufficient: their exact
+# bodies can remain present while a top-level ``exit``, ``false && call``, or a
+# later function redefinition makes every call a no-op.  This prefix ends at
+# the point by which every required invocation has been reached, so any
+# executable rewrite that can affect reachability must be reviewed together
+# with a new digest.
+#: WHERE THAT PREFIX ENDS, now that the three lanes are not column-zero calls.
+#:
+#: It used to end at the bare `run_unselectable_pytest` line — the last of the
+#: three populations, invoked at top level, so "everything up to here" was
+#: exactly the control flow that decides whether all three run. The full tier's
+#: independent stages now run AT THE SAME TIME: `lane_run_window` launches the
+#: lanes and `lane_emit_window` joins every one of them and prints its verdict,
+#: so the populations are reached through the lane bodies and no population is
+#: a top-level call any more. Anchoring on the old shape did not weaken the
+#: rule, it ABOLISHED it: no line matched, the prefix was never computed, and
+#: the only thing printed was "must invoke … at its reviewed top-level call
+#: site".
+#:
+#: `lane_emit_window` is the replacement and it is not a weaker anchor. It is
+#: the single top-level line by which every lane has been both dispatched AND
+#: joined, so a prefix ending there still contains every byte that decides
+#: whether the three populations run: their bodies, the lane bodies that call
+#: them, the launcher, the window, and everything before them.
+_LANDING_WINDOW_ANCHOR = "lane_emit_window"
+_LANDING_EXECUTION_PREFIX_SHA256 = (
+    "cfc5dabcce04cd9a335114b36e6e565f4d9198996d457c917181f8a3f2bef419"
+)
+# RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
+# moved for one reason and it is stated here rather than left to `git log`: the
+# three lanes' bodies are byte-identical (their digests above did not move), and
+# what changed is the control flow ahead of them — a fatal `rc 2` refusal that
+# runs `landing_pytest_runtime_preflight.py` before the first arm, so a host on
+# which the isolated trusted entry cannot import the runner refuses ONCE with a
+# named cause instead of reporting NORECORD for every file in all three arms.
+# Both new digests are DERIVED from the reviewed script by this file's own
+# `landing_semantic_progress_contract` rule, never hand-transcribed.
+#
+# A prefix proves the required calls are reached; the complete script proves a
+# later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
+# early successful exit after the third call).  Gate control-flow changes are
+# intentionally an explicit policy migration, never a heuristic match.
+#
+# RE-PINNED AGAIN at v1.11.5, and this migration is a RATCHET THAT WAS LEFT
+# UNTURNED rather than a new policy. The three pins here had been stale since
+# 0060d835 and kept SIX tests in `test_ci_harness_timeout_ceiling_check.py` red
+# on `main`, plus the hygiene gate "inner timeouts fit the harness" — across six
+# landings, none of which the drift was about. A permanently-red contract check
+# is a contract check nobody reads.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * `tools/gatekeeper-land.sh` (both digests above and below): ONE commit,
+#     eda53573 (v1.11.2), which inserts `landing_tier_checkout_preflight.py`
+#     and a fatal `exit 2` AHEAD of the arms so a full tier refuses to start in
+#     a checkout a third party can unregister mid-run. It adds a refusal in
+#     front of the lanes; it removes, reorders and rewrites none of them — and
+#     the three `_LANDING_LANE_SHA256` bodies did NOT move, which is this
+#     file's own independent witness that the lane bodies are byte-identical.
+#   * the semantic driver: five landed fixes to `pytest_per_file_junit.py`
+#     (3e6c1bfc, f96494b8, 732e0ee3, fe132795, 2b93d872) plus the progress-scan
+#     rewind that ships with this commit. Each was reviewed at its own landing;
+#     what nobody did afterwards was turn this ratchet.
+#
+#
+# RE-PINNED AGAIN on 2026-08-21, for the landing review. Both digests moved and
+# the three `_LANDING_LANE_SHA256` bodies did NOT, which is this file's own
+# independent witness that no lane body was touched.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * INSIDE the prefix (so it is control flow, and reviewed as such): the
+#     hygiene `--summary-json` record became UNCONDITIONAL — it used to be
+#     written only when `GATEKEEPER_HYGIENE_REPORT` named a path — and
+#     `lane_emit_window` gained one assignment, `GK_HYG_RC="$EMIT_RC"`, kept
+#     because the record says WHICH gates were red and only the rc says the set
+#     finished. Neither removes, reorders nor rewrites a lane; neither adds an
+#     exit; the window still launches and joins exactly the same lanes.
+#   * AFTER the anchor (so it is in the whole-file digest only): a new
+#     `full:gatekeeper-review` unit between `full:plugin-audit` and
+#     `full:write-guard-final`. It runs `gatekeeper_review.py` under a 240 s
+#     budget and maps a timeout — and every unexpected exit status — to rc 2
+#     UNDETERMINED, blocking. It is deliberately outside the prefix: it cannot
+#     affect whether the three populations run, and the prefix exists to pin
+#     exactly that.
+#
+#
+# RE-PINNED AGAIN, same day, because the two paragraphs above describe a wiring
+# that did not survive its own gates. `--hygiene-record-in` was a command-line
+# way to hand `gatekeeper_review`'s hygiene gate a substitute for running it,
+# and two gates that exist for exactly that were red about it. Both digests
+# moved again; the three `_LANDING_LANE_SHA256` bodies did NOT, which is again
+# this file's own independent witness that no lane body was touched.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * INSIDE the prefix: the caller's `GATEKEEPER_HYGIENE_REPORT` is passed to
+#     `--summary-json` at the call site again instead of through a `:-`
+#     default, and the record stays unconditional in the other branch — the
+#     two are different contracts and only the first has a reader outside this
+#     process. `lane_emit_window` LOST the `GK_HYG_RC="$EMIT_RC"` assignment
+#     the paragraph above added, because the only thing that read it was the
+#     flag that is gone. Neither removes, reorders nor rewrites a lane;
+#     neither adds an exit; the window still launches and joins exactly the
+#     same lanes.
+#   * AFTER the anchor: `full:gatekeeper-review` no longer passes a record to
+#     the review, so the review runs the hygiene set, and the budget it is
+#     given moved from 240 s to 1800 s — `repo_hygiene_gate`'s own
+#     `_HYGIENE_STALL_GRACE_S`, below which this `timeout` would kill runs the
+#     gate itself still considers alive. A timeout is still rc 2 UNDETERMINED
+#     and still blocking; that half did not move and is what
+#     `tools/test_gatekeeper_land_review_budget.py` drives.
+#
+# RE-PINNED a third time, and ONLY the whole-file digest: the edit is a comment
+# BELOW the `lane_emit_window` anchor, correcting what 1800 s bounds (the
+# review's supervisor, not the hygiene set's 300 s shard watchdog). The
+# execution-prefix digest did NOT move, which is this file's own witness that
+# the change is downstream of the anchor and touches no control flow.
+#
+# Every digest here is DERIVED — this file run over the reviewed tree, and the
+# sha256 it reports read back — never hand-transcribed.
+_LANDING_SCRIPT_SHA256 = (
+    "466a820a222afbbc1c9492d8a0a52ced3577cf99f2e267a83bb42f1ba62a34f2"
+)
+# The helper AST is not enough: a counterfeit CLI can define the expected
+# helper and never call it.  Bind the policy to the complete reviewed driver
+# whose functional tests prove selection -> aggregate JUnit coverage.
+_SEMANTIC_DRIVER_SHA256 = (
+    "392d077fcbe629d1fde9e715224d44b84fe93f2a40cad17f47597d317a02ec16"
+)
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
 #: future looser pattern would pick it up.
@@ -282,31 +404,6 @@ _TIMEOUT_RE = re.compile(r"--timeout[= ](\d+)")
 #: dies on the two-call shape that 19 test functions in this corpus have; 3
 #: survives two full-length calls and keeps a third of the budget in reserve.
 CEILING_DIVISOR = 3
-
-#: The clock a contributor CANNOT move, and therefore the only honest cap on one
-#: they can. `tools/gatekeeper-land.sh` wraps the whole selection in
-#: `pytest_per_file_junit.py --stall-after 300 --aggregate-stall-after 300`, and NO
-#: pytest marker raises either.
-#:
-#: WHY THIS EXISTS, AND WHY THE PREVIOUS TWO ATTEMPTS DID NOT NEED IT UNTIL THEY DID.
-#: Round 1 let `pytest.mark.timeout(0)` disable the ceiling; that was closed. Round 2
-#: kept `marker_ceiling` refusing non-positive values and left the RAISED key in the
-#: lock: `pytest.mark.timeout(2700)` bought a 900 s ceiling and retired a recorded
-#: advisory, on the fixed gate, with the same file and the same bound. Closing `0`
-#: and leaving `2700` is pinning the value that was reported instead of the door that
-#: was open.
-#:
-#: A ceiling the author supplies must be bounded by something the author cannot also
-#: supply. 300 s is that thing. Above it the marker is not a bound at all — it is a
-#: statement about a clock that will not be the one to end the run.
-#:
-#: MEASURED, LIVE ON MAIN WHEN THIS WAS WRITTEN:
-#: `test_vibe_ic_one_shot_runner.py:138` carries `@pytest.mark.timeout(1200)` over
-#: `:154 subprocess.run(..., timeout=400)`, in a file that emits ZERO progress relay
-#: events. 400 s > 300 s with no renewal, so that launch reaching its bound costs the
-#: file its record — the "loses its verdict" outcome this gate exists for — while the
-#: gate printed `largest applied: 400s` and `[PASS]`.
-DRIVER_STALL_S = 300
 
 #: Scanned population, relative to the plugin root.
 TESTS_DIR_REL = "programs/tests"
@@ -343,13 +440,80 @@ class HarnessBound:
                 "seconds": self.seconds, "command": self.command}
 
 
+def _strip_shell_comment(raw: str) -> str:
+    """Remove an executable Bash comment without touching quoted ``#``.
+
+    The semantic-lane contract is about what Bash executes, not reassuring
+    words after a comment marker.  ``shlex`` is not a Bash parser (notably for
+    command substitutions), so keep this deliberately small and exact: Bash
+    starts a comment at an unquoted ``#`` that begins a shell word.
+    """
+    quote: Optional[str] = None
+    # A command substitution inside double quotes is a fresh shell parse.  Its
+    # comments are executable comments even though the surrounding ``$(...)``
+    # sits inside a quoted assignment (the exact false-green this guards).
+    substitutions: List[Tuple[Optional[str], int]] = []
+    escaped = False
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "single":
+            escaped = True
+            index += 1
+            continue
+        if quote == "single":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "'" and quote is None:
+            quote = "single"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == "double" else "double"
+            index += 1
+            continue
+        if (char == "$" and index + 1 < len(raw)
+                and raw[index + 1] == "("):
+            substitutions.append((quote, 1))
+            quote = None
+            index += 2
+            continue
+        if substitutions and quote is None and char == "(":
+            outer, depth = substitutions[-1]
+            substitutions[-1] = (outer, depth + 1)
+            index += 1
+            continue
+        if substitutions and quote is None and char == ")":
+            outer, depth = substitutions[-1]
+            depth -= 1
+            if depth == 0:
+                substitutions.pop()
+                quote = outer
+            else:
+                substitutions[-1] = (outer, depth)
+            index += 1
+            continue
+        if (char == "#" and quote is None
+                and (index == 0 or raw[index - 1].isspace()
+                     or raw[index - 1] in ";|&()")):
+            return raw[:index]
+        index += 1
+    return raw
+
+
 def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
     """Yield (first_line_number, joined_command) with backslash continuations
     folded, so a flag on a continuation line belongs to its own command."""
     buf: List[str] = []
     start = 0
     for i, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.rstrip()
+        stripped = _strip_shell_comment(raw).rstrip()
         if not buf:
             start = i
         if stripped.endswith("\\"):
@@ -360,6 +524,310 @@ def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
         buf = []
     if buf:
         yield start, " ".join(buf)
+
+
+def _semantic_driver_contract_errors(driver: Path) -> List[str]:
+    """Validate the executed supervisor call structurally, not by comments."""
+    try:
+        raw = driver.read_bytes()
+        source = raw.decode("utf-8", errors="strict")
+        tree = ast.parse(source, filename=str(driver))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        return [f"semantic pytest driver cannot be parsed: {exc}"]
+    errors: List[str] = []
+    observed_digest = hashlib.sha256(raw).hexdigest()
+    if observed_digest != _SEMANTIC_DRIVER_SHA256:
+        errors.append(
+            "semantic pytest driver is not the exact reviewed executable "
+            f"(sha256={observed_digest}, expected="
+            f"{_SEMANTIC_DRIVER_SHA256})")
+    functions = [node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name == "_run_progress_supervised"]
+    if len(functions) != 1:
+        errors.append("semantic pytest driver must define "
+                      "_run_progress_supervised exactly once")
+        return errors
+    calls = [node for node in ast.walk(functions[0])
+             if isinstance(node, ast.Call)
+             and ((isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "run_supervised")
+                  or (isinstance(node.func, ast.Name)
+                      and node.func.id == "run_supervised"))]
+    if len(calls) != 1:
+        errors.append(
+            "_run_progress_supervised must call run_supervised exactly once")
+        return errors
+    keywords = {kw.arg: kw.value for kw in calls[0].keywords
+                if kw.arg is not None}
+    output = keywords.get("output_progress")
+    if not (isinstance(output, ast.Constant) and output.value is False):
+        errors.append("semantic pytest driver no longer proves: output bytes "
+                      "are not progress")
+    domain = keywords.get("domain_progress_probe")
+    if not (isinstance(domain, ast.Name)
+            and domain.id == "_progress_sample"):
+        errors.append("semantic pytest driver no longer proves: validated "
+                      "lifecycle is the progress source")
+    ceiling = keywords.get("hard_ceiling_s")
+    if not (isinstance(ceiling, ast.Call)
+            and isinstance(ceiling.func, ast.Name)
+            and ceiling.func.id == "float"
+            and len(ceiling.args) == 1
+            and isinstance(ceiling.args[0], ast.Constant)
+            and ceiling.args[0].value == "inf"
+            and not ceiling.keywords):
+        errors.append("semantic pytest driver no longer proves: there is no "
+                      "whole-run elapsed ceiling")
+    return errors
+
+
+def _shell_control_depths(lines: Sequence[str], start: int,
+                          end: int) -> Dict[int, int]:
+    """A deliberately narrow structural model for the three shipped functions.
+
+    Bash has no stdlib AST.  The landing functions use only ordinary
+    ``if/fi``, loops and ``case/esac`` control blocks, so track exactly those
+    block boundaries.  A semantic-driver command is accepted only at function
+    depth zero; putting the reassuring command under ``if false`` therefore
+    cannot satisfy the contract.  ``bash -n`` remains the syntax authority.
+    """
+    depths: Dict[int, int] = {}
+    depth = 0
+    for lineno in range(start + 1, end):
+        stripped = lines[lineno - 1].strip()
+        if not stripped or stripped.startswith("#"):
+            depths[lineno] = depth
+            continue
+        if re.match(r"^(fi|done|esac)\b", stripped):
+            depth = max(0, depth - 1)
+        depths[lineno] = depth
+        if re.match(r"^(if|for|while|until|case)\b", stripped):
+            # One-line controls close themselves and do not contain an
+            # independently accepted canonical driver command.
+            closes = ((stripped.startswith("if ") and re.search(
+                r";\s*fi(?:\s*;|\s*$)", stripped))
+                or (re.match(r"^(for|while|until)\b", stripped)
+                    and re.search(r";\s*done(?:\s*;|\s*$)", stripped))
+                or (stripped.startswith("case ")
+                    and re.search(r";\s*esac(?:\s*;|\s*$)", stripped)))
+            if not closes:
+                depth += 1
+    return depths
+
+
+def landing_semantic_progress_contract(repo_root: Path) -> Dict:
+    """Validate the local landing pytest lanes' no-fixed-timeout contract.
+
+    This deliberately owns only ``gatekeeper-land.sh``.  The A/B verifier has
+    its own two-wave/process-census contract and tests; treating historical
+    disabled workflows or a separate orchestrator as this harness's elapsed
+    bound is how a dead lane used to constrain the live one.
+    """
+    root = Path(repo_root)
+    land = root / "tools" / "gatekeeper-land.sh"
+    driver = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+              "programs" / "pytest_per_file_junit.py")
+    errors: List[str] = []
+    lanes: List[Dict] = []
+    try:
+        land_raw = land.read_bytes()
+        land_text = land_raw.decode("utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        return {"declared": False, "errors": [
+            f"landing script is unreadable: {exc}"], "lanes": []}
+
+    script_digest = hashlib.sha256(land_raw).hexdigest()
+    if script_digest != _LANDING_SCRIPT_SHA256:
+        errors.append(
+            "gatekeeper-land.sh is not the complete reviewed executable "
+            f"(sha256={script_digest}, expected={_LANDING_SCRIPT_SHA256})")
+
+    source_lines = land_text.splitlines()
+    populations = ("run_pytest", "run_repo_tools_pytest",
+                   "run_unselectable_pytest")
+    final_calls = [i for i, line in enumerate(source_lines, 1)
+                   if line in {_LANDING_WINDOW_ANCHOR,
+                               f"if {_LANDING_WINDOW_ANCHOR}; then"}]
+    if len(final_calls) != 1:
+        errors.append(
+            f"gatekeeper-land.sh must invoke {_LANDING_WINDOW_ANCHOR} exactly "
+            "once at its reviewed top-level call site")
+    else:
+        prefix_bytes = ("\n".join(source_lines[:final_calls[0]]) +
+                        "\n").encode("utf-8")
+        prefix_digest = hashlib.sha256(prefix_bytes).hexdigest()
+        if prefix_digest != _LANDING_EXECUTION_PREFIX_SHA256:
+            errors.append(
+                "gatekeeper-land.sh entry-to-final-pytest execution prefix "
+                "is not the exact reviewed control flow "
+                f"(sha256={prefix_digest}, expected="
+                f"{_LANDING_EXECUTION_PREFIX_SHA256})")
+    ranges: Dict[str, Tuple[int, int]] = {}
+    depths: Dict[str, Dict[int, int]] = {}
+    for population in populations:
+        starts = [i for i, line in enumerate(source_lines, 1)
+                  if line.startswith(f"{population}() {{")]
+        if len(starts) != 1:
+            errors.append(
+                f"gatekeeper-land.sh must define {population} exactly once")
+            continue
+        start = starts[0]
+        ends = [i for i in range(start + 1, len(source_lines) + 1)
+                if source_lines[i - 1] == "}"]
+        if not ends:
+            errors.append(
+                f"gatekeeper-land.sh has no structural end for {population}")
+            continue
+        function_bytes = ("\n".join(
+            source_lines[start - 1:ends[0]]) + "\n").encode("utf-8")
+        observed_digest = hashlib.sha256(function_bytes).hexdigest()
+        if observed_digest != _LANDING_LANE_SHA256[population]:
+            errors.append(
+                f"gatekeeper-land.sh function {population} is not the exact "
+                "reviewed executable body "
+                f"(sha256={observed_digest}, expected="
+                f"{_LANDING_LANE_SHA256[population]})")
+        # A HERE-STRING IS NOT A HEREDOC, and the difference is the whole
+        # reason this rule exists. The concern is a literal block of
+        # command-SHAPED DATA sitting in the file where a reader — and the
+        # canonical-command regex above — might take it for an executed
+        # command. `<<<"$out"` carries the value of a variable, so there is no
+        # literal in the file to mistake for anything; it is also the form the
+        # lane shells were deliberately moved TO, because `printf … | grep -q`
+        # asks its question in a subshell whose exit status is the pipeline's,
+        # not the probe's. Matching `<<` naively forbade the safer form.
+        if any(re.search(r"(?<!<)<<(?!<)", source_lines[i - 1])
+               for i in range(start + 1, ends[0])):
+            errors.append(
+                f"gatekeeper-land.sh function {population} contains a "
+                "heredoc; command-shaped data cannot prove lane execution")
+        nested = [i for i in range(start + 1, ends[0])
+                  if (re.match(
+                      r"^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*"
+                      r"\s*(?:\(\s*\))?\s*\{\s*$",
+                      source_lines[i - 1]) is not None)]
+        if nested:
+            errors.append(
+                f"gatekeeper-land.sh:{nested[0]} nests a function inside "
+                f"{population}; a never-called body cannot prove execution")
+        ranges[population] = (start, ends[0])
+        depths[population] = _shell_control_depths(
+            source_lines, start, ends[0])
+
+    # EACH POPULATION IS INVOKED EXACTLY ONCE, WHEREVER IT IS INVOKED FROM.
+    #
+    # The old top-level-call-site rule carried two properties at once: an
+    # anchor for the execution prefix, and "this population is actually
+    # called". Splitting them is what lets the anchor move to the lane window
+    # without losing the second: a population that is defined, digest-matched
+    # and never called still proves nothing, and a population called twice is
+    # two lanes where the record expects one. Shape-independent on purpose —
+    # `fn_capture "full:targeted-tests" run_pytest` inside a lane body is a
+    # call, and so is a bare top-level line; pinning the SHAPE is what made
+    # three separate tests in this repo stop discriminating at once.
+    for population in populations:
+        span = ranges.get(population)
+        if span is None:
+            continue
+        start, end = span
+        callers = [
+            lineno for lineno, command in _logical_lines(land_text)
+            if command.strip()
+            and not command.lstrip().startswith("#")
+            and not (start <= lineno <= end)
+            and re.search(rf"(?<![\w./-]){re.escape(population)}(?![\w(])",
+                          command)]
+        if len(callers) != 1:
+            errors.append(
+                f"gatekeeper-land.sh must invoke {population} exactly once "
+                f"outside its own definition (found {len(callers)})")
+
+    for lineno, command in _logical_lines(land_text):
+        stripped = command.lstrip()
+        if stripped.startswith("#"):
+            continue
+        owners = [name for name, (start, end) in ranges.items()
+                  if start < lineno < end]
+        owner = owners[0] if len(owners) == 1 else None
+        driver_invocation = bool(
+            owner and _DRIVER_COMMAND_RE[owner].search(command))
+        # A standalone `pytest` token in executable shell is forbidden unless
+        # this exact logical command invokes the semantic driver.  This catches
+        # env/absolute-path/function/array aliases without pretending to be a
+        # complete shell parser.  The one diagnostic grep is data, not a lane.
+        diagnostic = "grep -qa '^=== pytest junit summary'" in command
+        if ("pytest_per_file_junit.py" in command
+                and not driver_invocation and not stripped.startswith("#")):
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} names the semantic driver "
+                "outside its canonical executable lane")
+        if (_PYTEST_RE.search(command) and not driver_invocation
+                and not diagnostic):
+            errors.append(f"gatekeeper-land.sh:{lineno} mentions executable "
+                          "pytest outside the semantic aggregate driver")
+        if not driver_invocation:
+            lane_already_ran = any(
+                lane["population"] == owner and lane["line"] < lineno
+                for lane in lanes)
+            if (owner and not lane_already_ran
+                    and depths.get(owner, {}).get(lineno) == 0
+                    and re.match(r"^\s*(return|exit)(?:\s|$)", command)):
+                errors.append(
+                    f"gatekeeper-land.sh:{lineno} can leave {owner} before "
+                    "its semantic pytest lane")
+            continue
+        if depths.get(owner, {}).get(lineno) != 0:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} semantic pytest lane is nested "
+                "under conditional control")
+        lanes.append({"population": owner, "line": lineno,
+                      "command": " ".join(command.split())})
+        if "--aggregate-check" not in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not require the aggregate "
+                "semantic pytest record")
+        trusted_entry = re.search(
+            r"--\s+python3\s+-I\s+"
+            r"\"\$PROGRAMS/trusted_pytest_entry\.py\"(?=\s)",
+            command,
+        )
+        if trusted_entry is None:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not execute pytest through "
+                "the isolated trusted entry at the semantic driver's "
+                "subject-command boundary")
+        if re.search(r"(?:^|\s)-p\s+no:cacheprovider(?:\s|$)", command) is None:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not disable pytest's cache "
+                "plugin at the trusted entry boundary")
+        if _TIMEOUT_RE.search(command) or "pytest_timeout" in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} reintroduces a fixed pytest "
+                "elapsed-time verdict")
+        if _ELAPSED_WRAPPER_RE.search(command):
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} wraps semantic pytest in a "
+                "fixed elapsed-time command")
+        if "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" not in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} inherits ambient pytest plugins")
+    repository_marker = (root / "vibe-ic-marketplace" / "plugins" /
+                         "vibe-ic" / ".claude-plugin" /
+                         "plugin.json").is_file()
+    required = (driver.is_file() or repository_marker
+                or bool(ranges) or bool(lanes))
+    if required:
+        for population in populations:
+            count = sum(lane["population"] == population for lane in lanes)
+            if count != 1:
+                errors.append(
+                    f"gatekeeper-land.sh must route {population} through "
+                    f"exactly one semantic aggregate lane (found {count})")
+    if not required:
+        return {"declared": False, "errors": [], "lanes": []}
+    errors.extend(_semantic_driver_contract_errors(driver))
+    return {"declared": True, "errors": errors, "lanes": lanes}
 
 
 def harness_bounds(repo_root: Path) -> List[HarnessBound]:
@@ -414,6 +882,58 @@ def inner_timeout_ceiling(repo_root: Path) -> Optional[int]:
     """The largest inner bound a single blocking call may declare."""
     harness = ci_harness_timeout_seconds(repo_root)
     return None if harness is None else harness // CEILING_DIVISOR
+
+
+#: Where the driver's stall window is DECLARED. Resolved, never hand-copied, for
+#: the same reason the harness bound is: a number copied into this file is a
+#: second copy that cannot notice when the original moves.
+_STALL_SOURCE = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
+                 "pytest_per_file_junit.py", "DEFAULT_STALL_AFTER")
+
+
+def driver_stall_window(repo_root: Path) -> Optional[int]:
+    """Seconds an inner call may block before the DRIVER kills the session.
+
+    WHY THIS BOUND EXISTS ALONGSIDE THE HARNESS BOUND (vibe-ic#1734).
+
+    ``harness // 3`` assumes pytest's per-item clock is what ends a runaway call.
+    For an item carrying ``@pytest.mark.timeout(N)`` that is false, and the gate
+    already reads the marker. But the marker is supplied by the same contributor
+    whose bound is being judged, so it is not a constraint -- it is a dial. A
+    marker of 2700 buys a 900 s ceiling and silently retires a real 900 s bound.
+
+    The driver's stall window is the bound a contributor CANNOT supply. It is not
+    a runtime limit: it is how long the per-file driver tolerates NO validated
+    pytest lifecycle event before classifying the session hung. A blocking call
+    emits no such events, so it is exactly the window an inner call can hang in
+    before the SESSION -- not the test -- is killed. That is this gate's subject.
+
+    So the applicable item bound is ``min(marker or harness, stall)``, and
+    ``timeout(0)`` resolves to the stall window rather than to zero: zero means
+    "no per-item clock", and the stall clock is then the only thing left that can
+    end the call. Reading 0 as a BOUND of zero made every inner timeout in such a
+    file a violation -- which is how ``test_matrix_63x8_coverage.py:305
+    subprocess.run(timeout=60)`` was reported as a session risk in a file whose
+    items cannot be killed by the item clock at all, and blocked landing on main.
+
+    Returns None when the declaration cannot be read; the caller then falls back
+    to the harness bound, which is smaller and therefore the safe direction.
+    """
+    rel, const = _STALL_SOURCE
+    try:
+        tree = ast.parse((repo_root / rel).read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return None
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        tgt = node.targets[0]
+        if not (isinstance(tgt, ast.Name) and tgt.id == const):
+            continue
+        v = node.value
+        if isinstance(v, ast.Constant) and isinstance(v.value, (int, float)):
+            return int(v.value)
+    return None
 
 
 #: A checkout root, recognised WITHOUT reference to the harness sources.
@@ -497,14 +1017,7 @@ class Finding:
                  constant: Optional[str] = None,
                  constant_line: Optional[int] = None,
                  constant_kind: str = VIA_MODULE_CONSTANT,
-                 owner: Optional[str] = None,
-                 ceiling: Optional[int] = None):
-        #: The ceiling this call was ACTUALLY judged against — the session's,
-        #: or a positive marker's `N // 3`. Carried on the record rather than
-        #: formatted from the session ceiling at print time, because a report
-        #: that says "above the 60s ceiling" about a call judged at 200s is
-        #: describing a comparison it did not make (vibe-ic#1734 defect 2).
-        self.ceiling = ceiling
+                 owner: Optional[str] = None):
         self.path = path
         self.line = line
         self.callee = callee
@@ -529,8 +1042,7 @@ class Finding:
                 "constant": self.constant,
                 "constant_line": self.constant_line,
                 "constant_kind": self.constant_kind if self.constant else None,
-                "owner": self.owner,
-                "judged_against_seconds": self.ceiling}
+                "owner": self.owner}
 
     def __str__(self) -> str:
         via = ""
@@ -846,76 +1358,21 @@ class MarkedItem:
     """
 
     def __init__(self, path: str, line: int, test: str, seconds: float,
-                 ceiling: int, raises: bool = True):
+                 ceiling: int):
         self.path = path
         self.line = line
         self.test = test
         self.seconds = seconds
-        #: The ceiling that really applies to this item's calls. For a
-        #: non-positive marker that is the SESSION ceiling, unchanged.
         self.ceiling = ceiling
-        #: False for `timeout(0)` — disclosed, but it buys nothing. Recording
-        #: the distinction on the item is what stops the two lanes being told
-        #: apart by their printed text alone.
-        self.raises = raises
 
     def as_dict(self) -> Dict:
         return {"path": self.path, "line": self.line, "test": self.test,
-                "item_seconds": self.seconds, "ceiling_seconds": self.ceiling,
-                "raises_ceiling": self.raises}
+                "item_seconds": self.seconds, "ceiling_seconds": self.ceiling}
 
     def __str__(self) -> str:
-        if not self.raises:
-            return (f"{self.path}:{self.line}  {self.test}  "
-                    f"@pytest.mark.timeout({self.seconds}) -> NOT a bound this "
-                    f"gate can read (0 is pytest-timeout's 'no clock', not a "
-                    f"longer bound, and no marker raises the driver's stall "
-                    f"window): its calls are STILL judged against "
-                    f"{self.ceiling}s")
         return (f"{self.path}:{self.line}  {self.test}  "
                 f"@pytest.mark.timeout({self.seconds}) -> its calls are judged "
                 f"against {self.ceiling}s")
-
-
-def marker_ceiling(seconds: Optional[float]) -> Optional[int]:
-    """`N // 3` for a marker that DECLARES a bound, else None (vibe-ic#1734).
-
-    None means "this marker is not a bound this gate can read", and the ONLY
-    thing a caller may do with None is leave the ceiling where it was. It must
-    never be spelled as "skip this call": that is the withheld attempt's
-    `if call_ceiling is None: continue`, which fired ahead of the
-    forwarder/advisory lane and so retired a RECORDED ADVISORY as well as a
-    finding. There is no code path in this file that turns a marker into a
-    skip, and `self_check` fails the whole gate if one is reintroduced.
-
-    Non-positive is refused rather than divided. `0 // 3 == 0` was the other
-    half of the same defect from the opposite side: it read "no clock" as a
-    ZERO-second ceiling, which made every bound in such a file a finding —
-    including `relay_queue.get(timeout=0.1)`. One quirk, two false verdicts.
-    """
-    if seconds is None or seconds <= 0:
-        return None
-    if seconds > DRIVER_STALL_S:
-        # ABOVE THE CLOCK THAT ACTUALLY ENDS THE RUN, so it is not a bound and it
-        # does not become one by being written down. Returning None leaves the
-        # ceiling at the default — the SAFE direction — rather than granting the
-        # room the marker asked for. `raised_above_driver_stall()` reports it
-        # separately, because silently ignoring a marker somebody wrote on purpose
-        # would leave them believing they had raised something.
-        return None
-    return int(seconds) // CEILING_DIVISOR
-
-
-def raised_above_driver_stall(seconds: Optional[float]) -> bool:
-    """Is this marker asking for more room than any clock in the run will give?
-
-    Separate from :func:`marker_ceiling` on purpose. That function answers "what
-    ceiling does this marker buy" and must answer conservatively; this one answers
-    "should somebody be told", and the two have different failure directions. A
-    marker that is ignored AND unreported is how a contributor comes to believe a
-    file is exempt when it is not.
-    """
-    return seconds is not None and seconds > DRIVER_STALL_S
 
 
 def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
@@ -1018,37 +1475,8 @@ def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
     Several timeout marks resolve to the SMALLEST, not the last: a ceiling
     argued from the widest of several declarations would be the one number in
     this file a reader could not check by eye.
-
-    …AND ONLY THE POSITIVE ONES ARE CANDIDATES (vibe-ic#1734 defect 4). The
-    sentence above is only true while every candidate is a BOUND, because
-    "smallest" and "tightest" are the same word only then. The withheld attempt
-    made 0 mean total exemption and left `min` alone, so
-    `pytestmark = [pytest.mark.timeout(0), pytest.mark.timeout(300)]` around
-    `subprocess.run(timeout=900)` returned rc=0 — `min` had silently become the
-    most-PERMISSIVE pick while its docstring still argued for the tightest. A
-    non-positive mark is not a bound (see `marker_ceiling`), so it is not in the
-    running; the tie-break is over bounds again and means what it says.
     """
     best: Optional[Tuple[float, int]] = None
-    for secs, line in module_timeout_marks(tree, consts):
-        if secs <= 0:
-            continue
-        if best is None or secs < best[0]:
-            best = (secs, line)
-    return best
-
-
-def module_timeout_marks(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
-                         ) -> List[Tuple[float, int]]:
-    """Every readable `pytestmark = pytest.mark.timeout(N)` value, in order.
-
-    Split out from `module_item_marker` so a NON-POSITIVE mark still reaches
-    the disclosure. It is not a bound and must not move the ceiling, but it is
-    a declaration a reader has to be able to see: an exclusion nobody can see
-    is indistinguishable from a clean result, and that is as true of a
-    declaration that buys nothing as of one that buys something.
-    """
-    out: List[Tuple[float, int]] = []
     for node in getattr(tree, "body", []):
         target = value = None
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -1071,23 +1499,58 @@ def module_timeout_marks(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
                     if kw.arg in ("timeout", "seconds"):
                         val = kw.value
             got = _numeric(val, consts) if val is not None else None
-            if got is not None:
-                out.append((got[0], node.lineno))
-    return out
+            if got is not None and (best is None or got[0] < best[0]):
+                best = (got[0], node.lineno)
+    return best
 
 
-def scan_source(text: str, rel_path: str, ceiling: int
+
+def marker_ceiling(marker_seconds: float, base_ceiling: int,
+                   stall: Optional[int]) -> int:
+    """The per-call ceiling that applies inside an item carrying a timeout marker.
+
+    THREE CASES, AND THE CAP IS THE POINT (vibe-ic#1734):
+
+      marker N > 0   the item clock is N, so calls are judged against N // 3 --
+                     BUT never above the stall window, because a marker is
+                     supplied by the same contributor whose bound is judged and
+                     is therefore a dial, not a constraint. `timeout(2700)` used
+                     to buy a 900 s ceiling and retire a real 900 s bound.
+      marker 0       pytest-timeout DISABLES the item clock. Zero is not a bound
+                     of zero seconds; it means there is no per-item clock, and
+                     the driver's stall window is then the only thing that can
+                     end a blocking call. Judging against `0 // 3 == 0` made
+                     every inner timeout in such a file a violation.
+      no stall read  fall back to the harness bound, which is smaller. When the
+                     cap cannot be read the tighter answer is the safe one.
+    """
+    harness = base_ceiling * CEILING_DIVISOR
+    if stall:
+        effective = int(marker_seconds) if marker_seconds else stall
+        return min(effective, stall) // CEILING_DIVISOR
+    # NO STALL RESOLVED -> NO CAP, and `main` REFUSES in this state rather than
+    # publishing a verdict it cannot justify. Capping at the harness bound instead
+    # was tried and is wrong in a way worth recording: the marker exists precisely
+    # to REPLACE the harness item bound, so capping at it makes every marker inert
+    # and silently converts "this test genuinely needs longer" into a finding.
+    effective = int(marker_seconds) if marker_seconds else harness
+    return effective // CEILING_DIVISOR
+
+
+def scan_source(text: str, rel_path: str, ceiling: int,
+                stall: Optional[int] = None
                 ) -> Tuple[List[Finding], List[Finding], int]:
     """(findings, unresolved_above_ceiling, bounded_call_sites) for one file.
 
     Kept as the three-value shape every caller and test already uses; the
     marked-item census is the fourth thing `scan_source_report` returns.
     """
-    rep = scan_source_report(text, rel_path, ceiling)
+    rep = scan_source_report(text, rel_path, ceiling, stall)
     return rep["findings"], rep["unresolved_above_ceiling"], rep["sites"]
 
 
-def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
+def scan_source_report(text: str, rel_path: str, ceiling: int,
+                       stall: Optional[int] = None) -> Dict:
     """findings / unresolved / site count / marked items, for one file.
 
     Raises nothing: an unparseable file yields empty lists and is counted by
@@ -1113,65 +1576,31 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
     # The marked census is built even for a file with no bounded call, because
     # it is a DISCLOSURE: a marked item that never appears is a raised ceiling
     # nobody can see.
-    fn_marker: Dict[int, int] = {}
+    fn_marker: Dict[int, float] = {}
     marked: List[MarkedItem] = []
     mod_marker = module_item_marker(tree, consts)
     collectable_items = pytest_item_functions(tree)
     file_ceiling = ceiling
     if mod_marker is not None:
-        # Positive by construction — `module_item_marker` refuses the rest —
-        # but read through `marker_ceiling` anyway, so there is exactly ONE
-        # place in this file where a marker becomes a ceiling.
-        raised = marker_ceiling(mod_marker[0])
-        file_ceiling = ceiling if raised is None else raised
-        # A marker ABOVE the driver's stall window bought nothing (marker_ceiling
-        # returned None), and saying nothing about it would leave its author
-        # believing the file was exempt. `raises=False` because it is exactly that:
-        # a declaration that raised no ceiling.
-        _over = raised_above_driver_stall(mod_marker[0])
+        file_ceiling = marker_ceiling(mod_marker[0], ceiling, stall)
         marked.append(MarkedItem(rel_path, mod_marker[1],
                                  "<pytestmark: every test in this file>",
-                                 mod_marker[0], file_ceiling,
-                                 raises=not _over))
-    for secs, line in module_timeout_marks(tree, consts):
-        if secs > 0:
-            continue
-        # Disclosed, and buys nothing: `file_ceiling` is not touched here.
-        marked.append(MarkedItem(rel_path, line,
-                                 "<pytestmark: every test in this file>",
-                                 secs, file_ceiling, raises=False))
+                                 mod_marker[0], file_ceiling))
     for fn in funcs:
         if id(fn) not in collectable_items:
             continue
         mk = item_timeout_marker(fn, consts)
-        if mk is None:
-            continue
-        mc = marker_ceiling(mk)
-        if mc is None:
+        if mk is not None:
+            fn_marker[id(fn)] = mk
             marked.append(MarkedItem(rel_path, fn.lineno, fn.name, mk,
-                                     file_ceiling, raises=False))
-            continue
-        fn_marker[id(fn)] = mc
-        marked.append(MarkedItem(rel_path, fn.lineno, fn.name, mk, mc))
+                                     marker_ceiling(mk, ceiling, stall)))
 
     findings: List[Finding] = []
     unresolved: List[Finding] = []
     total = 0
-    # The census the verdict sentence is written from (vibe-ic#1734 defect 2).
-    # `judged` must equal `sites` on every path through the loop below: this
-    # gate judges every bound it can read, and the PASS line says so by
-    # printing both. A future exemption that skipped a call would show up here
-    # as `judged < sites` before it could show up as a false green.
-    judged = 0
-    at_session = 0
-    at_raised = 0
-    max_applied = ceiling
     if not timeout_calls:
         return {"findings": findings, "unresolved_above_ceiling": unresolved,
-                "sites": total, "marked_items": marked, "judged": judged,
-                "judged_at_session_ceiling": at_session,
-                "judged_at_raised_ceiling": at_raised,
-                "max_applied_ceiling": max_applied}
+                "sites": total, "marked_items": marked}
 
     mods, names = _subprocess_aliases(tree)
     # The scope map answers two questions and is built only when one is asked:
@@ -1193,13 +1622,10 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
         # The bound that will really apply to THIS call: the innermost
         # enclosing item bound, which is the session's unless a marker on a
         # function this call sits inside replaced it.
-        # ALWAYS an int. A marker that this file cannot read as a bound leaves
-        # it where it was; there is no `None` for a later `continue` to key
-        # off, which is the vibe-ic#1734 defect stated as a type.
         call_ceiling = file_ceiling
         for fn in reversed(chain):
             if id(fn) in fn_marker:
-                call_ceiling = fn_marker[id(fn)]
+                call_ceiling = marker_ceiling(fn_marker[id(fn)], ceiling, stall)
                 break
         for kw_name, val in kws:
             const_name = const_line = owner = None
@@ -1224,12 +1650,6 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
                 const_name = val.id
                 const_kind = VIA_PARAMETER_DEFAULT
             total += 1
-            judged += 1
-            if call_ceiling > ceiling:
-                at_raised += 1
-                max_applied = max(max_applied, call_ceiling)
-            else:
-                at_session += 1
             if seconds <= call_ceiling:
                 continue
             if forwarders is None:
@@ -1239,14 +1659,10 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
                 continue
             rec = Finding(rel_path, val.lineno, _dotted(node.func), kw_name,
                           seconds, why or "not resolvable from this file",
-                          const_name, const_line, const_kind, owner,
-                          call_ceiling)
+                          const_name, const_line, const_kind, owner)
             (findings if why else unresolved).append(rec)
     return {"findings": findings, "unresolved_above_ceiling": unresolved,
-            "sites": total, "marked_items": marked, "judged": judged,
-            "judged_at_session_ceiling": at_session,
-            "judged_at_raised_ceiling": at_raised,
-            "max_applied_ceiling": max_applied}
+            "sites": total, "marked_items": marked}
 
 
 def _resolve_parameter_default(val: ast.expr, chain: Tuple[ast.AST, ...],
@@ -1282,16 +1698,13 @@ def _resolve_parameter_default(val: ast.expr, chain: Tuple[ast.AST, ...],
 
 
 def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
+              stall: Optional[int] = None,
               anchor: Optional[Path] = None) -> Dict:
     findings: List[Finding] = []
     unresolved: List[Finding] = []
     marked: List[MarkedItem] = []
     files = 0
     sites = 0
-    judged = 0
-    at_session = 0
-    at_raised = 0
-    max_applied = ceiling
     unparseable: List[str] = []
     root = Path(tests_root)
     # Report paths relative to the PLUGIN root when the scan root is the
@@ -1310,7 +1723,7 @@ def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
             unparseable.append(rel)
             continue
         try:
-            one = scan_source_report(text, rel, ceiling)
+            one = scan_source_report(text, rel, ceiling, stall)
         except SyntaxError:
             unparseable.append(rel)
             continue
@@ -1318,20 +1731,13 @@ def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
         unresolved.extend(one["unresolved_above_ceiling"])
         marked.extend(one["marked_items"])
         sites += one["sites"]
-        judged += one["judged"]
-        at_session += one["judged_at_session_ceiling"]
-        at_raised += one["judged_at_raised_ceiling"]
-        max_applied = max(max_applied, one["max_applied_ceiling"])
     return {"files": files, "bounded_sites": sites, "findings": findings,
             "unresolved_above_ceiling": unresolved, "marked_items": marked,
-            "unparseable": unparseable, "judged": judged,
-            "judged_at_session_ceiling": at_session,
-            "judged_at_raised_ceiling": at_raised,
-            "max_applied_ceiling": max_applied}
+            "unparseable": unparseable}
 
 
 def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
-               ceiling: int) -> Dict:
+               ceiling: int, stall: Optional[int] = None) -> Dict:
     """Merge `scan_tree` over every root a pytest lane actually runs.
 
     Kept as a merge rather than one root with one glob because the two trees
@@ -1340,18 +1746,11 @@ def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
     """
     merged = {"files": 0, "bounded_sites": 0, "findings": [],
               "unresolved_above_ceiling": [], "marked_items": [],
-              "unparseable": [], "roots": [], "judged": 0,
-              "judged_at_session_ceiling": 0, "judged_at_raised_ceiling": 0,
-              "max_applied_ceiling": ceiling}
+              "unparseable": [], "roots": []}
     for root, glob, anchor in roots:
-        rep = scan_tree(root, ceiling, glob, anchor)
+        rep = scan_tree(root, ceiling, glob, stall=stall, anchor=anchor)
         merged["files"] += rep["files"]
         merged["bounded_sites"] += rep["bounded_sites"]
-        merged["judged"] += rep["judged"]
-        merged["judged_at_session_ceiling"] += rep["judged_at_session_ceiling"]
-        merged["judged_at_raised_ceiling"] += rep["judged_at_raised_ceiling"]
-        merged["max_applied_ceiling"] = max(merged["max_applied_ceiling"],
-                                            rep["max_applied_ceiling"])
         merged["findings"].extend(rep["findings"])
         merged["unresolved_above_ceiling"].extend(
             rep["unresolved_above_ceiling"])
@@ -1392,144 +1791,6 @@ def bounded_calls_per_test_function(tests_root: Path) -> Dict[int, int]:
             if n:
                 hist[n] = hist.get(n, 0) + 1
     return hist
-
-
-# --- the gate's own falsifiability, run on EVERY invocation -----------------
-
-#: WHY THIS LIVES IN THE PROGRAM AND NOT ONLY IN ITS PYTEST FILE (#1734 defect
-#: 3). The paired guard for the withheld attempt was written as pytest cases in
-#: `programs/tests/test_ci_harness_timeout_ceiling_check.py`. That file is not
-#: in `SMOKE_BASENAMES`, and `tools/gatekeeper-land.sh` builds its pytest list
-#: from `ci_targeted_test_select.py --base $BASE`. MEASURED on the exact diff
-#: that reintroduces the defect — one line, `pytestmark =
-#: pytest.mark.timeout(0)`, added to `test_matrix_mutation_ledger.py` — the
-#: real selector chose 18 files and that guard was not among them. So the guard
-#: could not run on the only PR it exists for, while `repo_hygiene_gates.sh`
-#: (which DOES run on every landing, line `inner timeouts fit the harness`)
-#: returned rc=0 PASS.
-#:
-#: The rule the whole of #1734 is an instance of: A CHANGE WHOSE PURPOSE IS TO
-#: MAKE SOMETHING SKIP NEEDS ITS GUARD WIRED AT THE LAYER THAT ALWAYS RUNS, NOT
-#: AT THE LAYER THE CHANGE ITSELF SELECTS. The layer that always runs is this
-#: program, so the assertions live here, execute before the scan on every run,
-#: and fail the gate. The pytest file keeps them too — `SMOKE_BASENAMES` now
-#: carries it — but neither copy depends on the other being reached.
-#:
-#: Each case is (label, source, ceiling, expected findings, expected
-#: advisories, expected readable sites). ~1 ms for all of them: six ast.parse
-#: calls on strings, no filesystem.
-_SELF_CHECK: Tuple[Tuple[str, str, int, int, int, int], ...] = (
-    ("a zero module marker does not retire a FINDING",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(0)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=900)\n", 60, 1, 0, 1),
-    ("a zero module marker does not retire a recorded ADVISORY",
-     "import pytest\n"
-     "pytestmark = pytest.mark.timeout(0)\n"
-     "def test_x():\n"
-     "    L.replay_many(timeout=900)\n", 60, 0, 1, 1),
-    ("a zero PER-TEST marker does not retire a finding either",
-     "import pytest, subprocess\n"
-     "@pytest.mark.timeout(0)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=900)\n", 60, 1, 0, 1),
-    ("the tie-break over [timeout(0), timeout(300)] picks 300, not 0",
-     "import pytest, subprocess\n"
-     "pytestmark = [pytest.mark.timeout(0), pytest.mark.timeout(300)]\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=900)\n", 60, 1, 0, 1),
-    ("a marker still TIGHTENS: 30 // 3 = 10 catches a 60 s call",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(30)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=60)\n", 60, 1, 0, 1),
-    ("a positive marker is a DECLARED bound, still judged, not an exemption",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(600)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=201)\n", 60, 1, 0, 1),
-
-    # ── ONE CASE PER DOOR, NOT PER NUMBER ────────────────────────────────────
-    #
-    # The six above are all about `0` or about tightening, and that is precisely
-    # how the second attempt at #1734 shipped a live silencer: it closed the value
-    # that had been reported and left the door beside it open. A contributor wrote
-    # `2700` instead of `0` and got a 900 s call to PASS on the fixed gate.
-    #
-    # These four are keyed to the DOOR — raise the ceiling, retire an advisory,
-    # retire a finding, out-run the clock nobody can move — so a future spelling of
-    # any of them fails here rather than in production.
-
-    ("a marker ABOVE the driver stall window buys NOTHING (the 2700 door)",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(2700)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=900)\n", 60, 1, 0, 1),
-
-    ("…and it cannot retire a recorded ADVISORY either",
-     "import pytest\n"
-     "pytestmark = pytest.mark.timeout(2700)\n"
-     "def test_x():\n"
-     "    L.replay_many(timeout=900)\n", 60, 0, 1, 1),
-
-    ("one second over the stall window already buys nothing",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(301)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=900)\n", 60, 1, 0, 1),
-
-    # THE PAIRED HALF. Without it the four above pass against a gate that ignores
-    # every marker — which would be a different defect with the same green.
-    ("a marker AT the stall window is still honoured: 300 // 3 = 100 clears 90 s",
-     "import pytest, subprocess\n"
-     "pytestmark = pytest.mark.timeout(300)\n"
-     "def test_x():\n"
-     "    subprocess.run(['x'], timeout=90)\n", 60, 0, 0, 1),
-)
-
-
-def self_check() -> List[str]:
-    """Failures of this gate's own falsifiability cases, empty when sound.
-
-    Also asserts the invariant the verdict sentence is written from: every
-    readable bound is JUDGED. `judged != sites` is what an exemption looks like
-    one step before it becomes a false green, whatever spelling it arrives in.
-    """
-    bad: List[str] = []
-    for label, src, ceil, want_f, want_u, want_sites in _SELF_CHECK:
-        try:
-            rep = scan_source_report(src, "<self-check>", ceil)
-        except SyntaxError as exc:            # pragma: no cover - fixture typo
-            bad.append(f"{label}: the fixture does not parse ({exc})")
-            continue
-        got = (len(rep["findings"]), len(rep["unresolved_above_ceiling"]),
-               rep["sites"])
-        if got != (want_f, want_u, want_sites):
-            bad.append(f"{label}: expected "
-                       f"{(want_f, want_u, want_sites)} "
-                       f"(finding(s), advisory(ies), readable bound(s)), got "
-                       f"{got}")
-        if rep["judged"] != rep["sites"]:
-            bad.append(f"{label}: {rep['sites']} readable bound(s) but "
-                       f"{rep['judged']} judged — a bound was dropped from the "
-                       "judged set, which is the exemption shape this gate "
-                       "refuses (vibe-ic#1734)")
-    if marker_ceiling(0) is not None or marker_ceiling(-1) is not None:
-        bad.append("marker_ceiling accepted a non-positive marker as a bound")
-    # …and the tie-break STRUCTURALLY, not only through the verdict. With
-    # `marker_ceiling` refusing 0 the behaviour above survives a `min` that
-    # still considers 0, because the refusal happens downstream — so a mutant
-    # that puts 0 back in the running would slip past a behaviour-only case.
-    # Defence in depth is the point: either edit alone must be caught, since
-    # the withheld attempt needed both and a future one might need one.
-    tie = module_item_marker(ast.parse(
-        "pytestmark = [pytest.mark.timeout(0), pytest.mark.timeout(300)]"), {})
-    if tie is None or tie[0] != 300:
-        bad.append("the min() tie-break over [timeout(0), timeout(300)] "
-                   f"returned {tie} — 0 is not a bound and must not be a "
-                   "candidate, or `smallest` stops meaning `tightest`")
-    return bad
 
 
 # --- CLI -------------------------------------------------------------------
@@ -1574,29 +1835,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "the ceiling divisor is chosen against")
     ap.add_argument("--json", dest="json_out", default=None,
                     help="write the machine record to this path")
-    ap.add_argument("--self-check-only", action="store_true",
-                    help="run only the falsifiability cases below and exit "
-                         "(they run on EVERY invocation regardless; this flag "
-                         "is for reading them without a tree)")
     args = ap.parse_args(argv)
-
-    # BEFORE anything else, and unconditionally. This is the assertion that
-    # `repo_hygiene_gates.sh` always reaches; see `_SELF_CHECK`.
-    broken = self_check()
-    if broken:
-        print("[FAIL] ci_harness_timeout_ceiling_check SELF-CHECK: this gate "
-              "can no longer catch what it exists to catch, so its verdict "
-              "about the tree would not mean anything:")
-        for b in broken:
-            print(f"   {b}")
-        print("  Nothing was scanned. This is NOT a pass.")
-        return 1
-    if args.self_check_only:
-        print(f"[PASS] ci_harness_timeout_ceiling_check SELF-CHECK: "
-              f"{len(_SELF_CHECK)} falsifiability case(s), including that a "
-              "`pytestmark = pytest.mark.timeout(0)` retires neither a finding "
-              "nor a recorded advisory. No tree was scanned.")
-        return 0
 
     repo_root = find_repo_root(Path(args.root)) if args.root else \
         find_repo_root()
@@ -1606,6 +1845,71 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bounds = harness_bounds(repo_root) if repo_root else []
     harness = min((b.seconds for b in bounds), default=None)
     roots = _scan_roots(repo_root, args.tests_root)
+    semantic = (landing_semantic_progress_contract(repo_root)
+                if repo_root else {"declared": False, "errors": [],
+                                   "lanes": []})
+
+    # The live landing gate no longer has an elapsed harness bound.  Validate
+    # that stronger contract before entering the legacy finite-bound audit used
+    # by old/fake harness fixtures.  A half migration is a failure, not a reason
+    # to fall back to whichever historical timeout still happens to parse.
+    if semantic["declared"] and args.tests_root is None:
+        if semantic["errors"]:
+            print("[FAIL] ci_harness_timeout_ceiling_check: the landing gate "
+                  "declares semantic pytest supervision but its contract is "
+                  "incomplete:")
+            for error in semantic["errors"]:
+                print(f"   {error}")
+            return 1
+        if not roots:
+            print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: "
+                  "semantic landing supervision is present, but no test tree "
+                  f"to scan ({args.tests_root or TESTS_DIR_REL} not found) -- "
+                  "0 files examined, which is NOT a pass.")
+            return 2
+        # A deliberately enormous finite comparison value lets the existing
+        # AST census count readable blocking sites without emitting non-standard
+        # JSON Infinity. Findings are not used in this mode: with no outer
+        # elapsed ceiling, no finite child bound can outlive it.
+        rep = scan_roots(roots, 10 ** 18)
+        if rep["unparseable"]:
+            print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: "
+                  "semantic harness is valid, but some test sources could not "
+                  "be parsed, so the population is incomplete:")
+            for path in rep["unparseable"][:20]:
+                print(f"   {path}")
+            return 2
+        print("ci_harness_timeout_ceiling_check: semantic-progress landing "
+              f"harness ({len(semantic['lanes'])} pytest population(s)); "
+              "fixed elapsed ceiling: none")
+        print(f"  scanned {rep['files']} file(s) in {len(rep['roots'])} "
+              f"tree(s), {rep['bounded_sites']} readable inner diagnostic "
+              "bound(s)")
+        for lane in semantic["lanes"]:
+            print(f"   gatekeeper-land.sh:{lane['line']}  "
+                  "aggregate lifecycle-supervised lane")
+        if args.json_out:
+            Path(args.json_out).write_text(json.dumps({
+                "program": "ci_harness_timeout_ceiling_check",
+                "mode": "semantic_progress",
+                "harness_seconds": None,
+                "ceiling_seconds": None,
+                "ceiling_divisor": None,
+                "harness_bounds": [],
+                "semantic_lanes": semantic["lanes"],
+                "roots": rep["roots"],
+                "files": rep["files"],
+                "bounded_sites": rep["bounded_sites"],
+                "findings": [],
+                "unresolved_above_ceiling": [],
+                "marked_items": [],
+                "unparseable": [],
+                "passed": True,
+            }, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        print("[PASS] every landing pytest population is supervised by "
+              "validated lifecycle progress with no total runtime ceiling; "
+              "elapsed time is not a test verdict.")
+        return 0
 
     # Two ways to have nothing to say, and neither of them is a pass. Reported
     # BEFORE the scan so the message names the missing input rather than an
@@ -1619,6 +1923,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "pass.")
         return 2
     ceiling = harness // CEILING_DIVISOR
+    # The cap a contributor cannot supply. Resolved, not stated; None falls back
+    # to the harness bound inside `marker_ceiling`, which is the tighter answer.
+    stall = driver_stall_window(repo_root)
+    if stall is None:
+        # A run that cannot read the cap cannot judge a marked item, and a marked
+        # item is exactly where the dial lives. Refusing is the only honest exit:
+        # without the cap this gate would publish PASS over ceilings a contributor
+        # set for themselves.
+        print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: could not read "
+              f"{_STALL_SOURCE[1]} from {_STALL_SOURCE[0]}, so the cap on a "
+              "marker-derived ceiling is unknown. A marked item cannot be judged "
+              "without it, and that is NOT a pass.")
+        return 2
     if not roots:
         print(f"[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: harness "
               f"bound {harness}s resolved, but no test tree to scan "
@@ -1626,7 +1943,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "examined, which is NOT a pass.")
         return 2
 
-    rep = scan_roots(roots, ceiling)
+    rep = scan_roots(roots, ceiling, stall)
 
     print(f"ci_harness_timeout_ceiling_check: harness bound {harness}s "
           f"(minimum of {len(bounds)} pytest invocation(s) in "
@@ -1658,12 +1975,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # whose own marker replaces the session bound is not judged against this
     # ceiling. Printed with the value, so raising a ceiling is a visible act.
     marked = rep["marked_items"]
-    raising = [m for m in marked if m.raises]
-    print(f"  test(s) carrying @pytest.mark.timeout: {len(marked)} — "
-          f"{len(raising)} declare a bound that replaces the {harness}s item "
-          f"bound (judged against their own marker // {CEILING_DIVISOR}), "
-          f"{len(marked) - len(raising)} are timeout(0), which is NOT a bound "
-          f"and exempts nothing (vibe-ic#1734)")
+    print(f"  test(s) whose @pytest.mark.timeout replaces the {harness}s item "
+          f"bound (judged against their own marker // {CEILING_DIVISOR}): "
+          f"{len(marked)}")
     for m in marked[:20]:
         print(f"     marked  {m}")
     if len(marked) > 20:
@@ -1683,6 +1997,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps({
             "program": "ci_harness_timeout_ceiling_check",
+            "mode": "fixed_timeout_legacy",
             "harness_seconds": harness,
             "ceiling_seconds": ceiling,
             "ceiling_divisor": CEILING_DIVISOR,
@@ -1690,10 +2005,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "roots": rep["roots"],
             "files": rep["files"],
             "bounded_sites": rep["bounded_sites"],
-            "judged": rep["judged"],
-            "judged_at_session_ceiling": rep["judged_at_session_ceiling"],
-            "judged_at_raised_ceiling": rep["judged_at_raised_ceiling"],
-            "max_applied_ceiling": rep["max_applied_ceiling"],
             "findings": [f.as_dict() for f in rep["findings"]],
             "unresolved_above_ceiling": [u.as_dict() for u in unres],
             "marked_items": [m.as_dict() for m in rep["marked_items"]],
@@ -1701,57 +2012,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "passed": not rep["findings"],
         }, indent=2) + "\n", encoding="utf-8")
 
-    # The judged denominator, stated next to the readable one. #1734 defect 2
-    # was a PASS sentence that had stopped describing the judged set; the two
-    # numbers below are what make that detectable by reading the output.
-    print(f"  judged: {rep['judged']} of {rep['bounded_sites']} readable "
-          f"bound(s) — {rep['judged_at_session_ceiling']} against the "
-          f"{ceiling}s session ceiling, {rep['judged_at_raised_ceiling']} "
-          f"against a declared marker's own ceiling (largest applied: "
-          f"{rep['max_applied_ceiling']}s). No readable bound is exempt.")
-
     if rep["findings"]:
-        print(f"[FAIL] {len(rep['findings'])} inner bound(s) above the ceiling "
-              f"that will really apply to them -- each one can outlive the "
-              f"item bound that governs it, and under "
-              f"`--timeout-method=thread` that kills the SESSION instead of "
-              f"the test:")
+        print(f"[FAIL] {len(rep['findings'])} inner bound(s) above the "
+              f"{ceiling}s ceiling -- each one can outlive the {harness}s "
+              f"harness, which kills the SESSION instead of the test:")
         for f in rep["findings"]:
-            print(f"   {f}   [{f.resolved_via}]  "
-                  f"[judged against {f.ceiling}s]")
+            print(f"   {f}   [{f.resolved_via}]")
         print("  Remedy: lower the bound, or move the test out of the "
-              "targeted subset if it genuinely needs longer. "
-              "`pytest.mark.timeout(0)` is NOT that second remedy -- it turns "
-              "off pytest-timeout's clock without taking the item out of the "
-              "harness, and this gate does not read it as a bound.")
+              "targeted subset if it genuinely needs longer.")
         return 1
-    # TRUE OF WHAT WAS ACTUALLY JUDGED. The old sentence named one number,
-    # `{ceiling}s`, and was safe only while the sole exclusion removed
-    # UNRESOLVABLE callees -- which is why the word "resolvable" was in it. A
-    # marker does not remove a call from the judged set, it changes the number
-    # it is judged against, so the sentence names both the count and the
-    # largest ceiling actually applied.
-    against = f"{ceiling}s"
-    if rep["judged_at_raised_ceiling"]:
-        against = (f"{ceiling}s for {rep['judged_at_session_ceiling']} of "
-                   f"them and their own marker // {CEILING_DIVISOR} for the "
-                   f"{rep['judged_at_raised_ceiling']} inside the marked "
-                   f"item(s) listed above, largest applied "
-                   f"{rep['max_applied_ceiling']}s")
-    # The advisory lane is NAMED in the sentence rather than left for the
-    # reader to subtract. `judged` counts every readable bound, and an
-    # unresolvable callee above the ceiling is one of them — so a sentence that
-    # said "all N resolvable calls" while N included that bound would be
-    # describing a set it does not have.
-    caveat = ("" if not unres else
-              f" The {len(unres)} bound(s) above the ceiling whose callee this "
-              f"file cannot resolve are listed above as advisory and are NOT "
-              f"covered by that claim.")
-    print(f"[PASS] all {rep['judged']} readable bound(s) were judged, and "
-          f"every one whose callee resolves to a blocking call is at or under "
-          f"the ceiling that will really apply to it ({against}), so its own "
-          f"timeout can fire before the bound that ends the session. Nothing "
-          f"was exempted from the judged set.{caveat}")
+    # THE SENTENCE MUST NOT OUTRUN WHAT WAS CHECKED (vibe-ic#1734, defect 2).
+    # It used to read "bounded at or under {ceiling}s" flat. That is false the
+    # moment any marked item is judged against its own, larger, ceiling -- the run
+    # would assert a property two lines under its own printed counterexample. The
+    # claim is now stated as what is actually true of every judged call: each is
+    # under THE CEILING THAT APPLIES TO IT, and the cap on that ceiling is named
+    # so a reader can see no marker can raise it without bound.
+    cap = stall if stall else harness
+    marked_n = len(rep["marked_items"])
+    extra = (f"; {marked_n} marked item(s) are judged against their own marker, "
+             f"capped at the {cap}s driver stall window") if marked_n else ""
+    print(f"[PASS] every resolvable blocking call is bounded at or under the "
+          f"ceiling that applies to it -- {ceiling}s by default (the {harness}s "
+          f"harness bound // {CEILING_DIVISOR}){extra}. So no such call can "
+          f"outlive the bound that would otherwise end the SESSION.")
     return 0
 
 

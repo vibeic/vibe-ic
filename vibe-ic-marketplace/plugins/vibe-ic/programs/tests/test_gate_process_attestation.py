@@ -31,6 +31,15 @@ def test_pytest_wall_clock_is_normalized_without_erasing_outcomes():
     assert red["semantic_sha256"] != left["semantic_sha256"]
 
 
+def test_parenthesized_pytest_minute_clock_is_normalized_too():
+    left = A.semantic_record("108 passed in 64.11s (0:01:04)\n", 0)
+    right = A.semantic_record("108 passed in 66.28s (0:01:06)\n", 0)
+    red = A.semantic_record("107 passed, 1 failed in 66.28s (0:01:06)\n", 1)
+    assert left["verdict_line"] == right["verdict_line"] == "108 passed in <TIME>s"
+    assert left["semantic_sha256"] == right["semantic_sha256"]
+    assert red["semantic_sha256"] != left["semantic_sha256"]
+
+
 def test_loader_refuses_a_record_whose_claim_and_digest_disagree(tmp_path):
     record = A.process_attestation(
         "gate", "[FAIL] real finding\n", 1, ["python3", "gate.py"])

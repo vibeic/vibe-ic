@@ -122,25 +122,30 @@ _538 = _load(_TESTS, "test_issue538_merge_gate_covers_ci_hygiene")
 
 
 # ── what the script's corpus IS, discovered rather than declared ────────────
+#: The producer the hygiene script itself hands to `gate_dispatch_over`.
+_CORPUS_PRODUCER = _REPO / "tools" / "ci" / "routed_def_corpus.py"
+
+
 def _published_corpus() -> list:
     """The items the gate script's own producer selects, run for real.
 
-    The glob is SCRAPED from the script — the single quoted pattern under
-    `benchmark-data` — so this test cannot disagree with the script about what
-    the corpus is, and cannot go stale when the layout moves. Present in the
-    script both before and after #957, so the discovery works in both arms and
-    only the disclosure assertions can fail.
+    ASKED OF THE SCRIPT'S OWN PRODUCER, which is the same reason the glob used
+    to be scraped out of the script: this test must not be able to disagree
+    with the script about what the corpus is, and must not go stale when the
+    layout moves. 7c376e348 (v1.10.69) moved the population out of an inline
+    `benchmark-data/...` glob and into `tools/ci/routed_def_corpus.py`, so
+    there is no longer a glob in the script to scrape — the scrape found zero
+    and this helper failed before any disclosure assertion could run. Running
+    the producer keeps the original property instead of re-copying its glob
+    here, which would be the second registry the scrape existed to avoid.
     """
-    text = _SCRIPT.read_text(errors="replace")
-    globs = sorted({m.group(1) for m in
-                    re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
-    assert len(globs) == 1, (
-        "the hygiene script no longer names exactly one published-corpus "
-        f"glob, so this test cannot know what the loop expands over: {globs}")
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "--", globs[0]],
-                         capture_output=True, text=True, timeout=_T)
+    out = subprocess.run(
+        ["python3", str(_CORPUS_PRODUCER), "--repo", str(_REPO)],
+        capture_output=True, text=True, timeout=_T)
+    # rc 2 is "I could not look", which this file never lets read as an empty
+    # corpus; the caller's `@needs_corpus` mark is what covers the absent one.
     assert out.returncode == 0, out.stderr
-    return [p for p in out.stdout.split() if p]
+    return [ln for ln in out.stdout.split() if ln]
 
 
 def _templated_decls():
@@ -423,6 +428,7 @@ def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
     assert not silent, silent
 
 
+@needs_corpus
 def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     """The other half: a disclosure that was achieved by dropping a gate, or by
     narrowing the corpus, would be a coverage cut wearing a fix's clothes.
