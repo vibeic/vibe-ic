@@ -599,3 +599,56 @@ this is a regression or a gap that shipped.**
 "a fixture I got wrong"; **it exposed an incompatibility that no test has reached
 since the migration**, and the only reason it looked like my fixture's fault is
 that mine was the first run to get that far.
+
+---
+
+# Part 12 — a GAP THAT SHIPPED, not a regression; and the check is right for one caller and impossible for the other
+
+Part 11 left one thing open: **has the routed-transition path ever passed?** It
+decides whether this is a regression or a gap. **Answered from history.**
+
+**All FOUR components arrived in the SAME commit:**
+
+    7c376e348  feat(landing): activate the semantic landing runtime [v1.10.69]
+               2026-08-18 22:28:49 +0800
+
+      benchmark_data_landing_checkout.py   the origin check
+      hermetic_git_subject.py              the no-remotes materialisation
+      build_trusted_transition_evidence    the caller
+      GATEKEEPER_STUB_ROUTED_TRANSITION    the env knob gating the only test
+
+**So it is a GAP THAT SHIPPED, not a regression.** Nothing changed under the
+check; the incompatible pair landed together — **complete with the test that would
+have caught it, gated behind an env knob the same architecture prevents from
+crossing.** The commit introduced the defect, the detector, and the reason the
+detector cannot fire, in one act.
+
+**AND THE CHECK IS NOT WRONG — IT IS RIGHT FOR THE OTHER CALLER.** The program is
+used two ways, and only one of them can satisfy an origin requirement:
+
+| call | checkout | has an origin? |
+|---|---|---|
+| `measure` — `:662` | `$configured`, the operator's real benchmark-data **CLONE** | **yes.** The check is correct and load-bearing here |
+| `validate` — `:806` | `$BENCHMARK_B2`, a **`git init`-ed hermetic subject** | **no, by construction** |
+
+`validate_benchmark_snapshot` has **exactly one call site**, and it is the
+hermetic one. **So the validate path can never pass, and the measure path needs
+the check it shares.**
+
+**That is why the remedy is not "delete the origin check".** It is correct where it
+runs on a clone. **What is wrong is applying a clone-shaped invariant to a subject
+built from objects** — and the fix is a distinction the program does not currently
+draw, not a deletion.
+
+**This closes the 4 corpus/bootstrap reds as a DIAGNOSIS**, at a level a
+protected-file owner can act on in one sitting:
+
+* not *"understand the trusted-parent-evidence protocol"* (Part 9),
+* not *"a fixture I got wrong"* (Part 11),
+* but **"`validate` requires an origin that its only caller's subject cannot have,
+  and both shipped together in `7c376e348`."**
+
+**What remains unmeasured, and it is small:** whether `measure`'s origin check and
+`validate`'s can be separated without weakening the first. That is a design
+question for the owner of two protected files — and it is the whole of what is
+left on this item.
