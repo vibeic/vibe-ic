@@ -37,6 +37,7 @@ jsonl is present on this host; otherwise faithful synthetic records stand in.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -342,6 +343,69 @@ def test_lifo_functionally_correct_filo():
     tb = _lifo_func_tb("FILO_RTL", 16, "clk", "reset", "push", "pop")
     out = _run_iverilog(rtl, tb, "filo")
     assert "ALL_PASS" in out, out
+
+
+def _mem_indices(rtl):
+    """Every index expression the emit uses to address `mem`, bracket-matched so a
+    nested part-select (`mem[sp[AW-1:0]]`) comes back whole. The array DECLARATION
+    (`mem [0:DEPTH-1]`) is not an index and is excluded."""
+    out, i = [], 0
+    while True:
+        j = rtl.find("mem[", i)
+        if j < 0:
+            return out
+        k, depth = j + 3, 0
+        while k < len(rtl):
+            if rtl[k] == "[":
+                depth += 1
+            elif rtl[k] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        idx = rtl[j + 4:k].strip()
+        if not idx.startswith("0:"):        # the array declaration, not an index
+            out.append(idx)
+        i = k + 1
+
+
+def test_lifo_top_of_stack_index_decrements_before_it_truncates():
+    """A FULL stack holds `sp == DEPTH == 1<<AW`, whose low AW bits are all ZERO, so
+    `mem[sp[AW-1:0] - 1'b1]` reaches the top entry only if that subtraction wraps
+    inside AW bits. An array index is a SELF-DETERMINED expression, so how wide it is
+    evaluated is the simulator's call: Icarus 11 evaluates it wider, computes -1, and
+    the first pop off a full stack reads `mem[-1]` as X (#1415) — Icarus 13/14 wrap
+    and pass. Assert the emit subtracts at sp's OWN [AW:0] width and narrows AFTER,
+    so the index means one thing on every simulator.
+
+    Runs WITHOUT a simulator deliberately. `test_lifo_functionally_correct_sync_lifo`
+    catches the same defect, but it SKIPs wherever iverilog is absent and passes
+    wherever iverilog is new enough — between the two, the regression had nowhere it
+    was reliably visible, which is how it survived.
+    """
+    rec = _ensure_named(_dataset_record("cvdp_copilot_sync_lifo_0001"), "sync_lifo") or \
+        _rec("sync_lifo", _LIFO_PROMPT)
+    rtl = S.solve(rec)
+    assert rtl is not None
+
+    # The top-of-stack address is a NARROWING net driven by a decrement of the
+    # full-width sp: in an assignment the context width spans the LHS and sp's
+    # [AW:0], so `DEPTH-1` is computed before the narrowing, not after.
+    m = re.search(r"wire\s*\[\s*AW\s*-\s*1\s*:\s*0\s*\]\s*(\w+)\s*=\s*sp\s*-\s*1(?:'b1)?\s*;",
+                  rtl)
+    assert m, ("the LIFO emit has no narrowing full-width top-of-stack decrement "
+               f"(`wire [AW-1:0] <name> = sp - 1'b1;`):\n{rtl}")
+    top_idx = m.group(1)
+
+    # `mem` may be addressed only by the PUSH index — sp itself, and push is gated
+    # on !full so sp <= DEPTH-1 and the narrowing is lossless — or by that net.
+    # Anything else (notably `sp[AW-1:0] - 1'b1`) truncates before it adjusts.
+    idxs = set(_mem_indices(rtl))
+    assert idxs <= {"sp[AW-1:0]", top_idx}, (
+        f"LIFO addresses mem with {sorted(idxs - {'sp[AW-1:0]', top_idx})}, which "
+        f"truncates sp before adjusting it; use `{top_idx}`\n{rtl}")
+    assert top_idx in idxs, (
+        f"`{top_idx}` is declared but mem is never addressed with it\n{rtl}")
 
 
 # =========================================================================== #
