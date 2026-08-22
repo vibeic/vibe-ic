@@ -1,0 +1,7 @@
+path	roster_head	disk_head	state	verdict	re_checked
+/home/reyerchu/_agentjob_jeco/wt	0723c694e	c2f1eb798	MOVED	RECOVER	disk head holds 29 files not at main tip; evidence corrected; RECOVER stands
+/home/reyerchu/_agentjob_jliar/wt	a00f53f20	7e50dce06	MOVED	LANDED	0 differ at BOTH heads, 0 uncommitted; LANDED holds
+/home/reyerchu/_wt_r4_digest	e3d6f4e5d9ceb1f2178eddde357c3b18feb8e1b2	(no head / dir gone)	GONE	RECOVER	directory deleted; commit survives; evidence already flags recover-the-REF
+/home/reyerchu/_wt_r5_author	c2c19ee1faae3f3a7c143a81348951cf1e28c27a	(no head / dir gone)	GONE	RECOVER	directory deleted; commit survives; evidence already flags recover-the-REF
+/home/reyerchu/_wt_r5_stasta	9287e8b35a03ab8956b2a808f29f6c3f9080425f	(no head / dir gone)	GONE	RECOVER	directory deleted; commit survives; evidence already flags recover-the-REF
+/home/reyerchu/_wt_spm_ihp_atpg	499eb2d017cbcba621eb45730027e36910380d8a	(no head / dir gone)	GONE	RECOVER	directory deleted; commit survives; evidence already flags recover-the-REF
