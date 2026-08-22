@@ -38,6 +38,7 @@ The fixture is synthetic on purpose — a square die, a three-master IO library,
 four pads a side — and carries no process, foundry or library name.
 """
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -1416,3 +1417,55 @@ def test_no_real_pdk_declares_one_site_at_two_sizes():
         # its IO libraries.
         assert not getattr(lib, "site_declaration_conflicts", {}), (
             f"{tree}: {lib.site_declaration_conflicts}")
+
+
+def test_the_module_header_can_still_do_its_own_arithmetic():
+    """The header states how many of upstream's PAD_* variables this module
+    names and how many it omits. Those two must add up to the total it also
+    states, and the whole reason this test exists is that a WRONG SENTENCE IN
+    THIS HEADER is what kept PAD_SITE_NOT_FOUND firing against a PDK that had
+    declared the site: the header asserted upstream's placer would exit 1 on
+    its first lookup, which it would not, and nothing re-checked the claim.
+
+    A prose count is not self-checking. This makes it so, with no dependency
+    on upstream being installed -- the arithmetic has to close on its own."""
+    doc = Path(PR.__file__).read_text(encoding="utf-8")
+    m = re.search(r"names (\d+) of upstream's (\d+) PDK-scoped", doc)
+    assert m, "the header no longer states how many PAD_* variables it names"
+    named, total = int(m.group(1)), int(m.group(2))
+    m2 = re.search(r"The other (\d+) it omits", doc)
+    assert m2, "the header no longer states how many it omits"
+    omitted = int(m2.group(1))
+    assert named + omitted == total, (
+        f"the header's own numbers do not close: it says it names {named} "
+        f"and omits {omitted}, which is {named + omitted}, not {total}")
+
+
+def test_the_header_count_matches_what_the_module_actually_names():
+    """The arithmetic closing is necessary and not sufficient -- two wrong
+    numbers can still sum correctly. This one counts the PAD_* variables the
+    three modules actually mention and compares it to the header's claim.
+
+    Driven by upstream's OWN variable list when librelane is importable, so
+    the denominator is upstream's rather than a list retyped here; skipped
+    honestly where it is not."""
+    flow = pytest.importorskip(
+        "librelane.config.flow",
+        reason="librelane not importable on this host")
+    upstream = {v.name for v in flow.pad_variables}
+    doc = Path(PR.__file__).read_text(encoding="utf-8")
+    m = re.search(r"names (\d+) of upstream's (\d+) PDK-scoped", doc)
+    assert m
+    named_claim, total_claim = int(m.group(1)), int(m.group(2))
+    assert total_claim == len(upstream), (
+        f"header says upstream has {total_claim} PAD_* variables; "
+        f"upstream's own pad_variables has {len(upstream)}")
+    here = PROGRAMS
+    sources = "\n".join(
+        (here / n).read_text(encoding="utf-8")
+        for n in ("_pad_ring.py", "pad_ring_gen.py", "pad_ring_check.py"))
+    actually = {v for v in upstream
+                if re.search(r"\b%s\b" % re.escape(v), sources)}
+    assert len(actually) == named_claim, (
+        f"header claims {named_claim} named; the modules name "
+        f"{len(actually)}: {sorted(actually)}")
