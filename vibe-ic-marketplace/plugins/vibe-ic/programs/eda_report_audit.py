@@ -1241,10 +1241,20 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     # where each sits in the file. The text greps run on the ORIGINAL text, so
     # the 22 corpus reports that carry a `#` preamble AND a text body are
     # byte-for-byte unaffected (measured: 22/22 identical).
+    # `^[INFO] COUNT: N` is MAGIC's own count as the LibreLane `Magic.DRC` step
+    # writes it, and MEASURED on a real run it is the only verdict marker that
+    # appears at all — `DRC errors found: N` is never emitted by that flow, so
+    # a clean Magic DRC returned None here and the file was reported UNREADABLE
+    # while the shuttle operator's arm passed the same layout. ANCHORED to line
+    # start (and to the optional [INFO] tag) so it cannot pick up an incidental
+    # "count: N" from prose elsewhere in an 11 MB transcript; it sits with the
+    # other ANCHORED patterns, above the loose fallback, for the same reason
+    # they do.
     for _rx in (r"violation\s+count\s+summary\s*:\s*(\d+)",
                 r"violation\s+report\s*:\s*(\d+)",
                 r"total\s+violations?\s*[:=]?\s*(\d+)",
-                r"DRC errors? found:\s*(\d+)"):
+                r"DRC errors? found:\s*(\d+)",
+                r"(?m)^\s*(?:\[INFO\]\s*)?COUNT\s*:\s*(\d+)\s*$"):
         m = re.search(_rx, text, re.I)
         if m:
             return (int(m.group(1)), 0)
