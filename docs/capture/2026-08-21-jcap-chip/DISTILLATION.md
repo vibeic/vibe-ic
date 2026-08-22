@@ -525,3 +525,42 @@ published records rather than of which branch it is composed with.
 positives with stable subjects; the rc=2 is a repository correctly reporting that
 it is not a run tree.
 
+### A measurement that contradicts the census lane's BLOCKING gate — for the assembler
+
+`gate_proof_vocabulary_has_a_producer` (census lane, `f55027d18`) blocks with
+rc=1 and states:
+
+> ONE axis has NOT ONE of its proof names produced: `drv` … The drv axis is
+> structurally unprovable — no run of this flow can produce the evidence it
+> proves from, on any design, ever.
+
+**The published records contradict the conclusion.** Counting canonical
+`vibeic.ppa.metric.v1` records under `ppa-crosslayer/` and `ppa-e2e/`, by key:
+
+    timing.drv.violations             MEASURED   0    NOT_MEASURED 122
+    timing.drv.max_tran_violations    MEASURED  63    NOT_MEASURED   0
+    timing.drv.max_cap_violations     MEASURED  63    NOT_MEASURED   0
+    timing.drv.max_fanout_violations  MEASURED  63    NOT_MEASURED   0
+
+in `drv_records.json` and `candidates.json`. The `drv` axis is an OR of ANDs —
+group 1 is `[violations]`, group 2 is `[max_tran AND max_cap AND max_fanout]` —
+and **group 2 is fully measured, 63 times**. Real runs prove this axis.
+
+**Both halves can be true, and that is the point.** Their gate asks a SOURCE
+question and its premise is correct: no module declares those literals, which I
+verified independently. The error is the step from "no literal is declared" to
+"no run can ever produce it" — the names are built dynamically, and 63 records
+exist that the source scan cannot see.
+
+That is the same error this lane made and fixed. `every_required_metric_key_has_
+a_producer` was written as a static literal scan, declared the drv axis
+unprovable, and was rewritten to be EMPIRICAL for exactly this reason — the
+producers build names by format (`_ppa/timing.py:651`). After that rewrite this
+lane's gate does NOT flag drv, and flags `em` and `equivalence` instead, which
+have 0 MEASURED against 370 NOT_MEASURED apiece.
+
+**What the assembler needs to know:** a gate that BLOCKS is asserting the drv
+axis can never be measured, and 63 published records measure it. This is not a
+composition conflict and not a merge problem — it is a factual disagreement about
+the tree, decidable by counting, and the count is above. Not repaired here: it is
+another lane's program and this lane has no standing to edit it.
