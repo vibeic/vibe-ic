@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783360968" />
-    <testcase name="tx_test" classname="tx_test" file="/code/src/tx_test.py" lineno="23" time="0.0012497901916503906" sim_time_ns="70.0" ratio_time="56009.40099198779" />
-  </testsuite>
-</testsuites>

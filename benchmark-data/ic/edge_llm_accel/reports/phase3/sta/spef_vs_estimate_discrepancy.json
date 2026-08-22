@@ -1,9 +1,0 @@
-{
-  "finding": "STA_BASIS_DISCREPANCY",
-  "estimate_worst_slack_ns": 4.27,
-  "spef_worst_slack_ns": 1.08,
-  "delta_ns": 3.19,
-  "sign_flip": false,
-  "canonical_basis": "spef",
-  "action": "timing ECO required when the SPEF basis is VIOLATED \u2014 the estimate-based MET is not a sign-off claim (#527)"
-}

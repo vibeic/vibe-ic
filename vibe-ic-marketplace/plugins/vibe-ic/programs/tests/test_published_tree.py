@@ -23,6 +23,10 @@ from pathlib import Path
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import _published_tree as P  # noqa: E402
+# The real-data arm at the bottom walks the PUBLISHED tree's git index, which
+# now lives in vibeic/benchmark-data. `_published_corpus` owns the single "is a
+# published cell readable here?" answer and the single skip reason.
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
 def _repo(tmp_path: Path, *, commit: tuple[str, ...] = ()) -> Path:
@@ -232,6 +236,7 @@ def test_require_is_not_satisfied_by_a_hollow_link(tmp_path):
     assert P.published_paths(r, require="real.txt") is not None
 
 
+@needs_corpus
 def test_on_the_real_repo_no_published_path_is_a_hollow_link():
     """REAL DATA, with the target set computed a second, independent way.
 
@@ -241,9 +246,16 @@ def test_on_the_real_repo_no_published_path_is_a_hollow_link():
     the ones landing outside the index survives into `published_paths`.
 
     It discloses its denominators and refuses to pass on an empty scan: a
-    corpus with no hollow link would prove nothing, so it says so instead."""
+    corpus with no hollow link would prove nothing, so it says so instead.
+
+    THE TREE IT WALKS IS THE PUBLISHED ONE. Every one of the 126 tracked
+    symlinks this guard was written against lived under `benchmark-data/`, and
+    all of them moved to vibeic/benchmark-data — so pointed at the plugin repo
+    it now finds zero links and fails on "nothing was examined", which reports a
+    defect where the fact is that the subject moved. It reads the corpus's own
+    git index instead, and skips (naming the corpus) when there is none here."""
     import os
-    root = _PROGRAMS.parents[3]
+    root = corpus_root()
     r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
                        capture_output=True, text=True)
     if r.returncode != 0:

@@ -1,0 +1,27 @@
+{
+  "program": "crosslayer_rewrite_equivalence",
+  "relation": "candidate_rtl == baseline_rtl",
+  "not_the_same_check_as": "flow step 13 (candidate RTL == candidate post-DFT netlist); step 13 passes on a rewritten candidate by construction and cannot reject one",
+  "top": "spm",
+  "mode": "cycle_exact",
+  "latency_offset_cycles": 0,
+  "latency_freedom_evidence": null,
+  "status": "NOT_PROVEN_EQUIVALENT",
+  "exit_code": 2,
+  "equivalent": false,
+  "compared_points": 37,
+  "proven_points": 36,
+  "unproven_points": 1,
+  "counterexample": false,
+  "bounded_refutation": false,
+  "bounded_refutation_depth": 12,
+  "explanation": "1 of 37 compared point(s) are UNPROVEN and no counterexample was produced \u2014 the engine neither proved nor refuted them. Unproven is not proven; this candidate is NOT admitted, and this is NOT a report that it is wrong.",
+  "baseline_rtl_files": [
+    "spm.v"
+  ],
+  "candidate_rtl_files": [
+    "spm.v"
+  ],
+  "tool": "yosys equiv_make+equiv_struct+equiv_simple+equiv_induct",
+  "elapsed_sec": 1795.16
+}
