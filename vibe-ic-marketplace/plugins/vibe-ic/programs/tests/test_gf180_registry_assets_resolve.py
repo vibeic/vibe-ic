@@ -179,19 +179,35 @@ def test_tapcell_distance_is_under_the_pdk_own_rule():
 
 
 def test_only_the_gf180_entry_declares_these_values():
-    """Blast-radius control: the change is scoped to the gf180mcuD entry.
+    """Blast-radius control: no OTHER entry's physical-cell keys drift.
 
-    Baseline values as they stand on origin/main. sky130A carries no tapcell
-    master in the registry at all — it is set by the hard-coded named branch
-    in `_detect_pdk`. ihp-sg13g2 is a TAPLESS-cell PDK (ties are cell-internal)
-    so its tapcell_master is deliberately null while it does declare an
-    antenna diode. None of that may change here.
+    The register below recorded `sky130A: (None, None)` with the note that its
+    tapcell master "is set by the hard-coded named branch in `_detect_pdk`".
+    That was true, and it was the hazard rather than a fact: the resolver reads
+    the registry with `reg.get("tapcell_master")`, so an OMITTED key and an
+    explicit `null` arrive identically as None — and None means "this PDK ships
+    no tapcell master", which routes the PERC latch-up gate down the tapless-
+    cell path.
+
+    Live consequence on `asap7`, whose branch built its PdkConfig without the
+    field: the image ships `MACRO TAPCELL_ASAP7_75t_R` (`CLASS CORE WELLTAP`,
+    `SITE asap7sc7p5t` — the site that entry declares), the tapcell step
+    self-skipped, and step 28 reported the resulting 0-tap DEF as a tapless-PDK
+    INDETERMINATE. A real latch-up exposure carried as a non-blocking
+    indeterminate — the direction #586 named as strictly worse than the false
+    FAIL it was fixing.
+
+    So three of these values are no longer None. `ihp-sg13g2` stays null because
+    it is GENUINELY tapless (ties cell-internal), which is now a stated null
+    rather than an indistinguishable absence — `pdk_registry_selectable_check`
+    fails an entry that omits the key. The register keeps its original job:
+    nothing here may drift silently.
     """
     baseline = {
-        "sky130A": (None, None),
+        "sky130A": ("sky130_fd_sc_hd__tapvpwrvgnd_1", None),
         "ihp-sg13g2": (None, "sg13g2_antennanp"),
-        "nangate45": (None, None),
-        "asap7": (None, None),
+        "nangate45": ("TAPCELL_X1", None),
+        "asap7": ("TAPCELL_ASAP7_75t_R", None),
         "custom_auto_detect": (None, None),
     }
     for e in REGISTRY["pdks"]:

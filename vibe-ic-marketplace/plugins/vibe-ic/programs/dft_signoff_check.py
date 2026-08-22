@@ -6,7 +6,14 @@ Rolls the three DFT-depth checks into ONE tapeout-facing verdict:
   1. STUCK-AT   : measured stuck-at coverage >= foundry floor
                   (delegated to dft_atpg_coverage_check — recomputed, never
                   a trusted self-asserted boolean; foundry floor clamps a
-                  lenient written target UP).
+                  lenient written target UP). The delegate ALSO applies L20
+                  applicability: a design whose OWN L20 declares no DFT has its
+                  below-floor FAIL downgraded to INFORMATIONAL. This gate
+                  re-derives none of that; it accepts exactly the dispositions
+                  the delegate's own rc mapping treats as non-blocking, via the
+                  SHARED predicate dft_atpg_coverage_check.stuck_at_signoff_passes
+                  ({PASS, INFORMATIONAL}). One predicate, two gates — so the two
+                  cannot reach opposite verdicts about the same tree (#603).
   2. TRANSITION : at-speed (launch-off-capture) transition coverage
                   >= target, OR a DOCUMENTED OSS engine limitation
                   (transition.engine_limited == true WITH a reason). A
@@ -15,22 +22,48 @@ Rolls the three DFT-depth checks into ONE tapeout-facing verdict:
   3. BSDL       : a padded design has a BSDL + boundary-scan-cell-per-pad
                   plan present (from bsdl_emit). A bare core is N/A (SKIP).
                   A padded design with a missing BSDL FAILs. Missing
-                  bsdl_plan evidence FAILs (never a vacuous pass).
+                  bsdl_plan evidence FAILs, unless the whole step was
+                  disclosed-skipped (see the §4.05 block below, which this
+                  program short-circuits on before it reaches BSDL at all).
 
-§4.05 (never a vacuous pass on absence):
-  * absent stuck-at evidence  → FAIL
+§4.05 (never an UNDISCLOSED pass on absence):
+  * absent stuck-at evidence, no disclosed sentinel → FAIL
   * absent transition record  → FAIL
   * absent BSDL plan          → FAIL (cannot prove boundary-scan status)
   * bare-core BSDL            → SKIP (honest N/A, not a pass-for-nothing)
   * engine-limited transition → ENGINE_LIMITED (accepted only when
                                 documented; otherwise FAIL)
+  * absent stuck-at evidence AND a sibling sentinel in phase2/stage2/dft/
+    self-reporting verdict ∈ {SKIP, SKIPPED, SKIPPED-CONDITION}
+                              → SKIPPED-CONDITION (rc=2), NOT a FAIL
+
+The first bullet used to read "absent stuck-at evidence → FAIL" with no
+qualifier. That has not matched the shipped code since the disclosed-skip
+branch landed (see `main()`, guarded by
+`dft_signoff_common.disclosed_atpg_skip`): this program short-circuits to
+rc=2 / "SKIPPED-CONDITION" before any aggregation when the stuck-at evidence
+is absent and the runner left a `dft_atpg_not_run.json` sentinel, and
+flow_compliance_check scores rc=2 as passed=True in its VACUOUS_PASS tier.
+Reproduced on the real spm x ihp-sg13g2 run: rc=2, not rc=1. The rule the
+code enforces is that absence alone never suffices — the skip must be
+explicitly disclosed by the producer.
 
 Overall PASS iff:
-  stuck_at == PASS
+  stuck_at is non-blocking — stuck_at_signoff_passes(status) is True, i.e. a
+                             measured PASS or the L20-applicability INFORMATIONAL
+                             disposition (design's own L20 declares no DFT). A
+                             real below-floor FAIL still blocks.
   AND transition ∈ {PASS, ENGINE_LIMITED(documented)}   (--strict-transition
                                                           demotes ENGINE_LIMITED
                                                           to FAIL)
   AND bsdl ∈ {PASS, SKIP}
+
+BLOCKING GATE: a FAIL verdict returns rc=1 and is meant to STOP tapeout sign-off;
+PASS returns rc=0, and a disclosed step-11 self-skip returns rc=2 (scored as a
+VACUOUS_PASS tier by flow_compliance_check). The INFORMATIONAL stuck-at
+disposition is non-blocking but is always reported in the record (see the
+`stuck_at` block's `floor_enforced` / `l20_applicability` fields) — degrade
+loudly, never silently.
 
 Usage:
     python3 dft_signoff_check.py <project_dir> [--json <out>]
@@ -38,7 +71,9 @@ Usage:
         [--coverage-json PATH] [--bsdl-plan PATH]
         [--strict-transition]
 
-main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error.
+main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error OR disclosed
+                    SKIPPED-CONDITION (rc=2 is overloaded; the stdout line and
+                    the --json `verdict` field distinguish them).
 
 chip-AGNOSTIC: reads only the generic coverage.json / bsdl_plan.json schemas.
 """
@@ -132,9 +167,55 @@ def _dft_inputs_absent(project: Path,
 
 # ── sub-check: transition ──────────────────────────────────────────────
 
+#: Step 11's declared at-speed deliverable, spelled as the flow yaml spells it.
+#: `fault_atpg_run.run_transition_atpg` writes it and records the same relative
+#: path in the coverage record's `plan_file` field.
+TRANSITION_PLAN_REL = "phase2/stage2/dft/transition_atpg_plan.md"
+
+#: A plan shorter than this is a placeholder, not a mechanism description.
+#: `fault_atpg_run._TRANSITION_PLAN_TEMPLATE` renders well over a kilobyte.
+_MIN_PLAN_BYTES = 200
+
+
+def _resolve_plan(project: Optional[Path], plan_file: Optional[str]):
+    """``(path, present)`` for the at-speed plan, or ``(None, None)`` when no
+    project root was supplied and nothing can be looked for.
+
+    THE RECORD DOES NOT GET TO OPT OUT. The first cut drove this off the
+    record's own ``plan_file`` field alone and returned ``(None, None)`` when
+    the field was missing, which made the requirement opt-in BY THE VERY
+    DOCUMENT UNDER AUDIT: measured, an ``engine_limited`` record naming
+    ``plan_file`` with the plan absent came back FAIL, and the identical record
+    with that one key deleted — same empty disk — came back ENGINE_LIMITED.
+    Deleting a field from a hand-authored coverage.json defeated the check.
+
+    So the canonical path step 11 declares, :data:`TRANSITION_PLAN_REL`, is the
+    fallback. A record that names its own document is still honoured at the
+    path it names (``fault_atpg_run.build_transition_report`` sets
+    ``plan_file`` on every record it emits, and a project may legitimately keep
+    the document elsewhere); a record that names nothing is held to the path
+    the flow declares, which is exactly where `fault_atpg_run` writes it.
+    """
+    if project is None:
+        return None, None
+    rel = (plan_file or "").strip() or TRANSITION_PLAN_REL
+    path = Path(rel)
+    if not path.is_absolute():
+        path = project / rel
+    try:
+        # `_TRANSITION_PLAN_TEMPLATE` renders well over a kilobyte, so the
+        # floor separates "the document exists" from "a placeholder was
+        # touched at the path the record names".
+        present = path.is_file() and path.stat().st_size >= _MIN_PLAN_BYTES
+    except OSError:
+        present = False
+    return path, present
+
+
 def evaluate_transition(coverage_json: Optional[dict],
                         transition_target: float,
-                        strict: bool = False) -> dict:
+                        strict: bool = False,
+                        project: Optional[Path] = None) -> dict:
     """Evaluate the transition (at-speed) fault-model sub-check from the
     coverage.json `transition` block (or flat mirror fields). Honest:
       * missing transition record          → FAIL (no evidence)
@@ -143,6 +224,27 @@ def evaluate_transition(coverage_json: Optional[dict],
       * supported + number >= target        → PASS
       * supported + number < target         → FAIL
       * supported + no number               → FAIL (claimed but unproven)
+
+    THE DOCUMENT BEHIND "DOCUMENTED" (step 11's third declared artefact).
+    ENGINE_LIMITED is the tier that lets a design ship with NO at-speed
+    coverage number, and the module docstring's own rule for it is "a
+    DOCUMENTED OSS engine limitation ... WITH a reason". The document is
+    ``phase2/stage2/dft/transition_atpg_plan.md`` — step 11 declares it, the
+    fault ATPG runner writes it, and the coverage record names it back in
+    ``transition.plan_file``. Nothing opened it, so the "documented" in
+    ENGINE_LIMITED rested on a free-text ``reason`` string alone and the
+    launch-off-capture mechanism plan the step claims to deliver was never
+    checked to exist.
+
+    Scope of the requirement, kept as narrow as the defect:
+      * the ENGINE_LIMITED tier ONLY — a measured PASS stands on its number,
+        not on a memo;
+      * only when a ``project`` is supplied, so the pure-dict callers are
+        unchanged.
+
+    It is NOT scoped to records that name a ``plan_file``: see
+    :func:`_resolve_plan` for why that made the requirement opt-in by the
+    document under audit.
     """
     reasons = []
     if coverage_json is None:
@@ -186,8 +288,23 @@ def evaluate_transition(coverage_json: Optional[dict],
                                 f"transition ATPG not accepted; a real "
                                 f"at-speed coverage number is required. "
                                 f"({reason})"]}
+        plan_path, plan_present = _resolve_plan(project, block.get("plan_file"))
+        if plan_present is False:
+            return {"status": "FAIL", "target_pct": target,
+                    "plan_file": str(plan_path) if plan_path else None,
+                    "plan_present": False,
+                    "reasons": [
+                        f"transition marked engine_limited and accepted on a "
+                        f"DOCUMENTED limitation, but the at-speed mechanism "
+                        f"plan the record names ({plan_path}) is absent or is "
+                        f"under {_MIN_PLAN_BYTES} B — step 11 declares "
+                        f"{TRANSITION_PLAN_REL} and the launch-off-capture "
+                        f"plan is the whole documentation this tier rests on. "
+                        f"({reason})"]}
         return {"status": "ENGINE_LIMITED", "target_pct": target,
                 "measured_pct": None,
+                "plan_file": str(plan_path) if plan_path else None,
+                "plan_present": plan_present,
                 "reasons": [f"transition ATPG engine-limited (documented): "
                             f"{reason}"]}
 
@@ -255,22 +372,38 @@ def audit(project: Path,
     bsdl_plan = _load_json(plan_path) if plan_path else None
 
     # 1) stuck-at (delegated recompute + foundry floor)
+    #    The coverage gate ALSO applies L20 applicability: a design whose own
+    #    L20 declares no DFT has its below-floor FAIL downgraded to
+    #    INFORMATIONAL (see dft_atpg_coverage_check.l20_dft_applicability). We
+    #    re-derive NONE of that here — we consume the recorded disposition and
+    #    carry `floor_enforced` + `l20_applicability` through so this aggregate
+    #    discloses WHY it accepted a non-PASS stuck-at (degrade loudly).
     sa = _sa.audit(project, coverage_json_override, foundry_floor=foundry_floor)
     stuck_at = {
         "status": sa.get("verdict"),
         "measured_pct": sa.get("measured_coverage_pct"),
         "effective_target_pct": sa.get("effective_target_pct"),
         "foundry_floor_pct": sa.get("foundry_floor_pct"),
+        "floor_enforced": sa.get("floor_enforced"),
+        "l20_applicability": sa.get("l20_applicability"),
         "reasons": sa.get("reasons", []),
     }
 
-    # 2) transition
+    # 2) transition — `project` is passed so the ENGINE_LIMITED tier can
+    #    require the at-speed plan document step 11 declares.
     transition = evaluate_transition(coverage_json, transition_target,
-                                     strict=strict_transition)
+                                     strict=strict_transition,
+                                     project=project)
     # 3) BSDL
     bsdl = evaluate_bsdl(bsdl_plan)
 
-    stuck_ok = stuck_at["status"] == "PASS"
+    # The stuck-at dimension is non-blocking for exactly the dispositions the
+    # coverage gate's OWN rc mapping treats as rc=0 — read from the SINGLE
+    # shared predicate, never re-listed here. This is what makes the two gates
+    # agree by construction: an INFORMATIONAL disposition the coverage gate
+    # emitted (design's L20 declares no DFT) is accepted here for the SAME
+    # reason it was rc=0 there, and a real below-floor FAIL still blocks.
+    stuck_ok = _sa.stuck_at_signoff_passes(stuck_at["status"])
     trans_ok = transition["status"] in ("PASS", "ENGINE_LIMITED")
     bsdl_ok = bsdl["status"] in ("PASS", "SKIP")
 

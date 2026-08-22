@@ -1,6 +1,7 @@
 """Unit tests for `drc_fix_planner.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("drc_fix_planner")
 
 
@@ -99,7 +100,7 @@ class TestPlanMarkdown:
         plan = mod.build_plan({})
         md = mod.plan_to_markdown(plan)
         assert "drc_fix_planner.py" in md
-        assert "v0.1.50" in md
+        assert f"(v{shipped_plugin_version()})." in md
 
     def test_refuse_to_overclaim(self):
         plan = mod.build_plan({})
