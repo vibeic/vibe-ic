@@ -26,6 +26,7 @@ import pytest
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "benchmark"))
 import cvdp_gate as G  # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 _TOP = ("module ping_pong_buffer(input clk);\n"
         "  dual_port_memory u_m (.clk(clk));\n"
@@ -89,6 +90,7 @@ def test_noleak_no_prompt_no_block():
     assert "dual_port_memory" in warn
 
 
+@NEEDS_SIM
 def test_end_state_gate_blocks_dropped_file(tmp_path):
     """END-STATE via the real program: cvdp_gate.main() on a draft that drops a
     prompt-required submodule file returns rc=1 (BLOCKED) and the report carries

@@ -58,6 +58,18 @@ _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 # --------------------------------------------------------------------------
 # #693 — sign-off DRC report provenance stamp at EMIT TIME
 # --------------------------------------------------------------------------
+#: A real, clean KLayout sign-off report database. The provenance declarer now
+#: derives the tool from the artefact, so a fixture standing in for "the
+#: sign-off DRC report" has to carry the format it claims.
+_KLAYOUT_RDB = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                "<report-database>\n"
+                "  <generator>drc: script='/pdk/tech/klayout/drc/deck.lydrc'"
+                "</generator>\n"
+                "  <top-cell>chip_top</top-cell>\n"
+                "  <items></items>\n"
+                "</report-database>\n")
+
+
 def _sha(p):
     h = hashlib.sha256()
     h.update(Path(p).read_bytes())
@@ -89,28 +101,57 @@ def test_693_drc_signoff_declared_at_emit_time(tmp_path):
     assert _provchk(tmp_path, rel, "klayout,magic,openroad").returncode == 1
     # The runner writes the sign-off DRC report (emit step), THEN our fix
     # re-runs the declarer at emit time.
-    (tmp_path / rel).write_text(
-        "# Sign-off DRC report\n<klayout drc-rdb> total 0 violations\n")
+    (tmp_path / rel).write_text(_KLAYOUT_RDB)
     declared = P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
     assert rel in declared
     # AFTER: the gate now PASSes.
     assert _provchk(tmp_path, rel, "klayout,magic,openroad").returncode == 0
 
 
-def test_693_real_sha_and_tool_stamped(tmp_path):
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    fp = tmp_path / rel
-    fp.write_text("# Sign-off DRC report\nviolations=0\n")
-    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
+def _stamped(tmp_path, rel):
     entry = None
     for line in (tmp_path / "provenance.jsonl").read_text().splitlines():
         if line.strip() and rel in line:
             entry = json.loads(line)
-            break
+    return entry
+
+
+def test_693_real_sha_and_tool_stamped(tmp_path):
+    _mk_proj(tmp_path)
+    rel = "reports/phase3/drc_signoff.rpt"
+    fp = tmp_path / rel
+    fp.write_text(_KLAYOUT_RDB)
+    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
+    entry = _stamped(tmp_path, rel)
     assert entry is not None
     assert entry["tool"] == "klayout"
     assert entry["outputs"][rel] == _sha(fp)  # REAL hash, not a placeholder
+
+
+def test_693_tool_is_derived_from_the_artefact_not_assumed(tmp_path):
+    """The `klayout` above must be MEASURED, not a constant.
+
+    The fixture used to be `"# Sign-off DRC report\\nviolations=0"` — a file
+    with no producer signature at all — and the assertion `tool == "klayout"`
+    still held, because the declarer hardcoded it. That is the laundering the
+    Step-31 provenance allow-list could never see through: with `klayout`
+    stamped unconditionally, removing `openroad` from the allow-list changes
+    nothing at all.
+    """
+    _mk_proj(tmp_path)
+    rel = "reports/phase3/drc_signoff.rpt"
+    (tmp_path / rel).write_text(
+        "# Sign-off DRC report (Step 31 alias).\n"
+        "# Source: phase3/stage3/pnr/routed.drc.rpt\n"
+        "# Tool: openroad\n#\n"
+        "openroad / drt-pass: detailed_route invoked\n"
+        "violation report: 0\nDRC clean: YES\n"
+        + "".join(f"[INFO DRT-{2000 + i:04d}] region query size = {i}.\n"
+                  for i in range(80)))
+    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
+    assert _stamped(tmp_path, rel)["tool"] == "openroad"
+    # and the allow-list can now do its job
+    assert _provchk(tmp_path, rel, "klayout,magic,svrfdrc").returncode == 1
 
 
 def test_693_negative_absent_report_not_fabricated(tmp_path):

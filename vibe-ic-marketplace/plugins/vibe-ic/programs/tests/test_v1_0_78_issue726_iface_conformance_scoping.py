@@ -239,7 +239,7 @@ def test_chip_agnostic_source():
     guard = PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run(
         [sys.executable, str(guard), str(PLUGIN)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

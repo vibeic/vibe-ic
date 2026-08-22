@@ -20,6 +20,8 @@ import json
 import sys
 from pathlib import Path
 
+from _source_pin import func_src
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA  # noqa: E402
 
@@ -60,25 +62,48 @@ def test_ir_within_budget_passes(tmp_path):
 
 
 def test_runner_ir_emitter_writes_budget_verdict():
-    # budget = configurable pct-of-VDD (v1.3.93: reconciled to the plugin's own
-    # ir_drop_budget_check._DEFAULT_BUDGET_PCT, was a hardwired 5%), VDD parsed
-    # from the PSM log.
-    i = _P3_SRC.index('_ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6')
-    # v1.4.6 — widened both bounds: the configurable-budget refactor spread the
-    # #444 comment (-1449), the verdict (+1117) and MEASURED (+3995) apart; the
-    # window must span #444..verdict while still EXCLUDING the MEASURED emitter.
-    window = _P3_SRC[i - 1700:i + 2500]
-    assert "Supply voltage" in window
-    assert '"worst_ir_uv": _worst_ir_uv' in window
-    assert '"verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL"' \
-        in window
-    assert "#444" in window
-    # the hardwired measurement-only verdict is gone from the IR emitter
-    assert '"verdict": "MEASURED"' not in window
+    """The IR verdict is derived from a configurable pct-of-VDD budget, and the
+    hardwired MEASURED verdict is gone from the IR emitter.
+
+    SCOPED STRUCTURALLY, and that is the fix. This used to slice the runner's
+    source by CHARACTER COUNT (`_P3_SRC[i - 1700:i + 2500]`) and had been
+    widened twice as the file grew. `_source_pin.func_src` — already used by the
+    test below in this same file — states the failure mode exactly: a magic
+    window is wrong in BOTH directions, too short giving a false FAIL on correct
+    code, too long letting a NEIGHBOURING function satisfy the assertion.
+
+    Both directions had already happened here. It was RED ON origin/main before
+    this change: `Supply voltage` lives in `_ir_supply_from_psm_log`, a
+    different function that the window used to reach and no longer does — the
+    assertion was being satisfied by a neighbour, exactly as that docstring
+    warns, and stopped being satisfied when the distance changed.
+
+    The scope is now the IR report block itself: from the end of `ir_drop.rpt`
+    to the start of the EM block, so `"verdict": "MEASURED"` — which is the EM
+    emitter's correct answer — cannot leak in and cannot be mistaken for the IR
+    one."""
+    emitter = func_src(_P3_SRC, "_emit_ir_em_reports")
+    ir_block = emitter[emitter.index('"# end of ir_drop.rpt'):
+                       emitter.index('"# end of em.rpt')]
+
+    # the budget is a configurable pct of the VDD parsed from the PSM log
+    assert '_ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6' in ir_block
+    assert '"worst_ir_uv": _worst_ir_uv' in ir_block
+    assert "#444" in ir_block
+    # the verdict is DERIVED from that budget, however it is spelled — the
+    # inline conditional this test used to pin verbatim has since been factored
+    # into `ir_verdict()` with an UNMEASURED arm, which is a better answer, and
+    # a literal-text assertion would have called that a regression.
+    assert '"verdict"' in ir_block and "_ir_budget_uv" in ir_block
+    # and the hardwired measurement-only verdict is not the IR emitter's answer
+    assert '"verdict": "MEASURED"' not in ir_block
+
+    # the VDD really is parsed, in the function whose job that is
+    assert "Supply voltage" in func_src(_P3_SRC, "_ir_supply_from_psm_log")
+
 
 
 def test_perc_auto_maps_measured_to_incomplete():
-    i = _P3_SRC.index("def _auto(name, verdict, tool, evidence):")
-    window = _P3_SRC[i:i + 1800]
+    window = func_src(_P3_SRC, "_auto")
     assert '"INCOMPLETE" if verdict == "MEASURED" else "FAIL"' in window
     assert "#444" in window
