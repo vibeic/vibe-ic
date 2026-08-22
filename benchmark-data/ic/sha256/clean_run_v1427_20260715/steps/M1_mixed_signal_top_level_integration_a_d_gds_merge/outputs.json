@@ -1,8 +1,0 @@
-{
-  "id": "M1",
-  "name": "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)",
-  "status": "na",
-  "phase": "mixed",
-  "folder": "M1_mixed_signal_top_level_integration_a_d_gds_merge",
-  "outputs": []
-}
