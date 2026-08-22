@@ -2,11 +2,39 @@
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
+<<<<<<< HEAD
 The plugin is no longer "compliance regexes over agent prose". It is **1272 top-level Python
 programs** (1197 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+The plugin is no longer "compliance regexes over agent prose". It is **1272 top-level Python
+programs** (1197 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+||||||||| 3a5dcef75e
+The plugin is no longer "compliance regexes over agent prose". It is **1260 top-level Python
+programs** (1185 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+=========
+The plugin is no longer "compliance regexes over agent prose". It is **1261 top-level Python
+programs** (1186 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+>>>>>>>>> Temporary merge branch 2
+=======
+The plugin is no longer "compliance regexes over agent prose". It is **1273 top-level Python
+programs** (1198 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 75 are helper modules and shims) that run the flow, **60 skills** that back the programs up
 where judgment is genuinely required, **6 slash commands**, **9 agents**, and
+<<<<<<< HEAD
 **2784 test files**. Programs decide; skills only fill the holes the programs
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+**2784 test files**. Programs decide; skills only fill the holes the programs
+||||||||| 3a5dcef75e
+**2767 test files**. Programs decide; skills only fill the holes the programs
+=========
+**2769 test files**. Programs decide; skills only fill the holes the programs
+>>>>>>>>> Temporary merge branch 2
+=======
+**2786 test files**. Programs decide; skills only fill the holes the programs
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 deliberately leave.
 
 ## ► The one front door
@@ -197,12 +225,36 @@ separate **`VIBEIC_OPENROAD_THREADS`** (`mcp-eda/src/lib/pnr_threads.mjs`,
    metadata fields, tool invocations, hand-off lines) as a regex list.
 2. A shared driver `_shared/skill_compliance_check.py` audits any
    agent-produced output against the YAML.
+<<<<<<< HEAD
 3. **1272 top-level deterministic programs** verify actual artifacts on disk — not
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+3. **1272 top-level deterministic programs** verify actual artifacts on disk — not
+||||||||| 3a5dcef75e
+3. **1260 top-level deterministic programs** verify actual artifacts on disk — not
+=========
+3. **1261 top-level deterministic programs** verify actual artifacts on disk — not
+>>>>>>>>> Temporary merge branch 2
+=======
+3. **1273 top-level deterministic programs** verify actual artifacts on disk — not
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
    just what the agent wrote in its report.
 
 ## Layout
 
+<<<<<<< HEAD
 At 1272 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+At 1272 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+||||||||| 3a5dcef75e
+At 1260 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+=========
+At 1261 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+>>>>>>>>> Temporary merge branch 2
+=======
+At 1273 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 generated instead. `programs/INDEX.md` is produced by `tools/gen_programs_index.py`, and a
 CI freshness test diffs the regenerated index against the committed one and FAILs on drift.
 
@@ -219,7 +271,19 @@ plugins/vibe-ic/
 │   ├── bootstrap_compliance.py    — regenerates all compliance.yaml
 │   ├── gen_compliance_tests.py    — regenerates all test_compliance.py
 │   └── add_compliance_gate.py     — adds gate section to SKILL.md files
+<<<<<<< HEAD
 ├── programs/                      — 1272 top-level *.py (1197 catalogued)
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+├── programs/                      — 1272 top-level *.py (1197 catalogued)
+||||||||| 3a5dcef75e
+├── programs/                      — 1260 top-level *.py (1185 catalogued)
+=========
+├── programs/                      — 1261 top-level *.py (1186 catalogued)
+>>>>>>>>> Temporary merge branch 2
+=======
+├── programs/                      — 1273 top-level *.py (1198 catalogued)
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 │   ├── INDEX.md                   — AUTO-GENERATED catalog; CI-checked for drift
 │   ├── vibe_ic_one_shot_runner.py — THE front door
 │   ├── phase1_one_shot_runner.py  — and phase1_doc_, phase2_, phase23_,
@@ -229,7 +293,19 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
+<<<<<<< HEAD
 │   └── tests/                     — 2784 test files
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+│   └── tests/                     — 2784 test files
+||||||||| 3a5dcef75e
+│   └── tests/                     — 2767 test files
+=========
+│   └── tests/                     — 2769 test files
+>>>>>>>>> Temporary merge branch 2
+=======
+│   └── tests/                     — 2786 test files
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 ├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
 │   └── <skill>/tests/             — 81 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
@@ -243,7 +319,19 @@ plugins/vibe-ic/
 
 ## Test suite
 
+<<<<<<< HEAD
 **2784 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+**2784 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+||||||||| 3a5dcef75e
+**2767 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+=========
+**2769 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+>>>>>>>>> Temporary merge branch 2
+=======
+**2786 test files** under `programs/tests/`, plus **81** per-skill compliance regressions
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as
@@ -312,7 +400,19 @@ architecture (v0.40).
 Everything since has come from the same loop, run continuously: drive real ICs and open
 benchmarks through the flow, find where an AI judgment call rescued a run, and absorb
 that judgment back into a deterministic program with a regression test. That is why the
+<<<<<<< HEAD
 program count moved from 41 at v0.40 to 1272 top-level programs today — and why
+||||||| merged common ancestors
+<<<<<<<<< Temporary merge branch 1
+program count moved from 41 at v0.40 to 1272 top-level programs today — and why
+||||||||| 3a5dcef75e
+program count moved from 41 at v0.40 to 1260 top-level programs today — and why
+=========
+program count moved from 41 at v0.40 to 1261 top-level programs today — and why
+>>>>>>>>> Temporary merge branch 2
+=======
+program count moved from 41 at v0.40 to 1273 top-level programs today — and why
+>>>>>>> refs/jtwo2/next/protected-tuple-drift-attribution
 the honesty gates exist at all. Each one was written after a real run reported a
 pass it could not back.
 
