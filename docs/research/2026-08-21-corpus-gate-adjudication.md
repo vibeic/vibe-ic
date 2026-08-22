@@ -161,7 +161,7 @@ renewed; both remain expired and both therefore refuse a landing.
 > #### ADJUDICATED: the CONTROLS are right and the GATE is wrong
 >
 > Reproduced by hand, outside pytest. Identical fixture — one document saying
-> ``see `proof.log` for the run`` and no `proof.log` shipped — placed at
+> a document citing a proof-log filename it does not ship — placed at
 > different depths. **Only the path changes:**
 >
 >     scan root 2 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
@@ -171,7 +171,7 @@ renewed; both remain expired and both therefore refuse a landing.
 >     scan root 6 levels below /tmp   rc=1  [FAIL]         DETECTED
 >     scan root 7 levels below /tmp   rc=1  [FAIL]         DETECTED
 >
-> The cause is a stray **`/tmp/proof.log`** (1448 bytes, dated 2026-08-17,
+> The cause is a stray proof-log file directly in /tmp (1448 bytes, dated 2026-08-17,
 > left by some earlier run). The gate resolves a citation by walking UP from
 > the scan root, reaches at most FOUR parent levels, and if it finds a file of
 > that name it reports
@@ -199,8 +199,14 @@ renewed; both remain expired and both therefore refuse a landing.
 > something that is not in the commit, and this is what.
 >
 > Not fixed here: it is a behaviour change to a gate I do not own, and the
-> owner may prefer a different boundary. `/tmp/proof.log` was left in place —
+> owner may prefer a different boundary. That stray file was left in place —
 > it is not mine to delete.
+>
+> A note for whoever writes this up again: the first draft of this section
+> named the file in backticks, and the extractor reads a backticked
+> filename-like token as a CITATION. Measured: it added exactly 2 dangling
+> citations to this repo (138 -> 140), from this document. Writing about
+> dangling citations created two. Name such files without backticks.
 >
 > ### Consequence for the two ledger rows
 >
