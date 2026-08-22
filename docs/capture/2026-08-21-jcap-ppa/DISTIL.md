@@ -17,10 +17,14 @@ disappear.
 
 Bucket-A records: **12**
 
-### Shipped as an instrument (4)
+### Shipped as an instrument (6)
 
+* `programs/gate_proof_vocabulary_has_a_producer.py` — gate
+  with `programs/tests/test_gate_proof_vocabulary_has_a_producer.py`
 * `programs/layer_membership_is_declared_not_inferred_from_a_filename_prefix.py` — gate
   with `programs/tests/test_layer_membership_is_declared_not_inferred_from_a_filename_prefix.py`
+* `programs/metric_constant_across_differing_arms_is_not_measured.py` — gate
+  with `programs/tests/test_metric_constant_across_differing_arms_is_not_measured.py`
 * `programs/population_guard_asserts_equality_not_a_floor.py` — gate
   with `programs/tests/test_population_guard_asserts_equality_not_a_floor.py`
 * `programs/published_absence_claim_is_rechecked_against_the_tree.py` — gate
@@ -28,7 +32,7 @@ Bucket-A records: **12**
 * `programs/two_input_selectors_given_together_must_refuse.py` — gate
   with `programs/tests/test_two_input_selectors_given_together_must_refuse.py`
 
-### Not shipped (8)
+### Not shipped (6)
 
 Each carries its measured reason:
 
@@ -38,24 +42,17 @@ Each carries its measured reason:
 * **`discovery_selects_on_the_parsed_document_not_the_filename`**  
   NOT IMPLEMENTED. The exact half — a gate whose input glob matches its own output report — is clean: 7 gates discover typed input by a semantic-token glob, 0 self-adjudicate. The valuable half needs a parsed corpus this checkout does not carry: all 7 parse, 3 select on a schema key, and the other 4 may use a structural predicate, which the record permits and a static scan cannot distinguish from its absence.
 
-* **`gate_proof_vocabulary_has_a_producer`**  
-  NOT IMPLEMENTED. Same shape and same disposition as the chip capture's `every_required_metric_key_has_a_producer`: the predicate exists as `_axis_names_match_terms()` and works only because that lane declares BOTH vocabularies as tuples. No other population declares either side.
-
-* **`metric_constant_across_differing_arms_is_not_measured`**  
-  NOT IMPLEMENTED. Needs the results of MULTIPLE ARMS, a runtime corpus a clean checkout does not carry. A checker could be authored but not verified here, and shipping a gate whose sweep cannot be run is what this lane refused throughout.
-
 * **`optional_import_is_guarded_by_capability_not_exception_type`**  
   NOT IMPLEMENTED, AND THE RECORD AGREES: it states its own screen is 'an UPPER BOUND on candidates and not a defect count ... the screen cannot see the flag'. An independent screen reproduced their numbers — 131 import guards, 77 with attribute use, against their 131/79. 31 of 131 set a capability marker, 100 do not, and it never converges without knowing which attributes are version-gated.
 
 * **`required_scope_keys_are_emitted_by_their_producer`**  
-  NOT IMPLEMENTED. As above — the consumer's required keys and the producer's emitted keys must both be declared before they can be cross-referenced, and only the PPA search lane declares either.
+  ALREADY IMPLEMENTED, in full. `_ppa/benchmark.py` carries the per-axis `REQUIRED_SCOPE` table and refuses with FOUR distinct codes: SCOPE_UNDECLARED (no scope at all), SCOPE_INCOMPLETE (a required key absent), SCOPE_SENTINEL (a required key present as null or "") and SCOPE_DIVERGED (the two arms' scopes differ). The record asks for exactly that, including a DISTINCT code for the null-placeholder case, and gives the same reasoning the module's own message gives: two placeholders compare equal, so numbers taken under conditions nobody recorded pass as taken under the same conditions. MEASURED against the committed corpus: 56 required-key checks over 4 arms, 0 absent, and 4 present-but-null (`rc_corner: None` on `timing_wns_ns`, both arms of both head-to-head records) — which is precisely the state SCOPE_SENTINEL exists to refuse, i.e. the gate working, not a gap.
 
 * **`runtime_output_path_may_not_resolve_inside_the_installed_tree`**  
   NOT IMPLEMENTED as a scan: 37 functions mkdir a caller-supplied destination's parent and ZERO of the 37 carry a containment check, so a gate flags the whole population and discriminates nothing. That is the record's own point — the fix belongs in the shared writer once. `_atomic_artefact.py:145` mkdirs with no resolution and no refusal, and that file is a PINNED AUTHORITY PATH.
 
 * **`writer_enforces_the_field_shapes_its_consumer_requires`**  
   NOT IMPLEMENTED. Needs the writer-to-validator pairing declared; nothing in `schemas/` declares which writer a validator governs, so which validator's rules a given writer must import is a judgement rather than a lookup.
-
 
 A record here that names no program is NOT an oversight: it carries a measured
 reason — already implemented elsewhere, half implemented, no static signature,
