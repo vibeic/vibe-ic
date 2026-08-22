@@ -49,6 +49,14 @@ module keeps them different, for the same reason `provenance` keeps "absent"
 apart from "empty": a check that cannot see its policy must say so, not report
 clean and not report a failure it did not establish.
 
+TWO AUTHORITY DECISIONS LIVE HERE, AND THEY ARE DIFFERENT SCALES
+================================================================
+`resolvable_fact_keys` settles a CONTRACT fact claimed by two declaration
+sources (sdc vs l19_spec vs runner). `METRIC_ARTEFACT_AUTHORITY` settles a
+METRIC RECORD read from two artefacts of ONE tool (openroad.log vs
+openroad.metrics.json). Both are opt-in by name, both name their loser, and
+both default to refusing.
+
 CONFLICT RESOLUTION IS OPT-IN, NOT OPT-OUT
 ==========================================
 The default for a disagreement is REFUSE. `policy.resolvable_fact_keys` lets a
@@ -80,6 +88,8 @@ __all__ = [
     "CONTRACT_SCHEMA", "DECLARATION_SCHEMA",
     "SEV_FAIL", "SEV_UNDETERMINED", "SEV_NOTE", "FINDING_CODES",
     "DEFAULT_AUTHORITY_ORDER", "POWER_BASIS_POLICIES",
+    "METRIC_ARTEFACT_AUTHORITY", "METRIC_AUTHORITY_REASON",
+    "metric_authority_rank", "resolve_metric_conflict",
     "build", "validate", "rc_from", "contract_digest_of", "load_json",
     "format_findings", "marker_for", "denominators",
     "format_denominators",
@@ -102,6 +112,150 @@ SEV_NOTE = "NOTE"
 #: spec layer states what SHOULD have been analysed, and when those two differ
 #: the difference is the finding, not something to rank away.
 DEFAULT_AUTHORITY_ORDER = ("sdc", "l19_spec", "l1_spec", "runner", "declared")
+
+# ---------------------------------------------------------------------------
+# METRIC-ARTEFACT AUTHORITY -- the declaration PPA_INTERFACES section 2.1 names
+# ---------------------------------------------------------------------------
+# "A parser never settles a conflict and neither does an index. The backend
+#  emits BOTH readings with different `source.path`, the index DETECTS the
+#  disagreement, and settling it is a declared authority decision in
+#  `_ppa/contract.py`."
+#
+# Until v1.11.69 that sentence pointed at a file that carried no such
+# declaration, so nothing settled anything and the conflict was permanent.
+# MEASURED over 12 real run trees on this host, with the shipped producers:
+# 17 records refused CONFLICTING_RECORD, on exactly three metrics, always
+# `openroad.log` against `openroad.metrics.json`.
+#
+# WHY THE JSON WINS, AND IT IS A MEASUREMENT AND NOT A PREFERENCE
+# ---------------------------------------------------------------
+# `routed.def` is the database that ships. Counting via placements in it,
+# against what each artefact's LAST reading says:
+#
+#     openroad.metrics.json (last)  ==  routed.def   10 of 10 uncontaminated runs
+#     openroad.log          (last)  ==  routed.def    6 of 10  (0 of the 4
+#                                                    runs where they disagree)
+#
+# The mechanism is in the log itself. `PNR_STAGE: postroute_antenna_repair`
+# inserts a diode and calls detailed_route AGAIN; that re-route appends its
+# numbers to the metrics JSON and prints NO "Total wire length" summary to the
+# log. So the log's last total describes the PRE-repair database -- measured:
+# `routed_preantenna.def` = 1944 vias = the log's number, `routed.def` = 1951
+# vias = the JSON's number, on the same run.
+#
+# For the DRC count the tool states the rule in its own words:
+#   "[WARNING DRT-0701] Post-route verification found N violation(s) that the
+#    routing loop did not report (M in-loop). The published result is the
+#    verified one."
+# The log parses M. The metrics JSON carries N.
+#
+# THE DIRECTION IS NOT UNIFORM and this is not "take the larger number": on one
+# run the ruling moves wirelength 824556 -> 821064 (down) and on another
+# 16511 -> 16522 (up). It is "the JSON's last entry is the database that ships".
+#
+# OPT-IN BY NAME, like `resolvable_fact_keys` above and for the same reason: a
+# metric absent from this table is NEVER resolved, and the index goes on
+# refusing it. A prefix or a wildcard would silently adopt every metric anyone
+# adds under `route.` later.
+METRIC_ARTEFACT_AUTHORITY: Dict[str, Tuple[str, ...]] = {
+    "route.wirelength.um": ("metrics_json", "log"),
+    "route.via.count": ("metrics_json", "log"),
+    "route.drc.violation.count": ("metrics_json", "log"),
+}
+
+#: The sentence printed on every resolution, per metric. A resolution with no
+#: stated reason is an unexplained overwrite, which is the thing the default
+#: refusal exists to prevent.
+METRIC_AUTHORITY_REASON = {
+    "route.wirelength.um": (
+        "openroad.metrics.json records EVERY detailed_route invocation, "
+        "including the re-route that postroute_antenna_repair triggers; the log "
+        "prints a `Total wire length` summary only for invocations that ran the "
+        "full router loop. Measured on 10 run trees, the JSON's last entry is "
+        "the routed.def that ships and the log's last total is a pre-repair "
+        "state."),
+    "route.via.count": (
+        "Same mechanism as route.wirelength.um, and directly counted: on "
+        "_tim_priv/run_base, routed_preantenna.def carries 1944 via placements "
+        "(the log's number) and routed.def carries 1951 (the JSON's)."),
+    "route.drc.violation.count": (
+        "The tool says which is published: `[WARNING DRT-0701] Post-route "
+        "verification found N violation(s) that the routing loop did not report "
+        "(M in-loop). The published result is the verified one.` The log's "
+        "summary is M; openroad.metrics.json carries N."),
+}
+
+
+def metric_authority_rank(metric: str, artefact_kind: Optional[str]) -> Optional[int]:
+    """Where `artefact_kind` ranks for `metric`; None if nothing ranks it.
+
+    None is not "last". A kind no declaration ranks cannot be resolved AGAINST
+    -- there is no winner to pick -- and the caller must leave the conflict
+    standing rather than choose whichever record happened to arrive first.
+    """
+    order = METRIC_ARTEFACT_AUTHORITY.get(metric)
+    if not order or artefact_kind is None:
+        return None
+    try:
+        return order.index(str(artefact_kind))
+    except ValueError:
+        return None
+
+
+def resolve_metric_conflict(records: Sequence[Mapping[str, Any]]
+                            ) -> Tuple[Optional[Dict[str, Any]],
+                                       List[Dict[str, Any]]]:
+    """Settle ONE identity's competing readings by declared artefact authority.
+
+    `records` are canonical metric records that an index would refuse as
+    CONFLICTING_RECORD: same metric, same scope, different values, different
+    artefacts. Each must carry `source.kind` naming which artefact it was read
+    from -- that is a fact about where the bytes came from, which a backend IS
+    entitled to state.
+
+    Returns `(winner, overridden)`, or `(None, [])` when this metric is not
+    opted in, when fewer than two readings disagree, when any reading names a
+    kind the declaration does not rank, or when NO reading carries a number.
+    Every one of those is the same answer: NOT SETTLED -- leave the conflict
+    for the index to refuse.
+
+    A reading with no `value` may be OVERRIDDEN but can never WIN: an artefact
+    that could not report a figure has not contradicted one that did.
+
+    NOTHING IS DELETED. The overridden readings come back in full so the caller
+    can record them beside the winner; a resolution that made the losing number
+    vanish would destroy the evidence that there was ever a question, which is
+    the whole objection to a parser picking one.
+    """
+    if len(records) < 2:
+        return None, []
+    metric = str(records[0].get("metric", ""))
+    if metric not in METRIC_ARTEFACT_AUTHORITY:
+        return None, []
+    ranked: List[Tuple[int, Dict[str, Any]]] = []
+    for rec in records:
+        rank = metric_authority_rank(
+            metric, (rec.get("source") or {}).get("kind"))
+        if rank is None:
+            return None, []
+        ranked.append((rank, dict(rec)))
+    if len({(r.get("status"), (r.get("unit") or "").lower(),
+             digest_of(r.get("value"))) for _, r in ranked}) < 2:
+        return None, []          # they agree: corroboration, not a conflict
+
+    # ONLY A READING THAT CARRIES A NUMBER CAN WIN. An artefact that could not
+    # report a figure has not CONTRADICTED one that did -- it has said nothing
+    # -- and letting it win by rank would throw away the only measurement in
+    # the group and call the result an authority decision. That is the one way
+    # this table could delete evidence, so it is closed here rather than left
+    # to each caller.
+    bearers = [(rank, rec) for rank, rec in ranked if "value" in rec]
+    if not bearers:
+        return None, []
+    bearers.sort(key=lambda pair: (pair[0], digest_of(pair[1].get("value"))))
+    winner = bearers[0][1]
+    return winner, [r for _, r in ranked if r is not winner]
+
 
 #: The two answers a declaration may give for "power metrics, no activity
 #: basis". There is deliberately no third that means "carry on".

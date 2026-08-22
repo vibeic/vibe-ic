@@ -86,6 +86,24 @@ literals it accepts.
 SAME corner. A field a producer could not establish is OMITTED and the reason is
 recorded outside `scope`; the refusal that follows is the correct outcome.
 
+**And an absent key that says nothing is the same silence one field over.** A
+producer that omits a key it could not establish MUST name it in `scope_gaps`
+with the sentence for why — "this view has no RC corner axis" and "nobody
+recorded one" are different facts and a reader cannot tell them apart from a
+hole. `_ppa/timing._gaps_for` is the enforcement in the producer and
+`schemas/ppa/timing_rows.v1.schema.json` is the machine-checkable half.
+
+Measured 2026-08-22, over 12 real run trees on one host: `_ppa/timing._scope`
+emitted all eight keys always, `null` for the unestablished, on the written
+ground that "an omitted key and a null key are different claims to a reader,
+and only one of them is true". Both halves of that are right and the conclusion
+was backwards. 152 rows were refused `SCOPE_SENTINEL` by the very validator on
+the other side of this document, and 44 more sat refused in the committed
+corpus `ppa-crosslayer/records/trials/b000/records_flat.json`. Two lanes held
+opposite rules; the rule is the one that can REFUSE. Guards:
+`tests/test_ppa_timing.py::test_no_scope_key_is_ever_null_and_every_absent_one_says_why`
+and `::test_no_row_this_module_emits_carries_a_scope_sentinel`.
+
 **A record that may enter a numeric comparison must CARRY its unit.** Absent or
 empty is refused (`NO_UNIT`); it is never inferred from the name. The name is a
 cross-check on a declared unit, not a substitute for one.
@@ -136,15 +154,105 @@ name one artefact and every timing row was emitted — and refused — twice.
 **A parser never settles a conflict and neither does an index.** The backend
 emits BOTH readings with different `source.path`
 (`_ppa/backends/__init__.py`), the index DETECTS the disagreement, and settling
-it is a declared authority decision in `_ppa/contract.py`
-(`policy.resolvable_fact_keys`, opt-in and named). Moving the artefact into
-`scope` to make the collision go away is NOT a fix: it converts a detected
+it is a declared authority decision in `_ppa/contract.py`. Moving the artefact
+into `scope` to make the collision go away is NOT a fix: it converts a detected
 conflict into two facts that quietly never compare again.
+
+There are TWO such declarations and they work at different scales.
+`policy.resolvable_fact_keys` settles a CONTRACT fact claimed by two
+declaration sources (sdc vs l19_spec vs runner).
+`METRIC_ARTEFACT_AUTHORITY` settles a METRIC RECORD read from two artefacts of
+ONE tool. Both are opt-in BY NAME — never by prefix, which is a hole that
+widens every time someone adds a key underneath it — both name their loser, and
+both default to refusing.
+
+**The declaration says which ARTEFACT, and it is a measurement.** Measured
+2026-08-22: `openroad.log` and `openroad.metrics.json` disagreed on
+`route.wirelength.um`, `route.via.count` and `route.drc.violation.count` in 17
+records across 12 real run trees, and `_ppa/contract.py` carried no declaration
+to settle any of them, so the gate's own instruction pointed at an empty table.
+`routed.def` is the database that ships; counting via placements in it, the
+JSON's last entry matches in 10 of 10 uncontaminated runs and the log's last
+printed total in 6 — and in none of the 4 where the two differ. The mechanism
+is in the log: `postroute_antenna_repair` inserts a diode and calls
+`detailed_route` again, appending to the JSON while printing no `Total wire
+length` summary; on one run `routed_preantenna.def` carries 1944 vias (the
+log's number) and `routed.def` carries 1951 (the JSON's). For the DRC count the
+tool states the rule itself: *"Post-route verification found N violation(s)
+that the routing loop did not report (M in-loop). The published result is the
+verified one."* The direction is NOT uniform — one run moves 824556 → 821064 —
+so the rule is not "take the larger", it is "the JSON's last entry is the
+database that ships".
+
+**A resolution never deletes the loser.** The overridden reading's value,
+artefact path and hash are written to `source.overridden_by_authority` beside
+the winner, with `source.authority` naming the declaration and its reason. A
+reading that carries NO number may be overridden but can never WIN: an artefact
+that could not report a figure has not contradicted one that did, and letting
+rank alone decide would throw away the only measurement in the group and call
+it an authority decision. Guard:
+`tests/test_ppa_metric_artefact_authority.py`.
 
 **If two readings really are one reading, the SCOPE is wrong — fix that.** A
 metric emitted once per reported path under one scope
 (`timing.*.worst_path_slack_ns`, three values, one view) is not a conflict and
 not corroboration; the scope is missing the field that tells the readings apart.
+
+**And the field that tells them apart has to actually tell them apart.** The
+first repair gave each path row its `path_startpoint`/`path_endpoint`, which
+fixed the corpus's 8 `SAME_ARTEFACT_TWO_VALUES` refusals — but it asked whether
+the artefact PRINTED two names, never whether the two names were UNIQUE in the
+view. Nothing stops OpenSTA reporting two paths of one group that share both,
+and when it does the rows carry one scope and the original defect is back
+verbatim. Reproduced on a two-path stamped report 2026-08-22; measured at 0
+occurrences across 2572 path identities in every STA report on one host, so it
+is a hole in the rule rather than a defect anyone has hit. Names that two rows
+share are DROPPED for that group and the volatile ordinal is used instead — a
+shared name is not a weaker identity, it is a wrong one, and a cross-arm
+comparison over an ordinal correctly REFUSES rather than comparing two paths
+that cannot be shown to be the same path. Guard:
+`tests/test_ppa_timing.py::test_two_paths_sharing_one_name_pair_do_not_share_one_identity`.
+
+**The RC corner is an AXIS, and an axis nobody read is not an axis nobody has.**
+Measured 2026-08-22 on two real run trees: the gate refused four records as
+`CONFLICTING_RECORD` —
+
+    timing.setup.worst_slack_ns  13.83 from phase3/stage3/sta/sta_mcorner_ocv.rpt
+                                 15.29 from phase3/stage3/sta/sta_spef_based.rpt
+
+— and read as two sign-off reports disagreeing it is unsettleable, because
+nothing in the tree ranks one STA report over the other. It was never that. The
+two runs read DIFFERENT parasitic files (`extracted/spef_corners/<top>.max.spef`
+against `extracted/<top>.spef`) at the same liberty, netlist, SDC and derate. A
+max-RC slack IS worse than a nominal-RC one; the two numbers never contradicted
+each other, and the extra 1.46 ns is the coupling capacitance. What made them
+look like a contradiction is that `scope.rc_corner` was left unestablished on
+both — the §6.1 sentinel one level OUT, where spelling the absence correctly
+does not help because the axis itself was never read.
+
+It was readable in the artefact the whole time, and unread in three places:
+`opensta.Section.spef` was parsed off the dialect-B banner and never consulted
+by `_ppa/timing`; the whole-file `STA_BASIS_SPEF:` stamp — which two of the
+runner's STA emitters already wrote — had no regex in the backend at all; and
+`_emit_spef_sta` stamped the PROCESS corner and not the parasitics it read, so
+the one axis on which it differs from its sibling was the one axis it left
+unstated. The gap the extractor wrote in place of the corner was itself false:
+*"this report names no RC corner for the section"*, on a section whose banner
+names `SPEF=<top>.max.spef`. **A gap that misdescribes the artefact is worse
+than no gap — it tells a reader to stop looking in the place the answer is.**
+
+**A corner is read from a stamp, never inferred from a file name.**
+`<top>.<corner>.spef` with `<corner>` in the closed vocabulary the extraction
+step emits (`min`, `nom`, `max`) is that step's own naming, so reading it back
+is reading a stamp. Anything else — including the un-cornered `<top>.spef` the
+single-corner step really reads — establishes NOTHING and says so, naming the
+file it could not classify. An open "whatever token sits before `.spef`" rule
+would mint an RC corner called `pnr`, and a corner nobody extracted is worse
+than a corner nobody named. Guards:
+`tests/test_ppa_rc_corner_is_an_axis.py`, whose positive control strikes the
+parasitics out of both artefacts and requires the conflict to come BACK — an
+artefact that states nothing about what it was timed against has not become
+comparable, and the index is right to refuse it.
 
 ### 2.2 Required views are declared PER AXIS
 

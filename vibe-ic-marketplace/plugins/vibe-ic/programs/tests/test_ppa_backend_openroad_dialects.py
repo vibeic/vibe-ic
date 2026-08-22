@@ -345,12 +345,7 @@ def test_a_boolean_is_not_a_count(tmp_path):
 
 
 # ── the two sources together ────────────────────────────────────────────────
-def test_a_run_directory_reads_both_sources_and_reconciles_neither(tmp_path):
-    """Measured on four independent runs of one build, the log and the metrics
-    JSON DISAGREE about wirelength and via count -- reproducibly, in the same
-    direction. A backend that picked a winner would delete the evidence that
-    there was ever a question, so both records are emitted and
-    `_ppa/contract.py` rules on the conflict."""
+def _both_sources(tmp_path):
     (tmp_path / "openroad.log").write_text(
         "OpenROAD 26Q3-1535-g543c33894f\n"
         "[INFO DRT-0194] Start detail routing.\n"
@@ -358,18 +353,58 @@ def test_a_run_directory_reads_both_sources_and_reconciles_neither(tmp_path):
         "Total wire length = 39887 um.\n"
         "Total number of vias = 4046.\n")
     (tmp_path / "openroad.metrics.json").write_text(METRICS_JSON_REAL_SHAPE)
-    o = B.parse_run(tmp_path)
+    return tmp_path
+
+
+def test_a_run_directory_reads_both_sources_and_reconciles_neither(tmp_path):
+    """Measured on four independent runs of one build, the log and the metrics
+    JSON DISAGREE about wirelength and via count. A backend that DECIDED a
+    winner would delete the evidence that there was ever a question, so the
+    parser emits both and `_ppa/contract.py` rules on the conflict.
+
+    This is the RAW parse (`apply_authority=False`), which is what "reconciles
+    neither" now means: it is the state before any declaration is read, and it
+    must keep working, because the declaration covers three metrics and every
+    other conflict this tool can produce still has to reach the index intact.
+    """
+    o = B.parse_run(_both_sources(tmp_path), apply_authority=False)
 
     same_scope = [r for r in o.by_metric("route.wirelength.um")
                   if r["scope"]["stage"] == "detailed_route"]
     assert sorted(r["value"] for r in same_scope) == [39887.0, 39925]
     assert len({r["source"]["path"] for r in same_scope}) == 2, \
         "the two numbers must be attributable to different artefacts"
+    # each record says WHICH artefact of this tool it came from
+    assert {r["source"]["kind"] for r in same_scope} == {"log", "metrics_json"}
     # ... and the JSON's records get the build the LOG identified, because the
     # metrics file does not carry one.
     assert o.tool_version == "26Q3-1535-g543c33894f"
     for r in o.records:
         assert r["source"]["tool_commit"] == "26Q3-1535-g543c33894f"
+
+
+def test_a_run_directory_applies_the_declaration_it_does_not_write_one(tmp_path):
+    """v1.11.69: the sentence above -- "`_ppa/contract.py` rules on the
+    conflict" -- pointed at a file that carried no such declaration, so nothing
+    ruled and the conflict was permanent. MEASURED over 12 real run trees: 17
+    records refused CONFLICTING_RECORD.
+
+    The declaration now exists and `parse_run` READS it. What must stay true is
+    that the parser gained no judgement of its own: with the table applied the
+    settled metric collapses to the declared artefact's reading, and the
+    overridden one is kept beside it rather than deleted.
+    """
+    o = B.parse_run(_both_sources(tmp_path))
+    same_scope = [r for r in o.by_metric("route.wirelength.um")
+                  if r["scope"]["stage"] == "detailed_route"]
+    assert [r["value"] for r in same_scope] == [39925]
+    src = same_scope[0]["source"]
+    assert src["kind"] == "metrics_json"
+    assert src["overridden_by_authority"] == [
+        {"path": str(tmp_path / "openroad.log"),
+         "sha256": src["overridden_by_authority"][0]["sha256"],
+         "kind": "log", "status": "MEASURED", "value": 39887.0}]
+    assert src["authority"]["order"] == ["metrics_json", "log"]
 
 
 def test_a_run_directory_without_a_metrics_json_still_works(tmp_path):
