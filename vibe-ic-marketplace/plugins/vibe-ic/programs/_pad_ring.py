@@ -777,8 +777,9 @@ def validate_assignment(obj: object) -> Dict[str, object]:
     if not seen:
         raise AssignmentError(
             "PAD_CONFIG_VARIABLE_ABSENT",
-            "all four side lists are empty — a ring of no pads assigns "
-            "nothing, and an empty set is not a pad ring")
+            f"all four side lists are empty in {ASSIGNMENT_REL} "
+            f"({', '.join(SIDE_VAR[s] for s in SIDES)}) — a ring of no pads "
+            f"assigns nothing, and an empty set is not a pad ring")
 
     rots = {}
     for var in ("PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
