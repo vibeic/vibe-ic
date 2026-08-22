@@ -1,0 +1,31 @@
+path	guard_verdict	measured_against_main	evidence
+/home/reyerchu/_cpath_priv/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_dens_priv/wt-jdrc1177-base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_g360	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_gf180b_priv/tree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_gsplit	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_jfeas_base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_jppa_closure/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_jppa_fixtures/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_jppa_fixtures/tree	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/jf-63x8-work/basejm9	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/wt-main62	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/claude-1000/-home-reyerchu-vibe-ic/0144f922-cbe4-48a4-937e-a5e723ca0cec/scratchpad/wt-base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/vibe-ic-shard	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/regen_36db60639	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_2efa6af35be69b409bfe9c95026e5c0a03ba56bf_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_36db60639da89dd18d116363049c9c23bb05f259_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_3850b444c5654f66f4d6d9a3df3f3c03bde2e877_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_6a092da303c282cf9bab4fdfe48d0b0b985c3dce_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_772c31dcb41a1625bf1c69832628722958752cb9_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_8172cb0b675051e6e8122a5cc6a3e0dc9ebf64c6_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_c5d7f2d00e1df23c35a8e289bc1dc3d29b62eee9_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_c8c2ab0f750efe97b5804f1bf41c279d28e4d2e5_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_e20d37fd49abd4775ddd7b32450c9226847f91cb_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/shard_ee849c19e4208b0c2e22795b9a02a5d08210c270_1	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/tmp/sp_ee849c19e	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/.claude/plugins/marketplaces/vibe-ic-marketplace	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/_jppa_power/base	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/wt/b68-base-hy	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/wt/b68-base-py	SAFE	a4caccefeab	change_contained_in_main uncommitted_differing=0 vs a4caccefeab
+/home/reyerchu/gkaudit_mainck	SAFE	a4caccefeab	standalone repo, no remote, single commit ef4e6bcc4b2 subject "origin/main snapshot" (2026-08-19). Its TREE 86df130761f is byte-identical to main commit 74ac9fa788f, so its entire content is already on main. NOTE a file-by-file comparison against a GUESSED nearby main commit reported 87 differences; tree identity is the decisive test and the guess was not.

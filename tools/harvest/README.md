@@ -68,7 +68,7 @@ it is deletion-bound, but whether a row means "already on main" or "worthless" i
 file does not draw, and guessing would put a verdict in another agent's mouth in the one direction
 that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
-**30 of them authorise deletion and none has been through `predelete_guard.sh`.**
+**30 of them authorise deletion; all 30 have now been through `predelete_guard.sh` and measured SAFE** — see `shard_c/108_DROP_guard_results.tsv`.
 
 ## 5. Still open, and not mine to close
 

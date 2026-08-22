@@ -24,5 +24,24 @@ agent's mouth in the one direction that is unrecoverable.
 So they are here, findable and preserved, with the original vocabulary intact. Mapping them into
 the consumable is a decision for whoever owns the merge, not for the agent that found them.
 
-**30 of these rows authorise deletion and none of them has been checked by
-`bin_jharv2/predelete_guard.sh`.** Run it before acting on any of them.
+## The 30 DROP rows have now been checked
+
+**All 30 measured SAFE** against live main — results in `108_DROP_guard_results.tsv`.
+
+29 by `predelete_guard.sh`: their own change reverse-applies cleanly onto main, so nothing in them
+is absent from it. Sixteen of those first refused as *"clone origin/main is stale"* — unmeasurable,
+not unsafe — and were fetched **forward** before being judged; a stale ref manufactures a false
+LANDED, so refusing was correct and fetching was the fix.
+
+The thirtieth, `gkaudit_mainck`, has **no remote at all**: a standalone repo whose single commit
+`ef4e6bcc4b2` is subject *"origin/main snapshot"*. Its HEAD is in no other clone and on no origin
+ref, which is the signature of the loss that happened this morning — but its **tree**
+`86df130761f` is byte-identical to main commit `74ac9fa788f`, so every byte it holds is already on
+main. Nothing to preserve.
+
+Worth recording how close that went the other way: comparing its files one by one against a
+*guessed* nearby main commit reported 87 differences. Tree identity is the decisive test; the guess
+was the same crude measure that has been wrong four times in this directory today.
+
+That the verdicts are safe does not make the vocabulary mappable — DROP still does not say LANDED
+or ABANDON, and that remains the merge owner's call.
