@@ -74,6 +74,36 @@ Both the label and `expansion == "EXPANDED"` are now load-bearing in
 `_legacy_empty_without_process`, and the source says so, so an absent corpus
 fails the shape check even if some future caller hands it the EMPTY label.
 
+## What this changes operationally, stated plainly
+
+This is a behaviour change, not only a wording change, so here is who feels it.
+
+* **The review / landing path: nothing changes.**
+  `gatekeeper_review._published_corpus_binding()` resolves
+  `VIBE_IC_BENCHMARK_DATA`, then `VIBEIC_BENCHMARK_DATA_CHECKOUT`, then falls
+  back to `$HOME/_matrix_benchmark_data`, and **refuses with a named remedy if
+  it cannot** — it never returns rc 0 unbound. That path is therefore always in
+  state B, and state B is byte-identical before and after. #1763 is untouched.
+* **A hand-run `tools/ci/repo_hygiene_gates.sh`, or `gatekeeper-land.sh`'s
+  `lane_hygiene`, on a machine with no pointer exported: `full:repo-hygiene`
+  now returns rc 2 where it used to return 0.** `lane_hygiene` (line 1347)
+  passes only `VIBEIC_SUBJECT_ROOT` and `GATEKEEPER_HYGIENE_JOBS` and inherits
+  whatever the operator happens to have exported, so it can be in state A.
+
+The second bullet is the point, not a regression: that rc 0 was a pass over a
+corpus nothing opened. The remedy is one line and the producer's own message
+already prints it — point `VIBE_IC_BENCHMARK_DATA` at a clone. An honest
+refusal naming a missing input beats a green run that measured nothing.
+
+Worth noting that `gatekeeper_review.py` already states this exact rule one
+layer up, at the binding it performs:
+
+> SET AND WRONG IS NOT ABSENT (`_corpus_location.py:26-29`), and NOTHING
+> ANYWHERE is not a pass either. The two are different states with different
+> remedies, so they get different sentences; neither is rc 0.
+
+#1764 is that same rule missing one layer down.
+
 ## The ruling: which is blocking
 
 **Both. Neither becomes a pass, and neither becomes exemptable.**
@@ -161,14 +191,18 @@ and, in the machine-readable record,
 
 ## Corpus sweep
 
-37 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
-`landing_merge_verdict`, `repo_hygiene_gates.sh` or the routed-DEF producer,
-run on this branch and, where red, re-run on a pristine `origin/main` worktree.
-876 passed, 2 skipped, 13 red — and every one of the 13 is accounted for below,
-none of them by this change:
+43 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
+`landing_merge_verdict`, `repo_hygiene_parallel`, `repo_hygiene_gates.sh` or the
+routed-DEF producer, run on this branch and, where red, re-run on a pristine
+`origin/main` worktree. 1170 passed, 2 skipped, 14 red — and every one of the 14
+is accounted for below, none of them by this change:
 
 * 262 passed / 2 skipped and 279 passed / 0 red — the two corpus-and-gate-wiring
   batches (23 files), clean.
+* 294 passed / 1 red — the `repo_hygiene_parallel` consumer batch (12 files).
+  The red is `test_orphan_scan_reads_the_landing_gate_runner.py::test_the_
+  shipped_audit_no_longer_calls_the_coordinator_unreachable`, about two
+  undeclared AUDIT_ONLY gates; **same test ID red on pristine `origin/main`.**
 * 9 red in `test_landing_merge_verdict.py` (end-to-end `gatekeeper-verify-merge`)
   — **the same 9 test IDs are red on pristine `origin/main`.** Pre-existing.
 * 3 red in `tools/ci/test_phase_b_activated_parity.py` and
