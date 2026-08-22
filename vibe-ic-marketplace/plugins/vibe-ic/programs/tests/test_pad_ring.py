@@ -1266,10 +1266,9 @@ def test_the_disclosure_does_not_claim_the_variable_is_inert(tmp_path):
     assert "rotation_vertical_inert" not in rep, (
         "the key asserts inertness in the schema itself")
     rec = rep["rotation_vertical_not_honoured"]
-    blob = json.dumps(rec).lower()
-    for lie in ("is inert", "does not read it", "the knob does nothing"):
-        assert lie not in blob, f"the disclosure claims {lie!r}, which is false"
-    assert "does not implement" in blob
+    blob = json.dumps(rec)
+    _assert_no_retracted_claim(blob, "the disclosure")
+    assert "does not implement" in blob.lower()
 
 
 def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
@@ -1560,16 +1559,41 @@ def test_corners_alternate_rotation_and_mirror(tmp_path):
         assert f"( {c['x']} {c['y']} ) {c['orient']} ;" in text
 
 
-#: The three sentences `main` shipped as live claims about the placer. Every
-#: one of them is false: `-rotation_vertical` moves the S/N rows, so the placer
-#: reads the variable. They are listed verbatim so a paraphrase that means the
-#: same thing still has to be argued for rather than slipping past a keyword.
+#: The sentences `main` shipped as live claims about the placer, VERBATIM, for
+#: scanning SOURCE. Every one is false: `-rotation_vertical` moves the S/N rows,
+#: so the placer reads the variable. The retraction that replaced them is worded
+#: so that it does not contain them, which is why a verbatim scan works here.
 RETRACTED_CLAIMS = (
     "`PAD_ROTATION_VERTICAL` IS INERT",
     "The same measurement shows the placer does not read it.",
     "placer ignores it",
     "the knob does nothing",
 )
+
+#: The same falsehoods as the shortest fragment that still identifies one, for
+#: scanning EMITTED text — the report and the console.
+#:
+#: THIS LIST EXISTS BECAUSE THE TWO GUARDS DISAGREED. The record guard listed
+#: three phrases and did not list `placer ignores it`, so that one sentence
+#: survived in the console line the whole time the commit next to it was
+#: removing `is inert` from the record. One vocabulary, checked in both places,
+#: is the fix — a second list is a second thing to forget to update.
+RETRACTED_PHRASES = (
+    "is inert",
+    "does not read it",
+    "the knob does nothing",
+    "placer ignores it",
+)
+
+
+def _assert_no_retracted_claim(text: str, where: str) -> None:
+    """No retracted falsehood in EMITTED text, verbatim or reworded."""
+    low = text.lower()
+    for lie in RETRACTED_PHRASES:
+        assert lie not in low, (
+            f"{where} carries the retracted claim {lie!r}: the placer DOES "
+            f"read PAD_ROTATION_VERTICAL — it moves the S/N rows. This step "
+            f"is what does not implement it.")
 
 
 def test_the_module_docstring_does_not_carry_the_inert_claim():
@@ -1622,7 +1646,10 @@ def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
     assert var in rep["reason"]
     printed = capsys.readouterr().out
     assert f"{var}_NOT_HONOURED" in printed
-    for claim in RETRACTED_CLAIMS:
-        assert claim not in printed, (
-            f"the console line carries the retracted claim {claim!r}")
-    assert claim not in rep["reason"]
+    # BOTH halves, through the one shared vocabulary. An earlier draft of this
+    # test left the `reason` assertion OUTSIDE the loop, so it re-used the
+    # leaked loop variable and checked exactly one of the four claims against
+    # exactly one of the two texts. Planting `placer ignores it` in the emitted
+    # reason passed it 3/3.
+    _assert_no_retracted_claim(printed, "the console line")
+    _assert_no_retracted_claim(rep["reason"], "the refusal reason")
