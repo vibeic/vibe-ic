@@ -114,11 +114,20 @@ over zero of both is reported as VACUOUS, never as a pass.
 
 EXIT CODES
 ==========
-    0  every emitted population agrees with its own site count, and every test
-       pin names a value its emitter states
+    0  every population this guard COMPARED agrees with its own site count, and
+       every test pin it compared names a value its emitter states.
+
+       NOT "every population agrees". Some may have been WITHHELD -- declined
+       because K is only a lower bound, or not counted because the statement
+       DENIES them, or in a source that would not parse. The head line states
+       how many of each, always, and a reader taking rc=0 to mean the whole tree
+       was checked is reading more than this exit code carries.
     1  REFUSED — the emitter line, the test line and the two values are printed
-    2  VACUOUS — no counter with a literal denominator and no paired pin was
-       found, so nothing was compared (`_vacuous_exit`'s tier, announced)
+    2  VACUOUS — nothing was compared, for one of TWO reasons the run
+       distinguishes: no counter with a literal denominator and no paired pin
+       exists here (`no-population-stated-twice`), or every one that does exist
+       was withheld above (`declined-every-comparison`). Both announced through
+       `_vacuous_exit`; the second is the one worth coming back to.
     3  the command line was rejected (`_gate_usage_exit`)
 
 USAGE

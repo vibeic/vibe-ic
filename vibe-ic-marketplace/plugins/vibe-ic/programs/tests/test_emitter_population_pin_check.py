@@ -2139,6 +2139,40 @@ def test_the_verdict_is_byte_identical_across_runs(tmp_path):
     assert len(doc["unparsed"]) >= 3, doc["unparsed"]
 
 
+def test_rc0_does_not_promise_the_whole_tree_was_checked(tmp_path):
+    """The EXIT CODES contract, which downstream automation reads before it
+    reads anything else, and which this branch made inaccurate.
+
+    It said rc=0 means "every emitted population agrees with its own site
+    count". After the lower-bound rule, rc=0 can mean "every population I
+    COMPARED agreed, and I declined others" -- so a harness taking rc=0 to mean
+    the tree was fully checked is reading more than the code carries.
+
+    Pinned as behaviour, not as prose: a run with one compared population AND
+    one declined must exit 0 AND say so in the head. If those two ever stop
+    coexisting the docstring is wrong again."""
+    emitter = ('def _r(n):\n'
+               '    return "  if {[catch {%s}]} { incr _m }\\n" % n\n\n\n'
+               'def s():\n    return ("  set _m 0\\n" + _r("a") + _r("b") + _r("c")\n'
+               '            + "  if {$_m >= 3} { puts M }\\n"\n'
+               '            + "  if {[catch {y}]} { incr _k }\\n"\n'
+               '            + "  if {[catch {z}]} { incr _k }\\n"\n'
+               '            + "  if {$_k >= 2} { puts K }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["counters_examined"] >= 1, doc
+    assert len(doc["not_determined"]) >= 1, (
+        "this fixture no longer produces a declined population, so it cannot "
+        f"show that rc=0 coexists with one: {doc}")
+    assert doc["findings"] == [], doc
+    head = [l for l in r.stdout.splitlines() if l.startswith("[PASS]")][0]
+    assert "NOT DECIDABLE" in head, (
+        "rc=0 was returned with a population declined, and the head did not "
+        f"say so:\n{head}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
