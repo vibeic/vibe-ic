@@ -24,9 +24,11 @@ Source read in full before anything was written: `_jpadsite_priv/RESULT.md` on
 
 Deliverable: `recoveries.json` (**7 records — 6 Bucket-A, 1 Bucket-D**)
 emitted through
-`enhancement_emit.py` into `candidates/`, both gates green
-(`enhancement_emit` rc 0, `backlog_sanitize_check` rc 0, 0 hard violations,
-0 soft warnings, no unrouted Bucket-A record).
+`enhancement_emit.py` into `candidates/`: **`enhancement_emit` rc 0, A=6 D=1,
+no unrouted Bucket-A record.** `backlog_sanitize_check` is NOT claimed as a
+second green here — see the note in the measured block at the end: since the
+Bucket-T record was withdrawn this capture emits no backlog YAML, so that gate
+has nothing to read and its rc 0 is vacuous.
 
 ---
 
@@ -369,9 +371,10 @@ existed — and two rules were added after the count was written.
   would have been convenient to widen. No GDS touched, no pin moved, no rule
   deck relaxed.
 * **The full `programs/tests` suite was not run** (standing measured-load
-  constraint). What was run: `enhancement_emit` and `backlog_sanitize_check` on
-  the emitted artefacts, the pre-fix reproduction, the AST predicate against
-  both trees, and ten OpenROAD processes in the pinned image.
+  constraint). What was run: `enhancement_emit` on the emitted artefacts, the
+  pre-fix reproduction, the AST predicate against both trees, and ten OpenROAD
+  processes in the pinned image. `backlog_sanitize_check` is deliberately NOT
+  in that list any more — it has no input left to read.
 * **Not pushed to `main`. No version bumped.** The lander assigns it.
 
 ## Where the numbers came from
@@ -989,7 +992,21 @@ Measured this session, all on a clean tree:
 
 ```
 enhancement_emit                                     rc 0   A=6 D=1, 0 unrouted
-backlog_sanitize_check on the emitted record         rc 0   0 hard, 0 soft
+backlog_sanitize_check                    rc 0 BUT VACUOUS — DO NOT COUNT IT
+    This line used to read "on the emitted record  rc 0  0 hard, 0 soft" and
+    was true when the Bucket-T record emitted a backlog YAML. That record was
+    withdrawn to Bucket D, so `candidates/` now holds no `bucket_C_backlogs/`
+    at all and the gate's population is EMPTY. Measured rather than reasoned:
+
+        $ backlog_sanitize_check.py --dir <the emitted backlog dir>
+        {"pass": true, "files_checked": 0, "note": "no YAML files found"}
+        rc 0
+
+    A green over nothing. It is left in this list, struck, instead of being
+    deleted, because silently dropping it would leave the earlier claim
+    standing unexplained in the two places above that cited it — and because a
+    capture whose subject is the empty denominator should not quietly retire
+    its own instance of one.
 pytest: the four suites that read the routing table  rc 0   87 passed, 4 skipped
     test_capture_routing_consistency, test_enhancement_emit,
     test_issue1130_wiring_population_parity, test_tracked_json_yaml_parses_check
