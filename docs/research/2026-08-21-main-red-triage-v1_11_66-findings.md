@@ -5999,12 +5999,28 @@ into the arm **through the subject tree**. Design A's would need to suppress a
 wave, which means reaching the arm through its environment — and that is the
 exact-set contract that refuses (M107).
 
-**Design C is the working proof of M91's thesis, and it has been passing the whole
-time.** I spent this branch establishing that *the tree crosses and the environment
-does not*, built a sentinel to demonstrate it (M92), reverted it at the next
-layer — **while three tests already in the file were doing precisely that, every
-run, in both lanes.** The pattern I proposed as a remedy was sitting in the same
-file as the tests that need it.
+**Design C is the working proof of M91's thesis — but NOT because it "has been
+passing the whole time", which is what this paragraph used to say and is false.**
+On `origin/main` those three tests assert `r.returncode == 2` and `doc is None`;
+they were **RED** until design C re-founded them (section A: 3 RED -> GREEN).
+
+**What was always true is narrower and is the real point: C's control always
+CROSSED.** Its tamper is a commit, so delivery was never its problem — the tests
+were red on their ASSERTIONS (a retired `rc == 2` contract), not on their channel.
+**A and C differ from B and D on delivery; C differed from itself only on what it
+asserted.**
+
+**AND "THE TREE IS THE ONLY CHANNEL" IS ALSO WRONG — MEASURED.** The arm receives
+FIVE read-only mounts, every one of which crosses:
+
+    /subject   /runtime   /corpus   /input/selection   /input/progress-plan.json
+
+**So the thesis is not "only the tree crosses". It is: the ENVIRONMENT does not
+cross, and several MOUNTS do.** That distinction matters for D specifically —
+**D's proposed channel was the CORPUS, and the corpus crosses.** D is therefore
+not blocked on channel availability at all; it is blocked on what the corpus
+CONTAINS and on the arms computing the transition themselves (M96, M105). **I had
+folded D in with B under "the channel refuses", and that was wrong about D.**
 
 **So the ranking in the proposal was upside down.** C was listed third and is the
 only one of the four with a complete, self-delivering mutation arm. **A, B and D
@@ -6281,10 +6297,23 @@ repeats — which is exactly the failure the section-count command had.
 **`highest M` — SOUND**, and now agrees with the corrected section count instead
 of contradicting it.
 
-**One of four was wrong, and it was the one whose answer I quoted most.** The
-three that survived are the ones I never leaned on; the broken one produced the
-figure in the title, in summaries, and in the header block that exists to stop
-figures decaying.
+**One of four was wrong, and it was the one whose answer had been corrected most
+often.** Counted, because the first version of this paragraph said *"the one whose
+answer I quoted most"* and **that does not survive counting**:
+
+    section count answer, quoted in this document now :  0
+    corrections count                                 :  2
+    image-lane pair (NOT one of the four commands)    : 23
+
+**The section count's answer appears ZERO times today — because I deliberately
+removed it from the title** (the header says so, and says why). The true claim is
+historical: it is the figure I corrected **three times** (32 → 57 → 69) before
+deleting it, which is precisely why a command was published to replace it. **The
+command inherited the importance the number had, and then nobody ran it.**
+
+**"The one I quoted most" was a rhetorical shape, not a measurement** — and the
+figure that IS quoted most (the image-lane pair, 23 times) is not one of the four
+commands at all.
 
 **That is not a coincidence and it is worth naming.** A command whose output you
 publish repeatedly is the one whose brokenness costs most and the one you are
@@ -6323,6 +6352,42 @@ file is what it was. It says nothing about whether the file I restored was the
 right file, or whether anything else moved while I was working.
 
 **The suite says both. It is the only thing that does.**
+
+
+## M121 — "the control cannot reach the arm" describes why they are red, not what blocks a fix
+
+M112's correction — that FIVE mounts cross, not just the tree — forced a re-read
+of the census row covering six reds. **It was compressing two different facts into
+one, and the compressed version is the one a lander would act on.**
+
+The row said: *"the exact-set env contract — a test control cannot reach the
+arm."* **That is true of the tests as shipped and false as a statement about what
+blocks a fix**, because M92 BUILT the fix and it reached the arm:
+
+    sentinel committed to the subject tree
+      -> stub takes the routed-transition path on BOTH arms
+      -> "arm A2/B2: base rc=1 candidate rc=1 (hermetic gates)"
+
+**The control reached the arm. The remedy is proven. The blocker moved.** And it
+moved to two DIFFERENT places, which the single row hid:
+
+| n | reaches the arm? | stops at | protected file |
+|--:|---|---|---|
+| 2 (interrupt) | **yes** — hang fires | cannot IDENTIFY the container | `gatekeeper-verify-merge.sh` must announce `RUN_ID` — **one line** |
+| 4 (corpus/bootstrap) | **yes** — routed path activates | trusted-parent-evidence integrity | `benchmark_data_landing_checkout.py`, `routed_def_corpus.py`, `_gate_dispatch.sh` |
+
+**Two decisions, not one, and they are not the same size.** The interrupt pair
+needs a single announcement line. The corpus four need someone who understands the
+trusted-parent-evidence protocol to decide whether a fixture can satisfy it — a
+materially larger ask, and I could not tell whether my fixture was wrong or the
+path was defective (M92).
+
+**Why the compression happened, since it is the third instance today:** "the env
+contract refuses" is TRUE, load-bearing, and I had just measured it precisely
+(M107). **A finding that is correct and freshly proven is the easiest thing to
+over-extend** — it carries its own authority into the next sentence, where it was
+never measured. **The allowlist explains the RED. It does not explain the BLOCK,
+and I let one sentence do both jobs.**
 
 
 # ===== REQUESTS TO THE LANDER =====
@@ -6429,7 +6494,7 @@ reading. **This is the measured grouping (M101 → M108): 34 reds, 5 roots.**
 | n | root | what closes it | whose |
 |--:|---|---|---|
 | **16** | **the corpus/record situation** — 11 D3 cells (6 citing `home` roots, 5 visible only once a corpus is offered) + 3 mutation-ledger + 2 nested-outcome, both downstream | **re-point the records to a `repo`/`published` kind.** `home` roots are excluded by `_ADMISSIBILITY` on purpose (#527) and **cannot become admissible by publishing anywhere** (M105). Separately, the corpus being OPTIONAL is what the illegal skip exists to tolerate (M103/M104) | corpus owner + infrastructure |
-| **6** | **the exact-set env contract** — a test control cannot reach the arm | extending it needs **3 coordinated changes** in a PROTECTED file (name, validator, symmetric verifier set). The sanctioned route is **committed tree data**, built and proven to cross (M92/M107) | protected-file owner |
+| **6** | **why they are RED TODAY:** the shipped tests use env controls, and the arm's environment is an exact-set contract that REFUSES (M107). **Why they are BLOCKED is a different and later thing** — the tree remedy WORKS (M92, built and run), and each half then stops one layer down, in a protected file, for a DIFFERENT reason. | **2 (interrupt):** sentinel crosses, hang fires — the test cannot IDENTIFY the arm's container; needs `gatekeeper-verify-merge.sh` to announce `RUN_ID`, **one line, PROTECTED** (M83). **4 (corpus/bootstrap):** sentinel crosses, routed path activates on both arms — stops at trusted-parent-evidence integrity (`benchmark_data_landing_checkout.py`, `routed_def_corpus.py`, `_gate_dispatch.sh`, all **PROTECTED**) (M92). | protected-file owner — **two separate one-layer-down decisions, not one** |
 | **5** | **`flow_compliance_check.py:10057`** — `not vacuous_hints` declines WAIVED-DEFERRED for Step 4 | **ONE decision.** The tier's own purpose supports the code (M106); the tests cover a waiver path the FIXTURE no longer reaches. **Do not assert `VACUOUS-PASS`** — it agrees with the drift (M46) | flow owner |
 | **3** | **`flow_gate_enforcement_audit` exits 1** on two undeclared gates | **ONE decision, and it closes 3 reds in three files section C never named.** *"Silence is not a decision (#886)"* — the audit exists to force it. **`advisory` is NOT the safe default** for `area_total_vs_budget_check` (M80) | gate authors |
 | **1** | `magic` cannot launch here | environment, not a defect (M60) | — |

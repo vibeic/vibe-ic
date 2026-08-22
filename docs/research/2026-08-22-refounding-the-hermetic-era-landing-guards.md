@@ -1,9 +1,22 @@
 # Re-founding the thirteen hermetic-era landing guards — a PROPOSAL
 
-**Status: A and C are IMPLEMENTED and verified on this branch — and C is the only
-one of the four that actually works, for the reason this document spends its
-length arriving at: its control is a COMMIT, and the tree crosses where the
-environment refuses. B was BUILT, RUN, and REVERTED. D's premise was FALSE.**
+**Status: A and C are IMPLEMENTED and verified on this branch. B was BUILT, RUN,
+and REVERTED. D's premise was FALSE.**
+
+**What separates them is whether a test must inject a CONTROL into the arm.** A
+needs none — it reads the verdict document the verifier already writes. C injects
+one and gets it across, because its control is a COMMIT. **B and D both need a
+control the ENVIRONMENT would have to carry, and the environment is an exact-set
+contract that refuses.** C alone therefore carries a self-delivering mutation arm:
+its `new_failures` assertion proves the tamper was DELIVERED, not merely that a
+refusal happened.
+
+> **CORRECTION, one commit old and mine.** This line briefly read *"C is the only
+> one of the four that actually works"*, which contradicts its own first clause —
+> **A is implemented, passes in both lanes, and is non-vacuous by construction.**
+> The real distinction is the narrower one above: C is the only one with a
+> self-delivering mutation arm. **I wrote an overclaim into the status line in the
+> same commit that fixed three overclaims in the status line.**
 
 > **THIS LINE USED TO SAY:** *"B is fully specified — both channels confirmed from
 > source, with a safety bound — and deliberately NOT built. D's mechanism is fully
@@ -358,7 +371,22 @@ the runner, never passed from the verifier, and present only in a receipt a
 completed run produces. See the corrected identification section above; the
 working channel is the MOUNTS, and it is now checked to the standard this
 sentence previously only claimed. C's is
-confirmed (M15, implemented and passing in both lanes). **D's is not.**
+confirmed (M15, implemented and passing in both lanes).
+
+> **"D's is not" — RETRACTED. D's channel IS confirmed, and I mis-filed D under
+> B's blocker.** The arm receives FIVE read-only mounts, every one of which
+> crosses: `/subject`, `/runtime`, **`/corpus`**, `/input/selection`,
+> `/input/progress-plan.json`. **D's proposed channel was the corpus, and the
+> corpus crosses.** Further, the tree-based control was BUILT and RUN: the stub
+> took the routed-transition path on both arms, which is D's mechanism executing.
+>
+> **What is genuinely unconfirmed for D is downstream of the channel** — whether a
+> fixture can satisfy the trusted-parent-evidence integrity check that stops the
+> run immediately afterwards (`benchmark-data B2 changed during trusted parent
+> evidence execution`), and whether the two arms' independent enumerations can be
+> made to differ from a fixture at all. **Those are real questions. "The channel is
+> unconfirmed" was not one of them**, and grouping D with B under a channel
+> objection hid the thing that actually blocks it.
 
 ## What this costs — CURRENT, after A and C landed
 
@@ -373,9 +401,25 @@ verified in both lanes, with dependants checked. **Nine remain**, and the earlie
 | **D** | designed, mechanism fully traced | ~~a REAL published cell in the fixture's benchmark-data~~ — **FALSE.** One IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, 211 paths, carrying `routed.def`), and the sandbox fixture already creates `ic/tiny/v1/phase3/stage3/pnr/routed.def` — the producer's exact cell predicate. **Nothing needs authoring.** What blocks it is the same layer that blocks B. |
 | **B** | **BUILT, RUN, REVERTED** — the channel works | ~~sequencing and my measured error rate~~ — **that is no longer the reason.** The sentinel crosses and the arm hangs; it fails at container IDENTIFICATION, needing **one line in `gatekeeper-verify-merge.sh` (PROTECTED)** to announce `RUN_ID`. Reverted rather than ship a test whose final assertion would pass vacuously. |
 
-**Revised order for what REMAINS: D before B.** D is blocked on evidence somebody
-else can supply; B is blocked on a decision plus the largest edit of the four. The
-original "A, C, D, B" is spent for its first two entries.
+**REVISED AGAIN, AND REVERSED: B before D.** This line said *"D before B — D is
+blocked on evidence somebody else can supply; B is blocked on a decision plus the
+largest edit of the four."* **Both premises are now measured false, and the
+ordering they produced would send the next person to the harder item first.**
+
+* **D is NOT blocked on evidence.** A real published cell IS tracked
+  (`ic/spm/v1.5.58_ihp-sg13g2`, carrying `routed.def`) and the sandbox fixture
+  already creates the producer's exact cell predicate. D is blocked on whether a
+  fixture can satisfy the **trusted-parent-evidence integrity check** — a protocol
+  judgement across THREE protected files.
+* **B is NOT the largest edit.** It was BUILT and RUN (M92); the sentinel-commit
+  fixture works and the hang fires. It needs **ONE LINE** in
+  `gatekeeper-verify-merge.sh` to announce `RUN_ID` so the test can identify the
+  arm's container.
+
+**One line versus a protocol judgement. B first.** The original "A, C, D, B" is
+spent for its first two entries, and its last two were in the right order all
+along — I reversed them on reasoning and have now reversed them back on
+measurement.
 
 ## What I did NOT verify
 
