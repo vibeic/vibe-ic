@@ -62,6 +62,7 @@ Accepted with no refusal and no unrouted record.
 - [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
 - [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
+- [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -970,8 +971,8 @@ is exactly the work the originating lane declined.
 arguments and compared stream byte counts. It reported 18 of 19 "on stderr" and
 is worthless: that is the argument-parser path, which is on the refusal stream
 for every command by construction. It measures argparse, not the contract — the
-seventh time in this lane a screen has measured something adjacent to its
-subject.
+another instance of a screen measuring something adjacent to its subject; the
+lane-wide count is reconciled under *How often the instrument was the problem*.
 **(o)** yes. **(d)** yes — a known-verdict invocation per command covers every
 command the layer gains.
 
@@ -1008,7 +1009,7 @@ is exactly why the test-side omission is easy to miss.
 
 **Screen warning:** a name is third-party only if it resolves nowhere in the
 repository. Matching against a list of module stems misclassifies in-repo
-packages and reports 216 — the eighth over-match in this lane.
+packages and reports 216 — another over-match — the total is under *How often the instrument was the problem*.
 **(o)** yes. **(d)** yes — it is per test module per import, so it covers the
 next optional dependency the suite adopts.
 
@@ -2022,6 +2023,33 @@ It describes an audit and a repair, and both are in it. **The real fault was
 narrower than the accusation** — the edit failed silently, so the report trailed
 by one commit, and no message was ever false. The overstatement stands in the
 git history, which is not rewritten; it is corrected here instead.
+
+## How often the instrument was the problem
+
+This report names a lot of defects. A reader deciding how much to trust them
+needs the other number: how often a screen I built returned a wrong answer about
+a subject that was fine. The report was counting — badly. It carried **three
+incompatible running tallies**, none reconciled with the others and none updated
+for anything found afterwards. Measured once, in one place:
+
+    paragraphs documenting an instrument error            17
+    explicit "reported X where the answer was Y" pairs     4   (560→0, 216→51,
+                                                               47→11, 34→9)
+
+**17 is a floor, not a total** — it counts what the prose bothered to write down,
+and the late sweeps produced more than they recorded: an absence sweep whose
+granularity was wrong, a universal sweep that read a spelled-out count as no
+count, a superseded-denominator screen wrong three times in five, an obligation
+screen that needed three passes, and four consecutive greps that nearly filed a
+defect against a correct shipped gate.
+
+The rate is the point, and it cuts both ways. A large share of the candidate
+findings in the later sweeps were the instrument rather than the subject — and
+**every one was caught by running a control before believing the result**, which
+is why they appear here as corrections rather than as claims. So the reader's
+calibration is: a figure that names its screen and its control has been through
+that filter; the handful explicitly dated to the base has not been re-run at all,
+and says so.
 
 ## The honest sentences, checked verbatim against the records
 
