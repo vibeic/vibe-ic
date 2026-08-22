@@ -1919,6 +1919,30 @@ table row a failure rather than a pass — and it now carries a control anyway, 
 the audit's own figure is zero uncontrolled checks rather than "two I judged to
 be fine".
 
+**Then the controls themselves were read, because the framework cannot audit
+them.** It catches a control that *fails to fail* at run time and prints
+`CONTROL BROKEN`; it cannot tell a control that detects a fault from one that is
+true no matter what. Reading all thirty:
+
+    inject a known fault and require it to be caught          strong
+    assert only that a parse succeeded                        weaker, but real
+    true regardless of the fault                              2
+
+Both are now repaired. The first was found earlier — a control asserting a
+deliberately-absent filename was absent, which holds under a *wrong* repository
+root too, and is why the root bug it was guarding went unnoticed until the bundle
+moved. The second is in the authoritative arm, the half that matters most: the
+live wiring check is an **intersection**, so an empty parse result passes it
+having examined nothing, and its control read `... or bool(stdout)` — a clause
+true whenever the gate printed anything at all, which says nothing about whether
+the parse found the list. It now requires the parsed population to be non-empty
+and not to over-match a name the gate never prints.
+
+Re-run on the slow arm, the population is real, so the check had been doing its
+work all along and simply had no guard proving it. That distinction is the point:
+this did not find a wrong answer, it found **an answer that was not entitled to
+be trusted**.
+
 ## The honest sentences, checked verbatim against the records
 
 The deliverable owes, *"for each Bucket B/C/D, the one honest sentence the ladder
