@@ -9,12 +9,20 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 Its section C is correct as of `a00f53f20`. **Read this table alongside it**; where
 they disagree, this document is later and says why.
 
+> **THE FINAL GROUPING IS PART 17. THIS TABLE DOES NOT REPEAT IT — DELIBERATELY.**
+> The rows below map frozen-branch rows to what CHANGED, and the two marked
+> `-> Part 17` moved again after being written. **This table has gone stale twice
+> from appending, in a document whose own finding is that appending does exactly
+> that.** Rather than patch it a third time, the counts now DELEGATE to Part 17
+> instead of duplicating it: *anchor, do not chase.* If a row and Part 17
+> disagree, **Part 17 wins**, and this note is the reason.
+
 | frozen section C row | status on `a4caccefe` |
 |---|---|
 | **3** — `flow_gate_enforcement_audit` exits 1 on two undeclared gates | **CLOSED.** The audit exits 0, both gates declare `ENFORCEMENT`, declared intent 41 → 44. **The decision it asked for was made** (Part 2) |
-| **3** — 63x8 remainder (1 anti-skip, 1 in-file interaction, 1 shared) | **now 2.** The in-file-interaction test is GREEN upstream, its cause independently confirmed (Part 1) |
+| **3** — 63x8 remainder | **CHANGED TWICE — see Part 17 for the count.** The in-file-interaction test is GREEN upstream (Part 1), and the remainder shrank again when the last red proved downstream of D3 (Part 17). |
 | **5** — the vacuity conditional | **unchanged, but the DECISION has moved** — see Part 3: the question is now about a gate program's disclosure channel, not the flow's tiering logic |
-| **16** — the corpus/record situation | **SPLIT to 13 + 3 (Part 16).** The 11 D3 + 2 nested-outcome reds are the corpus root and are untouched by 244 commits. **The 3 mutation-ledger reds are NOT downstream of it** — they are red BY DESIGN, because `applies_to` is frozen so a new step must redden the gate until someone measures its mutation |
+| **16** — the corpus/record situation | **CHANGED TWICE — see Part 17 for the count.** Split once when the ledger three proved red BY DESIGN rather than downstream (Part 16), and again when a third 63x8 red proved downstream of D3 (Part 17). |
 | **6** — landing-verdict | **unchanged**, and the arithmetic re-confirms the frozen branch's own count exactly |
 | **1** — `magic` | **unchanged** (environment) |
 
