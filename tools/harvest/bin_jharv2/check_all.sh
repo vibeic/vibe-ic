@@ -16,6 +16,7 @@ add(){ NAME+=("$1"); EXP+=("$2"); CMD+=("$3"); }
 add "predelete_guard self-test"        0 "bash $B/test_predelete_guard.sh"
 add "abandon-audit collapse fixture"   0 "bash $B/test_abandon_audit_untracked_collapse.sh"
 add "corrections_check self-test"      0 "bash $B/test_corrections_check.sh"
+add "rows keyed by (host,path)"        0 "bash $B/test_host_path_keying.sh"
 add "derived file matches its sources" 0 "python3 $B/derived_freshness_check.py $H"
 add "README counts match the files"    0 "python3 $B/readme_numbers_check.py $H"
 add "verdicts_all is reproducible"     0 "d=\$(mktemp -d); cp $H/verdicts_joined.tsv $H/verdicts_extras_joined.tsv \$d/; python3 $B/build_verdicts_all.py \$d >/dev/null; cmp -s \$d/verdicts_all.tsv $H/verdicts_all.tsv; r=\$?; rm -rf \$d; exit \$r"
