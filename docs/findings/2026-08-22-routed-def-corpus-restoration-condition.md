@@ -255,6 +255,33 @@ test file that names its rules — 125 passed, 12 skipped — and
 `size_policy_drift_check.py`, which probes `check_folder` as its decision entry
 point, still exits 0.
 
+### And it does NOT reach the three instances above. Measured, not assumed.
+
+`--tree` over one synthetic root carrying both shapes at once:
+
+| unit in the tree | what the checker did |
+|---|---|
+| `ic/demo/v9.9.9_openpdkx/` with `reports/reports/` | **FAIL — NESTED_DUPLICATE**, named |
+| `protocol_parity/demo2/` with `phase3/phase3/` **and** `reports/phase3/phase3/` | **not enumerated at all** |
+
+`1/2 conformant, 1 nonconformant`, rc 1 — and the two units are the IC root and
+the cell. Nothing under `protocol_parity/` was discovered, because
+`_discover_evidence_folders` keeps a child only under `ic/<IC>/`.
+
+So this rule covers the population the routed-DEF loop actually draws from —
+`ic/<design>/v<version>_<PDK>/` — and covers nothing else. The three
+`protocol_parity/` instances that made the shape credible remain uncaught, in
+the corpus repository, today. Catching them needs `_discover_evidence_folders`
+to enumerate a second tree, which changes what the structure gate reports over
+the whole corpus and would land three live FAILs on a tree `gatekeeper-land.sh`
+walks. That is a decision about the structure gate's scope, not a side effect of
+adjudicating one blocking row, so it is **named here and not taken**.
+
+The honest summary of the fix is therefore narrower than "the nested-duplicate
+bug is fixed": a cell can no longer be PUBLISHED into the routed-DEF corpus in a
+shape that corpus cannot see. The instances already published elsewhere are
+untouched.
+
 **Filed, not fixed:** `routed_def_corpus.py` hardcodes `may_be_absent=True`, so
 "a corpus was read and holds no routed DEF" and "no corpus was supplied at all"
 reach the dispatcher as the same rc 0 / 0 items. That file is line 71 of
