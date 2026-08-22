@@ -207,3 +207,44 @@ answer. `pruned_claim_check.sh` now asks the repo instead of guessing. All five 
 | my ABANDON rows | 29 | 29 | 20 contained in main, 5 pruned claims verified vs their named base, 4 twin-justified with twins verified identical and kept |
 | my LANDED rows | 163 | 163 | 0 holding content not on main |
 | joined deletion-bound | 48 | 48 | 34 ALLOW, 14 REFUSE — all 14 preserved on origin |
+
+## Turning the audit into something an executor can apply
+
+A document saying "these rows are wrong" is not actionable. `verdicts_joined_corrections.tsv` names
+the **10** deletion-bound rows that measurement contradicts, in joined's own schema, each with the
+host it was measured on and what was found:
+
+    LANDED -> RECOVER   wt_jwire2, _a1456, _jd3                    [c+retry]
+    LANDED -> RECOVER   _agent_scratch_whatif/wt_C, _agentjob_i1015/wt,
+                        _agentjob_jliar/wt, _wt_1236, _wt_1390pg, _wt_1486   [a]
+    LANDED -> RECOVER   _jintent/wt                                [b]
+
+Nine of the ten carried vacuous evidence. The tenth, `_jintent/wt`, is joined's stale copy of one of
+my own shard-B rows, which already said RECOVER.
+
+Four of the 14 REFUSE rows are **not** corrections: three are twin-justified ABANDONs whose twins I
+verified identical and kept, and `_jppa_skills/tree` is a LANDED whose 28 owned files really are
+byte-identical to main. The guard refuses them because it cannot see a twin and cannot query a
+gc'd HEAD — a limitation of the guard, not a wrong verdict, and reporting it as one would have been
+the same crude-measure error a fourth time.
+
+### The checker found its own bug first
+
+`corrections_check.sh` re-verifies every row against the machine holding it. Its first run reported
+`supported=1 unsupported=0`, rc=0 — having checked **1 of 10 rows**. `ssh` reads stdin, so inside a
+`while read` loop it swallows the rest of the input file. A clean green from a loop that ran once.
+
+Fixed with `ssh -n`, and it now asserts its own denominator: if the loop sees fewer rows than the
+file holds, that is a failure, because **a loop that stops early is indistinguishable from a loop
+that found nothing wrong**.
+
+A fail-closed state is reported as `UNMEASURED`, never as support — otherwise an unreachable host
+would confirm any correction I cared to write. `_jd3`, whose HEAD object is gc'd, is instead verified
+by a named probe: `d3_manifest_declaration_parity_check.py` hashes to `f7e68c793cc50edb` on disk
+against `ac6c915e9083e606` on main, matching the row's original evidence exactly.
+
+**Six hermetic arms**, no fleet required, including the two that stop a reject-everything checker
+from passing: a correction on a tree that genuinely holds content must be SUPPORTED, and a
+fail-closed clone with no probe must be UNMEASURED rather than either verdict. The probe arms need
+their own fail-closed fixture — a measurable clone never reaches that branch, so reusing the clean
+fixture left it dead code until I noticed the arm was passing for the wrong reason.
