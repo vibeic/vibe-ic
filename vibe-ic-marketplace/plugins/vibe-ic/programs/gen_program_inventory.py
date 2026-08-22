@@ -537,6 +537,12 @@ def main() -> None:
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if the committed inventory is stale or any "
                          "stated count in a bound document has drifted")
+    ap.add_argument("--check-artifact", action="store_true",
+                    dest="check_artifact",
+                    help="exit 1 only if the committed PROGRAM_INVENTORY.json "
+                         "differs from the tree; ignore prose in bound "
+                         "documents. For callers that regenerate the artefact "
+                         "and need to know whether THOSE BYTES are now correct")
     a = ap.parse_args()
 
     try:
@@ -545,7 +551,7 @@ def main() -> None:
         print(f"NOT CHECKED: cannot enumerate {PROGRAMS}: {exc}")
         sys.exit(2)
 
-    if a.check:
+    if a.check or a.check_artifact:
         fails: list[str] = []
         if not OUT.exists():
             print(f"FAIL: {OUT.name} missing — run without --check to generate")
@@ -565,20 +571,35 @@ def main() -> None:
             print("NOT CHECKED: " + msgs[0])
             sys.exit(2)
         fails += msgs
-        try:
-            fails += check_index_cross(inv)
-            fails += check_documents(inv)
-        except OSError as exc:
-            print(f"NOT CHECKED: cannot read a bound document: {exc}")
-            sys.exit(2)
+        # --check-artifact STOPS HERE, and the reason is a real caller.
+        # `generated_artifact_conflict_resolve.py` regenerates a derived file
+        # after a merge and then asks "are the committed bytes now the derived
+        # bytes?". Full --check also binds PROSE counts in the READMEs, which a
+        # regeneration cannot fix, so it answers "no" for a reason that has
+        # nothing to do with the artefact -- and the resolver's own degradation
+        # table turns a still-red --check into rc 2, UNMEASURABLE. That would
+        # report an unmeasurable tree where the artefact is provably correct.
+        # The prose obligation is real and full --check still enforces it; it
+        # is simply not the question this flag asks.
+        if not a.check_artifact:
+            try:
+                fails += check_index_cross(inv)
+                fails += check_documents(inv)
+            except OSError as exc:
+                print(f"NOT CHECKED: cannot read a bound document: {exc}")
+                sys.exit(2)
 
         if fails:
             print(f"FAIL: {len(fails)} stated-count problem(s)")
             for f in fails:
                 print(f"  - {f}")
             sys.exit(1)
-        print("OK: committed inventory matches the tree, and every stated "
-              "count in the bound documents matches its population.")
+        if a.check_artifact:
+            print("OK: committed PROGRAM_INVENTORY.json matches the tree "
+                  "(artefact only; prose counts NOT examined).")
+        else:
+            print("OK: committed inventory matches the tree, and every stated "
+                  "count in the bound documents matches its population.")
         for key, p in sorted(inv["populations"].items()):
             print(f"  {key:32s} = {p['count']}")
         sys.exit(0)
