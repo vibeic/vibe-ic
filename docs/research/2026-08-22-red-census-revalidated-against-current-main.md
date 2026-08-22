@@ -546,3 +546,56 @@ remote's default `HEAD` pointed at `master` while the push created `main`. **Bot
 failures looked like results.** The fixture in this repo does
 `symbolic-ref HEAD refs/heads/main` for exactly that reason, and copying what the
 repo already does is what made the test work.
+
+---
+
+# Part 11 — CLOSED. The blocker is a structural incompatibility, not a fixture I got wrong
+
+Parts 9 and 10 narrowed the 4 corpus/bootstrap reds from *"a protocol judgement"*
+to *"why does one git command return non-zero"*, and raised "the path is absent"
+as the leading candidate. **The candidate is wrong and the real answer is
+better.** Traced end to end, entirely by reading:
+
+| step | evidence |
+|---|---|
+| `build_trusted_transition_evidence` calls `validate_benchmark_snapshot "$BENCHMARK_B2"` | `:806` |
+| which runs `benchmark_data_landing_checkout.py validate --checkout ...` | `:340-345` |
+| whose `_inspect` calls `_origin` **unconditionally** | `:324` |
+| `_origin` requires `git remote get-url --all origin` == the expected URL | `:155-161` |
+| `$BENCHMARK_B2` is built by `materialize_hermetic_git_subject` | `:1237`, before the call at `:1378` |
+| which runs `hermetic_git_subject.py` — **`git init`, and ZERO remote-configuring lines** | `:206`; grep count 0 |
+
+**`$BENCHMARK_B2` EXISTS. It has no `origin` BY CONSTRUCTION.** An object-exact
+hermetic subject is `git init`-ed from objects — it is not a clone and not a
+worktree, and its own docstring says so. **The origin check expects a clone. The
+two cannot both be satisfied.**
+
+`['<missing or unreadable>']` is not a symptom of a missing directory or a broken
+fixture. **It is `git remote get-url` returning non-zero on a repository that was
+deliberately built without remotes.**
+
+**WHY THIS WAS LATENT.** `build_trusted_transition_evidence` runs only on the
+routed-transition path — the path gated by an env knob that cannot cross into the
+arm since the hermetic migration. **Nothing had executed it. M92's sentinel made
+it run for the first time, and this is what it found.**
+
+**So the ask for these 4 reds changes shape completely:**
+
+* **NOT** *"judge whether a fixture can satisfy the trusted-parent-evidence
+  protocol"* — the fixture is not the subject.
+* **IT IS:** the origin check and the hermetic subject materialisation are
+  **incompatible by construction**, and one of them must give — either the check
+  is not the right check for a hermetic subject, or hermetic subjects need a
+  recorded origin. **Both files are PROTECTED**, so it is the same owner's call,
+  but it is now a two-line question rather than an open-ended review.
+
+**WHAT I HAVE NOT ESTABLISHED:** whether this path ever passed. If it did,
+something about the materialisation or the check changed and the history would
+name it; if it never did, the routed-transition evidence has never been produced
+under the hermetic runner at all. **I did not measure that, and it decides whether
+this is a regression or a gap that shipped.**
+
+**The sentinel that was built and reverted paid for itself here.** It did not hit
+"a fixture I got wrong"; **it exposed an incompatibility that no test has reached
+since the migration**, and the only reason it looked like my fixture's fault is
+that mine was the first run to get that far.
