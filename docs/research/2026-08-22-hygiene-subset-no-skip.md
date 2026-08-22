@@ -2331,3 +2331,84 @@ it stop it. It is also the last claim in this document that was resting on
 argument rather than measurement.
 
 The scratch copy was deleted; nothing under `programs/` was touched.
+
+## 39. How `4232a7301` escaped: the no-skip test is invisible to the selector, AND to the disclosure that exists to catch that
+
+The last unasked question about this fix was the one this repository cares most
+about: **does the new guard actually get RUN?** Asking it turned up something
+larger than the answer.
+
+**The answer for my guard is yes.** `ci_targeted_test_select.py --base 546487a8a3`
+selects 119 files and includes `test_hygiene_handover_is_in_process_only.py`,
+`test_issue1498_…`, the ceiling-check tests, and the seventh node's file.
+
+**It does NOT include `test_issue538_merge_gate_covers_ci_hygiene.py`** — the
+file holding `test_the_cli_offers_no_way_to_skip_the_hygiene_set`, which is the
+no-skip guarantee this entire branch exists to defend.
+
+```
+mode ownership    selects test_issue538 : 0
+mode import-edge  selects test_issue538 : 0    <- the DEFAULT
+mode reference    selects test_issue538 : 1
+```
+
+**Why.** My guard says `import gatekeeper_review as R`. `test_issue538` says
+
+```python
+GR = _load("gatekeeper_review")      # spec_from_file_location + exec_module
+```
+
+An import-edge analysis sees the first and not the second. This is §35's finding
+with a consequence attached: the same coupling that hid
+`test_gatekeeper_review.py` from MY scan hides the no-skip test from the
+REPOSITORY'S scan.
+
+**That is almost certainly how `4232a7301` got in.** It changed
+`gatekeeper_review.py` to add `--hygiene-record-in`. The patch-cadence targeted
+gate would have selected 119 files and not the one test that forbids exactly
+that. The regression was not caught until the batch differential ran a broader
+set — which is where this brief found it.
+
+### The part that makes it a defect rather than a limitation
+
+vibe-ic#565 exists precisely so a bounded selection discloses what it dropped —
+§21's own subject. Its report on this diff:
+
+```
+[ci_targeted_test_select] IMPORT-EDGE GAP — test files that IMPORT a changed
+module and were NOT selected:
+    ci_harness_timeout_ceiling_check   imported by  5, selected  5, NOT selected 0
+    gatekeeper_review                  imported by 12, selected 12, NOT selected 0
+    TOTAL not selected: 0
+```
+
+**`TOTAL not selected: 0`, while the no-skip test is dropped.** The disclosure
+counts consumers by the SAME import-edge analysis the selector uses, so a
+path-loading consumer is invisible to both. Measured on this tree:
+
+```
+reach gatekeeper_review by plain import              9
+reach it by ANY route (import | path-load | subprocess)  20
+invisible to the gap report                          11
+```
+
+Eleven of twenty consumers — including `test_gatekeeper_review.py` and
+`test_issue538` — cannot appear in a report whose whole purpose is to say what
+was missed. **A disclosure that inherits the blind spot of the thing it
+discloses reports zero and means "zero that I can see"**, which is this
+document's opening subject wearing its last costume: an unmeasured thing reading
+as a measured zero.
+
+### What I am and am not claiming
+
+Claimed, and measured: the default mode drops `test_issue538` for a change to
+`gatekeeper_review.py`; `--mode reference` picks it up; the gap report says 0
+dropped; 11 of 20 consumers use a route it cannot see.
+
+NOT claimed: that this is the only escape route `4232a7301` had, or that
+switching the default mode is the right fix — `--mode reference` selects
+differently and more broadly, and that is an OWNER DECISION the flag's own help
+text already flags as such. This is a flow-level finding, reported with its
+reproduction (`ci_targeted_test_select.py --base <ref>`, compare `--mode
+reference` against the default) and not taken further, for the same reason as
+§18 and §28.
