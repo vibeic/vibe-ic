@@ -126,17 +126,23 @@ def _population(checker: str, flag: str, path: Path) -> int:
         return 1 if path.is_file() else 0
     if checker == "ppa_head_to_head_check.py":
         return len(_load("_hh", checker).corpus_records(path))
-    if checker == "ppa_contract_check.py":
-        return len(_load("_cc", checker).corpus_contracts(path))
-    if checker == "ppa_feasibility_check.py":
-        return len(_load("_fc", checker).corpus_candidate_sets(path))
-    if checker == "ppa_problem_integrity_check.py":
-        # A PAIR needs the baseline too, and the baseline is the OTHER flag on
-        # the same invocation — so the count here is of candidates available to
-        # pair with, which is what an empty corpus would make zero.
-        mod = _load("_pi", checker)
-        return len(mod.corpus_candidates(path, path / "__no_such_baseline__"))
-    raise AssertionError(f"no population counter for {checker} --corpus")
+    # THE OTHER THREE MOVED TO A SHARED SEAM AND THIS COUNTER DID NOT FOLLOW.
+    # `corpus_contracts` / `corpus_candidate_sets` / `corpus_candidates` were
+    # replaced by a SELECTION PREDICATE handed to `_ppa_corpus.collect`, and
+    # this function went on calling the old names — so it raised AttributeError
+    # on three of the six checkers and the guard could not see them at all. A
+    # guard that cannot run over half its family is the same class of defect it
+    # was written to catch, one level up. Calling the predicate through the seam
+    # keeps the original property: the count is the CHECKER'S OWN reckoning of
+    # its population, never a re-implementation that can drift from it.
+    predicate = {"ppa_contract_check.py": "is_contract",
+                 "ppa_feasibility_check.py": "is_candidate_set",
+                 "ppa_problem_integrity_check.py": "is_contract"}.get(checker)
+    if predicate is None:
+        raise AssertionError(f"no population counter for {checker} --corpus")
+    import _ppa_corpus as corpus_seam
+    mod = _load("_pop_" + checker.replace(".", "_"), checker)
+    return len(corpus_seam.collect(path, getattr(mod, predicate)).records)
 
 
 def test_the_wiring_still_invokes_every_ppa_record_gate():

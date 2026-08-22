@@ -1055,3 +1055,311 @@ thousand lines of prose, because this repository has gates that read tracked
 prose — is unchanged: declared 90, decided 80, passed 73, failed 7, NOT CHECKED
 10, and a failure set differing from the pristine baseline by exactly the one
 intended red, in both directions.
+
+---
+
+# Part 12 — the rows that could look, and still said nothing a reader could use
+
+Part 7 left eleven wired rows: four PASS, one FAIL, six NOT CHECKED. Parts 9 and
+10 argued the two NOT CHECKED rows whose input genuinely does not exist. This
+part is about the other kind, and it is a defect Parts 1–11 did not see because
+every one of them measured the EXIT CODE and none measured the SENTENCE.
+
+Two rows read their populations, adjudicated them, and refused in a way nobody
+could act on.
+
+## `PPA head-to-head records (end-to-end campaign)` — rc 2, and two records that
+   were indistinguishable in the output
+
+Measured on `a758f4adc`, `--corpus ppa-e2e`, the whole of what the gate printed
+about its two subjects:
+
+    [UNDETERMINED] ppa_head_to_head_check: SCOPE_SENTINEL
+      arm '…''s `timing_wns_ns` scope declares ['rc_corner'] with no value. …
+    [UNDETERMINED] ppa_head_to_head_check: SCOPE_SENTINEL
+      arm '…''s `timing_wns_ns` scope declares ['rc_corner'] with no value. …
+
+Two blocks, byte-identical. Nothing said which document either was about, or
+even that they were two documents rather than one reported twice.
+
+**It was never derived and then lost — it was sitting in the report object.**
+`evaluate` opens every report with `{"record": str(path)}`; `format_report`'s
+PASS branch prints it and its refusal branch printed `r['code']` alone. So the
+gate knew the answer on the line above the one it printed.
+
+The FAIL branch shared the defect, which is why `h2h_F` — the refusal this
+campaign's headline rests on — was reported for months as a code with no
+document attached.
+
+    after:  [UNDETERMINED] ppa_head_to_head_check: …/ppa-e2e/records/head_to_head.json: SCOPE_SENTINEL
+            [UNDETERMINED] ppa_head_to_head_check: …/head_to_head_diagnostic_power.json: SCOPE_SENTINEL
+            [FAIL]         ppa_head_to_head_check: …/ppa-crosslayer/records/h2h_F.json: BASELINE_TUNED_BY_US
+
+**rc is unchanged: 2 over `ppa-e2e`, 1 over `ppa-crosslayer`.** Both refusals are
+CORRECT and neither was converted. `rc_corner: null` really cannot be decided —
+`null == null`, so two numbers taken under conditions nobody recorded would
+satisfy a scope-equality test. What changed is that the refusal can now be acted
+on.
+
+## `PPA promotion feasibility (cross-layer campaign)` — rc 2 over 21 sets, and
+   the refusal in full was one sentence naming nothing
+
+    [CANNOT CHECK] at least one candidate was not adjudicated;
+                   this run makes no claim about it
+
+No candidate. No axis. No artefact. Over twenty-one adjudicated candidate sets.
+
+**And the naming existed, one layer down, complete.** Part 4 of this report
+quotes the reasons the records themselves give — the current-density screen that
+states verdict `nothing`; the equivalence proof whose gate side is
+`post_dft_netlist.v (synth)` and not the routed netlist. `_ppa/feasibility.py`
+carries both through `AxisResult.coverage` as a `reason` lifted VERBATIM from the
+metric row, together with the `sources` path that row cites, and
+`ppa_feasibility_check` writes all of it into the `--json` report.
+
+`tools/ci/repo_hygiene_gates.sh` passes no `--json`. So on the one channel a
+reader ever sees, every one of those sentences was discarded and replaced by a
+verdict code.
+
+    after, per undecided axis, on stdout beside the verdict:
+
+      …/trials/z23/candidates.json: z23: UNDETERMINED  em:FEAS_NOT_MEASURED,…
+        em: MISSING `reliability.em.violations` at view {"stage":"post_route"}
+            [NOT_MEASURED] -- the current-density screen states verdict
+            'nothing', which is neither PASS, FAIL nor SKIPPED.
+            cited artefact: reports/phase3/em.json
+        equivalence: MISSING `equivalence.verdict` … the proven pair is RTL
+            against 'post_dft_netlist.v (synth)', which names no post-layout
+            netlist … cited artefact: reports/lec.json
+
+**rc is unchanged: 2 over 21 sets, 0 infeasible, 21 undetermined.** Seven of nine
+axes are SATISFIED on every set and two carry no measurement; no candidate may be
+called promotable, and that was the honest answer before this change and is the
+honest answer after it. The difference is that the reader is now told the EM
+screen must reach a verdict and the equivalence proof must name the routed
+netlist, instead of being told a code.
+
+## Which of the two bugs each one was
+
+The brief that produced this part offered two: a gate missing an artefact it has
+not NAMED, and a gate declared to check something that checks nothing. Measured,
+**both rows are the first and neither is the second.** Each opened its corpus,
+read every document, and reached a per-subject verdict — 2 records and 21
+candidate sets, printed by the gates themselves. What each failed to do was say
+what it needed.
+
+That distinction is why no row here was converted to rc 0. An inert gate is
+repaired by making it run; a gate that runs and refuses correctly is repaired by
+making the refusal usable, and turning it green would have required editing a
+record to claim a measurement nobody took.
+
+## The finding on `h2h_F`, repaired at the producer and NOT at the gate
+
+Part 1 named it: the baseline arm `vibe-ic-pnr-only-searched` declares
+`tuned_by_this_project: true`. Both arms are configurations this project chose —
+`p04`, the place-and-route-only search winner, against `z23`, the cross-layer
+search winner. That is a within-project ABLATION, and an informative one: it
+isolates what the cross-layer search adds over a place-and-route-only search.
+What it is not is a head-to-head, whose entire claim is a comparison against an
+opponent we did not tune.
+
+**The record is not edited, not re-filed and not removed, and the gate goes on
+refusing it.** Two producer-side defects let it be written, and both are closed:
+
+  1. `ppa-crosslayer/tools/head_to_head.py` takes `--baseline-tuned`, whose own
+     help text reads *"the gate refuses a baseline we tuned"*. The producer was
+     therefore TOLD, in its own invocation, that the document it was about to
+     write could not be a head-to-head — and it stamped
+     `vibeic.ppa.comparison.v2` on it anyway, filed it in the head-to-head
+     corpus, and left the contradiction to surface at a hygiene gate after the
+     number had been published. It now refuses at write time and says what to
+     file instead.
+
+  2. `schemas/ppa/comparison.v2.schema.json` states the rule in PROSE — *"A
+     baseline must declare false"*, in the description of the very property —
+     and expressed no constraint. A producer validating its output against the
+     shipped schema was told the document was well formed. This is NOT one of
+     the cross-arm relations that schema's own description correctly says JSON
+     Schema cannot express: it reads two properties of ONE arm. It is now an
+     `if role == baseline then tuned_by_this_project: false` clause, and
+     validating the fifteen committed cross-layer records against the amended
+     schema refuses exactly one of them:
+
+         h2h_F   'True was expected to be False'  at arms[0].tuned_by_this_project
+
+     That is the same finding the gate makes, made at the point of production.
+
+  **Filing the ablation properly still has no home**, and that is named rather
+  than papered over: no schema in `schemas/ppa/` declares a within-project
+  ranking document. The first landable step is a record schema, not a number —
+  the same conclusion Part 9 reached for gates 3 and 5, and #1121's before it.
+
+## A crash that was exiting 1
+
+Found by a malformed fixture, exactly as Part 7's was. An arm whose `design` is
+written as a bare digest STRING instead of a mapping raises out of
+`check_same_problem`; `evaluate` catches only `Refusal`, so the traceback escaped
+and the interpreter exited **1** — which in this contract means *"these two runs
+did not solve the same problem"*, a verdict nothing reached. In corpus mode one
+such document decides the entire row.
+
+`ppa_contract_check` has carried a guard from the start and
+`ppa_problem_integrity_check` gained one in Part 7. `ppa_head_to_head_check` did
+not. It now returns **2**, not 3, and the distinction is corpus mode: the
+invocation was correct, and a corpus of fifty records where one is badly shaped
+is not a bad invocation. The record and the exception are named, and the missing
+input is named too — a document of the shape the schema declares. Anything
+raised OUTSIDE the per-record loop is still rc 3, matching `ppa_contract_check`.
+
+## The guard, and it generalises past these two rows
+
+`programs/tests/test_rc2_over_a_nonempty_population_names_the_artefact.py`.
+Its sibling, `…_ppa_gates_are_aimed_at_a_population_that_exists.py`, asserts a
+gate HAS a subject. This one asserts that a gate which has one, opens it, and
+then refuses, says what it needs. Two clauses, both countable:
+
+  1. **Subject named.** At least as many distinct EXISTING paths as the roll-up
+     says it could not decide. The candidate paths come from the CHECKER'S OWN
+     corpus walk, so the guard cannot drift from what the gate opened.
+  2. **Absent input named.** For each named subject, a REFERENT somewhere in
+     either stream: a backticked field or metric name, an artefact path other
+     than the subject itself, or a flag the reader could supply. A
+     SCREAMING_CASE code is not a referent — `FEAS_NOT_MEASURED` names a verdict,
+     not a thing to go and get.
+
+It runs on a synthetic corpus it builds itself, so it holds on a host carrying no
+campaign data, AND on every in-tree `--corpus` row parsed out of the wiring.
+
+**It asserts nothing about verdicts.** An rc 2 that is correct stays rc 2 and
+this file is satisfied; the one thing it will not accept is an rc 2 a reader
+cannot act on.
+
+**Two of its own assertions were wrong first, and both are recorded rather than
+quietly fixed.** `test_the_two_blocks_are_not_byte_identical` passed against the
+broken program, because splitting the stream on the marker put the trailing
+roll-up inside the last block and made two identical refusals compare unequal.
+And `_referents` counted `--corpus` from the gate's own header line, so negative
+control B passed against a program with all of its naming removed — a gate could
+have satisfied this entire file by repeating the argument it was called with.
+Both are now pinned by `test_a_verdict_code_alone_is_not_a_referent`.
+
+## A third row family, found while measuring: rc 3, and quieter than rc 2
+
+Re-running all eleven wired rows exactly as `repo_hygiene_gates.sh` invokes them
+turned up two that Part 7 recorded as rc 0 and that now exit **3**:
+
+    [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
+    and --corpus were both given. One names a single document and the other names
+    a population; running either one silently would report a verdict about
+    something the caller did not ask about. Give exactly one. rc=3.
+
+Reproduced on a pristine `a758f4adc`, so it is not this branch's doing.
+`--corpus` mode was rewritten to GROUP contracts by their problem identity and
+pair inside each group — which needs no baseline — and the refusal of the
+two-flag form is deliberate and argued in the program. The wiring was not
+updated with it, so `PPA arms solved one problem` had stopped examining any pair
+at all, in both campaigns.
+
+**rc 3 is quieter than rc 2 and that is why it survived.** An rc 2 at least says
+"I could not look" and the roll-up renders it NOT_CHECKED, which is a state a
+reader can go and interrogate. rc 3 says the CALLER got the arguments wrong, and
+nothing in the roll-up distinguishes it from a row that ran — the same blind spot
+Part 5 describes for the six original gates, arriving through the argument list
+instead of through the corpus path.
+
+The flag is removed. Measured after:
+
+    cross-layer  21 contract(s), 1 problem group,  210 pair(s), 0 conflicts -> rc 0
+    end-to-end   61 contract(s), 1 problem group, 1830 pair(s), 0 conflicts -> rc 0
+
+Part 7 recorded 20 and 60 pairs for the baseline-against-each form. Grouping
+compares every pair inside the group, which is the stronger question and the one
+the program now asks: a contract that drifts between trials 37 and 38 is a
+comparison nobody may quote, and pairing both only against the baseline could
+not have seen it.
+
+`test_no_wired_ppa_gate_is_a_bad_invocation` is the guard, and it needs no
+mutation to demonstrate: run it against the pristine wiring and both rows go red
+with the refusal quoted above.
+
+## Negative controls
+
+Three throwaway trees, each with ONE repair reverted, nothing else changed.
+
+    A — the record path removed from `format_report`'s refusal branch
+        3 failed, 10 passed
+          test_a_refusal_over_two_records_names_both_of_them
+          test_the_two_blocks_are_not_byte_identical
+          test_every_wired_corpus_gate_that_refuses_names_what_is_missing[ppa_head_to_head_check.py-ppa-e2e]
+
+        ppa_head_to_head_check.py --corpus ppa-e2e: rc 2 over a population of 2
+        with 2 undecided, and the output names 0 of them. A refusal whose
+        SUBJECT is unnamed cannot be acted on.
+
+    B — the per-axis MISSING lines removed from `ppa_feasibility_check`
+        2 failed, 11 passed
+          test_a_feasibility_refusal_names_the_metric_and_the_cited_artefact
+          test_every_wired_corpus_gate_that_refuses_names_what_is_missing[ppa_feasibility_check.py-ppa-crosslayer]
+
+        ppa_feasibility_check.py --corpus ppa-crosslayer: rc 2 and these
+        subjects are named but nothing says what is ABSENT from them -- no
+        field, no artefact, no flag, only verdict codes. 'rc 2' with no named
+        missing input is the failure mode this layer exists to end.
+
+    C — the wiring restored to its pristine two-flag form
+        2 failed
+          test_no_wired_ppa_gate_is_a_bad_invocation[--baseline|--corpus]  x2
+
+        ppa_problem_integrity_check.py --baseline …/b000/contract.json
+        --corpus …/ppa-crosslayer
+        is wired with arguments its own program refuses as a bad invocation,
+        so this row decides nothing and the roll-up cannot tell it from one
+        that ran.
+
+## A pre-existing red in the sibling guard, fixed on the way past
+
+`test_every_in_tree_corpus_holds_at_least_one_document` was RED on `a758f4adc`
+before anything in this part was written: `corpus_contracts`,
+`corpus_candidate_sets` and `corpus_candidates` were replaced by a SELECTION
+PREDICATE handed to `_ppa_corpus.collect`, and the guard's population counter
+went on calling the old names. It raised `AttributeError` on THREE of the six
+checkers, so the guard could not see half its family — the same class of defect
+it exists to catch, one level up. Counting now goes through the seam, which
+keeps the original property that the count is the checker's own reckoning.
+
+**And it is one of THIRTY-ONE, which is named here rather than left to be
+found.** The same selection of PPA test files, run on a pristine `a758f4adc`
+with `git clean -xdfq`, before anything in this part existed:
+
+    32 failed, 603 passed, 104 skipped, 4 xfailed
+
+Every one of the 31 not fixed above is the SAME cause and none of them is a
+finding about any gate's behaviour: a test reaching for a program internal that
+a refactor renamed and did not follow.
+
+     9  `_ppa_pi_cli` has no attribute `_CONTRACT_SCHEMA`
+     4  `corpus_contracts`      (ppa_contract_check)
+     3  `_ppa_contract_cli` has no attribute `_CONTRACT_SCHEMA`
+     2  `corpus_candidates`     (ppa_problem_integrity_check)
+     2  `corpus_candidate_sets` (ppa_feasibility_check)
+     1  `_CANDIDATES_SCHEMA`    (ppa_feasibility_check)
+    10  the remainder, in `test_ppa_layer_exit_contract.py` and
+        `test_ppa_layer_internal_error_is_not_a_finding.py`, over four programs
+        this branch does not touch — `ppa_agent_context_build`,
+        `ppa_diagnostic_router`, `ppa_pr_scope_check`, `ppa_signoff_records`
+
+That is four guard FILES over the PPA gate family raising `AttributeError`
+before they reach an assertion, so the properties they were written to hold are
+currently held by nothing. It is a real gap and it is a different lane from this
+one: repairing it is per-test-site work across four files with no shared fix, and
+this branch's scope is one refused record and two refusals that named nothing.
+**Recorded as a request, with the exact counts, rather than half-done.**
+
+The same selection on this branch:
+
+    31 failed, 618 passed, 104 skipped, 4 xfailed
+
+    failures on this branch and not the baseline:  (none)
+    failures on the baseline and not this branch:
+      test_issue1241_ppa_gates_are_aimed_at_a_population_that_exists.py
+        ::test_every_in_tree_corpus_holds_at_least_one_document
