@@ -5228,6 +5228,45 @@ count I have quoted for D3 — including my own six — was taken over the small
 denominator.
 
 
+## M97 — M93's closing verification was taken over a reduced denominator. The honest number is 17/296/0
+
+M93 closed this branch with *"12 failed, 242 passed, 61 skipped — every remaining
+red is a documented item, and there is no residue."* **The verdict survives. The
+number does not.**
+
+**Its `61 skipped` was the whole of M96's finding, sitting in my own headline
+result, and I read past it four times.** Re-ran the identical selection with
+`VIBE_IC_BENCHMARK_DATA` set:
+
+    M93, no pointer     12 failed, 242 passed, 61 SKIPPED   (445s)
+    M97, with pointer   17 failed, 296 passed,  0 skipped   (498s)
+
+    CLOSED by the pointer:   0
+    REVEALED:                5   (all D3, the exact five M96 names)
+
+**THE HONEST CLOSING STATE OF THIS SUITE:**
+
+| n | group | cause |
+|--:|---|---|
+| 11 | `test_matrix_d3_outputs_produced.py` | 6 cite `home` roots no corpus supplies; **5 only visible once the corpus is pointed at all** |
+| 6 | `test_landing_merge_verdict.py` | one defect — the closed 7-name env allowlist (M91), all behind protected files (M92) |
+
+**Still no residue: all 17 are grouped and root-caused.** What changed is that the
+denominator is now the whole dimension rather than 52 of 113 cells.
+
+**Why this one stings, and it is the lesson of the whole branch in miniature.** I
+built a header rule that a summary decays, published four re-derivation commands,
+audited every count in two documents, corrected a section title, swept a retracted
+claim into every artefact that carried it — **and the number I ended on was
+measured with a third of its subject invisible.** The `61 skipped` was printed in
+the same line as the `12 failed` every single time I quoted it.
+
+**A skipped cell has no colour, and I quoted a colour count next to sixty-one of
+them without once asking what they were.** Every instrument-defect entry in this
+document is a version of that question not being asked; this is the last one, and
+it was in my own conclusion.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
