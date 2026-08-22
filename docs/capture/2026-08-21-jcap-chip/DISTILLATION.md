@@ -1550,3 +1550,52 @@ A second test pins the reference on its own, deliberately separate from the swee
 so the failure names the CAUSE: the sweep going quiet and the capture moving are
 different events and must not share a line. It also asserts the capture still
 declares at least one Bucket-A rule, because a sweep over an empty set passes.
+
+## Wiring readiness, measured — so the wiring decision is not taken blind
+
+The twelve gates are unwired and whether to wire them is the adjudicator's call.
+What that call should not have to guess at is whether they are FIT to be wired.
+Measured on `87a1b1301`.
+
+**Invocation robustness.** A dispatcher does not call a gate the way I have been
+calling it. All twelve give an IDENTICAL rc under an absolute path from the repo
+root and a relative path from a different working directory; and an identical rc
+AND an identical denominator through a symlinked root, which is the case the
+`os.walk(followlinks=False)` choice was made for.
+
+**Runtime, under load 38.6 — the honest condition on this host.**
+
+    signoff_report_states_its_stage                     49.4s
+    only_the_declaring_step_writes_its_output           48.8s
+    generated_values_state_..._read_or_defaulted        24.0s
+    the other nine                                      10.3s combined
+    TOTAL (serial)                                     132.5s
+
+Three gates are 92% of it; all three walk the whole tree with AST. I found NO
+per-gate ceiling in `_gate_dispatch.sh` to compare against, so I am NOT claiming
+these breach one — only that a wiring decision should know three gates cost ~2
+minutes between them and the other nine are free.
+
+**The wired gate they will have to satisfy.** `gate_discloses_denominator_check`
+is already wired ("gates disclose their denominator") and probes each DECLARED
+gate against an empty tree. Mine are undeclared, so they are outside its
+population today — it reports `all 60 probed CI gate(s) of 90 declared` and passes
+without them. On wiring they enter it.
+
+I applied its own predicate to all twelve rather than guessing:
+
+    twelve gates probed against an empty tree
+      satisfy gate_discloses_denominator_check.discloses(): 12/12
+
+**This resolves a tension I expected to find and did not.** Two gates
+(`only_the_declaring_step`, `signoff_report_states_its_stage`) print NO `examined`
+line on an empty tree — they abort on the absent flow file and name it instead,
+which is the behaviour I defended earlier as the honest one, since "examined 0"
+would read as "looked and found nothing" when nothing was established. That looked
+like it would collide with a gate demanding a denominator. It does not: the
+predicate accepts a STATED REASON as well as a count. The honest form and the
+wired rule agree.
+
+**Also passing, unwired-but-relevant:** `ci_harness_timeout_ceiling_check` rc=0
+against this branch — the thirteen test files introduce no inner subprocess bound
+at or above the harness ceiling.
