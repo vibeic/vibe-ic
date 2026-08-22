@@ -4756,6 +4756,82 @@ question** — where a PR-context runner lives at all, which is the only one of 
 three the repo does not already answer.
 
 
+## M89 — the Docker lane, MEASURED in the pinned image: adding a Docker CLI is NOT sufficient
+
+Section C offered three options and reasoned about them. **I ran the image
+instead**, four times, and the option list was wrong in the way that matters.
+
+**First, the premise, verified inside the pinned digest itself:**
+
+    docker: ABSENT      git 2.43.0      Python 3.12.3
+    image ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2...d01ff  (local, 31GB)
+
+**M27 STANDS, and I nearly published that it did not.** My first check grepped for
+`docker.*not found|no docker|command not found` and returned **0**, which I read
+for a moment as a refutation. The real message is
+`cannot execute Docker CLI: [Errno 2] No such file or directory: 'docker'` —
+**matching none of my patterns.** Measured properly: **18 occurrences** in the
+no-docker baseline. **A zero from a pattern I wrote is not a finding**, and this
+is the fourth time that class has bitten in this branch.
+
+**THE MEASUREMENT — four arms, same suite, same image:**
+
+| arm | CLI errors | invalid-mount | failed | passed |
+|---|--:|--:|--:|--:|
+| pinned image, as CI runs it | **18** | 0 | 22 | 112 |
+| + host docker binary + socket | **0** | **18** | **22** | 112 |
+| + identical-path shared `TMPDIR` | 0 | 18 | 22 | 112 |
+
+**The failing test-ID sets are BYTE-IDENTICAL across all arms.** Not "22 and 22" —
+diffed, `comm` empty both directions. The counts matching is not the evidence; the
+sets matching is.
+
+**So supplying a working Docker CLI fixes the CLI error completely and changes
+NOTHING about the result.** The blocker underneath:
+
+    invalid mount config for type "bind":
+      bind source path does not exist: /tmp/gkverify.XURkCQ/candidate-subject
+
+**A host daemon resolves bind sources in the HOST namespace.** The runner
+bind-mounts paths it created inside the CALLING container, which the daemon
+cannot see. **This kills option 1 as anyone would implement it** — "add a Docker
+CLI + daemon" moves the error, it does not remove it.
+
+**The identical-path experiment got FURTHER, and named the exact remaining line.**
+Mounting a host directory at the same path in both namespaces and pointing
+`TMPDIR` at it DID relocate the verifier's run dir — the `gkverify.*` path
+disappears from the error. What defeats it:
+
+    hermetic_candidate_runner.py:1831
+        runtime_dir = Path(tempfile.mkdtemp(prefix="vibeic-hermetic-", dir="/tmp"))
+
+**`dir="/tmp"` is hardcoded and ignores `TMPDIR`**, so that one directory stays
+outside the shared mount and its `progress-plan.json` bind fails. The file is
+PROTECTED.
+
+**REVISED OPTIONS, each with a measured basis rather than an argument:**
+
+| option | verdict |
+|---|---|
+| add Docker CLI to the image | **INSUFFICIENT — measured.** CLI errors go to 0, the same 22 still fail |
+| CLI + host socket | **INSUFFICIENT — measured.** Mount namespace mismatch |
+| CLI + socket + identical-path `TMPDIR` | **one line away**: `:1831` hardcodes `dir="/tmp"` (protected) |
+| true docker-in-docker, own daemon | would resolve paths in one namespace; **untested here**, and privileged |
+| `--docker-bin` seam | unchanged — weaker guarantee, protected file (M31) |
+
+**What I did NOT measure, said plainly:** whether fixing `:1831` makes the 22 pass.
+It removes the ONLY blocker currently observed, and there may be a third layer
+under it. **Two layers appeared where I had reasoned about one, so predicting the
+third would be repeating the mistake this section exists to correct.**
+
+**A caution the lane owner should weigh, which none of the three options
+mentioned:** mounting the host's docker socket into the test container grants it
+root-equivalent control of the host daemon. For a lane whose entire purpose is
+hermetic isolation, that is not a small trade, and it is a reason to prefer a
+dedicated daemon over socket passthrough even though socket passthrough is
+cheaper.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4844,7 +4920,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (6 D3 reds measured) | **ONE group of six — M86 measured, M87 corrected.** All six cite `home`-kind run roots, and **5 of them cite the SAME root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`) — one unreproducible tree cited five times. **Their artefacts EXIST here** in other `home` trees (`_c3_adc_scratch/dehand*` carries all four PNR DEFs; 10+ trees carry `eco_trigger_decision.json`). **Step 30 joins them (M87)**: its outputs ARE declared, as GLOBS (`phase3/stage3/spice/*.sp`), produced by the EDA toolchain from external PDK models — `critical_path.sp` is just what satisfied the glob. **Not a production gap.** One publication-or-waiver decision closes all six. Never by widening the skip. | **ONE decision, six reds** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
-| **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
+| **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | **MEASURED IN THE IMAGE — M89. Adding a Docker CLI is NOT sufficient.** Four arms of the same suite in the pinned digest: as CI runs it, 18 CLI errors / 22 failed; **with a working CLI + host socket, 0 CLI errors and the SAME 22 failed** — failing ID sets **byte-identical**, now dying on `invalid mount config: bind source path does not exist`, because a host daemon resolves binds in the HOST namespace. An identical-path shared `TMPDIR` gets further and names the exact remaining line: **`hermetic_candidate_runner.py:1831` hardcodes `dir="/tmp"`** and ignores `TMPDIR` (PROTECTED). Whether fixing it closes the 22 is NOT measured — two layers appeared where I reasoned about one. Also: socket passthrough grants the test container root-equivalent host daemon access. | **option 1 disproven; one protected line identified** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
 | **3 unwired checkers** | **THREE homes, and the repo already states the rule — M88.** M71 re-verified across FOUR homes (it had checked two; the 2 Python hits are docstrings): all three genuinely unwired. `repo_hygiene_gates.sh:398-403` states the membership test — *subject is the shipped flow document, no PR context, no design run* — which sorts them: **`closed_loop_edge_check` -> hygiene** (its sibling is wired at `:424`, twenty lines below the comment about it; PROTECTED file, lander's one-line edit); **`ppa_pr_scope_check` -> a PR-context runner, explicitly NOT hygiene**; **`slot_pad_budget_check` -> a flow clause on the chip path**, and **M52's objection ('a gate with nothing to read') is now FALSE** — it produced real verdicts on 18 designs. | **1 precedent, 1 product call, 1 real open question** |
