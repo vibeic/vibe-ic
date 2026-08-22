@@ -5956,6 +5956,55 @@ control.** That is not a design insight I brought — it is one I could have rea
 off the passing tests before writing four designs.
 
 
+## M113 — entry 2's mutation arm PROVEN, and a fifth instance of the same grep error nearly made me accuse a good test
+
+Section A entry 2 claims *"Mutation arm proven: delete the `RW is not False`
+clause and it goes red."* **Every other "proven" in this document has now been
+checked; this one was not.** Measured:
+
+    sha256 before                     e7e4dce1fcc0c994...
+    disable `item.get("RW") is not False`  ->  1 FAILED
+    restored                          sha256 MATCHES, git status clean
+
+**The claim is exact — that is the clause, at `hermetic_candidate_runner.py:852`,
+and removing it reddens the test.** Verified against a PROTECTED file by
+mutate-measure-restore with a checksum on both sides, and the file is byte-identical
+to HEAD afterwards.
+
+**AND THE NEAR-MISS, which is worth more than the confirmation.** Looking for the
+refusal the test names, I ran:
+
+    grep -rn "subject bind is not exact" --include=*.py .
+      -> ONE hit, in the TEST. Nothing in any program emits it.
+
+**For a moment that read as: the test asserts a message no production code
+produces.** That would be a serious accusation about a test I shipped. **It is
+wrong.** The runner raises
+
+    raise Refusal(f"candidate {role} bind is not exact/read-only")
+
+an **f-string**, rendering `candidate subject bind is not exact/read-only` — of
+which the test's literal is a substring. My search was for a string that is
+CONSTRUCTED AT RUNTIME, so of course the source does not contain it.
+
+**That is the fifth instance of one error class in this engagement**, and the
+first where it nearly produced an accusation rather than a wrong number:
+
+    grep -c NAME              -> 0    "the variable cannot cross"   (it ABORTS the arm)
+    docker-absence pattern    -> 0    "M27 is refuted"              (18 real occurrences)
+    grep -Ff <(empty)         -> 9/9  "all protected touched"       (true of any branch)
+    failure's first line             "a third cause"               (payload named the first)
+    grep "subject bind..."    -> 1    "no code emits this"          (f-string)
+
+**The declaration-scan module I patched warns about exactly this shape** — that
+`ast.unparse` re-escapes, so a `\bmodule\b` probe finds no boundary, *"an artefact
+that silently produced two confident, wrong populations."* **I read that warning,
+fixed that module, and then made the same mistake against a different file an hour
+later.** Knowing the class is not the same as checking for it, and the check is
+always the same: **run the pattern against a known positive before believing a
+zero.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
