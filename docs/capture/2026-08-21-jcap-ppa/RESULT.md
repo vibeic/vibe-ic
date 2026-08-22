@@ -60,6 +60,7 @@ Accepted with no refusal and no unrouted record.
 - [No near-duplicates — and the first number I published from a broken instrument](#no-near-duplicates--and-the-first-number-i-published-from-a-broken-instrument)
 - [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
 - [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
+- [The same question, asked of the records, and where the tooling stops](#the-same-question-asked-of-the-records-and-where-the-tooling-stops)
 - [Three check NAMES promised more than their predicates deliver](#three-check-names-promised-more-than-their-predicates-deliver)
 - [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
@@ -2150,6 +2151,34 @@ A third flag was my screen's fault, not the records': the Bucket-T record looked
 figure-free because I searched the field the Bucket-A records use, and the ladder
 puts a T record's measurement in `problem` and `bad_sample`, where it is dense
 with them. Check 46 encodes that exemption rather than repeating my mistake.
+
+## The same question, asked of the records, and where the tooling stops
+
+If a check's name can promise more than its predicate delivers, so can a RULE's
+name promise more than its own `fix_action` achieves — and that would mislead the
+implementing lane rather than a reader. The question is the right one. **The
+tooling cannot answer it.**
+
+A screen for fix_actions that narrow their own scope flagged 24 of 35, on the
+word *only* — which ordinary prose uses constantly. Three of the flagged were
+read in full, named here so the sample is not a claim about the rest:
+
+| record | what the flag actually was |
+|---|---|
+| the accepted-value branch | *"the suffix admits **only** word characters"* — describing the defect |
+| the docstring binding | part of the build instruction, not a narrowing |
+| the absence claim | *"take **only** paths within a short window"* — a screen refinement |
+
+None narrows its rule name's promise. That is a negative result **on a sample of
+three**, and the population figure is deliberately not given, because the screen
+that would produce it is the eighth in this lane to measure my own vocabulary
+instead of the text.
+
+**This is where the ladder ends.** Figures that are projections of repository
+data can be bound, and now are. What a binding proves can be tested, and was.
+Whether a name is honest can be read, and was, for the verifier's 51 checks. The
+same question about 35 records needs 35 readings, and the honest report is the
+three that were done rather than a number that would look derived.
 
 ## Three check NAMES promised more than their predicates deliver
 
