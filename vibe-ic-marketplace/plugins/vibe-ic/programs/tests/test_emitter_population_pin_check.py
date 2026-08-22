@@ -2899,6 +2899,55 @@ def test_every_reach_quantity_in_the_document_also_reaches_the_head_line():
         "separately, and it is no longer printed")
 
 
+# ── the fix is the one the gate asked for ───────────────────────────────────
+
+def test_the_extractor_still_looks_like_an_extractor_and_consults_polarity():
+    """#712's census fell 214 -> 213 when this branch landed. There are two ways
+    to make that happen and only one of them is the fix.
+
+    The honest one: the extractor still SEARCHES PROSE and still WRITES A
+    DECLARED VALUE -- the gate goes on counting it as the kind of function it
+    audits -- and it now consults the polarity vocabulary. The other one is to
+    stop looking like an extractor: restructure until `_searches_prose` returns
+    False and the row leaves the census with nothing fixed. Both produce 213,
+    and the brief's rule is that the second is the one thing that may not be
+    done.
+
+    Checked with the gate's OWN predicates rather than a reimplementation of
+    them, because a private copy of "what counts as an extractor" would drift
+    from the thing that actually decides the census."""
+    import ast as _ast
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    try:
+        import prose_polarity_consulted_check as gate
+        searches = gate._searches_prose
+        writes = gate._writes_a_declared_value
+        consults = gate._consults_polarity
+        aliases_of = gate._aliases
+    except (ImportError, AttributeError) as e:
+        pytest.skip(f"the #712 gate's predicates are not importable here ({e}), "
+                    f"so this cannot be checked from this checkout")
+
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    aliases = aliases_of(tree)
+    assert aliases, (
+        "this program imports no polarity vocabulary at all, so nothing here "
+        "can be consulting it")
+
+    audited = [fn for fn in _ast.walk(tree)
+               if isinstance(fn, _ast.FunctionDef)
+               and searches(fn) and writes(fn)]
+    assert audited, (
+        "the #712 gate no longer counts ANY function here as an extractor. The "
+        "census would read 213 either way -- this is what closing the row by "
+        "hiding from it looks like, and it is the one move the brief forbids")
+
+    blind = [fn.name for fn in audited if not consults(fn, aliases)]
+    assert not blind, (
+        f"these are extractors by the gate's own definition and consult no "
+        f"polarity: {blind}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
