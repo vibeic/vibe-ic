@@ -69,12 +69,15 @@ EVERY LAYOUT ARTEFACT LEAVES A RECORD — `LAYOUT_ROUTING.txt` at the cell root,
 one line per layout artefact found under the source run directory:
 
     <relpath> <bytes>B sha256:<64hex> <DECISION> <destination>
-    DECISION ∈ STAGED | ROUTED_AWAY | NOT_PUBLISHED
+    DECISION ∈ STAGED | ROUTED_AWAY | NOT_PUBLISHED | OFF_CANONICAL_PATH
 
 A reader can therefore distinguish "big, stored elsewhere, here is its hash"
 from "in the run but out of published scope" from "never existed" — three
 states the count on stdout collapsed into one, because stdout is not part of
-the deliverable. `--oversize-route` names the destination for the routed-away
+the deliverable. The fourth, OFF_CANONICAL_PATH, exists because staging
+`_ROUTED_DEF_RELPATH` created a state that did not exist before it: an artefact
+that IS in published scope and is not where the scope looks. Saying
+NOT_PUBLISHED there asserts a policy decision nobody made. `--oversize-route` names the destination for the routed-away
 ones; it defaults to `not-retained`, which is the honest answer when nobody
 has said otherwise. A cell that records "not-retained" is a better deliverable
 than one that quietly looks whole.
@@ -462,6 +465,11 @@ def _record(p: Path, rel_base: Path, decision: str,
         rel = p.name
     dest = {"STAGED": "in-cell",
             "ROUTED_AWAY": route,
+            # The artefact IS in published scope and is not where the scope
+            # looks. Its DESTINATION is the same as an excluded artefact's --
+            # it went nowhere -- so the distinction has to live in the
+            # DECISION, which is the column that says why.
+            "OFF_CANONICAL_PATH": "source-run-only",
             "NOT_PUBLISHED": "source-run-only"}[decision]
     return {
         "path": rel,
@@ -604,8 +612,17 @@ _ROUTING_HEADER = (
     "#   NOT_PUBLISHED exists in the source run, in a subtree this cell does\n"
     "#                 not publish (PnR scratch, per-step scratch). Not a\n"
     "#                 size decision — small ones are not published either.\n"
+    "#   OFF_CANONICAL_PATH\n"
+    "#                 a `routed.def` that IS in published scope and is not\n"
+    "#                 where the scope looks. `phase3/stage3/pnr/routed.def`\n"
+    "#                 is the only path the published-corpus population is\n"
+    "#                 built from, so a DEF anywhere else is dropped — and\n"
+    "#                 recording that as NOT_PUBLISHED would assert a policy\n"
+    "#                 decision nobody made. Same repair CITATION_ROUTING.txt\n"
+    "#                 makes for citations: the wrong word here retires a\n"
+    "#                 finding instead of reporting one.\n"
     "#\n"
-    "# The sha256 is recorded in all three cases: it is what makes an\n"
+    "# The sha256 is recorded in all four cases: it is what makes an\n"
     "# artefact verifiable without being stored, and what turns recovering\n"
     "# one from a source host into a checkable file copy rather than a guess.\n"
     "#\n"
@@ -1465,6 +1482,67 @@ def publish(args: argparse.Namespace) -> dict:
             layout_records.append(
                 _record(routed_def, run_dir, "STAGED", route))
             staged.append(_ROUTED_DEF_RELPATH.as_posix())
+    else:
+        # NOTHING AT THE CANONICAL PATH, AND THE RUN HAS ONE SOMEWHERE ELSE.
+        # Since the block above exists, `_ROUTED_DEF_RELPATH` is IN published
+        # scope, so this is a DIFFERENT fact from the policy exclusions the
+        # inventory records: the artefact was not declined, it was not found.
+        # Recorded NOT_PUBLISHED -- as it was until this branch -- the two are
+        # the same word, and a reader of the cell concludes the run had no
+        # post-route geometry. `CITATION_ROUTING.txt` already argues this
+        # distinction for citations: "a directory that ships its neighbours
+        # and not this file is a HOLE ... the wrong word here retires a
+        # finding instead of reporting one."
+        #
+        # MEASURED, and the shape is committed rather than hypothetical: the
+        # published corpus carries 52 files under a doubled `phase3/phase3/`
+        # prefix, 28 of them under `protocol_parity/lpc/phase3/phase3/stage3/
+        # pnr/`. A run tree of that shape publishes rc 0, a cell with zero
+        # `.def` files, and -- before this -- no sentence anywhere naming the
+        # artefact it dropped.
+        #
+        # DEDUPED ON THE RESOLVED PATH, for the reason `_inventory_unpublished`
+        # gives: converged runs alias their outputs under `steps/`, and the
+        # same blob reached twice is the same evidence twice.
+        #
+        # SEEDED FROM WHAT IS ALREADY RECORDED, and that is not an optimisation.
+        # A `routed.def` inside a published subtree -- `reports/phase3/` is the
+        # measured case -- has ALREADY been decided about by `_copy_tree`:
+        # STAGED under the ceiling, ROUTED_AWAY over it. Emitting a second row
+        # for it here breaks this file's own invariant, stated in its header:
+        # "ONE LINE PER BLOB, not per path". Caught by
+        # test_an_oversized_artefact_is_absent_but_recorded_with_its_hash,
+        # which read 2 lines where it requires 1. `OFF_CANONICAL_PATH` is for
+        # an artefact the publisher never looked at -- not for one it looked at
+        # and decided.
+        off_canonical = []
+        aliased = {Path(r["src"]).resolve() for r in layout_records}
+        for cand in sorted(run_dir.rglob(_ROUTED_DEF_RELPATH.name)):
+            if not cand.is_file():
+                continue
+            real = cand.resolve()
+            if real in aliased:
+                continue
+            aliased.add(real)
+            rec = _record(cand, run_dir, "OFF_CANONICAL_PATH", route)
+            layout_records.append(rec)
+            # The record's OWN path column, not a second derivation of it: a
+            # symlink resolving outside the run makes `relative_to` raise, and
+            # `_record` already has the fallback for exactly that.
+            off_canonical.append(rec["path"])
+        if off_canonical:
+            # NOT a refusal. The run may be converged and the cell worth
+            # publishing; what must not happen is the drop being silent.
+            print(
+                f"WARNING: this run carries "
+                f"{len(off_canonical)} {_ROUTED_DEF_RELPATH.name} file(s), "
+                f"none of them at {_ROUTED_DEF_RELPATH.as_posix()}, which is "
+                f"the only path the published-corpus population is built "
+                f"from. The cell is published WITHOUT a routed DEF and adds "
+                f"no member to that corpus. Found: "
+                + ", ".join(sorted(off_canonical))
+                + f". Recorded OFF_CANONICAL_PATH in {_ROUTING_FILENAME}.",
+                file=sys.stderr)
 
     # shared design input (staged once per IC). BEFORE the routing record is
     # written: these files can live under the run too, and one recorded as

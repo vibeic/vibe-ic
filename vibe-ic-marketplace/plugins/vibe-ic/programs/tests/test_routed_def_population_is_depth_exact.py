@@ -43,10 +43,19 @@ corpus made non-empty by a malformed cell is that same pass with extra steps.
 The producer is a protected authority file (`REQUIRED_AUTHORITY_PATHS` in
 `tools/ci/protected_landing_transition.py`) and is right as written.
 
-A PUBLISH-SIDE REFUSAL FOR THE DOUBLED SHAPE IS NOT IN THIS CHANGE, and this
-file does not pretend otherwise. Nothing here refuses a cell that nests a
-directory inside a same-named parent; the shape stays committed in the corpus
-and uncaught. That is a named, open gap, not a solved one.
+A PUBLISH-SIDE REFUSAL FOR THE DOUBLED SHAPE IS STILL NOT IN THIS CHANGE, and
+this file does not pretend otherwise: nothing refuses a cell that nests a
+directory inside a same-named parent, and the shape stays committed in the
+corpus.
+
+WHAT DID CLOSE, one layer over, is the SILENCE around it.
+`test_routed_def_off_the_canonical_path_is_not_out_of_scope.py` pins that a run
+whose `routed.def` is off the canonical path is recorded OFF_CANONICAL_PATH
+rather than sharing the word NOT_PUBLISHED with the scratch the publisher
+excludes on purpose, and that the publisher names it on stderr. That does not
+make such a cell a population member and is not meant to -- the producer's
+answer is the same zero either way, which is exactly the collapse asserted
+below. It only stops the drop from being invisible.
 
 STATUS: THIS IS A CONTRACT PIN, NOT A REPAIR. It is GREEN before this branch as
 well as after — the depth rule it asserts is today's behaviour, unchanged here.
