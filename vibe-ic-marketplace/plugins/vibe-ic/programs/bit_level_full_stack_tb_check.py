@@ -51,6 +51,13 @@ Rules applied
 (2) At least one tb_*_full.v file exists.
 (3) The tb instantiates the top-level chip module (heuristic: contains
     `<top> u_dut` or `<top> dut` or `<top>(`), NOT just a sub-module.
+    (3a) #760 — the top is RECONCILED against the design's own module set
+    before rule (3) is applied. A declared top (`--top`, `L9.top_module`)
+    that names no module the design declares is reported as
+    `TOP_MODULE_NOT_IN_MODULE_SET` against the DECLARATION; rule (3) then
+    runs against the top the design's own hierarchy implies. Previously the
+    declared name was ground truth, so a name harvested out of prose made
+    rule (3) unsatisfiable and blamed the testbench for it.
 (4) The tb references the single-wire pad signal at the bit level
     (heuristic: contains both `acc_id` AND a sub-microsecond delay
     pattern like `#1` / `#10` / `5'd<n>` near pad transitions, OR
@@ -91,6 +98,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import _design_module_set as _dms
 import _path_layout as _pl
 import _sim_results_bridge as _srb
 
@@ -431,44 +439,116 @@ def _regmap_transaction_verdict(regmap: dict, rmc: dict) -> dict:
     }
 
 
-def _find_top_module(rtl_dir: Path, l9_path: Path | None,
-                     explicit_top: str | None) -> str | None:
-    """Best-effort top-module discovery: explicit > L9 > heuristic.
+#: Filename conventions that GUESS a top module, in preference order
+#: (chip-AGNOSTIC):
+#:   chip_top.{v,sv}  — phase2 spec-to-RTL canonical emit
+#:   *_top.{v,sv}     — AID-class / general convention
+#:   *_dtop.{v,sv}    — AID-class digital-top variant
+#:   top.{v,sv}       — legacy / sandbox fallback
+#:   dtop.{v,sv}      — legacy
+#: v1.6.125 (#47 Fix 1) — .sv covers phase2's spec-to-RTL SystemVerilog emit.
+_TOP_FILENAME_PATTERNS = (
+    "chip_top.sv", "chip_top.v",
+    "*_top.sv",    "*_top.v",
+    "*_dtop.sv",   "*_dtop.v",
+    "top.sv",      "top.v",
+    "dtop.sv",     "dtop.v",
+)
 
-    v1.6.125 (#47 Fix 1) — extend filename heuristic to cover
-    SystemVerilog (.sv / .svh) emitted by phase2's spec-to-RTL
-    generator. Also recognise `chip_top` as a canonical name in
-    addition to the legacy AID-class `*_top` / `*_dtop` shapes.
+
+def _top_candidates(rtl_dir: Path, l9_path: Path | None,
+                    explicit_top: str | None) -> list[tuple[str, str, bool]]:
+    """Ordered ``(name, source, is_declaration)`` top-module candidates.
+
+    The ORDER is the historical one — explicit ``--top`` > L9 > filename
+    convention. What changed with #760 is that a candidate is now a CLAIM to be
+    reconciled against the design's own module set, not an answer.
+
+    ``is_declaration`` separates the two kinds of candidate. An operator flag
+    and a published layer field ASSERT the design's top; when the design
+    refutes one, that assertion is itself the defect and must be reported. The
+    filename patterns only GUESS, so a refuted guess is this program's own miss
+    and is dropped silently rather than blamed on anybody.
     """
+    cands: list[tuple[str, str, bool]] = []
+
+    def _add(name, source: str, is_declaration: bool) -> None:
+        if not isinstance(name, str) or not name.strip():
+            return
+        n = name.strip()
+        if any(n == c for c, _, _ in cands):
+            return
+        cands.append((n, source, is_declaration))
+
     if explicit_top:
-        return explicit_top
+        _add(explicit_top, "--top", True)
     if l9_path and l9_path.exists():
         try:
             data = json.loads(l9_path.read_text())
-            top = (data.get("top_module")
-                   or data.get("dtop", {}).get("module")
-                   or data.get("module"))
-            if isinstance(top, str) and top:
-                return top
         except Exception:
-            pass
-    # Heuristic — preference order (chip-AGNOSTIC):
-    #   chip_top.{v,sv}  — phase2 spec-to-RTL canonical emit
-    #   *_top.{v,sv}     — AID-class / general convention
-    #   *_dtop.{v,sv}    — AID-class digital-top variant
-    #   top.{v,sv}       — legacy / sandbox fallback
-    #   dtop.{v,sv}      — legacy
-    for pat in (
-        "chip_top.sv", "chip_top.v",
-        "*_top.sv",    "*_top.v",
-        "*_dtop.sv",   "*_dtop.v",
-        "top.sv",      "top.v",
-        "dtop.sv",     "dtop.v",
-    ):
-        cands = sorted(rtl_dir.glob(pat))
-        if cands:
-            return cands[0].stem
-    return None
+            data = None
+        if isinstance(data, dict):
+            _add(data.get("top_module"), f"{l9_path.name}:top_module", True)
+            dtop = data.get("dtop")
+            if isinstance(dtop, dict):
+                _add(dtop.get("module"), f"{l9_path.name}:dtop.module", True)
+            _add(data.get("module"), f"{l9_path.name}:module", True)
+    for pat in _TOP_FILENAME_PATTERNS:
+        hits = sorted(rtl_dir.glob(pat))
+        if hits:
+            _add(hits[0].stem, f"rtl filename convention {pat}", False)
+    return cands
+
+
+def _resolve_top_module(rtl_dir: Path, l9_path: Path | None,
+                        explicit_top: str | None,
+                        module_set: set) -> tuple[str | None, dict]:
+    """Resolve the top module, reconciling every candidate against the design.
+
+    Returns ``(top, resolution)``. ``resolution["refuted"]`` lists the DECLARED
+    candidates the design's own module set refutes — declarations that name a
+    module this design does not declare, and therefore state a requirement no
+    testbench could ever satisfy (#760).
+
+    NO-RELAXATION INVARIANT. The structural fallback below runs ONLY when at
+    least one declared candidate was refuted. On every project where no
+    declaration is refuted — which is every project this program resolved a top
+    for before #760 — the candidate order, the resolved name, and therefore the
+    requirement placed on the testbench are byte-identical to the previous
+    behaviour. A refuted declaration is the only new state, and it makes the
+    gate stricter (it reports a defect that was previously mis-attributed),
+    never laxer.
+    """
+    cands = _top_candidates(rtl_dir, l9_path, explicit_top)
+    refuted: list[dict] = []
+    for name, source, is_declaration in cands:
+        rec = _dms.reconcile_declared_top(name, module_set)
+        if rec["verdict"] != _dms.ABSENT:
+            return name, {"top": name, "source": source,
+                          "verdict": rec["verdict"], "refuted": refuted,
+                          "module_set_size": len(module_set)}
+        if is_declaration:
+            refuted.append({"name": name, "source": source})
+    if not refuted:
+        # No declaration was refuted, so there is nothing to substitute for.
+        # Byte-identical to the pre-#760 outcome for this project shape.
+        return None, {"top": None, "source": None, "verdict": "unresolved",
+                      "refuted": [], "module_set_size": len(module_set)}
+    # Every declaration this run published names a module the design does not
+    # declare. Substitute the top the DESIGN itself implies — the module no
+    # other staged module instantiates. Derived from the design alone, never
+    # from the testbench under audit, so the pad-path requirement below stays a
+    # requirement the testbench has to meet rather than one it defines.
+    roots = _dms.instantiation_roots(_dms.design_module_bodies([rtl_dir]))
+    if len(roots) == 1:
+        root = next(iter(roots))
+        return root, {"top": root, "source": "design instantiation root",
+                      "verdict": "resolved_structurally", "refuted": refuted,
+                      "instantiation_roots": [root],
+                      "module_set_size": len(module_set)}
+    return None, {"top": None, "source": None, "verdict": "unresolved",
+                  "refuted": refuted, "instantiation_roots": sorted(roots),
+                  "module_set_size": len(module_set)}
 
 
 def _latest_rtl_mtime(rtl_dir: Path) -> float:
@@ -661,15 +741,54 @@ def check(project: Path, rtl_dir: Path, sim_dir: Path, top: str | None,
     tb_path = tbs[0]
     info["tb_path"] = str(tb_path)
 
-    # Resolve top
+    # Resolve top — reconciled against the design's OWN module set (#760), so
+    # a declared name the design does not declare is reported as the defect it
+    # is, instead of becoming an unsatisfiable demand on the testbench.
     l9_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
-    resolved_top = _find_top_module(rtl_dir, l9_path, top)
+    module_set = _dms.design_module_set([rtl_dir, _pl.synth_dir(project)])
+    resolved_top, resolution = _resolve_top_module(
+        rtl_dir, l9_path, top, module_set)
     info["top_module"] = resolved_top
+    info["top_module_resolution"] = resolution
+
+    for ref in resolution.get("refuted", []):
+        if resolution.get("source") == "design instantiation root":
+            _tail = (f"The design's own hierarchy resolves the top to "
+                     f"`{resolved_top}` (the module no other staged module "
+                     f"instantiates), and that is the top this gate required "
+                     f"of the testbench instead.")
+        else:
+            _tail = (f"The design's hierarchy does not imply an unambiguous "
+                     f"top either (instantiation roots: "
+                     f"{resolution.get('instantiation_roots', [])}), so no "
+                     f"top-module requirement could be stated at all.")
+        findings.append({
+            "severity": "FAIL", "rule": "TOP_MODULE_NOT_IN_MODULE_SET",
+            "source": ref["source"], "declared_top": ref["name"],
+            "message": (
+                f"{ref['source']} declares top module `{ref['name']}`, which "
+                f"is not one of the {len(module_set)} module(s) this design "
+                f"declares. No testbench can instantiate a module the design "
+                f"does not declare, so the defect is the declaration itself, "
+                f"not the testbench. {_tail}"),
+        })
+
     if not resolved_top:
+        if resolution.get("refuted"):
+            _refuted = ", ".join(f"{r['source']}=`{r['name']}`"
+                                 for r in resolution["refuted"])
+            _why = (f"every declared top ({_refuted}) names a module this "
+                    f"design does not declare, and the design's hierarchy "
+                    f"implies no unambiguous top "
+                    f"(instantiation roots: "
+                    f"{resolution.get('instantiation_roots', [])})")
+        else:
+            _why = ("no top declared by --top / L9 and no "
+                    "chip_top.{v,sv} / *_top.{v,sv} filename convention "
+                    "in the staged RTL")
         findings.append({
             "severity": "FAIL", "rule": "TOP_MODULE_RESOLVED",
-            "message": ("could not resolve top module from L9 / "
-                        "chip_top.{v,sv} / *_top.{v,sv} / --top argument"),
+            "message": f"could not resolve top module: {_why}",
         })
     else:
         ok, msg = _check_tb_instantiates_top(tb_path, resolved_top)

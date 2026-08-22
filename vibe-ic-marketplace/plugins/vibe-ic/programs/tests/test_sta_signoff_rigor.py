@@ -146,6 +146,122 @@ def test_read_aocv_command_echo_also_counts():
     assert res["ocv_mode"] == "aocv"
 
 
+# ── v1.10.3: CONTENT, not just coverage — a real (VIOLATED) finding inside
+# report_check_types' own output must FAIL the gate even when every coverage
+# dimension is present. Fixtures below are real OpenSTA 3.1.0 report shapes
+# (byte-shape verified against live sign-off reports), not idealized text.
+
+_REAL_MPW_VIOLATION = _FULL_RIGOR + """\
+
+                                     Required  Actual
+Pin                                    Width   Width   Slack
+------------------------------------------------------------
+u_otp.u_otp/PRD (high)                200.00  100.01  -99.99 (VIOLATED)
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance max_fanout
+"""
+
+_REAL_MPW_CLEAN = _FULL_RIGOR + """\
+
+                                     Required  Actual
+Pin                                    Width   Width   Slack
+------------------------------------------------------------
+_25158_/CLK (high)                      0.84    3.81    2.97 (MET)
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance
+"""
+
+_REAL_MAX_SLEW_AND_CAP_VIOLATION_ONLY = _FULL_RIGOR + """\
+
+max slew
+
+Pin                                    Limit    Slew   Slack
+------------------------------------------------------------
+_15653_/Y                               1.46   23.33  -21.86 (VIOLATED)
+
+max capacitance
+
+Pin                                    Limit     Cap   Slack
+------------------------------------------------------------
+_21312_/Y                               0.33    1.88   -1.54 (VIOLATED)
+
+                                     Required  Actual
+Pin                                    Width   Width   Slack
+------------------------------------------------------------
+_25158_/CLK (high)                      0.84    3.81    2.97 (MET)
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance
+"""
+
+_REAL_REMOVAL_VIOLATION = _FULL_RIGOR + """\
+
+Startpoint: reset_n (input port clocked by clk)
+Endpoint: _2738_ (removal check against rising-edge clock clk)
+Path Group: asynchronous
+Path Type: min
+                           2.05   data arrival time
+                           0.52   data required time
+-----------------------------------------------------------------------
+                           0.52   data required time
+                          -2.05   data arrival time
+-----------------------------------------------------------------------
+                          -1.53   slack (VIOLATED)
+
+SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capacitance
+"""
+
+
+def test_real_min_pulse_width_violation_fails_the_gate():
+    # LIVE-CAUGHT on an internal design's OTP macro PRD pin: coverage was 100%
+    # dimensions present) but the actual table row VIOLATED — the old gate
+    # (coverage-only) PASSed this; v1.10.3 must FAIL it.
+    res = G.evaluate(_REAL_MPW_VIOLATION)
+    assert res["verdict"] == "FAIL"
+    assert res["min_pulse_width_checked"] is True  # coverage was fine
+    assert len(res["check_types_violations"]) == 1
+    assert "PRD" in res["check_types_violations"][0]
+    assert "VIOLATED" in res["check_types_violations"][0]
+
+
+def test_clean_min_pulse_width_table_still_passes():
+    res = G.evaluate(_REAL_MPW_CLEAN)
+    assert res["verdict"] == "PASS"
+    assert res["check_types_violations"] == []
+
+
+def test_max_slew_and_max_capacitance_violations_are_out_of_scope():
+    # max_slew / max_capacitance are real DRV findings but NOT this gate's
+    # declared dimensions (recovery / removal / min_pulse_width only) — they
+    # must NOT be folded in here (that would be undisclosed scope creep and
+    # would retroactively flip unrelated runs' verdicts). The min_pulse_width
+    # table in this same fixture is clean, so the gate must PASS.
+    res = G.evaluate(_REAL_MAX_SLEW_AND_CAP_VIOLATION_ONLY)
+    assert res["verdict"] == "PASS"
+    assert res["check_types_violations"] == []
+
+
+def test_real_removal_path_violation_fails_the_gate():
+    res = G.evaluate(_REAL_REMOVAL_VIOLATION)
+    assert res["verdict"] == "FAIL"
+    assert len(res["check_types_violations"]) == 1
+    assert "removal check against" in res["check_types_violations"][0]
+
+
+def test_ordinary_setup_hold_path_violation_is_not_double_counted():
+    # An ordinary (non recovery/removal) path violation elsewhere in the
+    # report is a DIFFERENT gate's concern; it must not appear in this
+    # gate's check_types_violations list.
+    txt = _FULL_RIGOR + """
+Startpoint: reg_c (rising edge-triggered flip-flop clocked by clk)
+Endpoint: reg_d (rising edge-triggered flip-flop clocked by clk)
+Path Type: max
+           -1.20   slack (VIOLATED)
+"""
+    res = G.evaluate(txt)
+    assert res["check_types_violations"] == []
+    assert res["verdict"] == "PASS"
+
+
 # ── _emit_spef_sta source-pin ────────────────────────────────────────────────
 
 def test_spef_sta_tcl_emits_ocv_and_check_types():

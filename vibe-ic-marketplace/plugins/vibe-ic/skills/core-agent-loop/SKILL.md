@@ -389,6 +389,18 @@ sub-process — the full test suite, a reproduce run, a benchmark/IC flow),
 The launch-and-idle abandon bug: a detached background process finishes,
 NOTHING re-invokes you, and your "then write the result" step never runs —
 the tool's own outputs exist but your deliverable is never written
+The three beliefs that make this feel safe are each impossible, and an agent in
+vibe-ic#558 gave all three at once as its justification for yielding:
+
+* *"the harness will re-invoke me when the background job exits"* — nothing
+  re-invokes a finished turn. There is no such mechanism.
+* *"a background waiter is armed to fire"* — a waiter can only wake a turn that
+  is STILL ALIVE. It cannot start a new one.
+* *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+  cannot resume you.
+
+Refuting only the first leaves the other two as routes to the same outcome.
+
 (observed 3× in one session). Two binding rules:
 
 - **Run it through the BLOCKING `_watchdog.run_supervised`** (returns ONLY

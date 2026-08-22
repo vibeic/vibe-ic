@@ -51,6 +51,23 @@ for. This is also the ONLY per-block PV gate in the flow since A5
 stopped reading A6's outputs (see `analog_a5_layout_check`'s SCOPE
 section), so its non-silenceable core carries the whole class.
 
+WHAT AN LVS MATCH DOES NOT SAY — the matching disclosure, carried through
+--------------------------------------------------------------------------
+This gate's LVS half is a TOPOLOGY compare. It is blind to common-centroid
+placement, to interdigitated finger order and to dummies — and the last of
+those it is worse than blind to, because a dummy is a device the schematic
+does not have and it makes the compare HARDER. So a block laid out as N
+isolated devices in N slots reaches the same green PASS here as a fully
+matched one, and this gate's report was where a reader looked to find out.
+
+It now carries `_analog_layout_matching`'s classification of every block into
+its summary — `blocks_no_matching_structure`, `blocks_matching_undisclosed`,
+`matching_disclosure` — on EVERY verdict path. This is a RECORD, not a rule:
+no matching class changes this gate's verdict or exit code, because the
+rules over that record belong to A5, where the layout is. What changes is
+that "this block closed A6 with no matching structure" is now a field in the
+artefact rather than an inference from its absence.
+
 Preserves the CLI contract:
     python3 analog_a6_block_pv_check.py <project_dir> [--json <out>]
                                                        [--block <name>]
@@ -637,10 +654,19 @@ def main(argv=None) -> int:
         else:
             findings.extend(fs)
 
+    # THE RECORD, not a rule — see the module docstring. Read from the same
+    # per-block artefact A5 holds to its rules, so the two gates cannot
+    # disagree about one file, and merged into the summary on every path
+    # below (they all splat `**summary`).
+    import _analog_layout_matching as _lm
+    disclosures = {b: _lm.read_disclosure(project / "phase3" / "analog" / b, b)
+                   for b in blocks}
+
     summary = {
         "blocks_checked": len(blocks),
         "blocks_pass": blocks_pass,
         "blocks_fail": len({f["block"] for f in findings}),
+        **_lm.summarise(disclosures),
     }
 
     # A waiver covers a MEASURED defect, never an absent measurement.
@@ -711,6 +737,8 @@ def main(argv=None) -> int:
             print(f"  ... and {len(findings) - 8} more", file=sys.stderr)
     if waiver:
         print(f"  waiver:  {waiver.get('ticket', '?')}")
+    # LAST, and on every path — same contract as `structure_only_disclosure`.
+    _lm.matching_disclosure(_GATE_NAME, disclosures)
     return rc
 
 

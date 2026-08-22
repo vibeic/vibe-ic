@@ -30,21 +30,34 @@ mean the same thing on every machine. A run REPORT is the opposite kind
 of object — a record of where a run happened — and an absolute path in
 one is provenance, not a defect.
 
-That distinction is measured, not assumed. Under ``benchmark-data/``
-there are 464 tracked JSON files carrying a personal home path (1628
-occurrences); every one of them is a benchmark run output — score
-results and log pointers. Sweeping those would be a false positive at
-scale. This check therefore reads ONLY files matching
+That distinction is measured, not assumed. Measured 2026-07-28 in
+3e4d0c47: under ``benchmark-data/`` there were 464 tracked JSON files
+carrying a personal home path (1628 occurrences); every one of them is a
+benchmark run output — score results and log pointers. Sweeping those
+would be a false positive at scale. This check therefore reads ONLY files
+matching
 
     **/generated_docs/L*.json
 
-which is exactly the 2554-document L corpus and none of the run
-outputs.
+which on that date was exactly the 2554-document L corpus and none of the
+run outputs.
+
+Those three figures are PINNED to the date and commit above, not
+maintained. They are the input to a scope decision, so re-deriving them
+would destroy the record of what was actually measured when the decision
+was taken — but they are NOT a description of this checkout, and the L
+corpus grows. Re-take the count before citing it as current::
+
+    git ls-files 'benchmark-data/**/generated_docs/L*.json' | wc -l
+
+The glob above is a LOCATOR, not a guarantee: it tells a reader how to
+re-measure, it does not say 2554 still holds. It did not — see
+``derived_corpus_figure_check``, which was written from this exact site.
 
 WHAT COUNTS AS AN ABSOLUTE PATH (calibrated, not guessed)
 =========================================================
-Measured over all 2554 tracked L documents, string values that begin
-with ``/`` number 84. Four are the defect: personal-home provenance
+Measured 2026-07-28 in 3e4d0c47 over all 2554 tracked L documents then
+present, string values that begin with ``/`` number 84. Four are the defect: personal-home provenance
 paths. The other **80 are not paths at all** — they are 8b/10b
 control-code notation and table headings that happen to be
 slash-delimited::
@@ -53,12 +66,13 @@ slash-delimited::
     packet_types_summary[].members '/K/(K28.5)'
     auto_cited_sections[].heading  '/ 6   0.625   Receive 10   1.25 / 0'
 
-So "starts with a slash" is unusable: it FAILs 80 correct documents. The
-opposite over-correction is just as wrong — restricting the rule to the
-personal-home shape ``shipped_path_portability_check`` detects MISSES the
-defect that motivated this file, because a run under ``/tmp/...`` or a CI
-run under ``/var/lib/...`` emits an absolute path with no home directory
-in it. Measured: home-only catches 3 of 5 known-bad values.
+So "starts with a slash" is unusable: on that same 2026-07-28 corpus it
+FAILed 80 correct documents. The opposite over-correction is just as
+wrong — restricting the rule to the personal-home shape
+``shipped_path_portability_check`` detects MISSES the defect that
+motivated this file, because a run under ``/tmp/...`` or a CI run under
+``/var/lib/...`` emits an absolute path with no home directory in it.
+Measured the same day: home-only catches 3 of 5 known-bad values.
 
 The predicate is therefore the union of two clauses, each carrying its
 own justification:

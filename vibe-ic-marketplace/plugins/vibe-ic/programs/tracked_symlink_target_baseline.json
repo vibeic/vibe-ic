@@ -1,17 +1,4 @@
 {
   "_comment": "Tracked symlinks under the corpus whose target exists nowhere. MAY ONLY SHRINK: a new one FAILS, and one that starts resolving also FAILS so the register cannot become standing permission. Repairing these is the benchmark-agent's commit under NO-MIX, never this plugin's (vibe-ic#555).",
-  "known": [
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/README.md",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/aes.nangate.sdc",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/aes_abc.nangate.sdc",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/python",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/flow_utils.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/sta_common.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/sta_open_design.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/sta_run_reports.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/sta_utils.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/yosys_common.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/yosys_post_synth.tcl",
-    "benchmark-data/ic/opentitan_aes/input/reference_flow/pre_syn/tcl/yosys_pre_map.tcl"
-  ]
+  "known": []
 }

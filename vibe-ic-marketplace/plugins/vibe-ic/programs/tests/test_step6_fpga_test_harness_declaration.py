@@ -205,7 +205,22 @@ def test_GUARD_step6_still_registers_the_program():
 
 
 def test_GUARD_step6_gate_and_outputs_are_untouched():
-    """Direction-1: correcting a comment must not move a gate or an output."""
+    """Direction-1: correcting a comment must not move a gate or an output.
+
+    UPDATED 2026-08-03 (vibe-ic#693). This used to assert
+    ``len(all_of) == 4``. A bare count answers "did anything change?" but not
+    "did anything I already relied on change?", so adding a deliberate leg and
+    silently deleting an existing one look identical to it — and the only way
+    past it is to bump a number, which is exactly the ratchet edit nobody can
+    review.
+
+    It now pins the four ORIGINAL legs by content and position, which is the
+    invariant this guard was written for, and asserts that anything beyond them
+    is `advisory_program_exit_zero` — the one slot that cannot change a step
+    verdict. A future PR that wants to add a BLOCKING leg here must edit this
+    test and say why; one that adds an advisory leg does not, and one that
+    quietly rewrites leg 1..4 still fails.
+    """
     doc = yaml.safe_load(_FLOW_YAML.read_text(encoding="utf-8"))
 
     def steps(o):
@@ -224,4 +239,18 @@ def test_GUARD_step6_gate_and_outputs_are_untouched():
         "phase2/stage1/fpga/output_files/*.map.rpt",
         "reports/phase2/fpga/quartus_map_audit.json",
     ]
-    assert len(s6["gate"]["all_of"]) == 4
+    legs = s6["gate"]["all_of"]
+    assert len(legs) >= 4
+    assert legs[0] == {"files_exist": ["phase2/stage1/fpga/output_files/*.sof"]}
+    assert legs[1] == {
+        "files_exist": ["reports/phase2/fpga/quartus_map_audit.json"]}
+    assert list(legs[2]) == ["program_exit_zero"]
+    assert legs[2]["program_exit_zero"].split()[0] == "quartus_map_audit"
+    assert list(legs[3]) == ["optional_program_exit_zero"]
+    assert (legs[3]["optional_program_exit_zero"]["command"].split()[0]
+            == "fpga_verification_audit")
+    for extra in legs[4:]:
+        assert list(extra) == ["advisory_program_exit_zero"], (
+            f"step 6 gained a leg that is not advisory: {extra}. A blocking "
+            f"leg here changes the step verdict on every run that reaches it; "
+            f"say why in this test before adding one.")

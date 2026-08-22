@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import _gate_denominator as _gd
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl
@@ -339,7 +340,7 @@ def main(argv: Optional[list] = None) -> int:
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     denom = result.summary.get(_gd.DENOMINATOR_KEY) or {}
     reason = str(denom.get("not_applicable_reason") or "")

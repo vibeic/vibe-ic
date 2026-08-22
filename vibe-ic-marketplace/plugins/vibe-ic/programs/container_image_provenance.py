@@ -155,15 +155,23 @@ def verify(container: str, require_image: Optional[str] = None) -> Dict[str, obj
             # launcher needs the bare command. So name BOTH and say which
             # applies when, instead of hardcoding a guess about one image's
             # entrypoint into a general program. chip-, tool- and image-AGNOSTIC.
+            # `--init` is part of the suggestion, not decoration. The command below
+            # makes `sleep` PID 1, and PID 1 owns reaping; `sleep` never calls wait(),
+            # so every orphaned tool becomes a permanent zombie — and a zombie reports
+            # its LIFETIME-AVERAGE %CPU, which makes an idle host read as busy in every
+            # check that asks. Measured: 11 defunct yosys printing 96.5 / 89.1 / 16.5 on
+            # a host with one running process (vibeic-eda#65).
             reason += (
                 " — this looks like an IMAGE ref. --container names a CONTAINER "
                 "(docker exec <container>), not an image. Start one first: "
                 "tools/vibeic-eda/restart-eda.sh (it pins the tag and then "
                 "verifies the container's image id), or plainly: "
-                "docker run -d --name <name> %s sleep infinity — and if the "
+                "docker run -d --init --memory 48g --memory-swap 48g "
+                "--name <name> %s sleep infinity — and if the "
                 "image declares an ENTRYPOINT launcher, pass its skip flag "
                 "before the command, e.g. "
-                "docker run -d --name <name> %s --skip sleep infinity "
+                "docker run -d --init --memory 48g --memory-swap 48g "
+                "--name <name> %s --skip sleep infinity "
                 "(check `docker image inspect --format "
                 "'{{.Config.Entrypoint}}' %s`)." % (container, container,
                                                     container)

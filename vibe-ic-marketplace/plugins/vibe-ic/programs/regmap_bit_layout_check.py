@@ -307,6 +307,29 @@ def main():
                 continue
             failures.append(f"{rname}.{fname}")
 
+    if not failures and n_fields_examined == 0:
+        # An L4 doc that declares no register fields is not a register map this
+        # gate verified. "every field has explicit bit positions" is vacuously
+        # true over zero fields, and rc 0 is what the umbrella aggregates.
+        #
+        # Measured over 106 corpus projects (#564):
+        #   77  no L4 doc at all        -> already "not applicable"
+        #   24  L4 present, 0 fields    -> THIS branch; was PASS, now rc 2
+        #    5  L4 present, 7..84 fields-> unaffected, still PASS
+        #
+        # So 24 projects move from a pass that examined nothing to an explicit
+        # "could not check". None of the 5 real register maps is touched.
+        print("VACUOUS_PASS: regmap_bit_layout_check examined nothing "
+              "(reason: L4 declares 0 register field(s)) — the bit-position "
+              "rule is vacuously true over an empty field set", file=sys.stderr)
+        # sys.exit, not return: this module's `main()` is called bare at the
+        # bottom (`main()`, not `sys.exit(main())`), so a returned value is
+        # discarded and every other exit here uses sys.exit too. My first
+        # version used `return 2` and the message printed while rc stayed 0 —
+        # the exact split between message and exit code this fix is about,
+        # committed inside the fix for it.
+        sys.exit(2)
+
     if not failures:
         print(f"PASS — every L4 register field has explicit bit position(s) "
               f"({n_fields_examined} field(s) examined)")

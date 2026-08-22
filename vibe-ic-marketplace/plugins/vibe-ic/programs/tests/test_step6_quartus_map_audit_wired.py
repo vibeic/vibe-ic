@@ -209,9 +209,29 @@ def test_guard_board_absent_disclosure_shape_is_preserved(tmp_path):
     assert audit["verdict"] == "SKIP"
     assert audit["sof_present"] is False
     assert audit["skip_reason"] == "not_attempted"
-    assert audit["compile_log"] == "fpga/compile.log"
+    # THE KEY STAYS — four consumers read this shape and fields are ADDED, never
+    # removed. The VALUE no longer names a log that is not there. This assertion
+    # used to read `== "fpga/compile.log"`, which is what made the defect
+    # durable: a payload whose own `audited` is false still pointed a reader at
+    # a proof the deliverable does not carry, and the published
+    # caravel_user_project cell shipped exactly that until the evidence-citation
+    # gate caught it.
+    assert "compile_log" in audit
+    assert audit["compile_log"] is None
     assert audit["evidence"] == "fpga_compile not run"
     assert "design_identity" in audit
+
+
+def test_a_compile_log_that_exists_is_still_named(tmp_path):
+    """THE OTHER DIRECTION, and the one that decides whether the change above is
+    a fix or a deletion: when the log IS there, the field must still point at
+    it — otherwise "never name a missing proof" quietly becomes "never name the
+    proof"."""
+    proj = _project(tmp_path, sof=False, map_rpt=None)
+    (proj / "fpga").mkdir(parents=True, exist_ok=True)
+    (proj / "fpga/compile.log").write_text("quartus_map ...\n")
+    audit = _emit(proj, None)
+    assert audit["compile_log"] == "fpga/compile.log"
 
 
 def test_guard_board_absent_disclosure_still_grants_the_capgap_waiver(tmp_path):

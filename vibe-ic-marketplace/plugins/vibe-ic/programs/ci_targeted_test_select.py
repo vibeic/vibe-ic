@@ -158,7 +158,38 @@ existed. The cost is real and the choice is the owner's:
                                      known regressions  (mean of 40)
   ownership (default)  851 (45.5%)   0 / 3              16.8             20
   reference-capped    1652 (88.3%)   2 / 3              19.8             48
+  import-edge          --            see below         110-158          176
   reference           1849 (98.9%)   3 / 3              48.5            213
+
+vibe-ic#565 — THE IMPORT-EDGE ROW, measured 2026-08-01 because the decision it
+feeds was being asked without it. The mechanism shipped with #534 and the
+DEFAULT was left at `ownership` pending a cost that nobody had taken.
+
+On the exact regression #565 is about — `phase3_one_shot_runner.py` changes and
+`test_spm_ihp_openrcx_captable_layout.py` is the file that pins the behaviour a
+734-line edit silently reverted for three releases:
+
+    mode                selects    catches that test
+    ownership              16         no
+    reference-capped       16         no
+    import-edge           176         YES
+    reference             258         YES
+
+Selection size on three real landings of this repo (v1.9.19/20/21):
+
+    ownership          21    26    27
+    reference-capped   35    47    48
+    import-edge       110   157   158
+
+Wall-clock with the real CI command on the largest of those (v1.9.18's diff):
+
+    ownership     27 files     484 tests     49s
+    import-edge  158 files    3276 tests    409s      (8.4x)
+
+So import-edge buys the catch that `reference-capped` does not, at ~2/3 of
+`reference`'s file count — and costs roughly eight ownership lanes per landing.
+Whether that trade is worth making the DEFAULT is still the owner's call; what
+changed is that the call now has its number.
 
 Wall-clock, measured with the real CI command (``pytest -q --maxfail=10
 --timeout=180``):
@@ -207,17 +238,74 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+#: `spec_from_file_location("<stem>", <path>)` — an EXPLICIT loader edge.
+#: Matched on the module NAME argument, which is the stem the test binds,
+#: rather than on the path, because the path is often built from `Path`
+#: arithmetic that a regex cannot follow.
+_LOADER_NAME_RE = re.compile(
+    r"spec_from_file_location\(\s*[\"\']([A-Za-z_]\w*)[\"\']")
+
+#: The SAME call, read for the file it actually loads rather than for the alias
+#: it binds it under (vibe-ic#1176). `_LOADER_NAME_RE` keys the edge on argument
+#: one, so a test that renames the module on the way in carries an edge under a
+#: name no source stem matches, and the edge is dropped:
+#:
+#:     spec_from_file_location("fcc_i492_conv", PROGRAMS / "flow_compliance_check.py")
+#:
+#: MEASURED on `75776dbbb`: `test_issue492_gate_argv_conversions.py` and
+#: `test_issue492_umbrella_gate_invocation.py` both load
+#: `flow_compliance_check.py` under a private alias, and neither appears in
+#: `_build_import_edge_index`'s entry for that stem — the two tests state the
+#: strongest dependency the tree has on that module and were invisible to it.
+#:
+#: The call's argument list is captured whole (one level of nested parens, which
+#: covers the `Path(...) / "x.py"` and `parents[1] / "x.py"` forms this tree
+#: uses) and every `.py` string literal inside it contributes its stem. The path
+#: arithmetic still cannot be followed — but the FINAL segment is a literal in
+#: every occurrence in this tree, and the stem is all this index needs.
+_LOADER_CALL_RE = re.compile(
+    r"spec_from_file_location\((?P<args>[^()]*(?:\([^()]*\)[^()]*)*)\)", re.S)
+#: A `.py` string literal inside such an argument list.
+_LOADER_PY_LITERAL_RE = re.compile(r"[\"\']([^\"\']+\.py)[\"\']")
 
 # Selection modes. `ownership` is the DEFAULT and the shipped behaviour; the
 # other two are opt-in and measured in the module docstring (vibe-ic#452).
 MODE_OWNERSHIP = "ownership"
 MODE_REFERENCE = "reference"
 MODE_REFERENCE_CAPPED = "reference-capped"
-MODES = (MODE_OWNERSHIP, MODE_REFERENCE, MODE_REFERENCE_CAPPED)
+#: vibe-ic#565 — select by the DEPENDENCY a test states, not by its filename and
+#: not by a lexical mention.
+#:
+#: `2a632bcfe` changed 734 lines of `phase3_one_shot_runner.py` and removed all
+#: 11 lines of the IHP OpenRCX captable discovery landed hours earlier. The four
+#: tests that pin it are in `test_spm_ihp_openrcx_captable_layout.py`, which
+#: `import phase3_one_shot_runner` directly. `ownership` keys on the test
+#: FILENAME, so it selected none of them; the revert survived three releases.
+#:
+#: MEASURED on that exact commit, driving the real selector:
+#:
+#:     ownership          16 files    misses the IHP test
+#:     reference-capped   16 files    misses it too — the cap ZEROES a stem
+#:                                    named by more than `ref_max_tests`, and
+#:                                    `phase3_one_shot_runner` is named by 198,
+#:                                    so the cheap middle option gives no
+#:                                    protection for the largest module in the
+#:                                    tree, which is where the risk is
+#:     reference         251 files    catches it, on a LEXICAL mention
+#:     import-edge       155 files    catches it, on a STATED dependency
+#:
+#: Cheaper than `reference` AND more precise: every file it selects has an
+#: import or an explicit loader pointing at the changed module, rather than a
+#: name that happens to appear in it.
+MODE_IMPORT_EDGE = "import-edge"
+MODES = (MODE_OWNERSHIP, MODE_REFERENCE, MODE_REFERENCE_CAPPED,
+         MODE_IMPORT_EDGE)
 
 # `reference-capped` default: a source stem NAMED BY more than this many test
 # files contributes nothing through the reference rule (its own owned tests
@@ -256,7 +344,7 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # because a change to `skills/*/SKILL.md` does not select a test file
     # under `programs/tests/`. The PR that breaks a global invariant over the
     # shipped skills is exactly the PR whose changed-file set cannot reach the
-    # test that guards it. ~4 s for 15 tests — cheap enough for the floor.
+    # test that guards it. ~5 s for 19 tests — cheap enough for the floor.
     "test_tools_and_integration.py",
     # The promised survey (see the commit that added the line above): every
     # test that asserts a property of the WHOLE shipped tree has the same
@@ -274,6 +362,47 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_wave76_skill_md_chip_agnostic.py",
     "test_all_steps_covers_flow.py",
     "test_no_vibe_ic_core_reappears.py",
+    # vibe-ic#1025 — the same reachability argument, arriving through a SHELL
+    # file. Part of what this guard pins is a property of
+    # `tools/ci/repo_hygiene_gates.sh`: that the empty-corpus sweep is
+    # dispatched by a wrapper which BLOCKS on rc 2 rather than one that records
+    # NOT_CHECKED and exits 0. That file is outside `_SOURCE_DIRS` and no test
+    # is NAMED after it, so MEASURED with the selector itself on exactly the
+    # one-token diff that breaks the wiring: 16 tests selected, this guard NOT
+    # among them. The PR that neuters the gate is precisely the PR whose
+    # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
+    "test_issue1025_empty_corpus_sweep_blocks.py",
+    # vibe-ic#1025 — same reachability argument, arriving through a JSON
+    # file. What this guard pins is partly a property of
+    # `tools/ci/gate_red_since.json`: that no acknowledgement has an
+    # unreachable deadline. That path is outside `_SOURCE_DIRS` and no test
+    # is NAMED after it, so MEASURED with the selector on exactly the
+    # one-file diff that switches the mechanism off (`max_commits:
+    # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
+    "test_gate_red_since_check.py",
+    # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
+    # with the real selector, at 7c376e348, one throwaway commit each:
+    #
+    #   adding `pytestmark = pytest.mark.timeout(2700)` to ONE test file
+    #     -> 18 files selected, this guard NOT among them
+    #   raising `DEFAULT_STALL_AFTER` in `programs/pytest_per_file_junit.py`
+    #     -> 43 files selected, this guard NOT among them
+    #
+    # The first is the defect itself: `ci_harness_timeout_ceiling_check.py`
+    # exists to stop a test declaring a bound it can outlive, and the PR that
+    # reintroduces an exemption is a one-line edit to a test file, which
+    # selects the test named after that file and not this one. The second is
+    # the ceiling's own input — the stall window is resolved from the driver,
+    # so a diff that raises it moves this gate's verdict without selecting it.
+    #
+    # For completeness, because the negative matters as much: a diff touching
+    # `tools/gatekeeper-land.sh` DOES select it (72 files), via
+    # `_REPO_TOOL_DIRS` below. That lane was already covered; these two were
+    # not. The program additionally self-checks before every scan, so the two
+    # layers are independent — this roster entry covers the case where the
+    # program's own test is what must run, and the self-check covers the case
+    # where the program runs at all.
+    "test_ci_harness_timeout_ceiling_check.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
@@ -281,6 +410,85 @@ SMOKE_BASENAMES: tuple[str, ...] = (
 # programs/tests/.)
 _SOURCE_DIRS: tuple[str, ...] = ("programs", "benchmark")
 _TESTS_REL = "programs/tests"
+
+# Rule 6 (vibe-ic#1057) — REPO-ROOT directories that sit OUTSIDE the plugin and
+# whose files the plugin's tests drive by PATH rather than by import.
+#
+# Measured hole this closes: `tools/gatekeeper-land.sh` is named by 40 test
+# files, and a change to it selected 15 — the smoke floor, and nothing else.
+# Two independent reasons, either one alone sufficient:
+#
+#   * `select_tests` drops every changed path that is not `.py`, so a shell
+#     script never reaches a rule at all; and
+#   * even `tools/foo.py` fails `rp.parent.as_posix() in _SOURCE_DIRS`, because
+#     these paths are repo-relative and `_SOURCE_DIRS` is plugin-relative.
+#
+# So the selection was the same 15 files whether the change was a one-character
+# comment or a rewrite of the landing script — a green that says nothing about
+# the file that moved. The repo has no `.github/workflows/` (only
+# `workflows-disabled/`), so this selection IS the gate; there is no broader
+# job behind it that would have caught the miss.
+#
+# This is a DIRECTORY, read from the tree — never a list of filenames, which
+# would rot the first time a script is added or renamed.
+_REPO_TOOL_DIRS: tuple[str, ...] = ("tools",)
+
+# vibe-ic#1058 — the directory list above turned out to be the wrong shape, and
+# the audit that produced this constant's replacement is why.
+#
+# `tools/` was not special; it was the one we happened to notice. Probing EVERY
+# top-level directory with a trivial change, and counting only selections BEYOND
+# the smoke floor (a floor hit is not a targeted selection):
+#
+#   flow/phase1_phase2_phase3.yaml   114 covering tests    0 selected beyond floor
+#   skills/rtl-review/SKILL.md        67                   0
+#   .claude-plugin/plugin.json        35                   0
+#   .claude-plugin/marketplace.json   17                   0
+#   agents/ic-expert-agent.md         15                   0
+#   pytest.ini / conftest.py / hooks.json / run_tests.sh / SKILL_INVENTORY.json
+#                                     1-4 each             0
+#
+# Every path outside `programs/` and `benchmark/` selected exactly the 15-file
+# floor. `flow/phase1_phase2_phase3.yaml` is the canonical 44-step flow — the
+# repo's single source of truth — and a change to it selected nothing that reads
+# it. Enumerating directories would have to keep pace with every new one; the
+# generalisation below needs no list at all, so there is nothing to keep in step.
+#
+# RULE 7 supersedes rule 6: ANY changed path that no other rule mapped is keyed
+# by the most specific suffix of its own path that is UNIQUE in the tree, and
+# selects the tests that name that key. `tools/` now flows through this rule;
+# `_REPO_TOOL_DIRS` is retained only because rule 6's tests pin it as the
+# narrower case that must keep working.
+#
+# vibe-ic#1176 — rule 7 resolves its key in THREE hops, not one. The key names a
+# file; what has to be found is the tests that can break when that file changes,
+# and the tree binds them three different ways:
+#
+#   hop 1  a TEST names the key            glob `test_*.py`          (#1068)
+#   hop 2  a tests/ HELPER names it        glob `programs/tests/**`  (#1178)
+#   hop 3  a PROGRAM opens it              glob `programs|benchmark/*.py`
+#
+# Each hop was measured against the flow yaml, and each was the whole gap for
+# the tests below it. After hop 2, a flow-yaml change selected 160 files and
+# still missed all seven tests that reach the flow through
+# `flow_compliance_check.py` / `flow_dashboard_data.py` — programs, so neither
+# earlier hop can see them. Hop 3 resolves the naming source module through the
+# SAME rules a direct edit of that module takes, so it can never select more
+# than editing the module itself would.
+#
+# Hop 3 alone is LEXICAL and that is not affordable: 66 source modules mention
+# the flow yaml (537 dependent tests) but only 23 can open it (159). Programs
+# are prose-heavy where helpers are not, so hop 3 keys on a LIVE string literal
+# — `ast`, docstrings excluded — and the three giant runners that merely cite
+# the yaml drop out. See `_names_key_as_live_literal`.
+#
+# Uniqueness is what makes the rule safe to apply to everything. `README.md`
+# exists 41 times and `SKILL.md` 64 times: their basenames identify no file, so
+# they key on a longer suffix that tests do not spell, and select NOTHING rather
+# than dragging in every test that mentions a readme. Under-selecting an
+# ambiguous name is recoverable; over-selecting teaches people to ignore the
+# selection. Measured: 1158 of 6529 distinct basenames in this repo are
+# ambiguous, so this is the common case, not a corner.
 
 
 def _plugin_root_default() -> Path:
@@ -358,6 +566,60 @@ def _build_test_index(plugin_root: Path, source_stems: set[str]) -> dict[str, se
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+def _build_import_edge_index(
+    plugin_root: Path, source_stems: set[str],
+) -> dict[str, set[str]]:
+    """Map each source stem -> plugin-rel test paths that DEPEND ON it.
+
+    vibe-ic#565. Two edge kinds, because this tree uses both and either alone
+    is a hole:
+
+      import       `import phase3_one_shot_runner`, `from x import y` — parsed
+                   with `ast` via the same `_imported_module_names` rule 4 uses,
+                   so the two selectors cannot drift.
+      explicit     `spec_from_file_location("<stem>", ...)`. MEASURED over 2081
+      loader       test files: 1866 import edges, 86 loader edges, and 77 test
+                   files carry a loader edge with NO import of the same name.
+                   An `ast`-only scan misses those 77 entirely — which is the
+                   shape this mode exists to stop, one level down.
+
+    Fail-open, matching rule 4: a file that cannot be read or parsed contributes
+    no edges rather than aborting the selection. A selector that dies on one bad
+    file selects nothing, and selecting nothing is the defect.
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+
+    idx: dict[str, set[str]] = {}
+    for tp in sorted(tests_dir.rglob("test_*.py")):
+        try:
+            text = tp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = tp.relative_to(plugin_root).as_posix()
+
+        names: set[str] = set()
+        imported = _imported_module_names(text, _own_package(rel))
+        if imported:
+            names |= {n for n in imported if n in source_stems}
+        for m in _LOADER_NAME_RE.finditer(text):
+            if m.group(1) in source_stems:
+                names.add(m.group(1))
+        # …and the same call read for the file it LOADS, so an alias cannot hide
+        # the edge (vibe-ic#1176). Additive: a call whose alias already matched
+        # contributes the same stem twice and the set absorbs it.
+        for m in _LOADER_CALL_RE.finditer(text):
+            for lit in _LOADER_PY_LITERAL_RE.finditer(m.group("args")):
+                stem = Path(_norm(lit.group(1))).stem
+                if stem in source_stems:
+                    names.add(stem)
+
+        for n in names:
+            idx.setdefault(n, set()).add(rel)
+    return idx
+
+
 def _build_reference_index(
     plugin_root: Path, source_stems: set[str],
 ) -> dict[str, set[str]]:
@@ -389,10 +651,279 @@ def _build_reference_index(
 
 
 # ---------------------------------------------------------------------------
+# Rule 6 — repo-root TOOL scripts (vibe-ic#1057). Built LAZILY, like rule 4:
+# nothing here reads the tree unless a changed path is under a repo-root tool
+# directory, so every other lane pays exactly nothing.
+# ---------------------------------------------------------------------------
+
+
+def _is_repo_tool(repo_rel: str) -> bool:
+    """Is ``repo_rel`` (REPO-relative) a file under a repo-root tool dir?
+
+    Repo-relative on purpose: these paths are the ones `_to_plugin_rel` hands
+    back untouched precisely because they are outside the plugin.
+    """
+    p = _norm(repo_rel)
+    return any(p.startswith(d + "/") for d in _REPO_TOOL_DIRS)
+
+
+def _tool_ref_pattern(basename: str) -> re.Pattern[str]:
+    """Match ``basename`` as a whole path token, not as a substring.
+
+    The boundary class includes ``.`` and ``-`` because these names carry them
+    (``gatekeeper-land.sh``); a plain ``\\b`` would let ``land.sh`` match inside
+    ``pre-land.sh``. Anchoring on both sides is what keeps a new script named
+    with an existing one as its suffix from silently inheriting its tests.
+    """
+    b = r"[A-Za-z0-9_.\-]"
+    return re.compile(rf"(?<!{b}){re.escape(basename)}(?!{b})")
+
+
+def _repo_files(repo_root: Path) -> list[str] | None:
+    """Every tracked repo-relative path, or None if the tree cannot be listed.
+
+    None is a real answer, not a failure: a synthetic tree (a unit-test fixture)
+    is not a git repo, and the caller degrades to basename keying there. What it
+    must never do is raise — a selector that cannot list the tree still has to
+    emit a list.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _distinctive_key(changed: str, repo_files: list[str] | None) -> str | None:
+    """The shortest suffix of ``changed`` that identifies exactly ONE repo file.
+
+    Walks the path from the basename upward — ``marketplace.json``, then
+    ``.claude-plugin/marketplace.json``, and so on — and returns the first
+    suffix that no OTHER tracked file also ends with. That suffix is the most
+    specific thing a test could write and still mean this file, so it is the
+    right key to search test text for.
+
+    Returns None when NO suffix distinguishes the file. That is not a defect and
+    not a rare one: a path can be a proper suffix of a longer path, so it can
+    never be spelled unambiguously. `.claude-plugin/marketplace.json` (repo
+    root) is exactly this — `vibe-ic-marketplace/.claude-plugin/marketplace.json`
+    ends with it, so every reference to the short form is also a reference to the
+    long one. Selecting on it would attribute the plugin manifest's tests to the
+    repo manifest. None says "this cannot be mapped", and the caller discloses it
+    rather than guessing (vibe-ic#1058).
+    """
+    parts = _norm(changed).split("/")
+    if not parts or not parts[-1]:
+        return None
+    if repo_files is None:
+        return parts[-1]          # synthetic tree: basename is all we have
+    for i in range(len(parts) - 1, -1, -1):
+        suffix = "/".join(parts[i:])
+        owners = [f for f in repo_files
+                  if f == suffix or f.endswith("/" + suffix)]
+        if len(owners) == 1:
+            return suffix
+    return None
+
+
+def _build_tool_reference_index(
+    plugin_root: Path, tool_basenames: set[str],
+) -> dict[str, set[str]]:
+    """Map tool BASENAME -> set of plugin-rel test paths that NAME it.
+
+    Keyed on the basename WITH its extension (``gatekeeper-land.sh``), which is
+    how a path-driven consumer actually names the file, and never on the bare
+    stem: a stem collides across trees (``tools/spec_validator.py`` vs the
+    plugin's own ``spec_validator``) and would hand one file's edit the other
+    file's tests — a selection that looks richer while pointing at the wrong
+    code.
+
+    Unreadable files are skipped rather than failing the run: a selector that
+    cannot read one test file must still emit a list.
+    """
+    index: dict[str, set[str]] = {}
+    if not tool_basenames:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {b: _tool_ref_pattern(b) for b in tool_basenames}
+    for tf in sorted(tests_dir.glob("test_*.py")):
+        try:
+            text = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{tf.name}"
+        for base, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(base, set()).add(rel)
+    return index
+
+
+# ---------------------------------------------------------------------------
 # Rule 4 — shared TEST-HELPER modules (vibe-ic#534). Everything below is built
 # LAZILY: nothing here runs unless a changed path is a helper module, so the
 # common case (a source or test file changed) pays exactly nothing.
 # ---------------------------------------------------------------------------
+
+
+def _build_key_helper_index(
+    plugin_root: Path, keys: set[str],
+) -> dict[str, set[str]]:
+    """Map key -> set of plugin-rel HELPER modules that NAME it.
+
+    THE SECOND HOP, and rule 7 is incomplete without it. #1068 made an
+    unmapped path reach `_build_tool_reference_index`, which globs
+    ``test_*.py`` — so a data file is found only when a TEST names it
+    literally. MEASURED on `a38902d1`: a change to
+    ``flow/phase1_phase2_phase3.yaml`` selects 128 files and
+    ``test_matrix_d4_criteria_match.py`` is NOT among them, because that test
+    names the yaml zero times. It reaches the flow through
+    ``from matrix_63x8 import flowref``, and the path lives in
+    ``programs/tests/matrix_63x8/flowref.py`` (3 occurrences).
+
+    d4 recomputes itself from that yaml on every run, so the dimension that
+    measures flow-yaml correctness was the one a flow-yaml change did not run.
+
+    This index finds the HELPERS; the caller hands them to `_helper_consumers`
+    (rule 4), which already owns helper -> importing-test resolution. Composing
+    rather than re-deriving means this hop cannot drift from rule 4.
+
+    Same whole-token matching as `_build_tool_reference_index`, so
+    ``flow.yaml`` cannot match inside ``subflow.yaml``. Built LAZILY by its
+    only caller, which runs solely when an unmapped path is in the diff.
+    """
+    index: dict[str, set[str]] = {}
+    if not keys:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {k: _tool_ref_pattern(k) for k in keys}
+    for pyf in sorted(tests_dir.rglob("*.py")):
+        if pyf.name.startswith("test_"):
+            continue          # tests are rule 7's first hop, already covered
+        try:
+            text = pyf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{pyf.relative_to(tests_dir).as_posix()}"
+        if not _is_test_helper(rel):
+            continue
+        for k, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(k, set()).add(rel)
+    return index
+
+
+def _names_key_as_live_literal(text: str, pat: re.Pattern[str]) -> bool:
+    """Does ``text`` hold the key in a string literal that is not a docstring?
+
+    THE DISCRIMINATOR that makes the third hop affordable, and the reason it is
+    `ast` rather than another `pat.search(text)`. A source module is prose-heavy
+    in a way a test helper is not: this tree's runners cite the flow yaml in
+    their module docstrings while never opening it, and a lexical scan cannot
+    tell that citation from a path constant.
+
+    MEASURED on `75776dbbb` for key ``phase1_phase2_phase3.yaml``:
+
+        source modules that MENTION it            66   -> 537 dependent tests
+        source modules holding it as a LIVE literal 23 ->  159 dependent tests
+
+    The 43 that drop out are docstring and comment citations — `phase3_one_shot_
+    runner` (214 dependents, 3 mentions, all prose), `design_one_shot_runner`
+    (106), `_path_layout` (51) and this module itself, which names the yaml in
+    its own rule-7 docstring. None of them can read the file, so none of their
+    dependents can break when it changes; keeping them would have tripled the
+    selection for a change none of them can see.
+
+    A comment needs no handling: comments are not in the AST at all.
+
+    Fail-CLOSED on a syntax error, unlike the read paths around it: an
+    unparseable source module contributes no key edge rather than falling back
+    to the lexical scan this function exists to replace. The fallback would
+    re-admit exactly the prose citations, and it would do so silently.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings and pat.search(node.value)):
+            return True
+    return False
+
+
+def _build_key_source_index(
+    plugin_root: Path, keys: set[str], source_stems: set[str],
+) -> dict[str, set[str]]:
+    """Map key -> set of SOURCE STEMS that hold it as a live string literal.
+
+    THE THIRD HOP (vibe-ic#1176). Hop one globs ``test_*.py`` and hop two
+    (#1178) globs the helpers under ``programs/tests/``. Neither looks at
+    ``programs/*.py``, so a data file that only a PROGRAM opens reaches no test
+    at all — and the tests that exercise that program through it are the ones a
+    change to the data file is most likely to break.
+
+    MEASURED on `75776dbbb`, a one-line edit to ``flow/phase1_phase2_phase3.
+    yaml`` after #1178: 160 files selected, and all seven of the residual
+    flow-readers #1176 stayed open for are absent. Every one of them reaches the
+    flow through ``flow_compliance_check.py`` or ``flow_dashboard_data.py`` —
+    programs, not helpers — either by importing the module or by loading it with
+    ``spec_from_file_location``:
+
+        test_flow_dashboard_data.py                     D._load_flow()
+        test_issue492_gate_argv_conversions.py          local _load_flow()
+        test_issue492_umbrella_gate_invocation.py       local _load_flow()
+        test_issue559_not_a_project_gate.py             local _load_flow()
+        test_issue559_polluter_conversion.py            local _load_flow()
+        test_issue559_semantic_argv_gates.py            local _load_flow()
+        test_si_mcf_not_run_is_not_a_design_failure.py  F.DEFAULT_FLOW_DEF
+
+    This index finds the STEMS; the caller resolves them through the very rules
+    a changed source module already goes through, so the third hop cannot select
+    anything a direct edit of that module would not have selected, and cannot
+    drift from the mode the caller was asked for.
+
+    Built LAZILY by its only caller, which runs solely when an unmapped path is
+    in the diff.
+    """
+    index: dict[str, set[str]] = {}
+    if not keys:
+        return index
+    pats = {k: _tool_ref_pattern(k) for k in keys}
+    for src_dir in _SOURCE_DIRS:
+        d = plugin_root / src_dir
+        if not d.is_dir():
+            continue
+        for pyf in sorted(d.glob("*.py")):
+            if pyf.stem not in source_stems:
+                continue
+            try:
+                text = pyf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for k, pat in pats.items():
+                if not pat.search(text):
+                    continue          # cheap lexical reject before the parse
+                if _names_key_as_live_literal(text, pat):
+                    index.setdefault(k, set()).add(pyf.stem)
+    return index
 
 
 def _is_test_helper(rel: str) -> bool:
@@ -582,6 +1113,133 @@ def _helper_consumers(plugin_root: Path, changed_helpers: list[str],
     return selected
 
 
+# Rule 8 — DIRECTORY CONSUMERS (vibe-ic#1387). Built LAZILY, like rules 4/6/7.
+#
+# A test (or a shared helper) that reads a source directory by GLOB depends on
+# every file in it, and says so nowhere a name-based rule can see. The measured
+# case: `matrix_d7_artifact_graph.py:524` does
+#
+#     for path in sorted(F.PROGRAMS_DIR.glob("*.py")):
+#
+# and parses the AST of every program. A change to `programs/eda_report_audit.py`
+# therefore reddens `test_matrix_d7_outputs_list_complete.py` — while `grep -c
+# eda_report_audit` over BOTH files returns 0, so rule 3 has no name to match and
+# rule 5 has no import to follow. #1265 was verified NEW 0 by the documented
+# method and the delegate test, run by hand, was 11 red against main's 10.
+#
+# This is vibe-ic#534 one level out. #534: helpers are consumed by `import`, and
+# nothing modelled it -> rule 4. Here: source DIRECTORIES are consumed by `glob`,
+# and nothing modelled it.
+#
+# DERIVED, not listed, for the reason rule 4's docstring already gives: a
+# hand-list is a second registry free to drift, and it would have been wrong on
+# arrival — the tree has 19 `*.py` glob sites across 23 files today, and the
+# number moves whenever anyone writes a corpus-walking test. So the PATTERN is
+# read out of the AST and matched against the changed path with `fnmatch`.
+#
+# `iterdir()`/`walk()` are deliberately NOT edges: they carry no pattern, so the
+# only sound reading is "every file in some unknown directory", which would
+# select all 273 directory-reading files for any change. A pattern is what makes
+# the edge specific enough to be worth having.
+_DIR_GLOB_CALLS = ("glob", "rglob")
+
+# A pattern that matches EVERYTHING names no shape, and in this tree it almost
+# never means "read the source tree": measured, 38 of the 56 files that would
+# match `programs/eda_report_audit.py` matched ONLY via `"*"`, and they are
+# `tmp_path.glob("*")` fixtures asserting what a run wrote into a temp dir. That
+# is the same objection already made against `iterdir()` above — an edge with no
+# shape is an edge to everything — so the universal patterns are excluded on the
+# same ground rather than a different one. Dropping them takes the #1265 case
+# from +53 files to +18, and `matrix_d7_artifact_graph.py` (`"*.py"`) is
+# untouched by the exclusion.
+_UNSHAPED_PATTERNS = frozenset({"*", "**", "**/*", "*/*"})
+
+
+def _glob_patterns_in(text: str) -> set[str]:
+    """Literal patterns this file passes to `.glob()` / `.rglob()`.
+
+    Fail-open like rule 4: an unparseable file contributes nothing rather than
+    raising. A non-literal pattern (an f-string, a variable) is skipped for the
+    same reason `iterdir` is — it names no shape that can be matched.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()
+    out: set[str] = set()
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = n.func
+        if not isinstance(fn, ast.Attribute) or fn.attr not in _DIR_GLOB_CALLS:
+            continue
+        if n.args and isinstance(n.args[0], ast.Constant) \
+                and isinstance(n.args[0].value, str):
+            pat = n.args[0].value
+            if pat not in _UNSHAPED_PATTERNS:
+                out.add(pat)
+    return out
+
+
+def _build_dir_consumer_index(plugin_root: Path) -> dict[str, set[str]]:
+    """`plugin-rel test-tree file` -> the glob patterns it reads.
+
+    Cost is paid only when rule 8 actually fires. The `"glob("` text filter is a
+    sound superset — no call to `.glob(...)` can omit the literal `glob(` — and
+    it keeps the `ast` parse off the ~90% of the test tree that never globs.
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+    out: dict[str, set[str]] = {}
+    for path in sorted(tests_dir.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "glob(" not in text:
+            continue
+        pats = _glob_patterns_in(text)
+        if pats:
+            out[path.relative_to(plugin_root).as_posix()] = pats
+    return out
+
+
+def _dir_consumers(plugin_root: Path, changed_sources: list[str],
+                   source_stems: set[str]) -> set[str]:
+    """Rule 8: test-tree files whose glob pattern matches a changed source path.
+
+    A matching TEST file is selected directly. A matching HELPER is routed back
+    through rule 4, so the tests that import it come too — which is the whole
+    path from `programs/eda_report_audit.py` to
+    `test_matrix_d7_outputs_list_complete.py`: the glob edge reaches
+    `matrix_d7_artifact_graph.py`, and rule 4 carries it to the test.
+    """
+    if not changed_sources:
+        return set()
+    index = _build_dir_consumer_index(plugin_root)
+    if not index:
+        return set()
+    hit_tests: set[str] = set()
+    hit_helpers: list[str] = []
+    for rel, pats in index.items():
+        name = Path(rel).name
+        for src in changed_sources:
+            base = Path(src).name
+            if any(fnmatch.fnmatch(base, p) or fnmatch.fnmatch(src, p)
+                   for p in pats):
+                if name.startswith("test_"):
+                    if (plugin_root / rel).is_file():
+                        hit_tests.add(rel)
+                elif _is_test_helper(rel):
+                    hit_helpers.append(rel)
+                break
+    if hit_helpers:
+        hit_tests |= _helper_consumers(plugin_root, hit_helpers, source_stems)
+        hit_tests |= {h for h in hit_helpers if Path(h).name.startswith("test_")}
+    return hit_tests
+
+
 def _smoke_set(plugin_root: Path) -> set[str]:
     """The curated smoke set, filtered to basenames that actually exist."""
     out: set[str] = set()
@@ -590,6 +1248,44 @@ def _smoke_set(plugin_root: Path) -> set[str]:
         if (tests_dir / base).is_file():
             out.add(f"{_TESTS_REL}/{base}")
     return out
+
+
+def import_edge_gap(
+    changed_paths: list[str], selected: list[str] | set[str],
+    plugin_root: Path,
+) -> tuple[list[tuple[str, int, int, int]], int]:
+    """(rows, total_missed) — what the selection LEFT OUT, by import edge.
+
+    Each row is ``(source_stem, imported_by, selected, not_selected)``. PURE and
+    separate from `main` so it can be driven against a constructed tree; the
+    inline version could only be exercised through the CLI, which resolves
+    `plugin_root` from the SCRIPT's own location and therefore always audits the
+    real plugin — a fixture handed to it was never read, and the test that
+    thought it was passed for the wrong reason.
+
+    vibe-ic#565. The default `ownership` mode maps a changed module to tests by
+    FILENAME, so 2035 of 2850 import edges (71%) are unseeable by name. Whether
+    to WIDEN the default is a cost decision and stays the owner's; this reports
+    the shortfall so a landing is not stamped on a count that reads as coverage.
+    Changed TEST files are excluded — rule 2 already selects them, and their
+    stems are not source modules.
+    """
+    stems = {Path(c).stem for c in changed_paths
+             if c.endswith(".py") and f"/{_TESTS_REL.split('/')[-1]}/" not in c}
+    if not stems:
+        return [], 0
+    idx = _build_import_edge_index(plugin_root, stems)
+    sel = set(selected)
+    rows: list[tuple[str, int, int, int]] = []
+    total = 0
+    for stem in sorted(idx):
+        importers = idx[stem]
+        if not importers:
+            continue
+        missed = len(importers - sel)
+        total += missed
+        rows.append((stem, len(importers), len(importers) - missed, missed))
+    return rows, total
 
 
 def select_tests(
@@ -631,15 +1327,33 @@ def select_tests(
     source_stems = _source_stems(plugin_root)
     index = _build_test_index(plugin_root, source_stems)
     ref_index: dict[str, set[str]] = {}
-    if mode != MODE_OWNERSHIP:
+    if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
         ref_index = _build_reference_index(plugin_root, source_stems)
+    # vibe-ic#565 — built ONLY for import-edge mode, and only when something was
+    # actually changed, so the default lane pays nothing for it.
+    edge_index: dict[str, set[str]] = {}
+    if mode == MODE_IMPORT_EDGE:
+        edge_index = _build_import_edge_index(plugin_root, source_stems)
 
     selected: set[str] = set(_smoke_set(plugin_root))
     changed_helpers: list[str] = []
+    changed_tools: set[str] = set()
+    unmapped: list[str] = []
+    changed_sources: list[str] = []          # rule 8 (vibe-ic#1387)
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
+        # (6) a changed repo-root TOOL script -> the tests that NAME it.
+        # Checked BEFORE the `.py` guard below, which is one of the two reasons
+        # this population was invisible: a `.sh` never survived to reach a rule.
+        if _is_repo_tool(rel):
+            changed_tools.add(Path(rel).name)
+            continue
         if not rel.endswith(".py"):
+            # (7) anything else the rules below cannot classify. Formerly a
+            # silent `continue`, which is precisely how a change to the canonical
+            # flow YAML came to select the smoke floor and nothing else.
+            unmapped.append(raw)
             continue
         rp = Path(rel)
         # (2) a changed test file -> include directly (if it still exists).
@@ -654,19 +1368,164 @@ def select_tests(
         # (1) a changed top-level source module -> its owned tests.
         if rp.parent.as_posix() in _SOURCE_DIRS and not rp.name.startswith("test_"):
             selected |= index.get(rp.stem, set())
+            # (8) a source file is also read by every test that GLOBS its
+            # directory. Collected here, resolved lazily below.
+            changed_sources.append(rel)
             # (4, opt-in) every test file that NAMES the changed module.
-            if mode != MODE_OWNERSHIP:
+            if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
                 refs = ref_index.get(rp.stem, set())
                 if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
                     selected |= refs
+            # (5, opt-in) every test file that DEPENDS ON the changed module —
+            # an import, or an explicit `spec_from_file_location` loader.
+            #
+            # vibe-ic#565. NOT capped, deliberately: the cap is what makes
+            # `reference-capped` useless for this defect, because it zeroes
+            # exactly the large, frequently-changed modules where a silent
+            # revert is most likely (`phase3_one_shot_runner` is named by 198
+            # test files, well over the 50 default). A STATED dependency is not
+            # noise that needs bounding — every file selected here carries an
+            # edge pointing at the module that changed.
+            elif mode == MODE_IMPORT_EDGE:
+                selected |= edge_index.get(rp.stem, set())
+        else:
+            # (7) a `.py` inside the plugin but NOT under a source dir — the
+            # second half of the same hole. `conftest.py` and `pytest.ini` sit
+            # here, as does anything under `mcp-eda/`.
+            unmapped.append(raw)
 
     # (4) Built LAZILY — only when a shared test-helper module actually changed,
     # so the common case never reads the tree.
     if changed_helpers:
         selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
 
+    # (8) Built LAZILY, same as rules 4 and 6 and for the same reason: the
+    # index is read only when a source file is actually in the diff.
+    #
+    # Applies in EVERY mode and is NOT capped, on rule 4's argument: `--mode`
+    # trades coverage against cost over a population the other rules DO see,
+    # whereas a glob consumer is seen by no rule at all. Capping it would
+    # restore the hole for exactly the corpus-walking matrix tests where a
+    # silent miss is most expensive — that is the #1265 failure, verbatim.
+    if changed_sources:
+        selected |= _dir_consumers(plugin_root, changed_sources, source_stems)
+
+    # (6) Built LAZILY, same as rule 4 and for the same reason.
+    #
+    # Applies in EVERY mode, and is NOT capped. Both deliberate, and the same
+    # argument rule 4 already makes: `--mode` trades coverage against cost over
+    # a population the other rules DO see, whereas these files were seen by no
+    # rule at all — a cap here would restore the original hole for exactly the
+    # heavily-referenced scripts (`gatekeeper-land.sh` at 40 tests) where a
+    # silent break is most expensive. A test that names the script by path is
+    # a STATED dependency, not noise that needs bounding.
+    if changed_tools:
+        tool_index = _build_tool_reference_index(plugin_root, changed_tools)
+        for base in changed_tools:
+            selected |= tool_index.get(base, set())
+
+    # (7) Everything no other rule claimed. LAZY like rules 4 and 6: the tree is
+    # listed only when such a path is actually in the diff, so the common case
+    # (a change under `programs/`) still reads nothing extra.
+    #
+    # `unmappable` is collected, not discarded — `select_unmappable` re-derives
+    # it for the CLI, which discloses these paths instead of letting them pass
+    # as a silent floor-only selection.
+    if unmapped:
+        repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
+        keys = {k for k in (_distinctive_key(u, repo_files) for u in unmapped)
+                if k}
+        if keys:
+            key_index = _build_tool_reference_index(plugin_root, keys)
+            for k in keys:
+                selected |= key_index.get(k, set())
+            # SECOND HOP. The index above globs `test_*.py`, so a data file that
+            # only a HELPER names is found by nothing — which is why a flow-yaml
+            # change still missed `test_matrix_d4_criteria_match.py` (0 mentions;
+            # it reads the flow via `matrix_63x8/flowref.py`). Resolve those
+            # helpers through rule 4, which already owns helper -> test.
+            helper_index = _build_key_helper_index(plugin_root, keys)
+            named_helpers = sorted({h for k in keys
+                                    for h in helper_index.get(k, set())})
+            if named_helpers:
+                selected |= _helper_consumers(
+                    plugin_root, named_helpers, source_stems)
+            # THIRD HOP (vibe-ic#1176). Hops one and two between them see only
+            # `test_*.py` and the helpers under `programs/tests/`, so a data
+            # file that only a PROGRAM opens still reaches nothing. Resolve the
+            # naming source modules through the SAME rules a direct edit of
+            # those modules would take — rule 1's ownership always, plus
+            # whatever the requested `--mode` adds — so this hop can never
+            # select more than editing the module itself would, and never
+            # diverges from the mode it was asked for.
+            source_index = _build_key_source_index(
+                plugin_root, keys, source_stems)
+            for k in keys:
+                for stem in source_index.get(k, set()):
+                    selected |= index.get(stem, set())
+                    if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
+                        refs = ref_index.get(stem, set())
+                        if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
+                            selected |= refs
+                    elif mode == MODE_IMPORT_EDGE:
+                        selected |= edge_index.get(stem, set())
+
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
+
+
+def _repo_root_of(plugin_root: Path, plugin_prefix: str) -> Path:
+    """The repo root implied by ``plugin_root`` and ``plugin_prefix``.
+
+    Derived by stripping the prefix's segments, NOT by asking git — the caller
+    may be operating on a synthetic tree, and this must stay a pure function of
+    its arguments so the same call is reproducible off a real checkout.
+    """
+    if not plugin_prefix:
+        return plugin_root
+    root = plugin_root
+    for _ in [p for p in _norm(plugin_prefix).split("/") if p]:
+        root = root.parent
+    return root
+
+
+def select_unmappable(changed_paths: list[str], plugin_root: Path,
+                      plugin_prefix: str = "") -> list[str]:
+    """Changed paths that map to NO test set — the honest gap in a selection.
+
+    Separate from `select_tests` so the selection itself stays a pure list and
+    every caller keeps working unchanged. See the `--strict-unmapped` flag: this
+    is the input to the loud-missing-answer path (vibe-ic#1058).
+    """
+    repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
+    index_cache: dict[str, set[str]] | None = None
+    out: list[str] = []
+    for raw in changed_paths:
+        rel = _to_plugin_rel(raw, plugin_prefix)
+        rp = Path(rel)
+        mapped_by_other_rule = (
+            (rel.startswith(_TESTS_REL + "/") and rp.name.startswith("test_"))
+            or _is_test_helper(rel)
+            or (rel.endswith(".py")
+                and rp.parent.as_posix() in _SOURCE_DIRS
+                and not rp.name.startswith("test_"))
+        )
+        if mapped_by_other_rule:
+            continue
+        key = (Path(rel).name if _is_repo_tool(rel)
+               else _distinctive_key(raw, repo_files))
+        if not key:
+            out.append(raw)          # no suffix identifies it — unmappable
+            continue
+        if index_cache is None:
+            index_cache = {}
+        hits = index_cache.get(key)
+        if hits is None:
+            hits = _build_tool_reference_index(plugin_root, {key}).get(key, set())
+            index_cache[key] = hits
+        if not hits:
+            out.append(raw)          # identifiable, but no test names it
+    return sorted(set(out))
 
 
 def _git_changed_files(base: str, repo_root: Path) -> list[str] | None:
@@ -733,11 +1592,29 @@ def main(argv: list[str] | None = None) -> int:
                     help="base SHA/ref; diff is <base>..HEAD")
     ap.add_argument("--plugin-root", default=None,
                     help="plugin root (default: this file's grandparent)")
-    ap.add_argument("--mode", choices=MODES, default=MODE_OWNERSHIP,
-                    help="selection rule (default: %(default)s — the shipped "
-                         "behaviour). 'reference'/'reference-capped' are OPT-IN "
-                         "and cost more; see the module docstring for the "
-                         "measured coverage/cost frontier.")
+    ap.add_argument("--no-gap-report", action="store_true",
+                    help="skip the import-edge gap disclosure (vibe-ic#565). "
+                         "It costs ~3 s over the tests tree and does not change "
+                         "what is selected; opting out means the landing is "
+                         "stamped without knowing what the selection dropped.")
+    ap.add_argument("--mode", choices=MODES, default=MODE_IMPORT_EDGE,
+                    help="selection rule (default: %(default)s). OWNER DECISION "
+                         "(vibe-ic#565): the default follows the IMPORT EDGES a "
+                         "test declares, not the test's FILENAME. A test named "
+                         "after the chip or the feature rather than after the "
+                         "module it pins was never selected, and a 734-line edit "
+                         "silently reverted a landed fix for three releases "
+                         "because of it. 'ownership' remains available and is "
+                         "now the opt-IN narrowing; see the module docstring for "
+                         "the measured coverage/cost frontier.")
+    ap.add_argument("--strict-unmapped", action="store_true",
+                    help="EXIT 3 if any changed path maps to no test set, and "
+                         "name those paths on stderr (vibe-ic#1058). Off by "
+                         "default: prose and generated corpora legitimately map "
+                         "to nothing, so ON by default would fail most diffs and "
+                         "be switched off within a week. The DISCLOSURE below is "
+                         "unconditional — this flag only decides whether an "
+                         "unmapped path is fatal.")
     ap.add_argument("--ref-max-tests", type=int, default=DEFAULT_REF_MAX_TESTS,
                     help="reference-capped only: a stem named by more than this "
                          "many test files contributes nothing through the "
@@ -778,6 +1655,65 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[ci_targeted_test_select] selected {len(selected)} test file(s) "
           f"from {len(changed)} changed path(s) (base={args.base}, "
           f"mode={args.mode})", file=sys.stderr)
+
+    # vibe-ic#565 — SAY WHAT WAS LEFT OUT. The default `ownership` mode maps a
+    # changed module to tests by FILENAME, so a test named after the chip or the
+    # feature is invisible however directly it imports the module: 2035 of 2850
+    # import edges (71%) are unseeable by name. Whether to WIDEN the default is
+    # a cost decision and stays the owner's — but a bounded selection that does
+    # not say what it dropped reads as full coverage, and that is what a landing
+    # gets stamped on. Measured: the landing that changed
+    # `phase3_one_shot_runner` selected 17 files while 162 test files import it.
+    #
+    # The index costs 2.98 s over the whole tests tree — affordable beside a
+    # landing that already runs for minutes, and it is the only way this number
+    # exists at all. `--no-gap-report` opts out for a caller that cannot pay it.
+    if not args.no_gap_report:
+        try:
+            rows, miss_total = import_edge_gap(changed, selected, plugin_root)
+            if rows:
+                print("[ci_targeted_test_select] IMPORT-EDGE GAP — test files "
+                      "that IMPORT a changed module and were NOT selected (the "
+                      "default maps by filename, not by import):",
+                      file=sys.stderr)
+                for stem, n_imp, n_sel, n_missed in rows:
+                    print(f"    {stem:<34} imported by {n_imp:>4}, selected "
+                          f"{n_sel:>4}, NOT selected {n_missed:>4}",
+                          file=sys.stderr)
+                print(f"    TOTAL not selected: {miss_total} — rerun with "
+                      f"`--mode import-edge` to include them (vibe-ic#565)",
+                      file=sys.stderr)
+        except Exception as _gap_exc:            # noqa: BLE001
+            # The report is a disclosure, not a dependency: a selection that
+            # dies computing its own footnote selects nothing, and selecting
+            # nothing is the defect this file exists against.
+            print(f"[ci_targeted_test_select] import-edge gap report "
+                  f"unavailable ({_gap_exc}) — the selection above stands, but "
+                  f"what it left out is UNKNOWN, not zero", file=sys.stderr)
+
+    # vibe-ic#1058 — UNMAPPED disclosure. Unconditional, because the failure this
+    # closes is not "the selection was wrong" but "the selection was silently
+    # generic and read as coverage". Naming the paths converts that into a fact
+    # a reviewer can act on. `--strict-unmapped` decides only whether it is fatal.
+    try:
+        unmapped = select_unmappable(changed, plugin_root, plugin_prefix)
+    except Exception as _un_exc:                     # noqa: BLE001
+        print(f"[ci_targeted_test_select] unmapped-path report unavailable "
+              f"({_un_exc}) — the selection above stands, but whether every "
+              f"changed path reached a test set is UNKNOWN, not yes",
+              file=sys.stderr)
+        return 0
+    if unmapped:
+        print(f"[ci_targeted_test_select] UNMAPPED — {len(unmapped)} changed "
+              f"path(s) map to NO test set. The selection above covers the rest; "
+              f"for these it is the smoke floor, which is not evidence about "
+              f"them:", file=sys.stderr)
+        for u in unmapped:
+            print(f"    {u}", file=sys.stderr)
+        if args.strict_unmapped:
+            print("    --strict-unmapped: failing rather than reporting a green "
+                  "over paths nothing verified (vibe-ic#1058)", file=sys.stderr)
+            return 3
     return 0
 
 

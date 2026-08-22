@@ -37,13 +37,46 @@ Usage:
     python3 analog_hardmacro_check.py <project_dir> --json reports/gates/hardmacro.json
 
 Exit codes:
-    0 = PASS: at least one analog block was found and its hardmacro package
-        is complete
-    1 = FAIL (missing or corrupt hardmacro files)
+    0 = PASS: at least one analog block was found, its hardmacro package is
+        complete, and the artefact chain names what that package models.
+        PASS_STRUCTURE_ONLY — also rc 0, in its own disclosed tier — when what
+        it models is a library default and the chain says so.
+    1 = FAIL (missing or corrupt hardmacro files, or nothing anywhere names
+        what the package models)
     2 = VACUOUS: nothing was examined — this project declares no analog block,
         so there is no hardmacro package to deliver. #521: this used to be
         rc 0, which credited the gate in the plain PASS tier on 183 of the 200
         tracked project roots. Also rc 2 for an IO / parse error.
+
+═══ WHY THIS GATE ASKS WHAT THE PACKAGE MODELS ═══════════════════════════
+THE INVARIANT, with no tool, step or block name in it:
+
+    Two gates that certify ONE artefact must not disagree about it.
+
+THIS gate is the one `flow/phase1_phase2_phase3.yaml` DECLARES for A8
+(`program_exit_zero: "analog_hardmacro_check . --json
+reports/phase2/gates/hardmacro.json"`). `analog_liberty_nonzero_delay_check` —
+which reads the `design_content` record and grades the very `.lib` inside the
+package this gate signs off — appears ZERO times in that YAML.
+
+MEASURED, over one complete synthetic package (.gds + .lef + .lib + .v) on
+three trees identical in every artefact except the one recorded
+`design_content` value:
+
+    analog_a8_hardmacro_gen_check      PASS / PASS / PASS
+    analog_hardmacro_check             PASS / PASS / PASS
+    analog_liberty_nonzero_delay_check PASS / PASS_STRUCTURE_ONLY / FAIL
+
+The two gates that answer for the STEP could not tell the trees apart. The
+rule is a property of the PACKAGE, so every gate over it asks the same
+question, through ONE shared site
+(`_analog_a_check_common.hardmacro_content`) rather than a copied predicate.
+
+ASKED LAST, after every deliverable and content rule (GDS geometry, LEF
+MACRO/PIN, Liberty cell, Verilog module), each of which names a deeper cause
+and answers this one as a side effect. The deterministic-STUB short-circuit is
+untouched and never reaches the question: a stub marker is ITSELF a disclosure
+of what the package is, and PASS_WITH_STUB is its own already-disclosed tier.
 """
 from __future__ import annotations
 
@@ -56,7 +89,9 @@ from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
+import _analog_a_check_common as _acc
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 # ONE parser for "does this GDS carry geometry", shared with the A5 gate so the
 # two cannot drift apart on the same file type. Guarded: a checker must never
 # be silently disarmed by an import error, so an unavailable parser is a hard
@@ -142,6 +177,19 @@ class AuditResult:
     summary: dict = field(default_factory=dict)
 
 
+def _cite(path: Optional[Path], project: Path) -> Optional[str]:
+    """Project-relative citation, never an exception. The FLOW invokes this
+    gate as `analog_hardmacro_check . --json ...`, so `project` is `.` and
+    `Path("phase3/x").relative_to(Path("."))` raises — a citation string is not
+    worth a traceback in the gate that certifies the step."""
+    if path is None:
+        return None
+    try:
+        return str(Path(path).relative_to(project))
+    except ValueError:
+        return str(path)
+
+
 def _load_block_list(project: Path) -> List[str]:
     bl = _pl.analog_dir(project) / "analog_block_list.json"
     if not bl.exists():
@@ -184,9 +232,13 @@ def run_audit(project: Path) -> AuditResult:
         return result
 
     hardmacro_dir = _pl.hardmacro_dir(project)
+    analog_dir = _pl.analog_dir(project)
     complete = 0
     stub_blocks = 0   # v1.6.177 (#72 P1-6)
     incomplete = []
+    structure_only: List[str] = []
+    design_bound: List[str] = []
+    undisclosed: List[str] = []
 
     for block in blocks:
         block_dir = hardmacro_dir / block
@@ -313,15 +365,64 @@ def run_audit(project: Path) -> AuditResult:
                     f"missing {', '.join(missing)}"
                 ),
             ))
+            continue
+
+        # ── the certification question, asked LAST ────────────────────────
+        bounded = _acc.hardmacro_content(analog_dir / block)
+        cited = _cite(bounded.source, project)
+        if bounded.klass == _acc.CONTENT_UNDISCLOSED:
+            undisclosed.append(block)
+            # `ceiling_source is None` covers BOTH "the artefact is absent" and
+            # "the artefact is present and silent". Those send a reader to two
+            # different places, so the message asks the filesystem rather than
+            # inferring from a None.
+            said = (f"`{_acc.CONTENT_GATE_OF_RECORD_ARTEFACT}` records no "
+                    f"answer to"
+                    if (analog_dir / block
+                        / _acc.CONTENT_GATE_OF_RECORD_ARTEFACT).is_file()
+                    else "no corner artefact exists to say")
+            result.findings.append(Finding(
+                rule="HARDMACRO_SUBJECT_UNDECLARED",
+                severity="ERROR",
+                message=(
+                    f"Block '{block}': hardmacro package is complete "
+                    f"(GDS+LEF+LIB+V), and {said} what circuit it models "
+                    f"(`design_content`). Digital PnR will instantiate this "
+                    f"macro as this design's and integration STA will close "
+                    f"on its Liberty; a package that will not name its "
+                    f"subject must not be signed off for it. Declaring "
+                    f"`{_acc.CONTENT_STRUCTURE_ONLY}` is not a penalty — it "
+                    f"certifies, in its own disclosed tier; declining to "
+                    f"answer does not, or saying nothing would cost less than "
+                    f"saying so."),
+            ))
+            continue
+
+        complete += 1
+        if bounded.klass == _acc.CONTENT_STRUCTURE_ONLY:
+            structure_only.append(block)
+            result.findings.append(Finding(
+                rule="HARDMACRO_STRUCTURE_ONLY",
+                severity="WARNING",
+                message=(
+                    f"Block '{block}' hardmacro complete (GDS+LEF+LIB+V) AND "
+                    f"MODELLING A LIBRARY TOPOLOGY — `{cited}` records that "
+                    f"its circuit came from a topology library with no bound "
+                    f"input reaching any device parameter. The package is "
+                    f"real and it is the default's; a floorplan that reserves "
+                    f"area for it and an STA that closes on it are not closed "
+                    f"on a designed macro."),
+            ))
         else:
-            complete += 1
+            design_bound.append(block)
             result.findings.append(Finding(
                 rule="HARDMACRO_COMPLETE",
                 severity="INFO",
-                message=f"Block '{block}' hardmacro complete (GDS+LEF+LIB+V)",
+                message=(f"Block '{block}' hardmacro complete (GDS+LEF+LIB+V);"
+                         f" design content design-bound per `{cited}`"),
             ))
 
-    if incomplete:
+    if incomplete or undisclosed:
         result.passed = False
 
     # v1.6.177 (#72 P1-6) — verdict tier.
@@ -331,6 +432,13 @@ def run_audit(project: Path) -> AuditResult:
         verdict_tier = "PASS_WITH_STUB"
     elif result.passed and stub_blocks:
         verdict_tier = "PASS_WITH_STUB_PARTIAL"
+    elif result.passed and structure_only and not design_bound:
+        # Ranked below the stub tiers on purpose: a stub is a disclosure that
+        # the package is not a package at all, which is a stronger statement
+        # than "the package is real and it is a library default's". A project
+        # that has both keeps the stub word and names the structure-only
+        # subset in its summary.
+        verdict_tier = "PASS_STRUCTURE_ONLY"
 
     result.summary = {
         "skipped": False,
@@ -338,6 +446,9 @@ def run_audit(project: Path) -> AuditResult:
         "complete": complete,
         "stub_blocks": stub_blocks,
         "incomplete": incomplete,
+        "design_bound_blocks": design_bound,
+        "structure_only_blocks": structure_only,
+        "undisclosed_blocks": undisclosed,
         "pass": result.passed,
         "verdict_tier": verdict_tier,
     }
@@ -379,21 +490,42 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
     skipped = _vx.summary_is_skipped(result.summary)
     reason = _vx.skip_reason(result.summary)
 
+    # The tier travels on the verdict WORD. Only the NEW word is promoted onto
+    # that line: `PASS_WITH_STUB` / `PASS_WITH_STUB_PARTIAL` have always lived
+    # in the summary and rendered as a bare `[PASS]`, and changing that is a
+    # separate decision with its own consumers. A waiver, when one is active,
+    # still wins — it is the stronger statement about the verdict.
+    tier = (result.summary or {}).get("verdict_tier") or "PASS"
+    pass_token = waiver_status
+    if pass_token == "PASS" and tier == "PASS_STRUCTURE_ONLY":
+        pass_token = tier
+
+    so_blocks = (result.summary or {}).get("structure_only_blocks") or []
     if not args.json:
         print(_vx.verdict_line("analog_hardmacro_check", result.passed,
-                               skipped, reason, pass_token=waiver_status))
+                               skipped, reason, pass_token=pass_token))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
     if result.passed and skipped:
         _vx.announce_vacuous(result.program, reason)
+    # LAST, SHORT, and on every path the gate can leave by — including the
+    # `--json` path, which is the ONLY path the FLOW ever takes for this gate.
+    # To stderr, for the same reason `announce_vacuous` is.
+    if so_blocks:
+        names = ", ".join(str(b) for b in so_blocks)
+        if len(names) > 60:
+            names = f"{names[:57]}..."
+        print(f"{_acc.STRUCTURE_ONLY_TOKEN} {len(so_blocks)} hardmacro "
+              f"package(s) ({names}) model a library default, not a bound "
+              f"input [analog_hardmacro_check]", file=sys.stderr)
     return _vx.exit_code(result.passed, skipped)
 
 
