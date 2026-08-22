@@ -7237,3 +7237,57 @@ larger than its signal, J86's `at-or-over-50-sites=0`, J89's 8-ports-against-77-
 relies on — *a corrected number does not leave live copies behind* — is now checked by a
 program instead of by the care of whoever last edited it, and it passes with one
 documented collision.
+
+---
+
+## J93 — the control on my own adjudication: can the pre-check say anything but NOT_DETERMINED?
+
+All four UNDETERMINED rows rest on `general_precheck` answering **NOT_DETERMINED** about
+each chip. **Nothing on this host has ever produced a finished layout** — the control
+`sha256` reaches `routed.def` and no `*.gds` exists anywhere — so the pre-check finds
+`layouts_found=0` every time it is asked. That raises the one question nobody had put to
+my own deliverable:
+
+> **Is NOT_DETERMINED a fact about those six chips, or the only thing this instrument
+> can say?**
+
+A checker that returns the same answer whatever you show it is not a measurement. I have
+applied that rule to `notfeasible_control`, to the NDA scanner, to the census and to the
+decay ledger all day. **It had never been applied to the adjudication itself.**
+
+```
+NEG  a project with no layout at all
+     "verdict": "NOT_DETERMINED"   "layouts_found": 0
+     "reason": "no finished layout found ... nothing was examined, so nothing
+                was determined"
+
+POS  the same project plus ONE file where the pre-check globs
+     "verdict": "FAIL"             "layouts_found": 1
+     "reason": "the general precheck refused: KLayout.ReadLayout,
+                Checker.KLayoutAntenna, Checker.MagicDRC, Checker.KLayoutDRC
+                — each refusal is quoted from the measurement or the checker
+                that produced it"
+```
+
+**The instrument discriminates.** Given something to examine it examines it, runs real
+checkers, and returns a **different verdict** with each refusal quoted from the checker
+that produced it. `NOT_DETERMINED` is therefore what it says **about these chips**,
+because no layout exists for them — not the only output it has.
+
+**Scrupulously**: the positive control's file is **not a layout**. It is one line of text
+sitting where the glob looks, and **FAIL is the CORRECT answer for it** —
+`KLayout.ReadLayout` refuses to read it, which is the instrument working rather than
+failing. **Nothing here claims any chip passes**, and no chip's verdict moves. The only
+thing being measured is whether the verdict can differ at all.
+
+### Why this is the last assumption worth closing
+
+Two of the six rows are NOT FEASIBLE, reached by measurement, so the adjudication was
+never producing a single output. But **four of six is a lot of one tier**, and the honest
+reading of that is: the four are undetermined for a reason that is OURS and identical
+across them (§7), which is exactly what the report says — and now the tier's
+*discriminating power* is measured rather than assumed alongside it.
+
+**No verdict, tier or number moves.** What is added is that the brief's own named
+pre-check has a positive control, and the four UNDETERMINED rows are a reading rather
+than a floor.
