@@ -5,6 +5,7 @@ import math
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("protocol_turnaround_audit")
 
 
@@ -194,7 +195,8 @@ class TestEndToEnd:
         rep = mod.audit_rtl_dir(
             rtl_dir, tmp_path / "missing.json", clock_period_ns=10.0)
         d = rep.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"protocol_turnaround_audit v{shipped_plugin_version()}"
 
 
 class TestDoctrineCompliance:

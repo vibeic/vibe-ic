@@ -132,6 +132,36 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                 # of the input, not a chip-class scaffold leak.
                 "vsuite_per_kw_cap_skipped_v1_6_373",
                 "peripheral_only_emit_skipped_v1_6_376",
+                # for #454 — same structural-skip-counter family. Counts the
+                # `<hex> <MNEMONIC>` rows the L3 free-form opcode walker
+                # matched and then refused on their SHAPE (connector
+                # pin-assignment row, rate/capacity prose, numeric-range
+                # upper bound). Both fixtures are thin-input projects with
+                # no such rows, so both legitimately report 0; the counter
+                # is non-zero only on a project whose docs actually carry
+                # that shape. A shared 0 is a property of the input.
+                "non_command_row_refusal_count",
+                # for #505 — same structural-skip-counter family. Number
+                # of DISTINCT state machines L6/L9 attribute their states
+                # to, grouped from extractor provenance. Both fixtures
+                # are thin-input projects with no FSM evidence at all, so
+                # both legitimately report 0 alongside an empty
+                # `fsm_machines[]`. The count is non-zero only when a
+                # project's own documents declare or describe a machine;
+                # a shared 0 is a property of the input.
+                "fsm_machine_count",
+                # vibe-ic#522 — `_generator` records WHICH RELEASE OF THE
+                # PLUGIN wrote the file (version + L-doc taxonomy digest +
+                # last writer). It is identical across every document of
+                # every design BY CONSTRUCTION, and that is the point of
+                # it: it says nothing whatsoever about the part. This
+                # gate looks for a scaffold leak — content that should
+                # have differed between an AES core and a DRAM controller
+                # and did not — so a field that describes the TOOL rather
+                # than the CHIP is the one shape that can never be
+                # evidence of one. (Contrast `ic_name` below, which is
+                # skipped only for its fallback VALUE.)
+                "_generator",
                 # Empty/null sentinel structurally-shared values are fine.
                 # They're not "identical hardcodes" — they're "neither
                 # had evidence, both null".
@@ -206,7 +236,22 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # `input/docs/README.md`, so the RELATIVE path
                            # list coincides. A real-input filename echo,
                            # not a scaffold leak.
-                           "source_documents"):
+                           "source_documents",
+                           # v1.7.74 — for #507. L4's two MEASUREMENT
+                           # records: what the input declared against
+                           # what the layer carries, and whether the
+                           # register cap cut anything. Both are
+                           # statements ABOUT the extraction, not about
+                           # the design, and two projects whose inputs
+                           # declare no address-valued enum and whose
+                           # register list never reaches the cap
+                           # legitimately record the same zero — with
+                           # the same written reason, which is the
+                           # point. Per-chip content lives in
+                           # registers[]. Same family as the strategy /
+                           # applicability markers above.
+                           "input_declared_registers",
+                           "register_cap_v1_7_74"):
                     continue
                 suspect_fields.append(f"{layer}.{key} = {aes_val!r}")
 

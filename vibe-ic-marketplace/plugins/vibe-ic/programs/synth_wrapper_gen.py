@@ -4,15 +4,37 @@
 Yosys + most synth tools optimise away tri-state logic for `inout` ports
 unless wrapped. This generator scans rtl/<top>.sv for `inout` ports and
 emits rtl/<top>_synth.sv that:
-  - converts `inout id_bus` → `output id_bus_oe`, `output id_bus_o`,
-                                `input  id_bus_i`
+  - declares `output id_bus_oe`, `output id_bus_o`, `input id_bus_i` in
+    place of each `inout id_bus`
   - keeps the original module callable from non-synth flows
-  - emits accompanying SDC `set_false_path` for the new `_oe` net
 
-Output: rtl/<top>_synth.sv + rtl/<top>_synth.sdc
+Output: rtl/<top>_synth.sv — and ONLY that file.
 
-chip-AGNOSTIC. Used by phase2 runner when L9.synth_wrapper_required=true
-or when ic_class_registry's class config sets needs_synth_wrapper=true.
+CORRECTED CLAIMS (this docstring asserted behaviour the code does not have):
+
+  * "emits accompanying SDC `set_false_path` for the new `_oe` net" and
+    "Output: ... + rtl/<top>_synth.sdc" — no .sdc is written. `main()` writes
+    exactly one path, `rtl_dir / f"{top}_synth.sv"`, and outside this
+    correction note the token "sdc" appears nowhere in the module's code.
+    Removed rather than implemented: the
+    false-path constraint an operator actually needs depends on the pad-cell
+    tie-off, which this generator does not know.
+
+  * "Used by phase2 runner when L9.synth_wrapper_required=true or when
+    ic_class_registry's class config sets needs_synth_wrapper=true" — neither
+    key exists anywhere in the plugin (`grep -rn synth_wrapper_required` /
+    `needs_synth_wrapper` matched only this docstring), and no runner, gate or
+    MCP tool invokes this program at all. It is declared under flow Step 9's
+    `programs:` list and is OPERATOR-INVOKED: run it by hand before synthesis
+    on an inout-bearing design.
+
+KNOWN LIMITATION of the emitted wrapper (why it is not auto-wired): the
+generated instantiation connects each inout to its `_i` leg only —
+`.{sig}({sig}_i)` — and never drives the `_o` / `_oe` ports it declares, and
+the trailing "Caller must wire ..." comment names only the LAST signal. The
+output is a starting point for a human, not a drop-in synthesis wrapper.
+
+chip-AGNOSTIC.
 
 Replaces skill `synth-wrapper-gen` (archived).
 """

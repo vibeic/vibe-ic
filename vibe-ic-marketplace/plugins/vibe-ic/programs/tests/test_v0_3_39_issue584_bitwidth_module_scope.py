@@ -19,6 +19,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import bitwidth_consistency_check as BW  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 # The issue's exact shape: same-name signals at different widths in two
 # modules of one sv2v-style file; every index legal in its OWN module.
@@ -167,8 +168,8 @@ def test_real_artifact_clean_when_present():
     reopen's named artifact still carries the discriminating shape, the
     checker must PASS on it."""
     import pytest
-    art = Path("/home/reyerchu/vibe-ic/benchmark_ic/5th__opentitan_aes_v0338"
-               "/phase2/stage1/rtl/aes_sbox_canright_masked.v")
+    art = require_repo("benchmark_ic/5th__opentitan_aes_v0338/phase2/"
+                       "stage1/rtl/aes_sbox_canright_masked.v")
     if not art.is_file() or "input wire [7:0] a;" not in art.read_text(
             errors="replace"):
         pytest.skip("named artifact absent or reshaped (live corpus)")

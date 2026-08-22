@@ -33,6 +33,17 @@ from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Collection routes
+# through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the per-constant reference scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale). The
+# L2/L8 JSON reads (generated_docs) and the mitigation marker are untouched.
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 TURNAROUND_REGEX = re.compile(
     r"(t_?srs|response.?delay|turnaround|bus.?guard|reply.?gap|slave.?reply)",
     re.IGNORECASE,
@@ -63,8 +74,10 @@ class AuditResult:
 
 
 def discover_rtl_files(base: Path) -> List[Path]:
-    exts = {".v", ".sv", ".vh", ".svh"}
-    return sorted(p for p in base.rglob("*") if p.suffix.lower() in exts)
+    # Kimi-scale fix: shared authored-RTL collector. This gate has always
+    # also scanned *.vh/*.svh headers (turnaround `define/localparam
+    # constants live there), so the suffix set is widened accordingly.
+    return rtl_source_files(base, exts=("*.v", "*.sv", "*.vh", "*.svh"))
 
 
 def extract_declarations(rtl_files: List[Path]) -> List[dict]:

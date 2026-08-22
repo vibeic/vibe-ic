@@ -2,7 +2,7 @@
 
 Two modes:
   (1) Prompt-only: build the extraction instruction and write it to stdout.
-      The calling agent (PM Agent, human, or CI script) runs an LLM and
+      The calling agent (IC Expert Agent, human, or CI script) runs an LLM and
       feeds the resulting JSON back via `ingest-extracted`.
 
   (2) API call: if ANTHROPIC_API_KEY is set, call Anthropic directly via
@@ -636,7 +636,7 @@ def _summarize_class_schema(
 # Prompt builder
 # ---------------------------------------------------------------------------
 EXTRACT_SYSTEM_PROMPT = """\
-You are the PM Agent sub-routine for Vibe-IC Phase-1.
+You are the IC Expert Agent sub-routine for Vibe-IC Phase-1 (plain-language elicitation register).
 
 Your job: read the user's natural-language description of an IC and
 extract every fact you can attribute with high confidence into a flat JSON
