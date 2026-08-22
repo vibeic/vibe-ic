@@ -164,3 +164,32 @@ They are split out because that family is the one this repository records as
 killing a session under load; at these sizes (4 s, 24 s, 34 s) they cost about a
 minute an arm, which is why they could be run at load 55 when the 72-file arms
 could not.
+
+
+---
+
+## RE-MEASURED AGAINST THE BATCH AS IT NOW STANDS (ba432789b)
+
+The batch moved twice more while this was being kept in step, so the earlier
+figures no longer covered the tree. Re-run in full:
+
+    72 non-matrix files   base 1 failed / 1947 passed
+                          cand 0 failed / 1991 passed
+    3 test_matrix_* files base 6 failed | cand 6 failed, id sets IDENTICAL
+
+    NEW 0 in both groups.
+
+The candidate now has NO failures at all, and the single only-on-base id is the
+one this delta fixes — `test_the_bound_is_what_refuses_and_not_some_other_clause`,
+whose pre-ceiling version reports "its stated bound is not what is deciding
+this" for a row where the CEILING is deciding.
+
+**The batch also dropped its ninth row.** `PPA head-to-head records
+(cross-layer campaign)` carried no `bound_because`, which this delta's test kept
+failing on; the ledger is now back to eight rows, all complete. Worth recording
+rather than just noticing: the row was REMOVED, not completed. The ledger's own
+`_doc` says to delete a row "in the SAME commit that fixes the gate", so if that
+gate is still red the effect is to make it unowned — and an unowned red is
+reported NEW and is not failed by `gate_red_since`. That is a legitimate choice
+and it is somebody's to make; it is noted here only so it is not mistaken for
+the row having been justified.
