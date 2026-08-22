@@ -3558,8 +3558,8 @@ number and not the question.
     records                                            47
       fix text quotes a figure                         35
         names a literal command                         6
-        describes HOW the count was taken              29
-        neither — a bare number                         6
+        states WHAT was measured and over what scope   35   (hand-read, not detected)
+        states a predicate another reader could re-run  9   (the three reconstructed here, plus six that already did)
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 29 figure-bearing records fall short.
@@ -3683,7 +3683,32 @@ key is **empty** on these arms (the measurements live in a sibling file), so a
 sweep aimed at the contract returns 0 axes from 21 arms and looks like a clean
 corpus.
 
-Six records remain, and that is the first thing I would do next. A figure
+**The last six were hand-read, and the number I have been tracking was wrong in
+every one of its six revisions.** I reported the bare-number count as 24, then
+12, then 9, 8, 7, 6 — each time from a phrase detector searching for the marker
+words I happened to be writing. Reading the final six by hand: **none of them is
+a bare number.** Every one states what was measured and the scope it was
+measured over — *verified input by input… read directly*, *corpus-swept on this
+tree*, *measured on this layer: 6 contract pairs*, *measured on this tree: 48
+consumers*.
+
+So the real gap was never "a number with no context". It is narrower and
+harder: **a number whose exact predicate another reader could re-run.** My
+detector never measured that property once, across six commits of reporting it.
+
+**That is this batch's central class, arriving in the audit written about it,
+for the fourth time** — and the correction only came from abandoning the screen
+and reading six items, which took less time than any of the six re-measurements
+that produced the wrong figures.
+
+What the three full reconstructions in this pass show is what "re-runnable"
+actually costs: the digest figure reproduced exactly in one attempt, the
+invariance figure took four attempts and settled its load-bearing half while
+bracketing its denominator, and the emitted-type figure could not be settled by
+any grep because the identifiers are assigned through constants. Nine records
+now carry a predicate at that standard. **The honest count of what is left is
+not a number I am willing to give from a screen** — it would need the same
+hand-reading, over the 26 I have not read this pass. A figure
 without its question is a memory, which is the brief's own word for what this
 loop exists to stop producing.
 
