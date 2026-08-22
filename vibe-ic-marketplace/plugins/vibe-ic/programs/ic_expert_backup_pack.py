@@ -142,11 +142,21 @@ def _spec_requirements(prompt: str,
 
 def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optional[str],
              expert_skills: List[str], verify_gates: List[str],
-             out_dir: Path, k: int = 5, context_keys=None) -> Dict[str, Any]:
+             out_dir: Path, k: int = 5, context_keys=None,
+             output_target: str = "rtl.sv") -> Dict[str, Any]:
     """Assemble the IC-Expert-Agent AI-backup pack into `out_dir`. Returns the
     hand-off descriptor (also written to `out_dir/ic_expert_agent_handoff.json`).
     `context_keys` (optional) = the record's `input.context` file paths, used for
-    the context-sibling collision advisory."""
+    the context-sibling collision advisory.
+
+    `output_target` names the artefact the agent is asked to author. It defaults
+    to `rtl.sv` — the RTL-authoring hand-off this module was built for, and the
+    only one that existed while `benchmark/cvdp_task_loop` was the sole caller.
+    The assembly itself (retrieve, render the two INDEPENDENT digests, write the
+    contract, emit the descriptor) is target-agnostic, so the Phase-1 expert
+    PARSE track reuses it verbatim with `l_doc_expectations.json`. Same dual-
+    track hand-off, different question asked of it — reusing it is what keeps
+    one measured mechanism instead of two similar ones drifting apart."""
     out_dir.mkdir(parents=True, exist_ok=True)
     prompt = prompt or ""
 
@@ -187,7 +197,7 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
             },
             "converge": "diff the two bodies; root-cause + reconcile disagreement",
         },
-        "output_target": "rtl.sv",
+        "output_target": output_target,
     }
     (out_dir / "ic_expert_agent_handoff.json").write_text(
         json.dumps(handoff, indent=2, ensure_ascii=False))

@@ -77,7 +77,11 @@ def test_no_generated_docs_vacuous(tmp_path: Path) -> None:
     assert verdict == "VACUOUS_PASS"
     assert summary["generated_docs"] is None
     assert summary["l_docs_scanned"] == 0
-    assert main([str(tmp_path)]) == 0
+    # vibe-ic#1052: rc is what the flow reads. `VACUOUS_PASS` printed beside rc 0
+    # was credited in the plain PASS tier by every consumer that reads only the
+    # exit code, and the printed sentinel survives only the last 300 chars
+    # `_check_program_exit_zero` keeps. rc 2 has no such window.
+    assert main([str(tmp_path)]) == 2
 
 
 def test_generated_docs_empty_vacuous(tmp_path: Path) -> None:
@@ -86,6 +90,39 @@ def test_generated_docs_empty_vacuous(tmp_path: Path) -> None:
     verdict, findings, summary = scan(tmp_path)
     assert verdict == "VACUOUS_PASS"
     assert summary["l_docs_scanned"] == 0
+    assert main([str(tmp_path)]) == 2
+
+
+def test_the_vacuous_rc_carries_the_sentinel_TOO(tmp_path: Path, capsys) -> None:
+    """Both channels, asserted together.
+
+    `_vacuous_exit` gives both on purpose. Either one alone can regress silently
+    while the other keeps this test green, which is how the gate got here.
+    """
+    assert main([str(tmp_path)]) == 2
+    captured = capsys.readouterr()
+    assert "VACUOUS_PASS:" in (captured.out + captured.err)
+
+
+def test_a_REAL_clean_doc_set_still_passes(tmp_path: Path) -> None:
+    """The positive arm. Without it this change has only shown the gate can
+    refuse — a gate that refuses everything is a ban, not a check."""
+    d = tmp_path / "phase1" / "generated_docs"
+    d.mkdir(parents=True)
+    (d / "L1_DATASHEET.json").write_text('{"chip": "x", "ports": []}')
+    (d / "L2_FRS.json").write_text('{"requirements": ["r1"]}')
+    verdict, _, summary = scan(tmp_path)
+    assert verdict == "PASS", summary
+    assert summary["l_docs_scanned"] == 2
+    assert main([str(tmp_path)]) == 0
+
+
+def test_a_TODO_stub_still_FAILS(tmp_path: Path) -> None:
+    """And the negative arm stays reachable at rc 1, distinct from rc 2."""
+    d = tmp_path / "phase1" / "generated_docs"
+    d.mkdir(parents=True)
+    (d / "L1_DATASHEET.json").write_text('{"chip": "__TODO__"}')
+    assert main([str(tmp_path)]) == 1
 
 
 def test_bad_target_returns_2(tmp_path: Path) -> None:
@@ -102,3 +139,43 @@ def test_direct_generated_docs_dir(tmp_path: Path) -> None:
     verdict, findings, summary = scan(gd)
     assert verdict == "FAIL"
     assert summary["total_todo"] == 1
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#693 — this gate is NOT superseded by `gameable_placeholder_scan`.
+#
+# That program scans the same L*.json for a strictly larger TOKEN set, which
+# makes "delete this one" look safe. It is not: the two accept different INPUT
+# SHAPES. Handed the generated_docs directory itself — the shape
+# skills/phase1-output-verify/SKILL.md documents, and the shape the test above
+# pins — `gameable_placeholder_scan` resolves no docs dir and reports
+# NO_GENERATED_DOCS / rc 1 on a corpus containing zero placeholders.
+#
+# This test exists so that a future "consolidate the placeholder scanners"
+# change has to confront the fabricated red rather than discover it in a run.
+# ---------------------------------------------------------------------------
+def test_not_superseded_generated_docs_dir_shape(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps({"ic": "x"}))  # CLEAN
+
+    # this gate: judges the clean corpus correctly
+    verdict, _, summary = scan(gd)
+    assert verdict == "PASS"
+    assert summary["l_docs_scanned"] == 1 and summary["total_todo"] == 0
+
+    # the candidate superset, same target: a red produced by not looking
+    other = Path(__file__).parent.parent / "gameable_placeholder_scan.py"
+    res = subprocess.run([_sys.executable, str(other), str(gd)],
+                         capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "NO_GENERATED_DOCS" in res.stdout
+
+    # ...and it is right on the PROJECT-dir shape, which is what the flow passes
+    res = subprocess.run([_sys.executable, str(other), str(tmp_path)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "CLEAN" in res.stdout

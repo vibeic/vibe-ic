@@ -1,6 +1,46 @@
 #!/usr/bin/env python3
 """checkpoint_gate_check.py — deterministic phase-transition checkpoint gate.
 
+╔══════════════════════════════════════════════════════════════════════════╗
+║ ROTTED — DO NOT WIRE. SUPERSEDED BY THE PER-STEP GATE SET. (vibe-ic#693)  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+This program runs without crashing, but it addresses a DIRECTORY LAYOUT THE
+FLOW ABANDONED. It is recorded in
+`programs/checker_execution_wiring_baseline.json :: unwired_by_decision`,
+where `checker_execution_wiring_audit` re-derives the claim on every CI run.
+
+MEASURED over the 46 run trees on a working checkout: **46/46 FAIL at checkpoint 1, 46/46
+at checkpoint 2, 46/46 at checkpoint 3.** 100%, and every red is path rot, not
+a defect. On one real DRC-clean Phase-3 run — a run whose DRC evidence is 9050
+measured shapes in the layout it consumed:
+
+  CP1  8 MISSING of 9. `phase1_spec/01_prompt.md` … `05_appnote.md` do not
+       exist; the run uses `phase1/generated_docs/`. Only `l_layer_docs` PASSes.
+  CP2  5 MISSING + 1 FAIL of 12, including TWO ACTIVE MIS-READS:
+         [PASS] file:rtl → phase2/stage1/formal/formal_spm.sv
+                the RTL glob resolved to the FORMAL file — a false MATCH, not
+                merely a false miss;
+         [FAIL] cell_count: 0 cell(s) (need > 0)
+                on a run that placed real cells.
+  CP3  6 MISSING of 8 (Quartus artefacts an ASIC run never produces).
+
+There is also no insertion point: `grep -c checkpoint` over
+`flow/phase1_phase2_phase3.yaml` is **0** — the flow has no checkpoint concept,
+only per-step gates.
+
+WHAT ALREADY COVERS ITS SUBSTANCE
+  CP1 L-doc presence        → `phase1_doc_presence_check` (the one sub-check
+                              here that passes)
+  CP2 synth / DEF / GDS/DRC → flow steps 14 / 16 / 31 / 37
+                              (`gds_substance_check`, `drc_report_check`,
+                              `provenance_check`)
+  CP3 FPGA sign-off         → step 37 + the FPGA cap-gap waiver machinery
+
+Wiring it in ANY form — blocking or reporting — is an outage that trains
+readers to ignore it. The repair is to rewrite the checklist against the
+current layout, or delete the program. Not to wire it.
+
 Codifies the manual battery of presence + threshold checks that the
 `checkpoint-gate` skill (skills/checkpoint-gate/SKILL.md) used to ask the
 agent to run by hand. Running them by hand is non-deterministic: a fresh

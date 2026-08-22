@@ -194,10 +194,10 @@ def test_runner_gate_arstn_design_elaborates_against_hidden_tb(tmp_path):
         srcs = [str(p) for p in sorted(rtl_dir.glob("*.v"))]
         r = subprocess.run(
             ["iverilog", "-g2012", "-o", str(binp), *srcs, str(tb)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, (r.stdout + r.stderr)
         v = subprocess.run(["vvp", str(binp)], capture_output=True,
-                           text=True, timeout=120)
+                           text=True, timeout=60)
     assert "Your Design Passed" in (v.stdout + v.stderr), (v.stdout + v.stderr)
 
 

@@ -1,5 +1,0 @@
-{
-  "ic_name": "LIN bus 2.2A (Local Interconnect Network, LIN Consortium)",
-  "otp_present": false,
-  "notes": "LIN is a wire-level protocol specification, not a chip. There is no LIN-defined OTP / fuse / configuration ROM. Per-node identity data (initial NAD, Supplier ID, Function ID, Variant) is typically stored in microcontroller program flash or EEPROM and exposed via the Read by Identifier service (transport layer, ID 0x3C / 0x3D). The Save Configuration service may persist a node's reassigned NAD into non-volatile storage so that the assignment survives a power cycle — but the storage medium is vendor-specific."
-}

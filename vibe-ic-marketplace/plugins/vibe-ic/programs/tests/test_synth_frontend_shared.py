@@ -60,12 +60,29 @@ endmodule
 
 
 def _need_iic_eda():
+    """Skip unless a RUNNING container named _CONTAINER can actually be exec'd.
+
+    `docker inspect <name>` resolves IMAGES as well as containers, and
+    `vibeic-eda` is precisely our image name — so on any machine that has the
+    image pulled the old guard returned rc=0, declared the container
+    "available", and let the test proceed to fail inside `docker exec` with
+    "could not create container workdir". An environment-gated test must SKIP
+    when its environment is absent, never FAIL.
+
+    `--type=container` restricts the lookup to containers, and `.State.Running`
+    rejects a stopped one (which also inspects fine but cannot be exec'd).
+    """
     if not shutil.which("docker"):
-        pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", _CONTAINER],
+        skip_not_verified("docker not installed", RUN_REMEDY)
+    r = subprocess.run(["docker", "inspect", "--type=container",
+                        "-f", "{{.State.Running}}", _CONTAINER],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        pytest.skip(f"{_CONTAINER} container not available")
+        skip_not_verified(f"{_CONTAINER} container not available",
+                          RUN_REMEDY)
+    if r.stdout.strip() != "true":
+        skip_not_verified(f"{_CONTAINER} container is not running",
+                          RUN_REMEDY)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +368,12 @@ endmodule
 # decides the retry; it must fire on a sim-only signature and STAY OFF (keep the
 # honest FAIL) on a genuine design error — the §4.05 no-leak boundary.
 import synth_frontend as _sfmod
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:latest'  # the repo stores no version to cat
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 # v1.4.x — decided by the OBSERVABLE (no netlist) + the DESIGN PROPERTY
 # (the closure branches on the define set), not by the tool's phrasing.

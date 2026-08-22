@@ -477,3 +477,160 @@ def test_cli_incomplete_exit1(tmp_path: Path) -> None:
 def test_cli_error_exit2(tmp_path: Path) -> None:
     rc = H.main([str(tmp_path / "does_not_exist")])
     assert rc == 2
+
+
+# ── the report must enumerate the contract it actually enforces ────────────
+#
+# The JSON `contract` list was hand-written and carried SIX keys while
+# `items` carried seven: `version_less_candidate` — the owner directive that a
+# field bundle must not self-assign a version — was the one missing. A
+# consumer reading `contract` to learn what the gate enforces was told one
+# rule fewer than the gate blocks on. It is now rendered from
+# `CONTRACT_ITEMS`, and these tests keep the two from drifting again.
+
+def test_contract_list_enumerates_every_item(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path, _CLEAN_SRC)
+    patch = _make_producer_patch(repo)
+    bundle = _build_bundle(tmp_path, repo, patch)
+    out_json = tmp_path / "report.json"
+    H.main([str(bundle), "--json", str(out_json)])
+    rep = json.loads(out_json.read_text())
+    assert rep["contract"] == list(H.CONTRACT_ITEMS)
+    assert len(H.CONTRACT_ITEMS) == 7
+    assert [it["key"] for it in rep["items"]] == list(H.CONTRACT_ITEMS)
+    assert "version_less_candidate" in rep["contract"]
+
+
+def test_evaluate_adds_exactly_the_declared_contract(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path, _CLEAN_SRC)
+    patch = _make_producer_patch(repo)
+    bundle = _build_bundle(tmp_path, repo, patch)
+    rep = _evaluate(bundle)
+    assert tuple(it.key for it in rep.items) == H.CONTRACT_ITEMS
+
+
+# ── a candidate that DELETES a file must still get a verdict ──────────────
+#
+# `fix_surface_classify.classify_diff` raised TypeError on a diff that deletes
+# one file and edits another (a `/dev/null` destination gave the hunk a None
+# bucket label). Uncaught, that exited 1 — indistinguishable from a
+# legitimate INCOMPLETE — and no `--json` report was written, so a caller
+# branching on rc could not tell a crash from a judgment.
+
+def _make_delete_plus_edit_patch(repo: Path) -> str:
+    rel_del = "programs/to_delete.py"
+    (repo / rel_del).write_text("x = 1\ny = 2\n", encoding="utf-8")
+    _git(repo, "add", rel_del)
+    _git(repo, "commit", "-q", "-m", "add a file to delete")
+    (repo / rel_del).unlink()
+    tgt = repo / "programs" / "phase3_demo.py"
+    body = tgt.read_text(encoding="utf-8")
+    tgt.write_text(body.replace("_build_pnr_tcl(project, top)",
+                                "_build_pnr_tcl(project, top, fix=True)"),
+                   encoding="utf-8")
+    diff = _git(repo, "diff")
+    _git(repo, "checkout", "--", rel_del, "programs/phase3_demo.py")
+    assert "/dev/null" in diff
+    return diff
+
+
+def test_candidate_that_deletes_a_file_still_gets_a_verdict(
+        tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path, _CLEAN_SRC)
+    patch = _make_delete_plus_edit_patch(repo)
+    bundle = _build_bundle(tmp_path, repo, patch)
+    out_json = tmp_path / "report.json"
+    rc = H.main([str(bundle), "--json", str(out_json)])
+    assert rc in (0, 1)
+    rep = json.loads(out_json.read_text())          # written, not swallowed
+    item = {it["key"]: it for it in rep["items"]}["root_cause_not_surface"]
+    assert "CRASHED" not in item["detail"]
+
+
+def test_a_composed_crash_is_named_inconclusive_not_a_surface_verdict(
+        tmp_path: Path, monkeypatch) -> None:
+    # Defence-in-depth for the NEXT composed crash: the item must be red
+    # (fail-closed) AND say it was never judged, and the report must exist.
+    def _boom(_diff_text):
+        raise RuntimeError("synthetic composed failure")
+
+    monkeypatch.setattr(H._fsc, "classify_diff", _boom)
+    repo = _init_repo(tmp_path, _CLEAN_SRC)
+    patch = _make_producer_patch(repo)
+    bundle = _build_bundle(tmp_path, repo, patch)
+    rep = _evaluate(bundle)
+    item = _items(rep)["root_cause_not_surface"]
+    assert item.ok is False
+    assert "INCONCLUSIVE" in item.detail
+    assert "CRASHED" in item.detail
+    assert rep.verdict == "INCOMPLETE"
+
+
+# ── the ONE shipped invocation must match the CLI ─────────────────────────
+#
+# `skills/field-agent-loop/SKILL.md` shipped `--bundle <bundle_dir>` at two
+# call sites. Measured: `unrecognized arguments: --bundle`, rc=2, and the
+# skill's own comment reads `exit !0 -> NOT admissible`, so a field agent
+# following the shipped instruction got a permanent false REFUSAL and never a
+# verdict. The same two lines also used a `plugins/vibe-ic/programs/...`
+# prefix; `git ls-tree origin/main` has no top-level `plugins/`.
+
+def test_there_is_no_bundle_flag() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        H.main(["--bundle", "/nope"])
+    assert excinfo.value.code == 2
+
+
+# ── the gate is agent-driven, and that is DISCLOSED where it is decided ────
+#
+# This gate is run by an agent following the field-agent skill. It is on no
+# automated rail, and the two candidate ledgers both REFUSE the entry, with
+# their own error messages:
+#
+#   * `gate_skip_routing_check._UNROUTED_INVENTORY` is a ratchet over UNROUTED
+#     SKIP PATHS compared EXACTLY in both directions. This gate has 0 measured
+#     unrouted skip paths, so listing it at any count lands in the `fixed`
+#     bucket -> "delete the inventory entry" -> the check FAILs.
+#   * `checker_execution_wiring_baseline.json` records checkers NOTHING but
+#     their own test runs. `checker_execution_wiring_audit` counts a SKILL
+#     document as a runner, so adding this gate answers "[FAIL] 1 recorded
+#     checker(s) now HAVE a real runner — shrink the baseline".
+#
+# So the disclosure lives in the gate's own docstring. This test is what stops
+# it being deleted, and what forces whoever DOES put the gate on an automated
+# rail to revisit the reason it was not on one.
+
+def test_the_no_automated_rail_disclosure_is_present() -> None:
+    doc = H.__doc__ or ""
+    assert "WHAT THIS GATE IS NOT WIRED TO" in doc
+    assert "PRODUCER" in doc
+    assert "no bundle path convention" in doc or "does not exist" in doc.lower()
+
+
+def test_the_gate_is_still_off_the_automated_rails() -> None:
+    """If this fails, the gate WAS wired — go update the disclosure above
+    (and re-measure the PRODUCER rate), do not just delete this test."""
+    plugin = PROG.parent
+    repo = plugin.parent.parent.parent
+    flow = (plugin / "flow" / "phase1_phase2_phase3.yaml").read_text(
+        errors="replace")
+    assert "handoff_bundle_check" not in flow
+    for rel in ("tools/ci/repo_hygiene_gates.sh", "tools/git-hooks/pre-push",
+                "tools/gatekeeper-land.sh"):
+        p = repo / rel
+        if p.is_file():
+            assert "handoff_bundle_check" not in p.read_text(errors="replace"), rel
+
+
+def test_skill_invocations_use_the_real_cli() -> None:
+    skill = PROG.parent / "skills" / "field-agent-loop" / "SKILL.md"
+    text = skill.read_text(errors="replace")
+    lines = [ln for ln in text.splitlines()
+             if "handoff_bundle_check.py" in ln]
+    assert lines, "the field-agent skill must still invoke the gate"
+    for ln in lines:
+        assert "--bundle" not in ln, ln
+    invocations = [ln for ln in lines if "python3" in ln]
+    assert invocations, "expected at least one runnable invocation"
+    for ln in invocations:
+        assert "plugins/vibe-ic/programs/handoff_bundle_check.py" not in ln, ln
