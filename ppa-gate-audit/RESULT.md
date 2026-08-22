@@ -1658,3 +1658,76 @@ No program changed in this part. The guard file holds 34 tests.
 
     31 failed, 772 passed, 104 skipped, 4 xfailed
     failures on this branch and not the base: (none)
+
+---
+
+# Part 16 — how far the defect goes, measured instead of assumed
+
+Every part so far has fixed PPA rows and left the obvious question unasked: the
+rule is stated about *a gate*, so is the rest of the suite the same? Parts 12–15
+scoped the guard to the PPA family without saying why. That is an unexplained
+limit, and an unexplained limit on a guard is the shape this whole report is
+about.
+
+So the surface was measured. `repo_hygiene_gates.sh` wires **96** gate
+invocations, **25** of them through `run_tolerating_uncheckable` — the wrapper
+that renders rc 2 as NOT_CHECKED, and therefore the entire population this rule
+could ever apply to. Eleven are PPA rows. The other **fourteen** were run by
+hand, each from the cwd its own wiring line gives it.
+
+    rc 0   ten   container login-banner parses · no upstream forked twice ·
+                 PR bases reach main · STA engines agree · PDK via patch vs
+                 layer min width · macro OBS not crossed · DRC PASS is not
+                 vacuous · inner FAILs reach the verdict · new tool diagnostic
+                 id · image-gated verifications are not silently skipped
+    rc 2   three and every one of them already names what it needs
+    n/a    one   gates are host-independent exceeded a 90s probe — a slow gate,
+                 not a finding
+
+## The three, and why none of them has the defect
+
+    blocker list contract on committed reports
+      "--dir <ROOT>/benchmark-data is not a directory"
+      An EMPTY population living in another repository — the same excused shape
+      as the two published-corpus PPA rows — and the path is named.
+
+    engineering evidence fresh
+      "NOT_GENERATED: <ROOT>/docs/ENGINEERING_EVIDENCE.md does not exist — this
+       is NOT a pass; run `python3 tools/gen_engineering_evidence.py`."
+      The artefact AND its producer, in the refusal. This is what Parts 1 and 9
+      spent pages asking the PPA gates to do, already done here.
+
+    input-doc claims vs installed PDK
+      "[VACUOUS] ... examined nothing (reason: no_decidable_pdk_claim); this is
+       NOT a pass over the design"
+      "4 input document(s), 0 candidate claim(s) — contradicted=0 corroborated=0
+       undecided=0"
+      A THIRD shape, and it is legitimate. It read a non-empty corpus and found
+      no decidable claim in it. Nothing is ABSENT from disk, so there is no
+      artefact to name; it discloses the denominator instead and marks itself
+      VACUOUS rather than passing.
+
+## What this bounds
+
+**The defect was concentrated in the PPA family.** Six gates that had never
+checked anything (Part 1), two that checked and named nothing (Part 12), two
+exact-path rows that named too little and one of them hiding an rc 1 (Part 14),
+and two wired with arguments their own program refuses (Part 12) — all eleven
+rows, one subsystem. The other fourteen tolerating rows in the same file are
+already honest, and that is now a measurement rather than an assumption.
+
+**The arm is NOT widened to them, deliberately.** Three of the fourteen need a
+container image and one needs network, so pulling them into a pytest guard would
+trade a defect this repository does not have for host-dependence it would then
+have to manage — and `gates are host-independent` exists because that has bitten
+before. The reasoning is recorded in the guard file's own docstring so the
+scoping is answerable where a reader meets it, not only here.
+
+A negative result is worth writing down at the same standard as a positive one.
+Had it been skipped, the next person to ask "does this rule apply to the rest of
+the suite?" would have had to run all fourteen again to find out that it does.
+
+## No changes
+
+No program, no gate, no wiring, no verdict. Part 16 is a measurement and a
+docstring.
