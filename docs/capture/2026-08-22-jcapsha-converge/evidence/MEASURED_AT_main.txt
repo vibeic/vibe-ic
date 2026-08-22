@@ -1,2 +1,26 @@
-a4caccefeab577a5337f1854c9c857e4d7a2bd42
-worktree=/home/reyerchu/_jcapsha_conv
+WHAT THIS FILE IS: the base of the tree that carries it — the commit every
+figure in this capture that says "on current main" was measured against.
+
+IT IS NOT a historical label. Every OTHER file here names the sha it measured
+on inside its own text ("MEASURED ... origin/main a4caccefe"), which stays true
+wherever the file sits. THIS one means "the base HERE", so it goes false the
+moment the capture is rebased — and on the landable sibling branch it DID, in
+the same rebase that staled the version stamp. Both were found by asking the
+same question twice: does this artefact still say something true where it now
+sits?
+
+THIS TREE'S BASE
+    a4caccefeab577a5337f1854c9c857e4d7a2bd42   (this branch is NOT on origin/main)
+    ^ NOTE: this branch is based on a4caccefeab577a5337f1854c9c857e4d7a2bd42
+      (v1.11.69). origin/main has since moved to ae78abb28 (v1.11.70), 673
+      commits later. Every load-bearing figure was RE-MEASURED against that
+      newer base and survived unchanged — see REVERIFIED_AGAINST_LIVE_MAIN.md.
+      This branch is deliberately NOT rebased: it is the record, and its
+      version stamps and measurements are correct relative to a4caccefe.
+      jcapsha/land-on-current-main carries the same content on ae78abb28.
+
+THE BASE THESE MEASUREMENTS WERE TAKEN ON
+    a4caccefeab577a5337f1854c9c857e4d7a2bd42   (v1.11.69)
+
+The local worktree path that used to be on line 2 is gone. It named a directory
+on one host and told a reader nothing they could check.

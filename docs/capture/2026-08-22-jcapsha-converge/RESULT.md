@@ -833,3 +833,161 @@ distribution and both pins pass their upstream halves, on this branch, now. It
 does not establish they will be run again — and the BASIS line is the guard
 against the failure that matters more: a later reader taking a PASS for a
 statement about upstream when upstream was never opened.
+
+
+---
+
+## main moved 673 commits, and everything above was measured against a dead base
+
+A routine re-poll before a push — the same one that had answered "0 commits
+landed" eight times running — answered **673**
+(`evidence/MAIN_MOVED_673_COMMITS.md`).
+
+    my base   a4caccefe
+    main now  ae78abb28
+    landed    673
+
+**What changed, measured:**
+
+* **`phase3.pad_ring` is now on main** — someone landed their own version. My
+  addition is redundant. The red in `RED_routing_entry.md` was true when
+  measured and is false now; it is labelled by base sha and stays as a record
+  of that state.
+* **The F4 defect is still live** — main at `ae78abb28` still carries six
+  `inert` identifiers in `pad_ring_gen.py`.
+* **`jpadsite/pad-site` still has not landed**, so the NORTH and CORNER fixes
+  are still absent from main.
+
+**The merge, and the semantic break it hid.** Two conflicts, both ADDITIVE ON
+BOTH SIDES, resolved by union and never by choosing. Then the merged tree ran:
+
+    FAILED ...::test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert
+    FAILED ...::test_the_inert_disclosure_is_in_every_report_including_the_skip
+    2 failed, 206 passed
+
+Taking main's `test_pad_ring.py` wholesale and grafting only my NEW tests
+silently dropped my EDITS to two of its EXISTING ones. `pad_ring_gen.py` merged
+WITH the key rename; the test file merged WITHOUT it. Textually clean,
+semantically broken — the exact shape that makes "the merge had no conflicts"
+worthless as evidence. Re-applied: 208 passed, 16 skipped, rc 0; checker 3/3;
+`plugin_full_audit` D1/D2 PASS at 1273 programs.
+
+**The merge is not published, and the pre-push gate is why.** Pushing it would
+republish main's 673 commits on this ref, and the hook refused with a
+collateral-revert finding. Checked before acting: both flagged commits are
+already ancestors of `origin/main` — an older lane of mine that someone landed,
+with the revert inside main's own history. The gate is right about the shape
+and the shape is not mine. So: no argument with the gate, no `--no-verify`. **A
+verification does not need to be published.** The branch stays as its own 26
+commits; a lander merges onto current main themselves.
+
+What the merge taught, kept on the branch: `phase3.pad_ring` adopted **verbatim
+from main** so it merges as a no-op rather than a conflict.
+
+**The lesson, at the size it deserves.** I re-polled because the discipline says
+to, not because I suspected anything — the previous eight polls all said 0. A
+branch that had been "verified green" for its whole life was, for some unknown
+part of that time, verified against a base that no longer existed. *A
+verification is only as current as its last re-poll, and "it was 0 last time" is
+not a measurement.*
+
+
+## …and every number above re-measured against the base that exists
+
+Naming the drift is not the same as checking it. Each load-bearing figure was
+re-measured on `ae78abb28` (`evidence/REVERIFIED_AGAINST_LIVE_MAIN.md`):
+
+| figure | a4caccefe | ae78abb28 |
+|---|---|---|
+| F1 guard: files / verdicts / locus / FAIL | 1280 / 31 / 29 / 2 | **1309 / 31 / 29 / 2** |
+| F1 attempt 3: verdicts / named / refused | 25 / 13 / 11 | **25 / 13 / 11** |
+| `UPSTREAM_PINS` population | 0 | **0** |
+| `UPSTREAM_MIRROR` population | 0 | **0** |
+| `PAD_FAKE_SITES` as a bare quoted literal | False | **False** |
+
+Every conclusion survives. 29 more files parsed, the same 31 absence verdicts,
+the same two false positives (one line number shifted because that file
+changed). The blind predicate is still blind on the live tree, so the widening
+is not a fix for a state that has since gone away.
+
+A branch that ends by saying "a verification is only as current as its last
+re-poll" and leaves its own figures pinned to a dead base would be doing the
+thing it just named.
+
+
+## A second branch, so the lander does not rediscover the trap
+
+Merging this branch onto the live main hits two conflicts, and the obvious
+resolution of one is semantically broken in a way the merge cannot show — I hit
+it myself. Leaving that for someone else is leaving a trap, so
+(`evidence/A_LANDABLE_BRANCH_ON_THE_LIVE_MAIN.md`):
+
+| branch | base | what it is |
+|---|---|---|
+| `jcapsha/converge-capture-distill` | `a4caccefe` | the work and its full record — every measurement, retraction and self-correction |
+| `jcapsha/land-on-current-main` | `ae78abb28` | the same delta as ONE commit on the live main, verified green, directly landable |
+
+The second is built the way the collateral-revert gate itself prescribes —
+`git diff <merge-base>..<branch>` applied to current main, not a merge-forward
+that republishes main's history on the ref. **It pushed clean, which is the
+confirmation that the remedy the gate names actually works.**
+
+    upstream_contract_parity_check   PASS, 3 entries, rc 0
+    pytest                           208 passed, 16 skipped, rc 0
+    plugin_full_audit                D1 PASS, D2 PASS (1273 programs)
+
+Read the first. Merge the second.
+
+
+## One more of the same class, in my own deliverable
+
+Asked of my own artefact a question I had been asking of everything else: are
+the emitted candidates still regenerable, and do they still match?
+(`evidence/A_STALE_PROVENANCE_STAMP_IN_MY_OWN_ARTEFACT.md`)
+
+    < # Auto-captured by benchmark-enhancement-capture at plugin v1.11.70
+    > # Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
+
+`enhancement_emit.py` stamps each sketch with the plugin version AT EMIT TIME.
+Mine were emitted on `a4caccefe` — v1.11.69 — and carried unchanged onto a tree
+whose `plugin.json` says 1.11.70. **A stamp is only true relative to the tree it
+was taken on, and moving the tree does not move the stamp.**
+
+It is the failure `enhancement_emit.py` warns about in its own source, where it
+explains why an unreadable version is emitted as the non-semver `"unknown"`:
+
+    a provenance field nobody measured must be visibly non-data, so that it
+    fails the first time anyone sorts or compares by it. A plausible semver
+    constant never fails, which is exactly how a stale one survives.
+
+`v1.11.69` is a plausible semver constant. It did not fail. It survived.
+
+Regenerated on the landable branch (now v1.11.70). **This branch is
+deliberately left alone** — it is based on `a4caccefe`, which IS v1.11.69, so
+its stamp is correct here; rewriting it would introduce the same defect in the
+opposite direction. The two branches now differ in exactly this one field and
+each is right about its own tree.
+
+Nothing about reading the file would have shown it. The check is to REGENERATE
+and COMPARE — the same discipline as re-polling the base instead of trusting
+the last answer.
+
+
+### …and the same question, asked twice, found a second one
+
+If the version stamp went stale in the rebase, what else did? Audited every
+artefact for facts whose meaning is *relative to the tree that carries them*,
+as opposed to facts that name their own sha.
+
+`evidence/MEASURED_AT_main.txt` was the second. Its entire content was a bare
+sha and a local worktree path, and its MEANING is "the base here" — so on the
+landable branch it said `a4caccefe` while sitting on `ae78abb28`.
+
+The distinction is the whole point, and every other file is on the right side
+of it: they say *"MEASURED … origin/main a4caccefe"* inside their own text,
+which stays true wherever the file sits and must NOT be rewritten — doing so
+would falsify the record. Only a fact that means "HERE" can go stale by moving.
+
+Both copies now state which kind of claim they are, name their own tree's base,
+and point at the re-verification. The local worktree path is gone: it named a
+directory on one host and told a reader nothing they could check.
