@@ -384,6 +384,19 @@ both exit 0, and the four modules that exercise this work pass 175 / 9 skipped.
 and merged clean in every test this document ran, so its absence looks unintended
 rather than decided.
 
+The `jppafind` absence is stated with more care than the rest of this document,
+because acting on it means re-assembling. It was tested TWO independent ways, after
+the first two methods here proved unreliable:
+
+    12 distinctive added lines of its own      ->  2 found in the assembly
+    5 of its 24 changed files, by sha256       ->  5 of 5 identical to MAIN,
+                                                   not to the branch
+
+Files matching MAIN exactly is the decisive one: it means the branch was never
+applied, not that it was applied and then merged with someone else's edit. That is
+the same distinction that made `agent/jrows-on-batchbig` look absent when it is
+present.
+
 TWO WRONG READINGS OF MY OWN, ON THE WAY TO THAT LIST, both from a weak detector:
 "is this branch in the assembly" was first answered by testing ONE added file
 (missed branches whose first file is shared), then by byte-identity across all
