@@ -1,6 +1,0 @@
-{
-  "gate": "vacuous_testbench",
-  "sim_root": "/home/reyerchu/_c_car15_run/phase2/stage1/sim",
-  "verdict": "NOT_APPLICABLE",
-  "reason": "no testbench discovered under the sim tree"
-}
