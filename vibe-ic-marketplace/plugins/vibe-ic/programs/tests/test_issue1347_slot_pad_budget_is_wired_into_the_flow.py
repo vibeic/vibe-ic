@@ -599,13 +599,15 @@ def test_the_runners_four_tiers_are_four_distinct_readings():
 #
 #     opentitan_aes           DOES_NOT_FIT   515 bits   9.90x   (docstring: 515, 9.9x)
 #     ibex                    DOES_NOT_FIT   262 bits   5.04x   (docstring: 262, 5.0x)
-#     edge_llm_matmul_accel   DOES_NOT_FIT   109 bits   2.10x   (docstring: 107, 2.1x)
+#     edge_llm_matmul_accel   DOES_NOT_FIT   109 bits   2.10x   (docstring: 109, 2.1x)
 #     sha256                  FITS_AFTER_FOLD 75 bits           (docstring: 75, fits)
 #
-# `edge_llm_matmul_accel` reads 109 where the table says 107. Measured
-# old-parser and new-parser alike at 109, so it is not this branch's doing —
-# the table was taken against a different revision of that RTL. Recorded rather
-# than quietly rounded to agree.
+# The table read 107 for `edge_llm_matmul_accel` when these tests were written.
+# It reads 109 now: re-measuring showed the design declares TWO clocks and TWO
+# resets, only one pair of which rides the slot's dedicated pads, and the table
+# had waived both. The correction landed in the docstring; this comment quoted
+# the old value for three commits afterwards, which is why the agreement is now
+# ASSERTED below instead of narrated here.
 
 import shutil as _shutil  # noqa: E402
 import _hostpaths  # noqa: E402
@@ -689,3 +691,46 @@ def test_no_gate_declaration_anywhere_sits_outside_the_readers_window():
     assert not thin, (
         "a declaration is within 200 bytes of vanishing; one paragraph added "
         "above it un-declares the gate silently:\n  " + "\n  ".join(thin))
+
+
+def test_the_docstrings_cited_table_matches_what_the_program_measures():
+    """The table in `slot_pad_budget_check`'s docstring is the program's own
+    published evidence. Nothing re-derived it, so it drifted: one row read 107
+    against a measured 109 until this branch corrected it, and a comment in
+    THIS file went on quoting the old value for three commits afterwards.
+
+    Asserted rather than narrated. Both sides come from the tree — the claimed
+    bits are parsed out of the docstring table, the measured bits come from
+    driving the real published RTL through the same code path the gate uses.
+    Corpus-gated, so it skips where the corpus is not configured."""
+    import re
+    import slot_pad_budget_check as S   # this module has no `S` alias
+    doc = _hostpaths.require_corpus("ic")          # skips without a corpus
+    src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
+    rows = dict(re.findall(r"^    ([a-z_0-9]+)\s+(\d+)\s+52\s", src, re.M))
+    assert rows, "the docstring publishes no measured table any more"
+
+    checked, wrong = 0, []
+    for ic, top in (("opentitan_aes", "chip_top"), ("ibex", "chip_top")):
+        claimed = rows.get(ic)
+        if claimed is None:
+            continue
+        rtl = doc / ic / "phase2" / "stage1" / "rtl"
+        if not rtl.is_dir():
+            continue
+        ports = None
+        for f in sorted(rtl.iterdir()):
+            if f.suffix in (".v", ".sv"):
+                ports = S.parse_top_ports(f.read_text(errors="replace"), top)
+                if ports:
+                    break
+        if not ports:
+            continue
+        measured = S.interface_budget(ports)["signal_bits"]
+        checked += 1
+        if measured != int(claimed):
+            wrong.append(f"{ic}: table says {claimed}, program measures {measured}")
+    assert checked, "no cited IC could be measured from the configured corpus"
+    assert not wrong, (
+        "the docstring's published evidence no longer matches what the program "
+        "produces:\n  " + "\n  ".join(wrong))
