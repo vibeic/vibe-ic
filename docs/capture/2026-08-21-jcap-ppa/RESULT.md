@@ -1926,6 +1926,28 @@ they were emitted against, so carrying them across a version bump makes them
 refuse — correctly. Re-emitting at the landing base clears it. That is a step a
 lander must take, not a defect in either lane.
 
+**And the check has a home, measured rather than proposed.** The obvious one is
+closed: the landing hygiene script is entry one of **47** in the protected-path
+manifest with the `authority` role, so no lane can wire anything into it. The
+**emitter** is available on every count that matters:
+
+| | |
+|---|---|
+| in the protected manifest? | **no** |
+| already takes the record set? | **yes** — it is the required input |
+| already run by every capture lane? | **yes** — it is the step that produces the sketches |
+| already writes markdown? | **yes** — 9 references |
+
+So the change is one optional argument naming the report, and a refusal when
+that report's record count, section count, status block or cross-references
+disagree with the set it was handed. Absent the argument it behaves exactly as
+today, so nothing existing breaks.
+
+**That placement is what makes this rule compound rather than repair.** The
+bundle in front of you can be fixed by hand once. Every bundle after it gets the
+check for free from a step no lane can skip — which is the difference between a
+lesson and a program, and the reason this loop exists.
+
 **(o)** yes — the landed state is the original, and the check that catches it is
 a comparison the bundle already knows how to make.
 **(d)** yes — it keys on a document type owned by one lane sharing a path, and
