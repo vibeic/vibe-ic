@@ -1,5 +1,0 @@
-{
-  "ic_name": "LIN bus 2.2A (Local Interconnect Network, LIN Consortium)",
-  "lab_calibration_present": false,
-  "notes": "LIN is a wire-level protocol spec. There is no LIN-defined analog reference / trim / calibration loop at the protocol level. Bit-rate accuracy: the master must hold a precise time base (xtal or precision resonator); slave nodes resynchronise on every Sync byte (0x55) and may therefore tolerate a less stable clock (typical internal RC). The Physical Layer Specification (section 6) defines F_NOM and the bit-rate tolerance classes F_TOL_RES_SLAVE and F_TOL_RES_SLAVE_BETTER (which sets the 11 vs 9.5 bit-time break-detect threshold). Beyond those, no on-chip calibration is required by the protocol."
-}

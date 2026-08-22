@@ -1,0 +1,65 @@
+{
+  "schema": "vibeic.ppa.fixture_expectation.v1",
+  "fixture": "area/stage_pair",
+  "proves": "negative",
+  "known_answer": "These two AREA numbers come from the SAME design, the same PDK and the same run (spm, gf180mcuD, v1.9.96). They differ in exactly one thing: the stage. Under contract §2 they are DIFFERENT METRICS and a comparison between them is UNDETERMINED, not a winner.",
+  "the_trap": "Both artefacts report 262 cells — `cell_count: 262` in the synthesis stats, `n_components: 262` in the post-route floorplan record. The cell count matching is what makes a naive comparator believe the two AREA figures are the same measurement seen twice. They are not: 8047.6032 is a sum of library cell areas with no placement, no rows, no margin and no routing; 230400000000 is a die bounding box in DEF database units squared.",
+  "records": [
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "area.cell_area",
+      "status": "MEASURED",
+      "value": 8047.6032,
+      "unit": "cell-library area unit",
+      "scope": {
+        "stage": "synthesis",
+        "taxonomy": "proxy",
+        "includes_submodules": false
+      },
+      "source": {
+        "path": "synthesis_stats.json",
+        "tool": "yosys",
+        "line_evidence": "Chip area for module '\\chip_top': 8047.603200",
+        "log_line": 726
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "area.die_area",
+      "status": "MEASURED",
+      "value": 230400000000,
+      "unit": "DEF database unit squared",
+      "scope": {
+        "stage": "post_route",
+        "taxonomy": "physical"
+      },
+      "source": {
+        "path": "post_route_floorplan_pdn.json",
+        "tool": "openroad",
+        "line_evidence": "DIEAREA (0 0) (480000 480000) = 230400000000 DEF-units^2"
+      }
+    }
+  ],
+  "comparison_expectation": {
+    "left": "area.cell_area @ stage=synthesis",
+    "right": "area.die_area @ stage=post_route",
+    "verdict": "UNDETERMINED",
+    "reason": "scope.stage differs (synthesis vs post_route), scope.taxonomy differs (proxy vs physical), and the units are not the same unit. Contract §2: two numbers are comparable only if their scope matches."
+  },
+  "must_not": [
+    {
+      "forbidden": "reporting a ratio or a percentage change between the two",
+      "why": "the naive ratio is 230400000000 / 8047.6032 = 28629642.2, a number with no physical meaning"
+    },
+    {
+      "forbidden": "treating cell_count 262 == n_components 262 as evidence the metrics match",
+      "why": "the cell count is the same because it is the same netlist; the AREA question is what the two stages measure ABOUT that netlist, and they measure different things"
+    },
+    {
+      "forbidden": "converting DEF units to um^2 by assuming 1000 DBU/um",
+      "why": "neither shipped artefact contains the DEF `UNITS DISTANCE MICRONS` line, so the scale factor is NOT MEASURED here. A conversion made on an assumed DBU is DERIVED at best and wrong at worst, and contract §3 requires a DERIVED number to carry its formula."
+    }
+  ],
+  "why_the_two_cannot_be_reconciled_from_this_fixture": "The only bridge between them is core utilization, and the post-route record states it: 20.567%. Reconciling requires the CORE box, which appears in neither artefact. Working backwards, 8047.6032 / 0.20567 implies a core of about 39128.7 area units (a ~197.8 um side) inside a 480000-DEF-unit die box -- so the two numbers ARE mutually consistent, but only through a third quantity this fixture deliberately does not contain. A consumer that reconciles them anyway has invented the core box.",
+  "note_on_the_parse_source": "The human `DIEAREA_OK` message and the machine key AGREE in this artefact: the message says `= 230400000000 DEF-units^2`, `die_area_units` is 230400000000, and 480000*480000 = 230400000000. I checked the sibling runs in the corpus and found no disagreement between the two in any of them. Parse the KEY regardless: contract §3 says to hash the value you PARSED, and the key is the value the producer wrote AS DATA, whereas the message is prose that restates it. Prose is not a stable interface."
+}
