@@ -1868,3 +1868,52 @@ thing it was checking.
 
 **Net: the five dual-writer findings stand.** The decision they feed is unchanged
 and is now made on audited findings rather than unaudited ones.
+
+## All three live findings are now audited. Two stand, one was mine to withdraw
+
+The false positive made the audit obligatory rather than optional: a finding that
+goes to a ruling should have been attacked first. All three rc=1 gates have now
+been.
+
+    signoff_report_states_its_stage      3 reported -> 2 REAL, 1 WITHDRAWN
+    only_the_declaring_step_writes...    5 reported -> 5 REAL (mirror audit)
+    every_required_metric_key_has...     2 axes     -> 2 REAL (records audit)
+
+### `every_required_metric_key_has_a_producer` — attacked on its most likely defect
+
+A sibling gate's FAIL in this repo was once a SCOPE artefact: the producer existed,
+outside the scan root. So that is the first thing to try here. Producers DO exist:
+
+    reliability.em.violations   ppa-e2e/tools/signoff_records.py:176
+                                _ppa/signoff.py:643,648  (inside the plugin)
+    equivalence                 ppa-e2e/tools/signoff_records.py:191
+
+If this gate claimed "no producer", it would be wrong. It does not. It is EMPIRICAL
+and claims no MEASURED RECORD, and its own verdict line says "a producer may
+exist". The distinction is the whole gate.
+
+Nor is it an empty-corpus artefact: 12 keys ARE observed in emitted records, so
+records exist and these two are asymmetric to them. Reading the records settles it:
+
+    {"metric": "reliability.em.violations", "status": "NOT_MEASURED",
+     "source": {"path": "reports/phase3/em.json", ...}}
+    {"metric": "equivalence.verdict",       "status": "NOT_MEASURED",
+     "source": {"path": "reports/lec.json", ...}}
+
+366 records each, every one NOT_MEASURED. The gate refuses them as evidence, which
+is the behaviour the brief asked for in as many words — *an unmeasured axis is not
+a zero*. **Both findings REAL.**
+
+And `reliability.em`'s source is `reports/phase3/em.json` — the same electromigration
+artefact the capture's `measurement_only_artefact_is_not_a_verdict_source` incident
+is about ("carries a count of analysed segments and a maximum segment current and no
+violation count... the axis reading it resolved to not measured"). Two rules of the
+thirteen, derived independently, land on one artefact from opposite sides. That is
+corroboration rather than coincidence, and unlike the "three added statements" it
+was checked before being written down.
+
+**A key-name trap, again.** My first pass read `o.get("state")` and got `None` for
+all 366 records, which reads as "the records are empty". The key is `status`. A
+wrong key returns a plausible answer rather than an error — the same failure as
+counting NOT_MEASURED rows as MEASURED, which cost 408 phantom rows in this repo
+once before. The gate uses the right key; the cross-check I wrote did not.
