@@ -5350,6 +5350,48 @@ mistake in both directions in one document** — collapsing six items into one r
 (correctly, M91) and splitting one root into a phantom third (wrongly, here).
 
 
+## M100 — the "undocumented" vacuity trio is M45's defect. Five reds, one cause, one line
+
+M95 listed 3 structured-vacuity reds as **undocumented** and 2 coverage-bridge
+reds as documented, and treated them as separate rows. **Read side by side, all
+five are about Step 4 and the same conditional.**
+
+| test | what it says |
+|---|---|
+| `GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran` | `assert 'VACUOUS_PASS' != 'VACUOUS_PASS'` — the sim RAN and the step is still labelled vacuous |
+| `the_shipped_step_names_the_one_clause_that_examined_nothing` | Step 4's record has no `partial_vacuity_disclosed`; *"one silent pass traded for"* unanimity |
+| `the_other_self_aware_shipped_gate_also_reaches_the_tier` | *"the tier was granted without stating the count it was granted on"* |
+| `e2e_oracle_pass_lifts_step4_out_of_skipped_condition` | wants `WAIVED-DEFERRED`, gets `[VACUOUS-PASS] Step 4` |
+| `e2e_oracle_pass_is_deferred_not_counted_without_coverage` | wants `WAIVED-DEFERRED`, gets `[VACUOUS-PASS] Step 4` |
+
+**One conditional produces all five** (`flow_compliance_check.py:10057`):
+
+```python
+if (passed and waiver_hints and not non_hint_reasons
+        and not skip_hints and not vacuous_hints):
+```
+
+**Step 4 carries a waiver hint AND a vacuous hint** — `professional_tb_check`
+signals `VACUOUS_PASS (input not applicable)`, and 2 of 6 clauses declare
+NOT-APPLICABLE. So `not vacuous_hints` is false, the WAIVED-DEFERRED branch is
+declined, and the step resolves `VACUOUS_PASS` with no partial-vacuity disclosure
+set. **That is M45, verbatim, and M45 attached it to two reds.** It owns five.
+
+**Same shape as the flow-gate item**, which section C priced at 3 reds and M95
+measured at 6. **Twice now, a cause I had correctly diagnosed was recorded with
+half its blast radius**, because I stopped counting at the tests I happened to be
+looking at when I diagnosed it.
+
+**M46'S WARNING NOW COVERS FIVE TESTS, NOT TWO, AND IT MATTERS MORE FOR IT.**
+*"Do not fix by asserting `VACUOUS-PASS`"* — that turns all five green while
+deleting the waiver-path coverage they exist to hold. **A one-character change to
+`:10057` (dropping `and not vacuous_hints`) would also turn all five green**, and
+would silently convert every step carrying both hints from "vacuous" to "waived",
+which is the opposite of the disclosure this gate was built for. **The five are
+red because the code is doing what it was told; whether it was told the right
+thing is the owner's call, and it is ONE call, not five.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
