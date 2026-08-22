@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "RS-485 is a wire-level electrical standard; no PDK / SDC / floorplan constraints at the protocol layer. Per-transceiver fabrication constraints (BCD process, output stage current limit, ESD diode stacks) live in the vendor's PDK and not in TIA/EIA-485 nor in SLLA272D. Higher-level controller integration (UART block with RS-485 wrapper) carries its own SDC at the SoC integration level."
-  }
-}
