@@ -685,11 +685,15 @@ def test_every_state_the_dispatcher_can_record_is_classified():
     assert states >= {"PASS", "FAIL", "WROTE_CORPUS"}, (
         "the three states that MEAN 'this gate ran' must be in the parsed set; "
         f"a parser that misses them proves nothing here: {sorted(states)}")
-    for s in states:
-        ran = s in G._RAN
-        assert ran != G._did_not_run(s), (
-            f"{s!r} is classified inconsistently: in _RAN={ran}, "
-            f"_did_not_run={G._did_not_run(s)}")
+    # Collected: a per-state assert names ONE state and hides the rest, and the
+    # whole point of parsing the dispatcher is to learn about the WHOLE set.
+    inconsistent = [f"{s} (in _RAN={s in G._RAN}, "
+                    f"_did_not_run={G._did_not_run(s)})"
+                    for s in sorted(states)
+                    if (s in G._RAN) == G._did_not_run(s)]
+    assert not inconsistent, (
+        f"{len(inconsistent)} state(s) classified inconsistently: "
+        + ", ".join(inconsistent))
     # and the ones that are NOT process states must be the not-run kind
     assert {s for s in states if not G._did_not_run(s)} <= set(G._RAN)
 

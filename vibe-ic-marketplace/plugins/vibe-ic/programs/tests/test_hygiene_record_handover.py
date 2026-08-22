@@ -213,12 +213,18 @@ def test_the_not_run_set_covers_every_state_the_dispatcher_records():
     assert states >= {"PASS", "FAIL", "WROTE_CORPUS"}, (
         "the three states that MEAN 'this gate ran' must be in the parsed set; "
         f"a parser that misses them proves nothing here: {sorted(states)}")
-    for s in states:
+    # Collected, for the same reason: one assert per state reports one state.
+    wrong = []
+    for s in sorted(states):
         doc = _doc(["PASS", s])
         summary = R._hygiene_verdict(doc, 1).summary
         expected = "2/2" if s in ("PASS", "FAIL", "NOT_CHECKED",
                                   "WROTE_CORPUS") else "1/2"
-        assert f"{expected} gate(s) ran" in summary, (s, summary)
+        if f"{expected} gate(s) ran" not in summary:
+            wrong.append(f"{s} (wanted {expected}, got {summary!r})")
+    assert not wrong, (
+        f"{len(wrong)} state(s) counted wrongly in the denominator: "
+        + "; ".join(wrong))
 
 
 def test_all_three_consumers_agree_on_what_counts_as_having_run():
