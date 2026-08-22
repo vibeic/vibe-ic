@@ -234,3 +234,46 @@ moved.
   `VIBE_IC_BENCHMARK_DATA` at a clone — the action the gate's own message asks
   for — is what lets the push proceed, and that is also the configuration this
   record repairs the test helper for.
+
+## For whoever lands this
+
+**Nothing here touches a protected path, and that was checked rather than
+assumed.** `REQUIRED_AUTHORITY_PATHS` in `tools/ci/protected_landing_transition.py`
+carries `tools/ci/routed_def_corpus.py`, `tools/ci/_gate_dispatch.sh`,
+`tools/ci/repo_hygiene_gates.sh`, `tools/ci/hermetic_candidate_runner.py` and
+`tools/ci/benchmark_data_landing_checkout.py` — every file this record *reads*.
+It does not carry either file this branch *edits*:
+
+| edited | protected? |
+|---|---|
+| `programs/tests/_published_corpus.py` | no |
+| `programs/benchmark_evidence_structure_check.py` | no |
+
+So this lands from one candidate commit with no authority ceremony. That is not
+an accident of drafting: the repair was deliberately placed at the consumer
+rather than at `routed_def_corpus.py`, which is exactly why the earlier sibling
+`fix/routed-def-corpus-empty-adjudication` could not land — it edited the
+protected producer to change an absent corpus to rc 2, and #1764 later reached
+the same distinction through the authorised route with rc 3.
+
+**The absolute rule is re-proved on this branch, not merely left alone.** With
+the pointer bound at the real publisher:
+
+```
+$ VIBE_IC_BENCHMARK_DATA=<clone @ 3b58ccd42> python3 tools/ci/routed_def_corpus.py --repo <this branch>
+producer rc = 0
+items on stdout = 0
+[routed-def corpus] MEASURED EMPTY: git's index at <clone> was read under 'ic'
+and it publishes no */*/phase3/stage3/pnr/routed.def. ... This is an EMPTY
+POPULATION, not a clean one: no published cell was examined and nothing is
+claimed about any. The per-cell gates go live again on the first cell published
+with a routed DEF.
+```
+
+rc 0, 0 items, still NOT CHECKED, still blocking, and the row still names its own
+restoration condition. The four dispatcher/empty-corpus pinning modules —
+`test_issue1075_empty_corpus_leaves_a_gate`,
+`test_empty_corpus_gate_keeps_the_array_invariant`,
+`test_routed_def_corpus_dispatch`, `test_issue886_undeclared_gate_is_not_exempt`
+— are **58 passed** on this branch (loadavg 16.24, nproc 32). An empty corpus did
+not become a pass and cannot have.
