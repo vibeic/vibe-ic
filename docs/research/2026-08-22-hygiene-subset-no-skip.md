@@ -4467,3 +4467,47 @@ wiring` and `gates are wired to something` both name
 §61's literal from 181 to 182. The same gate is the subject of a ledger row, a
 flow clause and a shrink detector, and I met it three separate times tonight
 without noticing it was one thing until now.
+
+### §64 addendum — FIVE of the seven are STALE, which §64 could not see because it asked the wrong question
+
+§64 measured AGE and reported "all seven expired". True, and the weaker of the
+two available predicates. The ledger fails a row on age (L3 expired) **or** on
+the gate having gone green (L2 stale), and I had not asked the second question.
+Running each row's gate exactly as `repo_hygiene_gates.sh` declares it, from
+`$ROOT`, on a4caccefea:
+
+    flow-gate enforcement audit        rc 0   STALE
+    checker execution wiring           rc 0   STALE
+    gates are wired to something       rc 0   STALE
+    declaration scans strip comments   rc 0   STALE
+    d3 declaration/manifest parity     rc 0   STALE
+    L-doc field producer               rc 1   still red (and expired)
+    evidence citation resolves         rc 1   still red (and expired)
+
+**Five of the seven name gates that already pass.** Their fixes landed and nobody
+retired the row — the same omission I nearly committed myself an hour earlier
+with §61's row, and the reason the ledger states the rule in the imperative.
+
+That changes the remedy completely. "Seven expired deadlines" reads as seven
+unfixed defects; the truth is **two** unfixed defects and five pieces of stale
+bookkeeping. Retired on `next/retire-five-stale-acknowledgements`, each with its
+measured rc and verdict line in the commit.
+
+**The two that stay are the two that are still true** — `L-doc field producer`
+(3 fields read by a checker no document populates) and `evidence citation
+resolves` (3 dangling citations). Both are 539 commits past bounds of 210 and
+140. Their dates are NOT touched: re-dating is forbidden outright, and the ledger
+agrees from the other side — a row is *"never worth adding to silence anything"*.
+
+**Why retiring rows needs no adjudication.** The ledger cannot buy a green in
+either direction: *"the hygiene suite still exits 1 for every FAIL exactly as it
+did before this file existed."* Removing a row silences nothing and can only make
+the register stricter. What it restores is the KNOWN/NEW partition — the thing
+the register exists for — because a red carrying a stale row reads as old news to
+the next reader scanning a wall of red.
+
+**And the lesson is one already in this document.** §64's "all seven expired" was
+a count under an UNSTATED PREDICATE. Age was the predicate I happened to have
+computed; "does the gate still fail" was the predicate that decides what anyone
+should DO. Same family as [[compare-signatures-not-counts]] — a number that is
+accurate and answers a question nobody asked.
