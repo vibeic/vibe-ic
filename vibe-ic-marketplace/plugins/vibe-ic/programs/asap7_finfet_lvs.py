@@ -46,6 +46,7 @@ CLI:
 Requires the KLayout Python module ('pya', inside vibeic-eda); exits 3 if absent.
 """
 import sys, os, re, json, argparse
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # ASAP7 FEOL layer map (layer, datatype). PDK-specific but data-driven — a third
 # ASAP7 re-numbering only edits this table.
@@ -185,7 +186,7 @@ def emit_subckt(ckt, cell_name, power="VDD", ground="VSS", out=None):
     lines.append(".ENDS"); lines.append("")
     txt = "\n".join(lines)
     if out:
-        with open(out, "w") as f:
+        with atomic_writing(out) as f:
             f.write(txt)
     return txt, n
 
@@ -251,9 +252,9 @@ def cmd_compare_one(pya, gds, cell, golden_cdl, power, ground, out=None):
     lay_txt, ndev = emit_subckt(ckt, cell, power, ground, None)
     lay_path = (out or f"/tmp/_a7_{cell}") + ".lay.spice"
     src_path = (out or f"/tmp/_a7_{cell}") + ".src.spice"
-    with open(lay_path, "w") as f:
+    with atomic_writing(lay_path) as f:
         f.write(lay_txt)
-    with open(src_path, "w") as f:
+    with atomic_writing(src_path) as f:
         f.write(blocks[cell])
     ok, nl_l, nl_s, mm = _compare(pya, K, lay_path, src_path, cell, power, ground)
     res = {"cell": cell,
@@ -286,9 +287,9 @@ def cmd_batch(pya, gds, golden_cdl, power, ground, json_out=None):
             tally["EXTRACT_ERR"] += 1
             detail.append((cell, "EXTRACT_ERR", str(e)[:80])); continue
         lay_path = "/tmp/_a7b.lay.spice"; src_path = "/tmp/_a7b.src.spice"
-        with open(lay_path, "w") as f:
+        with atomic_writing(lay_path) as f:
             f.write(lay_txt)
-        with open(src_path, "w") as f:
+        with atomic_writing(src_path) as f:
             f.write(blocks[cell])
         try:
             ok, nl_l, nl_s, mm = _compare(pya, K, lay_path, src_path, cell, power, ground)
@@ -518,7 +519,7 @@ def build_golden_netlist(gate_verilog, cdl_paths, out):
         cells = cdl_paths[0]
     else:
         cells = out + ".cells.cdl"
-        with open(cells, "w") as f:
+        with atomic_writing(cells) as f:
             for p in cdl_paths:
                 f.write(open(p).read())
                 f.write("\n")
