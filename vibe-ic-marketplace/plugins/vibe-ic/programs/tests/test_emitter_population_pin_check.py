@@ -1353,7 +1353,15 @@ def test_a_refused_pin_points_at_the_phrase_not_the_keyword(tmp_path):
               '    assert "of 2 repairs refused" not in script()\n')   # 10
     progs, tests = _tree(tmp_path, emitter, padded)
     r = _run(progs, tests, "--json", tmp_path / "r.json")
+    # THE VERDICT, not only the evidence. This test pinned where the refusal
+    # points and never checked what the run concluded, so the guard could have
+    # started REFUSING this fixture -- a denying assertion is not a pin, so
+    # nothing here disagrees -- and it would still have gone green.
+    assert r.returncode == RC_PASS, (
+        "a test that DENIES a phrase was read as pinning it:\n"
+        + r.stdout + r.stderr)
     doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["findings"] == [], doc
     denied = doc["denied_by_polarity"]
     assert len(denied) == 1, denied
     assert denied[0]["where"].endswith(":10"), (
