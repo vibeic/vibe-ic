@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibeic.dev/schemas/ppa/metric_record.v1.schema.json",
+  "title": "vibeic.ppa.metric.v1 — the canonical PPA metric record",
+  "description": "The shape every number in the PPA system travels in, frozen in docs/PPA_INTERFACES.md section 2. THE INVARIANT THIS SCHEMA EXISTS TO ENFORCE: 0, -1 and \"\" never mean 'not measured'. A number that was not obtained is a record with status NOT_MEASURED and a reason, and it carries NO `value` key -- not `value: null`, which survives .get() as a present key and re-enters arithmetic as `or 0`. SECOND INVARIANT: comparability is a property of `scope`, not of the metric name; two records naming the same metric under different scope are different facts. This file is versioned by filename: v1 is never edited once something has hashed against it, and a change is v2 (PPA_INTERFACES section 5). The authoritative ENFORCER is programs/_ppa/metrics.py::validate, which is dependency-free; test_ppa_metrics_schema_agreement.py proves the two agree on one fixture corpus, so this document can never drift into decoration.",
+  "type": "object",
+  "required": ["schema", "metric", "status", "scope"],
+  "properties": {
+    "schema": {
+      "description": "First key of every instance document.",
+      "const": "vibeic.ppa.metric.v1"
+    },
+    "metric": {
+      "description": "Dotted lowercase name, at least two segments, e.g. 'timing.setup.wns_ns'. DELIBERATELY NOT AN ENUM: a closed list of metric names would have to be edited by every domain author who adds a metric, which makes this file a contention point and guarantees the list trails the tree. The first segment is the domain and is used for grouping only; it is never interpreted.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*(\\.[a-z][a-z0-9]*(_[a-z0-9]+)*)+$"
+    },
+    "status": {
+      "description": "Section 6.2. The enum is CLOSED: a reader that does not recognise a status cannot know whether the row may enter arithmetic, so an unknown one is refused rather than assumed safe. MEASURED and DERIVED may enter a numeric comparison; NOT_MEASURED, NOT_APPLICABLE and INVALID may not and carry a reason instead of a value; ESTIMATED carries a value but is never part of a final PPA claim -- it stays a distinct status rather than being banned so that an estimate which leaked into a bundle is VISIBLE as an estimate instead of being relabelled MEASURED by whoever wanted the row to count.",
+      "enum": ["MEASURED", "NOT_MEASURED", "NOT_APPLICABLE", "INVALID", "ESTIMATED", "DERIVED"]
+    },
+    "value": {
+      "description": "The number. Present ONLY for MEASURED, DERIVED and ESTIMATED. Never null: null is a present key, and a present key is not an absence.",
+      "type": "number"
+    },
+    "unit": {
+      "description": "A non-empty unit string. The empty string is not a unit -- it compares equal to another empty unit, so two numbers in different units pass a unit check. Where the metric NAME ends in a recognised unit suffix, programs/_ppa/metrics.py additionally requires the two to agree; that cross-check is not expressible in JSON Schema without enumerating the taxonomy here, which this file deliberately does not do.",
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "description": "Why there is no number. Required for NOT_MEASURED, NOT_APPLICABLE and INVALID. Without it the row is indistinguishable from a row nobody thought about, and a NOT_APPLICABLE with no reason is how a metric somebody could not obtain gets excused permanently.",
+      "type": "string",
+      "minLength": 1
+    },
+    "formula": {
+      "description": "Required for DERIVED. Section 3: a number this system computed states its formula, so a reader can recompute it instead of trusting it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "description": "Optional for DERIVED: the metric names this value was computed from.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "basis": {
+      "description": "Required for ESTIMATED: what the estimate rests on.",
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "description": "What makes two numbers comparable. Synthesis area and post-route area are different metrics; vectorless power and VCD power are different metrics; a different corner, mode or activity basis is a different fact. `stage` is the only universally required field -- corner, mode and clock fields are required by the DOMAIN that owns the metric, because a die-area record has no clock and demanding one would force a domain author to invent a value, which is how a scope field becomes decorative. Every declared field must be non-empty: an empty scope field is the third sentinel one level in, since \"\" == \"\" makes two records with an unknown corner compare as the same corner.",
+      "type": "object",
+      "required": ["stage"],
+      "minProperties": 1,
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "mode": {"type": "string", "minLength": 1},
+        "process": {"type": "string", "minLength": 1},
+        "voltage_v": {"type": "number"},
+        "temperature_c": {"type": "number"},
+        "rc_corner": {"type": "string", "minLength": 1},
+        "clock": {"type": "string", "minLength": 1},
+        "check": {"type": "string", "minLength": 1},
+        "activity_basis": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": {"not": {"enum": [null, ""]}}
+    },
+    "source": {
+      "description": "Provenance. Required for MEASURED: a number with no provenance cannot be checked against the artefact it came from, which is the entire contract. `sha256` is of the ARTEFACT bytes; the identity of the record itself is computed with _ppa/canonical_json.py and is never hand-rolled.",
+      "type": "object",
+      "required": ["path", "tool"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "tool": {"type": "string", "minLength": 1},
+        "tool_commit": {"type": "string"},
+        "parser": {"type": "string"},
+        "parser_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "MEASURED: a value, a unit and a source.",
+      "if": {"properties": {"status": {"const": "MEASURED"}}, "required": ["status"]},
+      "then": {"required": ["value", "unit", "source"]}
+    },
+    {
+      "description": "DERIVED: a value, a unit and the formula that produced it.",
+      "if": {"properties": {"status": {"const": "DERIVED"}}, "required": ["status"]},
+      "then": {"required": ["value", "unit", "formula"]}
+    },
+    {
+      "description": "ESTIMATED: a value, a unit and the basis of the estimate.",
+      "if": {"properties": {"status": {"const": "ESTIMATED"}}, "required": ["status"]},
+      "then": {"required": ["value", "unit", "basis"]}
+    },
+    {
+      "description": "THE FOURTH INVARIANT. A non-measurement carries a reason and MUST NOT carry a value. This is the clause that stops 0 from meaning 'not measured'.",
+      "if": {
+        "properties": {"status": {"enum": ["NOT_MEASURED", "NOT_APPLICABLE", "INVALID"]}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["reason"],
+        "not": {"required": ["value"]}
+      }
+    }
+  ]
+}

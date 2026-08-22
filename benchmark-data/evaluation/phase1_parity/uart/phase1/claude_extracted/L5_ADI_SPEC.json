@@ -1,5 +1,0 @@
-{
-  "ic_name": "PC16550D UART",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Digital TTL-compatible signaling on all pins. Power supply VDD = +5 V ± 10 %. Input thresholds VIL ≤ 0.8 V, VIH ≥ 2.0 V; output VOL ≤ 0.4 V at 1.6 mA sink, VOH ≥ 2.4 V at 1.0 mA source. Master Reset pin (MR) has a Schmitt trigger with 0.5 V typical hysteresis. TRI-STATE TTL drive on D7-D0 data bus."
-}
