@@ -388,7 +388,7 @@ def test_full_e2e_l3_table_to_l9_canonical_key_then_gate_pass(tmp_path):
     # 1) REAL promoter via the runner (gen_l9 path).
     r = subprocess.run(
         [sys.executable, str(RUNNER), str(proj), "--ic-name", "blk32"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
 
     l9 = json.loads(

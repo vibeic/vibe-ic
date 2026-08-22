@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "dft_present": false,
-    "notes": "Block guide does not specify DFT/scan topology; this is deferred to SoC integration. The SPI register file is amenable to standard scan insertion at the SoC level."
-  }
-}

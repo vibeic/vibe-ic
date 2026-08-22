@@ -109,8 +109,17 @@ def test_skip_on_missing_gain_field(tmp_path: Path):
     ]}
     _mk(tmp_path, "mod0", _ds_spec(256), corners)
     r, rpt = _run(tmp_path)
-    assert r.returncode == 0
-    assert rpt["verdict"] == "SKIP"
+    # RE-ANCHORED (#693 family). These four asserted `returncode == 0` and
+    # `verdict == "SKIP"` for a block that DECLARES this axis and carries no
+    # usable data — and this test's own name and docstring already call that
+    # "not a silent pass" / "must be UNMEASURED". The assertion contradicted
+    # the property the test is named for: at the exit-code level rc 0 IS a
+    # pass, so a wired flow counted it among the gates that passed.
+    #
+    # A block with NO target at all is still SKIP / rc 0 — genuinely not
+    # applicable, and that case is unchanged.
+    assert r.returncode == 2
+    assert rpt["verdict"] == "UNMEASURED"
 
 
 def test_nan_gain_is_not_a_silent_pass(tmp_path: Path):
@@ -125,8 +134,17 @@ def test_nan_gain_is_not_a_silent_pass(tmp_path: Path):
     (d / "corner_results.json").write_text(
         '{"corners": [{"name": "SS_125c", "ota_dc_gain_db": NaN}]}')
     r, rpt = _run(tmp_path)
-    assert r.returncode == 0
-    assert rpt["verdict"] == "SKIP", rpt
+    # RE-ANCHORED (#693 family). These four asserted `returncode == 0` and
+    # `verdict == "SKIP"` for a block that DECLARES this axis and carries no
+    # usable data — and this test's own name and docstring already call that
+    # "not a silent pass" / "must be UNMEASURED". The assertion contradicted
+    # the property the test is named for: at the exit-code level rc 0 IS a
+    # pass, so a wired flow counted it among the gates that passed.
+    #
+    # A block with NO target at all is still SKIP / rc 0 — genuinely not
+    # applicable, and that case is unchanged.
+    assert r.returncode == 2
+    assert rpt["verdict"] == "UNMEASURED", rpt
 
 
 def test_nan_worst_corner_does_not_mask_real_fail(tmp_path: Path):
