@@ -1,0 +1,45 @@
+F3c CHECKED AT THE LAYER WE ACTUALLY RE-IMPLEMENT -- and it holds.
+
+I had compared our mapping against the TOOL's documentation. But we do not
+re-implement the tool; we re-implement the FLOW layer above it, and that layer
+is the one that names `PAD_ROTATION_HORIZONTAL`. If the flow layer documented it
+our way, the attribution would move off us. So it had to be read.
+
+WHAT THE FLOW LAYER SAYS, verbatim from its variable declarations:
+
+    PAD_ROTATION_HORIZONTAL
+        "Rotation to apply to the horizontal sites to ensure pads are placed
+         correctly."     default R0, pdk=True
+
+    PAD_ROTATION_VERTICAL
+        "Rotation to apply to the vertical sites to ensure pads are placed
+         correctly."     default R0, pdk=True
+
+It says "horizontal SITES" -- the same phrase the tool uses -- and it adds no
+redefinition of its own. It then passes the value straight through as
+`-rotation_horizontal`, with the SAME site given for both `-horizontal_site` and
+`-vertical_site`. So the flow layer inherits the tool's meaning unchanged, and
+the tool's own page expands "horizontal site" as "the site for the horizontal
+pads (EAST AND WEST)".
+
+CONCLUSION: the flow layer is consistent with the tool. Neither is inverted.
+Ours is. F3c's attribution stands, now checked at the layer it is about.
+
+AND THIS IS ALSO HOW THE INVERSION HAPPENED, which is the generalisable part.
+The layer we read documents the term TERSELY -- "the horizontal sites" -- and
+never says which sides those are. The disambiguation exists, but it lives ONE
+LAYER DOWN, in the tool's own command reference. A reader working from the flow
+layer alone has a description that is complete-looking, authoritative, and
+insufficient, and the natural reading of "horizontal" is the horizontal ROWS.
+That reading is wrong and nothing at that layer says so.
+
+THE GENERAL LESSON, and it is not about pads:
+
+    WHEN THE LAYER YOU RE-IMPLEMENT DOCUMENTS A TERM TERSELY, THE DEFINITION
+    MAY LIVE IN THE LAYER BELOW IT. A description that does not enumerate its
+    cases is not a definition, however authoritative its source.
+
+It is the same failure I made myself, one level up, when I filed a defect
+against the tool after reading its argument NAMES and not its argument
+DEFINITIONS. Twice in one capture, at two different layers, from the same
+substitution: taking a name for a specification.
