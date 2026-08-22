@@ -2271,6 +2271,26 @@ in a form that does not lean on the counts. One further row is exempt for a
 different reason its own record gives: the question it asks cannot be answered by
 scanning code at all.
 
+**Every Bucket-A record carries a measured population.** Checked from the sweep
+table rather than from the prose, because a prose screen for this measures the
+author's vocabulary and did, twice:
+
+    records with a section                          37
+    whose sweep row carries a figure                35
+    without one                                      2   (C-1 and T-1)
+
+The two are the two buckets where a sweep row is not the home. C-1's population
+does not exist yet — that is its stated reason for being Bucket C, since no
+emitter records the inputs its check would read. T-1's measurement lives in its
+sample fields, where the ladder puts it, and is dense with figures there.
+
+*A measured population is not the same as a measured SECOND instance, and the
+table cannot tell them apart.* That distinction is what made `A-11` survive main
+repairing its motivating site: the record named two instances and only one was
+fixed. Records that name several are noted as such in their own text; the
+count of those is not derived here, because deriving it needs the reading the
+sweep table cannot do.
+
 The practical reading: **a figure in this report that is not marked as dated has
 either a check standing over it or a re-measurement behind it.** The two that
 have neither are labelled, and they are labelled because trying to check them is
