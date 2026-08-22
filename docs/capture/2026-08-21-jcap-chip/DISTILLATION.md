@@ -1462,3 +1462,50 @@ failures in one tier arm", which is a TIER run, so a reading exists in which the
 dispatcher's summary IS the subject and this is a live FAIL rather than a
 disclosure. I have implemented the narrower reading because it is the one the
 docstring already promised. Say the word and it becomes a finding.
+
+## Composing the frozen branch with main: measured, and the recipe that works
+
+The frozen branch is `c0e19ace9`. Main has moved **214 commits** past its base
+since it was cut, so "it was fine when I branched" is not an answer anyone should
+accept. Measured against `origin/main` at `a4caccefe`:
+
+**It conflicts. On exactly four files, and every one is a generated counter:**
+
+    vibe-ic-marketplace/README.md
+    vibe-ic-marketplace/plugins/vibe-ic/README.md
+    vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md
+    vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json
+
+**No source file conflicts.** The twelve checkers, the thirteen test files and the
+two repaired programs all merge clean. This is adjacency, not disagreement.
+
+**Do not hand-merge these.** Composed truth is on NEITHER side, which is provable
+rather than asserted: main carries `programs_top_level` 1240 and
+`programs_catalogued` 1165; this branch adds twelve programs; the correct composed
+values are 1252 and 1177, and neither side contains them.
+
+### The recipe, executed and verified rather than described
+
+    git merge origin/main                      # conflicts on the four above
+    git checkout origin/main -- <the four>     # any side; regeneration overwrites
+    git add -A                                 # STAGE FIRST — the counts read the index
+    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py
+    python3 tools/gen_programs_index.py
+    git add -A
+
+Result on the merged tree:
+
+    programs_top_level  = 1252   (main 1240 + 12)
+    programs_catalogued = 1177   (main 1165 + 12)
+
+    the thirteen lane test files          255 passed
+    every test that READS those counters  167 passed, 20 skipped, 0 failed
+
+The staging order is load-bearing and is the step that gets skipped: the
+generators count what is in the INDEX, so generating before staging counts the
+tree as it was and writes numbers that are wrong in a way nothing else notices.
+
+**Nothing here needs a push to the frozen branch.** The conflict is not a defect in
+the branch and not something the branch can fix from its own side — the composed
+counters can only be derived at assembly, against whatever main is at that moment.
+That is the assembler's step, and this is the tested procedure for it.
