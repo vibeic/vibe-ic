@@ -751,3 +751,57 @@ disclosure at all, or whether #901 deliberately scoped itself to the JSON channe
 deliberate scope**, which would make the remaining gap intentional rather than
 overlooked. **I am not guessing which; the commit body would say, and the owner
 will know without reading it.**
+
+---
+
+# Part 15 — the 5-red vacuity item, ROOT-CAUSED: #901 diagnosed this mis-fire and fixed it for one channel only
+
+Part 14 stopped one command short, saying *"the commit body would say."* **Read it.
+It says something better than expected: `#901` diagnosed EXACTLY this defect, in
+prose, and fixed it for the channel it was adding.**
+
+**From `13b34a78a` (#901), the author's own words:**
+
+> *"The tier branch is `passed and vacuous_hints and not non_hint_reasons` while
+> its own docstring says it means **"EVERY executed sub-gate was vacuously
+> satisfied"** — and a clause that passes SUBSTANTIVELY appends nothing, so
+> silence and vacuity are indistinguishable to it and **1-of-10 reads as
+> "every"**. That is the mis-fire."*
+
+**AND THE MIS-FIRE IS STILL THERE, FIRST IN THE CHAIN:**
+
+    10120|  elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
+            ^^^ LEGACY channel, NO COUNT            <- evaluated FIRST
+    10130|  elif passed and structure_only_hints ...
+    10134|  elif (passed and json_vacuous_hints and not non_hint_reasons
+                  and len(all_vacuous_cmds) >= len(ran_hints)):
+            ^^^ STRUCTURED channel, COUNTED         <- #901's fix, never reached
+
+**#901 added the counted branch for the channel it introduced and left the
+uncounted legacy branch AHEAD of it.** A step whose emptiness arrives on the
+legacy channel short-circuits to `VACUOUS_PASS` before the count is consulted.
+
+**STEP 4 IS THAT STEP.** Its own failure text reads
+**`2 of 6 gate clause(s) here examined nothing`** — four clauses examined
+something — and it is nonetheless labelled *"every executed sub-gate was
+vacuously satisfied."* **That is 1-of-10 at 2-of-6.**
+
+**THIS EXPLAINS ALL FIVE TESTS, and it is not the guard I spent three sections
+on:**
+
+* the three that assert the step is NOT vacuous — **correct; it is mis-labelled**;
+* the two that want `WAIVED-DEFERRED` — blocked by `and not vacuous_hints`, **but
+  that guard is downstream**: it declines because the status is already
+  `VACUOUS_PASS`, and the status is wrong.
+
+**So the remedy is not "should `:10057` decline the waiver branch" (Part 3), nor
+"revisit a June guard" (Part 14). It is: the legacy branch needs the same count
+the structured branch already has** — and the repository has both the diagnosis
+and the working implementation, twelve lines apart.
+
+**What I have NOT established:** whether the legacy branch was left uncounted
+deliberately. **#901 says the STEP-level half was deferred as an owner decision**
+— *"Every shape of it measurably restates something the repo has already pinned,
+and which of them to restate is an owner decision, not a reviewer's"* — so the
+gap may be exactly that deferral, still open. **That is the question to put to the
+owner, and it now comes with the fix already written next door.**
