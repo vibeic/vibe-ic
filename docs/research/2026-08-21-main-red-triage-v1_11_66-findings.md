@@ -3802,6 +3802,46 @@ claim about what could not be done, written confidently, and never re-derived
 until I made a rule of doing so.
 
 
+## M71 — the eighth blocker HOLDS, and the calibration matters more than the result
+
+Last unaudited blocker: *"3 unwired checkers — a wiring decision"*. M70 had just
+shown that "unwired" can mean "wired where this audit does not look", so the claim
+needed the same test.
+
+**First pass looked like M70 repeating:** `closed_loop_edge_check` is referenced
+in **7** files including `repo_hygiene_gates.sh` and the **flow yaml itself**,
+while `ppa_pr_scope_check` and `slot_pad_budget_check` appear in **none**.
+
+**Second pass killed that.** Both references are COMMENTS:
+
+```
+repo_hygiene_gates.sh:403   # It asks a question `closed_loop_edge_check`
+                            #   explicitly stops short of — that …
+flow yaml:5034              # this step (`closed_loop_edge_check.CL-NOT-A-LOOP`).
+```
+
+**Prose, not invocation.** The codebase discusses this checker in the very flow it
+audits, and never runs it. **The blocker holds: all three are genuinely unwired,
+and wiring them is a decision with four possible homes.**
+
+**And the detail sharpens M51.** `closed_loop_edge_check` exists to catch
+*declarations that are decoration*. It is itself a declaration that is decoration
+— **and the only places the repository names it are two comments describing what
+it would catch.** A checker discussed in the file it would audit, by a codebase
+that never invokes it.
+
+### Why recording a surviving blocker matters
+
+**Seven blockers examined, seven failed. The eighth held.** That is the result I
+most needed, because an audit that only ever confirms what its author suspects is
+not an audit — it is the `certificate, not a measurement` this document quotes
+against the code. **Had all eight dissolved, the honest conclusion would have been
+that my method was tuned to dissolve them.**
+
+Final tally of my own claims about what could not be done: **five outright false,
+one badly stated, one wrong about the work required, one correct.** One in eight.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -3893,7 +3933,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
-| **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. | **wiring decision** |
+| **3 unwired checkers** (in `checker execution wiring` + `gates are wired to something`, one defect counted twice) | a wiring home for `closed_loop_edge_check` (a guard against decoration that is itself decorative), `ppa_pr_scope_check`, and `slot_pad_budget_check` (see the `0.5ic` row — same artefact). The gate names four possible homes: flow yaml, CAPTURE_ROUTING, a runner, or `tools/ci`. **M71: blocker VERIFIED** — `closed_loop_edge_check` is referenced in the flow yaml and the hygiene script, but both are COMMENTS, not invocations; the other two appear nowhere. All three genuinely unwired. | **wiring decision (verified)** |
 | **`declaration scans strip comments`** | 5 regexes named in M55 (175 vs baseline 170). **M58, MEASURED: the analyser does not propagate stripped status through FOR-LOOP TARGETS.** Reassignment and subscripting are handled; iteration is not — and both sites reach the scan via `for decl in …split(',')` / `for line in …splitlines()`. The code is correct; the gate is a false positive here. Likely affects a large share of the 175, so **the 170 baseline partly counts an analyser limit**. Fix belongs in `stripped_locals` (`ast.For` targets), NOT in the subjects. | **gate false positive, mechanism measured** |
 | **`liar census`** (stale pin, 181 vs 179) | **DO NOT bump the literal (M54)** — that is the 5th bump of a number whose own comment calls it *"prose wearing an assertion"* and defers the cure to the flow's owner: derive the floor from the previous flow blob, with an authorisation path for a deliberate shrink. `unswept: []` — nothing is uncovered. | **owner's call, cure known** |
 
