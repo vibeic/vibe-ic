@@ -1975,7 +1975,7 @@ Two of those — 11 and 13 — were published and refuted within the hour. Two m
 — 9 and 10 — were a DECLINE and its stated blocker, which is the register I had
 not been auditing at all until §30.
 
-**INSTRUMENTS THAT ANSWERED THE WRONG QUESTION — 12** (nine here, three added below when this register itself went stale).
+**INSTRUMENTS THAT ANSWERED THE WRONG QUESTION** (nine here; six more added below as this register went stale twice — the list is the record, not the total).
 
 1. `pgrep -f drive_real_review.py` matched the shells waiting for it.
 2. The ref watch fired on my own pushes.
@@ -2015,6 +2015,29 @@ repo-root + 4 checker-importers + 12 reachers = **18**, no overlap. Corrected in
 place. The lesson does not improve with repetition, but the location does: the
 one paragraph whose whole job is to be trustworthy is the one I filled with an
 uncounted number.
+
+**THREE MORE, from the post-landing work, and I quoted "thirteen" without
+recounting before writing them down — the third time this register has gone
+stale and the second time I did it in the same breath as citing the register.**
+
+13. `grep -c 'hygiene-record-in'` over `main`'s `gatekeeper_review.py` returned
+    **2**, which reads as THE SKIP BUTTON IS ON MAIN. Both were prose — my own
+    docstring and my own "THERE IS NO … AND THERE MUST NOT BE" comment. The AST
+    said `declared CLI options mentioning 'hygiene': NONE`. The most consequential
+    wrong reading of the session: it would have been an alarm about `main`.
+14. **Ancestry by SHA after a history rewrite.** `git merge-base --is-ancestor`
+    said `3bfe4338e4` and `d0873e5f32` are NOT ancestors of `main` while
+    `05732dd26` is — which reads as "only the first commit landed", i.e. the §9
+    split-merge defect all over again. False: the landing rewrote the commits, so
+    ancestry answers a question about SHAs and not about CONTENT. Settled by
+    hashing the files: `main`'s doc and lander match `3bfe4338e4` byte for byte.
+15. **Misread merge parents.** I stated `8c409aa5a`'s second parent was
+    `3bfe4338e4`; it is `05732dd26`. Caught only because that reading contradicted
+    an ancestry result in the same output — two readings disagreeing, again.
+
+**Fifteen, then** — and the count is written here rather than in the header for
+the reason the header now states: a total that keeps moving does not belong in a
+summary. If it moves again, this list grows and no number above it needs editing.
 
 **Twelve, then, not nine** — and the three latecomers are all the same species
 as the original nine: each returned a confident answer that was wrong in the
