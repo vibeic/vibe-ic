@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -805,3 +806,63 @@ printf 'VIBEIC_PROGRESS {"completed":1,"nonce":"%s","schema":1,"scope":"live","s
         "provisioner_absent": True,
         "volume_absent": True,
     }
+
+
+#: Enough concurrent pairs that the race cannot hide. The unfixed stub leaked on
+#: 41 of 200 trials (~20%), so P(a broken stub shows zero leaks here) is about
+#: 0.8**60 -- roughly one in seven hundred thousand. Fewer trials would make
+#: this guard itself flaky, which is the failure it exists to remove.
+_RACE_TRIALS = 60
+
+
+def test_the_fake_docker_serialises_kill_against_rm(case):
+    """A container the runner REMOVED must not come back.
+
+    `test_malformed_progress_is_norecord_and_cleanup_is_owned` was
+    intermittently red -- green three times in a row one hour and red in every
+    interleaved round the next -- and the only failing assertion was that
+    `container.json` is gone. The leftover file was ZERO BYTES, which named it:
+    the runner drives `kill` and `rm --force` concurrently during teardown, and
+    the stub did load -> mutate -> save with nothing holding the ends together,
+    so `rm` could unlink between them and `save` resurrected the file.
+
+    This drives that pair directly instead of waiting for host load to expose
+    it. Measured over the stub at each commit: 41 leaks in 200 trials before the
+    fix, 0 after.
+    """
+    state = case["state"]
+    state.mkdir(parents=True, exist_ok=True)
+    name = "vibeic-candidate-race-probe"
+    doc = {
+        "Name": "/" + name, "Id": "2" * 64,
+        "State": {"Running": True, "Status": "running", "ExitCode": 0,
+                  "Pid": 1234, "Restarting": False},
+        "Mounts": [], "Config": {}, "HostConfig": {},
+    }
+    env = dict(os.environ)
+    env["FAKE_DOCKER_STATE"] = str(state)
+
+    def drive(argv):
+        subprocess.run([sys.executable, str(case["docker"])] + argv,
+                       env=env, capture_output=True, text=True)
+
+    survivors = []
+    for _ in range(_RACE_TRIALS):
+        (state / "container.json").write_text(json.dumps(doc), encoding="utf-8")
+        killer = threading.Thread(target=drive,
+                                  args=(["container", "kill", name],))
+        remover = threading.Thread(target=drive,
+                                   args=(["container", "rm", "--force", name],))
+        killer.start(); remover.start()
+        killer.join(); remover.join()
+        leftover = state / "container.json"
+        if leftover.exists():
+            survivors.append(leftover.stat().st_size)
+            leftover.unlink()
+
+    assert not survivors, (
+        f"{len(survivors)} of {_RACE_TRIALS} kill/rm races left a container "
+        f"the runner had removed, sizes {sorted(set(survivors))}. A `save` that "
+        "lands after an `unlink` resurrects torn-down state, and a stub killed "
+        "mid-write leaves a zero-byte document where a valid one or none are "
+        "the only honest states.")
