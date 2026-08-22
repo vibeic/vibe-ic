@@ -1,0 +1,3 @@
+path	shard_file	verdict_now	measured_against_main	measurement	recommendation
+/home/reyerchu/_jd3	verdicts_shard_c_80_recovered.tsv	RECOVER	a4caccefeab	change_contained_in_main, uncommitted_differing=0 (reverse-apply of merge-base..head onto a temp index of main succeeds)	its content has LANDED since judging; the row is now over-conservative. Safe to re-verdict LANDED, but only after re-measuring: this is drift, not a judging error.
+/var/tmp/jmg2/vibe-ic	verdicts_extra_8hd9.tsv	RECOVER	a4caccefeab	change_contained_in_main, uncommitted_differing=0	same
