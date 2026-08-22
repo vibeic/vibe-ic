@@ -79,23 +79,20 @@ def test_container_absent_but_host_present_is_available(monkeypatch):
 # --------------------------------------------------------------------------
 # _iverilog_exec_container — WHERE compile+run execute
 # --------------------------------------------------------------------------
-def test_exec_in_container_even_when_host_also_has_iverilog(monkeypatch):
-    """#902 REVERSED THIS EXPECTATION, deliberately.
+def test_exec_prefers_container_even_when_host_has_iverilog(monkeypatch):
+    """#902 — this assertion USED TO READ `is False`: whenever the host carried
+    any iverilog the sim ran there, so a run that pinned an image verified it
+    and then simulated with the machine's own simulator. MEASURED across a
+    fleet: three different Icarus frontends for the SAME cell, chosen by which
+    host the job landed on, with the pin reported satisfied every time.
 
-    This test used to assert host-first ("host has it -> run on host, even
-    with a container supplied"). That is precisely the defect #902 reports:
-    the run VERIFIES which image `--container` executes and then simulates
-    somewhere else, so the same RTL was compiled by Icarus 11.0, 12.0 or 14.0
-    depending only on what the operating system had installed. The saved
-    docker round-trip is not worth an unattributable result.
-
-    The rule is now CONTAINER-FIRST: a supplied container that carries
-    iverilog is where the sim runs. Host execution remains reachable and is
-    covered by the tests below and in
-    test_issue902_pinned_image_used_for_simulation.py."""
+    The contract is now the same container-first order `_iverilog_available`
+    already uses, so availability and execution cannot disagree about where the
+    simulator is. The host fallbacks that remain (no iverilog in the container,
+    or the container cannot see the run tree) are covered below and are
+    RECORDED rather than silent."""
     monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
     monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: True)
-    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True)
     assert dosr._iverilog_exec_container("c") is True
 
 
@@ -144,6 +141,11 @@ def test_stage_dispatches_into_container_with_translated_paths(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _t: None)
     monkeypatch.setattr(dosr, "_tool_in_container",
                         lambda c, t: t == "iverilog")
+    # #902 — dispatch also requires the container to SEE the tree. Stubbed
+    # here (raising=False: a no-op against the pre-#902 program) so this test
+    # keeps asserting exactly what it always asserted, on both sides.
+    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True,
+                        raising=False)
     # deterministic host->container mount translation: strip a /work prefix.
     monkeypatch.setattr(
         dosr, "_to_container_path",
@@ -186,6 +188,8 @@ def test_stage_runs_vvp_in_container_too(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _t: None)
     monkeypatch.setattr(dosr, "_tool_in_container",
                         lambda c, t: t == "iverilog")
+    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True,
+                        raising=False)
     monkeypatch.setattr(dosr, "_to_container_path", lambda p, c: p)
     calls = {}
 

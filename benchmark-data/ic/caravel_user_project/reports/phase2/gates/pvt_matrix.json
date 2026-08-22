@@ -1,9 +1,0 @@
-{
-  "program": "pvt_matrix_check",
-  "version": "1.0.0",
-  "verdict": "SINGLE_CORNER_STANCE_DISCLOSED",
-  "corner_count": 0,
-  "stance_corners": [],
-  "review_required": true,
-  "reason": "fewer than 2 Liberty corners available; a durable single-corner stance is disclosed (#694) — deferred / PASS-with-review, NOT a multi-corner sign-off. Stage ss/tt/ff libs for production tapeout."
-}

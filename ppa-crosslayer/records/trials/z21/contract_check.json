@@ -1,0 +1,31 @@
+{
+  "program": "ppa_contract_check",
+  "contract": "/home/reyerchu/_jxlayer/records/trials/z21/contract.json",
+  "contract_digest": "sha256:5e4660f1fb35e1fda23f3ddae3a1ec6ced36fbd0d9a8ba139ed7004718d43f5e",
+  "rc": 0,
+  "examined": {
+    "identities_measured": 5,
+    "identities_total": 5,
+    "artefacts_measured": 25,
+    "artefacts_declared": 25,
+    "evidence_artefacts": 25,
+    "images": 1,
+    "images_verdict_bearing": 1,
+    "declared_facts": 11,
+    "resolutions": 0,
+    "candidate_mutations": 4,
+    "metrics": 0,
+    "metrics_value_bearing": 0,
+    "metrics_power": 0
+  },
+  "findings": [
+    {
+      "code": "PPA-C-014",
+      "severity": "NOTE",
+      "message": "image 'ghcr.io/vibeic/vibeic-eda@sha256:24b5074b686386084f87a03712b5f76e475201fbf2f2583b112d6e2c3eb55f3d' pins bytes but its org.opencontainers.image.version label could not be read, so the human-readable version is NOT_MEASURED \u2014 not a guess and not a remembered number. The digest is the reproduction key and it is intact",
+      "role": "eda",
+      "ref": "ghcr.io/vibeic/vibeic-eda@sha256:24b5074b686386084f87a03712b5f76e475201fbf2f2583b112d6e2c3eb55f3d",
+      "reason": "org.opencontainers.image.version could not be read from the image"
+    }
+  ]
+}
