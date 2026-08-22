@@ -523,3 +523,71 @@ was never written is refused by the checker.
     PASS: 2 registered re-implementation(s)
 
 Zero open gaps, and every green in the register now has something behind it.
+
+
+---
+
+## The register's first non-pad entry, and the general-core test settled empirically
+
+The brief's general-core test asks whether a rule's LOGIC touches a pad or
+whether it merely got written here first. For F2 the honest answer was "the
+logic is general" — and the register's own contents were the weakest possible
+evidence for it: **two entries, both `pad_ring.*`**.
+
+Third entry, same register unchanged
+(`evidence/F2_a_non_pad_entry_and_two_mutations_that_were_not.md`):
+
+    digital_hardmacro.lef_write_route
+      ours      programs/digital_hardmacro_gen.py
+      upstream  librelane/scripts/magic/lef.tcl
+      sha256    067772b6… verified equal in ghcr.io/vibeic/vibeic-eda:0.3.24
+
+Upstream has two routes; `MAGIC_LEF_WRITE_USE_GDS` picks between them and its
+default is FALSE — read the views and the DEF, not the GDS alone. The producer's
+own docstring records what the other route cost on a real signed-off run: an
+abstract with an outline, obstructions and **zero pins**, because the port
+labels sit on layers the PDK's Magic technology does not map. Geometry from the
+GDS, ports from the DEF.
+
+Both halves pinned, both reds live and independent: upstream's default route
+losing `read_def` → sha + two-routes fail; our producer dropping `def read` →
+our half fails. No distribution reachable → skips, never passes.
+
+    pad_ring.upstream_pad_variables:   ... known_gap=0
+    pad_ring.along_the_row_extent:     anchors=2, pin=test
+    digital_hardmacro.lef_write_route: anchors=3, pin=test
+    PASS: 3 registered re-implementation(s)
+
+Three entries, two subsystems, one with no pad in it, zero open gaps.
+
+### Two more mutations that were not mutations
+
+The first attempt at both reds reported the properties SURVIVING. Both readings
+were false: I commented the lines out, and `# read_def` still contains
+`read_def`, so the assertions were right and my mutations were no-ops with
+respect to the property while looking like real edits. This is the second and
+third time tonight — the earlier one at least raised a `ValueError` I could
+see; these ran clean and produced greens that read as evidence. Every mutation
+in this branch now carries an assertion that the property actually changed, and
+prints `MUTATION APPLIED` only after it passes.
+
+A control also failed for a harness reason — I had mangled a cached copy of the
+upstream file by stripping a `sha256sum` header with `sed`/`tail`. Re-extracted
+with `docker run --rm --entrypoint cat`, it round-trips byte-exact. **A control
+that fails is a claim about the harness until proven otherwise.**
+
+### And a third borrowed fixture
+
+Registering the entry turned three unrelated tests red with `assert 2 == 1`,
+because `_fake_root` built a distribution from a hard-coded list of two pad
+files. The tests were right and the checker was right; the helper knew a fixed
+list. It now reads the register, so the next entry costs nothing. Proven not
+hollowed out by disabling the checker's sha guard — message deliberately left
+in place so the mutation could not pass by deleting the string the test greps
+for — which turns exactly one test red.
+
+That is the third fixture on this branch borrowed from live data rather than
+constructed. The pattern deserves its name: **a test that reaches into the
+shipped artefact for its fixture asserts today's contents, and fails the day
+the artefact legitimately changes — which is the day the register is doing its
+job.**

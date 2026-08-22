@@ -271,6 +271,18 @@ def test_a_named_pin_test_that_exists_passes(tmp_path):
 # ── snapshot drift, measured against a root we build ────────────────────────
 
 def _fake_root(tmp_path: Path, body: str) -> Path:
+    """A distribution that satisfies EVERY registered entry by construction.
+
+    It used to hard-code the two pad files. Registering a third entry — a
+    Magic LEF-write sequence, the first with no pad in it — then made three
+    unrelated tests fail with rc 2, because the new entry's upstream file was
+    not under this root and the checker correctly reported NOT DETERMINED. The
+    tests were right, the checker was right, and the helper was the thing that
+    knew a fixed list.
+
+    It now reads the register, so the next entry costs nothing here. Each test
+    still perturbs only the entry it is about.
+    """
     root = tmp_path / "root"
     (root / "librelane" / "config").mkdir(parents=True)
     (root / "librelane" / "config" / "flow.py").write_text(body,
@@ -281,6 +293,17 @@ def _fake_root(tmp_path: Path, body: str) -> Path:
      / "pad_cfg.tcl").write_text(
         "incr sum_of_cell_widths $width\n[[$inst getMaster] getWidth]\n",
         encoding="utf-8")
+
+    for entry in shipped_doc()["entries"]:
+        rel = (entry.get("upstream") or {}).get("file")
+        if not rel:
+            continue
+        path = root / rel
+        if path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        anchors = (entry.get("upstream") or {}).get("anchors") or []
+        path.write_text("\n".join(anchors) + "\n", encoding="utf-8")
     return root
 
 

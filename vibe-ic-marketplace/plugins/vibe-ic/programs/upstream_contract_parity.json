@@ -116,6 +116,35 @@
    "_history": [
     "2026-08-22 jcapsha: pin_test known_gap -> test. The gap was real and specific -- OUR half was pinned behaviourally all along, THEIRS was a sentence in a comment. Closed by reading the upstream file out of the image this snapshot records (sha256 verified equal) and asserting the three properties our Python mirrors. Prior: {\"status\": \"known_gap\", \"reason\": \"nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.\", \"reference\": \"vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it\"}"
    ]
+  },
+  {
+   "id": "digital_hardmacro.lef_write_route",
+   "kind": "computation",
+   "our_module": "programs/digital_hardmacro_gen.py",
+   "what_we_reimplement": "the Magic command sequence that writes a hardmacro's LEF abstract, and which of upstream's two routes it takes. THE FIRST NON-PAD ENTRY: the register shipped with two entries and both were pad_ring.*, which reads as a pad register however the docstring is worded. Same register, unchanged, on a subject with no pad in it.",
+   "upstream": {
+    "distribution": "librelane",
+    "file": "librelane/scripts/magic/lef.tcl",
+    "anchors": [
+     "if { $::env(MAGIC_LEF_WRITE_USE_GDS) } {",
+     "lappend lefwrite_opts -hide",
+     "lappend lefwrite_opts -pinonly"
+    ],
+    "note": "MAGIC_LEF_WRITE_USE_GDS picks between two routes and its default is FALSE -- read the views and the DEF, not the GDS alone. That default is load-bearing: the producer's docstring records that the GDS-only route yielded, on a real signed-off run, an abstract with an outline, obstructions and ZERO PINS, because the port labels sit on layers the PDK's Magic technology does not map. GEOMETRY from the GDS, PORTS from the DEF."
+   },
+   "snapshot": {
+    "measured_on": "2026-08-22",
+    "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+    "file_sha256": "067772b60a08a2c41fe947ca61ac84cf25272534962e78788acbeabefcf9b4b8"
+   },
+   "pin_test": {
+    "status": "test",
+    "test": "programs/tests/test_upstream_pin_magic_lef.py::test_upstream_still_has_two_routes_and_the_default_reads_the_def",
+    "note": "Two-sided, in one file. THEIRS: sha256 against this snapshot, the two-route branch with read_def on the default side, and the two abstraction knobs still spelled -hide and -pinonly under their own conditions -- SKIPPED, never passed, when no distribution is reachable. OURS: build_lef_tcl emits `gds read` AND `def read`, emits -hide for the abstract and withholds it for the full LEF, and emits -pinonly only when asked. Our half needs nothing external and always runs."
+   },
+   "_history": [
+    "2026-08-22 jcapsha: added. The upstream-parity rule is general and the register's own contents were the weakest evidence for that -- two entries, both pads. This is the same register on a Magic LEF-write sequence."
+   ]
   }
  ]
 }
