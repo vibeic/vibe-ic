@@ -344,3 +344,28 @@ is STALE — a row whose gate had been fixed would itself be failed, and none ha
 
 The two corpus rows are annotated as stating a CONDITION rather than a deadline
 and must not be read as blocking a corpus-less landing host.
+
+
+## FINAL MEASUREMENT, AT THE HEAD THAT LANDS
+
+Re-run once more at `a68c160e7`, five commits after the previous one and with
+`gate_red_since_check.py` changed three times since. Host load 2–3, which
+mattered: three earlier attempts were deferred at loads of 26, 61 and 90 because
+a wall-clock minimum and several gates here are demonstrably load-sensitive.
+
+    125 non-matrix files    base 40 failed / 2735 passed
+                            cand 40 failed / 2809 passed
+                            id sets IDENTICAL — NEW 0, only-on-base 0
+
+    7 test_matrix_* files   base 12 failed | cand 12 failed
+    one pytest call each    id sets IDENTICAL — NEW 0, only-on-base 0
+
+Every one of the seven matrix files matches its own base run exactly, including
+the three this repository records as session-killers under load
+(`63x8_census_freshness` 6 passed, `63x8_coverage` 3 failed / 26 passed,
+`mutation_ledger` 3 failed / 121 passed — the same on both arms).
+
+Not even the wall-clock timing test flipped this time. The two arms are the same
+set, twice over.
+
+**NEW attributable to this branch: 0.**
