@@ -121,14 +121,14 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          115<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    program_exit_zero          116<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 29<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     214<!--figure:gate_clauses_total-->, of which
-                              177<!--figure:blocking_clauses--> block
+    total                     215<!--figure:gate_clauses_total-->, of which
+                              178<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -143,8 +143,8 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 4. Program resolution
 --------------------------------------------------------------------
 A gate command's FIRST whitespace token is the program basename. Of the
-172<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-181<!--figure:gate_commands_total--> gate commands, all but
+173<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+182<!--figure:gate_commands_total--> gate commands, all but
 0<!--figure:gate_programs_unresolved--> resolve to ``programs/<token>.py``, and
 zero commands shell out via ``python3 <file>``. This figure is the live count
 of gates naming a program that does not exist. It went 0 -> 3 when the
@@ -167,8 +167,8 @@ programs — see section 4.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-106<!--figure:blocks_on_edges--> edges, mixed types
-(85<!--figure:blocks_on_edges_int--> int, 21<!--figure:blocks_on_edges_str--> str),
+107<!--figure:blocks_on_edges--> edges, mixed types
+(85<!--figure:blocks_on_edges_int--> int, 22<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).

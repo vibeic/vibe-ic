@@ -57,16 +57,21 @@ What CAN be established is the same fact by CROSS-CHECK, from two assets
 `cell_lef_glob`. A cell's LEF `SIZE w BY h` is in MICRONS by the LEF spec, so
 `w * h` is that cell's footprint in um^2, and the Liberty `area` for the SAME
 cell either agrees with it or does not. MEASURED inside the shipped EDA image
-(vibeic-eda 0.2.26), over every standard cell present in both files:
+(vibeic-eda 0.2.26), over every standard cell present in both files, for TWO of
+the FIVE `pdk_registry.json` entries that ship both globs (the sixth ships
+neither). This gate is chip-AGNOSTIC and `test_the_program_names_no_process_or_
+vendor_token` holds that assertion over this file, so the two libraries are
+identified here by their cell counts and not by name; the procedure above
+re-derives the same figure on any of the five:
 
-    gf180mcuD   229 of 229 cells    liberty_area / lef_um2:
+    library A   229 of 229 cells    liberty_area / lef_um2:
                                       min 1.000000  median 1.000000  max 1.000000
-    sky130A     405 of 405 cells    min 0.999547  median 1.000000  max 1.000000
+    library B   405 of 405 cells    min 0.999547  median 1.000000  max 1.000000
 
 So the Liberty area IS um^2 on both, and — the part that matters here — it is
 DERIVABLE PER PDK from assets the flow already resolves, rather than assumed for
 all PDKs from what two of them happen to do. A derivation must carry a
-TOLERANCE and not an equality: sky130A's worst cell is 0.999547, i.e. the
+TOLERANCE and not an equality: library B's worst cell is 0.999547, i.e. the
 Liberty figure is rounded, and an exact test would reject a correct library.
 
 That derivation belongs in the PRODUCER, not in this gate, and it is a separate
