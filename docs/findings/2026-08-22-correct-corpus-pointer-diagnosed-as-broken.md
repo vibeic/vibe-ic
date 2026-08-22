@@ -628,3 +628,31 @@ belongs and where the range is computed correctly.
 **So "673 behind" is the intended state of a candidate, not staleness** — and the
 table above is the evidence that being behind costs nothing here: every figure
 reproduces at the tip it will be merged onto.
+
+## Verified on the merged tree, not just on the branches
+
+A clean merge proves nothing about semantics — zero textual conflicts and a red
+merged tree is a shape this repository has hit repeatedly — so both branches were
+merged onto the moved `main` and the result was **run**.
+
+`origin/main` @ `ae78abb28` + `next/corpus-pointer-measured-empty` +
+`next/citation-routing-named-corpus-is-not-wrong`, merged in that order:
+**0 conflicts**, each also merging cleanly on its own.
+
+Both branches' tests on that merged tree (loadavg 45.05, nproc 32):
+
+| configuration | merged tree | clean `ae78abb28` |
+|---|---|---|
+| no pointer | **52 passed, 1 skipped** | — |
+| `VIBE_IC_BENCHMARK_DATA` at the real empty corpus | **52 passed, 1 skipped** | **2 errors during collection** |
+
+The second row is the whole point. That configuration — the one
+`gatekeeper_review._published_corpus_binding` creates by default — cannot collect
+`test_published_corpus_helper.py` or `test_citation_routing_is_true.py` on
+today's `main`, and runs both clean once these two branches are applied. The
+defect is still live on `main`; the repair holds on the tree that will exist
+after landing.
+
+**And the two land together without interacting badly**, which was not a given:
+branch 2 edits a module that imports the helper branch 1 repairs. Merged, that
+pair is 52 green in both pointer states.
