@@ -857,9 +857,15 @@ def test_the_runner_turns_that_rc_one_into_a_failed_step():
 
 
 def test_only_rc_one_stops_the_step_and_the_bound_is_deliberate():
-    """rc 2 is "no ceiling declared" for 176 of 177 published L19 copies.
-    If that ever starts stopping the step, almost every run goes non-green over
-    a requirement nobody wrote — a product decision this wiring deliberately
+    """rc 2 is "no ceiling declared" for 118 of 136 real converge runs across all
+    5 fleet machines — the figure swept for `l19_pdk_floorplan_contract_check`,
+    which is in this repository and reproducible. An earlier version of this
+    docstring said "176 of 177 published L19 copies", from a corpus withdrawn on
+    2026-08-20 that nobody can re-derive; it overstated the case for this bound
+    by more than an order of magnitude.
+
+    If rc 2 ever starts stopping the step, 118 of 136 runs go non-green over a
+    requirement they never wrote — a product decision this wiring deliberately
     did not take. Pinned so it cannot be taken silently."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))

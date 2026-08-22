@@ -156,12 +156,15 @@ Before this it could reach neither. That is the whole point of the change, and
 it is why this block no longer says the unit is what stands in the way.
 
 WHAT NOW STANDS IN THE WAY IS THE CEILING, NOT THE UNIT. rc 1 additionally needs
-`L19.die_area_budget_um`, and the measurement recorded above this — 177 L19
-copies in the published corpus, ONE declaring it, and zero overlap with the runs
-carrying an area figure — is unchanged by any of this. So on today's corpus the
-established unit converts a VACUOUS_PASS into an honest rc 2 "no ceiling
-declared", not into a red. An inline wiring today would therefore be safe and
-nearly inert; it becomes meaningful only when designs declare a die budget.
+`L19.die_area_budget_um`. The figure to use for that is the one swept for
+`l19_pdk_floorplan_contract_check` — 118 of 136 real converge runs across all 5
+fleet machines carry it null — and NOT the "177 copies, ONE declaring it" a
+draft of this block quoted from the withdrawn corpus. The two disagree by more
+than an order of magnitude on the part that matters: roughly one run in seven
+declares a die, not one in 177. The unit's establishment converts a VACUOUS_PASS
+into an honest verdict either way, but it is a REAL verdict on about a seventh
+of runs rather than on almost none, so this gate is not "nearly inert" and must
+not be described that way to a reviewer.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this
