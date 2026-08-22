@@ -3,6 +3,38 @@
 host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 `origin/main` at **a4caccefe**
 
+## IF YOU READ ONE SCREEN, READ THIS
+
+**The frozen branch `ptmo/main-red-triage-v11166` @ `88cf416b6` still merges
+cleanly onto current main and the merged tree was RUN** (Part 5): 11 files, no
+conflicts, `6 failed / 128 passed` — the same failing set it measures alone. **It
+needs no rebase and changes no number it reports once landed.**
+
+**Its findings survived 244 commits, and FOUR of its five requests have been
+answered upstream** (Parts 2, 6): the flow-gate intent declared, two checkers
+wired exactly where it predicted, the liar-census pin bumped with the start of a
+cure. **The fifth (`ppa_pr_scope_check`) has a venue after all** — the merge
+verifier, which already computes the `--base`/`--head` pair it takes (Part 7).
+
+**WHAT REMAINS, and who can act** (final grouping, Part 17 — 30 on the frozen
+branch's tree, 33 on main; the difference is the branch's own effect, Part 18):
+
+| n | group | what it needs |
+|--:|---|---|
+| 14 | corpus/record | **re-point the records** to a `repo`/`published` kind. Publishing does not help — `home` roots are excluded by design. A registry waiver is the third route and is **available but forbidden to me** (Part 8) |
+| 6 | landing-verdict | **2** need ONE LINE: `gatekeeper-verify-merge.sh` announcing `RUN_ID`. **4** are fully diagnosed: `validate` requires an `origin` its only caller's subject cannot have — both shipped in `7c376e348` (Part 12) |
+| 5 | vacuity | **the fix is already written twelve lines from the defect.** `#901` diagnosed this mis-fire in prose and fixed it for the structured channel; the uncounted legacy branch at `:10120` runs first (Part 15) |
+| 3 | mutation ledger | red **BY DESIGN** — frozen `applies_to` demands a measurement that the d3 red currently blocks (Part 16) |
+| 1 | 63x8 anti-skip | a considered disagreement between two rules, both defensible (Part 13) |
+| 1 | `magic` | environment, not a defect |
+
+**Nothing here is closable by an agent under this brief.** Every one needs a
+protected file, a product decision, a corpus publication, or an infrastructure
+call — **and the one that is technically available (the waiver) is the one the
+brief forbids.**
+
+---
+
 ## RECONCILIATION — which rows of the FROZEN branch this supersedes
 
 `ptmo/main-red-triage-v11166` is frozen at `88cf416b6` and **cannot be updated**.
