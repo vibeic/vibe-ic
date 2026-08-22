@@ -1843,8 +1843,16 @@ is BACKWARDS.** `sys.path` here is
 ```
 
 so stdlib comes FIRST and an ordinary `import argparse` gets
-`/usr/lib/python3.10/argparse.py`. Verified. Nothing on this host breaks merely
-by having the user site on the path.
+`/usr/lib/python3.10/argparse.py`. Verified.
+
+"Nothing on this host breaks merely by having the user site on the path" was
+then ALSO an over-generalisation from one instance, so it was measured rather
+than left standing: comparing every user-site entry against
+`sys.stdlib_module_names`, **exactly one collides — `argparse.py`, and no
+other**. The claim now covers what it says, with its scope stated: it is about
+NAME COLLISIONS WITH STDLIB, and says nothing about a third-party package that
+breaks something else (a bad `pytest11` plugin is a different class this fleet
+has seen before).
 
 The backport wins ONLY when a site directory is PREPENDED ahead of stdlib, which
 is exactly what an injected trusted-site lane does. Driven both ways:
