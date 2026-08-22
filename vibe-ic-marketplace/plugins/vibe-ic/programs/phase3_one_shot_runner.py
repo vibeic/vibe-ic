@@ -31896,6 +31896,143 @@ def step_digital_hardmacro_gen(project: Path) -> StepResult:
                       msg, out)
 
 
+def step_pad_ring_gen(project: Path) -> StepResult:
+    """Canonical step 15.5ic — the chip/IC path pad-ring producer pair.
+
+    WIRED HERE FOR THE REASON `step_digital_hardmacro_gen` ALREADY RECORDS.
+    Step 15.5ic declared `pad_assignment_gen` and `pad_ring_gen` in its
+    `programs:` list on 2026-08-20 (0a7699737) and NO RUNNER EVER INVOKED
+    EITHER: measured, both names appeared 0 times across all seven runner
+    modules, so `flow_step_executor_coverage_check` classified the step
+    ORPHANED — "can only ever be MISSING" — while `pad_assignment_gen` ran
+    only as a clause of the step's OWN gate. That is the shape this repo
+    withdrew for A8 on 2026-07-28: the acceptance auditor writing a declared
+    `required_output` it then reads. `reports/phase3/pad_assignment.json` is
+    one of this step's three declared outputs and the audit was creating it.
+
+    WHY AFTER `step_canonicalize_artefacts` AND NOT AT 15.5ic's DECLARED
+    POSITION, stated plainly because the flow yaml says "BEFORE ROUTING, NOT
+    AFTER" and this is after.
+
+      * The runner executes canonical steps 15-22 — floorplan/PDN, clock plan,
+        placement, spare cells, CTS, hold fix, route, extraction — in ONE
+        OpenROAD session. There is no seam at 15.5ic to insert into without
+        splitting that session, which would change the DEF that gets routed.
+      * It does not need one. `pad_ring_gen`'s declared inputs are step 15's
+        `phase3/stage3/pnr/floorplan.def` and 0.5ic's
+        `input/submission_template/tapeout_declaration.json`. NEITHER is
+        modified by routing, and `floorplan.def` is only STAGED at that
+        canonical path by `step_canonicalize_artefacts` — the identical reason
+        `step_digital_hardmacro_gen` runs here. So the artefact this produces
+        is byte-identical to one produced mid-span.
+      * Nothing consumes `padring.def`. Measured by grep over the repository:
+        its only references are `_pad_ring.PADRING_DEF_REL`, this step's own
+        `required_outputs` and `pad_ring_check`. The flow's "before routing"
+        note is about the SEMANTIC position in a chip flow, where the ring
+        would be handed to the router as the design's BTerms. This flow does
+        not do that yet, and on the day it does, this producer has to move
+        inside the session — which is PnR work, not a wiring change.
+
+    NEVER FAILS THE RUN, same contract as the hardmacro producer. The two
+    programs' exit codes are DISCLOSURES, not run verdicts:
+        pad_assignment_gen  0 WROTE / 1 REFUSE (names every owed variable)
+                            / 2 NOT_ASKED (no source answers section 2B)
+        pad_ring_gen        0 wrote the ring / 1 refusal / 2 disclosed SKIP
+    rc 2 is a legitimate not-asked, NOT an absent capability, so it maps to
+    SKIP rather than ENV_UNAVAILABLE. The GATE is what fails: `pad_ring_check`
+    refuses an unsound ring on its own evidence, and `pad_assignment_gen`'s own
+    clause still reports the REFUSE. ORDER IS FIXED — `pad_ring_gen` reads the
+    `phase3/stage3/pnr/pad_assignment.json` that `pad_assignment_gen` writes,
+    and ran only its SKIP branch until something wrote it.
+    """
+    t0 = time.time()
+    notes: List[str] = []
+    status = "SKIP"
+    for name in ("pad_assignment_gen.py", "pad_ring_gen.py"):
+        prog = PROGRAMS_DIR / name
+        if not prog.is_file():  # pragma: no cover - shipped tree always has it
+            notes.append(f"{name} not present in this tree")
+            continue
+        cmd = [sys.executable, str(prog), str(project)]
+        try:
+            cp = subprocess.run(cmd, capture_output=True, text=True,
+                                errors="replace", timeout=600)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            notes.append(f"{name}: producer did not complete: {exc}")
+            status = "ENV_UNAVAILABLE"
+            break
+        detail = (cp.stdout or cp.stderr or "").strip().splitlines()
+        notes.append(f"{name}: rc={cp.returncode} "
+                     f"{detail[0] if detail else ''}".strip())
+        if cp.returncode == 0:
+            status = "PASS" if status != "ENV_UNAVAILABLE" else status
+        elif cp.returncode in (1, 2):
+            # A refusal or a not-asked stops the pair: `pad_ring_gen` has no
+            # config to read and would only restate the same absence.
+            status = "SKIP"
+            break
+        else:
+            status = "ENV_UNAVAILABLE"
+            break
+    out: List[str] = []
+    for rel in ("phase3/stage3/pnr/padring.def",
+                "reports/phase3/padring.json",
+                "reports/phase3/pad_assignment.json"):
+        if (project / rel).is_file():
+            out.append(str(project / rel))
+    return StepResult("pad_ring_gen", status, time.time() - t0,
+                      "; ".join(notes) or "no producer ran", out)
+
+
+def step_tapeout_docs_gen(project: Path) -> StepResult:
+    """Canonical step 37.5ic — the release-document producer.
+
+    Same defect and same fix as `step_pad_ring_gen` above: declared in
+    37.5ic's `programs:` on 2026-08-20 and invoked from NO runner — 0
+    references across all seven — so the only thing that ever ran it was the
+    step's own gate clause, which writes `reports/phase3/docs/SIGNOFF_*.html`
+    and `BRIEF_*.html`, two of the step's five declared `required_outputs`.
+
+    THE GATE CLAUSE STAYS, and that is deliberate. This program's rc=1 is not
+    a producer failure, it is the RELEASABILITY VERDICT — its own source says
+    so at length: "A run that is NOT RELEASABLE is a content-earned FAIL and
+    must be scored as one", and rc=1 rather than rc=2 precisely so
+    `flow_compliance_check` cannot promote it to a PASS tier. Deleting the
+    clause to remove the self-certification would delete that verdict with it.
+    Running the producer HERE instead makes the documents exist before the
+    audit opens them, so the clause grades a document the audit did not write.
+
+    NEVER FAILS THE RUN, and `--allow-incomplete` is deliberately NOT passed:
+    the runner must produce exactly what the gate expects, and a DRAFT written
+    here would be a release document for a run that did not pass — the one
+    outcome this program refuses.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "tapeout_docs_gen.py"
+    if not prog.is_file():  # pragma: no cover - shipped tree always has it
+        return StepResult("tapeout_docs_gen", "SKIP", 0.0,
+                          f"{prog.name} not present in this tree")
+    out_dir = project / "reports" / "phase3" / "docs"
+    cmd = [sys.executable, str(prog), "--project", str(project),
+           "--out-dir", str(out_dir)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StepResult("tapeout_docs_gen", "ENV_UNAVAILABLE",
+                          time.time() - t0,
+                          f"producer did not complete: {exc}")
+    detail = (cp.stdout or cp.stderr or "").strip().splitlines()
+    msg = detail[0] if detail else f"rc={cp.returncode}"
+    # rc 1 is NOT RELEASABLE — a real finding about the run, reported by the
+    # gate. Here it is a SKIP: no documents were written, and the run's verdict
+    # is not this step's to set.
+    status = {0: "PASS", 1: "SKIP"}.get(cp.returncode, "ENV_UNAVAILABLE")
+    out = ([str(f) for f in sorted(out_dir.iterdir()) if f.is_file()]
+           if out_dir.is_dir() else [])
+    return StepResult("tapeout_docs_gen", status, time.time() - t0, msg, out)
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -41259,6 +41396,17 @@ def main() -> int:
     # contained no `.lef` anywhere. Immediately after canonicalisation, which
     # is what puts the sign-off GDS at this producer's declared input path.
     plan.append(step_digital_hardmacro_gen(project))
+
+    # Canonical steps 15.5ic and 37.5ic — declared on 2026-08-20 with a
+    # `programs:` list and wired into no runner, so both were ORPHANED: the
+    # only thing that executed their producers was each step's own gate. Both
+    # run immediately after canonicalisation for the same reason the hardmacro
+    # producer above does — that is what stages the canonical inputs they
+    # name. See each step function for why the pad ring's declared "before
+    # routing" position cannot be honoured while steps 15-22 are one OpenROAD
+    # session, and why the artefact is identical anyway.
+    plan.append(step_pad_ring_gen(project))
+    plan.append(step_tapeout_docs_gen(project))
 
     # vibe-ic#306 — corroborate a promoted route against the sign-off report,
     # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
