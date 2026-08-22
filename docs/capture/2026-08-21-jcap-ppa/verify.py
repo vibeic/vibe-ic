@@ -407,7 +407,12 @@ if SLOW:
     _live = set(re.findall(r"^   ([a-z0-9_]+)$", _r.stdout, re.M))
     _tg = {pathlib.Path(ROUTING["steps"][r["step"]]["bucket_A_program"]).stem
            for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]}
-    control("wiring-live", "gate is wired" in _r.stdout or bool(_r.stdout))
+    # The check is an INTERSECTION, so an empty `_live` passes it having looked
+    # at nothing -- and the previous control here was `... or bool(_r.stdout)`,
+    # whose second clause is true whenever the gate printed anything at all,
+    # so it could not detect that. Assert the parse produced a real population
+    # and that it did not over-match into a name the gate never prints.
+    control("wiring-live", bool(_live) and "no_such_program" not in _live)
     check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
           not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
 
