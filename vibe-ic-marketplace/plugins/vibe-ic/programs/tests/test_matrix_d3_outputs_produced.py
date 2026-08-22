@@ -4718,6 +4718,145 @@ def test_d3_the_publish_scope_predicate_answers_both_ways():
     assert all(f in files for f in _bep._COPY_FILES), (files, _bep._COPY_FILES)
 
 
+#: EVERY declared ``required_outputs`` entry, in a cell this dimension ENFORCES,
+#: that no cell ``benchmark_evidence_publish`` produces can carry.
+#:
+#: WHY THIS IS A SECOND PIN AND NOT A WIDER FIRST ONE.
+#: :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT` is the subset of THIS that
+#: is ALSO unevidenced today, and being unevidenced is a property of whichever
+#: corpus is bound — so that pin moves when the corpus does, and it is
+#: ``@needs_corpus`` for exactly that reason. Being UNPUBLISHABLE is a property
+#: of the flow declaration and the publish contract alone: no run root, no
+#: corpus and no host enters it, which is why this one runs on every lane
+#: including the blind one, where six of the eight cells it covers are red and
+#: nothing tells the reader the other ten are standing on borrowed evidence.
+#:
+#: THAT IS THE THING THIS PIN EXISTS TO SAY. Measured on this commit, with a
+#: corpus bound and every one of the 24 run through :func:`check_entry`:
+#:
+#:     16  PRODUCED [LIVE]
+#:      6  NOT PRODUCED [FIXTURE]   <- exactly UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT
+#:      2  NOT PRODUCED [LIVE]      <- step 0.5ic, recorded UNPROVEN, so FIXTURE
+#:                                     never applies and the other pin cannot
+#:                                     see them however the corpus moves
+#:
+#: The SIXTEEN resolve against tracked artefacts under prefixes the publisher
+#: does not stage — i.e. the pre-program hand-staged trees :data:`_PUBLISH_GAP`
+#: names. Re-publishing those cells with the program instead of by hand does not
+#: lose evidence that was merely mislaid; it takes sixteen entries from
+#: evidenced to unevidenced in one commit, and the eight not-produced become
+#: twenty-four. A population that can triple on a publish is one a reader has to
+#: be told about BEFORE the publish, not after.
+#:
+#: (An earlier revision of this comment said "eighteen" and "twenty-four". Both
+#: were arithmetic from the failing-cell list rather than from the entries: two
+#: of step 0.5ic's four missing entries are unpublishable and they are not among
+#: the six. Corrected against the per-entry measurement above.)
+#:
+#: It is a pin and not a count: a number measured on one day is the shape this
+#: module refuses everywhere else.
+DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
+    ("0.5ic", "input/submission_template/slots/*.yaml OR "
+              "input/submission_template/NO_TEMPLATE.txt OR "
+              "input/submission_template/SELF_TAPEOUT.txt"),
+    ("0.5ic", "input/submission_template/tapeout_declaration.json"),
+    ("10", "phase3/stage3/sta/pre_pnr_timing.rpt"),
+    ("15", "phase3/stage3/pnr/floorplan.def"),
+    ("15", "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"),
+    ("16", "phase3/stage3/cts/clock_plan.json"),
+    ("17", "phase3/stage3/pnr/placed.def"),
+    ("18", "phase3/stage3/pnr/spare_cells.json"),
+    ("19", "phase3/stage3/cts/clock_tree.rpt"),
+    ("19", "phase3/stage3/pnr/post_cts.def"),
+    ("20", "phase3/stage3/pnr/post_hold.def"),
+    ("21", "phase3/stage3/pnr/routed.def"),
+    ("21", "phase3/stage3/pnr/routed.drc.rpt"),
+    ("22", "phase3/stage3/extracted/parasitic.spef OR "
+           "phase3/stage3/extracted/*.spef"),
+    ("23", "phase3/stage3/sta/post_route_timing.rpt"),
+    ("29", "phase3/stage3/sim_postlayout/results.log OR "
+           "phase3/stage3/sim_postlayout/pass.flag"),
+    ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
+           "sim_spice/*.sp"),
+    ("32", "phase3/stage3/eco/eco_log.json OR "
+           "phase3/stage3/eco/no_eco_needed.flag"),
+    ("32", "phase3/stage3/eco/eco_trigger_decision.json"),
+    ("34", "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"),
+    ("38", "phase3/stage4/foundry_handoff/corner_test_vectors.json"),
+    ("38", "phase3/stage4/foundry_handoff/mask_spec.json"),
+    ("38", "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR "
+           "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"),
+    ("38", "phase3/stage4/foundry_handoff/wat_plan.json"),
+)
+
+
+def _declared_outside_the_publish_contract() -> Tuple[Tuple[str, str], ...]:
+    """Re-derived from the live flow yaml and the live publish scope."""
+    return tuple(sorted(
+        (F.normalize_id(sid), entry)
+        for sid in F.step_ids()
+        for entry in F.required_outputs(sid)
+        if matrix_cell_state(sid) == "ENFORCED" and not publishable(entry)))
+
+
+def test_d3_every_enforced_declaration_the_publisher_cannot_stage_is_pinned():
+    """No corpus. The declaration side of the publish gap, pinned so it cannot
+    grow — or shrink — without somebody saying which.
+
+    A step that declares a new output under a prefix the publisher does not
+    stage joins this population the same minute the yaml changes, and a reader
+    is told at that point rather than after a publish has taken the cell red.
+    The reverse matters as much: an entry LEAVING means the publish scope
+    widened, which is the evidence-policy call
+    ``benchmark_evidence_publish``'s docstring defers, and it may not happen
+    quietly.
+    """
+    measured = _declared_outside_the_publish_contract()
+    pinned = tuple(sorted(DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT))
+    assert measured == pinned, (
+        f"the ENFORCED-declaration-outside-the-publish-contract population "
+        f"changed: measured {len(measured)}, pinned {len(pinned)}.\n"
+        f"  JOINED — a step now declares an output no published cell can "
+        f"carry: {sorted(set(measured) - set(pinned))}\n"
+        f"  LEFT — say WHICH: the publish scope widened (an evidence-policy "
+        f"call), the flow moved the declaration, or the cell stopped being "
+        f"ENFORCED: {sorted(set(pinned) - set(measured))}"
+    )
+
+
+def test_d3_the_unevidenced_publish_gap_is_inside_the_declared_one():
+    """No corpus on the pin side. The two publish-gap pins may not drift apart.
+
+    :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT` is by construction the
+    subset of :data:`DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT` that is also
+    unevidenced. Nothing enforced that: two tuples maintained by hand, one
+    corpus-gated and one not, drift, and the drift would show up as a message
+    telling a reader an entry is unpublishable while the declaration pin says
+    it is fine.
+
+    Checked both ways round, because a subset assertion alone is satisfied by
+    an EMPTY subset — which is what a corpus-gated pin decays to if its guard
+    stops running.
+    """
+    declared = set(DECLARED_OUTSIDE_THE_PUBLISH_CONTRACT)
+    unevidenced = set(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT)
+    assert unevidenced <= declared, (
+        f"{len(unevidenced - declared)} entr(ies) are pinned UNEVIDENCED-"
+        f"outside-the-publish-contract but are not in the declaration pin: "
+        f"{sorted(unevidenced - declared)}. One of the two is wrong about the "
+        f"same publish scope."
+    )
+    assert unevidenced, (
+        "UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT is empty, so the subset "
+        "assertion above proved nothing"
+    )
+    for sid, entry in unevidenced:
+        assert not publishable(entry), (
+            f"step {sid}: {entry!r} is pinned as outside the publish contract "
+            f"and publishable() says it is inside it"
+        )
+
+
 #: The synthetic run the live binding below publishes. One artefact per scope
 #: prefix so a prefix that has silently stopped being staged is visible, plus
 #: one under `phase3/stage3/` — the prefix every entry in
