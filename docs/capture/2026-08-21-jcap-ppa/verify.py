@@ -32,9 +32,11 @@ RECS = json.loads((HERE / "recoveries.json").read_text())
 MD   = (HERE / "RESULT.md").read_text()
 CAND = HERE / "candidates"
 fails: list[str] = []
+_ran: list[str] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
+    _ran.append(name)
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail else ""))
     if not ok:
         fails.append(name)
@@ -182,12 +184,16 @@ WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
          "seven": 7, "eight": 8, "nine": 9, "ten": 10,
          "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
          "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20}
+         "nineteen": 19, "twenty": 20,
+         "twenty-one": 21, "twenty-two": 22, "twenty-three": 23}
 # `claimed_ap`, not `claimed`: that name is already bound above for the summary
 # file list. Rebinding it worked only because the first use is consumed before
 # this line -- which is the shadowing trap check 36 refuses for `def` names, and
 # variables are not covered by it.
-m = re.search(r"and the (\w+) already-program claims of which (\w+) hold", MD)
+# `[\w-]+`, not `\w+`: the counts are spelled, and a hyphenated one --
+# twenty-one -- silently parsed to None, which read as "the title states no
+# number" rather than "the title states a number this parser cannot spell".
+m = re.search(r"and the ([\w-]+) already-program claims of which ([\w-]+) hold", MD)
 claimed_ap = WORDS.get(m.group(1)) if m else None
 holding_ap = WORDS.get(m.group(2)) if m else None
 # COUNT THE TWO ALREADY-PROGRAM TABLES STRUCTURALLY, by their header rows.
@@ -822,6 +828,80 @@ check("the contention table matches the routing it is derived from",
       _stated == _live_rows,
       f"stated {dict(sorted(_stated.items()))} vs routed {dict(sorted(_live_rows.items()))}")
 
+
+# A sentence that INTRODUCES a table states how many rows follow it, and the
+# table then grows. The title's claim counts are re-derived above, but nothing
+# bound an introducing sentence to the rows under it -- so "Four more classes"
+# sat above six rows for most of this batch, inside the document that argues for
+# catching exactly that. Scoped to the "N more ..." opener because that is the
+# shape that carries a count; a looser match reads every numeral in every
+# paragraph and would flag prose that is not claiming a row count at all.
+def _intro_counts(lines):
+    matched, wrong = [], []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("|") and i + 1 < len(lines) and re.match(
+                r"^\|[-: |]+\|$", lines[i + 1]):
+            j2 = i + 2
+            rows = 0
+            while j2 < len(lines) and lines[j2].startswith("|"):
+                rows += 1
+                j2 += 1
+            k = i - 1
+            while k >= 0 and not lines[k].strip():
+                k -= 1
+            para = []
+            while k >= 0 and lines[k].strip() and not lines[k].startswith(("|", "#", "```")):
+                para.insert(0, lines[k])
+                k -= 1
+            m = re.match(r"\s*([A-Z][a-z]+|\d+)\s+more\b", " ".join(para))
+            if m:
+                tok = m.group(1).lower()
+                n = WORDS.get(tok, int(tok) if tok.isdigit() else None)
+                if n is not None:
+                    matched.append(n)
+                    if n != rows:
+                        wrong.append((n, rows))
+            i = j2
+        else:
+            i += 1
+    return matched, wrong
+
+
+_LINES = MD.split("\n")
+_im, _iw = _intro_counts(_LINES)
+# The mutation is DERIVED, not a literal. An earlier version hard-coded the
+# opener's wording; renaming that sentence made the mutation match nothing, the
+# control could no longer prove the check fires, and it said so -- which is the
+# guard-whose-target-moved class, caught by the guard. Now it rewrites whatever
+# opener it finds to a DIGIT that is certainly wrong -- a spelled word outside
+# the WORDS table parses to nothing and would break the control a second way.
+def _miscount(lines):
+    out = []
+    done = False
+    for l in lines:
+        m = re.match(r"^([A-Z][a-z]+|\d+)(\s+more\b)", l)
+        if m and not done:
+            done = True
+            l = "99" + m.group(2) + l[m.end():]
+        out.append(l)
+    return out
+
+
+control("intro-count", bool(_im) and _intro_counts(_miscount(_LINES))[1] != [])
+check("a sentence introducing a table counts the rows under it",
+      not _iw, f"{len(_im)} introduced table(s), mismatched {_iw}")
+
+
+
+# The count of checks is itself a stated fact in the report, and it went stale
+# the moment this file grew one -- the second time in a single batch that a
+# number in this document outlived what it counted. Bind it: count the call
+# sites in this file's own source rather than the results of this run, so the
+# figure is derivable without running anything. `rindex` for the same reason as
+# the marker check below -- the literal appears in this comment.
+_quoted_checks = {int(m) for m in re.findall(r"verify\.py[^\n]*?(\d+) checks", MD)}
+_quoted_checks |= {int(m) for m in re.findall(r"verifier's (\d+) checks", MD)}
 # 49. the routing figures the report quotes -- how many steps this branch adds
 # against the base, and how many records would be UNROUTED without them -- are a
 # projection of two files the repository holds. I re-derived them by hand five
@@ -855,6 +935,35 @@ if _bR.returncode == 0:
                        == (len(_new_steps), _at_new, len(RECS)),
           f"live ({len(_new_steps)}, {_at_new}, {len(RECS)}); quoted "
           + (f"({_q.group(1)}, {_q.group(2)}, {_q.group(3)})" if _q else "not found"))
+
+# Counted from actual invocations, not call sites: several checks run inside
+# loops, so the source has 42 `check(` lines and the run emits more. This one
+# counts itself, which is why the +1 is here rather than in the report.
+# Without this control the check above passes by EMPTY SET the moment the report
+# stops quoting a figure -- the escape hatch that makes a guard vacuous, which is
+# the class three of this batch's records are about.
+# Both stated figures are bound, not just the fast one: the report says N checks
+# and "+ M authoritative" under --slow, so the expected total differs by mode and
+# a check that only knew the fast number would fail every slow run.
+# A count in prose that IS the argument -- the cost of reading every record --
+# rather than decoration. Three counts in this report went stale in one sitting;
+# two said nothing their sentence needed and were rewritten without the number,
+# which is this batch's own A-26 remedy applied to itself. This one carries the
+# argument, so it is bound instead.
+_cost = re.findall(r"(\d+) records needs (\d+) readings", MD)
+control("reading-cost", bool(_cost))
+check("the per-record reading cost quotes the live record count",
+      all(int(a) == len(RECS) and int(b) == len(RECS) for a, b in _cost),
+      f"records {len(RECS)}, quoted {_cost}")
+
+_qextra = {int(m) for m in re.findall(r"\+ (\d+) authoritative", MD)}
+_expect = ({c + e for c in _quoted_checks for e in _qextra} if SLOW
+           else set(_quoted_checks))
+control("check-count", bool(_quoted_checks) and bool(_qextra))
+check("the report's stated check count matches the checks that ran",
+      bool(_expect) and len(_ran) + 1 in _expect,
+      f"ran {len(_ran) + 1}, expected {sorted(_expect)} "
+      f"(quoted {sorted(_quoted_checks)}, extra {sorted(_qextra)}, slow={SLOW})")
 
 print()
 if fails:
