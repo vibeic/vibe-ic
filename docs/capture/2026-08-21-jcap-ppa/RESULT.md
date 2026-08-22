@@ -1092,12 +1092,27 @@ the failure it was written for — a file truncated mid-string passing every
 landing gate. So why did it not fire? Because coverage of a root-scoped gate is
 whatever root it is handed:
 
-    programs walking a repository index                       37
-    programs referencing the split-out tree by name           98
+    programs walking a repository index                       38   (37 when first measured)
+    programs referencing the split-out tree by name           99   (98 when first measured)
     the tree present in this repository                       NO
+    ...but a clone of it IS reachable on this host, tracking  8309 files
     declared as a submodule                                   NO  (module list empty)
     resolved instead by                                       an environment variable
     the hygiene gate is invoked with                          this repository's root only
+
+*Both figures were re-derived after I found I could not reproduce them from the
+record.* Each counts files directly under the program directory, matched on
+source text — one for the version-control index query, one for the corpus
+directory's name. Both moved by exactly **one**: a tree that grew, not a screen
+that disagreed. The tell is that a genuine scope change moves the second by
+**six**, not one — including the package subdirectory gives 105, which is a
+different question and not a better answer.
+
+One trap for the next reader, because it produced a wrong number inside this
+audit: writing the alternation in extended-regex syntax as though it were
+basic-regex matches the literal backslash and returns **zero**, silently. A
+broken screen and a clean tree print the same — this batch's own central class,
+turning up inside the audit of it.
 
 *The screen behind 37 and 98 was not recorded, so these figures cannot be
 re-derived from this report — the third instance of `A-27` inside this document,
