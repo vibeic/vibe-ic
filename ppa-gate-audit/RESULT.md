@@ -1862,3 +1862,110 @@ the diagnosis rather than from the AttributeError.
 
 Every repair here is in a test file. The eleven wired rows are exactly as Part 14
 lists them.
+
+---
+
+# Part 18 — the guard family is green, and what being dark had cost
+
+Part 17 left 22 tests red and described the repair rather than doing it. Done
+now. The targeted PPA selection, which was **32 failed / 603 passed** on the
+pristine `a758f4adc`, is **840 passed, 0 failed**.
+
+    a758f4adc      32 failed, 603 passed, 104 skipped, 4 xfailed
+    this branch     0 failed, 840 passed, 102 skipped, 4 xfailed
+    new failures    NONE, at every step
+
+## WHAT BEING DARK HAD COST: a wired gate crashing into an rc 1
+
+`test_an_internal_error_is_rc_3_and_never_rc_1` had been red on
+`AttributeError: module has no attribute '_CONTRACT_SCHEMA'`. While it was red,
+the guard it pins **was not in the program**:
+
+    two contracts that GROUP on a well-formed `problem` identity, whose
+    `analysis` is a bare digest STRING instead of a record
+      -> AttributeError out of `identity.compare`
+      -> traceback escapes `check_corpus`
+      -> the interpreter exits 1
+
+and 1 is the code §1 reserves for *"these two runs were not solving the same
+problem"* — a verdict nothing reached. In corpus mode ONE such document decides
+a row over a whole campaign, and the wired rows sweep 21 and 61 contracts.
+
+**Part 7 of this report states that this program "now carries the same one".**
+On this tree it did not. Two things had to be true at once for that to survive:
+a claim in the audit, and the test that would have contradicted it failing for
+an unrelated reason. That is the shape worth remembering — not the missing
+`try`, but that a dark guard let a false claim stand in a document whose whole
+purpose is measurement.
+
+Repaired per pair (rc 2, naming both contracts, the exception, and the missing
+input) and at the top level (rc 3, matching `ppa_contract_check`). Negative
+controls: with the per-pair guard removed the row exits 3 and one bad pair
+decides it; with both removed, the traceback.
+
+## THREE FILES, THREE DIFFERENT REPAIRS, and the difference is the point
+
+Part 17 said a shim would make these tests vacuous. That was true of ONE of the
+three, and treating all three the same would have been wrong in both directions.
+
+**`test_issue1241_problem_integrity_takes_a_corpus.py` — REWRITTEN.** `--corpus`
+mode was rebuilt: it no longer takes a baseline and pairs everything against it,
+it GROUPS by problem identity and pairs inside each group. `corpus_candidates(
+corpus, baseline)` did not move, it stopped existing, and a shim restoring its
+signature would have put the baseline-exclusion inside the test and then
+asserted it there, with the program out of the loop. Every property is now
+asserted where it lives, and every number was MEASURED before it was asserted:
+
+    comparable pair                      rc 0, 1 pair    <- THE POSITIVE CONTROL
+    one contract alone                   rc 2, 0 pairs   <- never self-paired
+    three comparable                     rc 0, 3 pairs   = C(3,2)
+    toolchain differs                    rc 1, PPA-C-012
+    comparable + an unreadable document  rc 2
+    REFUSED pair + an unreadable one     rc 1            <- never softened
+    a contract under another filename    rc 0, 1 pair    <- by declaration
+
+The positive control is the load-bearing one: a file of refusal tests alone is
+satisfied by a gate that refuses everything.
+
+The fixture also had to hash to its own digest — `PPA-C-001` refuses a contract
+whose `contract_digest` does not match its content, so a fixture omitting it is
+refused for THAT, and every test built on it asserts a refusal it did not mean
+to cause. Three wrong probes were spent before that surfaced.
+
+**`..._corpus_walks_cannot_be_extended_by_a_symlink.py` — ADAPTED, legitimately.**
+Here the thing under test IS the walk, and the walk is still program code:
+`collect` is the shared seam and the predicate is the gate's own. Nothing moves
+into the test. Three of its four rows had been raising AttributeError, so the
+symlink property — that `**` does not recurse into a symlinked directory, which
+is what keeps a corpus from being silently extended to documents elsewhere — was
+being held for ONE walk instead of four.
+
+**`..._ppa_record_gates_take_a_corpus.py` — ADAPTED, plus two corrections.**
+
+  * `CC.main([]) == 2` was stale and is now 3. §1 separates them deliberately:
+    2 is "I could not look", 3 is "you invoked me wrong". Collapsing them is
+    exactly how a stale flag in the wiring reads as a row that ran — which is
+    not hypothetical, it is Part 12's `PPA arms solved one problem` finding.
+  * "an unreadable document stays in the corpus" is now asserted on
+    `scan.unreadable` rather than `scan.records`. A document that cannot be
+    parsed cannot be SELECTED — there is nothing to run a predicate on — and
+    `collect` splits the two deliberately. The load-bearing half is unchanged:
+    the verdict is 2 and the file is NAMED, never dropped to a silent pass. The
+    test additionally pins that the denominator says "unreadable", so the
+    population cannot be silently mis-sized.
+
+## The eleven wired rows, re-verified after the program change
+
+    rc=2  PPA head-to-head records                      published corpus, other repo
+    rc=1  PPA head-to-head records (cross-layer)        15 records, 1 refused, NAMED
+    rc=2  PPA head-to-head records (end-to-end)          2 records, both NAMED
+    rc=0  PPA measurement contract (cross-layer)        21 contracts
+    rc=0  PPA measurement contract (end-to-end)         61 contracts
+    rc=2  PPA measurement contract                      published corpus, other repo
+    rc=1  PPA measurement coverage                      54 of 148 records REFUSED
+    rc=2  PPA promotion feasibility (cross-layer)       21 sets, artefacts NAMED
+    rc=2  PPA frontier recomputes                       both artefacts NAMED
+    rc=0  PPA arms solved one problem (cross-layer)      210 pair(s)
+    rc=0  PPA arms solved one problem (end-to-end)      1830 pair(s)
+
+Unchanged from Part 14. Chip-agnostic guard PASS over 1553 files.
