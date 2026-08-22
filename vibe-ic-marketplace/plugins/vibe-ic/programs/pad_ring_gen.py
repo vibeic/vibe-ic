@@ -172,6 +172,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -578,20 +579,49 @@ def _abutment(die: PR.Def, pads: List[Dict[str, Any]],
 
 
 def _emit_def(die: PR.Def, pads: List[Dict[str, Any]],
-              corners: List[Dict[str, Any]]) -> str:
-    pts = " ".join(f"( {x} {y} )" for x, y in die.diearea)
-    rows = [f"- {c['instance']} {c['master']} + FIXED "
-            f"( {c['x']} {c['y']} ) {c['orient']} ;" for c in corners]
-    rows += [f"- {p['instance']} {p['master']} + FIXED "
-             f"( {p['x']} {p['y']} ) {p['orient']} ;" for p in pads]
-    return "\n".join([
-        "VERSION 5.8 ;", 'DIVIDERCHAR "/" ;', 'BUSBITCHARS "[]" ;',
-        f"DESIGN {die.design or 'top'} ;",
-        f"UNITS DISTANCE MICRONS {die.units} ;",
-        f"DIEAREA {pts} ;", "",
-        f"COMPONENTS {len(rows)} ;", *rows, "END COMPONENTS", "",
-        "END DESIGN", "",
-    ])
+              corners: List[Dict[str, Any]], source_text: str) -> str:
+    """Return the complete floorplan DEF with ring placements applied.
+
+    `padring.def` is a routing hand-off, not a placement-only sidecar.  The
+    former emitter rebuilt a tiny DEF containing only pad/corner COMPONENTS;
+    it silently dropped every standard-cell component, PIN, NET, ROW, TRACK
+    and SPECIALNET from `floorplan.def`.  No router could consume that file
+    without losing the design.  Preserve every source section byte-for-byte,
+    replacing only the named pad COMPONENT entries and adding corner entries.
+    """
+    section = re.search(
+        r"(?ms)^(?P<indent>\s*)COMPONENTS\s+\d+\s*;(?P<body>.*?)"
+        r"^(?P<endindent>\s*)END\s+COMPONENTS\b",
+        source_text,
+    )
+    if section is None:
+        raise PR.DefError("floorplan DEF has no COMPONENTS section")
+
+    placed = {str(x["instance"]): x for x in corners + pads}
+    entries: List[str] = []
+    seen = set()
+    for raw in section.group("body").split(";"):
+        body = raw.strip()
+        if not body:
+            continue
+        m = re.match(r"^-\s+(\S+)\s+(\S+)\b", body, re.S)
+        if m and m.group(1) in placed:
+            rec = placed[m.group(1)]
+            body = (f"- {rec['instance']} {rec['master']} + FIXED "
+                    f"( {rec['x']} {rec['y']} ) {rec['orient']}")
+            seen.add(m.group(1))
+        entries.append(body + " ;")
+    for rec in corners + pads:
+        if rec["instance"] in seen:
+            continue
+        entries.append(
+            f"- {rec['instance']} {rec['master']} + FIXED "
+            f"( {rec['x']} {rec['y']} ) {rec['orient']} ;")
+
+    replacement = (f"COMPONENTS {len(entries)} ;\n"
+                   + "\n".join(entries)
+                   + "\nEND COMPONENTS")
+    return source_text[:section.start()] + replacement + source_text[section.end():]
 
 
 # ── main ────────────────────────────────────────────────────────────────────
@@ -918,7 +948,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     dest = project / PR.PADRING_DEF_REL
     dest.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(dest, _emit_def(die, pads, corners))
+    try:
+        routed_input = _emit_def(
+            die, pads, corners, fp_path.read_text(errors="replace"))
+    except (PR.DefError, OSError) as exc:
+        return _fail(
+            "PADRING_ROUTING_HANDOFF_UNWRITABLE",
+            f"{PR.FLOORPLAN_DEF_REL}: {exc} — the ring cannot be handed to "
+            "routing without preserving the complete floorplan DEF",
+            die=die_rec, config=cfg_rec, pads=pads, corners=corners,
+            abutment=abut, spacing=spacing, bterms=bterms,
+            fillers_declared=cfg["fillers"])
+    atomic_write_text(dest, routed_input)
 
     notes = list(findings)
     if bterms["pad_signals_not_a_floorplan_bterm"]:

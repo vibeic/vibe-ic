@@ -47,7 +47,9 @@ from pathlib import Path
 
 import pytest
 
-PROGRAMS = Path(__file__).resolve().parent.parent
+PROGRAMS = Path(os.environ.get(
+    "VIBEIC_CONTRACT_PROGRAMS",
+    str(Path(__file__).resolve().parent.parent))).resolve()
 sys.path.insert(0, str(PROGRAMS))
 
 import _pad_ring as PR            # noqa: E402
@@ -236,6 +238,33 @@ def test_a_declared_config_is_placed_and_the_gate_agrees(placed):
     assert _ring_def(placed).is_file()
     assert _chk(placed) == 0
     assert _report(placed)["verdict"] == "PASS"
+
+
+def test_padring_def_is_a_complete_routing_handoff_not_a_pad_sidecar(tmp_path):
+    """The router must receive the original design plus the placed ring.
+
+    The old emitter rebuilt a tiny DEF containing only pad/corner COMPONENTS.
+    It could pass the ring gate while dropping the core, PINS, NETS, ROWS and
+    TRACKS that routing needs.  Pin each preserved section and the one intended
+    mutation (pad placement) here.
+    """
+    floorplan = _floorplan().replace(
+        "END DESIGN",
+        "ROW ROW_0 core_site 0 0 N DO 10 BY 1 STEP 500 0 ;\n"
+        "TRACKS X 0 DO 10 STEP 100 LAYER met2 ;\n"
+        "NETS 1 ;\n- ssig0 ( PIN ssig0 ) ;\nEND NETS\nEND DESIGN")
+    root = _project(tmp_path, floorplan=floorplan)
+    assert _gen(root) == 0, _report(root)
+    routed_input = _ring_def(root).read_text()
+    parsed = PR.parse_def(routed_input)
+    assert len(parsed.components) == 1 + len(PADS) + 4, (
+        "routing hand-off component population changed")
+    assert parsed.components["u_core"].master == "CORE_MACRO"
+    assert parsed.components[PADS["ssig0"]].placed
+    assert set(parsed.pins) == set(ALL_SIGNALS)
+    for exact in ("ROW ROW_0 core_site", "TRACKS X 0 DO 10 STEP 100",
+                  "NETS 1 ;", "- ssig0 ( PIN ssig0 ) ;"):
+        assert exact in routed_input, f"routing hand-off dropped {exact!r}"
 
 
 def test_the_spacing_is_upstreams_arithmetic(placed):

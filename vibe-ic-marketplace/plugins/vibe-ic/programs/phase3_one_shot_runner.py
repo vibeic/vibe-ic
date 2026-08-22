@@ -19982,6 +19982,54 @@ exit
 """
 
 
+def _floorplan_seed_tcl(full_pnr_tcl: str) -> str:
+    """Stop a generated PnR deck immediately after its floorplan DEF write.
+
+    Step 15.5ic needs the floorplan as input, while routing needs the resulting
+    pad-ring DEF as input.  This creates that real seam without duplicating the
+    floorplan recipe in a second emitter.  A missing/ambiguous seam is a hard
+    error: silently running the full deck would recreate the post-route orphan.
+    """
+    matches = list(re.finditer(
+        rf'(?ms)^puts "{re.escape(_PNR_STAGE_MARKER)} floorplan"\s*$.*?'
+        r'^write_def\s+\S+/floorplan\.def\s*$',
+        full_pnr_tcl,
+    ))
+    if len(matches) != 1:
+        raise ValueError(
+            f"PNR_FLOORPLAN_SEAM_AMBIGUOUS: expected one floorplan write, "
+            f"found {len(matches)}")
+    return full_pnr_tcl[:matches[0].end()] + "\nexit\n"
+
+
+def _padring_routing_consumer_tcl(full_pnr_tcl: str,
+                                  padring_def_c: str) -> str:
+    """Replace floorplan creation with the complete, verified pad-ring DEF.
+
+    The returned deck is the actual routing consumer.  It cannot fall back to
+    `floorplan.def`: absence of `padring.def` aborts before placement/CTS/route,
+    and the marker is durable evidence that the consumed path was intentional.
+    """
+    matches = list(re.finditer(
+        rf'(?ms)^puts "{re.escape(_PNR_STAGE_MARKER)} floorplan"\s*$.*?'
+        r'^write_def\s+\S+/floorplan\.def\s*$',
+        full_pnr_tcl,
+    ))
+    if len(matches) != 1:
+        raise ValueError(
+            f"PNR_FLOORPLAN_SEAM_AMBIGUOUS: expected one floorplan write, "
+            f"found {len(matches)}")
+    consume = (
+        f'puts "{_PNR_STAGE_MARKER} padring_ingest"\n'
+        f'if {{![file exists {padring_def_c}]}} {{\n'
+        f'  error "PADRING_ROUTING_INPUT_MISSING: {padring_def_c}"\n'
+        f'}}\n'
+        f'read_def {padring_def_c}\n'
+        f'puts "PADRING_ROUTING_CONSUMED: {padring_def_c}"')
+    return (full_pnr_tcl[:matches[0].start()] + consume
+            + full_pnr_tcl[matches[0].end():])
+
+
 class PnrResumeUnavailable(Exception):
     """Raised when a resume Tcl cannot be derived from a given pnr.tcl —
     always with the reason, never silently. A resume that cannot be built
@@ -20291,9 +20339,214 @@ def pnr_input_netlist(project: Path, top: str) -> Tuple[Path, str, bool]:
         f"({meta.get('area_instances_delta_pct')}%) vs pre-DFT"), True
 
 
+def _chip_path_requests_pad_ring(project: Path) -> bool:
+    """The exact design-dependent condition declared by canonical step 15.5ic."""
+    slot_dir = project / "input" / "submission_template" / "slots"
+    return ((project / "input" / "submission_template"
+             / "SELF_TAPEOUT.txt").is_file()
+            or (slot_dir.is_dir() and any(slot_dir.glob("*.yaml"))))
+
+
+def _padring_pdk_root_and_tree(pdk: PdkConfig,
+                               container: Optional[str]) -> Tuple[str, str]:
+    """Resolve the distribution root/tree from this run's own tech LEF."""
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        raise ValueError("PADRING_PDK_TREE_UNRESOLVED: tech LEF is not under "
+                         "a distribution libs.ref tree")
+    tree_path = Path(pdk_dir)
+    root = str(tree_path.parent)
+    if container:
+        root = _to_container_path(root, container)
+    return root, tree_path.name
+
+
+def _discover_padring_io_views(pdk: PdkConfig,
+                               container: str) -> Tuple[List[str], List[str]]:
+    """Ask the shipped pad library resolver for the IO LEF/GDS views.
+
+    The same deterministic resolver used by ``pad_ring_gen`` selects the LEFs;
+    GDS views are their sibling library views.  Absence is blocking: a router
+    cannot ingest pad masters it has not loaded, and a streamout made only from
+    LEF outlines is not physical pad evidence.
+    """
+    root, tree = _padring_pdk_root_and_tree(pdk, container)
+    programs_c = _to_container_path(str(PROGRAMS_DIR), container)
+    code = (
+        "import json,sys,pathlib; "
+        f"sys.path.insert(0,{programs_c!r}); import _pad_ring as p; "
+        f"lefs=p.discover_io_lefs({root!r},{tree!r}); "
+        "gds=sorted({str(g) for l in lefs for g in "
+        "(pathlib.Path(l).parent.parent/'gds').glob('*.gds')}); "
+        "print('PADRING_IO_VIEWS '+json.dumps("
+        "{'lefs':[str(x) for x in lefs],'gds':gds}))")
+    rc, out, err = _docker_exec(
+        container, "python3 -c " + shlex.quote(code), marker=programs_c,
+        hard_ceiling_s=300)
+    match = re.search(r"PADRING_IO_VIEWS\s+(\{.*\})", out or "")
+    if rc != 0 or match is None:
+        raise ValueError("PADRING_IO_VIEW_DISCOVERY_FAILED: "
+                         f"rc={rc}; {((out or '') + (err or ''))[-500:]}")
+    try:
+        doc = json.loads(match.group(1))
+        lefs = [str(x) for x in doc.get("lefs") or []]
+        gds = [str(x) for x in doc.get("gds") or []]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"PADRING_IO_VIEW_DISCOVERY_UNREADABLE: {exc}") from exc
+    if not lefs or not gds:
+        raise ValueError("PADRING_IO_PHYSICAL_VIEWS_ABSENT: resolved "
+                         f"{len(lefs)} IO LEF and {len(gds)} IO GDS files")
+    return lefs, gds
+
+
+def _inject_padring_io_lefs(full_pnr_tcl: str,
+                            io_lefs: Sequence[str]) -> str:
+    """Load IO masters before ``read_verilog``/``link_design`` exactly once."""
+    anchors = list(re.finditer(r"(?m)^read_verilog\s+", full_pnr_tcl))
+    if len(anchors) != 1:
+        raise ValueError("PADRING_NETLIST_SEAM_AMBIGUOUS: expected one "
+                         f"read_verilog, found {len(anchors)}")
+    block = ("# Pad-ring physical masters selected by the PDK IO resolver.\n"
+             + "".join(f"read_lef {p}\n" for p in io_lefs))
+    return full_pnr_tcl[:anchors[0].start()] + block + full_pnr_tcl[anchors[0].start():]
+
+
+def step_pad_ring_gen(project: Path, container: Optional[str] = None,
+                      pdk: Optional[PdkConfig] = None) -> StepResult:
+    """Canonical step 15.5ic producer + independent gate, before routing.
+
+    A producer refusal is FAIL, a fully absent declaration is SKIP, and only
+    assignment + ring generation + `pad_ring_check` rc=0 is PASS.  The PnR
+    caller treats every non-PASS as blocking when the chip-path condition is
+    true, so a requested die can never route without its ring.
+    """
+    t0 = time.time()
+    notes: List[str] = []
+    status = "SKIP"
+    try:
+        pdk_root, pdk_tree = (_padring_pdk_root_and_tree(pdk, container)
+                              if pdk else (None, None))
+    except ValueError as exc:
+        return StepResult("pad_ring_gen", "FAIL", time.time() - t0, str(exc))
+    pdk_args = (["--pdk-root", str(pdk_root), "--pdk", str(pdk_tree)]
+                if pdk_root and pdk_tree else [])
+    specs = [
+        ("pad_assignment_gen.py", []),
+        ("pad_ring_gen.py", pdk_args),
+        ("pad_ring_check.py", pdk_args),
+    ]
+    for name, extra in specs:
+        prog = PROGRAMS_DIR / name
+        if not prog.is_file():  # pragma: no cover - shipped tree always has it
+            status = "ENV_UNAVAILABLE"
+            notes.append(f"{name}: program absent")
+            break
+        if container:
+            prog_c = _to_container_path(str(prog), container)
+            project_c = _to_container_path(str(project), container)
+            argv = ["python3", prog_c, project_c, *extra]
+            cmd = " ".join(shlex.quote(str(x)) for x in argv)
+            rc, out, err = _docker_exec(container, cmd, marker=prog_c)
+        else:
+            cp = subprocess.run(
+                [sys.executable, str(prog), str(project), *extra],
+                capture_output=True, text=True, errors="replace", timeout=600)
+            rc, out, err = cp.returncode, cp.stdout, cp.stderr
+        detail = (out or err or "").strip().splitlines()
+        notes.append(f"{name}: rc={rc} {detail[0] if detail else ''}".strip())
+        if rc == 0:
+            status = "PASS"
+            continue
+        status = "SKIP" if rc == 2 else ("FAIL" if rc == 1
+                                          else "ENV_UNAVAILABLE")
+        break
+
+    out_files = [
+        str(project / rel) for rel in (
+            "phase3/stage3/pnr/padring.def",
+            "reports/phase3/padring.json",
+            "reports/phase3/pad_assignment.json")
+        if (project / rel).is_file()
+    ]
+    required = {
+        project / "phase3/stage3/pnr/padring.def",
+        project / "reports/phase3/padring.json",
+        project / "reports/phase3/pad_assignment.json",
+    }
+    missing = sorted(str(p.relative_to(project)) for p in required
+                     if not p.is_file())
+    if status == "PASS" and missing:
+        status = "FAIL"
+        notes.append("producer/gate returned rc=0 but required output(s) are "
+                     f"absent: {missing}")
+    return StepResult("pad_ring_gen", status, time.time() - t0,
+                      "; ".join(notes) or "no producer ran", out_files)
+
+
+def _prepare_padring_for_route(
+        project: Path, pdk: PdkConfig, container: str,
+        out_dir: Path, out_dir_c: str, generic_pnr_tcl: str,
+        pad_ring_step=step_pad_ring_gen,
+        io_view_discover=_discover_padring_io_views
+        ) -> Tuple[StepResult, Optional[str]]:
+    """Create floorplan -> ring -> checked routing input, or fail closed."""
+    t0 = time.time()
+    seed = out_dir / "padring_floorplan_seed.tcl"
+    seed_log = out_dir / "padring_floorplan_seed.log"
+    try:
+        io_lefs, io_gds = io_view_discover(pdk, container)
+        io_ready_tcl = _inject_padring_io_lefs(generic_pnr_tcl, io_lefs)
+        seed.write_text(_floorplan_seed_tcl(io_ready_tcl))
+    except (OSError, ValueError) as exc:
+        return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
+                           "could not form the physical IO-library + pre-route "
+                           f"floorplan seam: {exc}"),
+                None)
+    seed_c = _to_container_path(str(seed), container)
+    seed_log_c = _to_container_path(str(seed_log), container)
+    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+           f"openroad -no_init -exit {seed_c} 2>&1 | tee {seed_log_c}")
+    rc, out, err = _docker_exec(container, cmd, marker=seed_c,
+                                log_path=seed_log, hard_ceiling_s=1800)
+    floorplan = out_dir / "floorplan.def"
+    if rc != 0 or not floorplan.is_file():
+        return (StepResult(
+            "pad_ring_gen", "FAIL", time.time() - t0,
+            f"floorplan seed failed before pad generation: rc={rc}; "
+            f"floorplan_present={floorplan.is_file()}; "
+            f"log_tail={(out + err)[-1000:]}", [str(seed_log)]), None)
+
+    result = pad_ring_step(project, container=container, pdk=pdk)
+    if result.status != "PASS":
+        result.detail = ("BLOCKING before routing: chip-path step 15.5ic did "
+                         f"not produce a verified ring; {result.detail}")
+        return result, None
+    padring = out_dir / "padring.def"
+    try:
+        consumer = _padring_routing_consumer_tcl(
+            io_ready_tcl, _to_container_path(str(padring), container))
+    except ValueError as exc:
+        return (StepResult("pad_ring_gen", "FAIL", time.time() - t0,
+                           f"verified ring has no routing consumer: {exc}",
+                           result.output_files), None)
+    result.detail += ("; routing consumer prepared before placement/CTS/route "
+                      f"from {padring.relative_to(project)}; IO physical views "
+                      f"loaded ({len(io_lefs)} LEF, {len(io_gds)} GDS)")
+    for view in io_lefs:
+        if view not in pdk.macro_lefs:
+            pdk.macro_lefs.append(view)
+    for view in io_gds:
+        if view not in pdk.macro_gds:
+            pdk.macro_gds.append(view)
+    result.output_files += [str(seed), str(seed_log)]
+    return result, consumer
+
+
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
              container: str, die_um: str, util: float,
-             spare_density=None) -> StepResult:
+             spare_density=None, pad_ring_step=step_pad_ring_gen,
+             pad_ring_results: Optional[List[StepResult]] = None) -> StepResult:
     t0 = time.time()
     netlist, _nl_note, _nl_is_scan = pnr_input_netlist(project, top)
     print(f"[pnr] netlist: {_nl_note}", flush=True)
@@ -21144,7 +21397,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if corner_liberty_block:
         print('[phase3] approach(a) multi-corner PnR — repair targets '
               'ss setup / ff hold BEFORE detailed_route', file=sys.stderr)
-    pnr_tcl.write_text(_build_pnr_tcl_text(
+    _generic_pnr_tcl = _build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
         corner_liberty_block=corner_liberty_block,
@@ -21188,7 +21441,33 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         cts_distance_between_buffers=_rf_map.get(
             "cts_distance_between_buffers"),
         sizing_limits_block=sizing_limits_block,
-        sizing_drv_report_block=sizing_drv_report_block))
+        sizing_drv_report_block=sizing_drv_report_block)
+
+    _chip_padring = _chip_path_requests_pad_ring(project)
+
+    def _install_route_deck() -> Optional[StepResult]:
+        """Write the current geometry's route deck, refreshing its ring first."""
+        if not _chip_padring:
+            pnr_tcl.write_text(_generic_pnr_tcl)
+            return None
+        pad_result, consumer_tcl = _prepare_padring_for_route(
+            project, pdk, container, out_dir, out_dir_c,
+            _generic_pnr_tcl, pad_ring_step=pad_ring_step)
+        if pad_ring_results is not None:
+            pad_ring_results[:] = [pad_result]
+        if pad_result.status != "PASS" or consumer_tcl is None:
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                "routing refused because the chip-path pad ring was not a "
+                f"verified routing input: {pad_result.detail}",
+                pad_result.output_files,
+                extras={"finding": "PADRING_PREROUTE_BLOCKED"})
+        pnr_tcl.write_text(consumer_tcl)
+        return None
+
+    _pad_install_failure = _install_route_deck()
+    if _pad_install_failure is not None:
+        return _pad_install_failure
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit -metrics {out_dir_c}/{_PNR_METRICS} "
@@ -21317,9 +21596,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 die_w, die_h = _lw, _lh
                 core_w = die_w - 2 * core_pad
                 core_h = die_h - 2 * core_pad
-                pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-                    pnr_tcl.read_text(), die_w, die_h,
-                    core_pad, core_w, core_h, fp_rect))
+                _generic_pnr_tcl = _rewrite_pnr_floorplan_die(
+                    _generic_pnr_tcl, die_w, die_h,
+                    core_pad, core_w, core_h, fp_rect)
+                _pad_install_failure = _install_route_deck()
+                if _pad_install_failure is not None:
+                    return _pad_install_failure
                 _loosen_idx += 1
                 continue
             # (b) GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror
@@ -21357,9 +21639,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     die_w, die_h = _new_w, _new_h
                     core_w = die_w - 2 * core_pad
                     core_h = die_h - 2 * core_pad
-                    pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-                        pnr_tcl.read_text(), die_w, die_h,
-                        core_pad, core_w, core_h, fp_rect))
+                    _generic_pnr_tcl = _rewrite_pnr_floorplan_die(
+                        _generic_pnr_tcl, die_w, die_h,
+                        core_pad, core_w, core_h, fp_rect)
+                    _pad_install_failure = _install_route_deck()
+                    if _pad_install_failure is not None:
+                        return _pad_install_failure
                     _downsized_once = True
                     continue
             break  # no over-util error → take rc / def_file path
@@ -21397,9 +21682,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         core_w = die_w - 2 * core_pad
         core_h = die_h - 2 * core_pad
         # Rewrite the floorplan line in pnr.tcl with the new die.
-        pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
-            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h,
-            fp_rect))
+        _generic_pnr_tcl = _rewrite_pnr_floorplan_die(
+            _generic_pnr_tcl, die_w, die_h, core_pad, core_w, core_h,
+            fp_rect)
+        _pad_install_failure = _install_route_deck()
+        if _pad_install_failure is not None:
+            return _pad_install_failure
         _upsize_tries += 1
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
@@ -25477,6 +25765,237 @@ def _vacuous_on_unrouted(project: Path, step_name: str,
         return None
     return StepResult(step_name, "VACUOUS_PASS", time.time() - t0,
                       _ROUTING_INCOMPLETE_NOTE)
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _gds_reference_counts(path: Path, top: str) -> Dict[str, int]:
+    """Count GDS structure references reachable from ``top``.
+
+    This reads the GDSII record stream directly, so the final pad proof does
+    not depend on a second layout tool or on structure names merely existing
+    as unused library cells in the stream.  SREF and AREF edges are counted;
+    malformed/truncated streams fail closed.
+    """
+    refs: Dict[str, List[Tuple[str, int]]] = {}
+    current: Optional[str] = None
+    pending_kind: Optional[int] = None
+    pending_name: Optional[str] = None
+    pending_mult = 1
+    with path.open("rb") as fh:
+        while True:
+            head = fh.read(4)
+            if not head:
+                break
+            if len(head) != 4:
+                raise ValueError("truncated GDS record header")
+            size = int.from_bytes(head[:2], "big")
+            if size < 4 or size % 2:
+                raise ValueError(f"invalid GDS record length {size}")
+            data = fh.read(size - 4)
+            if len(data) != size - 4:
+                raise ValueError("truncated GDS record payload")
+            rtype = head[2]
+            if rtype == 0x05:              # BGNSTR
+                current = None
+            elif rtype == 0x06:            # STRNAME
+                current = data.rstrip(b"\x00").decode("ascii")
+                refs.setdefault(current, [])
+            elif rtype in (0x0A, 0x0B):    # SREF / AREF
+                pending_kind = rtype
+                pending_name = None
+                pending_mult = 1
+            elif rtype == 0x12 and pending_kind is not None:  # SNAME
+                pending_name = data.rstrip(b"\x00").decode("ascii")
+            elif rtype == 0x13 and pending_kind == 0x0B:      # COLROW
+                if len(data) != 4:
+                    raise ValueError("invalid GDS COLROW payload")
+                pending_mult = (int.from_bytes(data[:2], "big")
+                                * int.from_bytes(data[2:], "big"))
+            elif rtype == 0x11 and pending_kind is not None:  # ENDEL
+                if current is None or pending_name is None:
+                    raise ValueError("GDS reference has no owner or SNAME")
+                refs.setdefault(current, []).append(
+                    (pending_name, pending_mult))
+                pending_kind = pending_name = None
+                pending_mult = 1
+    if pending_kind is not None:
+        raise ValueError("unterminated GDS reference element")
+    if top not in refs:
+        raise ValueError(f"top structure {top!r} is absent")
+
+    counts: Dict[str, int] = {}
+
+    def walk(cell: str, multiplier: int, stack: Tuple[str, ...]) -> None:
+        if cell in stack:
+            raise ValueError(f"cyclic GDS hierarchy at {cell!r}")
+        for child, copies in refs.get(cell, []):
+            total = multiplier * copies
+            counts[child] = counts.get(child, 0) + total
+            walk(child, total, stack + (cell,))
+
+    walk(top, 1, ())
+    return counts
+
+
+def step_pad_ring_final_evidence(project: Path, top: str,
+                                 gds_result: StepResult) -> StepResult:
+    """BLOCKING proof that the routed DEF and streamed GDS carry the ring.
+
+    The proof re-parses the producer's pad/corner population from all three
+    hand-off DEFs, requires the live OpenROAD consumer marker, and binds the
+    exact final DEF bytes to the exact GDS bytes and stream-out engine.  It is
+    executed immediately after `step_gds`, before any downstream sign-off.
+    """
+    t0 = time.time()
+    report_path = project / "reports" / "phase3" / "padring.json"
+    out_path = project / "reports" / "phase3" / "pad_ring_route_evidence.json"
+    findings: List[str] = []
+    try:
+        import _pad_ring as _pr  # noqa: PLC0415
+        report = json.loads(report_path.read_text(errors="replace"))
+        producer = (report.get("producer") if isinstance(report, dict)
+                    and isinstance(report.get("producer"), dict) else report)
+        records = list(producer.get("pads") or []) + list(
+            producer.get("corners") or [])
+    except (OSError, ValueError, TypeError) as exc:
+        records = []
+        findings.append(f"PADRING_REPORT_UNREADABLE: {exc}")
+        _pr = None
+    if not records:
+        findings.append("PADRING_EXPECTED_POPULATION_EMPTY")
+
+    pnr_dir = _pl.pnr_dir(project)
+    def_paths = [pnr_dir / "padring.def", pnr_dir / "routed.def",
+                 pnr_dir / f"{top}.def"]
+    def_evidence: Dict[str, object] = {}
+    for path in def_paths:
+        if not path.is_file():
+            findings.append(f"PADRING_DEF_STAGE_MISSING: {path.name}")
+            continue
+        try:
+            parsed = _pr.read_def(path) if _pr is not None else None
+            missing = []
+            for rec in records:
+                inst = str(rec.get("instance") or "")
+                master = str(rec.get("master") or "")
+                comp = parsed.components.get(inst) if parsed else None
+                if (not inst or comp is None or not comp.placed
+                        or comp.master != master):
+                    missing.append(inst or "<unnamed>")
+            if missing:
+                findings.append(
+                    f"PADRING_POPULATION_LOST:{path.name}:{missing[:8]}")
+            def_evidence[path.name] = {
+                "sha256": _sha256_file(path),
+                "pad_corner_count_expected": len(records),
+                "pad_corner_count_matched": len(records) - len(missing),
+                "pins": len(parsed.pins) if parsed else None,
+            }
+        except (OSError, ValueError) as exc:
+            findings.append(f"PADRING_DEF_STAGE_UNREADABLE:{path.name}:{exc}")
+
+    route_tcl = pnr_dir / "pnr.tcl"
+    route_log = pnr_dir / "openroad.log"
+    try:
+        tcl = route_tcl.read_text(errors="replace")
+        ingest_i = tcl.index("PADRING_ROUTING_CONSUMED:")
+        place_m = re.search(r"(?m)^\s*global_placement(?:\s|$)",
+                            tcl[ingest_i:])
+        route_m = re.search(r"(?m)^\s*detailed_route(?:\s|$)",
+                            tcl[ingest_i:])
+        if place_m is None or route_m is None:
+            raise ValueError("live placement/route commands absent after ingest")
+        place_i = ingest_i + place_m.start()
+        route_i = ingest_i + route_m.start()
+        if not ingest_i < place_i < route_i:
+            findings.append("PADRING_CONSUMER_ORDER_INVALID")
+    except (OSError, ValueError) as exc:
+        findings.append(f"PADRING_CONSUMER_MISSING:{exc}")
+    try:
+        if "PADRING_ROUTING_CONSUMED:" not in route_log.read_text(
+                errors="replace"):
+            findings.append("PADRING_CONSUMER_NOT_OBSERVED_IN_LIVE_LOG")
+    except OSError as exc:
+        findings.append(f"PADRING_ROUTE_LOG_UNREADABLE:{exc}")
+
+    gds = pnr_dir / f"{top}.gds"
+    if gds_result.status != "PASS":
+        findings.append(f"PADRING_GDS_NOT_PASSED:{gds_result.status}")
+    if not gds.is_file() or gds.stat().st_size <= 0:
+        findings.append("PADRING_GDS_MISSING_OR_EMPTY")
+    gds_refs: Optional[Dict[str, int]] = None
+    if gds.is_file() and records:
+        try:
+            gds_refs = _gds_reference_counts(gds, top)
+            expected_by_master: Dict[str, int] = {}
+            for rec in records:
+                master = str(rec.get("master") or "")
+                if master:
+                    expected_by_master[master] = (
+                        expected_by_master.get(master, 0) + 1)
+            lost = {master: {"expected": count,
+                             "reachable_references": gds_refs.get(master, 0)}
+                    for master, count in expected_by_master.items()
+                    if gds_refs.get(master, 0) < count}
+            if lost:
+                findings.append(f"PADRING_GDS_REFERENCES_LOST:{lost}")
+        except (OSError, UnicodeError, ValueError) as exc:
+            findings.append(f"PADRING_GDS_HIERARCHY_UNREADABLE:{exc}")
+    gds_evidence = ({"path": str(gds.relative_to(project)),
+                     "sha256": _sha256_file(gds),
+                     "bytes": gds.stat().st_size,
+                     "streamout_engine": gds_result.extras.get(
+                         "streamout_engine"),
+                     "reachable_structure_references": gds_refs}
+                    if gds.is_file() and gds.stat().st_size > 0 else None)
+
+    payload = {
+        "schema": "vibe-ic/pad-ring-route-evidence/1",
+        "enforcement": "BLOCKING",
+        "verdict": "FAIL" if findings else "PASS",
+        "expected_pad_corner_count": len(records),
+        "def_evidence": def_evidence,
+        "gds_evidence": gds_evidence,
+        "gds_source_def": f"phase3/stage3/pnr/{top}.def",
+        "gds_source_def_sha256": (
+            _sha256_file(pnr_dir / f"{top}.def")
+            if (pnr_dir / f"{top}.def").is_file() else None),
+        "routing_consumer": "read_def phase3/stage3/pnr/padring.def",
+        "findings": findings,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _aa.write_text(out_path, json.dumps(payload, indent=2) + "\n")
+    return StepResult(
+        "pad_ring_route_evidence", "FAIL" if findings else "PASS",
+        time.time() - t0,
+        ("; ".join(findings) if findings else
+         f"{len(records)} pad/corner instances persist through padring.def, "
+         f"routed.def and {top}.def; live routing consumer observed; GDS "
+         "hierarchy retains every expected pad/corner reference; exact final "
+         "DEF and GDS hashes recorded"), [str(out_path)])
+
+
+def _pad_ring_route_cache_valid(project: Path, top: str) -> bool:
+    """A chip route is reusable only while its evidence hashes still bind."""
+    path = project / "reports" / "phase3" / "pad_ring_route_evidence.json"
+    try:
+        doc = json.loads(path.read_text())
+        final_def = _pl.pnr_dir(project) / f"{top}.def"
+        gds = _pl.pnr_dir(project) / f"{top}.gds"
+        return (doc.get("verdict") == "PASS" and final_def.is_file()
+                and gds.is_file()
+                and doc.get("gds_source_def_sha256") == _sha256_file(final_def)
+                and (doc.get("gds_evidence") or {}).get("sha256")
+                == _sha256_file(gds))
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def step_gds(project: Path, top: str, pdk: PdkConfig,
@@ -41442,6 +41961,12 @@ def main() -> int:
                 _pnr_out, "pnr")
             _cache_ok = _cache_ok and _pnr_prod_ok
             _cache_msg = f"{_cache_msg}; {_pnr_prod_msg}"
+            if (_chip_path_requests_pad_ring(project)
+                    and not _pad_ring_route_cache_valid(
+                        project, effective_top)):
+                _cache_ok = False
+                _cache_msg += ("; chip-path pad-ring route evidence absent, "
+                               "stale or hash-mismatched")
             if def_existing.is_file() and _cache_ok:
                 plan.append(StepResult(
                     "pnr", "PASS", 0.0,
@@ -41452,20 +41977,24 @@ def main() -> int:
                 if def_existing.is_file():
                     print(f"[pnr] cache invalid — {_cache_msg}",
                           file=sys.stderr)
-                # PRE-FLIGHT (canonical steps 15-22 — ONE OpenROAD session
-                # covering floorplan/PDN, clock plan, placement, spare cells,
-                # CTS, hold fix, route, extraction). Only the SPAN'S ENTRY
-                # inputs can refuse: 17 reading 15's `pdn.tcl` is a handoff
-                # this very dispatch creates.
-                plan.append(_spf.gate(
+                # Canonical 15.5ic is executed inside this dispatch at the
+                # real floorplan->route seam. Its row is returned separately
+                # and inserted BEFORE the PnR row so the durable plan states
+                # the same order the tools executed. The callable is passed
+                # explicitly: removing it makes the invocation guard red and
+                # cannot leave a dead definition looking wired.
+                _pad_ring_rows: List[StepResult] = []
+                _pnr_dispatched = _spf.gate(
                     project, "phase3_one_shot_runner", "pnr",
                     _preflight_refusal("pnr"),
                     step_pnr, project, effective_top, pdk, args.container,
                     args.die_um, args.util,
-                    spare_density=args.spare_density))
-                # Appends NOTHING — the provenance snapshot below still finds
-                # the PnR row where it expects it.
-                if plan[-1].status == "PASS":
+                    spare_density=args.spare_density,
+                    pad_ring_step=step_pad_ring_gen,
+                    pad_ring_results=_pad_ring_rows)
+                plan.extend(_pad_ring_rows)
+                plan.append(_pnr_dispatched)
+                if _pnr_dispatched.status == "PASS":
                     _write_producer_identity(_pnr_out, "pnr")
         # ── PROVENANCE SNAPSHOT of the PnR outcome ─────────────────────────
         # Everything downstream (the #527 SPEF repair, the DRV escalation and
@@ -41578,11 +42107,12 @@ def main() -> int:
                 _pnr_out, "gds")
             _cache_ok = _cache_ok and _gds_prod_ok
             if gds_existing.is_file() and _cache_ok and not _pnr_reran:
-                plan.append(StepResult(
+                _gds_dispatched = StepResult(
                     "gds", "PASS", 0.0,
                     f"GDS already present: {gds_existing.name} (skipped "
                     f"re-run; {_gds_prod_msg})",
-                    [str(gds_existing)]))
+                    [str(gds_existing)])
+                plan.append(_gds_dispatched)
             else:
                 # PRE-FLIGHT (canonical step 37 — stream-out). Step 34 (metal
                 # fill) is NOT in this span: MEASURED on spm v1.5.74, filled.def
@@ -41590,12 +42120,18 @@ def main() -> int:
                 # by step_canonicalize_artefacts, later than this site. So 37's
                 # only declared input is NOT-YET-DUE here and the pre-flight
                 # says exactly that instead of pretending to have checked it.
-                plan.append(_spf.gate(
+                _gds_dispatched = _spf.gate(
                     project, "phase3_one_shot_runner", "gds",
                     _preflight_refusal("gds"),
-                    step_gds, project, effective_top, pdk, args.container))
-                if plan[-1].status == "PASS":
+                    step_gds, project, effective_top, pdk, args.container)
+                plan.append(_gds_dispatched)
+                if _gds_dispatched.status == "PASS":
                     _write_producer_identity(_pnr_out, "gds")
+            if _chip_path_requests_pad_ring(project):
+                _pad_final = step_pad_ring_final_evidence(
+                    project, effective_top, _gds_dispatched)
+                plan.append(_pad_final)
+                _chain_ok = (_pad_final.status == "PASS")
         # PRE-FLIGHT (canonical step 31 — DRC/LVS/ERC/Density, split across the
         # two dispatches below). Its declared input is step 21's routed.def:
         # a sign-off that runs with no routed design produces a verdict about
