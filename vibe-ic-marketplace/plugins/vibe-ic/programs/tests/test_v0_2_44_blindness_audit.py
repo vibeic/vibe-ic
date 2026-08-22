@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
+from _entry_guard_fixture import write_prompt_report  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 DISPATCH = PLUGIN / "programs" / "benchmark_dispatch.py"
@@ -143,6 +144,9 @@ def _stage_run(tmp_path, with_violation: bool):
     body = (f"read {ds}/Prob001_prompt.txt\n" +
             (f"cat {ds}/Prob001_ref.sv\n" if with_violation else ""))
     (t / "batch00.log").write_text(body)
+    # Stage the producer-derived prompt report so this downstream blindness
+    # test reaches its subject without weakening the upstream entry contract.
+    write_prompt_report(run)
     return ds, run
 
 
@@ -151,7 +155,7 @@ def test_score_front_door_refuses_on_violation(tmp_path):
     r = subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode != 0
     assert "blindness audit FAILed" in (r.stdout + r.stderr)
 
@@ -161,7 +165,7 @@ def test_score_front_door_passes_audit_then_proceeds(tmp_path):
     r = subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     # the audit must PASS and the gate must NOT be the failure reason;
     # the scorer itself then runs (and may fail on the empty synthetic run).
     out = r.stdout + r.stderr

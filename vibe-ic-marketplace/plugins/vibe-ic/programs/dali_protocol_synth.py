@@ -31,6 +31,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -41,7 +44,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def _force(d: dict, key: str, value) -> None:
@@ -1006,7 +1011,7 @@ def apply_dali_synth(generated_docs_dir: Path, is_dali: bool,
         d = _read(p)
         d.setdefault("module_role",
             "DALI control gear (LED driver / ballast subordinate) — receives 16-bit forward frames over the 2-wire DALI bus, validates address, executes direct or indirect command, answers query commands with an 8-bit backward frame. Maintains persistent variables (Power On Level, Min/Max, Fade Rate/Time, Short Address, Group, Scene 0..15, Random Address, Fast Fade Time, Failure Status, Operating Mode, Dimming Curve) in non-volatile storage, applies the logarithmic 254-level dimming curve to the LED driver, and exposes Configuration-Mode addressing commands.")
-        d["top_module"] = "dali_control_gear_top"
+        _ptm.apply(d, "dali_control_gear_top")
         d.setdefault("integration_overview", {
             "host_side":           "Internal control-gear logic — Manchester encode/decode, address match, command dispatch, fade engine, persistent-variable store.",
             "wire_side_dali":      "DALI 2-wire bus, opto-isolated. DALI_RX edge-interrupt input + DALI_TX open-drain output. 9.5..22.5 V; ≤ 250 mA.",

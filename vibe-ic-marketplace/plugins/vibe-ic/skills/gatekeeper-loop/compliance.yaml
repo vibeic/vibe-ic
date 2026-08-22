@@ -1,0 +1,87 @@
+skill: gatekeeper-loop
+
+# Compliance requirements for gatekeeper-loop request-changes comments.
+#
+# Every time the gatekeeper posts a 繁體中文 request-changes comment on a
+# PR (Step 2 machine-red, or Step 2.7 reproducible-HIGH), the comment body
+# MUST follow the canonical 5-section shape so:
+#   (a) the PR author can deterministically see WHAT gate / finding blocked
+#       the PR and what is required to re-enter the gate
+#   (b) the machine-vs-agent split is stated at the publish layer too — the
+#       comment must name the required-check / Step-2.7 finding, not a vague
+#       "looks wrong"
+#   (c) chip-AGNOSTIC discipline is enforced at the publish layer as a
+#       second line of defence (the diff scan is the primary one)
+#
+# Save the candidate comment body to a file and run:
+#     python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+#         --requirements compliance.yaml <file>
+#
+# Exit 0 = PASS (post the comment); exit 1 = FAIL (patch and re-run).
+#
+# NOTE: Uses key `requirements:` matching skill_compliance_check.py, NOT the
+# `required_elements:` key seen in some older skills which is a no-op.
+
+requirements:
+  - id: R1_request_changes_header
+    description: >-
+      Comment must open with the canonical header line
+      "Gatekeeper 已 request-changes：PR #<num>" naming the PR. This is
+      the author's pickup anchor and states the gatekeeper identity.
+    pattern: 'Gatekeeper 已 request-changes：PR #'
+
+  - id: R2_problem_section
+    description: >-
+      Comment must contain a "**問題**：" section restating the PR's goal
+      plus what triggered the request-changes (which gate / which finding).
+    pattern: '\*\*問題\*\*：'
+
+  - id: R3_root_cause_section
+    description: >-
+      Comment must contain a "**根因**：" section giving the failing
+      machine-gate class OR the Step-2.7 adversarial finding's root cause
+      (not just the symptom).
+    pattern: '\*\*根因\*\*：'
+
+  - id: R4_evidence_section
+    description: >-
+      Comment must contain a "**證據**：" section carrying the verbatim
+      failing gate output OR the reproducible-HIGH reproduction. A bare
+      assertion with no evidence is not acceptable — the gate/finding must
+      be reproducible from the comment.
+    pattern: '\*\*證據\*\*：'
+
+  - id: R5_required_section
+    description: >-
+      Comment must contain a "**要求**：" section telling the author exactly
+      what to fix to re-enter the gate.
+    pattern: '\*\*要求\*\*：'
+
+  - id: R6_mechanism_line
+    description: >-
+      Comment must carry the "**機制說明**：" line stating the gatekeeper
+      mechanism — single gatekeeper, machine gates (required checks) +
+      Step-2.7 adversarial review, serialized merge queue, rebase + re-run
+      on the rebased tree, squash-merge (one PR = one version bump), and the
+      never --admin / --force / --no-verify invariants. The gate is the
+      quality guarantee — self-merge of a gated PR is allowed (there is no
+      author≠approver requirement).
+    pattern: '\*\*機制說明\*\*：'
+
+  - id: R7_squash_one_bump_mention
+    description: >-
+      The mechanism line must mention the squash-merge one-version-per-push
+      invariant so the author understands why their PR must carry exactly
+      one version bump.
+    pattern: 'squash'
+
+  - id: R8_chip_agnostic_language
+    description: >-
+      Comment text MUST NOT carry chip-specific class literals as detection
+      logic. Naming a benchmark folder is allowed in an evidence context,
+      but the same chip-class string must not appear declaring a regex /
+      deny-list / detection condition. Conservative pattern: bare
+      IC-A / usb_hid_tester OUTSIDE backticks → fail. (chip-AGNOSTIC at the
+      publish layer is a second line of defence; the diff scan is primary.)
+    pattern: '^(?!.*(?<![`a-zA-Z])(IC-A|usb_hid_tester)(?![`a-zA-Z])).*$'
+    required: false   # advisory; spot-checks rather than blocking

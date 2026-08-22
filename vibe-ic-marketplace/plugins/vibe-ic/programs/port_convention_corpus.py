@@ -214,12 +214,233 @@ def order_ports(ports: List[Tuple[str, str, str]],
     return outs + ins + inouts
 
 
+# ── Part 3: named-parameter-override contract (ORGANIC #742, FACET B) ────────
+# THE FLOOR THIS FIXES
+# --------------------
+# A hidden Shape-B testbench binds the DUT with a NAMED parameter override —
+# `dut #(.DATA_WIDTH(8),.STG_WIDTH(16)) u(...)` — but the prose design
+# description names NO such parameter, so a spec-faithful author emits a module
+# with NO `parameter STG_WIDTH`. iverilog then aborts elaboration with the
+# specific error:
+#
+#     testbench.v:NN: error: parameter `STG_WIDTH' not found in `<dut-inst>'.
+#
+# This is an UNDISCLOSED binding contract: the design is functionally correct
+# (golden-self-consistent) and the TB's functional check is LATENCY/parameter-
+# AGNOSTIC (proof: injecting only an UNUSED `parameter STG_WIDTH=<default>`
+# makes the design PASS with 0 mismatch — the param is never read by the RTL).
+#
+# THE FIX (harness-normalization of an undisclosed contract):
+#   * `iverilog_param_not_found` parses the SPECIFIC error text above (and ONLY
+#     it) — the structural signal, never a design/benchmark SKU.
+#   * `tb_named_param_overrides` parses the `#(.X(...))` named-param overrides
+#     the TB applies to the DUT instantiation (deterministic pre-emit gate).
+#   * `module_declares_param` / `inject_passthrough_param` ADD a missing
+#     `parameter X=<default>` to the emitted DUT header — a PURE ADD that never
+#     relaxes the functional pass/fail comparison (the vvp comparison is
+#     unchanged; an injected param the RTL never reads cannot change behaviour).
+#
+# §4.05 NEGATIVE NO-LEAK: injection only ADDS a missing declaration. A
+# functionally-wrong DUT STILL FAILs (the vvp comparison is untouched); a design
+# that ALREADY declares the param is UNAFFECTED (no-op). chip-AGNOSTIC: the
+# iverilog error grammar + the TB's own `#(.X(...))` instantiation grammar only.
+
+# `error: parameter `X' not found in `inst'.` — iverilog 12's exact wording.
+# Capture X (the missing parameter name) and tolerate the various quote styles
+# iverilog uses (backtick / single-quote / plain). chip-AGNOSTIC structural text.
+_PARAM_NOT_FOUND_RE = re.compile(
+    r"parameter\s+[`'\"]?([A-Za-z_]\w*)[`'\"]?\s+not\s+found\s+in\b",
+    re.IGNORECASE)
+
+# A `// comment` or `/* */` block, and a "..." string — stripped before scanning
+# a TB so a `parameter X` token inside a doc comment / $display string is never
+# mis-parsed.
+_PCC_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _strip_v(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", "", text)
+    return _PCC_STRING_RE.sub('""', text)
+
+
+def iverilog_param_not_found(error_text: str) -> List[str]:
+    """Return the ordered, de-duplicated list of parameter names iverilog reports
+    as `parameter `X' not found in `<inst>'` in `error_text`. Empty list when the
+    error text carries no such line. chip-AGNOSTIC: keys on the iverilog error
+    grammar only — never on a design/parameter SKU."""
+    seen: List[str] = []
+    for m in _PARAM_NOT_FOUND_RE.finditer(error_text or ""):
+        nm = m.group(1)
+        if nm not in seen:
+            seen.append(nm)
+    return seen
+
+
+def error_is_only_param_not_found(error_text: str) -> bool:
+    """True iff EVERY iverilog `error:` line in `error_text` is a
+    `parameter `X' not found` line (and at least one such line exists). The §4.05
+    gate that keeps the param-injection retry from firing when the candidate ALSO
+    has a genuine compile bug: a mixed error set is NOT auto-normalized — the
+    candidate's own error stays a model FAIL. chip-AGNOSTIC: error grammar only."""
+    err_lines = [ln for ln in (error_text or "").splitlines()
+                 if re.search(r"\berror\b\s*:", ln, re.IGNORECASE)]
+    if not err_lines:
+        return False
+    return all(_PARAM_NOT_FOUND_RE.search(ln) for ln in err_lines)
+
+
+# A TB net declaration the instantiation override may reference for a default —
+# `localparam`/`parameter` in the TB, or a plain literal. Best-effort.
+_TB_OVERRIDE_RE_TMPL = (
+    r"\b{top}\b\s*#\s*\((?P<ovr>.*?)\)\s*[A-Za-z_]\w*\s*\(")
+
+
+def tb_named_param_overrides(tb_text: str, top: str) -> dict:
+    """Parse the TB's `<top> #(.X(va),.Y(vb)) inst(...)` NAMED parameter overrides
+    into {X: 'va', Y: 'vb'}. Returns {} when the TB does NOT apply a named
+    `#(...)` override to `top` (a positional `#(8,16)` override or no override at
+    all). The override VALUE strings are returned verbatim (e.g. '16', "WIDTH",
+    "8'd5") so the caller can use them as the injected passthrough default. The
+    deterministic PRE-EMIT GATE: any width/size/stage symbol a sibling TB names as
+    a named-param override must be declared `parameter` in the emitted DUT.
+    chip-AGNOSTIC: the TB's own instantiation grammar only — no SKU literal."""
+    s = _strip_v(tb_text)
+    m = re.search(_TB_OVERRIDE_RE_TMPL.format(top=re.escape(top)), s, re.DOTALL)
+    if not m:
+        return {}
+    ovr = m.group("ovr")
+    if "." not in ovr:
+        return {}  # positional `#(8,16)` override — no named contract to honor
+    out: dict = {}
+    # .NAME(value) — value may itself contain (), so balance-match the inner ().
+    i, nlen = 0, len(ovr)
+    while i < nlen:
+        dm = re.match(r"\s*\.\s*([A-Za-z_]\w*)\s*\(", ovr[i:])
+        if not dm:
+            i += 1
+            continue
+        name = dm.group(1)
+        j = i + dm.end()  # just past the '('
+        depth, start = 1, j
+        while j < nlen and depth > 0:
+            if ovr[j] == "(":
+                depth += 1
+            elif ovr[j] == ")":
+                depth -= 1
+            j += 1
+        val = ovr[start:j - 1].strip() if depth == 0 else ""
+        out.setdefault(name, val)
+        i = j
+    return out
+
+
+def module_declares_param(module_text: str, module: str, param: str) -> bool:
+    """True iff `module`'s header / body in `module_text` declares `param` as a
+    `parameter` or `localparam` (whole-word). The §4.05 no-op guard: a design that
+    ALREADY declares the param is left UNAFFECTED by injection.
+    chip-AGNOSTIC: pure Verilog `parameter`/`localparam` grammar."""
+    s = _strip_v(module_text)
+    mm = re.search(rf"\bmodule\s+{re.escape(module)}\b", s)
+    if not mm:
+        return False
+    body = s[mm.end():]
+    me = re.search(r"\bendmodule\b", body)
+    if me:
+        body = body[:me.start()]
+    return bool(re.search(
+        rf"\b(?:parameter|localparam)\b[^;]*?\b{re.escape(param)}\b", body))
+
+
+def _default_for(param: str, override_val: str = "") -> str:
+    """Pick the injected passthrough default for `param`. Prefer a numeric-literal
+    override the TB supplied (e.g. `.STG_WIDTH(16)` → '16'); fall back to a benign
+    `1` (an UNUSED param's value never affects behaviour — the RTL does not read
+    it). NEVER picks a value that could change the functional comparison, because
+    the param is, by construction, absent from the RTL and thus unread."""
+    v = (override_val or "").strip()
+    if re.fullmatch(r"\d+", v):
+        return v
+    m = re.fullmatch(r"\d+'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+", v)
+    if m:
+        return v
+    return "1"
+
+
+def inject_passthrough_param(module_text: str, module: str, param: str,
+                             default: str = "1") -> Optional[str]:
+    """Return `module_text` with a PASSTHROUGH `parameter <param>=<default>` ADDED
+    to `module`'s header — never relaxing any functional check (the param is, by
+    construction, absent from the RTL, so it is UNREAD: vvp pass/fail is
+    unchanged). Returns None when:
+      * `module` is not found, or
+      * the module already declares `param` (no-op — §4.05 already-declared safe),
+      * the header is malformed (don't risk a broken edit).
+
+    Handles BOTH header shapes:
+      * NO existing `#(...)` block — insert one: `module m (...)` →
+        `module m #(parameter <param>=<default>) (...)`.
+      * an existing `#(...)` block — append: `#(parameter A=1)` →
+        `#(parameter A=1, parameter <param>=<default>)`.
+    PURE ADD — the port list, the body, and every existing parameter are byte-for-
+    byte preserved. chip-AGNOSTIC: pure Verilog module-header grammar."""
+    if module_declares_param(module_text, module, param):
+        return None
+    # Operate on the RAW text (so the edit lands in the real file), but locate the
+    # header with a comment-tolerant scan.
+    mm = re.search(rf"\bmodule\s+{re.escape(module)}\b", module_text)
+    if not mm:
+        return None
+    i, n = mm.end(), len(module_text)
+    # Skip whitespace; consume `import pkg::*;` clauses; locate the optional
+    # `#(...)` param block, then the port `(`.
+    def _skip_ws(j: int) -> int:
+        while j < n and module_text[j].isspace():
+            j += 1
+        return j
+    i = _skip_ws(i)
+    while True:
+        im = re.match(r"import\s+[\w:\*\s,]+;", module_text[i:])
+        if not im:
+            break
+        i = _skip_ws(i + im.end())
+    if i < n and module_text[i] == "#":
+        # Existing `#( ... )` param block — append a new parameter just before its
+        # closing ')'. Balance-match to find that ')'.
+        k = _skip_ws(i + 1)
+        if k >= n or module_text[k] != "(":
+            return None
+        depth, j = 0, k
+        while j < n:
+            if module_text[j] == "(":
+                depth += 1
+            elif module_text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= n or depth != 0:
+            return None
+        inner = module_text[k + 1:j].rstrip()
+        sep = "" if inner.endswith(",") or not inner.strip() else ", "
+        addition = f"{sep}parameter {param}={default}"
+        return module_text[:j] + addition + module_text[j:]
+    if i < n and module_text[i] == "(":
+        # No param block — insert one between the module name region and the port
+        # `(`. Place it right before this opening port paren.
+        return (module_text[:i]
+                + f"#(parameter {param}={default}) "
+                + module_text[i:])
+    return None
+
+
 def main(argv=None) -> int:  # pragma: no cover — thin CLI for manual use
     import argparse
     import json
     ap = argparse.ArgumentParser(
         description="Port-convention corpus: optional-handshake inference + "
-                    "genre-conventional port ordering.")
+                    "genre-conventional port ordering + named-param-override "
+                    "passthrough injection.")
     ap.add_argument("--prose", default="", help="design prose (handshake hint)")
     ap.add_argument("--ports", nargs="*", default=[],
                     help="existing port names")
