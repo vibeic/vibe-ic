@@ -398,6 +398,8 @@ def test_negative_control_the_positive_arm_is_unchanged_by_the_break():
 import dataclasses                              # noqa: E402
 from _ppa import delivery_path as DP            # noqa: E402
 from test_ppa_eco_delivery_path import chip_tree, ip_tree, unrouted_tree  # noqa: E402
+import _submission_template as _ST            # noqa: E402
+ST_NO_TEMPLATE_REL = _ST.NO_TEMPLATE_REL
 
 
 def _with_route(pol, project):
@@ -1087,3 +1089,77 @@ def test_penalty_is_never_mistakable_for_an_eligibility_decision():
                            policy())
     assert pen["promotable"] is None
     assert pen["basis"] == "SEARCH_ONLY"
+
+
+# ---------------------------------------------------------------------------
+# THE ROUTER ON TREES NOBODY BUILT FOR IT
+# ---------------------------------------------------------------------------
+# Every route test above hands `DP.resolve` a tree this suite constructed. That
+# is faithful -- the fixtures spell the marker files from the modules that own
+# them -- but it cannot show what the predicate does on a directory nobody made
+# for it. No tree in this repo carries `input/submission_template/`, so the CHIP
+# and IP arms are not reachable from real in-tree data at all; what IS reachable,
+# and is the arm that matters, is the SAFE direction:
+#
+#     a real project directory with no router artefact must resolve to
+#     NOT_DETERMINED and the axis stance to PATH_UNDETERMINED -- never IP.
+#
+# Reading an unestablished route as an IP delivery would silently exempt a
+# design from ECO readiness, which is the one way this flag could make things
+# worse than the silence it replaces.
+def _real_project_dirs():
+    """Real, non-fixture directories in this repo that look like run trees."""
+    root = _PROGRAMS.parents[3]
+    out = []
+    for phase3 in sorted(root.glob("docs/research/**/phase3"))[:12]:
+        d = phase3.parent
+        if d.is_dir():
+            out.append(d)
+    return out
+
+
+def test_router_on_real_trees_never_guesses_an_ip_delivery():
+    """The safe direction, on directories this suite did not construct.
+
+    Skipped, not silently passed, when no such tree is in the checkout -- an
+    empty scan is NOT OBSERVED.
+    """
+    import pytest
+    dirs = _real_project_dirs()
+    if not dirs:
+        pytest.skip("no real run-tree directories in this checkout; NOT "
+                    "OBSERVED rather than satisfied")
+
+    seen = 0
+    for d in dirs:
+        route = DP.resolve(str(d))
+        seen += 1
+        assert route["path"] != DP.PATH_IP, (
+            f"{d} carries no `{ST_NO_TEMPLATE_REL}` and the router still called "
+            f"it an IP delivery; an unestablished route read as IP silently "
+            f"exempts a design from ECO readiness")
+        # and whatever it did say, the axis must not turn it into a pass
+        pol = F.policy_from_document(
+            {"required_views": [dict(VIEW)], "delivery_path": route})
+        stance = F.eco_applicability(pol.eco_requirement,
+                                     pol.delivery_path)[0]
+        assert stance != F.ECO_NOT_APPLICABLE_ON_IP_PATH, (d, route["path"])
+    assert seen > 0
+
+
+def test_router_on_real_trees_reports_undetermined_not_a_verdict():
+    """Positively: with no router artefact the answer is "the route was not
+    established", and the axis says PATH_UNDETERMINED -- which blocks."""
+    import pytest
+    dirs = _real_project_dirs()
+    if not dirs:
+        pytest.skip("no real run-tree directories in this checkout; NOT "
+                    "OBSERVED")
+    route = DP.resolve(str(dirs[0]))
+    assert route["path"] == DP.PATH_NOT_DETERMINED, route
+    pol = F.policy_from_document(
+        {"required_views": [dict(VIEW)], "delivery_path": route})
+    r = F.promotion_verdict(cand("real-tree", clean_nine()), pol)
+    assert axis_of(r).applicability["state"] == F.ECO_PATH_UNDETERMINED
+    assert r.verdict == F.UNDETERMINED
+    assert F.set_exit_code([r]) == F.RC_UNDETERMINED
