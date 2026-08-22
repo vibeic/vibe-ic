@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783361190" />
-    <testcase name="test_inter_block" classname="test_intra_block" file="/code/src/test_intra_block.py" lineno="7" time="0.006957530975341797" sim_time_ns="100.0" ratio_time="14372.914810499624" />
-  </testsuite>
-</testsuites>
