@@ -318,8 +318,17 @@ The PDK declares both sites, with their sizes, one directory over, in its
       # Create fake pad sites
       # Note: This is needed if site definition are not in LEF
       set ::env(PAD_FAKE_SITES) [dict create]
-      dict set ::env(PAD_FAKE_SITES) "GF_IO_Site"  "0.1, 355"
-      dict set ::env(PAD_FAKE_SITES) "GF_COR_Site" "355, 355"
+      set ::env(PAD_FAKE_SITES) [dict create]                    # :9
+      dict set ::env(PAD_FAKE_SITES) "GF_IO_Site" "0.1, 355"     # :10
+      dict set ::env(PAD_FAKE_SITES) "GF_COR_Site" "355, 355"    # :11
+
+    (VERBATIM, and the line numbers are the file's. An earlier draft aligned the
+    two values with an extra space -- `"GF_IO_Site"  "0.1, 355"` -- which reads
+    identically and greps to ZERO HITS against the actual config. A quotation
+    that a reader cannot find by searching for it is not a quotation. The
+    `[dict create]` line above them was omitted entirely; it is what the two
+    `dict set` lines write into, and the parser correctly ignores it -- it
+    matches `dict set`, not `set`.)
 
 That is not a workaround somebody left lying around. It is a declared,
 documented, PDK-scoped variable of the same upstream flow whose config contract
@@ -1460,8 +1469,15 @@ find six paragraphs. The owner is asleep and will read this cold.
 
        "`pad_assignment_gen` composes the config from the operator's slot
         geometry WHERE THE SLOT SPEAKS and from the design's own tape-out
-        declaration everywhere else, DERIVES NOTHING, and stamps every variable
+        declaration everywhere else, derives nothing, and stamps every variable
         with which source it came from."
+                    -- flow/phase1_phase2_phase3.yaml:3045-3048, verbatim
+
+   (The capitals in "WHERE THE SLOT SPEAKS" are the SOURCE's. An earlier draft
+   also capitalised "derives nothing" for emphasis -- mine, not theirs -- which
+   in a sentence that already contains the author's own emphasis is actively
+   misleading: a reader cannot tell which phrase the flow owner chose to stress.
+   Restored to lowercase; the emphasis is made in my prose below instead.)
 
    So the precedence is: operator slot -> tape-out declaration -> nothing
    derived. The L-documents are not a source, and "derives nothing" is stated as
@@ -1628,6 +1644,18 @@ ALL THREE PARTS OF THE RULING, BOUND TO ARTEFACTS RATHER THAN ASSERTED
                                          hold 81 components. Part 3 was the only
                                          part of the ruling whose evidence was a
                                          sentence rather than a count.
+
+EVERY COMMAND THIS FILE PUBLISHES HAS BEEN RUN
+  every_published_command_runs.txt       Prompted by finding a re-run pointer
+                                         aimed at a place with nothing in it.
+                                         Eleven runnable commands extracted from
+                                         this report and executed: all pass. One
+                                         more is published as a labelled
+                                         COUNTER-example (`# BREAKS`), and one is
+                                         a quoted measurement with an elided path
+                                         sitting under the line that carries the
+                                         full one -- named rather than expanded
+                                         to make a table read 12/12.
 
 EVERY VERIFIER HERE IS GRADED, NOT ONLY RUN
   every_verifier_is_graded.txt           A verifier only ever seen GREEN is an

@@ -1,0 +1,49 @@
+EVERY COMMAND THIS REPORT PUBLISHES, EXTRACTED AND RUN
+======================================================
+WHY: the report was found to contain a re-run pointer aimed at a place with
+NOTHING IN IT ("the loop is in no_test_was_weakened.py's docstring" -- it is not,
+and that script refuses on a program file). That is worse than a stale figure. A
+wrong number can be re-measured; a dead pointer costs the reader the trip and
+teaches them to distrust the pointers that ARE good, and this report leans on
+them heavily.
+
+So: extract every command from RESULT.md mechanically, and RUN it.
+
+  #   command                                                   result
+  --------------------------------------------------------------------------
+   1  git cat-file -e 41e6562d2^{commit}                        OK
+   3  git diff --numstat a00f53f20..41e6562d2                   OK, 4 files
+   4  git ls-remote origin refs/heads/jpadsite/capture-bundle   OK
+   5  git merge-base --is-ancestor 41e6562d2 origin/main        OK, "not yet"
+   6  git show 41e6562d2:...tests/test_pad_ring.py  > /tmp/t.py OK, 1471 lines
+   7  git show <head>:docs/capture/.../RESULT.md | head -1      OK, the key line
+   8  git show a00f53f20:...pad_ring_gen.py | sed -n '526p'     OK, the dead
+                                                                anchor, alive in
+                                                                history
+   9  git show a00f53f20:...tests/test_pad_ring.py  > /tmp/b.py OK, 928 lines
+  11  ls /foss/pdks/gf180mcuD/.../lef/*.lef | wc -l             OK, 15 (in the
+                                                                pinned image)
+  12  the AST heredoc (mutation denominator)                    OK, True x3 --
+                                                                extracted back
+                                                                OUT of the
+                                                                report and run,
+                                                                not eyeballed
+  13  python3 no_test_was_weakened.py /tmp/b.py /tmp/t.py       OK
+
+THE TWO THAT ARE NOT RUNNABLE, AND WHY THAT IS CORRECT:
+   2  git diff --numstat $(git merge-base HEAD origin/main)..HEAD
+      Labelled `# BREAKS` in the report. It is published AS a counter-example --
+      it returns +106/-10 today and ZERO FILES once this branch lands, because
+      vibe-ic lands by merge and the merge-base becomes the head. Running it is
+      the point; believing it is the error.
+  10  grep -h '^ *SITE' .../lef/*.lef | sort | uniq -c
+      A QUOTED MEASUREMENT with an elided path, not a recipe -- it sits directly
+      under command 11, which carries the full path. Stated here rather than
+      "expanded to make the table read 12/12", because the honest count is
+      ELEVEN RUNNABLE, ALL PASSING, plus one deliberate counter-example and one
+      elision.
+
+RE-RUN THIS AUDIT: extract with the regex over RESULT.md that produced the list
+(`^\s{2,}(\$ )?(git|grep|python3|docker|sha256sum|ls|find|pytest|bash)\b`), then
+run each. The regex is a LOWER BOUND -- an ad-hoc pattern is always narrower than
+its subject -- so a command it misses is not a command that works.
