@@ -80,11 +80,22 @@ has said otherwise. A cell that records "not-retained" is a better deliverable
 than one that quietly looks whole.
 
 Raw PnR scratch under phase3/stage3 is still not staged: that is a decision
-about what counts as evidence, which is separate from how big a file is. NOTE
-that the three hand-staged reference cells DO carry `phase3/stage3/pnr/
-routed.def` and `phase3/stage3/extracted/*.spef`, so on that subtree this
-program still publishes less than they do. Widening it is an evidence-policy
-call, not a size call, and is deliberately left alone here.
+about what counts as evidence, which is separate from how big a file is.
+`placed.def`, `floorplan.def`, `post_cts.def`, the stage's `.tcl`, and
+`phase3/stage3/extracted/*.spef` are all still NOT_PUBLISHED, and widening the
+SUBTREE remains an evidence-policy call left alone here.
+
+ONE artefact out of that subtree is now staged: `phase3/stage3/pnr/routed.def`,
+under `_ROUTED_DEF_RELPATH`, size-routed exactly like the GDS. Not a widening
+of the scratch policy -- a repair of the same omission the GDS block below
+carries its own comment about. Its directory is not a copy subtree, so the size
+routing could not reach it and the artefact was dropped at EVERY size; MEASURED
+at 38 bytes, six orders of magnitude under the ceiling, recorded
+`NOT_PUBLISHED source-run-only`. A BLOCKING hygiene loop selects its whole
+population on that one path, so no number of published cells could make it
+check anything. It also moves this program TOWARD the hand-staged reference
+cells rather than away from them: they carry that file, and on the rest of the
+subtree (`extracted/*.spef`) this program still publishes less than they do.
 
 THE PER-STEP EVIDENCE — RECORDED, NOT MIRRORED (`STEP_ROUTING.txt`, `steps/`)
 ============================================================================
@@ -254,6 +265,43 @@ _COPY_SUBTREES = (
     "reports",
 )
 _COPY_FILES = ("provenance.jsonl",)
+
+# THE ONE ARTEFACT PUBLISHED OUT OF `phase3/stage3`, AND WHY IT IS NAMED HERE
+# RATHER THAN ADDED TO `_COPY_SUBTREES`.
+#
+# `repo_hygiene_gates.sh` declares a BLOCKING loop over the corpus "published
+# cells carrying a routed DEF", and `tools/ci/routed_def_corpus.py` selects its
+# population on exactly one path shape inside the published tree:
+#
+#     ic/<design>/<version>/phase3/stage3/pnr/routed.def
+#
+# MEASURED (2026-08-22, synthetic converged run, supported publish path): a
+# routed DEF of 38 bytes -- six orders of magnitude under `_SIZE_CEILING` --
+# produced a cell containing ZERO `.def` files, recorded as
+# `NOT_PUBLISHED source-run-only`. `phase3/stage3` is not a copy subtree, so
+# the size routing never reached it and NO number of published cells could add
+# a member to that corpus. The gate was not one publish away from checking
+# something; it was unreachable from every supported action.
+#
+# That is the SAME defect the GDS block in `publish` already carries its own
+# comment about, one artefact over: "`phase3/stage4` is not a copy subtree, so
+# until this existed the GDS was omitted at EVERY size -- the size routing
+# could not reach the one artefact the manifest is actually about."
+#
+# ONE ARTEFACT, NOT THE SUBTREE, and that distinction is the whole design. The
+# docstring above records that widening published scope to raw PnR scratch is
+# an evidence-policy call, deliberately left alone -- and it stays left alone:
+# `placed.def`, `floorplan.def`, `post_cts.def`, the `.tcl`, and
+# `phase3/stage3/extracted/` are all still NOT_PUBLISHED. What changes is only
+# that the artefact three registered gates are ABOUT can reach a reader, routed
+# by the same size rule as every other layout blob, so a cell over the ceiling
+# is still ROUTED_AWAY rather than made unlandable.
+#
+# It is also a RESTORATION, not a new policy: the docstring already records
+# that "the three hand-staged reference cells DO carry `phase3/stage3/pnr/
+# routed.def` ... so on that subtree this program still publishes less than
+# they do."
+_ROUTED_DEF_RELPATH = Path("phase3") / "stage3" / "pnr" / "routed.def"
 
 
 class Refuse(Exception):
@@ -1400,6 +1448,23 @@ def publish(args: argparse.Namespace) -> dict:
             shutil.copy2(g, gds_dir / g.name)
         layout_records.append(_record(g, run_dir, "STAGED", route, sha=sha))
         staged.append(f"phase3/stage4/gds/{g.name}")
+
+    # The routed DEF. Same shape as the GDS block above and for the same
+    # reason: its directory is not a copy subtree, so without this the artefact
+    # is omitted at EVERY size. See `_ROUTED_DEF_RELPATH`.
+    routed_def = run_dir / _ROUTED_DEF_RELPATH
+    if routed_def.is_file():
+        if over_ceiling(routed_def):
+            layout_records.append(
+                _record(routed_def, run_dir, "ROUTED_AWAY", route))
+        else:
+            if not dry:
+                target = dest / _ROUTED_DEF_RELPATH
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(routed_def, target)
+            layout_records.append(
+                _record(routed_def, run_dir, "STAGED", route))
+            staged.append(_ROUTED_DEF_RELPATH.as_posix())
 
     # shared design input (staged once per IC). BEFORE the routing record is
     # written: these files can live under the run too, and one recorded as
