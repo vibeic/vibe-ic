@@ -108,6 +108,16 @@ _LEDGER = frozenset({
     "_clock_port_sink_count", "_compute_downsized_die",
     "_compute_loosened_die", "_compute_resized_die",
     "_compute_spare_density", "_def_pdn_evidence",
+    # RECORDED after 6dd97611e, which added this emitter without the ledger
+    # decision this blocking test requires. `_cts_master_bound_check_tcl`
+    # produces a report-only Tcl fragment inside the adjacent live
+    # tap/placeability block: it reads that block's `_wc_run` / `_wc_sw` Tcl
+    # locals and prints whether the caller-resolved CTS masters meet the bound.
+    # It does not parse or derive a timing metric. Moving it to
+    # `_ppa/timing.py` would invert the boundary: that module reads completed
+    # timing artefacts and has no Tcl emitter. This is therefore runner
+    # orchestration whose `cts` token only makes its name look like PPA logic.
+    "_cts_master_bound_check_tcl",
     "_density_metal_fill", "_derive_metal_fill_density",
     "_design_supply_nets", "_detect_macro_supply_signal_ties",
     "_die_density_fill", "_die_finishing", "_discover_aocv_table",
