@@ -196,6 +196,10 @@ def test_an_inexpressible_stage_is_disclosed_not_refused(tmp_path):
 def test_the_inexpressible_count_is_never_silently_zero(tmp_path):
     root = _tree(tmp_path, _FLOW, {"runner.py": _STAMPED})
     rc, out = _run(root)
+    # Same reason as the disclosure pin in the pointer file: the denominator is
+    # printed before the verdict line, so without this the assertion survives a
+    # gate that never judged anything.
+    assert rc == 0, out
     assert _count_in(out, "0 inexpressible")
 
 
@@ -247,6 +251,183 @@ def test_absent_root_is_bad_invocation(tmp_path):
     assert rc == 3, out
 
 
-def test_repository_itself_is_clean():
+# KNOWN-LIVE DEFECT, PINNED RATHER THAN WAIVED.
+#
+# Arm A (flow `required_outputs`) is clean and stays clean. Arm B — the family
+# rule — reports three emitters in `phase3_one_shot_runner.py` that write a
+# timing/power report without STA_BASIS while the same module stamps another one
+# it emits. The capture that motivated this rule says so in as many words
+# ("Not yet fixed. The lane states the remedy as three added statements in the
+# multi-corner emitters"), so this is the rule working, not the rule misfiring.
+#
+# The stamps are NOT authored here on purpose: STA_BASIS is a claim about which
+# side of place-and-route a report measures, and asserting POST_ROUTE for a
+# session whose inputs were never checked is the unearned claim this whole lane
+# exists to prevent. `_emit_power_report` already carries the `basis` argument
+# that answers it; the other two need their sessions read first.
+#
+# This test pins the SET. It goes red if a new unstamped sibling appears AND if
+# one is fixed — at which point the fixer edits this test, which is the point.
+# WAS THREE. `sta_mcorner_ocv_posteco.rpt` was removed after it was checked
+# rather than assumed: `_measure_posteco_mcorner_ocv` stamps nothing itself, but
+# hands the report path to `_emit_mcorner_ocv_sta`, whose generated session writes
+# STA_BASIS / _LIBERTY / _NETLIST / _SPEF into that file. It was a FALSE POSITIVE
+# published by a scope-local reading, and the count coinciding with the capture's
+# "three added statements" was coincidence, not corroboration.
+_KNOWN_UNSTAMPED = {
+    "power.rpt",
+    "si_crosstalk.rpt",
+}
+
+
+def test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set():
     rc, out = _run(_REPO)
+    assert rc == 1, out
+    assert "0 declared-and-unstamped" in out, (
+        "arm A regressed: a flow-declared report lost its stamp\n" + out)
+    # DISCLOSED lines also contain "emitted by" and share the stream, so the
+    # filter names the finding shape rather than a substring both carry.
+    seen = {ln.split(":", 1)[0] for ln in out.splitlines()
+            if "emitted by" in ln and not ln.startswith("[")
+            and not ln.startswith("DISCLOSED")}
+    assert seen == _KNOWN_UNSTAMPED, (
+        "arm B's finding set moved.\n  expected %s\n  got      %s\n%s"
+        % (sorted(_KNOWN_UNSTAMPED), sorted(seen), out))
+
+
+# ── ARM B — the family rule ─────────────────────────────────────────────────
+# Arm A is keyed on the flow's `required_outputs` and CANNOT reach the capture's
+# own incident: both multi-corner sign-off reports are emitted and never
+# declared, so arm A files them under DISCLOSED. These pin the arm that can.
+
+_SIBLING_RED = (
+    'def emit_a(project, body):\n'
+    '    p = project / "sta" / "post_route_timing.rpt"\n'
+    '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+    '\n'
+    'def emit_b(project, body):\n'
+    '    q = project / "sta" / "sta_mcorner_ocv_posteco.rpt"\n'
+    '    q.write_text(body)\n')
+
+
+def test_arm_b_an_unstamped_sibling_of_a_stamped_report_goes_red(tmp_path):
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": _SIBLING_RED}))
+    assert rc == 1, out
+    assert "sta_mcorner_ocv_posteco.rpt" in out, out
+    assert "the same module stamps another" in out, out
+
+
+def test_arm_b_a_module_that_stamps_nothing_is_outside_the_population(tmp_path):
+    """No convention demonstrated, so the omission is a scope question, not a
+    finding. This is what keeps the arm from reddening every report in the tree.
+
+    THE rc IS PINNED, AND THE FIRST VERSION OF THIS TEST NEEDED IT. It renamed the
+    stamped report to `other_sta.rpt`, which left the flow-declared report with no
+    emitter — so arm A bailed out at NOT CHECKED (rc=2) before arm B judged
+    anything, and the absence assertion below was satisfied by a gate that never
+    ran. A green assertion under rc=2 proves nothing at all. The declared report
+    keeps its emitter here so the gate actually reaches a verdict.
+    """
+    body = ('def emit_b(project, body):\n'
+            '    q = project / "sta" / "aging_sta.rpt"\n'
+            '    q.write_text(body)\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": _STAMPED, "n.py": body}))
     assert rc == 0, out
+    assert "aging_sta.rpt" not in out.split("examined")[0], out
+
+
+def test_arm_b_sees_a_write_made_by_atomic_rename(tmp_path):
+    """THE GAP THAT HID THE CAPTURE'S OWN REPORT.
+
+    The atomic-write doctrine here is temp-file + `os.replace`, so a correct
+    emitter never calls `write_text` on its destination. While this scan knew
+    only the direct write forms, `sta_mcorner_ocv_posteco.rpt` — written by
+    `_measure_posteco_mcorner_ocv` via `replace` — was invisible to it.
+    """
+    body = ('import os\n'
+            'def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def emit_b(project, body):\n'
+            '    tmp = project / "sta" / "sta_mcorner_ocv_posteco.rpt.tmp"\n'
+            '    tmp.write_bytes(body)\n'
+            '    os.replace(tmp, project / "sta" / "sta_mcorner_ocv_posteco.rpt")\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 1, out
+    assert "sta_mcorner_ocv_posteco.rpt" in out, out
+
+
+def test_arm_b_does_not_require_a_copier_to_stamp(tmp_path):
+    """A republished byte-identical copy cannot state a basis its producer did
+    not. Reddening the mirror would demand a stamp from the one function that
+    provably has nothing to stamp it with."""
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def mirror(src, dst):\n'
+            '    payload = src.read_bytes()\n'
+            '    dst.write_bytes(payload)\n'
+            '    return "sta_spef_based.rpt"\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 0, out
+    assert "sta_spef_based.rpt" not in out.split("examined")[0], out
+
+
+def test_arm_b_a_bare_read_is_not_a_copy(tmp_path):
+    """The copy signal is the DATAFLOW, not the read. Every report generator
+    reads the tool log it summarises; treating that as copying emptied this
+    arm's population and turned the gate green — measured, not supposed."""
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def emit_b(project, log):\n'
+            '    raw = log.read_text()\n'
+            '    q = project / "sta" / "si_crosstalk.rpt"\n'
+            '    q.write_text("slack " + raw.split()[0])\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 1, out
+    assert "si_crosstalk.rpt" in out, out
+
+
+def test_arm_b_follows_one_hop_delegation_to_a_stamper(tmp_path):
+    """A wrapper that hands its report to a stamping helper is NOT a finding.
+
+    This is the false positive that shipped: the wrapper stamps nothing in its own
+    body, so a scope-local reading calls the report unstamped when the stamp is
+    written one call away, into that very file.
+    """
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def _session(rpt_out, body):\n'
+            '    rpt_out.write_text("STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def wrapper(project, body):\n'
+            '    out = project / "sta" / "sta_mcorner_ocv_posteco.rpt"\n'
+            '    _session(out, body)\n'
+            '    out.write_bytes(b"")\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 0, out
+    assert "sta_mcorner_ocv_posteco.rpt" not in out.split("examined")[0], out
+
+
+def test_arm_b_still_reddens_a_wrapper_whose_callee_does_not_stamp(tmp_path):
+    """The other direction — delegation is not a blanket excuse."""
+    body = ('def emit_a(project, body):\n'
+            '    p = project / "sta" / "post_route_timing.rpt"\n'
+            '    p.write_text("# STA_BASIS: POST_ROUTE_SPEF\\n" + body)\n'
+            '\n'
+            'def _plain(rpt_out, body):\n'
+            '    rpt_out.write_text(body)\n'
+            '\n'
+            'def wrapper(project, body):\n'
+            '    out = project / "sta" / "si_crosstalk.rpt"\n'
+            '    _plain(out, body)\n'
+            '    out.write_bytes(b"")\n')
+    rc, out = _run(_tree(tmp_path, _FLOW, {"m.py": body}))
+    assert rc == 1, out
+    assert "si_crosstalk.rpt" in out, out
