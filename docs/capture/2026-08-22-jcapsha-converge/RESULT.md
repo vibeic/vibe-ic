@@ -833,3 +833,60 @@ distribution and both pins pass their upstream halves, on this branch, now. It
 does not establish they will be run again — and the BASIS line is the guard
 against the failure that matters more: a later reader taking a PASS for a
 statement about upstream when upstream was never opened.
+
+
+---
+
+## main moved 673 commits, and everything above was measured against a dead base
+
+A routine re-poll before a push — the same one that had answered "0 commits
+landed" eight times running — answered **673**
+(`evidence/MAIN_MOVED_673_COMMITS.md`).
+
+    my base   a4caccefe
+    main now  ae78abb28
+    landed    673
+
+**What changed, measured:**
+
+* **`phase3.pad_ring` is now on main** — someone landed their own version. My
+  addition is redundant. The red in `RED_routing_entry.md` was true when
+  measured and is false now; it is labelled by base sha and stays as a record
+  of that state.
+* **The F4 defect is still live** — main at `ae78abb28` still carries six
+  `inert` identifiers in `pad_ring_gen.py`.
+* **`jpadsite/pad-site` still has not landed**, so the NORTH and CORNER fixes
+  are still absent from main.
+
+**The merge, and the semantic break it hid.** Two conflicts, both ADDITIVE ON
+BOTH SIDES, resolved by union and never by choosing. Then the merged tree ran:
+
+    FAILED ...::test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert
+    FAILED ...::test_the_inert_disclosure_is_in_every_report_including_the_skip
+    2 failed, 206 passed
+
+Taking main's `test_pad_ring.py` wholesale and grafting only my NEW tests
+silently dropped my EDITS to two of its EXISTING ones. `pad_ring_gen.py` merged
+WITH the key rename; the test file merged WITHOUT it. Textually clean,
+semantically broken — the exact shape that makes "the merge had no conflicts"
+worthless as evidence. Re-applied: 208 passed, 16 skipped, rc 0; checker 3/3;
+`plugin_full_audit` D1/D2 PASS at 1273 programs.
+
+**The merge is not published, and the pre-push gate is why.** Pushing it would
+republish main's 673 commits on this ref, and the hook refused with a
+collateral-revert finding. Checked before acting: both flagged commits are
+already ancestors of `origin/main` — an older lane of mine that someone landed,
+with the revert inside main's own history. The gate is right about the shape
+and the shape is not mine. So: no argument with the gate, no `--no-verify`. **A
+verification does not need to be published.** The branch stays as its own 26
+commits; a lander merges onto current main themselves.
+
+What the merge taught, kept on the branch: `phase3.pad_ring` adopted **verbatim
+from main** so it merges as a no-op rather than a conflict.
+
+**The lesson, at the size it deserves.** I re-polled because the discipline says
+to, not because I suspected anything — the previous eight polls all said 0. A
+branch that had been "verified green" for its whole life was, for some unknown
+part of that time, verified against a base that no longer existed. *A
+verification is only as current as its last re-poll, and "it was 0 last time" is
+not a measurement.*
