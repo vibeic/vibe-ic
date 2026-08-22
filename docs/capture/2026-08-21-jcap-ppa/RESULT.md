@@ -2646,7 +2646,7 @@ gap was non-empty every single time it was measured.
 | A-23 | 53 records, 3 lanes | **0 / 0** | **swept on a real population**, 23 records not mine: no unrouted step, no unwired target. Clean result is conditional on this branch's routing entries — without them 9 of 30 would be unrouted |
 | A-24 | 37 gates | 98 consumers | the consumed tree is outside every one of them |
 | A-25 | 29 → **38** types | 17 → **19 unschema'd** | upstream cause of A-15 and A-17, and **re-measured: the gap is widening** — nine new document types against one new schema |
-| A-26 | 2 docs bound | 0 docstrings | 1 expired claim confirmed; population NOT estimated |
+| A-26 | 2 → **7** docs bound | **1215 candidates** of 4026 docstrings | re-measured: the binder is markdown-only by construction, and the population the record left unestimated is now bounded by a stated screen |
 | A-27 | **12 bad screens** | 3 missed their own case | the class behind every warning above |
 | A-28 | 232 single-value | 115 files | upper bound on candidates, stated as such |
 | A-29 | 4 lanes | **3 wrong** | not my measurement — the convention commit's own |
