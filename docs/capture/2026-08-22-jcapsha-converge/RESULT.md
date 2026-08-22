@@ -294,10 +294,66 @@ zero locus-word hits in each message).
 
 Per the brief — a guard that fires on the state we just shipped is a bug, and
 must be narrowed or dropped. **So F1's checker is NOT shipped on this branch.**
-The record carries the rule, the ladder verdict, and the exact reason the
-existing implementation is not yet green. Shipping it red, or shipping it after
-quietly widening the word list to swallow two hits I had already judged
-false-positive, would both be worse than shipping the honest gap.
+
+### And the reason is worse than two false positives — the guard does not catch F1
+
+I wrote a control instead of taking the rc 1 at face value
+(`evidence/F1_the_guard_does_not_catch_F1.md`). Four absence verdicts, one of
+them the ACTUAL pre-fix refusal:
+
+| verdict | guard |
+|---|---|
+| `PAD_SITE_NOT_FOUND` — the real message, `...(0 site(s) from 1 LEF(s); PAD-class: [])` | **PASSES** |
+| `f"{name} is not available"` | **PASSES** |
+| `f"{thing} is not available"` | FAILS |
+| `"it is not there"` | FAILS |
+
+**The refusal that blocked one design's whole verdict passes the guard written
+out of it.** It says `LEF(s)`, and `lef` is in `_LOCUS_WORDS`. The guard is
+named `absence_verdict_names_its_search_space` and the property it decides is
+`absence_verdict_mentions_a_locus_word`, and the distance between those two
+predicates is precisely the defect:
+
+    a locus word is a place that EXISTS.
+    a search space is the set of places that were OPENED.
+    "0 site(s) from 1 LEF(s)" names a count and a view and is still a
+    search space of ONE where the distribution declares in TWO.
+
+The guard's docstring concedes this in advance. It is an honest disclosure and
+it is easy to read past; measured, it means the guard is blind to its own
+motivating case while reporting two false positives on top. Too lax where it
+matters, too strict where it does not — and narrowing the word list fixes
+neither, because the word list is not the part that is wrong.
+
+**A claim I nearly published at the wrong size.** Row 2 passes only because
+bare `name` is in the vocabulary — a word for the thing SOUGHT, not the place
+SEARCHED. `name` is the commonest variable in a refusal message, so the
+mechanism suggests a hole most refusals fall through. Control on main's 1279
+files, bare `name` dropped: **31 verdicts, 29 naming a locus, 2 FAIL — with it
+and without it, identical.** The hole is real on a constructed input and
+accounts for zero of main's passes. Latent, not active. Written at the size the
+corpus supports.
+
+### What is decidable, for whoever writes it
+
+Not "mentions a locus word", and not "is the search space complete" — the
+docstring is right that completeness belongs to the DISTRIBUTION. The decidable
+middle:
+
+    an absence verdict must interpolate THE COLLECTION IT ITERATED — the
+    actual list of things opened — not a count of it, and not a word that
+    sounds like a place.
+
+The pre-fix message carried two counts and no list. A reader handed the LIST
+would have seen one path where the distribution declares in two directories,
+which is the whole finding. A program can check that a refusal carries the
+collection its enclosing scope iterated; it cannot check that the collection
+was the right one. That boundary is where Bucket A ends, and it is further
+along than the shipped implementation reaches.
+
+Shipping it red, or shipping it after quietly widening the word list to swallow
+two hits I had already judged false-positive, would both be worse than shipping
+the honest gap.
 
 ---
 
@@ -372,6 +428,7 @@ arrivals at one missing entry is the entry being missing.
     evidence/F2_the_PASS_is_partly_blind.md      the false PASS + positive control
     evidence/RED_routing_entry.md                the red the routing entry ships with
     evidence/F1_guard_on_current_main.txt        rc 1, the 2 false positives
+    evidence/F1_the_guard_does_not_catch_F1.md   the control: it passes the real refusal
     evidence/F2_parity_PASS_on_current_main.txt  rc 0, the blind pass
     evidence/F2_candidate_UPSTREAM_PINS_vacuous.txt    rc 2, population 0
     evidence/F2_candidate_UPSTREAM_MIRROR_vacuous.txt  rc 2, population 0
