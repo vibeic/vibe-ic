@@ -219,18 +219,38 @@ Both states, as a pair, because the collapse was a statement about a pair:
   tests.
 * `test_the_phase1_waiver_covers_the_measured_empty_row_and_not_the_absent_one`
   and `test_the_waiver_checks_the_shape_and_not_only_the_label` — these two pass
-  on `main` as well. They are guards for the future, not the red, and this
+  at `81cd5321b` as well. They are guards for the future, not the red, and this
   record does not claim otherwise.
 
-**Red without the fix**, production code reverted to `81cd5321b` and the tests
-kept: `5 failed, 13 passed` on the row-identity set, plus the closing-rc test.
-The sharpest is the last one, because the log it captures contains the entire
-defect in one place — the producer says it scanned nothing, and one line later
-the run calls the corpus empty and closes 0:
+**Red without the fix, re-measured on this tree.** A clean worktree of this
+branch with the three production files reverted and every test kept —
+`tools/ci/routed_def_corpus.py` and `tools/ci/_gate_dispatch.sh` to
+`81cd5321b`, `repo_hygiene_parallel.py` to `24a097287^` — run with
+`PYTHONDONTWRITEBYTECODE=1`:
+
+    7 failed, 57 passed in 23.26s
+
+    FAILED test_an_unconfigured_moved_corpus_is_explicit_no_corpus
+    FAILED test_the_absent_exit_code_is_one_number_in_two_languages
+    FAILED test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict
+    FAILED test_the_dispatcher_gives_absent_and_empty_different_rows
+    FAILED test_a_corpus_that_was_read_and_holds_none_says_so
+    FAILED test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND
+    FAILED test_an_absent_corpus_does_not_close_the_hygiene_dag_green
+
+The two `test_repo_hygiene_parallel.py` waiver guards named above stayed green
+under the revert, exactly as this record says they would — they are guards for
+the future, and counting them as part of the red would have inflated it.
+
+The sharpest failure is the last, because the log it captures holds the entire
+defect in one place: the producer says it scanned nothing, and the very next
+lines call the corpus empty and let the DAG close 0.
 
     [routed-def corpus] NO_CORPUS: nothing at …/benchmark-data/ic and
-    VIBE_IC_BENCHMARK_DATA is unset … NOTHING WAS SCANNED
-       ^^ NOT CHECKED (rc 2, BLOCKING): corpus "…" is EMPTY
+    VIBE_IC_BENCHMARK_DATA is unset … NOTHING WAS SCANNED, 0 routed DEF(s)
+    were examined and nothing is claimed about them
+       ^^ NOT CHECKED (rc 2, BLOCKING; no exemption): corpus "…" is EMPTY —
+          nothing was checked over it [0s]
     AssertionError: the parallel hygiene DAG closed GREEN (rc 0) over a corpus
     that was NEVER OPENED … assert 0 == 2
 
