@@ -23,6 +23,9 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _shape_refusal  # noqa: E402  (#991)
+
 
 # ---------------------------------------------------------------------------
 # License whitelist / blacklist (chip-AGNOSTIC, enforced at manifest load)
@@ -85,6 +88,15 @@ class CatalogMatch:
     # would leak the answer key through the front door (§4.05).
     self_match: bool = False
     self_match_reason: str = ""
+    # #991 — every list field above that was PRESENT in the manifest and was
+    # not a JSON array. Recorded on the match rather than dropped, because the
+    # three coercions that built them (`x if isinstance(x, list) else []`) made
+    # a manifest that declares a dependency indistinguishable from one that
+    # declares none: MEASURED, a `depends_on` keyed BY DEPENDENCY NAME caused
+    # the required IP to be silently absent from the offered set, with no
+    # diagnostic anywhere. A match carrying any of these is REFUSED by
+    # `query_catalog` — see `_shape_refusals_in`.
+    shape_refusals: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_audit_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1260,9 +1272,42 @@ def _is_soc_top(manifest: Dict[str, Any]) -> bool:
     return False
 
 
+#: The manifest fields this module reads as lists. Each one, when present in
+#: another shape, was silently emptied — and each empty has a different and
+#: entirely silent consequence downstream:
+#:   rtl_files          `ip_catalog_pull` copies nothing AND `find_local_mirror`
+#:                      stops testing candidate dirs for RTL (its `if
+#:                      rtl_files:` guard), so it can bind the wrong mirror.
+#:   depends_on         the transitive auto-include loop in `query_catalog`
+#:                      never runs, so a required IP is simply not offered.
+#:   synth_safe_params  `synth_param_overrides()` returns `{}`, so the glue
+#:                      author instantiates the IP with none of the pins the
+#:                      manifest says synthesis needs.
+_MANIFEST_LIST_FIELDS = ("rtl_files", "depends_on", "synth_safe_params")
+
+
+def _shape_refusals_in(m: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every list field PRESENT in this manifest in a shape this module cannot
+    read, each NAMING what arrived. Empty list = nothing to refuse; a field
+    that is absent, or is a declared `[]`, is not a refusal."""
+    out: List[Dict[str, Any]] = []
+    for key in _MANIFEST_LIST_FIELDS:
+        _, mismatch = _shape_refusal.read_list_from(m, key)
+        if mismatch is not None:
+            out.append(mismatch)
+    return out
+
+
 def _manifest_to_match(m: Dict[str, Any], pattern: str,
                        confidence: float) -> CatalogMatch:
-    """Build a CatalogMatch from a manifest dict + firing pattern."""
+    """Build a CatalogMatch from a manifest dict + firing pattern.
+
+    #991 — the three list fields keep their empty-on-unreadable behaviour so
+    every existing reader is unchanged, but the refusal is now RECORDED on the
+    match instead of discarded. `query_catalog` reads it and refuses the entry;
+    a direct caller of this function that ignores `shape_refusals` behaves
+    exactly as before rather than silently gaining a new failure mode.
+    """
     return CatalogMatch(
         ip_name=m.get("ip_name", "<unknown>"),
         category=m.get("_category", ""),
@@ -1280,7 +1325,28 @@ def _manifest_to_match(m: Dict[str, Any], pattern: str,
             m.get("synth_safe_params", [])
             if isinstance(m.get("synth_safe_params"), list) else []
         ),
+        shape_refusals=_shape_refusals_in(m),
     )
+
+
+def _refuse_unreadable_shape(mt: CatalogMatch) -> Optional[str]:
+    """The stderr sentence for a manifest whose list fields cannot be read, or
+    `None` when there is nothing to refuse.
+
+    REFUSED, not repaired and not offered-with-a-warning, for the same reason
+    the #187 self-match guard refuses rather than flags: what follows a match
+    is an automatic pull, and an IP pulled without the files, dependencies or
+    synthesis pins its own manifest declares fails several steps later with an
+    error that names none of this. The remedy is one edit to the manifest, and
+    `ip_catalog_validate.py` already states the same requirement — it is simply
+    not wired to run before a query.
+    """
+    if not mt.shape_refusals:
+        return None
+    parts = "; ".join(_shape_refusal.sentence(r) for r in mt.shape_refusals)
+    return (f"manifest {mt.manifest_path or mt.ip_name} declares "
+            f"{[r['field'] for r in mt.shape_refusals]} in a shape this "
+            f"module cannot read, so this IP is NOT offered: {parts}")
 
 
 # ---------------------------------------------------------------------------
@@ -1436,6 +1502,11 @@ def query_catalog(project: Path,
 
         if best_confidence >= min_confidence:
             mt = _manifest_to_match(m, best_pattern, best_confidence)
+            _shape_reason = _refuse_unreadable_shape(mt)
+            if _shape_reason:
+                print(f"ip_catalog_query: REFUSED unreadable manifest shape "
+                      f"{ip_name!r} — {_shape_reason}", file=sys.stderr)
+                continue
             reason = _self_match_reason(mt, m, ic_ident)
             if reason:
                 mt.self_match = True
@@ -1465,6 +1536,14 @@ def query_catalog(project: Path,
         matched_names.add(dep)
         dep_match = _manifest_to_match(
             dm, "depends_on(auto-included)", max(min_confidence, 0.4))
+        # #991 — and so does the shape refusal. A dependency pulled in
+        # automatically gets no human read at all, so an unreadable manifest
+        # here is if anything less likely to be noticed than one that matched.
+        _dep_shape = _refuse_unreadable_shape(dep_match)
+        if _dep_shape:
+            print(f"ip_catalog_query: REFUSED unreadable manifest shape for "
+                  f"dependency {dep!r} — {_dep_shape}", file=sys.stderr)
+            continue
         # #187 — the self-match guard applies to auto-included dependencies too:
         # a dependency that is itself the IC's own design is refused.
         _dep_reason = _self_match_reason(dep_match, dm, ic_ident)
