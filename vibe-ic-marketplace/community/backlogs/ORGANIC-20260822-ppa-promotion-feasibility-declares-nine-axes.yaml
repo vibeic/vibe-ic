@@ -1,0 +1,76 @@
+type: floor-defect
+severity: P3
+component: 'tools/ci/repo_hygiene_gates.sh :: PPA promotion feasibility'
+
+title: >-
+  The "PPA promotion feasibility" exemption explains its rc=2 as "seven of nine
+  feasibility axes are SATISFIED ... and two carry no measurement" -- seven plus
+  two is nine, and DEFAULT_AXES has TEN. The tenth (eco_readiness) is counted in
+  neither half and is NOT_APPLICABLE on all 21 candidate sets, so it never
+  appears in a result anybody reads.
+
+pattern: |
+  `uncheckable_until 2027-02-28` on the "PPA promotion feasibility" row carries a
+  CONTENT rationale for its rc=2:
+
+      "rc 2 here is a CONTENT verdict over 21 adjudicated candidate sets, not an
+       absent input: seven of nine feasibility axes are SATISFIED on every one
+       and two (em, equivalence) carry no measurement at all, so no candidate
+       may be called promotable."
+
+  That sentence is complete about a NINE-axis table. `_ppa/feasibility.DEFAULT_AXES`
+  has ten entries; the tenth is `eco_readiness`, added after this text was
+  written. It is in neither the "seven satisfied" nor the "two unmeasured", so
+  the arithmetic silently omits it.
+
+  Why nothing noticed: the tenth axis is uniformly NOT_APPLICABLE on this corpus,
+  because none of the 21 candidate documents declares an `eco_readiness`
+  requirement or a `delivery_path`. An axis that is never SATISFIED and never
+  VIOLATED never shows up in a failure, so a stale denominator around it produces
+  no symptom.
+
+  This is the same defect class the row itself exists to catch, one level up: a
+  declaration that reads as total while a whole axis passes underneath it
+  uncounted.
+
+evidence: |
+  Measured on a758f4adc (this repo), PYTHONDONTWRITEBYTECODE=1, clean tree:
+
+    len(_ppa.feasibility.DEFAULT_AXES)                     10
+    DEFAULT_AXES[-1].name                                  eco_readiness
+    the declaration's own arithmetic, read from the script "seven of nine" + two
+
+    ppa_feasibility_check.py --candidates <each of the 21
+      ppa-crosslayer/records/trials/*/candidates.json>
+      -> eco_readiness: NOT_APPLICABLE, 21 of 21
+
+    trials/*/candidates.json declaring eco_readiness        0 of 21
+    trials/*/candidates.json stating delivery_path          0 of 21
+    axes named in required_views_by_axis                    9 (antenna, drc, drv,
+      em, equivalence, hold, ir, lvs, setup) -- eco_readiness absent from all 21
+
+repro: |
+  python3 -c "import sys; sys.path.insert(0,'vibe-ic-marketplace/plugins/vibe-ic/programs'); \
+    from _ppa import feasibility as F; print(len(F.DEFAULT_AXES), F.DEFAULT_AXES[-1].name)"
+  grep -o 'seven of nine feasibility axes are SATISFIED' tools/ci/repo_hygiene_gates.sh
+
+suggested_fix: |
+  Decide which half the tenth axis belongs in and say so, rather than editing the
+  numeral. NOT_APPLICABLE is neither "SATISFIED" nor "carries no measurement", so
+  the honest form is probably a third clause naming it and why it is inapplicable
+  on this corpus -- which also documents that the corpus declares no ECO
+  requirement, the fact that makes it inapplicable.
+
+  Deriving the counts from `len(DEFAULT_AXES)` instead of writing them in prose
+  would stop this recurring, but that is a larger change to how exemption text is
+  authored and is not required to fix this row.
+
+  NOT attempted here: this is another lane's declaration, landed, and picking the
+  clause is a judgement about what the gate means, not a typo fix.
+
+session_context: >-
+  Found by jeco2 while auditing whether the design-for-ECO feasibility axis
+  actually bites (branch jeco2/eco-axis-bite-audit). The audit's own subject is
+  the same shape one level down: the axis is landed, correct, and inert on every
+  contract that declares nothing. Connecting that to ppa-gate-audit/RESULT.md,
+  which re-pointed six dead hygiene gates at real records, surfaced this.
