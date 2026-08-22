@@ -39,9 +39,15 @@ USAGE
 
 EXIT CODES
 ----------
-    0 — PASS (break-framing consistent with L3, or not a break-framed protocol)
+    0 — PASS: an RX command module was examined and it uses break-to-break
+        framing, as L3 requires
     1 — FAIL (expected-length framing detected in a break-delimited protocol)
-    2 — IO / argument error
+    2 — VACUOUS: nothing was examined — no RTL directory, no
+        L3_CMD_PROTOCOL.json to derive the framing type from, an L3 that does
+        not describe break-delimited framing, or no RX command module to
+        audit. #515: all four used to be rc 0. Two of them printed no finding
+        at all, so the gate's ENTIRE output on 288 of 327 tracked project
+        roots was the single line ``0 error(s); verdict: PASS``.
 """
 from __future__ import annotations
 
@@ -53,6 +59,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -129,29 +137,52 @@ def audit(project_dir: Path) -> AuditResult:
     result = AuditResult()
     rtl_dir = _pl.rtl_dir(project_dir)
     if not rtl_dir.is_dir():
+        # #515 — this branch used to be COMPLETELY silent: no finding, so the
+        # gate's whole output was `0 error(s); verdict: PASS`. It is the most
+        # common outcome in the tracked corpus and it examined nothing.
         result.summary = {"skipped": True, "reason": "no_rtl_dir"}
+        result.findings.append(Finding(
+            "SKIP", "INFO",
+            f"No RTL directory at {rtl_dir} — nothing to audit for framing.",
+        ))
         return result
 
     l3_path = _pl.generated_docs_dir(project_dir) / "L3_CMD_PROTOCOL.json"
     if not l3_path.exists():
         result.summary = {"skipped": True, "reason": "no_L3_json"}
+        # #515 — (rule, severity) were transposed here and in the two branches
+        # below, so the printer rendered `[SKIP] INFO` instead of `[INFO] SKIP`
+        # and the report JSON carried `severity: "SKIP"`. Corrected to match
+        # this gate's three siblings and its own PASS finding below.
         result.findings.append(Finding(
-            "INFO", "SKIP", "No L3_CMD_PROTOCOL.json — cannot determine framing type.",
+            "SKIP", "INFO",
+            "No L3_CMD_PROTOCOL.json — cannot determine framing type.",
         ))
         return result
 
     if not _is_break_protocol(l3_path):
         result.summary = {"skipped": True, "reason": "not_break_protocol"}
         result.findings.append(Finding(
-            "INFO", "SKIP", "L3 does not indicate break-delimited framing.",
+            "SKIP", "INFO",
+            "L3 does not indicate break-delimited framing.",
         ))
         return result
 
     rx_files = _find_rx_cmd_files(rtl_dir)
     if not rx_files:
+        # This one is a JUDGEMENT, not a mechanical edit. L3 DOES describe
+        # break-delimited framing and no RX command module was found, which
+        # could be read as a real gap. It stays a skip because that reading
+        # answers a different question: this gate audits HOW an RX parser
+        # frames, and it has no parser to audit, so it holds no opinion. Its
+        # detector is a filename / port-name heuristic, so a FAIL here would
+        # be a verdict about the gate's own recognisers, not about the design.
+        # "Is a parser missing?" belongs to a module-presence gate with real
+        # evidence, not to this one.
         result.summary = {"skipped": True, "reason": "no_rx_cmd_module"}
         result.findings.append(Finding(
-            "WARN", "NO_RX_CMD", "Could not find RX command module in RTL.",
+            "NO_RX_CMD", "WARN",
+            "Could not find RX command module in RTL.",
         ))
         return result
 
@@ -212,7 +243,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     project = Path(args.project_dir)
     if not project.is_dir():
         print(f"error: not a directory: {project}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     result = audit(project)
     report = {
@@ -228,14 +259,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(txt)
         else:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.json).write_text(txt + "\n")
+            atomic_write_text(Path(args.json), txt + "\n")
     else:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
         errors = [f for f in result.findings if f.severity == "ERROR"]
-        print(f"\n{len(errors)} error(s); verdict: {'FAIL' if errors else 'PASS'}")
+        verdict = ("FAIL" if errors
+                   else "VACUOUS (nothing examined)"
+                   if _vx.summary_is_skipped(result.summary) else "PASS")
+        print(f"\n{len(errors)} error(s); verdict: {verdict}")
 
-    return 0 if result.passed else 1
+    # #515 — routed from the gate's OWN `summary["skipped"]`, never from the
+    # printed text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program,
+                             str(result.summary.get("reason", "unspecified")))
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":
