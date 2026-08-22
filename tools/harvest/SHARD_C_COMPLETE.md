@@ -1,5 +1,15 @@
+> **FINAL 2026-08-22T05:2xZ (jharv3): 90 RECOVER / 18 LANDED / 2 ABANDON / 0 UNREACHABLE.**
+> `wt-j63x8c` flipped ABANDON -> RECOVER -> ABANDON. Its content never changed and the
+> duplicate finding was never in doubt; what changed was *preservation*. Its first
+> ABANDON rested on `origin/jmatrix/63x8-main-reds`, which was deleted from origin
+> mid-session, leaving the commit on no ref anywhere — so it became RECOVER. It was then
+> anchored onto this branch at `6feae9385`, which is the revert condition the row itself
+> named, so ABANDON is restored on an anchor that actually exists. **All 110 judged heads
+> and all 529 rescued commits are now reachable from this branch.**
+
 > **SUPERSEDED IN ONE ROW, 2026-08-22 (jharv3, third session).** The counts below read
-> 90 RECOVER / 18 LANDED / 2 ABANDON. They are now **91 / 18 / 1**:
+> 90 RECOVER / 18 LANDED / 2 ABANDON. They went to 91 / 18 / 1 and are now **back to
+> 90 / 18 / 2** — see the final note below:
 > `/home/reyerchu/wt-j63x8c` changed **ABANDON -> RECOVER** because the live origin branch
 > its ABANDON rested on, `jmatrix/63x8-main-reds`, was deleted from origin during that
 > session, leaving its HEAD on no live origin ref and its named twin undecided and dirty.
