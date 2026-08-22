@@ -3842,6 +3842,40 @@ Final tally of my own claims about what could not be done: **five outright false
 one badly stated, one wrong about the work required, one correct.** One in eight.
 
 
+## M72 — the wiring decision has one home, not four, and precedent names it
+
+The gate offers four homes for an unwired checker: *"the flow yaml,
+CAPTURE_ROUTING, a runner, or `tools/ci`"*. For `ppa_pr_scope_check` that choice
+is narrower than it reads.
+
+**Measured:**
+
+* **No `.github/workflows/` exists at all.** "Wire it into CI" is not an option
+  here — `repo_hygiene_gates.sh` *is* the CI.
+* **No PR-scope hook** in `gatekeeper-land.sh` or `gatekeeper-verify-merge.sh`.
+* **Its siblings are already hygiene gates:** `ppa_head_to_head_check` (`:123`)
+  and `ppa_contract_check` (`:151`) both run from `repo_hygiene_gates.sh`.
+
+**So the home is `tools/ci/repo_hygiene_gates.sh`, by precedent set by its own
+family** — not a four-way choice. And that file is protected
+(`roles=['authority']`), which is why the decision remains the lander's while the
+*deliberation* no longer is.
+
+**The other two differ, and should not be filed together:**
+
+| checker | where it goes | what still blocks it |
+|---|---|---|
+| `ppa_pr_scope_check` | `repo_hygiene_gates.sh`, by sibling precedent | a protected-path edit — nothing else |
+| `slot_pad_budget_check` | same, presumably | **the template** (M52/M66) — it has nothing to read until then |
+| `closed_loop_edge_check` | flow-level, since it audits the flow's own `closed_loop:` blocks | a decision about what it should do when it fires |
+
+**"Three unwired checkers, a wiring decision" was one row hiding three different
+situations** — one needing only a protected-path edit, one blocked behind an
+artefact, one needing a policy answer first. **The count was the least useful
+thing about it**, which is the same defect as "the six blocking FAILs" turning
+out to be three distinct defects.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
