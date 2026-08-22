@@ -6,10 +6,25 @@ gap detector expect them.
 """
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+# THE REPO ROOT MUST BE ON `sys.path` BEFORE THE ABSOLUTE IMPORT BELOW, and
+# this file has to say so rather than inherit it from how it was launched.
+# `python3 -m pytest` put the cwd on `sys.path[0]`; the landing arms now run
+# through `trusted_pytest_entry.py` under `python3 -I`, which deliberately keeps
+# the subject cwd OFF `sys.path` — that is the property the trusted entry exists
+# to guarantee. Without this the module raises
+# `ModuleNotFoundError: No module named 'tools'` AT COLLECTION, the session exits
+# rc=2 with no complete junit, and the landing reports the file NORECORD:
+# UNKNOWN, not clean and not red. Six of the eight files in this directory
+# already carry these three lines; this was one of the two that did not.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.phase1_engine.ingest import (
     from_pin_csv,

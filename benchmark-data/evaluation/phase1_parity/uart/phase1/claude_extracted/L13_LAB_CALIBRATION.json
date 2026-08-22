@@ -1,5 +1,0 @@
-{
-  "ic_name": "PC16550D UART",
-  "lab_calibration_present": false,
-  "notes": "PC16550D has no analog reference / trim / calibration loop. Baud-rate accuracy depends on the external XIN clock or crystal; no on-chip trim. The receiver uses 16× oversampling for noise immunity, eliminating any need for chip-side calibration."
-}

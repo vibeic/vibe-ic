@@ -1,5 +1,0 @@
-{
-  "ic_name": "SPI Block (S12SPIV4)",
-  "lab_calibration_present": false,
-  "notes": "Pure digital protocol block; no analog reference / trim / calibration loop. Baud-rate is purely from a digital divider chain (SPPR, SPR) of the BusClock."
-}
