@@ -1464,7 +1464,7 @@ to main.
 | `agent_jppa-tests` | **C-2** (first written as a Bucket-A rule, demoted by its own sweep), **A-22**, and the fourth-instance measurement under A-3 |
 | `agent_jppafeas-feasibility-producers` | A-1, A-2 |
 | `jrecords_record-shape-reconcile` | the producer-census instance under A-3 |
-| `jreq_lander-three` | its three requests are landed; nothing left to distil |
+| `jreq_lander-three` | its three requests are landed. **"Nothing left to distil" was wrong** — re-read after the coverage of every named source was questioned rather than assumed. Its environment note carries the measurement behind **C-2** (33 of 46 shipped test files in this layer failing from one too-old dependency) and names the shared helper that already handles that case for three files, which C-2 now cites so the implementing lane builds on it |
 | using the emitter this brief mandates | A-9, A-10 |
 | the brief's own line that the ASYMMETRY is the richest material | **A-13** — the one I had read and not acted on |
 
