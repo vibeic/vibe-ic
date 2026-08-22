@@ -3900,7 +3900,12 @@ that introduces the defect — is not an ancestor of this branch's head, so the 
 breaks is 22/22 green here and the red is unreproducible. Measuring against the right
 reference meant branching off `main`:
 
-    fix/jland67-differential-fixture-lacks-wired-gates    (off a4caccefea)
+    next/differential-fixture-carries-the-wired-gates    (off a4caccefea)
+
+It was first pushed as `fix/jland67-differential-fixture-lacks-wired-gates` and
+moved under a standing ruling that new work does not go onto a branch frozen in a
+batch — a batch that keeps absorbing one more improvement never lands. Both refs
+point at the same commit; `next/` is the one to read.
 
 **The defect.** `d5646372f` wired three gates into `tools/gatekeeper-land-differential.sh`
 — `landing_noop_verdict_check`, `attestation_preflight_check`,
