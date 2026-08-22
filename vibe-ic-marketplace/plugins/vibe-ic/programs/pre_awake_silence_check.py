@@ -27,7 +27,17 @@ Static heuristic check.  Scans RTL for:
 Usage:
     python3 pre_awake_silence_check.py --rtl-dir <dir> [--json <report.json>]
 
-Exit: 0 = PASS, 1 = findings, 2 = IO error.
+Exit codes:
+    0 = PASS: a wake/sleep signal was found and its gating is correct
+    1 = FAIL (ungated dispatcher / incomplete clear paths)
+    2 = VACUOUS: nothing was examined — this RTL declares no wake or sleep
+        signal at all, so there is no wake state to gate. #521: this used to
+        be rc 0. It was one of three leads #515 could not reproduce, because
+        a probe that passes a PROJECT directory is rejected by this gate's
+        argparse (it takes `--rtl-dir`) and the rc 2 that comes back is the
+        parser's, not a verdict. Driven through its documented interface it
+        reproduces on 106 of the 107 tracked RTL directories. Also rc 2 for
+        an IO error.
 """
 from __future__ import annotations
 
@@ -38,6 +48,8 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -243,7 +255,14 @@ def main(argv: List[str] = None) -> int:
     print(out)
     if any(f.category == "IO" for f in findings):
         return 2
-    return 0 if is_pass else 1
+    # #521 — routed from the gate's OWN `skipped` flag, never from the report
+    # text (which is printed to STDOUT here, so the sentinel goes to stderr to
+    # keep that document parseable).
+    skipped = _vx.summary_is_skipped(report["summary"])
+    if is_pass and skipped:
+        _vx.announce_vacuous("pre_awake_silence_check",
+                             _vx.skip_reason(report["summary"]))
+    return _vx.exit_code(is_pass, skipped)
 
 
 if __name__ == "__main__":

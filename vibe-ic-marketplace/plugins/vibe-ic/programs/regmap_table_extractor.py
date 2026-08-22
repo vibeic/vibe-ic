@@ -108,9 +108,18 @@ def _normalize_addr(addr: str) -> str:
 _GFM_NAME_HDR = {"name", "register", "field", "regname", "reg",
                  "register name", "csr name", "field name",
                  # #747-reopen: rst grid maps use these as the NAME column
-                 # header (perf-counters / interrupt-cause / parameter tables).
+                 # header (perf-counters / parameter tables).
+                 #
+                 # #512 removed one entry from this set: an architecture's
+                 # specific CSR spelling, added here as a NAME header for the
+                 # interrupt-cause table this parser must now refuse anyway. A
+                 # token naming one architecture's register is not documentation
+                 # vocabulary, and column roles must be decided by table shape,
+                 # not by recognising a spelling. Proven inert first: no header
+                 # cell in the corpus is that bare token, and re-deriving every
+                 # design root's L4 with it removed changes nothing.
                  "event counter", "event selector", "event", "counter",
-                 "selector", "mcause", "parameter"}
+                 "selector", "parameter"}
 _GFM_OFFSET_HDR = {"offset", "address", "addr", "csr address",
                    "base address", "register address", "reg address",
                    # #747-reopen: rst grid maps put the hex constant under a
@@ -128,6 +137,107 @@ _GFM_ACCESS_HDR = {"access", "type", "rw", "mode", "permission", "perm"}
 # offset cell actually holds a real `0x...` hex token — never a bare decimal —
 # so the parameter/value tables do not fabricate phantom addresses (§4.05).
 _GFM_OFFSET_WEAK_HDR = {"default", "reset value", "value"}
+
+# ---------------------------------------------------------------------------
+# #512 — WHAT MAKES A TABLE A REGISTER TABLE.
+#
+# The hex-only gate above stopped a bare-decimal `Default` from FABRICATING an
+# address. It did not stop a hex one, so a *parameters* table
+#
+#     | Name          | Type/Range | Default    | Description                |
+#     | ``DmBaseAddr``| int        | 0x1A110000 | Base address of the Debug Module |
+#
+# still emitted `DmBaseAddr @ 0x1A110000` as a REGISTER. It is not one: it is a
+# configuration constant the design is parameterised with. And a two-column
+# interrupt-cause table
+#
+#     | ``mcause`` | Description                              |
+#     | 0xFFFFFFE0 | Load integrity error internal interrupt. |
+#
+# emitted two NAMELESS "registers" — cause codes, not addresses.
+#
+# Both are decided HERE, by the table's own structure, never by prose, a design
+# name, a document filename or a token spelling:
+#
+#   R1  A table whose ONLY address-role column was claimed by a VALUE-type
+#       header (`Default` / `Value` / `Reset Value`) describes no address space.
+#       Such a header states what a thing is SET TO, not where it LIVES; the hex
+#       inside it is a constant. When the SAME table also carries a STRONG
+#       address header (`Address` / `Offset` / `CSR Address`), that column IS the
+#       address space, the value column is correctly ignored, and the table is
+#       read exactly as before.
+#
+#   R2  A table with no NAME-bearing column yields no registers. A register the
+#       consumer cannot name is a register it cannot emit, decode or test — and
+#       the absent name is not a gap in the extraction, it is the document
+#       saying this column is not an address space. Interrupt-cause tables,
+#       memory-map segment tables and error-code tables all have this shape in
+#       any vendor's documentation.
+#
+# THREE-NAMED DECISION (#512, recorded deliberately): R1 drops the named
+# `DmBaseAddr` / `DmHaltAddr` / `DmExceptionAddr` rows as well as the two
+# nameless `mcause` rows. Stopping only the nameless pair would have treated the
+# gate that caught them (a nameless-identifier collision) and left three
+# fabricated registers standing — carrying a name is not evidence of being a
+# register. This REVERSES one assertion of the #747-round-2 fix, which had taken
+# the hex-valued `Default` cell as an address; see
+# `test_v1_0_83_issue747r2_rst_grid_vocab.py`, where that assertion is now
+# inverted with this reason attached.
+#
+# A table stopped by R1/R2 is DISCLOSED, never silently discarded — see
+# `extract_regmap_table(..., disclosures=[])`.
+# ---------------------------------------------------------------------------
+NOT_REGISTERS_NO_NAME_COLUMN = "no_name_bearing_column"
+NOT_REGISTERS_VALUE_COLUMN_ONLY = "address_role_only_from_value_column"
+ROW_DROPPED_NO_NAME = "row_without_name"
+
+_NOT_REGISTERS_REASON_TEXT = {
+    NOT_REGISTERS_NO_NAME_COLUMN: (
+        "this table was read and yielded no registers: it has an "
+        "address-bearing column but no name-bearing column, so every row would "
+        "be a register no consumer could name, emit or decode"),
+    NOT_REGISTERS_VALUE_COLUMN_ONLY: (
+        "this table was read and yielded no registers: its only address-role "
+        "column is headed by a VALUE keyword (default / value / reset value), "
+        "which states what a thing is set to and not where it lives, so the hex "
+        "it holds is a constant and not a register address"),
+    ROW_DROPPED_NO_NAME: (
+        "these rows of an otherwise-readable register table carry an address "
+        "but no name, so they would be registers no consumer could name"),
+}
+
+
+def _disclose(disclosures, reason: str, source_path: str,
+              header_cells: List[str], data: List["tuple"],
+              addr_col: "int | None") -> None:
+    """Record that a table was READ and did not become registers.
+
+    Silence about a dropped row is the same defect one layer down: the caller
+    cannot tell "the documents declare no such register" from "we read it and
+    threw it away". `disclosures` is an optional caller-supplied list; when it
+    is None the extractor behaves exactly as before (no global state, no I/O).
+    """
+    if disclosures is None:
+        return
+    addrs: List[str] = []
+    if addr_col is not None:
+        for (_ln, _raw, cells) in data:
+            if addr_col < len(cells):
+                addrs.extend(_offset_addrs(cells[addr_col])
+                             or [m.group(1).lower() for m in
+                                 [_GFM_OFFSET_HEX_RE.search(cells[addr_col])]
+                                 if m])
+    first_line = data[0][0] if data else None
+    disclosures.append({
+        "source": source_path,
+        "first_data_line": first_line,
+        "header": [c for c in header_cells],
+        "rows_read": len(data),
+        "registers_emitted": 0,
+        "addresses_read_and_dropped": addrs,
+        "reason": reason,
+        "detail": _NOT_REGISTERS_REASON_TEXT.get(reason, reason),
+    })
 _GFM_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 _GFM_OFFSET_RE = re.compile(r"(0x[0-9A-Fa-f]+|\b\d+\b)")
 # ORGANIC #800 (gapJ) — a CSR offset cell of the form ``0xLOW (0xHIGH)`` carries
@@ -158,6 +268,64 @@ def _offset_addrs(cell: str) -> "List[str]":
         if hi != out[0]:
             out.append(hi)
     return out
+
+
+# ---------------------------------------------------------------------------
+# #516 — a `0xLOW (0xHIGH)` offset cell declares TWO registers, and the NAME
+# cell is where the document says what the second one is CALLED.
+#
+# The compact pair notation writes the shared stem once and parenthesises the
+# suffix that distinguishes the companion register:
+#
+#     | ``mcycle(h)``  | 0xB00 (0xB80) |   ->  mcycle @ 0xB00, mcycleh @ 0xB80
+#
+# ORGANIC #800 taught `_offset_addrs` to return BOTH addresses (the high-word
+# alias used to be dropped, one undercounted address token per pair). But the
+# row builders then emitted every address under the SAME base name, so the
+# companion register was published under its sibling's name — `mcycle` at
+# 0xB80, where the design's own CSR table independently states `mcycleh`. That
+# is a false fact, and it also puts two registers with one name at two
+# addresses into L4, which `l4_regmap_phase2_emitter_contract_check` rejects
+# ("give every registers[] entry a distinct, non-empty name").
+#
+# chip-AGNOSTIC: pure `stem(suffix)` typographic grammar. No vendor, no
+# register name, no architecture — a suffix of `h`, `_hi`, `H`, `x` all work
+# the same way because the document, not this program, supplies the letters.
+# ---------------------------------------------------------------------------
+_NAME_PAREN_SUFFIX_RE = re.compile(
+    r"^[`\s]*[A-Za-z_]\w*\(\s*([A-Za-z_]\w{0,7})\s*\)")
+
+
+def _paren_name_suffix(name_cell: str) -> str:
+    """The parenthesised suffix a compact pair-name cell carries (``"h"`` for
+    ``` ``mcycle(h)`` ```), or ``""`` when the cell names a single register."""
+    m = _NAME_PAREN_SUFFIX_RE.match((name_cell or "").strip())
+    return m.group(1) if m else ""
+
+
+def _names_for_addrs(name_cell: str, base: str, n_addrs: int):
+    """One register NAME per address in a multi-address offset cell.
+
+    Returns a list of length ``n_addrs``, or ``None`` when the document does
+    NOT state a name for the companion address. `None` is not a failure — it is
+    the honest answer: the alias address is real (the offset cell prints it) but
+    its name is unstated, and both alternatives are fabrication. Inventing a
+    suffix invents a fact; reusing the base name asserts that two addresses hold
+    the same register. The caller records the address as an alias of the
+    register the document DID name, so the address stays discoverable without a
+    second, wrongly-named record.
+    """
+    if n_addrs <= 1:
+        return [base]
+    suffix = _paren_name_suffix(name_cell)
+    if not suffix:
+        return None
+    # The `stem(suffix)` form expresses exactly a PAIR — one stem, one
+    # companion. A cell that somehow yielded more addresses than that is not
+    # named by this grammar either, so it takes the alias path too.
+    if n_addrs != 2:
+        return None
+    return [base, base + suffix]
 # Strict `0x...` token (underscored hex like `0x0000_0010` tolerated). Used for
 # the weak-role OFFSET headers and the structural fallback so a bare decimal can
 # never be promoted to an address (§4.05 no-leak).
@@ -209,16 +377,35 @@ def _gfm_clean_name(cell: str) -> str:
     return ""
 
 
-def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
+def _extract_gfm_pipe_table(text: str, source_path: str,
+                            disclosures=None) -> List[Dict]:
     """Parse `|`-delimited GFM register summary tables (Name-first). Returns
     [] when no such table (with a name+offset header) is present, so callers
     keep the dash/column regex behaviour for non-pipe docs."""
     rows: List[Dict] = []
     cols = None  # role -> column index, set from the detected header
+    # #512 R1 state for the CURRENT table region: a table whose only address
+    # role came from a VALUE header emits nothing and is disclosed once, at the
+    # end of the region, with the addresses it was holding.
+    weak_only_header: List[str] = []
+    weak_only_rows: List["tuple"] = []
+    weak_only_col = None
+
+    def _flush_weak_only():
+        nonlocal weak_only_header, weak_only_rows, weak_only_col
+        if weak_only_rows:
+            _disclose(disclosures, NOT_REGISTERS_VALUE_COLUMN_ONLY,
+                      source_path, weak_only_header, weak_only_rows,
+                      weak_only_col)
+        weak_only_header = []
+        weak_only_rows = []
+        weak_only_col = None
+
     for lineno, line in enumerate(text.split("\n"), start=1):
         s = line.strip()
         if not s.startswith("|"):
             cols = None  # any non-pipe line ends the current table region
+            _flush_weak_only()
             continue
         cells = _gfm_cells(line)
         nonempty = [c for c in cells if c]
@@ -265,9 +452,23 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
                         cols.setdefault("desc", i)
                     elif c in _GFM_ACCESS_HDR:
                         cols.setdefault("access", i)
+                if cols.get("offset_weak"):
+                    weak_only_header = cells
+                    weak_only_col = cols.get("offset")
             continue  # header consumed (or a pre-table pipe line ignored)
         ni, oi = cols.get("name"), cols.get("offset")
         if ni is None or oi is None or ni >= len(cells) or oi >= len(cells):
+            continue
+        # #512 R1 (same rule as the rst-grid path, same reason) — the only
+        # address-role column this header could name is a VALUE column
+        # (`Default` / `Value` / `Reset Value`). Such a header states what a
+        # thing is SET TO, not where it LIVES, so a hex cell under it is a
+        # configuration constant and not a register address. A table carrying a
+        # strong `Offset`/`Address` header never reaches here (strong-preferred
+        # above). Pre-#512 only a bare-DECIMAL cell was refused, so a hex one
+        # still became a register.
+        if cols.get("offset_weak"):
+            weak_only_rows.append((lineno, line, cells))
             continue
         name = _gfm_clean_name(cells[ni])
         if not name or _is_header_row(name):
@@ -297,19 +498,35 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        for addr_hex in addrs:
+        # #516 — name each address of a `0xLOW (0xHIGH)` pair from what the
+        # NAME cell actually says; never publish the companion under the
+        # stem's own name. See `_names_for_addrs`.
+        _names = _names_for_addrs(cells[ni], name, len(addrs))
+        _evidence = {
+            "source": source_path,
+            "line": lineno,
+            "matched_token": line.strip()[:120],
+            "extraction_strategy": "gfm_pipe_table_match",
+        }
+        if _names is None:
             rows.append({
-            "addr_hex": addr_hex,
-            "access": access_norm,
-            "name": name,
-            "description": desc.strip(),
-            "evidence": {
-                "source": source_path,
-                "line": lineno,
-                "matched_token": line.strip()[:120],
-                "extraction_strategy": "gfm_pipe_table_match",
-            },
-        })
+                "addr_hex": addrs[0],
+                "access": access_norm,
+                "name": name,
+                "description": desc.strip(),
+                "alias_addr_hex": list(addrs[1:]),
+                "evidence": dict(_evidence),
+            })
+        else:
+            for addr_hex, _nm in zip(addrs, _names):
+                rows.append({
+                    "addr_hex": addr_hex,
+                    "access": access_norm,
+                    "name": _nm,
+                    "description": desc.strip(),
+                    "evidence": dict(_evidence),
+                })
+    _flush_weak_only()   # a table that runs to EOF still discloses
     return rows
 
 
@@ -352,16 +569,29 @@ def _rst_is_grid_border(line: str) -> bool:
 def _rst_header_roles(low: List[str]) -> Dict:
     """Map a lowercased header cell list to {role: column-index}. A column may
     be named (NAME / OFFSET / LEN / DESC / ACCESS) by a generic doc-vocabulary
-    keyword. setdefault keeps the FIRST match per role so e.g. a table with both
-    `CSR Address` and `Reset Value` picks `CSR Address` as the offset."""
+    keyword. setdefault keeps the FIRST match per role.
+
+    #512 — the OFFSET role is STRONG-PREFERRED, matching the GFM path: the first
+    offset-role column claims the role and its own weakness sets the flag, but a
+    later STRONG header (`Address` / `Offset` / `CSR Address`) supersedes an
+    earlier WEAK one (`Default` / `Value` / `Reset Value`). Pre-#512 this was a
+    plain first-wins `setdefault`, so a `| Name | Reset Value | CSR Address |`
+    table bound the offset to the value column — harmless while a weak column
+    still emitted rows, but a false DROP now that #512's R1 refuses a table whose
+    only address role is a value column. Column ORDER must not decide whether a
+    real address column is seen."""
     cols: Dict = {}
     for i, c in enumerate(low):
         if c in _GFM_NAME_HDR:
             cols.setdefault("name", i)
         elif c in _GFM_OFFSET_HDR:
-            cols.setdefault("offset", i)
-            if c in _GFM_OFFSET_WEAK_HDR:
-                cols.setdefault("offset_weak", True)
+            is_weak = c in _GFM_OFFSET_WEAK_HDR
+            if "offset" not in cols:
+                cols["offset"] = i
+                cols["offset_weak"] = is_weak
+            elif cols.get("offset_weak") and not is_weak:
+                cols["offset"] = i
+                cols["offset_weak"] = False
         elif c in _GFM_LEN_HDR:
             cols.setdefault("length", i)
         elif c in _GFM_DESC_HDR:
@@ -438,7 +668,8 @@ def _rst_structural_roles(header_low: List[str],
 
 def _flush_rst_grid_table(header_cells: List[str],
                           data: List["tuple"],
-                          source_path: str) -> List[Dict]:
+                          source_path: str,
+                          disclosures=None) -> List[Dict]:
     """Resolve column roles for one completed grid table and emit its rows.
     `data` is a list of (lineno, raw_line, cells). Tries the header-keyword
     roles first; if they don't yield BOTH name and offset, falls back to the
@@ -455,10 +686,31 @@ def _flush_rst_grid_table(header_cells: List[str],
         cols = _rst_structural_roles(low, [c for (_, _, c) in data])
     oi = cols.get("offset")
     if oi is None:
+        # No address-role column at all: nothing was read, so there is nothing
+        # to disclose — an absent address column is not a dropped address.
+        return []
+    ni = cols.get("name")
+    # #512 R1 — the header NAMED the address role, and the only column it could
+    # find for it is a VALUE column. A `Default` / `Value` / `Reset Value` header
+    # states what a thing is SET TO. The hex inside it is a constant the design
+    # is configured with, not an address the design implements. (A table that
+    # ALSO carries a strong `Address`/`Offset`/`CSR Address` header never reaches
+    # here — `_rst_header_roles` is strong-preferred.)
+    if cols.get("offset_weak") and not cols.get("offset_struct"):
+        _disclose(disclosures, NOT_REGISTERS_VALUE_COLUMN_ONLY,
+                  source_path, header_cells, data, oi)
+        return []
+    # #512 R2 — an address-bearing table with no name-bearing column is not a
+    # register table missing its names. Pre-#512 the structural path emitted such
+    # rows with `name: ""`, which is a register no consumer can name, emit or
+    # decode; two of them collided on the emitter's single unnamed identifier.
+    if ni is None:
+        _disclose(disclosures, NOT_REGISTERS_NO_NAME_COLUMN,
+                  source_path, header_cells, data, oi)
         return []
     weak = cols.get("offset_weak") or cols.get("offset_struct")
     out: List[Dict] = []
-    ni = cols.get("name")
+    dropped_unnamed: List["tuple"] = []
     for lineno, raw, cells in data:
         if oi >= len(cells):
             continue
@@ -481,13 +733,17 @@ def _flush_rst_grid_table(header_cells: List[str],
             off = mo.group(1).lower()
             addrs = [off if off.startswith("0x") else hex(int(off))]
         name = ""
-        if ni is not None and ni < len(cells):
+        if ni < len(cells):
             name = _gfm_clean_name(cells[ni])
             if name and _is_header_row(name):
                 name = ""
-        # A header-role table requires a real name (v1.0.82 behaviour); the
-        # structural fallback may emit an address-only row (2-col mcause case).
-        if not cols.get("offset_struct") and not name:
+        # #512 — a register row requires a real name, on EVERY path. The
+        # structural fallback used to be exempt from this (`offset_struct`),
+        # which is how the nameless rows were emitted; the exemption is gone, so
+        # a single unnamed row inside an otherwise-named table is dropped and
+        # disclosed rather than shipped as `name: ""`.
+        if not name:
+            dropped_unnamed.append((lineno, raw, cells))
             continue
         desc = ""
         if "desc" in cols and cols["desc"] < len(cells):
@@ -498,23 +754,47 @@ def _flush_rst_grid_table(header_cells: List[str],
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        for addr_hex in addrs:
+        # #516 — same rule as the GFM path: the companion address of a
+        # `0xLOW (0xHIGH)` pair is named by the NAME cell's parenthesised
+        # suffix, not by repeating the stem. See `_names_for_addrs`.
+        _names = _names_for_addrs(cells[ni], name, len(addrs))
+        _evidence = {
+            "source": source_path,
+            "line": lineno,
+            "matched_token": raw.strip()[:120],
+            "extraction_strategy": "rst_grid_table_match",
+        }
+        if _names is None:
             out.append({
-                "addr_hex": addr_hex,
+                "addr_hex": addrs[0],
                 "access": access_norm,
                 "name": name,
                 "description": desc.strip(),
-                "evidence": {
-                    "source": source_path,
-                    "line": lineno,
-                    "matched_token": raw.strip()[:120],
-                    "extraction_strategy": "rst_grid_table_match",
-                },
+                "alias_addr_hex": list(addrs[1:]),
+                "evidence": dict(_evidence),
             })
+        else:
+            for addr_hex, _nm in zip(addrs, _names):
+                out.append({
+                    "addr_hex": addr_hex,
+                    "access": access_norm,
+                    "name": _nm,
+                    "description": desc.strip(),
+                    "evidence": dict(_evidence),
+                })
+    if dropped_unnamed and disclosures is not None:
+        # #512 — rows READ and not emitted. Reported even when the table also
+        # produced registers, so the record says how many of its rows survived.
+        _disclose(disclosures, ROW_DROPPED_NO_NAME, source_path,
+                  header_cells, dropped_unnamed, oi)
+        disclosures[-1]["rows_read"] = len(data)
+        disclosures[-1]["rows_dropped"] = len(dropped_unnamed)
+        disclosures[-1]["registers_emitted"] = len(out)
     return out
 
 
-def _extract_rst_grid_table(text: str, source_path: str) -> List[Dict]:
+def _extract_rst_grid_table(text: str, source_path: str,
+                            disclosures=None) -> List[Dict]:
     """Parse reStructuredText GRID-table register maps (`+---+` / `+===+`
     borders with `| cell |` rows). Returns [] when no grid table with a
     resolvable offset column is present, so callers keep all other behaviour
@@ -537,7 +817,8 @@ def _extract_rst_grid_table(text: str, source_path: str) -> List[Dict]:
 
     def _end_table():
         nonlocal header_cells, data, in_grid
-        rows.extend(_flush_rst_grid_table(header_cells, data, source_path))
+        rows.extend(_flush_rst_grid_table(header_cells, data, source_path,
+                                          disclosures))
         header_cells = []
         data = []
         in_grid = False
@@ -575,8 +856,13 @@ def _extract_rst_grid_table(text: str, source_path: str) -> List[Dict]:
     return rows
 
 
-def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
+def extract_regmap_table(text: str, source_path: str,
+                         disclosures=None) -> List[Dict]:
     """Return list of register dicts. Empty list if no rows match.
+
+    #512 — pass a list as `disclosures` to also receive one record per table
+    that was READ and did not become registers (see `_disclose`). Omit it and
+    behaviour is byte-identical to before; the extractor keeps no global state.
 
     Each entry shape (single-address row)::
 
@@ -652,10 +938,10 @@ def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
     # #616 — GFM pipe-delimited (Name-first) tables, which the line-by-line
     # 0x-anchored regexes above cannot match. Disjoint from the regex rows
     # (those never match a `|`-leading line), so a plain extend is safe.
-    rows.extend(_extract_gfm_pipe_table(text, source_path))
+    rows.extend(_extract_gfm_pipe_table(text, source_path, disclosures))
     # #747 — reStructuredText GRID tables (`+---+`/`+===+` borders). Disjoint
     # from the GFM path: the GFM path RESETS its column map on every border
     # line (a non-pipe line), so it emits ZERO rows for a grid table — only
     # this branch reads the cells across the in-table border separators.
-    rows.extend(_extract_rst_grid_table(text, source_path))
+    rows.extend(_extract_rst_grid_table(text, source_path, disclosures))
     return rows

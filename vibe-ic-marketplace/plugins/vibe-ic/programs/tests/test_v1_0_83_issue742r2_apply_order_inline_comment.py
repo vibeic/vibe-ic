@@ -206,10 +206,10 @@ def test_apply_order_reordered_rtl_compiles_against_positional_tb(tmp_path):
         binp = Path(td) / "b"
         r = subprocess.run(
             ["iverilog", "-g2012", "-o", str(binp), str(dut), str(tb)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, (r.stdout + r.stderr)
         v = subprocess.run(["vvp", str(binp)], capture_output=True,
-                           text=True, timeout=120)
+                           text=True, timeout=60)
     assert "Your Design Passed" in (v.stdout + v.stderr), (v.stdout + v.stderr)
 
 
@@ -249,7 +249,7 @@ def test_prefix_inline_comment_reproduces_compile_error(tmp_path):
         r = subprocess.run(
             ["iverilog", "-g2012", "-o", str(binp), str(dut),
              str(dd / "testbench.v")],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
     assert r.returncode != 0, "verbatim positional bind should NOT compile"
     # iverilog phrases this positional-bind elaboration failure differently
     # across versions — older builds print "Unable to assign to unresolved

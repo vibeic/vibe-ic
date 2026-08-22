@@ -1,0 +1,19 @@
+{
+  "declared_schema": "vibeic.ppa.comparison.v2",
+  "ok": false,
+  "problem": {
+    "clock_target_ns": 10.0,
+    "corners": [
+      "ss",
+      "tt",
+      "ff"
+    ],
+    "pdk": "sky130A",
+    "spec_sha256": "sha256:1dcf5958689a55b1e4400164c6696adf310ea6696c64d95ba3bc10c45c2cf522"
+  },
+  "record": "/home/reyerchu/_jxlayer/records/h2h_F.json",
+  "refusal": {
+    "code": "BASELINE_TUNED_BY_US",
+    "message": "baseline 'vibe-ic-pnr-only-searched' does not declare `tuned_by_this_project: false`. A baseline we tune is an oracle we wrote, and a favourable number measured against it says nothing about silicon."
+  }
+}
