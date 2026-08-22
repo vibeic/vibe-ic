@@ -324,7 +324,36 @@ def check_corpus(named: Path, require_impl_differs: bool = False,
             for j in range(i + 1, len(arms)):
                 (pa, da), (pb, db) = arms[i], arms[j]
                 pairs += 1
-                findings = compare_contracts(da, db, require_impl_differs)
+                try:
+                    findings = compare_contracts(da, db, require_impl_differs)
+                except Exception as exc:
+                    # AN INTERNAL ERROR IS NOT A FINDING, and without this the
+                    # traceback escaped and the interpreter exited 1 -- the code
+                    # §1 reserves for "these two runs were not solving the same
+                    # problem", a verdict nothing reached.
+                    #
+                    # MEASURED: two contracts that GROUP on a well-formed
+                    # `problem` identity but whose `analysis` is written as a
+                    # bare digest STRING instead of a record raise
+                    # AttributeError out of `identity.compare`. In corpus mode
+                    # ONE such document decides a row over an entire campaign --
+                    # the wired rows sweep 21 and 61 contracts.
+                    #
+                    # 2 AND NOT 3, for the same reason as the head-to-head
+                    # gate's: the INVOCATION was correct. A corpus where one
+                    # pair is badly shaped is not a bad invocation, and 3 would
+                    # let that pair decide a row about all the others. The pair
+                    # and the exception are NAMED, and so is the missing input.
+                    print(f"[{_GATE}] CANNOT CHECK: comparing {pa} against "
+                          f"{pb} raised {type(exc).__name__}: {exc}. Neither "
+                          f"contract was judged and this is NOT a finding "
+                          f"about either run. WHAT IS MISSING: a contract of "
+                          f"the shape schemas/ppa/contract.v1.schema.json "
+                          f"declares -- both documents parsed as JSON, so a "
+                          f"field one of them carries is not the type that "
+                          f"schema gives it. rc=2.", file=sys.stderr)
+                    group_rcs.append(corpus_seam.RC_UNDETERMINED)
+                    continue
                 # BOTH arms get their own mutation clause; see the docstring.
                 seen = {(f["code"], f["message"]) for f in findings}
                 for extra in C._check_mutations(da):
@@ -443,4 +472,15 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        # Anything raised OUTSIDE the per-pair loop: there the invocation
+        # itself is what failed, so §1's 3 is right. `ppa_contract_check` has
+        # worded it this way since the beginning.
+        print(f"{cli_exit.MARK_REFUSE} ppa_problem_integrity_check: internal "
+              f"error {type(exc).__name__}: {exc}. Nothing was compared. rc=3 "
+              f"(NOT a finding about any contract).", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)
