@@ -483,3 +483,43 @@ arrivals at one missing entry is the entry being missing.
     evidence/F2_mutation_sweep.md                three reds, and one non-result
     evidence/enhancement_emit_run.txt            the emitter's own output
     evidence/MEASURED_AT_main.txt                the base sha every number above is against
+
+
+---
+
+## Closed after the clean-tree pass: the register's last gap
+
+`pad_ring.along_the_row_extent` was still `pin=known_gap`, and I had written
+that this branch would not close it. It closes
+(`evidence/F2_the_last_known_gap_is_closed.md`) because the image the snapshot
+records — `ghcr.io/vibeic/vibeic-eda:0.3.24` — is on this host and upstream's
+`pad_cfg.tcl` is readable at the recorded sha256, byte for byte.
+
+The gap was more specific than the register's own wording. **Our half was
+pinned all along** by `test_pad_ring.py::test_the_spacing_is_upstreams_arithmetic`
+— the fixture's master is 75 x 350 against a 1_280_000-unit side, so summing by
+HEIGHT does not fit and the test goes red the moment the extent returns to the
+oriented footprint. Nobody had written down that it was the pin. **Upstream's
+half was a sentence in a comment**, and that is what
+`test_upstream_pin_pad_cfg.py` adds: sha256 against the snapshot, both cell
+measurements reading `getWidth`, and the master's height reaching nothing but a
+`puts`.
+
+That last assertion is the one worth stating carefully: a raw count of
+`getHeight` in that file is FOUR and reads as a contradiction. Two are site
+dimensions; the other two are the per-cell measurement, and MEASURED, the
+resulting `$height` is used in exactly one line of the whole file — a
+diagnostic `puts`. The test asserts the USE, not the count, because a count
+would have to be explained away and an explanation living in a test is a
+comment.
+
+Reds: positive control passes at a custom root; upstream drifted to sum
+`$height` → 3 of 4 fail including the sha; no distribution reachable → 4
+SKIPPED, naming the missing input, never passing. And a pin naming a test that
+was never written is refused by the checker.
+
+    pad_ring.upstream_pad_variables: ... known_gap=0
+    pad_ring.along_the_row_extent:   anchors=2, pin=test
+    PASS: 2 registered re-implementation(s)
+
+Zero open gaps, and every green in the register now has something behind it.
