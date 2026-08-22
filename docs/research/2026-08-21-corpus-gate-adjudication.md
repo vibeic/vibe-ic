@@ -158,6 +158,50 @@ renewed; both remain expired and both therefore refuse a landing.
 > select --base origin/main` routes 0 of these — so no two-arm measurement of
 > any branch has ever seen them.
 >
+> #### ADJUDICATED: the CONTROLS are right and the GATE is wrong
+>
+> Reproduced by hand, outside pytest. Identical fixture — one document saying
+> ``see `proof.log` for the run`` and no `proof.log` shipped — placed at
+> different depths. **Only the path changes:**
+>
+>     scan root 2 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 3 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 4 levels below /tmp   rc=0  OUT OF SCOPE   MISSED
+>     scan root 5 levels below /tmp   rc=1  [FAIL]         DETECTED
+>     scan root 6 levels below /tmp   rc=1  [FAIL]         DETECTED
+>     scan root 7 levels below /tmp   rc=1  [FAIL]         DETECTED
+>
+> The cause is a stray **`/tmp/proof.log`** (1448 bytes, dated 2026-08-17,
+> left by some earlier run). The gate resolves a citation by walking UP from
+> the scan root, reaches at most FOUR parent levels, and if it finds a file of
+> that name it reports
+>
+>     OUT OF SCOPE : 1 citation(s) resolve against the repository but ABOVE
+>                    this gate's scan root — the document is correct and this
+>                    gate is not the one that judges it
+>
+> and passes. pytest's `tmp_path` sits 3 levels below `/tmp`, inside that
+> window, which is why all four controls fail.
+>
+> The OUT-OF-SCOPE rule is reasonable INSIDE the repository, where "above the
+> scan root" means another part of a tree someone owns. It is not reasonable
+> when nothing encloses the scan root: the gate's own output says
+> *"git-tracked file set unavailable — falling back to plain filesystem
+> existence"*, and in that state "the repository" is just the filesystem, so
+> **any unrelated file with the cited basename within four parents silences a
+> real dangling citation**.
+>
+> So the four controls are correct and are red for a real reason, and the fix
+> belongs in the gate: when no git-tracked file set is available, do not
+> resolve above the scan root at all. That also makes this the exact mechanism
+> behind the `HOST_DEPENDENT_VERDICT` that
+> `gate_host_independence_check` reports for this same gate — it is reading
+> something that is not in the commit, and this is what.
+>
+> Not fixed here: it is a behaviour change to a gate I do not own, and the
+> owner may prefer a different boundary. `/tmp/proof.log` was left in place —
+> it is not mine to delete.
+>
 > ### Consequence for the two ledger rows
 >
 > Both rows have aged past `MAX_BOUND_COMMITS = 500` (549 behind), so no legal
