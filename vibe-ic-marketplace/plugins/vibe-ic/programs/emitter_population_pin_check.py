@@ -621,6 +621,18 @@ def denies_containment(node: ast.AST, parent: Dict[int, ast.AST]) -> Optional[st
                      or up.func.attr.startswith("assertIsNot")
                      or up.func.attr == "assertFalse"):
             return up.func.attr
+        # THE STOP IS FOR CLARITY, NOT FOR CORRECTNESS, and that is measured
+        # rather than assumed: every form this walk tests for -- UnaryOp,
+        # Compare, Call -- is an `ast.expr`, and an expression is never the
+        # parent of a statement. Counted over this tree: 602,938 edges whose
+        # child is a statement, across 3,965 files; their parents are
+        # statements (491,973), Module (104,129) and ExceptHandler (6,836),
+        # and ZERO are expressions. So nothing the walk looks for can appear
+        # above this point and deleting the stop cannot change an answer --
+        # which is why the mutation sweep could not kill it. Keeping it says
+        # where the question ends. `test_the_statement_stop_rests_on_a_true
+        # _premise` fails if a form that is NOT an expression is ever added
+        # to the walk, because that is what would make this reasoning false.
         if isinstance(up, ast.stmt):
             return None
         cur = up

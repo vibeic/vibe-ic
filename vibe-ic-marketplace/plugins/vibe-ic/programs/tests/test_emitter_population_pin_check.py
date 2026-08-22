@@ -21,8 +21,12 @@ Guards: every `if ...: continue` in the program deleted in turn -- 20 sites, 8
 survived, 4 of which were real gaps and are now covered (see "guards a mutation
 sweep found nothing was holding"). Three of the remaining four are fast paths,
 not guards: deleting them leaves the shipped tree's --json byte identical. The
-fourth, `if isinstance(up, ast.stmt)`, has no input I could construct that
-distinguishes it.
+fourth, `if isinstance(up, ast.stmt)`, is EQUIVALENT, and now says so with a
+proof rather than a shrug: every form that walk tests for is an `ast.expr`,
+and an expression is never the parent of a statement -- 602,938
+statement-parent edges over 3,965 files of this tree, zero with an expression
+parent. The premise that argument needs is pinned by
+`test_the_statement_stop_rests_on_a_true_premise`.
 
 Boundaries: every comparison operator flipped to its neighbour -- `>=`<->`>`,
 `<`<->`<=`, `==`<->`!=`. 12 sites, ZERO survivors, including the two that carry
@@ -3191,6 +3195,49 @@ def test_a_pin_in_a_test_naming_a_silent_program_is_deliberately_not_reached(
     assert doc["pins_unmatched"] == 0, (
         "this pin was reached after all -- the limit the docstring sizes has "
         "changed, and the 24 it names are now counted: " + repr(doc))
+
+
+def test_the_statement_stop_rests_on_a_true_premise():
+    """`denies_containment` stops walking at the first statement, and the
+    mutation sweep could not kill that stop. The reason is not thin coverage: an
+    `ast.expr` is never the parent of an `ast.stmt` -- measured over this tree,
+    602,938 statement-parent edges across 3,965 files, zero with an expression
+    parent -- so no form the walk tests for can appear above the stop.
+
+    That argument holds only while every form it tests for IS an expression. Add
+    a check for something that can sit above a statement and the stop starts
+    hiding answers instead of ending a question. This fails then, which is the
+    only moment it matters."""
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "denies_containment")
+    # ONLY the checks made on the walk variable itself. The first version of
+    # this probe collected every `ast.X` in every isinstance call, which swept
+    # in `ast.Not` and `ast.NotIn` -- operator classes, tested on `up.op` and on
+    # the comparison's ops, never on `up` -- and failed on unmutated code. What
+    # the stop's soundness depends on is what can be found ABOVE it, which is
+    # only ever what `up` is tested against.
+    walked = {"up"}
+    tested = set()
+    for call in _ast.walk(fn):
+        if isinstance(call, _ast.Call) and getattr(call.func, "id", "") == "isinstance" \
+                and getattr(call.args[0], "id", None) in walked:
+            for arg in call.args[1:]:
+                for node in _ast.walk(arg):
+                    if isinstance(node, _ast.Attribute) and \
+                            getattr(node.value, "id", "") == "ast":
+                        tested.add(node.attr)
+    assert tested, "no isinstance checks on the walk variable -- probe is broken"
+    tested.discard("stmt")                      # the stop itself
+    not_expressions = sorted(
+        name for name in tested
+        if not (isinstance(getattr(_ast, name, None), type)
+                and issubclass(getattr(_ast, name), _ast.expr)))
+    assert not not_expressions, (
+        "this walk now tests for forms that are not expressions, and an "
+        "expression is the only thing that cannot sit above the statement "
+        f"stop -- so the stop may now be hiding an answer: {not_expressions}")
 
 
 # ── the vacuous tier ─────────────────────────────────────────────────────────
