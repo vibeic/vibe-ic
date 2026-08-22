@@ -240,28 +240,66 @@ and, in the machine-readable record,
              'gates': 1, 'expansion': 'EXPANDED'}]     <- a MEASURED population
         == [{…                       'expansion': 'NO_CORPUS'}]  <- nothing opened
 
+## The question a new expansion state always raises: what does an OLD reader do with it?
+
+`NO_CORPUS` is a value that did not exist before, and `hygiene_finding_delta`
+runs from **the verifier's tree, not the tree under test**
+(`landing_merge_verdict.py:917-919` — "a tree under test must not be able to
+supply the program that judges it"). So a candidate carrying this change can be
+differenced by a verifier that predates it, and its `_validate_record` would
+meet an expansion state it does not know.
+
+Traced, not assumed. It raises `Refusal("unknown expansion state")` →
+`compare` returns `status: REFUSED` → `landing_merge_verdict.py:1284` marks the
+run **`unmeasurable = True`** and blocks:
+
+    THE HYGIENE FINDING DIFFERENTIAL COULD NOT BE COMPUTED, so whether this
+    branch introduced a hygiene finding is UNKNOWN
+
+That is the correct direction, and the reason this needs no compatibility shim:
+an old reader meeting the new state gets an **honest UNMEASURABLE that blocks**,
+never a pass. The state it cannot parse is one it must not silently fold into
+`EXPANDED` anyway — that fold is the whole defect.
+
+It also should not arise on that path at all: `gatekeeper_review` binds the
+corpus before the set, so the landing arms are in state B. Both statements are
+here because the second is a single guard and the first is what happens when a
+single guard is wrong.
+
+The reverse direction is already handled: `hygiene_finding_delta._validate_record`
+(`:603-611`) **accepts** `NO_CORPUS` alongside `EXPANDED` and `PRODUCER_FAILED`
+rather than refusing, and says in the source why it is not folded into
+`EXPANDED`. `absent_corpora` is read with `.get`, so a record from an older
+dispatcher simply has none.
+
 ## Corpus sweep
 
-43 test files that read `_gate_dispatch.sh`, `hygiene_finding_delta`,
-`landing_merge_verdict`, `repo_hygiene_parallel`, `repo_hygiene_gates.sh` or the
-routed-DEF producer, run on this branch and, where red, re-run on a pristine
-`origin/main` worktree. 1170 passed, 2 skipped, 14 red — and every one of the 14
-is accounted for below, none of them by this change:
+### 1. The shipped gate list, diffed between the two states, on both commits
 
-* 262 passed / 2 skipped and 279 passed / 0 red — the two corpus-and-gate-wiring
-  batches (23 files), clean.
-* 294 passed / 1 red — the `repo_hygiene_parallel` consumer batch (12 files).
-  The red is `test_orphan_scan_reads_the_landing_gate_runner.py::test_the_
-  shipped_audit_no_longer_calls_the_coordinator_unreachable`, about two
-  undeclared AUDIT_ONLY gates; **same test ID red on pristine `origin/main`.**
-* 9 red in `test_landing_merge_verdict.py` (end-to-end `gatekeeper-verify-merge`)
-  — **the same 9 test IDs are red on pristine `origin/main`.** Pre-existing.
-* 3 red in `tools/ci/test_phase_b_activated_parity.py` and
-  `test_gate_fixtures_discriminate.py` — **the same 3 IDs are red on pristine
-  `origin/main`.** Pre-existing; the parity pair is the protected-tuple defect
-  reported in `2026-08-22-protected-tuple-on-main-matches-neither-state.md`.
-* 1 ordering flake in `test_gate_process_attestation.py` under load 45 on 32
-  cores; passes 3/3 in isolation and its fixture script never calls
-  `gate_dispatch_over`, so no changed line is on its path.
+The strongest form of *"nothing new fires"*, and it needs no fixture: run the
+real `tools/ci/repo_hygiene_gates.sh --list --summary-json` on a clean worktree
+of each commit, once with `VIBE_IC_BENCHMARK_DATA` unset (state A) and once
+pointed at a git checkout whose `ic/` subtree publishes no
+`*/*/phase3/stage3/pnr/routed.def` (state B — the genuine #1763 population), and
+diff the declared gate lists label for label.
 
-No test was relaxed, no assertion widened, no baseline written.
+| commit | declared | labels differing between state A and state B |
+|---|---|---|
+| `81cd5321b` (before) | 87 | **0 of 87** — the two states were indistinguishable |
+| `a4caccefe` (after) | 93 | **1 of 93** — and it is the routed-DEF row |
+
+The one line that differs, on the tree carrying the fix:
+
+    state A   corpus "…" was NOT FOUND — nothing was opened to check   NO_CORPUS
+    state B   corpus "…" is EMPTY — nothing was checked over it        EXPANDED
+
+The 87 → 93 is 200 commits of new gates between the two, not this change: within
+each commit the comparison is state A against state B on the same tree, which is
+what the claim is about.
+
+**State B's row is exactly the sentence #1763 adjudicated**, unchanged in bytes,
+for the reason #1763 gave — every published cell was withdrawn on 2026-08-20, so
+the population really is 0, and NOT CHECKED + BLOCKING are both correct there.
+The brief's *"your change must leave that row saying exactly what it says today"*
+is satisfied by measurement, not by assertion.
+
