@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 37,
+    "A": 38,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -27,7 +27,8 @@
       "programs/ppa_problem_integrity_check.py",
       "programs/phase3_one_shot_runner.py",
       "programs/crosslayer_rewrite_equivalence.py",
-      "programs/_ppa/timing.py"
+      "programs/_ppa/timing.py",
+      "benchmark_run_manifest.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -52,7 +53,8 @@
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_ppa_problem_integrity_check_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_phase3_one_shot_runner_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_rewrite_equivalence_rule_sketches.py",
-    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_timing_rule_sketches.py"
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_timing_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_benchmark_run_manifest_rule_sketches.py"
   ],
   "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
   "bucket_C_files": [

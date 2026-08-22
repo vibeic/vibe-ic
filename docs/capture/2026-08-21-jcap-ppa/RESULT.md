@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 40 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 41 records, and the eighteen already-program claims of which seventeen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 40 records](#the-40-records)
+- [The 41 records](#the-41-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -89,7 +89,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 37 | deterministic rules — the default, and every one names its predicate |
+| **A** | 38 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -231,7 +231,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 40 records
+## The 41 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1016,8 +1016,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            37     (22 when the rule was written)
-    distinct target programs    19
+    Bucket-A records            38     (22 when the rule was written)
+    distinct target programs    20
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1528,6 +1528,45 @@ covers every command the layer ships, and the shape to copy is in the 5 that
 already have it.
 
 ---
+### A-40 · an aggregate over exit codes combines by severity not by integer value · `benchmark.aggregate_verdict`
+
+From the corpus lane's aggregation note: the flow's own reader maps exit code 2
+to a vacuous pass and 1 to a fail, so **2 is the larger integer and the weaker
+verdict**. Aggregating a corpus with a bare maximum therefore lets ADDING a
+record SUBTRACT a refusal.
+
+    call sites taking a maximum over an rc/verdict-named value   8
+      passing an explicit severity key                           3
+      integer maximum, but guarding the not-checked code         1
+      integer maximum over a deliberate two-value space          1
+      unguarded integer maximum                                  3
+
+I did not stop at reading it. Built a two-run corpus and ran the gate:
+
+| tree | per-run lines | exit |
+|---|---|---|
+| one run, manifest missing | `[FAIL] … no RUN_MANIFEST.json` | **1** |
+| the same run **plus** one whose manifest is unreadable | `[FAIL] …` **twice** | **2** |
+
+The added run is the only difference. Both lines still say FAIL; the process
+says could-not-check. A consumer keying on the exit code sees the failing run
+disappear.
+
+The guarded site is the interesting one: it takes an integer maximum but carries
+an explicit `if rc != NOT_CHECKED` clause. Someone hit this exact bug and
+repaired **one call site instead of the class** — which is the whole reason this
+lane exists.
+
+Of the two unconfirmed sites, one takes its code from a loader that reports
+unreadable input with the not-checked code (the confirmed shape), and the other
+nests two integer maxima, an inner one whose result the outer then combines
+again.
+
+**(o)** yes — the confirmed call site has no severity key, so the rule fires on
+it as written.
+**(d)** yes — it keys on the SHAPE, a maximum over exit-code-valued operands
+with no declared order, not on any of these three functions.
+
 
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
@@ -1632,8 +1671,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **11** steps. Without them **14 of the
-40 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **12** steps. Without them **15 of the
+41 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -1884,7 +1923,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          37     (26 when the rubric was applied)
+    Bucket-A records                          38     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -1965,9 +2004,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 40 records**:
+the patterns were unchecked by anything. Over **all 41 records**:
 
-    pairs compared                      780
+    pairs compared                      820
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -3017,7 +3056,7 @@ shipped, and only a sibling lane's unrelated decision note walked me back into i
 
 ## Summary
 
-**STATUS**: 40 records emitted and validated — 37 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 41 records emitted and validated — 38 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -3045,7 +3084,7 @@ bucket. My 37 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 15 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39 |
+| **EXTRACT-NEW** | 16 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3200,6 +3239,7 @@ gap was non-empty every single time it was measured.
 | A-37 | 23 **marked** refusals | **0 carry a remedy** | survived its control — and its denominator is the marked subset, blind to unmarked refusals by construction |
 | A-38 | 3 null-emitting sites | **44 recorded refusals** | the doc forbids it in bold, the gate refuses it, a sibling module already fixed it |
 | A-39 | 20 entry points | **15 unguarded** | an escaped exception exits on the finding code; 5 siblings already guard it |
+| A-40 | 8 aggregation sites | **3 unguarded** | rc 2 outranks rc 1 by integer order; CONFIRMED by execution — adding a run took a corpus from rc 1 to rc 2 |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |

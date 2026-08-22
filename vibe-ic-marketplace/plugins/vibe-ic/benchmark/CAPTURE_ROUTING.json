@@ -278,6 +278,11 @@
     "ppa.timing_scope": {
       "bucket_A_program": "programs/_ppa/timing.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
+    "benchmark.aggregate_verdict": {
+      "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
+      "bucket_A_program": "programs/benchmark_run_manifest.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
