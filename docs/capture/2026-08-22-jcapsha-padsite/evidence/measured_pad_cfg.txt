@@ -1,0 +1,13 @@
+===== getWidth / getHeight in pad_cfg.tcl =====
+63:set pad_site_width [expr double([$pad_site getWidth]) / $units]
+64:set pad_site_height [expr double([$pad_site getHeight]) / $units]
+66:set pad_corner_site_width [expr double([$pad_corner_site getWidth]) / $units]
+67:set pad_corner_site_height [expr double([$pad_corner_site getHeight]) / $units]
+73:make_io_sites \
+78:    -rotation_horizontal $::env(PAD_ROTATION_HORIZONTAL) \
+79:    -rotation_vertical $::env(PAD_ROTATION_VERTICAL) \
+80:    -rotation_corner $::env(PAD_ROTATION_CORNER)
+99:        set width  [expr [[$inst getMaster] getWidth] / $units]
+100:        set height [expr [[$inst getMaster] getHeight] / $units]
+162:        set width  [expr [[$inst getMaster] getWidth] / $units]
+163:        set height [expr [[$inst getMaster] getHeight] / $units]

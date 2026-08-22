@@ -1,0 +1,89 @@
+    puts "Placing pads for $side…"
+    set sum_of_cell_widths 0
+    
+    foreach inst_name $::env($side) {
+        if { [set inst [$block findInst $inst_name]] == "NULL" } {
+            puts stderr "\[ERROR\] No instance $inst_name found."
+            exit 1
+        }
+        set master_name [[$inst getMaster] getName]
+        
+        # Convert to micrometer
+        set width  [expr [[$inst getMaster] getWidth] / $units]
+        set height [expr [[$inst getMaster] getHeight] / $units]
+        
+        puts "$master_name: $width $height"
+        incr sum_of_cell_widths $width
+    }
+
+    puts "The sum of cell widths for $side: $sum_of_cell_widths"
+    
+    # Get the available space for the side
+    set side_width 0
+    if {[lsearch -exact $horizontal_sides $side] >= 0} {
+        set horizontal_side_width [expr ($DIE_WIDTH - $::env(PAD_EDGE_SPACING) * 2 - $pad_corner_site_width * 2)]
+        puts "horizontal_side_width: $horizontal_side_width"
+        set side_width $horizontal_side_width
+    }
+    if {[lsearch -exact $vertical_sides $side] >= 0} {
+        set vertical_side_width [expr ($DIE_HEIGHT - $::env(PAD_EDGE_SPACING) * 2 - $pad_corner_site_height * 2)]
+        puts "vertical_side_width: $vertical_side_width"
+        set side_width $vertical_side_width
+    }
+    
+    if {$sum_of_cell_widths > $side_width} {
+        puts "\[Error\] Sum of cell widths for $side is larger than the width of this side."
+        exit 1
+    }
+
+    set space_for_fill [expr $side_width - $sum_of_cell_widths]
+    puts "space_for_fill: $space_for_fill"
+
+    set space_between_pads [expr $space_for_fill / ([llength $::env($side)] + 1)]
+    puts "space_between_pads: $space_between_pads"
+        if { [set inst [$block findInst $inst_name]] == "NULL" } {
+            puts stderr "\[ERROR\] No instance $inst_name found."
+            exit 1
+        }
+        set master_name [[$inst getMaster] getName]
+        
+        # Convert to micrometer
+        set width  [expr [[$inst getMaster] getWidth] / $units]
+        set height [expr [[$inst getMaster] getHeight] / $units]
+        
+        # Place the pads        
+        place_pad -row [dict get $row_names $side] -location $cur_pos $inst_name -master $master_name
+        
+        # Increment current position
+        set cur_pos [expr $cur_pos + $space_between_pads_min_filler + $width]
+    }
+}
+
+puts "\[INFO\] Placing corner cells…"
+
+# Place corner cells
+place_corners $::env(PAD_CORNER)
+
+puts "\[INFO\] Placing filler cells…"
+
+# Place filler cells
+place_io_fill -row IO_NORTH {*}$::env(PAD_FILLERS)
+place_io_fill -row IO_SOUTH {*}$::env(PAD_FILLERS)
+place_io_fill -row IO_WEST {*}$::env(PAD_FILLERS)
+place_io_fill -row IO_EAST {*}$::env(PAD_FILLERS)
+
+puts "\[INFO\] Connecting ring signals…"
+
+# Connect the ring signals
+connect_by_abutment
+
+# Place bondpads (if needed)
+if { [info exists ::env(PAD_BONDPAD_NAME)] } {
+    puts "\[INFO\] Placing bondpads…"
+    
+    foreach side $sides {
+        foreach inst_name $::env($side) {
+            if { [set inst [$block findInst $inst_name]] == "NULL" } {
+                puts stderr "\[ERROR\] No instance $inst_name found."
+                exit 1
+            }

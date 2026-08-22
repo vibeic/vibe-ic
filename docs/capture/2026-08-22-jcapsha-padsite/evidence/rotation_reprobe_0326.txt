@@ -1,0 +1,17 @@
+26Q3-1666-ge29ae70ad4 
+##### rotation_vertical=R0 dbu/um=2000
+  pw0 orient=MXR90 along/into(um): dx=350.0 dy=75.0
+  pw1 orient=R90 along/into(um): dx=350.0 dy=75.0
+  ps0 orient=R0 along/into(um): dx=75.0 dy=350.0
+##### rotation_vertical=R90 dbu/um=2000
+  pw0 orient=MXR90 along/into(um): dx=350.0 dy=75.0
+  pw1 orient=R90 along/into(um): dx=350.0 dy=75.0
+  ps0 orient=R90 along/into(um): dx=350.0 dy=75.0
+##### rotation_vertical=R180 dbu/um=2000
+  pw0 orient=MXR90 along/into(um): dx=350.0 dy=75.0
+  pw1 orient=R90 along/into(um): dx=350.0 dy=75.0
+  ps0 orient=R180 along/into(um): dx=75.0 dy=350.0
+##### rotation_vertical=MX dbu/um=2000
+  pw0 orient=MXR90 along/into(um): dx=350.0 dy=75.0
+  pw1 orient=R90 along/into(um): dx=350.0 dy=75.0
+  ps0 orient=MX along/into(um): dx=75.0 dy=350.0

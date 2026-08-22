@@ -1,0 +1,15 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN probe ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 2262000 2262000 ) ;
+COMPONENTS 6 ;
+- pw0 gf180mcu_fd_io__bi_t + UNPLACED ;
+- pw1 gf180mcu_fd_io__bi_t + UNPLACED ;
+- pw2 gf180mcu_fd_io__bi_t + UNPLACED ;
+- ps0 gf180mcu_fd_io__bi_t + UNPLACED ;
+- ps1 gf180mcu_fd_io__bi_t + UNPLACED ;
+- ps2 gf180mcu_fd_io__bi_t + UNPLACED ;
+END COMPONENTS
+END DESIGN
