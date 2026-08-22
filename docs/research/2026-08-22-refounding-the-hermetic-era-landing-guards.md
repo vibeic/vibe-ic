@@ -116,6 +116,17 @@ or nonce. Filtering on the label KEY alone (`--filter label=ai.vibeic.hermetic-r
 with any value) is NOT safe on this host — a concurrent verification by another
 agent would be caught and the guard would go red for someone else's container.
 
+**CORRECTED — the ref gives a DIFFERENT id than the label carries.** What
+follows identifies the verifier's `RUN_ID` correctly, and I then assumed that was
+the value on `ai.vibeic.hermetic-run`. It is not: the runner mints its own
+`os.urandom(12).hex()` and is never told the verifier's. **The ref is still the
+right starting point, but it identifies the container through the container's
+MOUNTS** — every arm mounts host paths under `$RUN`, and `RUN_ID` is
+`basename "$RUN"`, so `docker inspect` + a `Mount.Source` containing `RUN_ID`
+names this run's containers and cannot name a concurrent agent's. Read the rest
+of this section for the ref mechanics, which are correct, and take the
+identification step from the mount rule, not from the label value.
+
 The reachable channel is the test's OWN repo: the verifier creates
 `refs/gk-verify/$RUN_ID/head` and `.../merge` in it (`:328-329`), and `RUN_ID` is
 the run directory's basename (`:327`).
@@ -297,7 +308,13 @@ not.
 **The general rule this earns, and it applies to B and C as well as D:** every
 "just express it through channel X" claim in this document needs channel X
 checked before the item is ranked. A survived that check only after being
-rewritten. B's channel is confirmed (the container label, from source). C's is
+rewritten. **B's channel was NOT confirmed and this sentence used to say it
+was** — I verified the label EXISTS and wrote that as though I had verified a test
+can learn its VALUE. It cannot: `run_id` is `os.urandom(12).hex()` minted inside
+the runner, never passed from the verifier, and present only in a receipt a
+completed run produces. See the corrected identification section above; the
+working channel is the MOUNTS, and it is now checked to the standard this
+sentence previously only claimed. C's is
 confirmed (M15, implemented and passing in both lanes). **D's is not.**
 
 ## What this costs — CURRENT, after A and C landed
