@@ -203,9 +203,23 @@ Composed truth is on NEITHER side, measured:
     | test_files           |      2740 |        2743 |     2756 |
 
 Taking either side, or splitting the hunks, lands a count that is wrong by
-construction. **The resolution is to REGENERATE:** take either side to clear the
-conflict, then run `programs/gen_program_inventory.py` and
-`tools/gen_programs_index.py`, then update the stated counts in the two bound
-READMEs BY KEY. Verified end to end on the real merge: 0 unresolved conflicts and
-23/23 `test_program_inventory_no_drift.py` passing on the composed tree.
+construction. **The resolution is to REGENERATE, in three steps, all of which are
+load-bearing:**
+
+1. take either side to clear the conflict;
+2. run `programs/gen_program_inventory.py` and `tools/gen_programs_index.py`;
+3. update the stated counts in the two bound READMEs **by key**.
+
+Step 3 is easy to skip and does not fail quietly — omitting it on a real trial
+merge left three `test_program_inventory_no_drift.py` failures
+(`README.md:17,42,365,467 states 1250 ... tree has 1266`). With all three steps:
+0 unresolved conflicts and 23/23 drift tests passing on the composed tree.
+
+**THIS LANE'S GATES ARE UNAFFECTED BY THE COMPOSITION.** All twelve return
+exactly what they return here — ten rc=0, `only_the_declaring_step_writes_its_
+output` rc=1, `pytest_aggregate_carries_its_runtime_identity` rc=2 — over the
+combined source, which now includes the census lane's four new programs and their
+tests. 236 of this lane's tests pass in the composed tree. So the four censuses
+introduce no finding in the gates, and the gates introduce none in the censuses'
+population.
 
