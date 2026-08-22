@@ -1,0 +1,41 @@
+{
+  "schema": "vibeic.ppa.fixture_declared_views.v1",
+  "why": "NOT_MEASURED is only meaningful against a DECLARED set. Without this list a missing view is indistinguishable from a view nobody asked for, and a consumer can stay silent about it and still look complete. This is the set a consumer of ./views/ must account for, one row each, no omissions.",
+  "design": "spm",
+  "pdk": "gf180mcuD",
+  "stage": "post_route_extracted",
+  "clock": {"name": "clk", "period_ns": 24.0},
+  "declared_views": [
+    {
+      "view": "setup_ss_125c_4v50",
+      "check": "setup",
+      "process": "ss",
+      "voltage_v": 4.5,
+      "temperature_c": 125,
+      "rc_corner": "max",
+      "report": "views/setup_ss_125c_4v50.rpt",
+      "present": true
+    },
+    {
+      "view": "hold_ff_n40c_5v50",
+      "check": "hold",
+      "process": "ff",
+      "voltage_v": 5.5,
+      "temperature_c": -40,
+      "rc_corner": "min",
+      "report": "views/hold_ff_n40c_5v50.rpt",
+      "present": true
+    },
+    {
+      "view": "setup_tt_025c_5v00",
+      "check": "setup",
+      "process": "tt",
+      "voltage_v": 5.0,
+      "temperature_c": 25,
+      "rc_corner": "nom",
+      "report": "views/setup_tt_025c_5v00.rpt",
+      "present": false,
+      "absent_on_purpose": "This view is DELIBERATELY not shipped. It is the whole point of the fixture: a consumer must emit a NOT_MEASURED row for it, carrying a reason, and must not emit 0, -1, null, or nothing at all. The real published run declares a tt corner (gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00) in reports/phase3/multi_corner_spef_stance.json and in reports/phase3/sta/sta_corner_record_completeness.json, and the real sta_mcorner_ocv.rpt contains only the SETUP-SS and HOLD-FF blocks — so the absence is faithful to the source, not invented here."
+    }
+  ]
+}
