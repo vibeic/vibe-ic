@@ -24,8 +24,9 @@ cannot vouch for.
 
 - **Shard A: 15 of 114 rows** carry RECOVER over content main's history already holds.
 - **Shard B: 23 of 131 rows** likewise.
-- 21 shard-A heads are not in this clone at all and were **not judged** — an honest
-  UNDETERMINED, listed in `shard_a_heads_undetermined_from_108_jharv3.tsv`.
+- The 21 shard-A heads this clone does not hold **are now judged too** — see the section below.
+  They were UNDETERMINED only because the objects live on `.120`; that host answers, so the
+  missing input was fetched rather than written off.
 
 Every one of those 38 was then read on its own host: HEAD, `--untracked-files=all`, tracked
 modifications, and gitignored entries.
@@ -70,9 +71,36 @@ The self-test drives five guarantees, two of which are traps this measurement fe
 Also: main's own tip must classify as reached over >1000 files, a known-unlanded head must
 classify as holding work, and a head tracking zero files must be **REFUSED**, never passed.
 
+## The 21 that were UNDETERMINED are now decided
+
+They were unreadable from `.108` because their objects only exist in `.120`'s clone. `.120`
+answers through the `.102` hop, so their trees were read there (read-only, no fetch in their
+clone, 43 MB of `path<TAB>blob` lines) and judged here against main's history. Blob hashes
+compare across machines without moving a byte of content.
+
+**All 21 decided, 0 left UNDETERMINED, and no head among them has drifted from what its row
+cites:**
+
+| result | rows |
+|---|---:|
+| **holds content main never had — RECOVER is CORRECT** | **15** |
+| content already on main, clean on disk → **ready for LANDED** | 2 |
+| content already on main, but dirty on disk → RECOVER is right, the value is the uncommitted files | 3 |
+| already carries LANDED, and content confirms it | 1 |
+
+The 15 are the reassuring half: `_wt_c2` and `_wt_c3` hold 22 and 23 paths main has never held,
+`advA` 5, `advC` 6, `_agentjob_i1424/reb` 8, and so on — real work, correctly kept.
+
+The two that can move are `_wt_v1610` and `vibe-ic-wt-caravel-final` — clean, no drift, ignored
+entries only in classes main declares generated (7 and 1 entries).
+
+**Shard A therefore has 20 RECOVER rows whose content main's history already holds, 14 of them
+ready to move today.** Per-row detail: `shard_a_undetermined_now_judged_jharv3.tsv`.
+
 ## Data
 
 - `shard_a_b_landed_by_history_jharv3.tsv` — per row: shard, path, host, judged head, paths main
   never held, disk state, an example main commit holding its content, ready-for-LANDED, blocker.
 - `shard_a_b_disk_state_jharv3.tsv` — the raw host reads behind the disk column.
-- `shard_a_heads_undetermined_from_108_jharv3.tsv` — the 21 shard-A heads this clone cannot judge.
+- `shard_a_undetermined_now_judged_jharv3.tsv` — the 21 former UNDETERMINEDs, now decided, with
+  disk state and the paths main never held.
