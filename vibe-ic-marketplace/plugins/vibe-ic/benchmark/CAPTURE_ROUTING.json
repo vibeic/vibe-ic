@@ -105,6 +105,11 @@
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
+    "phase3.pad_ring": {
+      "description": "Pad Ring (chip/IC path only) — the flow declares this step (flow/phase1_phase2_phase3.yaml:2986) and CAPTURE_ROUTING carried no entry for it, so every capture from it fell through to default_routing, whose bucket_A_program is null.",
+      "bucket_A_program": "programs/pad_ring_gen.py",
+      "bucket_B_skill_file": "skills/tapeout-checklist/SKILL.md"
+    },
     "phase3.synth": {
       "bucket_A_program": "programs/phase3_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
@@ -234,6 +239,11 @@
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
+    },
+    "repo.upstream_parity": {
+      "description": "Where this plugin RE-IMPLEMENTS an upstream flow's computation or configuration contract, and what pins ours against theirs.",
+      "bucket_A_program": "programs/upstream_contract_parity_check.py",
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     }
   },
   "default_routing": {
