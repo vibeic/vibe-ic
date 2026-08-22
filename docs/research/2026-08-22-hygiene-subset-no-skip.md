@@ -1954,3 +1954,57 @@ start: the errors were not concentrated in the hard technical findings. They
 were in the cheap connective sentences — a cost, a count, a "cheap", a
 "clears it" — written quickly between measurements, and carried forward because
 nothing in a document re-measures its own prose.
+
+## 33. A fourth repo-root test file, and the scan that hid it twice
+
+`repo-root tools/ tests are outside every plugin-scoped selection` — so they are
+found by enumeration or not at all. I had run three of them
+(`test_gatekeeper_land_review_budget`, `_lanes`, and finally `_differential`,
+28 passed) and then enumerated the rest properly. There are 20, and **four**
+reference something this branch touches.
+
+The fourth is `tools/test_liar_census.py`, which I had never run. Running it:
+
+```
+1 failed, 107 passed
+FAILED tools/test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
+```
+
+**Attributed, not assumed.** Same node on the batch BASE `546487a8a3`, which
+carries none of this branch's work:
+
+```
+1 failed in 0.68s
+```
+
+**Pre-existing.** This branch does not touch it, and its only textual link to
+this work is a COMMENT at line 802 mentioning `ci_harness_timeout_ceiling_check`
+— which is why the relevance scan surfaced it at all. Reported because a red in
+a file that no selection reaches is exactly the kind that survives indefinitely,
+not because it is anyone's regression tonight.
+
+### The scan told me "none" twice before telling me "four"
+
+Worth recording because it is the tenth instrument failure of the session and
+the only one that failed the *same question* twice with two different bugs:
+
+```
+attempt 1   grep -clE ...   -> printed nothing
+            (-l overrides -c in this grep, so $h was a FILENAME, never "1")
+attempt 2   grep -qE  ...   -> "0 of 20 relevant"
+attempt 3   same loop, verbatim, no wrapper -> 4 relevant
+```
+
+Attempt 2's condition is correct in isolation — verified afterwards on the exact
+file, three ways, all MATCH — so its zero was spurious rather than logical, and
+the only difference is that the failing line also ran
+`$(ls tools/test_*.py|wc -l)` in the same command. I did not chase it further
+because the lesson does not depend on the mechanism: **an empty result from a
+scan is a claim, and it needs the same distrust as a full one.** Both wrong
+answers said "none relevant", which is the permissive direction, and which would
+have left the fourth file unrun and the red unreported.
+
+The tell that caught it: I *knew* three files contained the string, and the scan
+said zero. A scan whose output contradicts something you already know is not a
+surprising result — it is a broken instrument, and the right move is to test the
+instrument against the known case before believing anything else it says.
