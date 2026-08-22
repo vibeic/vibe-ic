@@ -44,5 +44,22 @@ for spec in "hash-compare|s/            ok = (actual == claimed_main)/          
   if [ "$u" != "0" ] && [ "$b" = "0" ]; then printf '  %-18s unblinded=%s blinded=%s LOAD-BEARING\n' "$name" "$u" "$b"
   else printf '  %-18s unblinded=%s blinded=%s **NOT PROVEN**\n' "$name" "$u" "$b"; fail=1; fi
 done
-[ "$fail" = "0" ] && echo "SELFTEST OK: every guarantee proven load-bearing by a case only it catches" || echo "SELFTEST FAILED"
+
+# jharv3's generalisation, and they were right that my standard was necessary and not sufficient:
+# A CASE MUST ASSERT THE OUTCOME THE BRANCH ACTUALLY CHANGES. Both arms on pass/fail cannot see a
+# branch that only moves a row between two NON-FAILING buckets. Mine has exactly one: the test
+# that files an UNDETERMINED row as "no claim by design" rather than "claim I could not read".
+# Blinding it moves 4 rows between those buckets and the exit code is 0 either way.
+bucket () { python3 "$1" "$2" 2>/dev/null | tail -1 | sed 's/.*no_claim_by_design=\([0-9]*\).*DID_NOT_CHECK=\([0-9]*\).*/\1|\2/'; }
+blind 's/        if "UNDETERMINED (" in c\[2\]:/        if False:/'
+ub=$(bucket "$CHK" "$SRC"); bb=$(bucket "$T/blind.py" "$SRC")
+ue=$(run "$CHK" "$SRC"); be=$(run "$T/blind.py" "$SRC")
+if [ "$ub" != "$bb" ]; then
+  printf '  %-18s buckets %s -> %s (exit %s -> %s) LOAD-BEARING BY BUCKET\n' "undetermined-class" "$ub" "$bb" "$ue" "$be"
+  [ "$ue" = "$be" ] && printf '       note: exit code is identical both ways — pass/fail alone could NOT see this branch\n'
+else
+  printf '  %-18s buckets unchanged (%s) **NOT PROVEN**\n' "undetermined-class" "$ub"; fail=1
+fi
+
+[ "$fail" = "0" ] && echo "SELFTEST OK: every guarantee proven load-bearing, by failure or by bucket" || echo "SELFTEST FAILED"
 exit $fail

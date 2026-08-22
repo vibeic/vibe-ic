@@ -767,3 +767,52 @@ content. **Uncommitted now outranks superseded.** All 43 are RECOVER.
 Both fixes are in `bin_jharv2/judge.sh`. The contract deliverables were never affected — shard B
 and the recovered 80 are 28/28 clean under the widest setting — which is luck of which hosts had
 untracked scratch directories, not care.
+
+## Both arms on pass/fail is necessary and not sufficient
+
+jharv3 swept their own gates mechanically — blind each guard, ask whether the suite notices — and
+23 of 31 survived, 15 of them an entire validation body that could have been `if False:`. The
+last survivor was **literally the absent-file branch**, and it survived for a reason my standard
+could not have caught:
+
+> **Blinding it changes no pass/fail.** An absent file falls through to another non-failing
+> bucket, so the exit code is identical either way.
+
+Their generalisation: **a case must assert the outcome the branch actually changes.** Checked
+mine, and they were right that I had one:
+
+    unblinded:  no_claim_by_design=4  DID_NOT_CHECK=41   exit 0
+    blinded:    no_claim_by_design=0  DID_NOT_CHECK=45   exit 0
+
+The test that files an `UNDETERMINED` row as *"makes no claim"* rather than *"claim I could not
+read"* moves four rows between two non-failing buckets, and **my both-arms proof reported nothing**.
+`evidence_selftest.sh` now asserts buckets as well as exit codes, and prints the note that
+pass/fail alone could not see that branch.
+
+## A frozen constant, and then the opposite error
+
+jharv3 also found `MAIN` frozen as a literal in their gate — *"a gate that checks freshness
+against a constant inherits the staleness it exists to catch, and is invisible while it is still
+true."* Mine had the same shape in both writers.
+
+Deriving it live turned out to be **the opposite error**. The rows were judged against a specific
+main; if main moves and the file is merely regenerated, a live-derived label claims a freshness
+the *judgement* does not have. The label has to record the main the **judge** used:
+
+    HARV_JUDGED_MAIN=81cd5321b08   -> "judged against origin/main 81cd5321b08"
+    HARV_JUDGED_MAIN=a00f53f2094   -> "judged against origin/main a00f53f2094 (origin/main has
+                                       since advanced to 81cd5321b08; … main moving can only turn
+                                       RECOVER into LANDED, never the reverse)"
+    unset                          -> AssertionError, refuses to label rows with a guess
+
+Frozen lies when main moves. Live lies when the file is regenerated without re-judging. Recorded
+plus a drift disclosure is the only one of the three that cannot mislead.
+
+## And the 41, again
+
+Merging the 43 re-judged rows without re-running `evidence.py` reintroduced the exact defect this
+file already records: **41 rows whose verdict was refreshed and whose evidence was not**, naming
+no file and carrying no hash. Regenerated. `544 RECOVER, 540 parsed, 540 agree, 0 disagree,
+0 DID_NOT_CHECK.`
+
+Knowing a failure mode by name did not stop me repeating it — third time tonight for this one.
