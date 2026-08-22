@@ -937,3 +937,37 @@ confirmation that the remedy the gate names actually works.**
     plugin_full_audit                D1 PASS, D2 PASS (1273 programs)
 
 Read the first. Merge the second.
+
+
+## One more of the same class, in my own deliverable
+
+Asked of my own artefact a question I had been asking of everything else: are
+the emitted candidates still regenerable, and do they still match?
+(`evidence/A_STALE_PROVENANCE_STAMP_IN_MY_OWN_ARTEFACT.md`)
+
+    < # Auto-captured by benchmark-enhancement-capture at plugin v1.11.70
+    > # Auto-captured by benchmark-enhancement-capture at plugin v1.11.69
+
+`enhancement_emit.py` stamps each sketch with the plugin version AT EMIT TIME.
+Mine were emitted on `a4caccefe` — v1.11.69 — and carried unchanged onto a tree
+whose `plugin.json` says 1.11.70. **A stamp is only true relative to the tree it
+was taken on, and moving the tree does not move the stamp.**
+
+It is the failure `enhancement_emit.py` warns about in its own source, where it
+explains why an unreadable version is emitted as the non-semver `"unknown"`:
+
+    a provenance field nobody measured must be visibly non-data, so that it
+    fails the first time anyone sorts or compares by it. A plausible semver
+    constant never fails, which is exactly how a stale one survives.
+
+`v1.11.69` is a plausible semver constant. It did not fail. It survived.
+
+Regenerated on the landable branch (now v1.11.70). **This branch is
+deliberately left alone** — it is based on `a4caccefe`, which IS v1.11.69, so
+its stamp is correct here; rewriting it would introduce the same defect in the
+opposite direction. The two branches now differ in exactly this one field and
+each is right about its own tree.
+
+Nothing about reading the file would have shown it. The check is to REGENERATE
+and COMPARE — the same discipline as re-polling the base instead of trusting
+the last answer.
