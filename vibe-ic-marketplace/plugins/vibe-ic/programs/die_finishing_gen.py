@@ -333,7 +333,11 @@ def resolve_script(project: Path, explicit: Optional[str],
     STATEMENT about specific locations rather than a shrug:
       1. `--script`
       2. the project's PDK-bridge declaration (`sealring.script`)
-      3. the design's own tape-out declaration (`seal_ring_script`)
+      3. the design's own tape-out declaration (`seal_ring_script`) — taken as
+         given when absolute, and otherwise ALSO tried joined to
+         `$PDK_ROOT/$PDK`, because a declared script path is normally relative
+         to the PDK root (that is how it appears in the PDK tree). `source`
+         records which of the two forms hit.
       4. `$KLAYOUT_SEALRING_SCRIPT` — LibreLane's own PDK variable
       5. `$PDK_ROOT/$PDK/` + the conventional script path
 
@@ -359,7 +363,35 @@ def resolve_script(project: Path, explicit: Optional[str],
     tried.append(f"{_DECL_SOURCE}.{_DECL_SCRIPT}")
     decl_script = _declared(declared or {}, _DECL_SCRIPT)
     if isinstance(decl_script, str) and decl_script.strip():
-        return decl_script.strip(), f"{_DECL_SOURCE}.{_DECL_SCRIPT}", tried
+        decl_script = decl_script.strip()
+        # A DECLARED SCRIPT PATH IS USUALLY RELATIVE TO THE PDK ROOT, because
+        # that is how it appears in the PDK tree and it is the only form that is
+        # a fact about the DIE rather than about one machine's filesystem:
+        #     seal_ring_script: libs.tech/klayout/tech/scripts/sealring.py
+        # Returning it verbatim made exactly that form unresolvable, and because
+        # this step OUTRANKS the $PDK_ROOT/$PDK probe below, answering the field
+        # correctly was worse than leaving it blank. MEASURED, same project,
+        # same declaration, same layout, only the program version differing:
+        #     4-step resolver (no declaration step)  -> rc 0, seal PASS
+        #     5-step resolver, field answered        -> rc 2, DISCLOSED_SKIP
+        #     5-step resolver, field UNANSWERED      -> rc 0, seal PASS
+        # So try the declared value AS GIVEN first — an operator who wrote an
+        # absolute path meant it — and only then joined to the PDK root, saying
+        # in `source` which form actually hit. Existence is still decided by the
+        # runner, not here, so a declared script that resolves in NEITHER form
+        # still reaches the same DISCLOSED_SKIP it does today: this widens which
+        # spellings can be FOUND, never what counts as found.
+        _decl_src = f"{_DECL_SOURCE}.{_DECL_SCRIPT}"
+        if os.path.isabs(decl_script):
+            return decl_script, _decl_src, tried
+        _root = pdk_root or os.environ.get("PDK_ROOT")
+        _name = pdk or os.environ.get("PDK")
+        if _root and _name:
+            joined = f"{_root.rstrip('/')}/{_name}/{decl_script.lstrip('/')}"
+            if os.path.exists(joined):
+                tried.append(joined)
+                return joined, f"{_decl_src} (joined to $PDK_ROOT/$PDK)", tried
+        return decl_script, _decl_src, tried
     tried.append(f"${_ENV_SCRIPT}")
     env_script = os.environ.get(_ENV_SCRIPT)
     if env_script:
