@@ -338,12 +338,21 @@ it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
   Four IDs are red on `main` and green here (`…mutable_base_cache_is_disabled_
   and_remeasured`, `…the_caller_checkout_is_never_touched`, `…the_fallback_
   allows_a_known_good_branch`, `test_the_forced_fallback_is_the_only_thing_the_
-  env_var_can_do`). **This record does not claim the change fixes them.** They
-  are parallel end-to-end tests that build worktrees and kill process groups on
-  timeouts, both runs were taken under host load 70-85, and a change that adds
-  one note string to `decide()` is not a plausible cause. The honest reading is
-  load-sensitivity in that file, in the same family as the
-  `test_gate_process_attestation` intermittent above.
+  env_var_can_do`). **This record does not claim the change fixes them, and that
+  is now measured rather than hedged:** re-run those four IDs alone on the
+  pristine `origin/main` worktree and **all four PASS** (`4 passed, 130
+  deselected in 237s`). They are not red on `main` at all -- they are
+  load-sensitive inside the full-file run, in the same family as the
+  `test_gate_process_attestation` intermittent above. That file's end-to-end
+  tests build worktrees and kill process groups on timeouts, both full runs were
+  taken under host load 70-85, and a change that adds one note string to
+  `decide()` was never a plausible cause of a difference in them.
+
+  So the correct statement about `test_landing_merge_verdict.py` is the narrow
+  one: **9 IDs are genuinely red on both trees, the branch introduces none, and
+  the 4-ID gap between the two full runs is scheduling noise on `main`'s side,
+  not a repair on this branch's side.** Anyone re-running this under lower load
+  should expect the two full runs to converge on 9.
 
 * **Every assertion removed by this branch, enumerated.** `git diff
   origin/main...HEAD -- '*test*' | grep '^-' | grep assert` returns exactly one
