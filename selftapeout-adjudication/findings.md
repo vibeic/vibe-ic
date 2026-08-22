@@ -6391,3 +6391,183 @@ Both branches are also pinned in the ledger by sha, for the same reason J74 exis
 
 **No verdict, no number.** What moves is that the six adjudications, the journal that
 argues them, and the controls that check them are no longer only on one disk.
+
+---
+
+## J83 — a control whose tolerance was 17× its own signal, caught by the thing it was controlling
+
+J80 probed the POST-CTS state and had to bound the distance to the arms' POST-HOLD state
+by **argument**: hold repair adds 222 cells, 3 644.04 µm² (0.06 % of movable) and moves
+the residual by 7. An argument is not a measurement, so this dispatch built a probe that
+runs the flow's own `repair_timing -hold` and removes it. Predictions registered first
+(`meas/_j83/REGISTERED.md`, **16:31:49**), including an ENTRY CONTROL, because a probe
+that is not in the arms' state answers about nothing.
+
+### The entry control, as first written
+
+> **E HOLDS if** the probe's cell count is within **±1 %** of the arm's 391 980 **and**
+> its rung-1 residual is inside 2 296–2 418.
+
+### What the probe did, and what E said about it
+
+```
+probe v1   [WARNING EST-0027] no estimated parasitics. Using wire load models.
+           [INFO RSZ-0033] No hold violations found.
+           -> 0 buffers inserted, movable 6 050 774.64 um^2, cells 391 758
+
+the ARM    [INFO RSZ-0046] Found 1341 endpoints with hold violations.
+             final | 8 resized | 222 buffers | +0.1% area | WNS 0.013 | TNS 0.000
+           [INFO RSZ-0032] Inserted 222 hold buffers.
+           -> movable 6 054 418.68 um^2, cells 391 980
+```
+
+**The probe's hold repair did nothing at all — and E passes it.** 391 758 is
+**0.057 %** away from 391 980, comfortably inside the ±1 % E allowed, and the residual
+lands inside the band. **E would have certified a no-op as "the arms' state".**
+
+### The defect, stated as a property rather than as this one mistake
+
+**The quantity E existed to detect is 222 cells = 0.057 % of the population. E's
+tolerance was ±1 %, which is 17× larger. A control whose tolerance exceeds its own
+signal cannot fail** — it is a `PASS` that was determined when the bound was chosen, not
+when the measurement was taken. This is the same family as J78's *"a predicate whose
+answer depends on when you ask it"*: both are rules that look like tests and are not.
+
+It is also the reason the no-op was caught at all: the probe printed its own cause.
+`no estimated parasitics` names it — the flow estimates them at `pnr.tcl:8268` and v1
+started at 8303, so the timing view had no parasitics and `repair_timing -hold` found
+nothing to fix. **Had OpenROAD been quieter, E's PASS is all I would have had.**
+
+### E2 — the version that can fail
+
+v2 inserts `estimate_parasitics -placement` verbatim from `pnr.tcl:8268-8270`, and
+**not** the `buffer_ports` / `repair_design` around it: those are pre-CTS optimisations
+already baked into `post_cts.def`, and re-running them would change the netlist the
+probe is comparing. E2 requires all three:
+
+1. hold violations **found** (not `No hold violations found`);
+2. hold buffers inserted within **±20 % of 222** (178–266);
+3. post-hold movable within **±0.02 % of 6 054 418.68 µm²** — **±1 211 µm², which is
+   smaller than the 3 644.04 µm² the arm's hold repair added**, so a no-op now fails.
+
+Bound 3 is the fix: **the tolerance is now smaller than the signal.** E2 was registered
+at **16:34:55**, before v2 ran.
+
+**v1 is not thrown away** — it re-runs J80's ladder on the same DEF, so whatever it
+prints is an independent replication of `2 337 → 296`, and it is reported as that rather
+than as what it was built to be.
+
+### E2 FAILED — and it failed for a reason that was NOT the one v2 fixed
+
+v2 added `estimate_parasitics -placement`. It **worked**: `EST-0027 no estimated
+parasitics` went from 1 occurrence to 0. And `repair_timing -hold` still printed
+`No hold violations found` and inserted 0 buffers. **So E2 fails on bound 1**, and
+whatever v1 and v2 print after that point is answered on a state that is not the arm's.
+Recorded rather than quietly re-run.
+
+**Parasitics was a real gap and not THE gap.** What remained was the clock. Post-CTS
+hold violations are made of clock-tree SKEW; a design entered from a DEF carries an
+**IDEAL** clock, so every clock arrival is 0, there is no skew, and there is nothing to
+violate. `clock_tree_synthesis` propagates the clock as a side effect, which is why the
+arm never had to say so and a DEF-entry probe does.
+
+### E3 HELD, and the strongest number in it is one I did not choose
+
+v3 = v2 + `set_propagated_clock [all_clocks]`. **This is a TIMING-VIEW reconstruction,
+not a change to the design**: no cell moves, no rule is relaxed, the netlist is
+byte-identical either way. E3 was registered at **16:38:11**, before v3 ran.
+
+```
+quantity               arm      probe v3       delta   E3 bound
+endpoints             1341          1341           0   found, not zero          HOLD
+buffers                222           224          +2   178-266                  HOLD
+movable um2     6054418.68    6054603.07     +184.39   +/-1211 um^2 (+0.0030 %) HOLD
+cells               391980        391982          +2   (not bounded; reported)
+rung-1 residual       2352          2352           0   (not bounded; reported)
+```
+
+**`Found 1341 endpoints with hold violations` — the arm's number exactly**, and the
+rung-1 residual comes out at **2 352, also exactly.** Neither is a bound I set: E3
+bounded the buffer count and the area, and the two quantities that agree to the digit
+are ones I did not get to choose. A DEF plus two named timing-view reconstructions
+reproduces the arm's post-hold state.
+
+**The diagnosis took three probes and each one eliminated a named cause with a
+measurement**: v1 `no estimated parasitics` → v2 parasitics present, still nothing →
+v3 propagated clock, 1341 endpoints. The two dead ends are kept because "it was the
+clock" is worth much less than "it was not the parasitics, and here is the run that
+shows it".
+
+### v1 is not wasted — it independently replicates J80 to the digit
+
+v1 ran the same ladder on the same DEF from a separately-built Tcl and finished:
+
+```
+rungs 1-4   2345 -> 2345 -> 2343 -> 2337     PROBE_PRESWAP_OK=0
+swapped=2089 -> gf180mcu_fd_sc_mcu7t5v0__clkbuf_4
+post-swap   movable 6050774.64 -> 5887399.08 um^2   util 47.3 % -> 46.2 %
+            residual 2337 -> 296              PROBE_POSTSWAP_OK=0
+```
+
+**Identical to J80 in every figure.** v2 was stopped once E2 failed: it was by then a
+pure duplicate of v1 on a state established not to be the arm's, and it was costing a
+core the arms and v3 could use. Stopping it is recorded here rather than left as a gap
+in the container list.
+
+### P4, P5 and P6 — ALL THREE HELD, in the arm's own post-hold state
+
+v3 finished at **16:54:57**, `rc=0`, **16 minutes 35 seconds** end to end at host
+loadavg ~20 on 32 cores.
+
+```
+rungs 1-4    2352 -> 2352 -> 2350 -> 2344      PROBE_PRESWAP_OK=0
+             (the arm's own: 2352 -> 2352 -> 2344 -> 2340)
+POST_HOLD_CLKBUF_DOWNSIZE swapped=2089 -> gf180mcu_fd_sc_mcu7t5v0__clkbuf_4
+post-swap    movable 6054603.07 -> 5891227.51 um^2   (-163 375.56)
+             residual 2344 -> 303                    PROBE_POSTSWAP_OK=0
+```
+
+```
+P4  post-swap residual 303 < 2296, the floor of the band all four arms hold   HELD
+P5  post-swap residual 303 < 500                                              HELD
+P6  swapped = 2089 exactly                                                    HELD
+```
+
+**−87.1 % in sixteen minutes, on the state five arms have been sitting in for between
+one and thirteen hours.**
+
+### The three agreements that were not bounds I set
+
+1. **The swap area is 163 375.56 µm² again** — the second state, the same number,
+   against the **163 375.5648 µm²** derived beforehand from the PDK's own
+   `SITE ... SIZE 0.56 BY 3.92` and seven `MACRO` widths. **0.0048 µm² out, twice.**
+2. **J80's bound-by-argument was right to the digit.** J80 measured post-CTS
+   `2 337 → 296` and argued post-hold would differ by about a fifteenth of a percent.
+   Post-hold measures **`2 344 → 303`**: the pre-swap gap is **7** and the post-swap gap
+   is **7** — and **7 is exactly what hold repair moved the rung-1 residual by**
+   (2 345 → 2 352). The argument was not merely in the right direction; the offset is
+   the same integer on both sides of the swap.
+3. **The entry control was scored by the arm's own numbers, not by mine.** E3 bounded
+   the buffer count and the area; what came out matching to the digit were the two
+   quantities I did not bound — `1341` endpoints and a `2352` rung-1 residual.
+
+### What this does and does not settle
+
+**It does not answer J79's P1, P2 or P3.** Those read the FIVE ARMS' logs and are claims
+about what the arms eventually print; a probe is not an arm, and the predicate still
+returns `NOT YET`, exit 2. What is now settled is the **mechanism** those predictions
+rest on, measured in the arms' own state rather than argued from a neighbouring one:
+
+* the residual the arms cannot clear is **2 344**, and it is **not** clearable by
+  search — rungs 1–4 move it by 8 while the displacement bound grows 20×, and rung 5
+  has bought 255 of 2 296 in **over ten hours of one core** (J81);
+* it **is** clearable by area — the flow's own rung 6 takes it to **303** in
+  **16 minutes**, by removing a quantity of clock-buffer width that is a PDK constant;
+* and `PROBE_POSTSWAP_OK=0`, so **this is not a manufactured pass**: the placement is
+  still illegal afterwards, nothing here says the chip closes, and what rung 7 would
+  face is a full-die search over **303** stuck cells instead of **2 344**.
+
+**No verdict moves. No die number moves.** `edge_llm_matmul_accel` stays UNDETERMINED,
+core-limited, build-to 6.139–6.171 mm. What moves is that the report's account of why
+the arms are stuck is now a measurement in their own state, and the probe that produced
+it took sixteen minutes.

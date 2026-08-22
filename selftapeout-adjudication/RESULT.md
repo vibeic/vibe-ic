@@ -61,8 +61,30 @@ Both are refuted by the arm's own log and corrected here — J81. What survives 
 statement, and that ten hours of search buys what ten minutes of downsizing beats by
 7×.)*
 `PROBE_POSTSWAP_OK=0`: even after the swap the placement is not legal, so this is not a
-manufactured pass, and P1/P2/P3 stay registered and unanswered because this is the
-post-CTS state and not the post-hold one. **A chip-AGNOSTIC plugin defect fell out of it
+manufactured pass, and P1/P2/P3 stay registered and unanswered.
+
+**★ AND THE "POST-CTS, NOT POST-HOLD" CAVEAT IS NOW REMOVED BY MEASUREMENT (J83).** J80
+had to bound the distance to the arms' own state by ARGUMENT. A second probe runs the
+flow's own `repair_timing -hold` and removes it — **and it took THREE tries, each
+eliminating a named cause with a run**: v1's hold repair was a no-op (`no estimated
+parasitics`); v2 added the flow's own `estimate_parasitics -placement`, the warning
+disappeared, and it was **still** a no-op; v3 added `set_propagated_clock` — a
+TIMING-VIEW reconstruction that moves no cell and leaves the netlist byte-identical —
+and printed **`Found 1341 endpoints with hold violations`, the arm's number exactly**,
+**224 hold buffers against the arm's 222**, movable within **+0.0030 %**, and a rung-1
+residual of **2 352, also the arm's exactly**. *(The entry control as FIRST written could
+not have caught any of this: it allowed ±1 % on a cell count whose signal is 222 cells =
+**0.057 %** — a tolerance **17× larger than its own signal**, which is a PASS decided
+when the bound was chosen rather than when the measurement was taken. It was restated
+with a bound smaller than the signal before v3 ran.)* **In that state, the flow's own
+rung 6 takes the residual from 2 344 to 303 — −87.1 % — in SIXTEEN MINUTES**, on a state
+five arms have been sitting in for between one and thirteen hours, freeing
+**163 375.56 µm²** — the PDK-derived figure to **0.0048 µm²** for the second time. And
+J80's argued bound turns out right to the digit: post-CTS `2 337 → 296`, post-hold
+`2 344 → 303`, **the same offset of 7 on both sides of the swap, which is exactly what
+hold repair moved the rung-1 residual by**. `PROBE_POSTSWAP_OK=0` still — the placement
+is illegal afterwards, nothing says the chip closes, and rung 7 would face **303** stuck
+cells instead of 2 344. **A chip-AGNOSTIC plugin defect fell out of it
 and is fixed and pushed (§8): the downsize's own `catch` guard is inverted, so the rung
 that is worth 87.3 % here could fail in TOTAL SILENCE.**
 
@@ -410,7 +432,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J82). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J83). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
