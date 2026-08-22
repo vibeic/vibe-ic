@@ -11,7 +11,14 @@ corpus "published cells carrying a routed DEF" is EMPTY — nothing was checked 
 ```
 
 Measured 2026-08-22 on a clean worktree of `origin/main` @ `81cd5321b`
-(`PYTHONDONTWRITEBYTECODE=1`). It reaches the same verdict as
+(`PYTHONDONTWRITEBYTECODE=1`), and **RE-MEASURED end to end on 2026-08-22 on a
+clean worktree of `origin/main` @ `a4caccefe` (v1.11.69), 214 commits later,
+against the publishing repository at its live tip `3b58ccd42`.** Evidence
+attaches to a sha, not to a branch name: this record was written against a base
+that main has moved past, so every load-bearing figure below was taken again
+rather than carried forward. Three figures moved and are corrected in place —
+each correction is marked **[re-measured @ a4caccefe]** and states what the
+earlier number was. Nothing in the verdict moved. It reaches the same verdict as
 `2026-08-22-routed-def-corpus-adjudication.md` by a different route — that
 record read this repository's publishing programs; this one reads the
 **publishing repository's own committed statement** — and it then contradicts
@@ -41,6 +48,44 @@ That repository's tip on 2026-08-22 is `3b58ccd42`. Its complete recursive tree
 
 There is no routed DEF in the published corpus, at any path, under any name.
 The population is zero at the source, not merely zero in this checkout.
+
+**[re-measured @ a4caccefe]** The table above was originally read from GitHub's
+tree API. It was taken again from a local clone — `git clone --filter=blob:none
+--single-branch --branch main`, HEAD `3b58ccd42`, `git ls-tree -r --name-only` —
+and every row reproduces: 6929 blobs, `grep -c 'routed\.def'` = **0**,
+`grep -cE '\.def$'` = **0**, 9 designs under `ic/`. Two readers, two protocols,
+same answer. `git ls-remote` confirms `refs/heads/main` is still `3b58ccd42`, so
+the publisher has not moved since the first draft.
+
+### And the row reproduces, on the landing path, exactly as reported
+
+The producer's rc depends on whether a corpus was RESOLVED, and the two states
+have different exit codes since #1764. So "rc 0, 0 items" is a claim about
+which state the landing path is in, and it is checkable. Bound the way
+`gatekeeper_review` binds it — `VIBE_IC_BENCHMARK_DATA` at a clone of the
+publisher — and run the producer on a clean `a4caccefe` worktree:
+
+```
+$ VIBE_IC_BENCHMARK_DATA=<clone of benchmark-data @ 3b58ccd42> \
+    python3 tools/ci/routed_def_corpus.py --repo <clean a4caccefe worktree>
+producer rc = 0
+items on stdout = 0
+[routed-def corpus] MEASURED EMPTY: git's index at <clone> was read under 'ic'
+and it publishes no */*/phase3/stage3/pnr/routed.def. This IS a measurement --
+the corpus was opened and the population is 0 -- and it is NOT the same state
+as a corpus that could not be found (rc 3).
+```
+
+`rc 0, 0 items` — the brief's population line, reproduced against the live
+publisher. This is decisive for the verdict, and it is the reason (2) rather
+than (3) is the answer: the corpus was **opened**, an index was **read**, and it
+holds none. Had the artefacts merely been somewhere the producer does not look,
+this would be a measurement of a tree that contains them. It is not. The tree
+was measured, twice, by two readers, and it contains no `.def` file at all.
+
+(For contrast, the same worktree with no pointer and no `benchmark-data/` exits
+**3** — `NOT FOUND`, the absence of a measurement. That is a different row with
+a different sentence, and it is not the row the brief quotes.)
 
 ## The publisher says so itself, in two committed files
 
@@ -148,8 +193,19 @@ published where I cannot count it*).
 vacuous: mutating a **copy** of the producer from `len(parts) == 6` /
 `parts[2:]` to `len(parts) >= 6` / `parts[-4:]` gives 2 failed / 1 passed, while
 the identical harness over a byte-identical copy gives 3 passed — so the colour
-is the mutation and not the scaffold. The tracked producer was not touched
-(`git status --porcelain` empty; sha256 `d04b8215…` before and after).
+is the mutation and not the scaffold.
+
+**[re-measured @ a4caccefe]** #1764 rewrote this producer between the two
+measurements, so the mutation was rebuilt against the current file and run
+again. Same result: **control (byte-identical copy) 3 passed; mutated 2 failed,
+1 passed** — the two that fail are `test_one_directory_deeper_is_not_counted`
+and `test_a_published_routed_def_at_the_wrong_depth_is_indistinguishable_from_none`,
+which is the pair that carries the finding. On the unmutated branch tree the
+file is 3 passed. The tracked producer was not touched: it is a protected
+authority path and both arms are copies outside the worktree
+(`git status --porcelain` empty; sha256 `6c8f9fa9…` at `a4caccefe`, which is a
+different file from the `d04b8215…` measured at `81cd5321b` — that is #1764,
+and it is why re-running this was not optional).
 
 **And it is the same defect class the withdrawal was made for.** `u_hawaii_adc`
 was withdrawn because its run wrote a second audit at `reports/`**`reports`**`/audit/…`
@@ -198,6 +254,17 @@ carried it was withdrawn for exactly that and the instruction to check for it
 was written down. It is why the rule below is a program and not another line in
 a contract.
 
+**[re-measured @ a4caccefe]** Every cell of the table above was taken again
+from a full checkout of `benchmark-data` @ `3b58ccd42` (the first draft read
+them through the tree/contents API) and every one reproduces: four names at
+both depths, `cmp` says three DIFFER and `gds_size.json` is IDENTICAL;
+`foundry_handoff_audit.json` is `verdict=SKIP` with 0 found / 2 missing outside
+and `verdict=PASS` with 2 found / 0 missing inside; `si_crosstalk.json` is
+`max_crosstalk_noise` **0.0** with no SPEF outside and **1791.87** with a real
+SPEF inside, whose recorded source tree is the retired repository. The two
+quoted publisher sentences were read from the same checkout at
+`CELL_MATRIX.md:23-26` and `INDEX.md:88`.
+
 ## Decision: BLOCKING stays, and it buys no exemption
 
 Unchanged from the earlier adjudication, and for the same two reasons, both of
@@ -232,41 +299,81 @@ green. It closes the gap between "a cell is published" and "the routed-DEF loop
 can see it", which is what makes the restoration condition above true rather
 than hopeful.
 
-The red, with the same test file on both arms:
+The red, with the same test file on both arms — **[re-measured @ a4caccefe]**,
+against `origin/main`'s checker at the current tip rather than the old one:
 
 | arm | result |
 |---|---|
-| final tests vs `origin/main`'s checker (byte-identical copy) | **6 failed**, 1 passed |
+| final tests vs `origin/main` @ `a4caccefe`'s checker (byte-identical copy) | **6 failed**, 1 passed |
 | final tests vs the fixed checker | **7 passed** |
+
+Unchanged from the first measurement. The six that go red are
+`test_the_rule_reports_a_verdict_on_a_clean_cell`,
+`test_the_withdrawal_shape_is_refused`,
+`test_the_shape_that_makes_the_routed_def_corpus_look_empty_is_refused`,
+`test_every_offender_is_named_not_just_the_first`,
+`test_the_finding_is_machine_readable` and
+`test_an_empty_nested_duplicate_still_counts`.
 
 The 1 that passes on the red arm is the negative control — the canonical cell,
 which carries `phase3/` and `reports/phase3/` in one tree, must not be refused.
 It is written first so that a rule matching the NAME rather than the ADJACENCY
 is caught by a test instead of by a reviewer.
 
-And the rule is measured rather than argued. Over the full historical
-published-cell corpus at the last commit that carried it — 5 cells, **388**
-distinct directories — it fires exactly **once**, on
-`u_hawaii_adc/v1.9.86_sky130A/reports/reports`. One true positive, 387 clean
-directories, zero false positives.
+And the rule is measured rather than argued — **[re-measured @ a4caccefe],
+this time by running both checkers over the real published tree rather than
+over a fixture.** The last commit of `vibeic/benchmark-data` that carried
+published cells is `146d665` (the parent of `bcf2f94`, "withdraw all four
+published cells"). Checked out whole and handed to `--tree`:
 
-Targeted regression (load 61–72 on 32 cores): the checker's own suite plus every
-test file that names its rules — 125 passed, 12 skipped — and
-`size_policy_drift_check.py`, which probes `check_folder` as its decision entry
-point, still exits 0.
+| arm | result over `benchmark-data` @ `146d665` |
+|---|---|
+| `origin/main`'s checker @ `a4caccefe` | **13/13 conformant, 0 nonconformant, rc 0** |
+| this branch's checker | **12/13 conformant, 1 nonconformant, rc 1** |
+
+The 13 units are 9 `ic/<IC>/` layout units and 4 cells. The one unit the arms
+disagree about is `ic/u_hawaii_adc/v1.9.86_sky130A`, named for
+`reports/reports`, and it is **the cell the publisher withdrew two days later
+for exactly that defect**. Read the other way round, which is the sentence that
+matters: *`origin/main`'s structure gate prints `[PASS] … verdict=PASS` over the
+cell whose second, contradictory audit says FAIL.*
+
+Across the four cells' **342** distinct directories there is exactly **one**
+same-name nesting, and it is that one. One true positive, 341 clean
+directories, zero false positives, on real published artefacts.
+
+**Correction.** The figure in the first draft of this record was "5 cells, 388
+distinct directories, 387 clean". Both numbers are wrong: `146d665` publishes
+**4** cells (`spm` × three PDKs, `u_hawaii_adc` × one) spanning **342**
+directories. The one-hit result is unchanged; only my count of what it was
+measured over was.
+
+Targeted regression (load 61–72 on 32 cores at first measurement): the checker's
+own suite plus every test file that names its rules — 125 passed, 12 skipped —
+and `size_policy_drift_check.py`, which probes `check_folder` as its decision
+entry point, still exits 0.
 
 ### And it does NOT reach the three instances above. Measured, not assumed.
 
-`--tree` over one synthetic root carrying both shapes at once:
+**[re-measured @ a4caccefe]** — and no longer on a synthetic root. Both checkers
+run over the LIVE published tree, `benchmark-data` @ `3b58ccd42`, the one the
+landing path actually binds:
 
-| unit in the tree | what the checker did |
+| arm | result over the live published tree |
 |---|---|
-| `ic/demo/v9.9.9_openpdkx/` with `reports/reports/` | **FAIL — NESTED_DUPLICATE**, named |
-| `protocol_parity/demo2/` with `phase3/phase3/` **and** `reports/phase3/phase3/` | **not enumerated at all** |
+| `origin/main`'s checker | 9/9 conformant, 0 nonconformant, rc 0 |
+| this branch's checker | 9/9 conformant, 0 nonconformant, rc 0 |
 
-`1/2 conformant, 1 nonconformant`, rc 1 — and the two units are the IC root and
-the cell. Nothing under `protocol_parity/` was discovered, because
-`_discover_evidence_folders` keeps a child only under `ic/<IC>/`.
+Byte-identical output. Nine units, all of them `ic/<IC>/` layout units, **no
+cell units at all** (every cell was withdrawn), and the string
+`protocol_parity` does not occur once in either arm's output — grep count 0.
+`_discover_evidence_folders` keeps a child only under `ic/<IC>/`, verified in
+its own source at `benchmark_evidence_structure_check.py:878-890`.
+
+So on today's corpus the new rule fires on nothing and changes nothing, which
+is the correct and unexciting result: it is a PUBLISH-TIME refusal for a shape
+nothing currently publishes, and it earns its place by what it refuses next
+rather than by what it reds now.
 
 So this rule covers the population the routed-DEF loop actually draws from —
 `ic/<design>/v<version>_<PDK>/` — and covers nothing else. The three
@@ -282,25 +389,64 @@ bug is fixed": a cell can no longer be PUBLISHED into the routed-DEF corpus in a
 shape that corpus cannot see. The instances already published elsewhere are
 untouched.
 
-**Filed, not fixed:** `routed_def_corpus.py` hardcodes `may_be_absent=True`, so
-"a corpus was read and holds no routed DEF" and "no corpus was supplied at all"
-reach the dispatcher as the same rc 0 / 0 items. That file is line 71 of
-`REQUIRED_AUTHORITY_PATHS` in `tools/ci/protected_landing_transition.py`;
-`build_receipt` refuses a candidate whose protected bytes match neither BASE's
-`current` nor BASE's `next` tuple — `_match_state` raises *"protected tuple
-matches neither authorised atomic state"* — and the PREPARE arm explicitly
-refuses a candidate that changed live protected bytes. So the fix is reachable
-only through a base-authorised PREPARE → ACTIVATE pair, and not from one
-candidate commit. Recorded here so the next transition has the reason to hand.
+**Filed here, and FIXED ON MAIN SINCE — by someone else, and better.**
+**[re-measured @ a4caccefe]** The first draft filed this: `routed_def_corpus.py`
+hardcodes `may_be_absent=True`, so "a corpus was read and holds no routed DEF"
+and "no corpus was supplied at all" reach the dispatcher as the same rc 0 /
+0 items. It was filed rather than fixed because that file is line 71 of
+`REQUIRED_AUTHORITY_PATHS` in `tools/ci/protected_landing_transition.py`
+(**still line 71 today**), and `_match_state` raises *"protected tuple matches
+neither authorised atomic state"* for a candidate that edits it outside a
+base-authorised PREPARE → ACTIVATE pair.
 
-**A note for whoever lands this.** A sibling branch,
-`fix/routed-def-corpus-empty-adjudication`, reaches the same verdict about the
-corpus and then edits `tools/ci/routed_def_corpus.py` directly (70 lines) with
-no manifest change. On the reading above that candidate cannot land as it
-stands: same manifest bytes as BASE, protected tuple equal to neither
-authorised state, so `_match_state` raises before any test runs. The two
-branches do not conflict — this one touches no protected path — but landing them
-as a pair would not produce the fix that branch intends.
+That transition happened. `ef0399606` ("routed-def corpus: an ABSENT corpus and
+a MEASURED-EMPTY one shared one row (#1764)") landed the distinction, and it is
+live at `a4caccefe`:
+
+```
+rc 0  the index WAS read and it publishes no routed DEF   -- a measurement
+rc 3  no corpus was resolved, so nothing was opened       -- no measurement
+rc 2  somebody said where the corpus is and was wrong     -- UNDETERMINED
+```
+
+Measured on a clean `a4caccefe` worktree: with no pointer and no
+`benchmark-data/`, the producer exits **3** and prints `NOT FOUND (rc 3)`. Note
+what did NOT change — the call still passes `may_be_absent=True`; what changed
+is that the NO_CORPUS branch now leaves with its own code instead of borrowing
+rc 0. The filed item is CLOSED, and this record no longer asks anyone to
+act on it.
+
+**A note for whoever lands this: two sibling branches are now DEAD, and one
+of them because it WON.** **[re-measured @ a4caccefe]**
+
+`origin/fix/routed-def-corpus-empty-adjudication` @ `6ec94ef2c` reaches the same
+verdict about the corpus and then edits `tools/ci/routed_def_corpus.py` directly
+to make an absent corpus exit **rc 2**. The first draft of this record said that
+candidate could not land, because it changes protected bytes with no manifest
+change. That is still true of the commit — and it no longer matters, because its
+FINDING landed on main through the authorised route as `ef0399606` (#1764),
+which gave the absent corpus **rc 3** rather than rc 2 and argued for the
+difference in the producer's own docstring:
+
+> reversing it would have made an absent corpus borrow the FAILED PRODUCER row
+> instead, which is a second wrong sentence rather than the missing one
+
+So the sibling is superseded on the merits, not merely blocked on mechanics: the
+distinction it asked for exists, under a better exit code than the one it
+proposed. **Do not land it. Nothing is lost by closing it** — bundled at
+`refs/backup/jdef/empty-adjudication` before this record was written.
+
+`origin/fix/jdefcorpus-routed-def-restoration-condition` @ `0df1dd533` is THIS
+record's first draft, based on `81cd5321b`, 214 commits behind. It is superseded
+by the branch you are reading, which is the same net change cherry-picked onto
+`a4caccefe` — verified identical modulo blob hashes — plus these corrections.
+**Land this one; close that one.** Bundled at
+`refs/backup/jdef/restoration-condition`.
+
+Neither branch touches a protected path.
+`benchmark_evidence_structure_check.py` does not appear in
+`REQUIRED_AUTHORITY_PATHS` at all — checked at `a4caccefe` — so this change is
+landable from one candidate commit.
 
 ## What this deliberately does not do
 
