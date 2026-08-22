@@ -890,3 +890,26 @@ branch that had been "verified green" for its whole life was, for some unknown
 part of that time, verified against a base that no longer existed. *A
 verification is only as current as its last re-poll, and "it was 0 last time" is
 not a measurement.*
+
+
+## …and every number above re-measured against the base that exists
+
+Naming the drift is not the same as checking it. Each load-bearing figure was
+re-measured on `ae78abb28` (`evidence/REVERIFIED_AGAINST_LIVE_MAIN.md`):
+
+| figure | a4caccefe | ae78abb28 |
+|---|---|---|
+| F1 guard: files / verdicts / locus / FAIL | 1280 / 31 / 29 / 2 | **1309 / 31 / 29 / 2** |
+| F1 attempt 3: verdicts / named / refused | 25 / 13 / 11 | **25 / 13 / 11** |
+| `UPSTREAM_PINS` population | 0 | **0** |
+| `UPSTREAM_MIRROR` population | 0 | **0** |
+| `PAD_FAKE_SITES` as a bare quoted literal | False | **False** |
+
+Every conclusion survives. 29 more files parsed, the same 31 absence verdicts,
+the same two false positives (one line number shifted because that file
+changed). The blind predicate is still blind on the live tree, so the widening
+is not a fix for a state that has since gone away.
+
+A branch that ends by saying "a verification is only as current as its last
+re-poll" and leaves its own figures pinned to a dead base would be doing the
+thing it just named.
