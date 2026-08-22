@@ -1674,6 +1674,63 @@ def test_the_vacuous_tier_says_WHY_it_is_empty(tmp_path):
         + r.stdout)
 
 
+def test_a_NOT_DECIDABLE_line_names_where_and_why(tmp_path):
+    """The last reader-facing line on this branch never held to the evidence
+    standard the others do. Every existing assertion checks only that the
+    substring `[NOT DECIDABLE]` appears -- so a line naming the wrong program,
+    the wrong counter, or no numbers at all would have passed them all.
+
+    It is the ONLY thing a reader gets about a comparison the guard declined, so
+    it has to carry all four facts: WHERE (which program), WHAT (which counter),
+    the numbers that make it undecidable (sites, and the multiplier that
+    explains the shortfall), and the denominator it declined to compare against.
+
+    Two programs, named so ALPHABETICAL order puts the honest one FIRST: a
+    `where` captured outside the per-program loop reports `aa_honest.py` and
+    sends the reader to a file with nothing undecidable in it. That failure is
+    the one already pinned for polarity refusals; this is the same standard,
+    applied to the line that did not have it."""
+    honest = ('def script():\n    return (\n'
+              '        "  if {[catch {a}]} { incr _h }\\n"\n'
+              '        "  if {[catch {b}]} { incr _h }\\n"\n'
+              '        "  if {$_h >= 2} { puts ALL }\\n")\n')
+    declined = ('def _repair(name):\n'
+                '    return "  if {[catch {%s}]} { incr _d }\\n" % name\n\n\n'
+                'def script():\n    return ("  set _d 0\\n" + _repair("a")\n'
+                '            + _repair("b") + _repair("c")\n'
+                '            + "  if {$_d >= 3} { puts ALL }\\n")\n')
+    progs = tmp_path / "p"
+    tests = progs / "tests"
+    tests.mkdir(parents=True)
+    (progs / "aa_honest.py").write_text(honest, encoding="utf-8")
+    (progs / "zz_declined.py").write_text(declined, encoding="utf-8")
+    (tests / "test_x.py").write_text("def test_x():\n    assert True\n",
+                                     encoding="utf-8")
+
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    line = [l for l in r.stdout.splitlines() if "[NOT DECIDABLE]" in l]
+    assert len(line) == 1, r.stdout
+    line = line[0]
+
+    assert "zz_declined.py" in line and "aa_honest.py" not in line, (
+        "the line names the wrong program -- a reader sent to a file with "
+        f"nothing undecidable in it:\n{line}")
+    assert "$_d" in line and "$_h" not in line, (
+        f"the line names the wrong counter:\n{line}")
+    for fact in ("1 site(s)", "called 3x", "says 3"):
+        assert fact in line, (
+            f"the line does not carry {fact!r}, so a reader cannot see why it "
+            f"is undecidable:\n{line}")
+
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert [(d["program"], d["counter"], d["increment_sites"],
+             d["emitted_per_site"], d["denominator"])
+            for d in doc["not_determined"]] == [("zz_declined.py", "_d", 1, 3, 3)], doc
+    # the honest program beside it was still compared
+    assert doc["counters_examined"] == 1, doc
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
