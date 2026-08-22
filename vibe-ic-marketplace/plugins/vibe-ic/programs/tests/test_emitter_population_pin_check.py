@@ -32,11 +32,26 @@ earlier on this branch). Reproduce by rewriting the file through `ast.unparse`
 with one op flipped; the un-mutated round trip passes, so the harness itself is
 not what fails.
 
-NOT DONE, and not to be read as done: the integer-constant arm. Constants inside
-f-strings carry bogus `lineno`/`col_offset` on this interpreter, so the mutator
-edited sites other than the ones it named, and the run hit a ten-minute cap
-before finishing. Its four "survivors" are artefacts and were discarded rather
-than reported.
+Constants: every integer constant outside an f-string incremented by one -- 37
+sites, 32 caught, 5 survivors, and each survivor is EQUIVALENT rather than
+uncovered:
+
+    rfind("\n", 0, at) + 1   both the 0 and the +1: `lstrip()` absorbs the
+                             one-character shift, and searching from 1 differs
+                             only if a newline sits at index 0
+    calls.get(host, 0) > 1   with a default of 1 the test is still False
+    max(out.get(k, 0), ...)  `calls[host]` is >= 2 on that path, so the max
+                             does not move
+    json.dumps(indent=2)     whitespace of the `--json -` document; pinning it
+                             would be specifying the formatting, not the report
+
+Argued AND measured: each leaves the shipped tree's --json byte identical.
+
+The first attempt at this arm was discarded, not reported: it matched sites by
+`lineno`/`col_offset`, and constants inside f-strings carry bogus positions on
+this interpreter, so it edited sites other than the ones it named -- its
+"survivors" pointed at docstring prose, which is how the instrument was caught.
+Mutating by INDEX during one walk uses no positions and has none of that.
 
 THE SWAP RUN THE OTHER WAY, because "my tests pass" is not the same claim as
 "the author's contract still holds": 3c3c51aee's ORIGINAL test file, unmodified,
