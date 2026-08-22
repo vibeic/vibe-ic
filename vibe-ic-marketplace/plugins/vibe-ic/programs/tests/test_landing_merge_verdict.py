@@ -2560,16 +2560,102 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
     assert "candidate planted this base log" not in r.stdout
 
 
+def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
+    """Run the verifier with a caller-visible run directory.
+
+    Returns (returncode, verdict-doc-or-None, stdout, stderr, fired) where
+    `fired` says whether `when_b1_starts` was actually called with the run
+    directory while the candidate wave was in flight.  It is returned rather
+    than assumed because "the corpus is unchanged" and "nobody tried" are the
+    same bytes: a tamper test that cannot say its stimulus was delivered is
+    reporting a third outcome it has not enumerated.
+    """
+    run_root = tmp_path / "verifier-tmp"
+    run_root.mkdir(parents=True)
+    out = tmp_path / "verdict.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
+         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "TMPDIR": str(run_root),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])})
+    fired = False
+    deadline = time.monotonic() + _T
+    while (when_b1_starts is not None and not fired
+           and proc.poll() is None and time.monotonic() < deadline):
+        runs = sorted(run_root.glob("gkverify.*"))
+        if runs and (runs[0] / "b1-runner.log").exists():
+            when_b1_starts(runs[0])
+            fired = True
+            break
+        time.sleep(0.02)
+    try:
+        stdout, stderr = proc.communicate(timeout=_T)
+    except subprocess.TimeoutExpired:                     # pragma: no cover
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    doc = json.loads(out.read_text()) if out.is_file() else None
+    return proc.returncode, doc, stdout, stderr, fired
+
+
 def test_end_to_end_relinked_parent_selection_is_norecord(
         sandbox, tmp_path):
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_RELINK_SELECTION": "1"},
-    )
+    """PROPERTY (unchanged): a relinked parent-owned test selection is
+    NORECORD -- never a recorded verdict about a selection that moved.
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "changed/relinked the parent-owned test selection" in r.stderr
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+), AND THE HAND THAT
+    DOES THE RELINKING IS THE PART THAT MOVED. It used to be the candidate's
+    own landing gate: the stub read `GATEKEEPER_RELINK_SELECTION`, reached into
+    the parent's run directory and swapped `selection.txt` for a symlink to a
+    byte-identical copy. Under the hermetic launcher an arm is a container that
+    is handed `/input/selection.txt` as a read-only bind and cannot name the
+    run directory at all, so that stimulus is not merely undetected -- it
+    cannot be expressed. MEASURED on a4caccefe: the switch occurs ZERO times in
+    `tools/gatekeeper-verify-merge.sh` and is not on the launcher's `--env`
+    allow-list, so the stub branch never fired and the old test was asserting
+    a refusal for something nothing had attempted.
+
+    The relink is therefore planted where a relink can still happen: on the
+    HOST, in the parent's own run directory, while the candidate wave is in
+    flight. That is the threat the surviving code is written against -- the
+    verifier re-reads and re-attests its inputs precisely because it does not
+    assume the candidate is the only process on the machine -- and it is the
+    reason a content comparison is not enough: the copy is byte-identical, so
+    `cmp` on the bytes cannot see it. What sees it is
+    `hermetic_landing_arm_receipt._resolved_file`, which refuses a supplied
+    input path that is not a DIRECT regular file, before any of its bytes are
+    allowed to bind an arm's receipt.
+
+    ASSERTED: rc 2, NO verdict document, and the refusal names both the arm
+    receipt and the selection. Plus the paired control in the same harness --
+    the same run with the relink withheld is a recorded LAND OK -- because a
+    refusal that also fires without the tamper is a ban, not a check.
+    """
+    def relink(run):
+        selection = run / "selection.txt"
+        copy = run / "selection-copy.txt"
+        copy.write_bytes(selection.read_bytes())
+        selection.unlink()
+        selection.symlink_to(copy)
+
+    rc, doc, stdout, stderr, fired = _verify_watching_the_run_dir(
+        sandbox, "innocuous_green", tmp_path / "relinked", relink)
+    assert fired, "the relink was never planted, so nothing was tested"
+    assert rc == 2, stdout + stderr
+    assert doc is None, "a run whose selection moved still wrote a verdict"
+    assert "arm receipt is NORECORD" in stderr, stderr
+    assert "selection is not a direct regular file" in stderr, stderr
+
+    control_rc, control_doc, control_out, control_err, _ = (
+        _verify_watching_the_run_dir(
+            sandbox, "innocuous_green", tmp_path / "untampered"))
+    assert control_rc == 0, control_out + control_err
+    assert control_doc is not None and control_doc["verdict"] == "LAND_OK"
 
 
 def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
