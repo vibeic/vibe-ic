@@ -4832,6 +4832,76 @@ dedicated daemon over socket passthrough even though socket passthrough is
 cheaper.
 
 
+## M90 — THE LANES NOW AGREE. 22 image reds -> 6, byte-identical to the host, with no code change
+
+M89 measured that a Docker CLI is not sufficient and named a hardcoded
+`dir="/tmp"` in a protected file as what defeated the identical-path attempt.
+**One experiment was still available: make the container's `/tmp` BE the host's
+`/tmp`.** Then the hardcoded path resolves identically in both namespaces and the
+protected line stops mattering.
+
+**IT WORKS.**
+
+    docker run --rm \
+      --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v /usr/bin/docker:/usr/local/bin/docker:ro \
+      -v /tmp:/tmp \
+      -v <clone>:/work:ro  <pinned digest>  --skip  bash -c '... pytest ...'
+
+**Four invocation flags. No image rebuild, no code change, no protected-file
+edit.**
+
+| arm | CLI err | invalid-mount | NORECORD | failed | passed |
+|---|--:|--:|--:|--:|--:|
+| image, as CI runs it | 18 | 0 | 39 | 22 | 112 |
+| + CLI + socket | 0 | 18 | 39 | 22 | 112 |
+| + identical-path `TMPDIR` | 0 | 18 | 39 | 22 | 112 |
+| **+ host `/tmp` at `/tmp`** | **0** | **0** | **0** | **6** | **128** |
+
+**All three blocker classes go to zero and 16 of the 22 close.**
+
+**AND THE TWO LANES NOW AGREE, BY TEST ID:**
+
+    host  lane   6 failed, 128 passed  (426s)
+    image lane   6 failed, 128 passed  (415s)
+    comm -23 / comm -13  ->  EMPTY BOTH DIRECTIONS
+
+Not "6 and 6" — the SETS are byte-identical. That is the check this whole
+two-lane exercise exists to make, and it is the first time it has ever come back
+clean.
+
+**THE SURVIVING SIX ARE EXACTLY THE ITEMS I DOCUMENTED AS BLOCKED:**
+
+    b2_corpus_mutation_is_post_attested_and_norecord     the corpus pair (M25/M83)
+    relinked_parent_selection_is_norecord                the corpus pair (M25/M83)
+    interruption_kills_a_term_ignoring_parallel_arm      G4 / design B (M81/M83)
+    pid_only_term_kills_a_term_ignoring_b2               G4 / design B (M81/M83)
+    post_bootstrap_equal_corpus_uses_ordinary_delta      bootstrap corpus delta
+    trusted_verifier_supplies_the_one_bootstrap_evidence bootstrap evidence
+
+**Nothing unexplained is left in this suite.** Four of the six are items with
+written-up blockers; the remaining two are bootstrap-corpus tests in the same
+family as the corpus pair.
+
+**RETRACTION — this is the claim I repeated most often in this document and in
+every summary I wrote.** I said: *"the repair is invisible to CI, because all 22
+die on the absent Docker CLI before reaching any re-founded assertion."* The first
+half is now false. **My four re-founded design A and C tests PASS in the image
+lane** — `every_arm_of_both_waves_actually_ran` and
+`candidate_cannot_prewrite_base_wave_artifacts` are both absent from the surviving
+six. **The repair was never invisible. The lane was misconfigured, and I described
+the misconfiguration as a property of the repair.**
+
+**What is and is not settled.** This is measured on THIS host with ITS daemon; I
+have not run it in CI, and the socket-passthrough caution from M89 stands
+undiminished — binding the host socket AND the host `/tmp` into the test container
+is a large grant for a lane whose purpose is isolation. **The engineering claim
+here is narrow and strong: the image lane is runnable today with flags alone.**
+Whether it SHOULD be run that way is the lane owner's call, and a dedicated daemon
+remains the safer shape.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4920,7 +4990,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
 | **Matrix family** (6 D3 reds measured) | **ONE group of six — M86 measured, M87 corrected.** All six cite `home`-kind run roots, and **5 of them cite the SAME root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`) — one unreproducible tree cited five times. **Their artefacts EXIST here** in other `home` trees (`_c3_adc_scratch/dehand*` carries all four PNR DEFs; 10+ trees carry `eco_trigger_decision.json`). **Step 30 joins them (M87)**: its outputs ARE declared, as GLOBS (`phase3/stage3/spice/*.sp`), produced by the EDA toolchain from external PDK models — `critical_path.sp` is just what satisfied the glob. **Not a production gap.** One publication-or-waiver decision closes all six. Never by widening the skip. | **ONE decision, six reds** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
-| **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | **MEASURED IN THE IMAGE — M89. Adding a Docker CLI is NOT sufficient.** Four arms of the same suite in the pinned digest: as CI runs it, 18 CLI errors / 22 failed; **with a working CLI + host socket, 0 CLI errors and the SAME 22 failed** — failing ID sets **byte-identical**, now dying on `invalid mount config: bind source path does not exist`, because a host daemon resolves binds in the HOST namespace. An identical-path shared `TMPDIR` gets further and names the exact remaining line: **`hermetic_candidate_runner.py:1831` hardcodes `dir="/tmp"`** and ignores `TMPDIR` (PROTECTED). Whether fixing it closes the 22 is NOT measured — two layers appeared where I reasoned about one. Also: socket passthrough grants the test container root-equivalent host daemon access. | **option 1 disproven; one protected line identified** |
+| **CI image has no Docker CLI** | **SOLVED WITH FLAGS — M90. The lanes now AGREE.** Adding `-v /tmp:/tmp` to the docker CLI + socket mounts takes the image lane from **22 failed -> 6 failed, 128 passed**, with all three blocker classes (CLI error / invalid-mount / NORECORD) at **zero**. **No image rebuild, no code change, no protected-file edit** — four invocation flags. Host lane and image lane are now **byte-identical by test ID** (`comm` empty both directions), the first clean two-lane agreement on record. The surviving 6 are exactly the documented blockers (2 corpus pair, 2 G4/design B, 2 bootstrap). **RETRACTS 'the repair is invisible to CI'** — the A/C repairs PASS in the image. Caution stands: socket + host `/tmp` is a large grant for an isolation lane. | **runnable today; the shape is the owner's call** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
 | **`b2_corpus_mutation` + `relinked_parent_selection`** (2 reds) | **M25: NO EVENT OCCURS**, so they cannot be re-founded the way A and C were — their attack arrives only via an env knob that cannot cross, so there is no trace to assert. Re-pointing their assertions would produce a test that passes *because nothing happened*. The relink is **doubly** undeliverable (its target is unmounted) and its guarantee is structurally true, partly covered by M15's read-only bind test. Needs the attack DELIVERED — the corpus half is D's open question; the selection half has no available channel. | **needs a channel, not an edit** |
 | **3 unwired checkers** | **THREE homes, and the repo already states the rule — M88.** M71 re-verified across FOUR homes (it had checked two; the 2 Python hits are docstrings): all three genuinely unwired. `repo_hygiene_gates.sh:398-403` states the membership test — *subject is the shipped flow document, no PR context, no design run* — which sorts them: **`closed_loop_edge_check` -> hygiene** (its sibling is wired at `:424`, twenty lines below the comment about it; PROTECTED file, lander's one-line edit); **`ppa_pr_scope_check` -> a PR-context runner, explicitly NOT hygiene**; **`slot_pad_budget_check` -> a flow clause on the chip path**, and **M52's objection ('a gate with nothing to read') is now FALSE** — it produced real verdicts on 18 designs. | **1 precedent, 1 product call, 1 real open question** |
