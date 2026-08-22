@@ -1496,8 +1496,10 @@ def publish(args: argparse.Namespace) -> dict:
         #
         # MEASURED, and the shape is committed rather than hypothetical: the
         # published corpus carries 52 files under a doubled `phase3/phase3/`
-        # prefix, 28 of them under `protocol_parity/lpc/phase3/phase3/stage3/
-        # pnr/`. A run tree of that shape publishes rc 0, a cell with zero
+        # prefix -- 28 under `protocol_parity/lpc/`, 24 under
+        # `protocol_parity/usb_pd/`, of which 11 sit in
+        # `lpc/phase3/phase3/stage3/pnr/` itself. A run tree of that shape
+        # publishes rc 0, a cell with zero
         # `.def` files, and -- before this -- no sentence anywhere naming the
         # artefact it dropped.
         #

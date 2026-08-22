@@ -29,7 +29,8 @@ not, the producer's answer is the same zero — which is exactly the collapse
 asserted below.
 
 MEASURED against the published corpus (`vibeic/benchmark-data` @ 3b58ccd42):
-`protocol_parity/lpc` carries `phase3/phase3/stage3/pnr/` (28 files) and
+`protocol_parity/lpc` carries `phase3/phase3/` (28 files, 11 of them in
+`stage3/pnr/`) and
 `protocol_parity/usb_pd` carries `reports/phase3/phase3/`, where four report
 names exist at both depths and three of them DIFFER. The doubled shape is not
 hypothetical; it is committed.

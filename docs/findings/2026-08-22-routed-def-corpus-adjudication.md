@@ -763,7 +763,8 @@ a deliberate policy exclusion with the same word.
 
 A converged run identical to ARM A's except that its routed DEF sits at
 `phase3/phase3/stage3/pnr/routed.def` — the doubled prefix
-`protocol_parity/lpc` carries in 28 committed files — published through the
+`protocol_parity/lpc` carries in 28 committed files, 11 of them in
+`phase3/phase3/stage3/pnr/` itself — published through the
 supported path with no flags:
 
 ```

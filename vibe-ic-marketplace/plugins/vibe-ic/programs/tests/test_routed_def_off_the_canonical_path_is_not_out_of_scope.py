@@ -24,10 +24,13 @@ post-route geometry.
 
 AND THE SHAPE IS COMMITTED, NOT HYPOTHETICAL. The published corpus
 (`vibeic/benchmark-data` @ `3b58ccd42`) carries 52 files under a doubled
-`phase3/phase3/` prefix -- `protocol_parity/lpc/phase3/phase3/stage3/pnr/`
-holds `routed.drc.rpt`, `spare_cells.json`, `pnr.tcl` and 25 more, and
-`protocol_parity/usb_pd` doubles `reports/phase3/phase3/`. A run tree of that
-shape is a shape real runs have had.
+`phase3/phase3/` prefix: 28 under `protocol_parity/lpc/` and 24 under
+`protocol_parity/usb_pd/`, which doubles `reports/phase3/phase3/`. Eleven of
+lpc's sit in `phase3/phase3/stage3/pnr/` itself -- `routed.drc.rpt`,
+`spare_cells.json`, `pnr.tcl`, `chip_top_pnr.v`, `constraint.sdc`, `sta.rpt`,
+`pdn.done`, `metal_fill.done`, `metal_fill_chip_top.tcl`,
+`magic_stream_out.tcl`, `stream_out.py`. A run tree of that shape is a shape
+real runs have had.
 
 WHY IT MATTERS TO THE BLOCKING ROW
 ==================================
