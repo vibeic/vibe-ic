@@ -382,7 +382,21 @@ def test_runner_calls_the_emitter_in_the_synthesis_step():
     The emit must be a step output."""
     src = (PROG.parent / "phase3_one_shot_runner.py").read_text()
     assert "import synth_area_stats_emit as _sas" in src
-    assert "_sas.emit_for_run(project, log, netlist)" in src
+    # The CALL, not one exact spelling of its argument list. This used to pin
+    # `_sas.emit_for_run(project, log, netlist)` verbatim and broke the moment
+    # the emitter gained the library argument — a coupled change, not a
+    # regression. What must stay true is that the synthesis step calls the
+    # emitter with the run it just produced.
+    import ast as _ast
+    fn = next((n for n in _ast.walk(_ast.parse(src))
+               if isinstance(n, _ast.FunctionDef) and n.name == "step_synth"), None)
+    assert fn is not None, "phase3_one_shot_runner.step_synth is gone"
+    body = _ast.get_source_segment(src, fn) or ""
+    assert "_sas.emit_for_run(" in body, (
+        "step_synth no longer calls the emitter, so the artefact is back to "
+        "being scraped after the fact — the #447 defect this test is about")
+    for arg in ("project", "log", "netlist"):
+        assert arg in body.split("_sas.emit_for_run(", 1)[1][:400], arg
 
 
 def test_flow_declaration_is_untouched():

@@ -11884,17 +11884,81 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # area figure in a sign-off artefact is worse than no figure.
     _area_stats = None
     try:
-        _area_stats = _sas.emit_for_run(project, log, netlist)
+        # THE LIBRARY THIS SYNTHESIS ACTUALLY LOADED. It is the same one
+        # interpolated into `stat -liberty` above, so the area figure and
+        # the library its unit is derived from cannot disagree. The HOST
+        # path, not the container translation: the emitter runs here.
+        _area_stats = _sas.emit_for_run(project, log, netlist,
+                                        liberty=getattr(pdk, "liberty", None))
     except Exception:
         _area_stats = None
     _synth_evidence = [str(netlist), str(log)]
     if _area_stats is not None:
         _synth_evidence.append(str(_area_stats))
+
+    # ── step 9's area clause, ENFORCED HERE (vibe-ic, 2026-08-22) ────────────
+    #
+    # The flow declares `area_total_vs_budget_check` in step 9's
+    # `program_exit_zero`, and until now NO runner spawned it: it was evaluated
+    # only by `flow_compliance_check` as `final_audit`, after every artefact had
+    # already been written, so it could describe a run but never stop one. That
+    # is vibe-ic#306's whole finding, and this gate's own declaration recorded
+    # it as `ENFORCEMENT: advisory` for exactly that reason.
+    #
+    # THIS is where its verdict belongs. Step 9's declared output is
+    # `phase2/stage2/synth/stats.json`, and the call above is what finally
+    # writes an AREA into it: step 9's other producer maps to generic primitives
+    # (`abc -g cmos2`) and yosys prints no area line at all, so before this
+    # point there is no figure to compare. No flow edit is needed or made — the
+    # clause stays exactly where it is declared.
+    #
+    # ONLY rc 1 STOPS THE STEP, and that is a deliberate bound, not timidity:
+    #   rc 1  the design's own synthesised cell area exceeds the die area IT
+    #         declared. That is a fact about the design, it is knowable here
+    #         rather than at streamout, and it is a FAIL.
+    #   rc 0  compared and it fits.
+    #   rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and a
+    #         CORRECTION of the number first written here: `die_area_budget_um`
+    #         is null in 118 of 136 real converge runs across all 5 fleet
+    #         machines (swept independently for
+    #         `l19_pdk_floorplan_contract_check`), not the 176-of-177 an earlier
+    #         comment cited from a withdrawn corpus. Roughly one run in seven
+    #         DOES declare a die. Treating rc 2 as non-green would still turn
+    #         118 of 136 runs non-green over a requirement they never wrote, so
+    #         it is DISCLOSED in this step's detail and does not stop the step.
+    #         Whether the flow should demand a declared die budget is a product
+    #         decision and is deliberately NOT taken here.
+    #   any other outcome (timeout, missing program) is a fault of the check,
+    #         never a verdict about the design, and is disclosed the same way.
+    _area_verdict = ""
+    _area_prog = PROGRAMS_DIR / "area_total_vs_budget_check.py"
+    if _area_stats is not None and _area_prog.is_file():
+        try:
+            _acp = subprocess.run(
+                [sys.executable, str(_area_prog), str(project)],
+                capture_output=True, text=True, timeout=120)
+        except Exception as _exc:                                # noqa: BLE001
+            _area_verdict = f" area_budget=NOT_CHECKED({_exc.__class__.__name__})"
+        else:
+            _atail = ((_acp.stdout or "") + (_acp.stderr or "")).strip()[-600:]
+            if _acp.returncode == 1:
+                return StepResult(
+                    "synth", "FAIL", time.time() - t0,
+                    f"netlist={netlist.name} cells={cell_count} "
+                    f"frontend={synth_frontend}; the synthesised cell area "
+                    f"exceeds the die area this design declares, so it cannot "
+                    f"be placed at any utilisation. {_atail}",
+                    _synth_evidence,
+                    extras={"synth_frontend": synth_frontend,
+                            "area_budget_rc": 1})
+            _area_verdict = (" area_budget=ok" if _acp.returncode == 0
+                             else f" area_budget=INCOMPLETE(rc={_acp.returncode})")
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}"
                       + (f" area_stats={_area_stats.name}"
-                         if _area_stats is not None else " area_stats=none"),
+                         if _area_stats is not None else " area_stats=none")
+                      + _area_verdict,
                       _synth_evidence,
                       extras={"synth_frontend": synth_frontend,
                               "reference_flow_qor_knobs": _rf_notes,

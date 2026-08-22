@@ -71,9 +71,14 @@ _AUDIT = _PROGRAMS / "flow_gate_enforcement_audit.py"
 #: (gate, flow step it guards, the slot it is wired in). The slot is DATA, not a
 #: constant: `advisory` answers the RUNNER axis and must never be quoted as
 #: licence to move either clause out of the flow's blocking slot.
+#: (gate, flow step, slot, DECLARED intent). The intent is DATA now, not a
+#: constant: `area_total_vs_budget_check` was declared `advisory` when this file
+#: was written and is `blocking` since its wiring landed, while
+#: `tapeout_docs_gen` is still `advisory`. Sharing one expected value hid that
+#: difference and would have let either drift onto the other's answer.
 _GATES = (
-    ("area_total_vs_budget_check", "9", "program_exit_zero"),
-    ("tapeout_docs_gen", "37.5ic", "program_exit_zero"),
+    ("area_total_vs_budget_check", "9", "program_exit_zero", "blocking"),
+    ("tapeout_docs_gen", "37.5ic", "program_exit_zero", "advisory"),
 )
 
 #: 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces (the
@@ -117,15 +122,15 @@ def _flow_command(gate: str) -> str:
 
 # ───────────────────────────────────────────── axis 1: the declaration exists
 
-@pytest.mark.parametrize("gate,_step,_slot", _GATES)
-def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot):
+@pytest.mark.parametrize("gate,_step,_slot,intent", _GATES)
+def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot, intent):
     """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
     audit calls to decide DECLARED vs UNDECLARED, so this cannot pass on a
     declaration the audit would not see — one below the 4000-character window,
     one indented past a marker it does not accept, or one that is prose about
     the token rather than the token opening a line."""
     mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, gate) == "advisory", (
+    assert mod.declared_intent(_PROGRAMS, gate) == intent, (
         f"{gate} does not state where its verdict is consumed in a form the "
         f"audit reads: `ENFORCEMENT: advisory|blocking` opening a line in the "
         f"first 4000 characters, or a lone `\"verdict_mode\"` literal")
@@ -133,9 +138,9 @@ def test_the_gate_declares_an_intent_the_audit_can_read(gate, _step, _slot):
 
 # ────────────────────────────────── axis 2: the declaration bought no demotion
 
-@pytest.mark.parametrize("gate,step,slot", _GATES)
+@pytest.mark.parametrize("gate,step,slot,_intent", _GATES)
 def test_the_declaration_did_not_move_the_gate_between_flow_slots(
-        gate, step, slot):
+        gate, step, slot, _intent):
     """THE PAIRED HALF OF THE DECLARATION.
 
     `advisory` answers "no runner spawns this inline". It is NOT a statement
@@ -180,9 +185,9 @@ def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
     contradicting = {c["gate"] for c in rep["contradictions"]}
     orphaned = {o["gate"] for o in rep["orphaned"]}
     rows = {r["gate"]: r for r in rep["gates"]}
-    for gate, step, slot in _GATES:
+    for gate, step, slot, intent in _GATES:
         assert gate in rows, f"{gate} is not in the flow definition at all"
-        assert rows[gate]["declared"] == "advisory", rows[gate]
+        assert rows[gate]["declared"] == intent, rows[gate]
         assert rows[gate]["slots"] == [slot], (step, rows[gate])
         assert gate not in undeclared
         assert gate not in contradicting
@@ -198,7 +203,7 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
     not INTO it."""
     doc = json.loads(_BASELINE.read_text())
     recorded = set(doc["undeclared_known"])
-    for gate, _step, _slot in _GATES:
+    for gate, _step, _slot, _intent in _GATES:
         assert f"undeclared::{gate}" not in recorded, (
             f"{gate} was recorded as debt instead of declaring an intent")
         assert f"undeclared::{gate}.py" not in recorded, gate
@@ -207,7 +212,7 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
         f"the shrink-only register grew: {prev} -> {len(recorded)}")
     for key in ("scope_expanded", "undeclared_scope_expanded"):
         reason = doc.get(key) or ""
-        for gate, _step, _slot in _GATES:
+        for gate, _step, _slot, _intent in _GATES:
             assert gate not in reason, (
                 f"the {key} reason names {gate}, so the register was widened "
                 f"to absorb it instead of the gate declaring an intent")
@@ -228,10 +233,35 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
 # is measured here on every run rather than believed.
 
 def _producer_area_unit_literal() -> str:
-    """The `chip_area_unit` string `synth_area_stats_emit` actually writes, read
-    from its AST rather than copied. The value is an implicit concatenation of
-    two literals, so a regex over the source would see half of it."""
+    """The `chip_area_unit` string `synth_area_stats_emit` actually writes.
+
+    TWO SHAPES, both resolved, because the producer moved between them and this
+    guard is supposed to follow the VALUE rather than pin a spelling:
+
+      1. a SHARED CONSTANT — `_ystat.AREA_UNIT_UNESTABLISHED`. The figure has
+         two producers parsing the same yosys line, and they were made to share
+         one sentence so they could not drift into disagreeing about the unit.
+      2. an inline literal, which is what this file was first written against.
+         Kept so the guard still works on a tree from before that change.
+
+    It RAISES when it can resolve neither. A resolver that fell back to a guess
+    would measure the wrong string and report the precondition as still holding
+    when nobody had checked — which is the failure this whole guard exists to
+    prevent, one level up.
+    """
     src = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
+    if "_ystat.AREA_UNIT_UNESTABLISHED" in src:
+        saved = list(sys.path)
+        sys.path.insert(0, str(_PROGRAMS))
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "_ystat_areaunit", _PROGRAMS / "_yosys_stat.py")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            return mod.AREA_UNIT_UNESTABLISHED
+        finally:
+            sys.path[:] = saved
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.Dict):
             continue
@@ -241,10 +271,11 @@ def _producer_area_unit_literal() -> str:
                     and isinstance(v.value, str)):
                 return v.value
     raise AssertionError(
-        "synth_area_stats_emit no longer writes a literal `chip_area_unit`; "
-        "the promotion precondition recorded in area_total_vs_budget_check's "
-        "ENFORCEMENT block was written against that literal and must be "
-        "re-derived before the declaration is trusted")
+        "synth_area_stats_emit writes `chip_area_unit` from neither a shared "
+        "constant this resolver knows nor an inline literal; the promotion "
+        "precondition recorded in area_total_vs_budget_check's ENFORCEMENT "
+        "block was written against that value and must be re-derived before "
+        "the declaration is trusted")
 
 
 def test_the_area_figures_only_producer_still_declines_to_name_the_unit():
@@ -375,33 +406,164 @@ def test_the_evidence_route_the_area_declaration_names_still_exists():
                 f"from the registry any more")
 
 
-def test_the_wiring_the_area_declaration_names_is_still_a_real_place():
-    """The promotion path has to be a place that EXISTS, or the declaration is
-    an instruction nobody can follow.
+def _ystat_mod():
+    saved = list(sys.path)
+    sys.path.insert(0, str(_PROGRAMS))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_ystat_wiring", _PROGRAMS / "_yosys_stat.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = m
+        spec.loader.exec_module(m)
+        return m
+    finally:
+        sys.path[:] = saved
 
-    Anchored on the FUNCTION and on the CALL, never on a line number: a
-    line-anchored citation rots silently the first time anything above it moves,
-    and this file is the only thing standing between the declaration and that.
-    """
-    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
+
+#: The two synthesis log shapes this flow actually produces. Step 9 maps to
+#: GENERIC primitives and loads no library, so yosys prints no area line;
+#: phase 3 maps against a library and prints one.
+_STEP9_LOG = "=== chip_top ===\n   Number of cells:                349\n"
+_PHASE3_LOG = ("=== chip_top ===\n   Number of cells:                349\n"
+               "     349 5.84E+03 cells\n\n"
+               "   Chip area for module '\\chip_top': 5841.196200\n")
+
+
+def test_step_nine_produces_no_area_figure_at_all():
+    """WHY THE DECLARATION NAMES PHASE 3 AND NOT STEP 9.
+
+    An earlier version of the ENFORCEMENT block said the inline wiring belonged
+    in `design_one_shot_runner.step_yosys_synth`. It does not: that step runs
+    `abc -g cmos2` and a bare `stat`, loads no library, and yosys prints no
+    `Chip area for module` line — so a gate wired there reads None on every
+    project ever built and refuses forever. This pins the fact the correction
+    rests on."""
+    ys = _ystat_mod()
+    parsed = ys.parse_stat_block(_STEP9_LOG)
+    assert parsed is not None, "the step-9 fixture no longer parses"
+    assert parsed["chip_area"] is None, (
+        "a library-less synthesis now yields an area figure; the reason "
+        "area_total_vs_budget_check's promotion condition names phase 3 "
+        "rather than step 9 has changed and must be re-derived")
+
+
+def test_the_phase_three_synthesis_is_what_produces_the_figure():
+    """The other half: with a library loaded the same parser DOES get one, so
+    the correction is a statement about which step runs, not about the parser."""
+    ys = _ystat_mod()
+    assert ys.parse_stat_block(_PHASE3_LOG)["chip_area"] is not None
+
+
+def test_the_producer_the_declaration_names_is_still_a_real_place():
+    """The promotion path has to be somewhere that EXISTS. Anchored on the
+    FUNCTION and the CALL, never on a line number."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))
-               if isinstance(n, ast.FunctionDef) and n.name == "step_yosys_synth"),
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"),
               None)
     assert fn is not None, (
-        "design_one_shot_runner.step_yosys_synth is gone; the wiring "
-        "area_total_vs_budget_check's ENFORCEMENT block names no longer "
-        "exists and the promotion path must be re-derived")
-    calls = {c.func.attr for c in ast.walk(fn)
-             if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
-    assert "emit_stats_json" in calls, (
-        "step_yosys_synth no longer calls emit_stats_json, so the point the "
-        "declaration names — 'immediately after the call that writes the "
-        "figure this gate reads' — is not there any more")
-    # And the FAIL shape the declaration says to copy is still in that function.
+        "phase3_one_shot_runner.step_synth is gone; the producer the area "
+        "gate's ENFORCEMENT block names no longer exists")
     body = ast.get_source_segment(src, fn) or ""
-    assert "synth_netlist_check" in body, (
-        "the `synth_netlist_check` call site the area declaration points at as "
-        "the model for the rc-1 branch has left step_yosys_synth")
+    assert "emit_for_run" in body, (
+        "step_synth no longer calls emit_for_run, so the point the declaration "
+        "names — the call that writes the figure this gate reads — is not there")
+    assert "-liberty" in body, (
+        "step_synth no longer passes -liberty, so it would stop producing an "
+        "area line and the whole promotion chain must be re-derived")
+
+
+def test_the_emitter_can_now_be_told_which_library_produced_the_figure():
+    """RE-DECIDED, not edited to match (2026-08-22).
+
+    This assertion used to read the other way: `emit_for_run` took no library
+    parameter, and that was recorded as precondition 1 of the `advisory`
+    declaration — "when that changes, the unit becomes establishable and this
+    declaration must be re-decided". It changed, so it was re-decided, and this
+    now pins the state that replaced it.
+
+    The declaration stays `advisory` and the reason is DIFFERENT: the unit is no
+    longer what stands in the way. No runner spawns this gate inline, which is
+    the only axis that token names, and that is a product decision rather than a
+    technical gap.
+    """
+    emit = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(emit))
+               if isinstance(n, ast.FunctionDef) and n.name == "emit_for_run"),
+              None)
+    assert fn is not None, "synth_area_stats_emit.emit_for_run is gone"
+    params = [a.arg for a in fn.args.args] + [a.arg for a in fn.args.kwonlyargs]
+    assert any("lib" in a.lower() for a in params), (
+        f"emit_for_run takes {params}; it can no longer be told which library "
+        f"produced the figure, so the unit is unestablishable again and the "
+        f"ENFORCEMENT block's account of what remains is wrong")
+
+
+def test_the_producer_actually_passes_the_library_it_synthesised_against():
+    """A parameter nothing supplies is the same as no parameter. The caller
+    must hand over the library it interpolated into `stat -liberty`, or the
+    figure and the unit could come from different libraries."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    assert fn is not None
+    body = ast.get_source_segment(src, fn) or ""
+    call = body.split("_sas.emit_for_run(", 1)
+    assert len(call) == 2, "step_synth no longer calls the emitter"
+    assert "liberty" in call[1][:400], (
+        "step_synth calls the emitter without handing over the library it "
+        "synthesised against, so the unit cannot be established on a real run")
+
+
+def test_the_gate_reaches_a_real_verdict_once_the_unit_is_established(tmp_path):
+    """THE CLOSURE, asserted end to end rather than described.
+
+    Before this chain existed the gate's only reachable verdict through the
+    flow was rc 2 INCOMPLETE. With the unit established it must reach BOTH real
+    verdicts on the same figure — and a test that only proved rc 1 would be
+    satisfied by a gate that fails everything."""
+    def _project(root: Path, budget: str) -> Path:
+        (root / "phase2/stage2/synth").mkdir(parents=True)
+        (root / "generated_docs").mkdir(parents=True)
+        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
+            "schema": "vibeic.synth.stats.v1",
+            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
+            "chip_area": 25282.1184, "chip_area_unit": "um^2",
+            "cell_count": 349, "includes_submodules": False,
+            "selection": {"rule": "top", "why": "top module"}}))
+        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+            json.dumps({"fields": {"die_area_budget_um": budget}}))
+        return root
+
+    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
+    over = _project(tmp_path / "over", "10x10")          # 100 um^2, far too small
+    cp = subprocess.run([sys.executable, prog, str(over)],
+                        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert cp.returncode == 1, (cp.returncode, cp.stdout[-800:])
+    assert "AREA_TOTAL_OVER_DECLARED_DIE" in cp.stdout
+
+    fits = _project(tmp_path / "fits", "1000x1000")      # 1e6 um^2, roomy
+    cp2 = subprocess.run([sys.executable, prog, str(fits)],
+                         capture_output=True, text=True, timeout=_TIMEOUT)
+    assert cp2.returncode == 0, (cp2.returncode, cp2.stdout[-800:])
+
+
+def test_both_producers_write_to_the_same_artefact_path():
+    """The overwrite the correction depends on: phase 3 replaces step 9's own
+    stats.json, which is the only reason a figure is there at final-audit."""
+    saved = list(sys.path)
+    sys.path.insert(0, str(_PROGRAMS))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_pl_wiring", _PROGRAMS / "_path_layout.py")
+        pl = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = pl
+        spec.loader.exec_module(pl)
+    finally:
+        sys.path[:] = saved
+    assert pl.synth_dir(Path("/P")) == Path("/P/phase2/stage2/synth"), (
+        "the synthesis artefact directory moved; the claim that phase 3 "
+        "overwrites step 9's stats.json must be re-measured")
 
 
 # ═══════════════════════════════ THE REASON, RE-MEASURED — `tapeout_docs_gen`
@@ -617,3 +779,104 @@ def test_the_control_declaring_blocking_without_the_wiring_still_fails(
 
 if __name__ == "__main__":
     sys.exit(pytest.main([str(Path(__file__).resolve()), "-v"]))
+
+
+# ═════════════════════════ THE WIRING, AND THAT IT CAN GO RED (2026-08-22)
+#
+# `area_total_vs_budget_check` is DECLARED blocking and WIRED inline. A wiring
+# nobody can make fail is not a wiring, so this section proves the red three
+# ways and is honest about the one thing it does not execute: `step_synth`
+# itself needs a real synthesis, so what is executed here is the verdict the
+# wiring consumes and the branch that consumes it, not the whole step.
+
+def test_the_wiring_is_measured_as_inline_blocking_by_the_audit():
+    """The repo's OWN instrument for "can this gate stop the step". It parses
+    the runner and asks whether the exit status reaches a control-flow
+    decision — the exact question `advisory` used to answer no to."""
+    mod = _audit_mod()
+    rep = mod.audit(_FLOW, _PROGRAMS)
+    row = {r["gate"]: r for r in rep["gates"]}["area_total_vs_budget_check"]
+    assert row["enforcement"] == "ENFORCED", row
+    assert row["wiring"] == "INLINE_BLOCKING", row
+    assert row["declared"] == "blocking", row
+    assert row["slots"] == ["program_exit_zero"], (
+        "the wiring is not permission to move the clause out of the flow's "
+        "blocking slot")
+
+
+def test_the_verdict_the_wiring_consumes_really_is_rc_one(tmp_path):
+    """EXECUTED, not asserted. The wiring branches on rc 1 from a real
+    subprocess, so this runs that subprocess on a project whose declared die
+    cannot hold its own synthesised area — the only input that makes the step
+    fail — and on one that fits, so a gate that failed everything would not
+    satisfy it."""
+    def _project(root: Path, budget: str) -> Path:
+        (root / "phase2/stage2/synth").mkdir(parents=True)
+        (root / "generated_docs").mkdir(parents=True)
+        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
+            "schema": "vibeic.synth.stats.v1",
+            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
+            "chip_area": 25282.1184, "chip_area_unit": "um^2",
+            "cell_count": 349, "includes_submodules": False,
+            "selection": {"rule": "top", "why": "top module"}}))
+        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+            json.dumps({"fields": {"die_area_budget_um": budget}}))
+        return root
+    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
+    over = subprocess.run(
+        [sys.executable, prog, str(_project(tmp_path / "o", "10x10"))],
+        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert over.returncode == 1, (over.returncode, over.stdout[-600:])
+    fits = subprocess.run(
+        [sys.executable, prog, str(_project(tmp_path / "f", "1000x1000"))],
+        capture_output=True, text=True, timeout=_TIMEOUT)
+    assert fits.returncode == 0, (fits.returncode, fits.stdout[-600:])
+
+
+def test_the_runner_turns_that_rc_one_into_a_failed_step():
+    """The branch that consumes it, read from the runner's AST rather than
+    from a line number. Three things must all hold, and each has been a way
+    this class of wiring was silently defanged before: the gate is SPAWNED, the
+    rc is COMPARED to 1, and that comparison returns a FAIL StepResult rather
+    than merely logging."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    assert fn is not None, "phase3_one_shot_runner.step_synth is gone"
+    body = ast.get_source_segment(src, fn) or ""
+    assert "area_total_vs_budget_check.py" in body, (
+        "step_synth no longer spawns the gate, so nothing can stop the step")
+    seg = body.split("area_total_vs_budget_check.py", 1)[1]
+    assert "returncode == 1" in seg, (
+        "the gate's exit status no longer reaches a comparison; a runner that "
+        "spawns a gate and discards its status is vibe-ic#884's defect")
+    tail = seg.split("returncode == 1", 1)[1][:800]
+    assert '"FAIL"' in tail, (
+        "rc 1 no longer returns a FAIL StepResult — the verdict is computed "
+        "and dropped, which is exactly what `advisory` used to mean")
+
+
+def test_only_rc_one_stops_the_step_and_the_bound_is_deliberate():
+    """rc 2 is "no ceiling declared" for 118 of 136 real converge runs across all
+    5 fleet machines — CITED from `l19_pdk_floorplan_contract_check`, which is
+    dated and attributed and in this repository, though its population is fleet
+    run trees a reader here may not be able to reach. An earlier version of this
+    docstring said "176 of 177 published L19 copies", from a corpus withdrawn on
+    2026-08-20 that cannot be re-derived at all; it overstated the case for this
+    bound by more than an order of magnitude. A second draft called the
+    replacement "reproducible", which was also wrong — it is a citation.
+
+    If rc 2 ever starts stopping the step, 118 of 136 runs go non-green over a
+    requirement they never wrote — a product decision this wiring deliberately
+    did not take. Pinned so it cannot be taken silently."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"), None)
+    seg = (ast.get_source_segment(src, fn) or "").split(
+        "area_total_vs_budget_check.py", 1)[1][:2000]
+    assert "returncode != 0" not in seg, (
+        "the wiring now stops the step on ANY non-zero rc, which makes rc 2 "
+        "INCOMPLETE — the state of nearly every published run — a failure")
+    assert "INCOMPLETE" in seg, (
+        "the non-blocking rc-2 outcome is no longer disclosed in the step's "
+        "detail, so a run that could not be compared reads like one that was")

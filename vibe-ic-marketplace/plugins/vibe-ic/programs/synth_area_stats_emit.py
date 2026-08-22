@@ -87,6 +87,7 @@ except ImportError:  # pragma: no cover - direct-script fallback
 # first working out which of them wrote the file — one helper, one field name,
 # no schema drift. The digest algorithm and the field name live there.
 import _yosys_stat as _ystat
+import _area_unit as _aunit
 
 SCHEMA = "vibe-ic/synth-stats/1"
 
@@ -376,9 +377,40 @@ def resolve_netlist(text: str, log_path: Path,
     return None
 
 
+def _resolve_area_unit(liberty: Optional[Path]) -> Tuple[str, Dict[str, Any]]:
+    """(`chip_area_unit`, evidence). Falls back to the unestablished sentence.
+
+    Every failure path returns the SAME sentence the emitter has always
+    written, so a tree with no reachable PDK produces byte-identical unit text
+    to before this was added. Only a positive MEASUREMENT changes it.
+    """
+    if liberty is None:
+        return _ystat.AREA_UNIT_UNESTABLISHED, {
+            "established": False,
+            "reason": "the synthesis did not report which library it loaded"}
+    registry = Path(__file__).resolve().parent / "pdk_registry.json"
+    cell_lef, why = _aunit.resolve_from_registry(Path(liberty), registry)
+    if cell_lef is None:
+        return _ystat.AREA_UNIT_UNESTABLISHED, {
+            "established": False, "liberty": str(liberty), "reason": why}
+    rec = _aunit.derive(Path(liberty), cell_lef)
+    if not rec.get("established"):
+        return _ystat.AREA_UNIT_UNESTABLISHED, rec
+    return rec["unit"], rec
+
+
 def build_report(project: Path, log_path: Path,
-                 netlist: Optional[Path]) -> Tuple[Optional[Dict[str, Any]],
-                                                   Dict[str, Any]]:
+                 netlist: Optional[Path],
+                 liberty: Optional[Path] = None,
+                 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """``liberty`` is the library the synthesis actually loaded.
+
+    Supplied, the figure's unit is ESTABLISHED from evidence — see `_area_unit`
+    — and `chip_area_unit` names square micrometres instead of declining to.
+    Absent or unresolvable, nothing changes: the unit stays unestablished and
+    the honest sentence is written, exactly as before. A missing PDK must not
+    turn into an assumed unit.
+    """
     text = log_path.read_text(errors="replace")
     blocks = parse_blocks(text)
     block, rule, note = select_block(blocks)
@@ -413,6 +445,10 @@ def build_report(project: Path, log_path: Path,
     # byte-identical alias under a second name is not a different design.
     # `None` when there was no netlist to hash — an absent binding, never a
     # stand-in value.
+    # ESTABLISH THE UNIT, OR KEEP SAYING IT IS NOT ESTABLISHED. Never assume:
+    # a library this run did not load, or a cell LEF the registry cannot
+    # resolve, leaves the figure exactly as unitless as it was.
+    _unit_record = _resolve_area_unit(liberty)
     report = {
         "schema": SCHEMA,
         "netlist": _project_relative(nl, project),
@@ -422,8 +458,14 @@ def build_report(project: Path, log_path: Path,
         # figure in the library's own area unit and does not restate it, so
         # naming a concrete unit here would be an invention.
         "chip_area": block.area,
-        "chip_area_unit": "cell-library area unit (as declared by the "
-                          "library the synthesis script loaded)",
+        # THE ONE SENTENCE, imported rather than repeated. Both producers
+        # parse the same yosys line and must say the same thing about its unit;
+        # two copies of a string are two things that can drift.
+        "chip_area_unit": _unit_record[0],
+        # THE EVIDENCE, not just the conclusion. A reader can re-derive the
+        # unit from the cells compared and the ratio band rather than trust it,
+        # and a REFUSAL says which artefact it could not reach.
+        "chip_area_unit_evidence": _unit_record[1],
         "sequential_area": block.seq_area,
         "cell_count": block.row_cell_sum,
         "cell_types": len(block.rows),
@@ -493,7 +535,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def emit_for_run(project: Path, log_path: Path,
-                 netlist: Optional[Path] = None) -> Optional[Path]:
+                 netlist: Optional[Path] = None,
+                 liberty: Optional[Path] = None) -> Optional[Path]:
     """In-run entry point. Returns the artefact path, or None if refused.
 
     The artefact must be produced DURING the run: the synthesis log is a
@@ -502,7 +545,7 @@ def emit_for_run(project: Path, log_path: Path,
     in a fresh clone.
     """
     try:
-        report, _diag = build_report(project, log_path, netlist)
+        report, _diag = build_report(project, log_path, netlist, liberty)
         if report is None:
             return None
         out = _pl.synth_dir(project) / "stats.json"

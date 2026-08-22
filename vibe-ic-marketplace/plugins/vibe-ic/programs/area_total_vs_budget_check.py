@@ -2,19 +2,92 @@
 """area_total_vs_budget_check.py — the synthesised area figure must reach a
 COMPARISON, or the step must REFUSE and name the authority it lacks.
 
-ENFORCEMENT: advisory — no runner spawns this gate inline, so its exit status
-cannot stop step 9 while step 9 is running. That is the ONLY axis this token
-names and the one `flow_gate_enforcement_audit` measures. The other two axes are
-unchanged, and are stated here so the declaration can never be read as
-permission to defang the gate:
+CHIP_AGNOSTIC: strict — no process, vendor or PDK name anywhere in this file,
+DOCSTRING INCLUDED. This is STRICTER than the repo-wide `source_chip_agnostic_check`,
+which permits open-PDK names and clears 508 programs that carry one legitimately.
+That gate's PASS is not this file's verdict; `test_area_total_vs_budget_check::test_the_program_names_no_process_or_vendor_token` is, and it reads the WHOLE file.
 
-  * FLOW SLOT — unchanged and BLOCKING. Step 9 wires this clause in
-    `program_exit_zero`, never `advisory_program_exit_zero`.
-  * VERDICT SEVERITY — unchanged. rc 1 when the cell area exceeds the declared
-    die, rc 2 on INCOMPLETE. See "INCOMPLETE EXITS 2, NOT 0" below.
+MEASURED, which is why this paragraph exists: a docstring paragraph naming two open
+PDKs was added to this file, the repo-wide gate returned PASS over 1544 files, and
+this file's own test was red. The rule was real and invisible. Identify a library by
+its cell count and the registry population it came from, never by its name.
 
-WHY ADVISORY, MEASURED RATHER THAN PREFERRED
---------------------------------------------
+ENFORCEMENT: blocking — `phase3_one_shot_runner.step_synth` spawns this gate
+inline and returns `StepResult(..., "FAIL", ...)` on rc 1, so its verdict can
+stop the step it guards while that step is running. `flow_gate_enforcement_audit`
+measures the wiring as INLINE_BLOCKING.
+
+IT WAS `advisory` UNTIL 2026-08-22, and every word of that declaration was true
+when written: no runner spawned it, so it could describe a run and never stop
+one. Three things had to change first and all three are recorded below — the
+producer had to hand over the library it synthesised against, the figure's unit
+had to be ESTABLISHED from evidence rather than assumed, and only then was there
+a verdict worth carrying inline. This token now records the wiring that exists,
+not an intention.
+
+NO FLOW EDIT WAS MADE OR NEEDED. The clause stays exactly where the flow declares
+it, in step 9's `program_exit_zero`. Step 9's declared output IS
+`phase2/stage2/synth/stats.json`, and the phase-3 synthesis is what finally
+writes an AREA into it: step 9's other producer maps to generic primitives and
+yosys prints no area line at all. So the gate is enforced at the point its input
+becomes real, which is the same step, not a different one.
+
+ONLY rc 1 STOPS THE STEP, and the bound is deliberate:
+
+  rc 1  the design's synthesised cell area exceeds the die area IT declared.
+        A fact about the design, knowable at synthesis rather than at streamout,
+        and a FAIL of the step.
+  rc 0  compared, and it fits.
+  rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and this is a
+        CORRECTION of the number an earlier version of this block carried: it
+        cited 176 of 177 published L19 copies, from a corpus that has since been
+        withdrawn and cannot be re-derived at all.
+
+        The better figure is CITED, not measured here, and the difference
+        matters: `l19_pdk_floorplan_contract_check` records that across 136 real
+        converge runs on all 5 fleet machines `die_area_budget_um` is null in
+        118. That is dated, attributed and in this repository — but its
+        population is fleet run trees, which this file's reader may not be able
+        to reach either, so it is an ATTRIBUTED CITATION and not something a
+        reviewer can re-derive from the tree alone.
+
+        What CAN be measured from a developer machine, and was: 24702
+        `L19_CONSTRAINTS_PDK.json` copies, of which 606 declare a die. That
+        population is contaminated — it counts test fixtures and repeated
+        scratch copies, and its declared values include obvious ones
+        ('1234x5678', 'abc') beside real ones — so it does NOT confirm or refute
+        118/136 and must not be quoted as a rate. It establishes only that the
+        field is genuinely populated in practice rather than dead.
+
+        Either way this gate is materially less inert than 176-of-177 implied.
+
+        AND THE FIELD IS POPULATABLE, so a null is the design's silence rather
+        than the flow's: `floorplan_contract` extracts a die WxH from the
+        design's OWN documents and phase 1 writes it into L19. Nothing is
+        broken; those designs did not state a die size.
+
+        Making rc 2 non-green would therefore turn 118 of 136 runs non-green
+        over a requirement they never wrote, so it is DISCLOSED in the step's
+        detail and does not stop the step. WHETHER THE FLOW SHOULD DEMAND A
+        DECLARED DIE BUDGET IS A PRODUCT DECISION AND IS DELIBERATELY NOT TAKEN
+        HERE — it is the one thing still standing between this gate and
+        answering on every run, and 118/136 is the number that decision costs.
+
+THE OTHER TWO AXES ARE UNCHANGED, stated so this token can never be read as
+permission to move anything: the FLOW SLOT is `program_exit_zero` and stays
+there, and the VERDICT SEVERITY is unchanged — rc 1 on a real finding, rc 2 on
+INCOMPLETE.
+
+A NOTE ON WHAT DID NOT CATCH THIS. While the wiring existed and this file still
+said `advisory`, `flow_gate_enforcement_audit` exited 0. Its `contradiction`
+class is one-directional — it fails a gate that DECLARES blocking and is wired
+audit-only, and says nothing about one wired blocking that declares advisory.
+That asymmetry is disclosed here rather than left for the next reader to
+discover, and the test beside this file pins the declaration against the
+MEASURED wiring in both directions.
+
+HOW IT GOT HERE, MEASURED AT EVERY STEP
+---------------------------------------
 The inline wiring this repo uses — `phase3_one_shot_runner.
 _DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` — turns rc 0 into PASS
 and rc 1 into a FAIL of the run. Through its step-9 clause this gate can reach
@@ -41,28 +114,22 @@ assert, which is the ART-POWER-FIGURES-X1000 defect this gate exists to remove.
 
 WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
 -----------------------------------------------------
-One thing, and it is not in this file: `synth_area_stats_emit` must ESTABLISH
-the unit instead of declining to, so `chip_area_unit` names um^2 — any spelling
-in `_UM2_SPELLINGS` — on EVIDENCE rather than on convention.
+CORRECTED 2026-08-22. An earlier version of this block said the wiring belonged
+in `design_one_shot_runner.step_yosys_synth`, right after the call that writes
+the figure. That is the WRONG STEP, and wiring it there would have produced a
+gate that refuses on every run forever. Measured on both real log shapes:
 
-AND THE ROUTE HAD TO BE CHECKED, because the obvious wording of this paragraph
-— "record the unit the loaded Liberty DECLARES" — is an instruction nobody can
-follow. LIBERTY HAS NO AREA UNIT. Its `units` group declares time, voltage,
-current, capacitance, resistance and power; `area` is a bare number with no unit
-beside it, no program in this repository reads such a unit, and there is nothing
-there to read.
+    step 9   read_verilog / synth -flatten / abc -g cmos2 / stat
+             -> NO `Chip area for module` line at all -> chip_area = None
+    phase 3  read_liberty / dfflibmap -liberty / abc -liberty
+             / stat -liberty <lib>
+             -> Chip area for module '<top>': 5841.196200 -> chip_area set
 
-What CAN be established is the same fact by CROSS-CHECK, from two assets
-`pdk_registry.json` already names for every PDK it carries — `liberty_glob` and
-`cell_lef_glob`. A cell's LEF `SIZE w BY h` is in MICRONS by the LEF spec, so
-`w * h` is that cell's footprint in um^2, and the Liberty `area` for the SAME
-cell either agrees with it or does not. MEASURED inside the shipped EDA image
-(vibeic-eda 0.2.26), over every standard cell present in both files, for TWO of
-the FIVE `pdk_registry.json` entries that ship both globs (the sixth ships
-neither). This gate is chip-AGNOSTIC and `test_the_program_names_no_process_or_
-vendor_token` holds that assertion over this file, so the two libraries are
-identified here by their cell counts and not by name; the procedure above
-re-derives the same figure on any of the five:
+Step 9 synthesises to GENERIC primitives (`abc -g cmos2`) and never loads a
+library, so yosys prints no area at all. The figure this gate reads is written
+LATER, by `phase3_one_shot_runner.step_synth` via `synth_area_stats_emit.
+emit_for_run` — which overwrites step 9's own `stats.json`, because
+`_path_layout.synth_dir` sends both producers to `phase2/stage2/synth/`.
 
     library A   229 of 229 cells    liberty_area / lef_um2:
                                       min 1.000000  median 1.000000  max 1.000000
@@ -79,21 +146,53 @@ against 437 LEF macros, the surplus being LEF-only physical cells with no timing
 model. The conclusion is untouched -- it rests on the ratio, not on the census --
 but the number is now the one a reader re-derives.
 
-So the Liberty area IS um^2 on both, and — the part that matters here — it is
-DERIVABLE PER PDK from assets the flow already resolves, rather than assumed for
-all PDKs from what two of them happen to do. A derivation must carry a
-TOLERANCE and not an equality: library B's worst cell is 0.999547, i.e. the
-Liberty figure is rounded, and an exact test would reject a correct library.
+So this gate can see a figure at all ONLY because it is evaluated at
+`final_audit`, after phase 3 has run — which is the very AUDIT_ONLY property
+the block above describes. An inline wiring at step 9 would run BEFORE the
+producer and read `chip_area: None` on every project ever built.
 
-That derivation belongs in the PRODUCER, not in this gate, and it is a separate
-change with its own blast radius — it makes this gate LIVE on every run that
-declares a die budget. Once it lands, this gate reaches rc 0 and rc 1 on real
-runs and has a verdict worth carrying inline, and the wiring belongs in
-`design_one_shot_runner.step_yosys_synth` immediately after the
-`_ystat.emit_stats_json(...)` call that writes the figure this gate reads: rc 1
-returning `StepResult(..., "FAIL", ...)` the way that same function's
-`synth_netlist_check` call site already does, rc 2 disclosed and non-green
-rather than silently dropped.
+TWO OF THE THREE ARE NOW DONE, and the declaration is re-decided rather than
+left standing (2026-08-22):
+
+  1. DONE. `emit_for_run` now accepts the LIBRARY the synthesis loaded, and
+     `phase3_one_shot_runner.step_synth` passes it — the same one it
+     interpolates into `stat -liberty`, so the figure and the library its unit
+     is derived from cannot disagree.
+  2. DONE, from evidence rather than assumption. `_area_unit` establishes the
+     unit by cross-checking each cell's Liberty `area` against its LEF
+     `SIZE w BY h`, which is in microns by the LEF spec. MEASURED over all five
+     libraries the registry resolves in the shipped EDA image: every one
+     establishes um^2, on 42 to 428 cells apiece, median 1.000000. Two carry a
+     single per-cell outlier — a filler at exactly 0.5, one scan flop at
+     exactly 10/9 — which are DISCLOSED and do not unmake a library's unit: a
+     unit error is a COMMON factor across the population, never one cell.
+     A library at a common 1000x is refused, and so is one split between two
+     units; both refusals have a reachable test case.
+  3. REMAINS, and it is the product decision, not a technical gap. No runner
+     spawns this gate inline, so its verdict still cannot stop the step it
+     guards, and that is what `ENFORCEMENT: advisory` above records.
+
+WHAT THE GATE CAN NOW DO, measured end to end through the real producer and this
+gate, on a library from the shipped image:
+
+    stats.json    chip_area 2.5282e+04, chip_area_unit "um^2"
+                  established from 229 cells, median 1.000000, 0 outliers
+    die 10x10     rc 1 FAIL  — cell area exceeds the declared die by 252.8x
+    die 1000x1000 rc 0 PASS  — compared, and it fits
+
+Before this it could reach neither. That is the whole point of the change, and
+it is why this block no longer says the unit is what stands in the way.
+
+WHAT NOW STANDS IN THE WAY IS THE CEILING, NOT THE UNIT. rc 1 additionally needs
+`L19.die_area_budget_um`. The figure to use for that is the one swept for
+`l19_pdk_floorplan_contract_check` — 118 of 136 real converge runs across all 5
+fleet machines carry it null — and NOT the "177 copies, ONE declaring it" a
+draft of this block quoted from the withdrawn corpus. The two disagree by more
+than an order of magnitude on the part that matters: roughly one run in seven
+declares a die, not one in 177. The unit's establishment converts a VACUOUS_PASS
+into an honest verdict either way, but it is a REAL verdict on about a seventh
+of runs rather than on almost none, so this gate is not "nearly inert" and must
+not be described that way to a reviewer.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this

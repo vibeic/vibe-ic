@@ -1763,6 +1763,14 @@ def audit(flow: Path, programs: Path) -> dict:
         {"venue": "dispatched by a gate the flow names (transitive)",
          "present": bool(dispatched), "reached": sorted(dispatched)},
     ]
+    # See the note beside `declared_weaker_than_wired` in the report below.
+    # Computed from the SAME rows the rest of this report is built from, so it
+    # cannot describe a different tree than the one just audited.
+    declared_weaker_than_wired = [
+        {"gate": r["gate"], "declared": r["declared"], "wiring": r["wiring"]}
+        for r in rows
+        if r["declared"] == "advisory" and r["wiring"] == INLINE_BLOCKING]
+
     return {
         "orphan_venues": orphan_venues,
         "total_gates": len(rows),
@@ -1783,6 +1791,24 @@ def audit(flow: Path, programs: Path) -> dict:
         "declared": sum(1 for r in rows if r["declared"]),
         "undeclared": sum(1 for r in rows if not r["declared"]),
         "contradictions": contradictions,
+        # THE OTHER DIRECTION, WHICH `contradictions` CANNOT SEE (2026-08-22).
+        #
+        # `contradictions` is one-directional by construction: it fails a gate
+        # that DECLARES blocking and is wired AUDIT_ONLY. The reverse — wired
+        # INLINE_BLOCKING while its own file says `advisory` — passed this audit
+        # silently, and a reader of that file is told the gate cannot stop the
+        # step when it can.
+        #
+        # MEASURED on origin/main a4caccefe: ONE gate is in that state. It is
+        # reported and NOT failed, deliberately, because its case is a genuine
+        # collision over what the token means rather than a mistake: it writes
+        # `ENFORCEMENT: advisory` and immediately says "(Advisory describes the
+        # FINDINGS. The track's EXECUTION is mandatory.)" — finding SEVERITY,
+        # which is a different axis from the one this audit measures. Failing it
+        # would decide that dispute by reddening a blocking hygiene gate, which
+        # is not this program's call. Disclosing it puts the dispute where a
+        # flow owner can see it, and stops the next one being added silently.
+        "declared_weaker_than_wired": declared_weaker_than_wired,
         "orphaned": orphaned,
         "malformed_clauses": malformed,
         "undeclared_audit_only": undeclared_audit_only,
@@ -2109,6 +2135,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"\n[PASS] no NEW enforcement contradiction "
           f"({len(now)} recorded as debt; {len(now_u)} gate(s) recorded as "
           f"UNDECLARED and audit-only)")
+    # DISCLOSED ON THE PASS PATH, because the PASS is what gets read as "every
+    # declaration matches its wiring". It does not: this class is the one the
+    # `contradiction` scan above cannot see, and it does not affect the exit
+    # code — see the note beside `declared_weaker_than_wired` in `audit()`.
+    weaker = rep.get("declared_weaker_than_wired") or []
+    if weaker:
+        print(f"  DISCLOSURE — {len(weaker)} gate(s) are wired so they CAN stop "
+              f"a step while their own file declares `advisory`. Not failed "
+              f"here: `advisory` is used by at least one of them for finding "
+              f"SEVERITY, a different axis from the one this audit measures, "
+              f"and settling that is a flow owner's call:")
+        for w in weaker:
+            print(f"    {w['gate']}  declared={w['declared']} "
+                  f"wiring={w['wiring']}")
     return 0
 
 
