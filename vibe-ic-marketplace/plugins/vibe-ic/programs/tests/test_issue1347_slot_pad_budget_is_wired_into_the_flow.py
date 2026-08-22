@@ -255,14 +255,14 @@ def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
     """The doctrine property itself (§3/§5), pinned so it cannot regress to
     AUDIT_ONLY. A dict `.get(rc, ...)` instead of a branch on `rc` is enough to
     lose it — that spelling reports INLINE_UNPROVEN, and unknown is not yes."""
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="fga1347_")) / "fga.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "flow_gate_enforcement_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
-    doc = json.loads(out.read_text())
+    # Called IN-PROCESS, not spawned. The audit scans ~1240 programs and takes
+    # ~24s; as a child it was bounded at 60s (the harness ceiling), which left
+    # 2.5x headroom and MEASURABLY was not enough — this test flaked at machine
+    # load ~17 and passed at load ~5. In-process the work is identical but the
+    # only bound is pytest's own 180s item timeout, which is 7x headroom.
+    # A flake is worse than no test: its green is the one that gets believed.
+    import flow_gate_enforcement_audit as A
+    doc = A.audit(PLUGIN / "flow" / "phase1_phase2_phase3.yaml", PROG)
     mine = [g for g in doc["gates"] if g.get("gate") == "slot_pad_budget_check"]
     assert mine, "the audit does not see the gate at all"
     assert mine[0]["enforcement"] == "ENFORCED", mine[0]
@@ -337,14 +337,11 @@ def test_the_three_step_verdicts_are_three_distinct_values():
 # agent remembers to. FLOW / PROG / CI / TOOLS fire without anyone choosing.
 
 def _wiring_audit_report() -> dict:
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="cew1347_")) / "cew.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "checker_execution_wiring_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
-    return json.loads(out.read_text())
+    """In-process, for the same reason as the enforcement audit above: as a
+    spawned child this scan takes ~23s against a 60s harness ceiling, and 2.5x
+    headroom measurably was not enough under machine load."""
+    import checker_execution_wiring_audit as C
+    return C.audit(PLUGIN, PLUGIN.parents[2])
 
 
 def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():

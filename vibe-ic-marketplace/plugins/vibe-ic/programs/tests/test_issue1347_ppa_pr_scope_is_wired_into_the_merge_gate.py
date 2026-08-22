@@ -258,14 +258,11 @@ def test_the_documented_schema_string_is_the_one_the_checker_accepts():
 # NOT the flow, because a change-set is not a design.
 
 def _wiring_audit_report() -> dict:
-    import subprocess
-    import tempfile as _tf
-    out = Path(_tf.mkdtemp(prefix="cewppa_")) / "cew.json"
-    subprocess.run([sys.executable,
-                    str(PROG / "checker_execution_wiring_audit.py"),
-                    "--json", str(out)],
-                   capture_output=True, text=True, timeout=_CHILD_TIMEOUT_S)
-    return json.loads(out.read_text())
+    """In-process: as a spawned child this scan takes ~23s against a 60s
+    harness ceiling, and that headroom measurably failed under load."""
+    import checker_execution_wiring_audit as C
+    plugin = PROG.parent
+    return C.audit(plugin, plugin.parents[2])
 
 
 def test_the_wiring_audit_credits_a_machine_runner_not_a_skill_mention():
