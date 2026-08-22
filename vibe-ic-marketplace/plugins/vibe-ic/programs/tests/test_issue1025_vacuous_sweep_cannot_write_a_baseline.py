@@ -47,6 +47,42 @@ def _empty_corpus(tmp_path: Path) -> Path:
     return corpus
 
 
+def _reaching_corpus(tmp_path: Path) -> Path:
+    """A corpus the sweep DOES reach: two run trees, one of them with a real
+    unacknowledged FAIL.
+
+    Built here rather than read out of `benchmark-data/` (vibe-ic#1357 shape):
+    the published result cells now live in `vibeic/benchmark-data`, so a test
+    rooted at the in-repo corpus measured "which cells happen to be checked in"
+    and not the property. The property is the gate's own — a sweep WITH reach
+    still writes — and it is stated entirely by this fixture:
+
+      * `ic/demo_dirty/.../reports/phase3/ir_drop.json` declares `FAIL` with no
+        waiver and no bubble-up, so the sweep must find exactly ONE finding.
+        Without it `findings_total` and `per_run` would both be empty and the
+        arithmetic assertion below would hold vacuously.
+      * `ic/demo_clean/...` is a second tree with a `reports/` tree and nothing
+        wrong, so `runs_swept` exceeds the number of runs with findings and the
+        denominator is genuinely more than one.
+
+    MEASURED on this fixture: runs_swept=2, runs_with_reports=2,
+    findings_total=1, per_run={'ic/demo_dirty/v0.0.1_demopdk': 1}.
+
+    `tmp_path` is outside any git work tree, which is the case
+    `_published_run_trees` documents as "tracked-ness is not a question that
+    applies and the disk is the honest answer" — so the sweep walks the disk
+    and this fixture is the whole population.
+    """
+    corpus = tmp_path / "reaching_corpus"
+    clean = corpus / "ic" / "demo_clean" / "v0.0.1_demopdk" / "reports" / "phase2"
+    clean.mkdir(parents=True)
+    (clean / "lint.json").write_text(json.dumps({"verdict": "PASS"}))
+    dirty = corpus / "ic" / "demo_dirty" / "v0.0.1_demopdk" / "reports" / "phase3"
+    dirty.mkdir(parents=True)
+    (dirty / "ir_drop.json").write_text(json.dumps({"verdict": "FAIL"}))
+    return corpus
+
+
 def _baseline_copy(tmp_path: Path) -> Path:
     """The REAL baseline, copied. Real so the destroy would be visible."""
     dst = tmp_path / "baseline.json"
@@ -111,13 +147,8 @@ def test_write_baseline_still_works_when_the_sweep_actually_reaches(tmp_path):
     A guard that refuses everything passes the test above while removing the
     command. This pins that a sweep WITH reach still writes.
     """
-    repo_corpus = PLUGIN_ROOT.parent.parent.parent / "benchmark-data"
-    if not repo_corpus.is_dir():
-        import pytest
-        pytest.skip("no benchmark-data corpus here")
-
     bl = tmp_path / "written.json"
-    r = _run("--corpus", str(repo_corpus), "--baseline", str(bl),
+    r = _run("--corpus", str(_reaching_corpus(tmp_path)), "--baseline", str(bl),
              "--write-baseline")
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
     assert bl.is_file(), "reachable sweep did not write a baseline"
@@ -125,4 +156,12 @@ def test_write_baseline_still_works_when_the_sweep_actually_reaches(tmp_path):
     assert written["runs_with_reports"] > 0, (
         "wrote a baseline whose own record says it examined nothing — the "
         "refusal above is then not measuring the condition it claims to")
+    # The fixture plants exactly one unacknowledged FAIL, so this arithmetic is
+    # load-bearing rather than 0 == sum(()). A refusal that had quietly become a
+    # ban, or a sweep that reached the trees and audited none of them, fails here.
+    assert written["findings_total"] == 1, (
+        f"the sweep reached the fixture but did not AUDIT it: expected the one "
+        f"planted unacknowledged FAIL, got {written['findings_total']}\n"
+        f"{r.stdout}{r.stderr}")
+    assert written["per_run"] == {"ic/demo_dirty/v0.0.1_demopdk": 1}, written
     assert written["findings_total"] == sum(written["per_run"].values())

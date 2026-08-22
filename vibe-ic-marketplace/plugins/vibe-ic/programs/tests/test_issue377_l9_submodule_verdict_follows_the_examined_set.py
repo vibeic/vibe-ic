@@ -26,7 +26,8 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 import l9_submodule_conformance_check as C  # noqa: E402
 
-from _hostpaths import repo_path_opt  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -187,24 +188,51 @@ def test_the_cli_exit_code_is_unchanged_for_the_new_vacuous_arm(tmp_path):
 # 5. corpus guard — the population that motivated this, read not re-derived
 # --------------------------------------------------------------------------
 
-_BENCH = repo_path_opt("benchmark-data")
+def _published_l9_docs(root: Path) -> list:
+    """Every published `L9_INTEGRATION_SPEC.json` under `root`, root-relative.
+
+    TRACKED where tracked-ness is a question that can be asked — the population
+    a fresh clone would receive, not whatever this machine's working tree
+    happens to hold — and the disk otherwise, which is the same rule
+    `step_internal_fail_bubble_up_check._published_run_trees` states for a run
+    tree handed over on its own.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                             capture_output=True, text=True, timeout=60)
+        if out.returncode == 0 and out.stdout:
+            return sorted(p for p in out.stdout.split("\0")
+                          if p.endswith("L9_INTEGRATION_SPEC.json"))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sorted(p.relative_to(root).as_posix()
+                  for p in root.rglob("L9_INTEGRATION_SPEC.json"))
 
 
-@pytest.mark.skipif(not _BENCH.is_dir(),
-                    reason="tracked corpus not present in this checkout")
+@needs_corpus
 def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
-    """Reads tracked L9 documents with a PURE function. Writes nothing."""
-    tracked = subprocess.run(
-        ["git", "-C", str(_BENCH.parent), "ls-files", "benchmark-data"],
-        capture_output=True, text=True, check=True).stdout.split()
-    docs = [d for d in tracked if d.endswith("L9_INTEGRATION_SPEC.json")]
-    assert docs, "corpus guard would be vacuous: no tracked L9 documents"
+    """Reads published L9 documents with a PURE function. Writes nothing.
+
+    The subject is a PUBLISHED CELL. Those moved to `vibeic/benchmark-data`, so
+    an absent corpus is "I could not look" and SKIPS naming it — vibe-ic#1357's
+    rule for an absent TOOL, applied to absent DATA. Nothing is weakened: every
+    assertion below, including the four denominator floors (`nonempty > 0`,
+    `declared > 0`, `driven > 0`, `new_arm > 0`), still runs verbatim whenever a
+    corpus IS readable, so a corpus that stopped exercising the vacuous arm is
+    still a failure.
+    """
+    root = corpus_root()
+    assert root is not None, "the marker admitted a run with no corpus to read"
+    docs = _published_l9_docs(root)
+    assert docs, (
+        f"corpus guard would be vacuous: {root} is readable but publishes no "
+        f"L9_INTEGRATION_SPEC.json")
 
     declared = examined = 0
     nonempty = all_skipped = 0
     driven = new_arm = 0
     for rel in docs:
-        raw = json.loads((_BENCH.parent / rel).read_text())
+        raw = json.loads((root / rel).read_text())
         doc = raw.get("fields") if isinstance(raw.get("fields"), dict) else raw
         subs = doc.get("submodules")
         if not isinstance(subs, list) or not subs:
@@ -222,7 +250,7 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
         marker = "/phase1/generated_docs/"
         if marker not in rel:
             continue                      # load_l9 would resolve elsewhere
-        proj = _BENCH.parent / rel[:rel.index(marker)]
+        proj = root / rel[:rel.index(marker)]
         verdict, findings, live, reason = C.audit_report(proj)
         driven += 1
         assert verdict == "VACUOUS_PASS" and findings == [], (

@@ -108,13 +108,38 @@ from typing import List, Optional, Tuple
 from _pdk_via_analyzer import (_routing_index, parse_tech_lef,
                                patch_extents)
 
-#: The EDA image whose PDK trees this checker reads with `--from-image`. A LIVE
-#: pointer: registered in `tools/vibeic-eda/sync_image_version.py`'s
-#: `INSTALL_DOC_CANDIDATES`, so `--set` rewrites it and `--check` catches drift.
-#: The alternative — naming an image in a comment — is a string nothing
-#: resolves, which is how the first version of this file went red on the
-#: image-version gate.
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.97"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+
+# WHICH IMAGE `--from-image` READS — a DIGEST, resolved now, not a version
+# remembered in the source tree. `tools/vibeic-eda/VERSION` used to answer this
+# and cost a PR here per vibeic-eda release; MEASURED 2026-08-21 it also named an
+# image this host does not have, so `--from-image` was a multi-gigabyte pull, not
+# a reading of the installed PDKs. See `_eda_image.judged_image`.
+import _eda_image as _img
+
+
+def default_image(explicit=None, *, allow_pull: bool = False) -> "_img.JudgedImage":
+    """The image this run reads its tech LEFs out of, pinned by digest.
+
+    NOT `resolve()`. This program reports FAIL about tech LEFs read FROM an
+    image, so the report has to say WHICH bytes it read — otherwise a finding
+    cannot be replayed and a red cannot be attributed to the PDK layer that
+    caused it. It records the DIGEST for that, and the image's own
+    `org.opencontainers.image.version` label so a reader can say which release.
+    """
+    judged = _img.judged_image(explicit=explicit, allow_pull=allow_pull)
+    why = _img.unidentified_reason(judged)
+    if why:
+        # rc 2 is this program's word for NOTHING WAS MEASURED, and it is a
+        # different number from its word for a finding. A run that never opened
+        # an image, or opened one that would not say which release it is, must
+        # not report about silicon. That is the repository's rule in the
+        # direction that INVENTS a defect rather than hiding one.
+        print("[REFUSE] pdk_via_patch_meets_layer_min_width_check: " + why + ". Nothing was measured.",
+              file=sys.stderr)
+        raise SystemExit(2)
+    return judged
 
 #: Tech-LEF filename shapes. `*.tlef` alone misses nangate45, whose tech LEF is
 #: `NangateOpenCellLibrary.tech.lef` — it was reported NOT MEASURED for exactly
@@ -245,7 +270,8 @@ def discover(pdk_roots: List[Path]) -> List[Path]:
     return uniq
 
 
-def stage_from_image(image: str, dest: Path) -> Tuple[List[Path], str]:
+def stage_from_image(image: str, dest: Path, *, pull: bool = False
+                    ) -> Tuple[List[Path], str]:
     """Copy every tech LEF out of `image` into `dest`. `([], reason)` when the
     image cannot be opened — an unreachable image is NOT a clean PDK."""
     pats = " -o ".join(f'-name "*{s}"' for s in _TECH_LEF_SUFFIXES)
@@ -254,7 +280,9 @@ def stage_from_image(image: str, dest: Path) -> Tuple[List[Path], str]:
               f' | while read -r f; do echo "###LEF $f"; cat "$f"; done')
     try:
         r = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "bash", image,
+            ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+             *([] if pull else ["--pull", "never"]),
+             "--entrypoint", "bash", image,
              "-lc", script],
             capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -295,14 +323,20 @@ def main(argv=None) -> int:
                          "(repeatable); default is the last "
                          f"{_KEY_COMPONENTS} path components")
     ap.add_argument("--from-image", action="store_true",
-                    help=f"read the tech LEFs out of {DEFAULT_IMAGE}")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+                    help="read the tech LEFs out of the EDA image this host holds")
+    ap.add_argument("--image", default=None,
+                    help="EDA image, ideally a digest; default: the newest "
+                         "vibeic-eda image on this host, pinned to its digest")
     ap.add_argument("--routing-max-layer", default=None,
                     help="highest metal index (or layer name) signals are "
                          "routed on; a finding above it is MITIGATED")
     ap.add_argument("--advisory", action="store_true",
                     help="print everything and return 0. Lowers the exit "
                          "code; hides nothing.")
+    ap.add_argument("--allow-pull", action="store_true",
+                    help="permit `--from-image` to FETCH the image if this host "
+                         "does not have it. Off by default: a multi-gigabyte "
+                         "download inside a gate is the operator's call.")
     ap.add_argument("--json", dest="json_out")
     args = ap.parse_args(argv)
 
@@ -311,12 +345,17 @@ def main(argv=None) -> int:
     readable += discover([Path(p) for p in args.pdk_root])
     staged_note = ""
     tmp: Optional[object] = None
+    judged = None
     if args.from_image:
         import tempfile
         tmp = tempfile.TemporaryDirectory()
-        got, why = stage_from_image(args.image, Path(tmp.name))
+        # Same reason as the `--help` note on the flag: resolve at use, not
+        # at parse, and reuse the one answer for the message below.
+        judged = default_image(args.image, allow_pull=args.allow_pull)
+        got, why = stage_from_image(judged.ref, Path(tmp.name),
+                                    pull=args.allow_pull)
         readable += got
-        staged_note = why or f"{len(got)} tech LEF(s) from {args.image}"
+        staged_note = why or f"{len(got)} tech LEF(s) from {judged.ref}"
 
     seen, uniq = set(), []
     for p in readable:
@@ -349,8 +388,7 @@ def main(argv=None) -> int:
             open_f.append(f)
 
     verdict = "FAIL" if open_f else "PASS"
-    report = {
-        "program": "pdk_via_patch_meets_layer_min_width_check",
+    body = {
         "tech_lefs_checked": [str(p) for p in readable],
         "routing_max_layer": max_layer,
         "findings": found,
@@ -359,6 +397,21 @@ def main(argv=None) -> int:
         "verdict": verdict,
         "exit_code": 0 if (args.advisory or not open_f) else 1,
     }
+    # A finding read OUT OF AN IMAGE has to name that image, or it cannot be
+    # replayed and a red cannot be attributed to the PDK layer that caused it.
+    # `verdict_report` REFUSES a body that does not. Findings taken from tech
+    # LEFs the caller named on the command line are about FILES, not about an
+    # image, so they keep the plain body — a digest there would claim the run
+    # read bytes it never opened.
+    if judged is not None:
+        report = _img.verdict_report(
+            "pdk_via_patch_meets_layer_min_width_check", judged, body)
+    else:
+        report = {"program": "pdk_via_patch_meets_layer_min_width_check",
+                  "image": None, "image_digest": None,
+                  "image_digest_kind": "", "image_source": "tech-lef-argument",
+                  "image_version": None, "image_version_source": "",
+                  **body}
     if args.json_out:
         Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json_out).write_text(json.dumps(report, indent=2) + "\n")
@@ -384,6 +437,10 @@ def main(argv=None) -> int:
 
     if open_f:
         forms = sorted({f["form"] for f in open_f})
+        if judged is not None:
+            print(f"  Read out of {judged.ref} — this is a fact about THAT "
+                  f"IMAGE's PDK layer, not about the change under test. Re-run "
+                  f"it with --from-image --image {judged.ref}.")
         print(f"[{'ADVISORY' if args.advisory else 'FAIL'}] {len(open_f)} via "
               f"patch(es) narrower than their own layer's minimum width, over "
               f"{len(readable)} tech LEF(s) ({'+'.join(forms)} form(s); "

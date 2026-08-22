@@ -28,8 +28,13 @@ it, or a decision reference.
     GOOD  reason:   "The artefact is emitted on only one branch of a real PDK
                      condition, so an unconditional declaration converts every
                      honest run of the other branch into MISSING."
-          evidence: "programs/mixed_signal_top_lvs_run.py:919 —
-                     (rpt_dir / 'top_lvs.json').write_text(...)"
+          evidence: "programs/mixed_signal_top_lvs_run.py::`(rpt_dir / "top_lvs.json").write_text(`"
+
+                    (a CONTENT anchor. The example a reader copies decides how
+                     the next waiver is written, and a `path:line` here rots the
+                     moment that file shifts — measured 2026-08-14, the `:917`
+                     this carried resolved on main but FAILED inside three
+                     separate batches.)
 
     GOOD  reason:   "Deciding this needs a real converged project tree; the
                      required artefact is produced only by a tool absent from CI."
@@ -1004,8 +1009,16 @@ WAIVERS: Tuple[Waiver, ...] = (
             "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:919 "
-            "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
+            # vibe-ic#1289 — CONTENT anchor, not a line number. Measured
+            # 2026-08-14: this citation read `:917` and rotted in THREE separate
+            # batches (the 22-PR INDEX.md batch, the 10-PR hygiene batch, and a
+            # 64-PR extension), each time manufacturing a red that belonged to
+            # no PR in the batch, because those batches shift lines in
+            # mixed_signal_top_lvs_run.py. Re-pointing the number resets the
+            # counter; anchoring to the text removes the failure mode. The
+            # anchor resolves to exactly ONE line, which the validator requires.
+            "producer programs/mixed_signal_top_lvs_run.py::`"
+            '(rpt_dir / "top_lvs.json").write_text(' "` (in the same block "
             "as the already-declared merge.json); consumer "
             "programs/mixed_signal_merge_check.py:89-91 then :108. MEASURED "
             "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
@@ -1043,7 +1056,18 @@ WAIVERS: Tuple[Waiver, ...] = (
             "fail on its own, so it would be decoration. Closing this needs "
             "the (a) decision — re-publish the six roots, or add a "
             "conditional/disclosed-skip spelling to required_outputs — taken "
-            "first; then (b) follows as OR-pairs that can actually fail."
+            "first; then (b) follows as OR-pairs that can actually fail. "
+            "COUNT RE-MEASURED 2026-08-14 (#1215): sixteen, not the fourteen "
+            "recorded above — the population drifted upward while this cell "
+            "stayed red and nobody re-read it, which is what a waived cell "
+            "makes easy. #1215 declared one of the sixteen, "
+            "reports/phase3/sta/post_route_signoff_corner.json (this step's "
+            "own post_route_signoff_corner_check --json target, promoted by "
+            "the write record and undeclared), taking it to FIFTEEN. That is "
+            "a finding removed, not a colour change: this cell was red before "
+            "and is red after, and the (a)/(b) split above is untouched — "
+            "both halves of the residue are exactly the artefacts named "
+            "there."
         ),
         evidence=(
             "producers programs/phase3_one_shot_runner.py::`sta_out / "
@@ -1081,6 +1105,105 @@ WAIVERS: Tuple[Waiver, ...] = (
             "MISSING (5 of 8); the other three are FAIL before and after."
         ),
     ),
+    Waiver(
+        step_id="34",
+        dim=7,
+        reason=(
+            "W2 charges reports/phase3/cmp_fill_emit.json as produced, "
+            "gate-read and undeclared, and the READ half is an artefact of "
+            "the consumer oracle rather than a fact about the flow. "
+            "_gate_consumers builds {path: steps whose gate reads it} by "
+            "mining every gate program's SOURCE for path literals, so a "
+            "program that names its OWN DEFAULT OUTPUT in a module constant "
+            "is recorded as a consumer of that output. metal_fill_emit is "
+            "step 34's gate program and _REPORT_REL is exactly that "
+            "constant: it is the FALLBACK the emitter writes to when no "
+            "--json is supplied. Nothing in the repository reads the path. "
+            "The flow's only gate invocation of the program passes an "
+            "explicit --json reports/phase2/gates/cmp_fill_emit.json, which "
+            "is a DIFFERENT file and is the one step 34's gate actually "
+            "consumes. Declaring the phase3 path would also assert an "
+            "UNCONDITIONAL production the flow itself denies: the runner "
+            "half returns before invoking the emitter when there is no GDS "
+            "to fill and when the density config declares no layers, and the "
+            "emitter DISCLOSED_SKIPs when no KLayout runner is reachable, so "
+            "an honest run of any of those branches would report MISSING. "
+            "That is the same objection the dimension's own module docstring "
+            "already sustains against declaring the DFT skip sentinels. "
+            "Closing this needs the CONSUMER oracle taught to tell a gate "
+            "program's own default-output constant from a path it reads — "
+            "not a declaration, and not a change to W2's rule."
+        ),
+        evidence=(
+            "producer default programs/metal_fill_emit.py:82 "
+            "(_REPORT_REL = \"reports/phase3/cmp_fill_emit.json\") applied at "
+            "programs/metal_fill_emit.py:133 and "
+            "programs/metal_fill_emit.py:319 as "
+            "`rep = Path(report) if report else (project / _REPORT_REL)`, so "
+            "the constant is reached only when --json is absent; the runner "
+            "invocation that reaches it is "
+            "programs/phase3_one_shot_runner.py::`\"--cell\", top, "
+            "\"--in-place\"],` — the last argv element, so the whole argv is "
+            "visible and carries no --json — guarded by the two early returns, "
+            "programs/phase3_one_shot_runner.py::`return False, "
+            "\"metal_fill_density config has no layers\"` and the "
+            "`return False, \"no GDS to fill\"` on the line directly above "
+            "it. (That second guard is written identically at two places in "
+            "the file, so it cannot carry a content anchor of its own; the "
+            "unique guard beside it carries the citation, and the pair is "
+            "read there. BOTH of these were line numbers until 2026-08-19, "
+            "when a change 7000 lines higher up moved them by forty-one and "
+            "`validate()` reported both unresolvable — the third and fourth "
+            "citations in this one waiver to rot exactly as the note below "
+            "predicts.) The competing path the gate really reads is "
+            "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
+            "--verify-only --json reports/phase2/gates/cmp_fill_emit.json\" "
+            "(a CONTENT anchor, converted from the line-number form it "
+            "carried at first writing — that line number was correct when "
+            "written and had drifted by forty lines a day later, which is the "
+            "rot the content grammar exists to end). The oracle rule that "
+            "conflates the two is "
+            "programs/tests/matrix_d7_artifact_graph.py::"
+            "`for lit in program_literals(prog)` (the mining loop of "
+            "_gate_consumers). "
+            # vibe-ic#1289/#1290 — CONTENT anchors, not line numbers. BOTH of
+            # the citations above were written by line and BOTH had rotted by
+            # 2026-08-15, in the two different ways this notation exists to
+            # end. The yaml citation named 4242 and the flow grew 40 lines
+            # above it, so 4242 now reads a comment and `validate()` reported
+            # the citation unresolvable — a HARD red on
+            # test_waivers_meet_the_registry_standard. The oracle citation
+            # named 1074-1085, which held exactly that loop when it was
+            # written (9167b162e) and now holds the body of a DIFFERENT
+            # function, `flow_consumers`; `_gate_consumers` has moved to 1184
+            # and its `for lit in program_literals(prog)` to 1190. That
+            # citation still RESOLVED — `flow_consumers` calls
+            # `gate_input_paths`, a token this waiver also names in
+            # `gate_input_paths("34")` — so it went on READING as evidence
+            # while pointing at unrelated code, which is the worse of the two
+            # failures because nothing reports it.
+            # Historical numbers above carry no leading colon on purpose: a
+            # bare `:NNNN` inherits the last-named file and would be graded as
+            # a live citation.
+            #
+            # The remaining `path:line` citations in this entry are NOT
+            # converted, and the reason is measured rather than editorial: a
+            # content anchor must resolve to exactly ONE line, and
+            # `rep = Path(report) if report else (project / _REPORT_REL)`
+            # occurs twice in metal_fill_emit.py (at 133 and 319 — the pair is
+            # the point of the claim) while "no GDS to fill" occurs twice in
+            # phase3_one_shot_runner.py. Both would be refused as AMBIGUOUS by
+            # this registry's own rule, so the line form is the only form
+            # available there.
+            "MEASURED 2026-08-14 on the rebased tree: "
+            "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
+            "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "
+            "and matrix_d7_artifact_graph.gate_input_paths(\"34\") contains "
+            "no cmp_fill_emit entry at all — only "
+            "input/pdk/bridge/cmp_fill_targets.json and "
+            "signoff/cmp_fill_targets.json, which are different artefacts."
+        ),
+    ),
 )
 
 
@@ -1115,8 +1238,14 @@ def validate(waiver: Waiver) -> Tuple[str, ...]:
     citation was false while this function returned ``()``.
     """
     problems = []
-    if waiver.dim not in range(1, 9):
-        problems.append(f"dim {waiver.dim!r} is not in 1..8")
+    # Local import: `cells` is the single declaration of how many dimensions
+    # exist, and hard-coding the range here is how this check went on saying
+    # "1..8" after a ninth dimension landed. Imported inside the function so the
+    # module-level import graph stays one-directional.
+    from . import cells as _cells
+    if waiver.dim not in _cells.DIMENSIONS:
+        problems.append(
+            f"dim {waiver.dim!r} is not one of {list(_cells.DIMENSIONS)}")
     if not flowref.has_step(waiver.step_id):
         problems.append(f"step {waiver.step_id!r} is not declared in the flow yaml")
     reason = (waiver.reason or "").strip()

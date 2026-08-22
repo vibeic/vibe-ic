@@ -23,6 +23,8 @@ import sys
 import pytest
 from pathlib import Path
 
+from _published_corpus import corpus_root, needs_corpus
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import evidence_citation_resolves_check as E  # noqa: E402
@@ -145,6 +147,7 @@ def test_paid_debt_must_be_removed_from_the_baseline(tmp_path):
 
 # ── shipped state ────────────────────────────────────────────────────────────
 
+@needs_corpus
 def test_shipped_baseline_matches_the_shipped_tree():
     """The gate must be GREEN on main as landed — a gate that ships red is
     the failure mode it exists to remove (#306: 62 of 72 gates could describe
@@ -154,14 +157,24 @@ def test_shipped_baseline_matches_the_shipped_tree():
     TRACKED tree, so a developer whose benchmark-data holds local run
     artifacts would see a mismatch that is theirs, not the repo's. Skipping
     loudly there is what keeps this test from being deleted by the first
-    person it annoys; CI runs clean and enforces it for real."""
-    r = subprocess.run([sys.executable, str(_PROG)],
+    person it annoys; CI runs clean and enforces it for real.
+
+    THE TREE IT MEANS IS THE PUBLISHED CORPUS, WHEREVER THAT IS. The gate's
+    default root is `<checkout>/benchmark-data/ic` and its baseline lives with
+    the DATA it describes (`root.parent/evidence_citation_baseline.json`, see
+    `_BASELINE_NAME`), so when the cells moved to vibeic/benchmark-data both
+    moved together. Running the default here would compare THAT register
+    against a directory holding only the design inputs and report 135 debts
+    "paid" — a number about nothing. The scan root is therefore resolved to
+    the corpus this run actually has, and where there is none the honest answer
+    is that the shipped tree could not be looked at (skip), not that it is
+    green (pass) and not that it is broken (fail)."""
+    root = corpus_root() / "ic"
+    r = subprocess.run([sys.executable, str(_PROG), str(root)],
                        capture_output=True, text=True, timeout=60)
     if r.returncode == 2:
         pytest.skip("no benchmark-data tree in this checkout")
-    root = next((b / E._DEFAULT_ROOT_REL for b in Path(_PROG).resolve().parents
-                 if (b / E._DEFAULT_ROOT_REL).is_dir()), None)
-    if root is not None and E._working_tree_dirt(root):
+    if E._working_tree_dirt(root):
         pytest.skip("working tree under the scan root is dirty — the shipped "
                     "baseline describes the TRACKED tree; CI runs clean")
     assert r.returncode == 0, r.stdout + r.stderr

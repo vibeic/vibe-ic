@@ -60,6 +60,8 @@ import json
 import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _vacuous_exit as _vx
@@ -223,7 +225,7 @@ def main(argv=None) -> int:
     if ns.json:
         out = Path(ns.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, indent=2) + "\n")
+        atomic_write_text(out, json.dumps(rep, indent=2) + "\n")
 
     print(json.dumps(rep, indent=2))
     if rep["rc"] == RC_VACUOUS:
