@@ -2343,3 +2343,95 @@ re-filing shipped — passes with the refusal removed, all 17 of them. It pins t
 two document kinds apart; it does not pin the refusal. The red lives in
 `test_issue1121`, and anyone checking that claim by running the ablation file
 alone would get a false all-clear.
+
+
+# Part 22 — a producer that held the datum and reported the datum absent
+
+Part 21 said the rc 0 is unavailable because `h2h_A`'s `timing_wns_ns.rc_corner`
+is null and no artefact states it. The first half is right and the second half
+is **wrong**, and the artefact says so on its own first line.
+
+## The measurement
+
+The report `h2h_A` cites is `phase3/stage3/sta/sta_mcorner_ocv.rpt`. Running the
+SHIPPED backend over it:
+
+    banner: === SETUP corner: process=SS liberty=..__ss_100C_1v60.lib, SPEF=spm.max.spef ===
+       check='setup'  process='SS'  rc_corner=None  spef='spm.max.spef'
+       check='hold'   process='FF'  rc_corner=None  spef='spm.min.spef'
+
+`_ppa/backends/opensta` captures that `SPEF=` token with `_BANNER_SPEF_RE`, off
+the **same banner line** it reads `process=` and `liberty=` from.
+`_ppa/timing.py` then read `sec.rc_corner` only, never `sec.spef`, and wrote:
+
+    "this report names no RC corner for the section; the RC axis is reported
+     by the multi-corner SPEF report, not this one"
+
+That sentence is false for this report. The section names its RC condition — as
+a parasitics file — and the producer was holding it while saying it was absent.
+This is the same class the PPA record gates exist to end, arriving from the
+producer side instead of the gate side.
+
+Scoped by dialect, because only one is affected and overstating it would repeat
+Part 20's mistake:
+
+    dialect A  sta_spef_multicorner.rpt   rc_corner='max'                 -> h2h_B's timing is complete
+    dialect B  sta_mcorner_ocv.rpt        rc_corner=None, spef='spm.max.spef' -> h2h_A
+    dialect C  sta_spef_based.rpt         no banner at all                -> genuinely nothing
+
+## What was repaired, and what deliberately was not
+
+The reason now names the parasitics it is holding. `rc_corner` is **still not
+filled**, and that is the design rather than a half-measure: the token is a FILE
+NAME, and reading `max` out of `x.max.spef` is exactly the filename inference
+`_stage_for` refuses forty lines above — *"inferring `post_route_extracted` from
+the filename would let a pre-layout estimate be compared against sign-off
+evidence"*. A stated gap is the honest outcome; a filled key would be a guess
+wearing a measurement's clothes.
+
+On the real artefact after the repair:
+
+    rc_corner gap -> this section names its parasitics as 'spm.max.spef' but no
+                     normalised RC-corner label, and the file name is NOT read
+                     as one: deriving a corner from a stem is the filename
+                     inference this module refuses elsewhere. The RC identity IS
+                     stated by the report and is not yet carried in scope
+    rc_corner values emitted: {None}
+
+## What this does NOT change, said plainly
+
+**No row turns green.** `h2h_A` stays `SCOPE_SENTINEL` and the cross-layer
+campaign stays rc 2 over 14 records, 0 refused. The corpus is static JSON; the
+records cite a run tree that is not in this repository and cannot be regenerated
+here. Part 21's *verdict* — rc 2 is honest and rc 0 is not available — survives
+intact. What changed is that its stated reason is no longer a denial.
+
+**The remaining repair is a contract change and is named, not done.** Making
+these records decidable means carrying the SPEF identity in scope as itself:
+two arms that both read `spm.max.spef` are at the same RC condition, and that is
+decidable without parsing a corner out of a name. That touches `REQUIRED_SCOPE`
+and `check_scope_parity` and every record already published, so it is the next
+branch's work and not a line to slip into this one.
+
+## The guard
+
+`tests/test_a_producer_may_not_deny_a_datum_it_holds.py`, five assertions:
+the backend really does hold the SPEF while `rc_corner` is None (the premise,
+proven rather than assumed); the reason names it; the reason no longer claims
+the report named no RC corner; the corner is still not invented from the file
+name; and a report that *truly* names nothing keeps the original sentence — so
+the repair cannot become a blanket replacement of a true statement.
+
+NEGATIVE CONTROL, the reason reverted to the denial:
+
+    FAILED ::test_the_reason_names_the_parasitics_the_producer_is_holding
+    FAILED ::test_the_reason_does_not_claim_the_report_named_no_rc_corner
+    2 failed, 3 passed
+
+    E  AssertionError: assert '.spef' in 'this report names no RC corner for
+       the section; the RC axis is reported by the multi-corner SPEF report,
+       not this one'
+
+The three that stay green under the revert are the correct ones to stay green:
+they pin the non-inference and the true-sentence-preserved side, which reverting
+the reason does not touch.
