@@ -98,8 +98,30 @@ EXEMPT_VERDICTS = {TRUE_FLOOR, DATASET_DEFECT}
 ALL_KNOWN_VERDICTS = AI_SOLVABLE_VERDICTS | EXEMPT_VERDICTS
 
 # ── liberal field-name aliases ────────────────────────────────────────────
-_VERDICT_KEYS = ("verdict", "category", "label", "triage_verdict", "outcome",
-                 "classification")
+# `category` IS LAST, AND A BARE RUBRIC LETTER IN IT IS IGNORED.
+#
+# The same skill that defines §4.2 (which this audit enforces) also defines the
+# §4/§6.4 triage rubric, whose values are the LETTERS A-H. `category` is the
+# field that rubric uses. The one real published input carries BOTH — 87
+# records of `{"category": "H", "verdict": "REAL_RTL_BUG"}` — and was audited
+# correctly only because `verdict` happened to come first in this tuple.
+#
+# Measured on that file, one field removed at a time:
+#   * drop `verdict`, keep `category: "H"`  ->  rc=1, 121 of 121 records
+#     accused of `unknown_verdict (verdict='H')`. Every one of them carries an
+#     absorption_ref; not one is a real finding.
+#   * a producer that writes the rubric letter in `category` and the real
+#     verdict in any OTHER alias (`outcome`, `label`, `classification`) was
+#     accused the same way, because `category` SHADOWED them from position 2.
+#
+# So a rubric letter is not a verdict and must not be read as one. It is not
+# silently dropped either: if a record offers nothing BUT a rubric letter, the
+# violation says so by name (`rubric_letter_not_a_verdict`) instead of
+# inviting the author to add "H" to the vocabulary.
+_VERDICT_KEYS = ("verdict", "triage_verdict", "outcome", "classification",
+                 "label", "category")
+#: §4/§6.4 triage rubric letters — a CATEGORY, never a §4.2 convergence verdict.
+_RUBRIC_LETTERS = frozenset("ABCDEFGH")
 _BLIND_KEYS = ("independent_blind_passes", "blind_passes", "ai_blind_passes",
                "independent_solve_passes", "blind_solve_passes",
                "ai_solved_blind")
@@ -128,12 +150,43 @@ def _first_present(rec: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[Any]:
     return None
 
 
-def extract_verdict(rec: Dict[str, Any]) -> Optional[str]:
-    raw = _first_present(rec, _VERDICT_KEYS)
-    if raw is None:
-        return None
+def _normalise_verdict(raw: Any) -> Optional[str]:
     s = str(raw).strip().upper().replace("-", "_").replace(" ", "_")
     return s or None
+
+
+def is_rubric_letter(value: Optional[str]) -> bool:
+    """A bare §4/§6.4 rubric letter (A-H), not a §4.2 convergence verdict."""
+    return bool(value) and value in _RUBRIC_LETTERS
+
+
+def extract_verdict(rec: Dict[str, Any]) -> Optional[str]:
+    """First alias holding something that is not a bare rubric letter.
+
+    Scanning the aliases in order and SKIPPING rubric letters is what stops
+    `category: "H"` shadowing a real verdict sitting in `outcome`/`label`.
+    """
+    for key in _VERDICT_KEYS:
+        raw = _first_present(rec, (key,))
+        if raw is None:
+            continue
+        v = _normalise_verdict(raw)
+        if v is None or is_rubric_letter(v):
+            continue
+        return v
+    return None
+
+
+def only_rubric_letter(rec: Dict[str, Any]) -> Optional[str]:
+    """The rubric letter a record offers when it offers no verdict at all."""
+    for key in _VERDICT_KEYS:
+        raw = _first_present(rec, (key,))
+        if raw is None:
+            continue
+        v = _normalise_verdict(raw)
+        if is_rubric_letter(v):
+            return v
+    return None
 
 
 def extract_bool(rec: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[bool]:
@@ -238,6 +291,21 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         floor_ev = extract_str(rec, _FLOOR_EV_KEYS)
 
         if verdict is None or verdict not in ALL_KNOWN_VERDICTS:
+            letter = only_rubric_letter(rec) if verdict is None else None
+            if letter is not None:
+                violations.append({
+                    "id": rid, "rule": "rubric_letter_not_a_verdict",
+                    "verdict": letter,
+                    "detail": (
+                        f"the only verdict-shaped value on this record is "
+                        f"{letter!r}, which is a § 4/§ 6.4 TRIAGE RUBRIC "
+                        "letter, not a § 4.2 convergence verdict. The two live "
+                        "in the same records and mean different things — emit "
+                        "`verdict` beside `category` (AI-solvable set or "
+                        "TRUE_FLOOR / DATASET_DEFECT); do NOT add the letter "
+                        "to the verdict vocabulary"),
+                })
+                continue
             violations.append({
                 "id": rid, "rule": "unknown_verdict", "verdict": verdict,
                 "detail": (f"verdict {verdict!r} is not a recognised "

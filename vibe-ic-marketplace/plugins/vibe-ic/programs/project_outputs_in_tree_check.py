@@ -163,6 +163,40 @@ def _waiver_count(project: Path) -> int:
     return 0
 
 
+def _inside_project(path_str: str, project: Path) -> bool:
+    """True when `path_str` resolves to the project root or anything under it.
+
+    A volatile-looking absolute path is only an EXTERNAL-STORAGE finding when
+    it points OUTSIDE the project being audited.  When the project root itself
+    sits under a volatile prefix (`/tmp/...`, `/var/tmp/...`, `/dev/shm/...`,
+    `/run/...`) every absolute self-reference the flow writes into its own
+    `reports/**/*.json` matches `_PATH_RE` — so the gate reported the project's
+    OWN in-tree files as artifacts that must be "copied into the project tree".
+
+    That is self-inflating, because `flow_compliance_check` REGENERATES those
+    gate JSONs (stamping the absolute project path into them) every time it
+    runs: auditing a project from a scratch copy — the standard way to audit
+    without mutating the original — manufactures the very violation being
+    audited for, and the count grows with each audit run.
+
+    Measured on a real run dir (spm x ihp-sg13g2), copied to /tmp and audited:
+        before any audit run : 1 live external-storage artifact
+        after ONE audit run  : 21 live, 13 gate JSONs now carrying the copy's
+                               own absolute path
+    The only variable between the two readings is that the audit ran.
+
+    Sibling precedent: this file already carves out two non-violating classes
+    the same way — R7 pinned plugin worktrees (`_pinned_plugin_root`) and #622
+    log-sourced ephemeral tool paths. The project's own tree is the third, and
+    the most basic: `project` is already resolved at the top of `main()`.
+    """
+    try:
+        p = Path(path_str).resolve()
+    except (OSError, ValueError):
+        return False
+    return p == project or project in p.parents
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: project_outputs_in_tree_check <project_dir>",
@@ -177,6 +211,9 @@ def main() -> int:
     findings: List[Tuple[str, str, bool, bool]] = []
     # R7 — pinned plugin-source references (disclosed, non-blocking).
     plugin_src: List[Tuple[str, str]] = []
+    # In-tree self-references: absolute paths that resolve INSIDE the project
+    # being audited (counted only, never a finding — see _inside_project).
+    in_tree_self = 0
     seen: Set[str] = set()
     for pat in _SCAN_GLOBS:
         for f in project.glob(pat):
@@ -192,6 +229,14 @@ def main() -> int:
                 if p in seen:
                     continue
                 seen.add(p)
+                # A path that resolves INSIDE the project being audited is
+                # in-tree BY DEFINITION, whatever the project root happens to
+                # be. Must precede the exists() classification: otherwise
+                # auditing a project that itself lives under /tmp reports the
+                # project's OWN files as external storage.
+                if _inside_project(p, project):
+                    in_tree_self += 1
+                    continue
                 # R7 — a pinned plugin worktree path is a legitimate plugin
                 # SOURCE, not a volatile project output. Disclose, never FAIL.
                 if _pinned_plugin_root(p) is not None:
@@ -226,6 +271,13 @@ def main() -> int:
             print(f"  - {f} → {p}")
         if len(plugin_src) > 5:
             print(f"  ... +{len(plugin_src)-5} more")
+
+    if in_tree_self:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{in_tree_self} in-tree self-reference(s) under the project "
+              f"root {project} — in-tree by definition, non-blocking (the "
+              f"project itself lives at a volatile path; these are its OWN "
+              f"files, not external storage)")
 
     if ephemeral:
         print(f"[INFO] project_outputs_in_tree_check: "
