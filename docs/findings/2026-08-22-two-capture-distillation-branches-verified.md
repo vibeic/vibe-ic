@@ -162,6 +162,45 @@ THEM TEST-STRENGTHENING. `git merge-base --is-ancestor` says so for both:
     ships the version whose own commit message says it "passed on the incident
     that motivated it", and I read its silence as success.
 
+IT IS NOT JUST MY TWO — AND THIS PART IS BEYOND THE BRIEF, SO READ THE
+EVIDENCE FOR IT CAREFULLY. Having found two tips missing, I asked whether the
+batch dropped tips systematically. `land/one-assembled` merged seventeen
+branches. Of the fifteen still on the remote:
+
+    4 landed at their tip
+    10 have commits on the branch and not on main — SIXTY commits in total
+     1 (fix/routed-def-corpus-adjudication) is not an ancestor but is 0 ahead:
+       main holds the same content under a different commit, so nothing is lost
+
+    EVERY ONE OF THE 60 HAS A COMMITTER DATE BEFORE THE LANDING COMMIT
+    (ae78abb28, 2026-08-22 18:47:18 +0800). NONE came after. So this is not
+    branches carrying on afterwards; at landing time those commits existed and
+    were not taken.
+
+    HOW STRONG IS THAT. For my two subjects it is direct: I recorded jdistmat at
+    facc28860 and jdistchip at c0e19ace9 hours BEFORE the landing, and both are
+    still those SHAs. For the other eight the evidence is the committer date,
+    which a rebase rewrites — so a branch force-pushed after the landing with
+    older-dated commits would look the same. I have not audited the other eight
+    beyond that, and I am not claiming their content matters as much as mine;
+    what I am claiming is that the shape recurs.
+
+    WHAT THE OTHERS LOOK LIKE, by way of sample — the same character as my five:
+        fix/jwire2-hygiene-wiring   "make the two wired checkers able to refuse
+                                     correctly"
+        fix/jpolarity-emitter-polarity  "three reads of non-ASCII content were
+                                     relying on the interpreter's default
+                                     encoding"
+        jcap-ppa                    "two stated counts in this report went
+                                     stale, so both are now bound"
+        ptmo/main-red-triage-v11166 "retract 'D's channel is not confirmed' --
+                                     it is, and D was mis-filed"
+
+    Corrections, encoding fixes, refusal paths, retracted claims. The late
+    commits on a branch are where its author fixed what they had got wrong, and
+    a landing that takes the branch but not its last few commits takes the work
+    and leaves the corrections.
+
 ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
 25 / 6 / 1), and the single difference is that regression, not an improvement.
 The five that are red:
