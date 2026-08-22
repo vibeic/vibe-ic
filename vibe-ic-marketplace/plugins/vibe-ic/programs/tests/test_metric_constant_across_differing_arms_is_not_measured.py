@@ -5,6 +5,7 @@ shipped-tree test asserts rc 1 and names what closes it.
 """
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -12,6 +13,18 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+def _count(out: str, label: str) -> int:
+    """The integer on the population line `label`, or -1 if absent.
+
+    A SUBSTRING assertion on a count is not a pin. `"axes examined:        1"`
+    is a PREFIX of `"axes examined:        14"`, so it passes for 1, 14, 19 and
+    100 -- and fails for 2 -- which pins nothing and refuses arbitrarily. This
+    reads the number and lets the caller state the relation it actually means.
+    """
+    m = re.search(rf"^\s*{re.escape(label)}:\s+(\d+)\s*$", out, re.M)
+    return int(m.group(1)) if m else -1
+
 
 PROG = (Path(__file__).resolve().parents[1]
         / "metric_constant_across_differing_arms_is_not_measured.py")
@@ -87,7 +100,7 @@ def test_the_metric_names_live_in_a_field_not_a_key():
              "metrics": [_rec("power.total_w", 0.000306)]} for d in range(3)]
     r = _run(_tree(rows))
     assert r.returncode == 1
-    assert "axes examined:        1" in r.stdout, (
+    assert _count(r.stdout, "axes examined") >= 1, (
         f"the extractor found no axis in a metric-record list\n{r.stdout}")
 
 
