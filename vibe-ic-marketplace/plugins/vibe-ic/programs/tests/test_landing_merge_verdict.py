@@ -1784,7 +1784,11 @@ if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
     echo "=== FAILURES ABOVE — no routed transition record ==="
     exit 2
   fi
-  echo "  FAIL  repo hygiene gates"
+  # The gate LINE is emitted with the others, after the opening sentinel: a
+  # `  FAIL  ` line printed before the sentinel is outside the record the
+  # verifier parses, and an arm whose log closes with ALL GATES PASS while it
+  # exits 1 is refused as "no complete terminal record for rc=1".  Nothing had
+  # ever run this branch under the semantic landing record to notice.
   STUB_HYGIENE_STATE=FAIL
   STUB_HYGIENE_RC=1
 fi
@@ -1816,6 +1820,9 @@ if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
+if [ "$STUB_HYGIENE_STATE" = "FAIL" ]; then
+  echo "  FAIL  repo hygiene gates"
+fi
 SEL="$(mktemp -t stub_sel.XXXXXX)"
 JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
 ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
@@ -1848,10 +1855,11 @@ fi
 # `landing_publish` also sets FAILED from the journal it wrote.
 landing_publish
 if [ "$STUB_TARGETED_STATE" = "SKIP" ] \
-   && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+   && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ] \
+   && [ "$FAILED" = "0" ]; then
   echo "  REPORT  merge verifier owns the independent targeted-test evidence"
   echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
-elif [ "$STUB_TARGETED_STATE" = "FAIL" ]; then
+elif [ "$FAILED" != "0" ]; then
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 else
   [ "$STUB_STAMP" = "1" ] \
@@ -2149,12 +2157,136 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
                "A2 duplicated the targeted suite already measured by A1")
 
 
+_ROUTED_GATE_MARKER = "routed-corpus-gate.enabled"
+_ROUTED_ACTIVATION_MARKER = "routed-corpus-producer.activated"
+
+
+def _routed_activation_repo(sandbox, tmp_path, base_already_expanded=False):
+    """A subject whose CANDIDATE COMMIT activates the routed-DEF producer.
+
+    The EMPTY-to-expanded bootstrap is a fact about two SUBJECTS, not about two
+    environments: arm A2 runs the base commit's landing gate and arm B2 runs
+    the candidate's, so which population each declares has to be decided by
+    what is COMMITTED on each side.  That is also the only channel that
+    survives the hermetic launcher, which forwards an explicit --env allow-list
+    and carries no test switch into an arm.
+
+    Base commit: the routed-DEF gate is dispatched over an EMPTY population.
+    Candidate commit: it adds the activation marker, so the same gate is
+    dispatched over the real routed corpus -- exactly the one-use activation
+    the bootstrap exists for.  `base_already_expanded` puts the marker on the
+    BASE too, which is the post-activation world where no transition is due.
+    """
+    repo = tmp_path / "routed-activation-repo"
+    cloned = subprocess.run(["git", "clone", "-q", str(sandbox), str(repo)],
+                            capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+
+    land = repo / "tools/gatekeeper-land.sh"
+    text = land.read_text()
+    armed = ('if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \\\n'
+             '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
+             '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n')
+    assert armed in text, "the stub's routed-transition switch moved"
+    text = text.replace(armed, (
+        'if [ -f "$ROOT/%s" ] \\\n'
+        '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
+        '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n'
+        % _ROUTED_GATE_MARKER))
+    producer = ('    if [ "$GATEKEEPER_VERIFY_ARM" = "A2" ] \\\n'
+                '       && [ "${GATEKEEPER_STUB_BASE_EXPANDED:-0}" != "1" ]; then\n')
+    assert producer in text, "the stub's population producer moved"
+    text = text.replace(producer,
+                        '    if [ ! -f "$ROOT/%s" ]; then\n'
+                        % _ROUTED_ACTIVATION_MARKER)
+    land.write_text(text)
+    (repo / _ROUTED_GATE_MARKER).write_text("routed corpus gate is dispatched\n")
+    tracked = ["tools/gatekeeper-land.sh", _ROUTED_GATE_MARKER,
+               _PROTECTED.MANIFEST_PATH]
+    if base_already_expanded:
+        (repo / _ROUTED_ACTIVATION_MARKER).write_text("already activated\n")
+        tracked.append(_ROUTED_ACTIVATION_MARKER)
+    _write_activated_manifest(repo)
+    _git(repo, "add", *tracked)
+    assert _git(repo, "commit", "-qm",
+                "dispatch the routed corpus gate").returncode == 0
+
+    _git(repo, "checkout", "-q", "-b", "activate_producer")
+    (repo / _ROUTED_ACTIVATION_MARKER).write_text("the producer is activated\n")
+    (repo / "routed-activation-note.txt").write_text("activate routed corpus\n")
+    _git(repo, "add", "-A")
+    assert _git(repo, "commit", "-qm",
+                "activate the routed producer").returncode == 0
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
 def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
         sandbox, tmp_path):
-    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion."""
-    r, doc = _verify(
-        sandbox, "routed_transition", tmp_path,
-        env_extra={"GATEKEEPER_STUB_ROUTED_TRANSITION": "1"})
+    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion.
+
+    PROPERTY UNCHANGED, INTERFACE MOVED, AND THEN THE PROPERTY DID NOT HOLD.
+    Read the failure before repairing anything: THIS TEST IS THE MESSENGER.
+
+    The stimulus used to be `GATEKEEPER_STUB_ROUTED_TRANSITION`, read by the
+    stub landing gate inside an arm. MEASURED on a4caccefe: the name occurs
+    ZERO times in `tools/gatekeeper-verify-merge.sh` and is not on the hermetic
+    launcher's `--env` allow-list, so inside an arm it is EMPTY, the stub's
+    branch never fired, no arm ever declared a routed corpus, and the old test
+    died on `KeyError: 'corpus_transitions'` -- reporting a missing key for a
+    transition nothing had asked for.
+
+    It is now expressed the way the real thing is: the CANDIDATE COMMIT
+    activates the producer. A2 runs the base commit's gate over an EMPTY
+    population, B2 runs the candidate's over the real routed corpus, and that
+    is a fact about two subjects rather than two environments -- which is the
+    only channel the containment leaves open.
+
+    WITH THE STIMULUS FINALLY DELIVERED, MAIN CANNOT SUPPLY THE EVIDENCE. The
+    verifier detects the EMPTY base correctly and calls
+    `build_trusted_transition_evidence`, which enumerates and executes the
+    routed corpus and then re-attests the corpus snapshot with
+    `validate_benchmark_snapshot "$BENCHMARK_B2"`. That validator is
+    `benchmark_data_landing_checkout.py validate`, which requires the directory
+    to be a git checkout whose `origin` is exactly the canonical benchmark-data
+    remote. `$BENCHMARK_B2` is not such a checkout: since the commit that
+    introduced both halves (7c376e3481, v1.10.69, 2026-08-18) it is built by
+    `materialize_hermetic_git_subject`, i.e. `git init` over an object-exact
+    tree, which has NO remote at all. Measured directly, outside this fixture,
+    with the production argument list:
+
+        real checkout   -> [PASS] benchmark-data private worktree validated
+        materialized    -> [NORECORD] origin must be exactly
+                           'https://github.com/vibeic/benchmark-data.git';
+                           observed ['<missing or unreadable>']
+
+    so the one-use bootstrap dies with `benchmark-data B2 changed during
+    trusted parent evidence execution` -- a message that blames a mutation
+    when nothing mutated. It fails CLOSED (the landing is refused, never
+    granted), so it is a liveness defect and not a hole; but the property this
+    test names does not hold, and the honest thing is to leave the test
+    asserting the property rather than rewrite it to match the behaviour.
+
+    THE FIX IS NOT ON THIS BRANCH ON PURPOSE. `tools/gatekeeper-verify-merge.sh`
+    is a protected authority path; changing it is a PREPARE/ACTIVATE protected
+    landing transition and belongs to the repo-gatekeeper, not to a test
+    repair. Its shape is stated in the report: re-attest `$BENCHMARK_B2` as
+    what it IS -- compare its tree digest against the one already bound in the
+    B2 arm receipt's `inputs.corpus`, the same digest
+    `compare_hermetic_shared_inputs` reads -- instead of asking a materialized
+    snapshot for a git remote it cannot have. With that one line replaced, this
+    test passes; nothing else about the bootstrap is broken.
+
+    Its sibling below is the paired control: the SAME fixture with one bit
+    different (the base already activated) reaches a verdict and passes, so
+    nothing here is a broken fixture -- the only difference is whether the
+    bootstrap path is entered at all.
+    """
+    repo = _routed_activation_repo(sandbox, tmp_path)
+    r, doc = _verify(repo, "activate_producer", tmp_path)
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
@@ -2166,25 +2298,43 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
     assert transition["candidate_items"] == 1
     assert transition["replacement_gates"] == 4
     assert len(transition["parent_evidence_sha256"]) == 64
-    assert "trusted EMPTY→expanded evidence supplied" in r.stdout
+    assert transition["corpus"] == "published cells carrying a routed DEF"
+    # The four replacement gates are NOT_CHECKED under a live bound, which is
+    # the only kind of unknown allowed to replace an EMPTY base. An unbounded
+    # NOT_CHECKED here would mean an unknown candidate result had been accepted
+    # in place of a measured one.
+    assert transition["bounded_not_checked"] == [
+        "DRC PASS is not vacuous (tiny)",
+        "inner FAILs reach the verdict (tiny)",
+        "macro OBS not crossed (tiny)",
+        "new tool diagnostic id (tiny)",
+    ], transition
+    assert transition["benchmark_data_sha"], transition
 
 
 def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
         sandbox, tmp_path):
-    """After activation, evidence must not demand another one-use transition."""
-    r, doc = _verify(
-        sandbox, "routed_transition", tmp_path,
-        env_extra={
-            "GATEKEEPER_STUB_ROUTED_TRANSITION": "1",
-            "GATEKEEPER_STUB_BASE_EXPANDED": "1",
-        })
+    """After activation, evidence must not demand another one-use transition.
+
+    THE PAIRED CONTROL, and it used to be green for the wrong reason. It
+    asserted that no transition is claimed -- true, but only because the switch
+    it set reached no arm, so neither side ever declared a routed corpus and
+    there was nothing a transition could have been claimed about. Same fixture
+    as the bootstrap test with one bit different: the base commit carries the
+    activation marker too, so BOTH arms enumerate the real routed corpus,
+    `base_has_exact_legacy_routed_empty` is correctly false, and the ordinary
+    differential answers without any one-use evidence.
+    """
+    repo = _routed_activation_repo(sandbox, tmp_path,
+                                   base_already_expanded=True)
+    r, doc = _verify(repo, "activate_producer", tmp_path)
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
     assert delta["status"] == "CLEAN", delta
     assert delta.get("corpus_transitions", []) == []
-    assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
+    assert "exact corpus transition" not in r.stdout
 
 
 def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
