@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus
+
 SCRIPT = Path(__file__).parent.parent / "enhancement_emit.py"
 ROUTING = Path(__file__).parent.parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
 assert SCRIPT.exists(), f"missing program: {SCRIPT}"
@@ -208,6 +210,114 @@ def test_emit_backlog_refuses_missing_backlog_slug():
            "suggested_fix": "z"}
     with pytest.raises(ValueError, match="backlog_slug"):
         _emit_mod.emit_backlog(rec, "2026-05-28")
+
+
+# ── `pattern` is required AT EMIT, not only downstream ───────────────────────
+#
+# Two backlog-landing PRs an hour apart shipped a broken `pattern` on a
+# required field — one byte-identical text copied off an unrelated defect, one
+# empty. One cause: `backlog_slug` above RAISES when absent, while `pattern`
+# was read as `rec.get("pattern", "")` and `_validate_general_text` returns
+# early on a falsy value. An omitted pattern emitted well-formed YAML with an
+# empty block and no error, while `backlog_sanitize_check.REQUIRED_FIELDS`
+# demands the field of that very file. Required downstream, undefined upstream,
+# unenforced here — so both ways of resolving it were available.
+
+_PATTERNLESS = {"title": "A gate accepts what it should refuse",
+                "suggested_fix": "Make the gate refuse.",
+                "backlog_slug": "generic-issue-category"}
+
+_REAL_PATTERN = ("A required field that is defaulted at its write site but "
+                 "demanded by a downstream gate: the write succeeds, the "
+                 "record looks complete, and the refusal lands on whoever "
+                 "reads it next.")
+
+
+def test_emit_backlog_refuses_missing_pattern():
+    """Behavioural: emit must REFUSE, not write a plausible empty block."""
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(dict(_PATTERNLESS), "2026-05-28")
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n", "  \n \t "])
+def test_emit_backlog_refuses_blank_pattern(blank):
+    """A whitespace-only pattern emits the identical empty YAML block an
+    omitted one did, so it is the same defect and is refused the same way."""
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(dict(_PATTERNLESS, pattern=blank), "2026-05-28")
+
+
+def test_emit_backlog_refusal_defines_what_a_pattern_is():
+    """A refusal that only says "required" is what produced the two defects:
+    an author who meets an undefined required field resolves it by imitation
+    or by leaving it blank. The message must state what the field IS."""
+    with pytest.raises(ValueError) as ei:
+        _emit_mod.emit_backlog(dict(_PATTERNLESS), "2026-05-28")
+    msg = str(ei.value).lower()
+    assert "class of defect" in msg, msg
+    assert "different instance" in msg, msg
+    assert "not a restatement of the title" in msg, msg
+    assert "do not copy one from another record" in msg, msg
+
+
+def test_emit_backlog_still_emits_when_a_pattern_is_present():
+    """No-leak, in-suite: a refusal that breaks valid input is worse than the
+    defect it prevents."""
+    fname, body = _emit_mod.emit_backlog(
+        dict(_PATTERNLESS, pattern=_REAL_PATTERN), "2026-05-28")
+    assert fname == "ORGANIC-20260528-generic-issue-category.yaml"
+    assert "pattern: |\n  A required field that is defaulted" in body
+
+
+def test_emit_backlog_required_fields_refuse_symmetrically():
+    """The mechanism itself: two required fields of one function, one
+    behaviour. The control proves the record is otherwise emittable, so each
+    refusal below is attributable to the field that was dropped."""
+    good = dict(_PATTERNLESS, pattern=_REAL_PATTERN)
+    _emit_mod.emit_backlog(dict(good), "2026-05-28")      # control: emits
+
+    no_slug = dict(good)
+    no_slug.pop("backlog_slug")
+    with pytest.raises(ValueError, match="backlog_slug"):
+        _emit_mod.emit_backlog(no_slug, "2026-05-28")
+
+    no_pattern = dict(good)
+    no_pattern.pop("pattern")
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(no_pattern, "2026-05-28")
+
+
+def test_module_schema_documents_pattern_where_backlogs_are_written():
+    """The input schema listed `pattern` only under the Bucket-B (skill)
+    fields. A Bucket-C author reading the backlog field block met a field
+    that emit requires and the sanitize gate demands, and that the block they
+    were reading did not name."""
+    doc = _emit_mod.__doc__
+    start = doc.index("# Bucket-C (backlog) fields:")
+    end = doc.index("# Bucket-D fields:")
+    assert '"pattern"' in doc[start:end], (
+        "Bucket-C field block must list `pattern` — it is consumed there")
+
+
+def test_both_authoring_skills_define_what_a_pattern_is():
+    """Neither skill that tells an author to write a `pattern` defined one:
+    one listed it as a bare name in an enumeration, the other showed a worked
+    example — a shape to imitate, not a rule. Imitation is exactly what
+    produced the copied text."""
+    skills = SCRIPT.parent.parent / "skills"
+    capture = (skills / "benchmark-enhancement-capture" / "SKILL.md").read_text()
+    submit = (skills / "community-backlog-submit" / "SKILL.md").read_text()
+    import re as _re
+    for name, text in (("benchmark-enhancement-capture", capture),
+                       ("community-backlog-submit", submit)):
+        # Unwrap markdown blockquote continuations so a phrase that spans a
+        # line break still matches: the assertion is about the sentence, not
+        # about where the author happened to wrap it.
+        low = _re.sub(r"\s+", " ", text.replace("\n>", " ")).lower()
+        assert "what `pattern` must say" in low, (
+            f"{name} must DEFINE the field, not only name or exemplify it")
+        assert "recognise a **different** instance" in low, name
+        assert "not a restatement of `title`" in low, name
 
 
 def test_scrub_design_leak_removes_prob_ids():
@@ -660,3 +770,844 @@ def test_phase2_lec_routes_to_lec_program(tmp_path):
         f"phase2.lec Bucket A must route to lec_equivalence_check; got {a_files}"
     assert not summary.get("bucket_A_unrouted"), \
         "phase2.lec must NOT be unrouted now that it has a routing entry"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #795 — the provenance fields this emitter stamps must be MEASUREMENTS.
+#
+# `plugin_version` was the literal "0.1.33" and `submitted_at`'s time-of-day
+# was the literal midnight. Both are formatted like data, so a wrong value is
+# invisible: no reader, and no gate, can tell a defaulted record from a
+# measured one. `backlog_sanitize_check.py` requires `plugin_version` but only
+# checks it is non-empty, and `tools/ci/staged_version_claim_check.py` exempts
+# `community/backlogs/` from version-claim checking entirely.
+#
+# The tests below therefore REFUSE to be satisfied by a constant. Each one
+# changes the thing the emitter is supposed to be reading and asserts the
+# emitted value FOLLOWED it. Swapping one hardcoded constant for another
+# cannot pass any of them.
+# ═══════════════════════════════════════════════════════════════════════════
+import datetime as _dt
+import importlib as _importlib
+import re as _re
+import time as _time
+
+_PROGRAMS_DIR = Path(__file__).resolve().parent.parent
+if str(_PROGRAMS_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS_DIR))
+EMIT = _importlib.import_module("enhancement_emit")
+
+# The single source of truth, read here INDEPENDENTLY of the program under
+# test — the test must not learn the expected version from the code that is
+# supposed to be reading it.
+_PLUGIN_JSON = _PROGRAMS_DIR.parent / ".claude-plugin" / "plugin.json"
+
+
+def _shipped_version() -> str:
+    return json.loads(_PLUGIN_JSON.read_text())["version"]
+
+
+def _bucket_c_record(**over) -> dict:
+    rec = {
+        "step": "phase2.rtl_gen", "design": "d1", "bucket": "C",
+        "why_not_bucket_a": "needs judgement no predicate can make",
+        "title": "a captured gap", "pattern": "a general pattern",
+        "suggested_fix": "a general fix", "backlog_slug": "provenance-probe",
+        "backlog_type": "bug", "severity": "P2",
+        "component": "program:enhancement_emit",
+        "session_context": "captured from a convergence run",
+    }
+    rec.update(over)
+    return rec
+
+
+def _yaml_field(body: str, key: str) -> str:
+    for line in body.splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip().strip('"')
+    raise AssertionError(f"field {key!r} absent from emitted backlog:\n{body}")
+
+
+def _fake_plugin_root(tmp_path: Path, version) -> Path:
+    """A minimal plugin tree whose manifest declares `version`."""
+    root = tmp_path / "fake_plugin"
+    (root / ".claude-plugin").mkdir(parents=True)
+    doc = {"name": "vibe-ic"}
+    if version is not None:
+        doc["version"] = version
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(doc))
+    return root
+
+
+def test_emitted_plugin_version_tracks_the_manifest_it_reads(tmp_path,
+                                                             monkeypatch):
+    """A record with no `plugin_version` must carry the version READ from
+    `.claude-plugin/plugin.json`. Proven by pointing the emitter at a manifest
+    declaring a version no constant in the tree could be, and requiring the
+    emitted value to follow it — twice, to two different values."""
+    for declared in ("7.0.1", "42.13.9"):
+        monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                            _fake_plugin_root(tmp_path / declared, declared))
+        _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+        assert _yaml_field(body, "plugin_version") == declared, (
+            f"emitted plugin_version must be the manifest's {declared!r}; "
+            f"got:\n{body}")
+
+
+def test_emitted_plugin_version_is_the_real_shipped_version():
+    """Against the REAL plugin tree (no monkeypatching), an undated capture
+    carries the shipped version — not any of the constants this emitter or its
+    siblings have historically stamped."""
+    _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    got = _yaml_field(body, "plugin_version")
+    assert got == _shipped_version(), (
+        f"emitted plugin_version {got!r} != shipped {_shipped_version()!r}")
+    # Negative control: the historical constants, written out as literals so
+    # that deleting one cannot silently delete its own coverage.
+    for stale in ("0.1.33", "0.1.34", "0.1.50", "0.1.51", "0.1.2", "0.101"):
+        assert got != stale, (
+            f"emitted plugin_version is the hardcoded constant {stale!r} — a "
+            f"constant is not a measurement")
+
+
+def test_author_supplied_plugin_version_is_never_overridden(tmp_path,
+                                                            monkeypatch):
+    """The fix must not overwrite author intent: a record that STATES its
+    version emits exactly that, even though the running plugin is a different
+    version entirely."""
+    monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                        _fake_plugin_root(tmp_path, "42.13.9"))
+    _fname, body = EMIT.emit_backlog(
+        _bucket_c_record(plugin_version="1.2.96"), "2026-08-04")
+    assert _yaml_field(body, "plugin_version") == "1.2.96"
+
+
+def test_unreadable_manifest_emits_visibly_non_data(tmp_path, monkeypatch):
+    """When the version cannot be READ, the emitted value must be visibly
+    non-data — it fails the first time anyone sorts by it. A plausible semver
+    fallback would never fail, which is the whole defect."""
+    for root in (tmp_path / "absent",                       # no manifest at all
+                 _fake_plugin_root(tmp_path, None)):        # manifest, no field
+        monkeypatch.setattr(EMIT, "PLUGIN_ROOT", root)
+        got = EMIT.resolved_plugin_version()
+        assert got == "unknown", f"expected a non-data marker; got {got!r}"
+        assert not _re.match(r"^\d+\.\d+\.\d+$", got), (
+            f"fallback {got!r} is semver-shaped — indistinguishable from a "
+            f"measured version")
+        _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+        assert _yaml_field(body, "plugin_version") == "unknown"
+
+
+def test_submitted_at_is_a_measurement_not_a_constant_time():
+    """`submitted_at` must be the real instant of submission. Negative control
+    per the issue: two invocations made seconds apart must NOT emit the same
+    value — a constant time-of-day emits the same string forever."""
+    _f1, b1 = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    _time.sleep(1.05)
+    _f2, b2 = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    t1, t2 = _yaml_field(b1, "submitted_at"), _yaml_field(b2, "submitted_at")
+    assert t1 != t2, (
+        f"two submissions a second apart emitted the same instant {t1!r} — "
+        f"the field is a constant, not a measurement")
+    parsed = _dt.datetime.fromisoformat(t2)
+    assert parsed.tzinfo is not None, f"{t2!r} carries no UTC offset"
+    delta = abs((_dt.datetime.now().astimezone() - parsed).total_seconds())
+    assert delta < 120, (
+        f"emitted submitted_at {t2!r} is {delta:.0f}s from now — not the "
+        f"instant of submission")
+
+
+def test_submitted_at_follows_the_instant_it_is_given():
+    """Injecting the instant proves the field is rendered FROM it (and pins the
+    exact midnight string the emitter used to hardcode)."""
+    inst = _dt.datetime(2026, 8, 4, 7, 38, 43,
+                        tzinfo=_dt.timezone(_dt.timedelta(hours=8)))
+    _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04", inst)
+    assert _yaml_field(body, "submitted_at") == "2026-08-04T07:38:43+08:00"
+    assert "2026-08-04T00:00:00+08:00" not in body, \
+        "the hardcoded midnight is back"
+
+
+def test_rule_sketch_header_carries_the_version_it_was_emitted_at(tmp_path,
+                                                                  monkeypatch):
+    """The Bucket-A sketch header stamps a version too — the third constant in
+    this file. It must track the manifest like the other two."""
+    monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                        _fake_plugin_root(tmp_path, "42.13.9"))
+    sketch = EMIT.emit_program_rule_sketch({
+        "rule_name": "a-captured-rule", "pattern": "a general pattern",
+        "docstring": "a general docstring", "fix_action": "a general fix",
+        "expected_signal": "ERROR"})
+    assert "v42.13.9" in sketch, f"sketch header ignores the manifest:\n{sketch}"
+    assert "v0.1.34" not in sketch, "the hardcoded sketch version is back"
+
+
+def test_end_to_end_emit_stamps_no_stale_constant(tmp_path):
+    """Through the real CLI: the emitted backlog carries the shipped version and
+    an id whose date is derived from the SAME instant as submitted_at."""
+    res = run(tmp_path, [_bucket_c_record()])
+    body = (Path(res["summary"]["bucket_C_dir"]) /
+            res["summary"]["bucket_C_files"][0]).read_text()
+    assert _yaml_field(body, "plugin_version") == _shipped_version()
+    stamped = _dt.datetime.fromisoformat(_yaml_field(body, "submitted_at"))
+    assert stamped.tzinfo is not None
+    assert _yaml_field(body, "id").split("-")[1] == \
+        stamped.date().isoformat().replace("-", "")
+# ── #798 — the backtick leak guard must not refuse legitimate names ──────────
+#
+# What the guard is FOR: keeping BENCHMARK DESIGN identifiers out of captured
+# plugin content. A true positive is a design leaf-name (`radix2_div`,
+# `mux256to1`, `ece241_2014_q5a`), a Prob ID, a benchmark family name, or one
+# of those with its separators stripped to evade the shape rules
+# (`radix2divbyeven`).
+#
+# Two predicates in `_check_backtick_content` fired on things that are none of
+# those. Both are pinned below in BOTH directions: the false positive must stop
+# firing AND the structurally-adjacent true positive must still fire. The
+# negative half is the load-bearing one — a false positive costs a re-run, a
+# leaking exemption ships a defect as PASS.
+
+
+def _backtick_verdict(tok: str):
+    """None if the guard accepts `tok` backtick-wrapped, else the message."""
+    try:
+        _emit_mod._check_backtick_content("fix_action", f"see `{tok}`")
+        return None
+    except ValueError as e:
+        return str(e)
+
+
+def test_backtick_guard_accepts_every_plugin_program_filename():
+    """#798 — the corpus sweep the issue asked for. The plugin's naming
+    convention is `descriptive_name_check.py`, which is long BY DESIGN; the
+    total-length cap refused 348 of 1105 (31.49%), so a capture record could
+    not name the file it was about for a third of the plugin."""
+    names = sorted(p.name for p in _PROGRAMS_DIR.glob("*.py"))
+    assert len(names) > 900, \
+        f"corpus sanity: expected the full programs/ dir, got {len(names)}"
+    refused = [(n, _backtick_verdict(n)) for n in names if _backtick_verdict(n)]
+    assert not refused, (
+        f"{len(refused)}/{len(names)} of the plugin's own program filenames "
+        f"are refused when backtick-wrapped:\n" +
+        "\n".join(f"  - `{n}` -> {w[:130]}" for n, w in refused[:8]))
+
+
+def test_backtick_guard_is_not_a_catch22_for_program_filenames():
+    """#798 — the bare-text rule's own remedy IS the backtick form, so the two
+    rules together must not make a name unwritable in every form. The bare form
+    is (correctly) refused with an instruction to backtick it; the backticked
+    form must then be accepted."""
+    name = "declared_pdk_is_the_pdk_used_check.py"
+    with pytest.raises(ValueError, match="wrap it in markdown backticks"):
+        _emit_mod._validate_general_text("fix_action", f"Add the rule to {name}.")
+    _emit_mod._validate_general_text("fix_action", f"Add the rule to `{name}`.")
+
+
+def test_backtick_guard_still_refuses_separator_stripped_concatenation():
+    """#798 NEGATIVE (load-bearing) — the narrowed rule measures the longest
+    UNBROKEN alphanumeric run instead of the total token length. Each fixture
+    below is derived mechanically from its accepted partner by deleting the
+    separators and nothing else, so the two members differ in exactly the
+    property that defines 'concatenated'. Accepted member must pass; derived
+    member must STILL be refused, and refused BY THE CONCATENATION RULE."""
+    import re as _re
+    accepted = [
+        "chip_clock_toggle_divider_when_master_already_target_check.py",
+        "doc_consistency_no_unresolved_conflicts_check.py",
+        "fixed_point_substractor_and_divider",
+    ]
+    # Digit-free by construction: the derived concatenation must be refused by
+    # the CONCATENATION rule, so no fixture may also match the digits-in-the-
+    # middle shape rule — otherwise the assertion below would pass for the
+    # wrong reason.
+    assert not any(ch.isdigit() for n in accepted for ch in n), \
+        "fixtures must be digit-free so only the concatenation rule can fire"
+    for name in accepted:
+        assert len(name) > 30, f"fixture must exceed the old 30-char cap: {name}"
+        assert _backtick_verdict(name) is None, (
+            f"separator-bearing name must be accepted at any total length: "
+            f"`{name}` -> {_backtick_verdict(name)}")
+        concat = _re.sub(r"[^A-Za-z0-9]", "", name)
+        assert len(concat) > 30, (
+            f"the derived concatenation must still sit outside the 30-char "
+            f"budget for this pair to prove anything: {concat!r}")
+        w = _backtick_verdict(concat)
+        assert w is not None, (
+            f"separator-stripped concatenation must STILL be refused: "
+            f"`{concat}` (derived from `{name}`)")
+        assert "unbroken alphanumeric run" in w, (
+            f"`{concat}` must be refused BY THE CONCATENATION RULE, not by "
+            f"accident of another rule; got: {w[:200]}")
+    # The invariant is not limited to the >30 class: a short benchmark
+    # leaf-name must not become writable by deleting its separator either.
+    # (`counter_12` was never caught; `counter12` was, and must stay so.)
+    # NOTE: digit-free leaf-names (`freq_divbyeven` -> `freqdivbyeven`) are
+    # accepted by BOTH origin/main and this branch — no backtick rule covers
+    # that class. Pre-existing gap, recorded here so this list is not read as
+    # a claim of complete coverage.
+    for short in ("counter12", "adder16bit", "radix2div"):
+        assert _backtick_verdict(short) is not None, \
+            f"separator-stripped leaf-name `{short}` must still be refused"
+
+
+def test_backtick_guard_accepts_industry_vocabulary_via_the_allowlist():
+    """#798 — the digit-shape rule refused 11 of this plugin's own 86 shipped
+    `*_protocol_synth.py` names (12.8%) plus ordinary encoding vocabulary.
+    Those false positives are cleared through the ALLOWLIST, not by narrowing
+    the rule: `ddr4` and `lemmings1` are the same shape, so any narrowing that
+    admits one admits the other (see the floor test below)."""
+    accepted = [
+        # this plugin's own shipped protocol names
+        "ddr4", "ddr5", "gddr6", "hbm3", "lpddr5", "usb4", "rs485", "psi5",
+        "jesd204", "arinc429", "milstd1553",
+        # ordinary encoding / bus / numeric-format vocabulary
+        "crc32", "sha256", "base64", "utf8", "axi4", "usb3", "int8", "float32",
+        # public PDKs — issue #798's second reported false positive
+        "asap7", "nangate45", "freepdk45", "sg13g2", "sky130A", "gf180mcuD",
+    ]
+    refused = [(t, _backtick_verdict(t)) for t in accepted if _backtick_verdict(t)]
+    assert not refused, (
+        "industry vocabulary refused as a benchmark leaf-name:\n" +
+        "\n".join(f"  - `{t}` -> {w[:130]}" for t, w in refused))
+
+
+#: #798 — the count of `verilogeval_v2/problems.list` LEAF-names (the
+#: `ProbNNN_` prefix stripped, i.e. the name a leaking author actually writes)
+#: that the digit-shape rule refuses on origin/main. Narrowing that rule to
+#: "require an alphabetic tail after the digits" was authored and reverted
+#: here because it drops this to 38 — `lemmings1`, `kmap4`, `circuit10`,
+#: `fsm3`, `vector5`, `popcount255`, `rule110`, `lfsr32`, `dff8`, `count10`,
+#: `shift18` and 36 more. These floors exist so the next narrowing cannot be
+#: silent. RAISING them is fine; lowering one is a coverage loss that must be
+#: argued in the PR, not absorbed.
+#:
+#: SCOPE — both of these pin the DIGIT-SHAPE rule and NOTHING ELSE. All 85 and
+#: all 91 are refused with "benchmark-leaf-name shape"; no VerilogEval leaf-name
+#: has an unbroken alphanumeric run over 30 characters, so deleting the
+#: run-length cap outright leaves both numbers untouched. Do not read a green
+#: `_VE_LEAF_*` as evidence about the run-length cap — see
+#: `_CVDP_LEAF_RUN_FLOOR` for the constant that covers that rule.
+_VE_LEAF_FLOOR = 85
+_VE_LEAF_CONCAT_FLOOR = 91
+
+#: #798 — the CVDP DESIGN leaf-name floor, and the one number in this change
+#: that went DOWN. Over the 229 unique CVDP design leaf-names (a cell id minus
+#: its `cvdp_<track>_` prefix and `_NNNN` ordinal, harvested from tracked paths
+#: AND file contents) origin/main catches 14 and this branch catches 8. The six
+#: freed are all separator-bearing names longer than 30 characters, which the
+#: old total-length cap refused as a side effect:
+#:     arithmetic_progression_generator        (32)
+#:     configurable_digital_low_pass_filter    (36)
+#:     reed_solomon_encoder_and_decoder        (32)
+#:     secure_read_write_register_bank         (31)
+#:     sequencial_binary_to_one_hot_decoder    (36)
+#:     write_through_data_direct_mapped_cache  (38)
+#: This is DISCLOSED, not repaired. No length or shape discriminator exists —
+#: `configurable_digital_low_pass_filter` is 36 chars and
+#: `declared_pdk_is_the_pdk_used_check.py` is 37 — and restoring the cap
+#: re-creates the 31.49% catch-22 that is the defect being fixed. The class is
+#: unguarded by design at the identifier level; the CELL IDS carrying these
+#: names remain fully caught by the family branch (126 of the 126 cell ids
+#: `git ls-files` yields from tracked PATHS — see the harvest definition in
+#: `enhancement_emit.py`; contents are excluded because this commit's own tests
+#: add cell-id literals and a contents-inclusive count would measure itself).
+#: The floor is here so the NEXT change cannot lower it without saying so.
+#:
+#: SCOPE — this constant pins the DIGIT-SHAPE rule's residue, NOT the
+#: run-length cap that this commit authored. All 8 survivors are refused with
+#: "benchmark-leaf-name shape"; replace `if len(longest) > 30:` with
+#: `if False:` and this is still 8, because no raw CVDP leaf-name has an
+#: unbroken run over 30 characters — the six the cap freed are 31-38 chars only
+#: in TOTAL. A green `_CVDP_LEAF_FLOOR` is therefore no evidence at all about
+#: the run-length cap; `_CVDP_LEAF_RUN_FLOOR` below is.
+_CVDP_LEAF_FLOOR = 8
+
+#: #798 — the floor that the RUN-LENGTH CAP itself owns, and the reason it is
+#: measured on the separator-STRIPPED corpus: strip the separators and the six
+#: freed names become unbroken runs again (`writethroughdatadirectmappedcache`
+#: is 33 characters), which is exactly the concatenation the cap exists to
+#: refuse. Counted by RULE ATTRIBUTION — only refusals whose message says
+#: "unbroken alphanumeric run" count — so a broadening of the digit-shape rule
+#: can never silently satisfy this floor on the run-length rule's behalf.
+#: Deleting the cap takes it 3 -> 0.
+_CVDP_LEAF_RUN_FLOOR = 3
+
+#: #798 — the same separator-stripped corpus counted in aggregate: 14
+#: digit-shape + the 3 above. Held at its origin/main value of 17 (there the 3
+#: came from the total-length cap), which is what makes it the non-weakening
+#: pin for concatenation. Deleting the run-length cap takes it 17 -> 14.
+_CVDP_LEAF_CONCAT_FLOOR = 17
+
+
+def _repo_root():
+    """Walk up to the checkout that carries `benchmark-data/`. Resolving by a
+    fixed number of `.parent`s silently skipped this whole corpus test when it
+    was off by one — and a skipped floor test looks exactly like a passing
+    one."""
+    for d in [Path(__file__).resolve()] + list(Path(__file__).resolve().parents):
+        if (d / "benchmark-data" / "evaluation").is_dir():
+            return d
+    return None
+
+
+# ── WHERE THE BENCHMARK CORPORA LIVE NOW ────────────────────────────────────
+# The datasets these negative controls are measured against — the VerilogEval-v2
+# problem list, the RTLLM `pass_at_1.json` runs, and the tracked paths that
+# carry CVDP cell ids — moved out of this repository with the rest of the
+# published benchmark data (vibeic/benchmark-data). Nothing about the FLOORS
+# changed: they are still counted over the same names, so they are resolved
+# here through `_published_corpus` instead of through this checkout alone.
+#
+# MEASURED on this branch, which is why the harvest is a UNION of the two trees
+# rather than a swap of one for the other — the ids live on BOTH sides, in
+# plugin source comments and fixtures as well as in benchmark run dirs:
+#
+#     tracked-PATH cvdp cell ids   vibe-ic  96   benchmark-data  63   union 126
+#     cvdp design leaf-names       vibe-ic 226   benchmark-data 182   union 229
+#
+# 126 and 229 are exactly `_CVDP_CELL_ID_PATH_CORPUS_FLOOR` and the 229 the
+# docstrings above quote, so the union restores the corpus the floors were
+# measured on rather than re-cutting it to fit.
+def _corpus_tree():
+    """The published benchmark-data tree, or None when there is none here."""
+    return corpus_root()
+
+
+def _harvest_trees():
+    """Every distinct git tree to harvest cvdp ids from: this checkout, plus
+    the benchmark-data corpus when it is a SEPARATE checkout (in a tree that
+    still carries the corpus in-repo, `git ls-files` already covers it and
+    listing it twice would only walk the same files again)."""
+    trees = []
+    repo = _repo_root()
+    if repo is not None:
+        trees.append(repo)
+    corpus = _corpus_tree()
+    if corpus is not None:
+        inside = repo is not None and (
+            corpus == repo or repo in corpus.resolve().parents)
+        if not inside:
+            trees.append(corpus)
+    return trees
+
+
+def _verilogeval_leaf_names():
+    import re as _re2
+    corpus = _corpus_tree()
+    src = corpus / "evaluation/verilogeval_v2/problems.list"
+    assert src.is_file(), (
+        f"the published benchmark corpus is present at {corpus} but the "
+        f"corpus this floor is measured against is missing: {src}")
+    probs = [l.strip() for l in src.read_text().splitlines() if l.strip()]
+    return probs, [_re2.sub(r"^Prob\d+_", "", p) for p in probs]
+
+
+def _cvdp_design_leaf_names():
+    """Cell id minus its `cvdp_<track>_` prefix and `_NNNN` ordinal — the
+    DESIGN name, which is what a leaking author writes when the record is
+    about the design rather than the dataset row."""
+    import re as _re4, subprocess as _sp
+    trees = _harvest_trees()
+    if not trees:
+        pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
+    # Harvest over every GIT-TRACKED file, not just benchmark-data/: these ids
+    # also appear in plugin source comments and fixtures, and scoping the sweep
+    # narrower than the reported measurement would pin a floor against a
+    # different corpus than the one the change was measured on (182 vs 229).
+    cell = _re4.compile(r"cvdp_(?:copilot|agentic)_([A-Za-z0-9_]*?)_\d{4}")
+    leaves = set()
+    for root in trees:
+        try:
+            # 30s, not 120: `ci_harness_timeout_ceiling_check` caps an inner
+            # subprocess bound at harness//3 = 60s, because a longer one
+            # outlives the 180s pytest harness and kills the SESSION instead of
+            # the test. Measured here: 0.01s for 21216 tracked files.
+            tracked = _sp.run(["git", "-C", str(root), "ls-files"],
+                              capture_output=True, text=True,
+                              timeout=30).stdout.split()
+        except (OSError, _sp.SubprocessError):  # pragma: no cover - env-dependent
+            pytest.skip("git not available to enumerate the tracked corpus")
+        if not tracked:
+            pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
+        for rel in tracked:
+            leaves.update(cell.findall(rel))
+            f = root / rel
+            try:
+                if f.is_file() and f.stat().st_size <= 4_000_000:
+                    leaves.update(cell.findall(f.read_text(errors="ignore")))
+            except OSError:
+                pass
+    return sorted(x for x in leaves if x)
+
+
+@needs_corpus
+def test_backtick_guard_catches_cvdp_design_leaf_names_at_or_above_floor():
+    """#798 NEGATIVE (load-bearing) — the corpus this change actually LOST
+    coverage on, pinned so the loss is a number and not a surprise.
+
+    The VerilogEval and RTLLM leaf-name floors both held at their origin/main
+    values, which made it easy to read the change as costing no design-leaf
+    coverage anywhere. It did: six CVDP design leaf-names were refused only
+    because they exceeded the 30-character cap, and the run-based cap does not
+    refuse them. See `_CVDP_LEAF_FLOOR` for the six and for why restoring the
+    cap is not the answer.
+
+    READ THE SCOPE NOTES ON THE CONSTANTS. `_CVDP_LEAF_FLOOR` is blind to the
+    run-length cap this commit authored — delete that cap and it stays at 8.
+    The cap's own floor is `_CVDP_LEAF_RUN_FLOOR`, asserted below on the
+    separator-stripped corpus and attributed by refusal message."""
+    leaves = _cvdp_design_leaf_names()
+    assert len(leaves) > 150, f"corpus sanity: got {len(leaves)} CVDP leaf-names"
+    caught = [x for x in leaves if _backtick_verdict(x)]
+    assert len(caught) >= _CVDP_LEAF_FLOOR, (
+        f"the guard now catches only {len(caught)}/{len(leaves)} CVDP design "
+        f"leaf-names, below the {_CVDP_LEAF_FLOOR} floor. Newly freed: "
+        f"{sorted(set(leaves) - set(caught))[:20]}")
+    concat = sorted({x.replace("_", "") for x in leaves})
+    caught_c = [c for c in concat if _backtick_verdict(c)]
+    assert len(caught_c) >= _CVDP_LEAF_CONCAT_FLOOR, (
+        f"separator-stripped CVDP leaf-names caught {len(caught_c)}/"
+        f"{len(concat)}, below the {_CVDP_LEAF_CONCAT_FLOOR} floor")
+    # The floor the RUN-LENGTH CAP owns. Attributed by refusal message so that
+    # a broadening of the digit-shape rule cannot satisfy it by proxy: the
+    # aggregate above would survive that substitution, this will not.
+    by_run = [c for c in concat
+              if "unbroken alphanumeric run" in (_backtick_verdict(c) or "")]
+    assert len(by_run) >= _CVDP_LEAF_RUN_FLOOR, (
+        f"the run-length cap refuses only {len(by_run)} separator-stripped "
+        f"CVDP leaf-names, below the {_CVDP_LEAF_RUN_FLOOR} floor — the cap "
+        f"has been weakened or deleted. Caught by it: {sorted(by_run)}")
+    # The CELL IDs carrying these names must stay fully caught — that is what
+    # keeps the identifier-level loss bounded rather than open-ended.
+    for cell_id in ("cvdp_copilot_configurable_digital_low_pass_filter_0001",
+                    "cvdp_copilot_write_through_data_direct_mapped_cache_0001"):
+        w = _backtick_verdict(cell_id)
+        assert w is not None and "benchmark family name" in w, \
+            f"cell id `{cell_id}` must still be refused as a family leak; got {w}"
+
+
+@needs_corpus
+def test_backtick_guard_catches_verilogeval_leaf_names_at_or_above_floor():
+    """#798 NEGATIVE (load-bearing) — the corpus that can actually MOVE when
+    the digit rule changes.
+
+    The obvious corpus, the full `ProbNNN_…` strings, is useless here: the
+    `Prob\\d+` branch catches those unconditionally, so its 156/156 cannot
+    budge no matter what the digit rule does. A corpus that a different rule
+    catches unconditionally cannot measure the rule under test. The leaf-name
+    is what a leaking author writes, and it is the shape this rule owns."""
+    probs, leaves = _verilogeval_leaf_names()
+    assert len(leaves) > 100, f"corpus sanity: got {len(leaves)} problems"
+    # Control: the full ProbNNN_ strings are caught by a DIFFERENT branch, so
+    # this number is insensitive to the rule under test. Asserted so the
+    # distinction is visible rather than implied.
+    assert all(_backtick_verdict(p) for p in probs), \
+        "every full ProbNNN_ id must be caught (by the Prob branch)"
+
+    caught = [l for l in leaves if _backtick_verdict(l)]
+    assert len(caught) >= _VE_LEAF_FLOOR, (
+        f"the digit-shape rule now catches only {len(caught)}/{len(leaves)} "
+        f"benchmark leaf-names, below the {_VE_LEAF_FLOOR} floor. Lost: "
+        f"{sorted(set(leaves) - set(caught))[:20]}")
+    concat = [l.replace("_", "").replace("-", "") for l in leaves]
+    caught_c = [c for c in concat if _backtick_verdict(c)]
+    assert len(caught_c) >= _VE_LEAF_CONCAT_FLOOR, (
+        f"separator-stripped leaf-names caught {len(caught_c)}/{len(concat)}, "
+        f"below the {_VE_LEAF_CONCAT_FLOOR} floor")
+
+
+def test_backtick_guard_still_refuses_lowercase_then_digits_leaf_names():
+    """#798 NEGATIVE (load-bearing) — the shape this rule owns, pinned as
+    literals drawn from the classes a narrowing would silently drop: names
+    that TERMINATE at their digits (the 47 the reverted narrowing lost) and
+    names that continue past them."""
+    terminal_digit_leaves = (      # the class the reverted narrowing dropped
+        "lemmings1", "kmap4", "circuit10", "fsm3", "vector5", "popcount255",
+        "rule110", "lfsr32", "dff8", "count10", "shift18", "truthtable1",
+        "edgedetect2", "gatesv100",
+    )
+    continues_past_digits = (      # the class it kept
+        "radix2_div", "mux256to1", "radix2divbyeven",
+        "parallel2serial", "serial2parallel", "ece241_2014_q5a",
+        "ddr4phy", "usb4slave", "asap7cell", "crc32gen",
+    )
+    for leaf in terminal_digit_leaves + continues_past_digits:
+        w = _backtick_verdict(leaf)
+        assert w is not None and "benchmark-leaf-name shape" in w, \
+            f"benchmark design leaf-name `{leaf}` must be refused; got {w}"
+    # ...and the allowlisted vocabulary of the SAME shape still passes, so the
+    # discriminator really is the finite list and not an accident.
+    for ok in ("ddr4", "usb4", "asap7", "crc32"):
+        assert _backtick_verdict(ok) is None, \
+            f"allowlisted `{ok}` must be accepted; got {_backtick_verdict(ok)}"
+
+
+def test_backtick_guard_still_refuses_absolute_taboos():
+    """#798 NEGATIVE — relaxing the two identifier-shape rules must not touch
+    the taboos that apply to identifier AND code-snippet form alike."""
+    for tok, marker in (
+            ("Prob089_ece241_2014_q5a", "benchmark family name"),
+            ("prob068", "Prob ID"),
+            ("RTLLM", "benchmark family name"),
+            ("VerilogEval-v2", "benchmark family name"),
+            ("CVDP", "benchmark family name"),
+    ):
+        w = _backtick_verdict(tok)
+        assert w is not None, f"`{tok}` must be refused"
+        assert marker in w, f"`{tok}` must be refused as {marker}; got {w[:200]}"
+
+
+def test_backtick_guard_catches_cell_ids_by_family_not_by_length():
+    """#798 NEGATIVE (load-bearing) — narrowing the length cap would have
+    silently dropped 76 of the 126 CVDP cell ids that `git ls-files` yields
+    from tracked PATHS (the harvest definition is spelled out at the top of
+    `enhancement_emit.py`; file contents are excluded because this commit's
+    own tests add cell-id literals). `\\bCVDP\\b` matched 0 of the 126 — `_` is
+    a word character, so the boundary fails on both sides of
+    `base_cvdp_..._0001` — and those 76 were refused only for being over 30
+    characters, while the other 50 were accepted outright. A benchmark cell id
+    must be refused for BEING a benchmark cell id — assert the rule that
+    fires, not merely that something fires."""
+    for cell in (
+            "cvdp_copilot_scrambler_0001",
+            "cvdp_copilot_cache_lru_0019",
+            "cvdp_agentic_8x3_priority_encoder_0003",
+            "base_cvdp_copilot_64b66b_encoder_0009",   # prefixed variants
+            "ctx_cvdp_copilot_scrambler_0018",
+            "enh_cvdp_copilot_scrambler_0009",
+    ):
+        w = _backtick_verdict(cell)
+        assert w is not None, f"benchmark cell id `{cell}` must be refused"
+        assert "benchmark family name" in w, (
+            f"`{cell}` must be refused as a FAMILY leak, not by a length "
+            f"accident; got: {w[:200]}")
+    for prob in ("Prob089_ece241_2014_q5a", "base_Prob042_something"):
+        w = _backtick_verdict(prob)
+        assert w is not None and (
+            "benchmark family name" in w or "Prob ID" in w), \
+            f"`{prob}` must still be refused; got {w}"
+
+
+#: #798 — the tracked-PATHS cell-id corpus size at the sha that authored this
+#: change. A FLOOR, not an equality: the tree gains benchmark run dirs, so this
+#: number only ever grows, and the claim that survives corpus growth is the
+#: ratio, not the count. Present so the cardinal quoted in `enhancement_emit.py`
+#: is re-derived by RUNNING the suite instead of trusted as prose.
+_CVDP_CELL_ID_PATH_CORPUS_FLOOR = 126
+
+
+def _cvdp_cell_ids_in_tracked_paths():
+    """The harvest definition quoted in `enhancement_emit.py`, executable.
+    PATHS ONLY — including file contents makes the corpus self-referential,
+    since this module itself contains cell-id literals."""
+    import re as _re5, subprocess as _sp2
+    trees = _harvest_trees()
+    if not trees:
+        pytest.skip("benchmark-data/ not in this checkout (plugin-only install)")
+    rx = _re5.compile(r"cvdp_(?:copilot|agentic)_[A-Za-z0-9_]*?_\d{4}")
+    ids: set[str] = set()
+    for root in trees:
+        try:
+            tracked = _sp2.run(["git", "-C", str(root), "ls-files"],
+                               capture_output=True, text=True,
+                               timeout=30).stdout.split()
+        except (OSError, _sp2.SubprocessError):  # pragma: no cover - env-dependent
+            pytest.skip("git not available to enumerate the tracked corpus")
+        if not tracked:
+            pytest.skip("not a git checkout — cannot enumerate the tracked corpus")
+        for rel in tracked:
+            ids.update(rx.findall(rel))
+    return sorted(ids)
+
+
+@needs_corpus
+def test_every_tracked_cell_id_is_refused_as_a_family_leak():
+    """#798 NEGATIVE (load-bearing) — the corpus form of the test above, and
+    the executable version of the cardinal quoted in `enhancement_emit.py`.
+
+    origin/main catches 0 of these by family (`\\bCVDP\\b` never matches an
+    underscore-glued tag) and refuses only the 76 that happen to exceed the
+    30-char cap; this branch must refuse ALL of them, and for the family
+    reason. The ratio is the claim, not the count — the count is a floor
+    because the tree keeps gaining benchmark run dirs."""
+    ids = _cvdp_cell_ids_in_tracked_paths()
+    assert len(ids) >= _CVDP_CELL_ID_PATH_CORPUS_FLOOR, (
+        f"the tracked-PATHS cell-id corpus collapsed to {len(ids)} ids, below "
+        f"the {_CVDP_CELL_ID_PATH_CORPUS_FLOOR} floor — a shrunken corpus "
+        f"makes a 100%-coverage claim vacuous")
+    not_family = [i for i in ids
+                  if "benchmark family name" not in (_backtick_verdict(i) or "")]
+    assert not not_family, (
+        f"{len(not_family)}/{len(ids)} tracked CVDP cell ids are NOT refused "
+        f"as a family leak: {sorted(not_family)[:10]}")
+
+
+def test_backtick_guard_accepts_the_plugins_own_benchmark_adapters():
+    """#798 — a family tag also legitimately PREFIXES this plugin's thin
+    benchmark adapters, which the open-benchmark doctrine says are correctly
+    named that way. Catching cell ids must not re-create the false-positive
+    class this issue is about."""
+    adapters = [
+        "cvdp_gate.py", "cvdp_solve_pipeline.py", "cvdp_task_router.py",
+        "test_cvdp_task_router.py", "cvdp_context_interface_recover",
+        "cvdp_phase1_entry.py", "cvdp_results.json",
+        "score_rtllm.py", "score_verilogeval.py",
+        "verilogeval_v2", "verilogeval_human", "verilogeval_machine",
+    ]
+    refused = [(a, _backtick_verdict(a)) for a in adapters
+               if _backtick_verdict(a)]
+    assert not refused, (
+        "the plugin's own benchmark adapter filenames are refused:\n" +
+        "\n".join(f"  - `{a}` -> {w[:130]}" for a, w in refused))
+    # ...but the BARE family tag on its own is still a leak.
+    for bare in ("CVDP", "RTLLM", "MetRex", "ResBench"):
+        assert _backtick_verdict(bare) is not None, \
+            f"the bare family tag `{bare}` must still be refused"
+    # ...and so is a DATASET artifact. An adapter carries no dataset numbering
+    # (`cvdp_gate.py`: none; `verilogeval_v2`: one digit); a dataset artifact
+    # carries a cell ordinal or a release version. Both forms below were
+    # refused on origin/main only because they exceeded the 30-char cap, so
+    # without this branch the length fix would have quietly freed them.
+    for dataset in (
+            "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl",
+            "cvdp_open_v110",
+            "cvdp_copilot_scrambler_0001"):
+        w = _backtick_verdict(dataset)
+        assert w is not None and "benchmark family name" in w, \
+            f"dataset artifact `{dataset}` must be refused as a family leak; got {w}"
+
+
+def test_pdk_allowlist_category_pins_public_pdks_and_excludes_leaf_names():
+    """#798 — a PDK name whose digits are followed by more letters (`sg13g2`,
+    `sky130a`) is structurally identical to a design leaf-name, so the honest
+    discriminator is a finite public list, not a heuristic. Pinned as literals
+    plus a set-equality assertion: deleting an entry must break this test, not
+    silently delete its own coverage."""
+    import yaml as _yaml
+    data = _yaml.safe_load(
+        (_PROGRAMS_DIR / "industry_tech_allowlist.yaml").read_text())
+    entries = set(data["categories"]["pdk_foundry"]["entries"])
+    assert entries == {
+        "asap7", "freepdk45", "gf180", "gf180mcu", "nangate45", "sg13g2",
+        "sky130", "sky130a", "sky130b", "skywater", "tsmc",
+    }, f"pdk_foundry entries changed without updating this pin: {sorted(entries)}"
+    loaded = _emit_mod._load_industry_tech_allowlist()
+    assert {"asap7", "sg13g2", "sky130a"} <= loaded
+    # NEGATIVE: the allowlist is for foundry / PDK proper nouns only — a
+    # benchmark design leaf-name must never be reachable through it.
+    assert not ({"radix2_div", "freq_divbyeven", "asyn_fifo", "mux256to1"}
+                & loaded), \
+        "a benchmark design leaf-name must never enter the industry allowlist"
+
+
+def test_vocabulary_allowlist_categories_are_pinned():
+    """#798 — the digit-shape rule's false positives are cleared HERE rather
+    than by narrowing the rule, so these two categories are load-bearing.
+    Literals plus set equality: deleting an entry must break this test rather
+    than silently delete its own coverage."""
+    import yaml as _yaml
+    data = _yaml.safe_load(
+        (_PROGRAMS_DIR / "industry_tech_allowlist.yaml").read_text())
+    cats = data["categories"]
+    assert set(cats["protocol_generation"]["entries"]) == {
+        "ahb3", "ahb5", "apb3", "apb4", "arinc429", "axi3", "axi4",
+        "ddr3", "ddr4", "ddr5", "gddr6", "hbm3", "jesd204", "lpddr4",
+        "lpddr5", "milstd1553", "pcie3", "pcie4", "pcie5", "psi5", "rs485",
+        "usb2", "usb3", "usb4",
+    }, "protocol_generation changed without updating this pin"
+    assert set(cats["encoding_and_width"]["entries"]) == {
+        "base64", "bf16", "crc8", "crc16", "crc32", "crc64",
+        "float16", "float32", "float64", "fp8", "fp16", "fp32",
+        "int8", "int16", "int32", "int64", "md5", "sha1", "sha256", "sha512",
+        "uint8", "uint16", "uint32", "utf8", "utf16", "utf32",
+    }, "encoding_and_width changed without updating this pin"
+
+
+@needs_corpus
+def test_industry_allowlist_never_contains_a_benchmark_leaf_name():
+    """#798 NEGATIVE (load-bearing) — the allowlist is now the ONLY thing
+    standing between `ddr4` (accepted) and `lemmings1` (refused), which have
+    identical shape. So the allowlist must be checked against the benchmark
+    corpora themselves, not merely against a handful of remembered examples:
+    one careless entry silently un-guards a real design name.
+
+    REACH — what this does and does not do, so the next reader does not
+    over-trust it:
+
+      * It is a COLLISION check, not a semantic gate. It catches an entry that
+        IS a name in the corpora below. It would happily pass `alu32`,
+        `radix4div`, `fifo16`, `uart16550` — plausible design leaf-names that
+        simply are not in these datasets. That limitation is real and
+        currently unexercised.
+      * Corpus = VerilogEval-v2 (156) + RTLLM (50) + CVDP design leaf-names
+        (227 — this test CASE-FOLDS, because allowlist lookup is
+        case-insensitive, and folding merges `IIR_filter`/`iir_filter` and
+        `AXI_stream_upscale`/`axi_stream_upscale` out of the 229 raw names the
+        floor tests above count), each REQUIRED with its own floor (see below)
+        and each unioned with its separator-stripped form. Adding a fourth
+        benchmark widens the reach for free; nothing here is dataset-specific.
+      * Blast radius of a smuggled entry is bounded: the allowlist is consulted
+        AFTER the Prob-ID and benchmark-family taboos in
+        `_check_backtick_content`, so no entry can ever un-guard a family or
+        Prob leak — only the digit-shape and unbroken-run rules."""
+    import json as _json, re as _re3
+    loaded = _emit_mod._load_industry_tech_allowlist()
+    assert len(loaded) > 40, f"allowlist sanity: got {len(loaded)} entries"
+    corpus = _corpus_tree()
+
+    # Once the corpus is present, every dataset in it is REQUIRED and carries
+    # its OWN floor. The earlier shape guarded the VerilogEval and RTLLM reads
+    # with `if …is_file():` under a single aggregate `len(leaves) > 150` that
+    # CVDP alone (227 case-folded) already satisfied: removing either file left
+    # this control GREEN with a third to two-thirds of its corpus gone
+    # (measured 699 -> 619 -> 479 -> 398 names, PASS in all four states).
+    # `dff8`, `lfsr32`, `count10` and `fsm3` are VerilogEval leaf-names of
+    # exactly the shape this control exists to catch, so the missing corpus is
+    # not a cosmetic loss. A dataset is now either present or a loud failure —
+    # and "the whole corpus is elsewhere" is the SKIP on this test, which is a
+    # different statement from "the corpus is here and a dataset is missing".
+    ve_src = corpus / "evaluation/verilogeval_v2/problems.list"
+    assert ve_src.is_file(), (
+        f"the published benchmark corpus is present at {corpus} but the "
+        f"VerilogEval corpus this negative control depends on is missing: "
+        f"{ve_src}")
+    ve_leaves = {_re3.sub(r"^Prob\d+_", "", l.strip()).lower()
+                 for l in ve_src.read_text().splitlines() if l.strip()}
+
+    # RTLLM by GLOB, not by one version-named run root: the tree carries seven
+    # `pass_at_1.json` siblings under evaluation/rtllm/ and pinning a single
+    # `run_cleanroom_v1388/` makes the whole corpus vanish the day that run dir
+    # is pruned or renamed. Their union is the same 50-design set.
+    rt_srcs = sorted((corpus / "evaluation/rtllm").rglob("pass_at_1.json"))
+    assert rt_srcs, (
+        f"the published benchmark corpus is present at {corpus} but no "
+        f"evaluation/rtllm/**/pass_at_1.json exists under it — the RTLLM "
+        f"corpus this negative control depends on is missing")
+    rt_leaves: set[str] = set()
+    for _p in rt_srcs:
+        try:
+            _doc = _json.loads(_p.read_text())
+        except ValueError:  # pragma: no cover - a malformed sibling run
+            continue
+        for _r in (_doc.get("results", []) if isinstance(_doc, dict) else []):
+            if isinstance(_r, dict) and "design" in _r:
+                rt_leaves.add(str(_r["design"]).split("/")[-1].lower())
+
+    cvdp_leaves = {x.lower() for x in _cvdp_design_leaf_names()}
+
+    for _label, _got, _floor in (("VerilogEval-v2", ve_leaves, 156),
+                                 ("RTLLM", rt_leaves, 50),
+                                 ("CVDP design (case-folded)", cvdp_leaves,
+                                  227)):
+        assert len(_got) >= _floor, (
+            f"the {_label} corpus this negative control is measured against "
+            f"collapsed to {len(_got)} names, below its floor of {_floor}. A "
+            f"shrunken corpus makes a collision check pass by having nothing "
+            f"left to collide with")
+
+    leaves = ve_leaves | rt_leaves | cvdp_leaves
+    leaves |= {l.replace("_", "") for l in leaves}
+    clash = sorted(loaded & leaves)
+    assert not clash, (
+        f"industry allowlist entries collide with benchmark design "
+        f"leaf-names — each one silently un-guards that design: {clash}")

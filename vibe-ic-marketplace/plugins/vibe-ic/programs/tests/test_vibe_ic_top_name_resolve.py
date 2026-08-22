@@ -27,8 +27,37 @@ def test_sole_root_no_chip_top_derives_that_module(tmp_path):
     assert "auto-derived" in note
 
 
-def test_explicit_top_is_honored_even_if_absent(tmp_path):
+def test_explicit_top_that_exists_is_honored(tmp_path):
     _mk(tmp_path, {"spm.v": "module spm();\nendmodule\n"})
+    top, note = R._resolve_top_name(tmp_path, "spm", "spm", explicit=True)
+    assert top == "spm" and note == ""
+
+
+def test_explicit_top_provably_absent_derives_instead(tmp_path):
+    """An explicit --top-name naming a module that does NOT exist in the staged
+    RTL cannot be honored: forwarding it produces yosys "'X' is not a valid
+    top-level module" and a dead phase-3. Derive the real top instead, and say
+    so in the note so the substitution is auditable.
+
+    Real-world trigger: a caller passing the PROJECT/repo name instead of a
+    module name (caravel_user_project, whose top module is
+    user_project_wrapper)."""
+    _mk(tmp_path, {
+        "user_project_wrapper.v":
+            "module user_project_wrapper(input a);\n"
+            "  user_proj_example u0(.a(a));\nendmodule\n",
+        "user_proj_example.v": "module user_proj_example(input a);\nendmodule\n",
+    })
+    top, note = R._resolve_top_name(
+        tmp_path, "caravel_user_project", "caravel_user_project", explicit=True)
+    assert top == "user_project_wrapper"
+    assert "caravel_user_project" in note and "not a module" in note
+
+
+def test_explicit_absent_but_no_rtl_is_kept(tmp_path):
+    """Absence must be PROVEN. With no RTL to scan we cannot know the explicit
+    name is wrong, so it must survive untouched (no silent substitution)."""
+    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     top, note = R._resolve_top_name(tmp_path, "spm", "my_top", explicit=True)
     assert top == "my_top" and note == ""
 
