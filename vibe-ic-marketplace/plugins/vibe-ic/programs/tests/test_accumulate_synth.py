@@ -555,3 +555,36 @@ def test_real_moving_average_solves_under_any_prompt_name():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ── polarity: a PROMPT states a retired parameter as readily as a live one ──
+#
+# Found by `prose_polarity_census`. `_param_defaults` reads a prompt -- natural
+# language, written by a person -- and published a denied default as a stated
+# one. It compounds with `setdefault`, which keeps the FIRST match: a retired
+# value written before the live one took its place.
+
+def _defaults(prompt):
+    import accumulate_synth as M
+    return M._param_defaults(prompt)
+
+
+def test_a_retired_parameter_default_is_not_read_as_stated():
+    assert _defaults("Do not use parameter WIDTH = 8.") == {}
+
+
+def test_a_retired_value_does_not_displace_the_live_one():
+    assert _defaults("parameter WIDTH = 8 is no longer used.\n"
+                     "Use parameter WIDTH = 16.") == {"WIDTH": 16}
+
+
+def test_a_denied_PROSE_default_is_not_read():
+    """The first pattern is plain English -- `WIDTH ... default value of 5` --
+    so this reader is prose first and Verilog second."""
+    assert _defaults("WIDTH no longer has a default value of 5.") == {}
+
+
+def test_a_plainly_stated_default_is_still_read():
+    """The control arm: a fix that refused everything would pass the rest."""
+    assert _defaults("Use parameter WIDTH = 8 for the datapath.") == {"WIDTH": 8}
+    assert _defaults("WIDTH has a default value of 5.") == {"WIDTH": 5}

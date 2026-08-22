@@ -59,6 +59,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from _prose_polarity import is_denied, sentence_scope
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -107,6 +109,15 @@ def _toplevel(record: dict) -> Optional[str]:
 # AND a markdown port table (| Port | Direction | Width | ... |). Both forms appear
 # in this dataset. Shared dialect with shift_counter_synth / memory_synth.
 # --------------------------------------------------------------------------- #
+#: A prompt is written by a person, and a person states a RETIRED value as
+#: readily as a live one. `sentence_scope` breaks on ". " and a blank line;
+#: a prompt also ends sentences at a line end, so these are ADDED -- it
+#: cannot remove from the shared set. Not "\n" alone: a prompt wraps
+#: mid-sentence, and breaking there misses a denial written across two
+#: lines, which is the under-reach that publishes the denied value.
+_PROMPT_LINE_BREAKS = (".\n", "!\n", "?\n")
+
+
 def _param_defaults(prompt: str) -> Dict[str, int]:
     """STATED parameter defaults — `Default BINARY_WIDTH=5`, `Default value is 8`,
     `parameter X = 8`, `OUTPUT_WIDTH=32`."""
@@ -114,11 +125,23 @@ def _param_defaults(prompt: str) -> Dict[str, int]:
     for m in re.finditer(
         r"`?([A-Z][A-Z0-9_]+)`?[^.\n]{0,80}?default(?:\s+value)?(?:\s+of)?\s*"
         r"(?:is\s+|=\s*|:\s*)?`?(\d+)`?", prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         out.setdefault(m.group(1), int(m.group(2)))
     for m in re.finditer(r"parameter\s+`?([A-Z][A-Z0-9_]+)`?\s*=\s*(\d+)", prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         out.setdefault(m.group(1), int(m.group(2)))
     # `**`BINARY_WIDTH`**: ... Default: `BINARY_WIDTH=5`` / `BINARY_WIDTH=5`
     for m in re.finditer(r"`?([A-Z][A-Z0-9_]+)`?\s*=\s*`?(\d+)`?", prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=_PROMPT_LINE_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
         out.setdefault(m.group(1), int(m.group(2)))
     return out
 
