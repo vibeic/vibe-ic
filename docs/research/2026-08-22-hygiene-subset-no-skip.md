@@ -4675,3 +4675,57 @@ rounds. The four survivors are documented as blocked in §60, §31 and §63.
 tuple are **one PREPARE**, not three problems: the manifest needs a real
 authorised protected move, and either of the first two supplies it. That is
 stated in full at §63 with the measurement behind it.
+
+## 68. §58's fix is written and measured — the code was never the blocked part
+
+Branch: `next/selector-sees-subprocess-drivers`, off `main` `a4caccefea`, 2 files,
++103.
+
+I stopped on §58 because authoring a manifest PREPARE for a change nobody had
+approved is not a thing to do quietly. On re-reading, that blocks the
+AUTHORISATION and not the code: a change on a `next/` branch is a proposal. So
+the rule is written, tested and measured, and the ruling can now be executed
+rather than started.
+
+`_build_import_edge_index` already models two edge kinds — `import` and
+`spec_from_file_location`. This adds the third route a real dependency travels:
+a test that DRIVES the program as a subprocess, naming its file.
+
+    clean tree, old selector   122 files
+    clean tree, new selector   124 files
+    net-new  test_issue538_merge_gate_covers_ci_hygiene.py   (the guarantee test)
+             test_v1_1_6_core_agent_pr_method.py
+
+Keyed on the BASENAME WITH ITS EXTENSION rather than the bare stem
+`_build_reference_index` uses — the stem occurs in prose and in unrelated
+identifiers, `"gatekeeper_review.py"` occurs where something RUNS it. That
+distinction is the whole cost difference, so a second test fails if the rule ever
+starts matching a bare mention.
+
+### The measurement was contaminated twice before it was right
+
+**First: the selector selects its own tests.** Copying the patched selector into
+the tree makes it an uncommitted changed source, and the selector reads
+uncommitted changes — so the arm picked up eight selector tests and read as +10.
+The fix is to hide the edit from git:
+
+    git update-index --assume-unchanged <selector>   # tree reads clean
+    …run…
+    git update-index --no-assume-unchanged <selector>
+
+**Second: I made the arms symmetric in the wrong direction.** Realising the
+dirtiness mattered, I made BOTH arms dirty — old selector plus a comment, new
+selector — and got 132 vs 132 with an EMPTY diff, which reads as "the rule does
+nothing". It was not doing nothing; the contamination was simply large enough to
+swamp it in both arms. Two wrong answers, `+10` and `+0`, before `+2`.
+
+**And I lost the edit mid-measurement.** The stash/checkout dance discarded the
+uncommitted selector change, which I noticed only because the new test failed and
+`grep -c _DRIVER_PY_LITERAL_RE` returned 0. That accident produced the paired red
+for free — the test IS red without the rule — but it is the second time tonight
+that a restore ate uncommitted work, after §57's addendum recorded exactly that.
+The lesson does not stick from writing it down once.
+
+**This branch still cannot land alone.** `ci_targeted_test_select.py` is a
+protected path, so it needs the PREPARE of §63 naming it as the authorised move —
+and that same PREPARE regularises the eleven drifted paths. One operation.
