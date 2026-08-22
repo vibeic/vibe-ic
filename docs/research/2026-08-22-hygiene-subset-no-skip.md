@@ -4729,3 +4729,59 @@ The lesson does not stick from writing it down once.
 **This branch still cannot land alone.** `ci_targeted_test_select.py` is a
 protected path, so it needs the PREPARE of §63 naming it as the authorised move —
 and that same PREPARE regularises the eleven drifted paths. One operation.
+
+## 69. `main` MOVED — and someone else fixed my race, half of it
+
+A ref watch fired: `main` a4caccefea → **ae78abb285**, v1.11.70, another assembled
+batch — 238 files, +46,761 lines. Every number in this document is pinned to the
+old sha, so all of it was re-checked rather than assumed. **Everything holds
+except two things, and one of them is a finding.**
+
+### Someone else found the same race and shipped half the fix
+
+`5a3ecd6431` — *"test(hermetic-runner): the harness resurrected a container the
+runner had removed"* — is §62's defect, diagnosed correctly and independently, and
+it landed. Its `save_container` gains `create=False`, the same rule I wrote, plus
+the same atomic write. My branch conflicted with it, which is how I found it.
+
+**It does not close the race**, and my probe from §62 says so:
+
+    a4caccefea   before that commit        21 / 200
+    ae78abb285   with it landed            69 / 400 and 68 / 400   (~17%)
+    with a lock                             0 / 400
+
+The guard is right and, on its own, a **TOCTOU**: `path.exists()` answers yes,
+`container rm` unlinks, and `os.replace` recreates the record the runner had
+already force-removed and verified absent. The atomic write genuinely fixes the
+0-byte shape its comment names — `zero-byte=0` in every arm — and cannot fix this
+one, because what gets recreated is a perfectly valid document.
+
+So my branch is superseded in shape and not in substance. Replaced by
+`next/fake-docker-lock-closes-the-toctou`, off the NEW main, which is the minimal
+delta on what landed: an exclusive `flock` around BOTH sides of the pair —
+`save_container` across check-and-write, `container rm` across
+exists-read-unlink. **A lock only one side takes serialises nothing.** It ships
+the 60-round guard, red at 4/60 without it.
+
+**That two independent agents diagnosed this identically and one shipped a
+half-fix is the argument for the probe, not against the fixer.** The half is
+invisible to every instrument except a deliberate concurrent driver: the test it
+corrupts passed 8 times running with the race present, and unfixed main passed 5
+of 5 interleaved.
+
+### Everything else re-validated against ae78abb285
+
+    all five code branches merge onto the new main            clean
+    flow clause population                        182/182, 0 added, 0 removed
+      -> §61's pin of 182 is still correct
+    acknowledged-red ledger                       8 rows, unchanged
+      -> the five I retired still rc 0 (stale); the two I kept still rc 1
+    gate-fixture debt                             14 findings, 10 carry BOTH
+      -> unchanged, so §59–60's work still applies in full
+
+### The one thing that got worse
+
+Protected paths whose live bytes match NEITHER recorded state: **11 → 12.** This
+landing moved another one without a PREPARE. §63's finding is not static debt —
+it accrues with every batch that touches a protected path, and the parity gate
+will keep saying so.
