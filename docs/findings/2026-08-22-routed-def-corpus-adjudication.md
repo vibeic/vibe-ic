@@ -449,3 +449,46 @@ sibling `placed.def`; the property is untouched; and the test now pins the
 boundary from BOTH sides, so the carve-out cannot silently grow into the subtree
 it was carved out of. Confirmed not vacuous: the re-pointed test is RED on
 pristine `origin/main`.
+
+### One residual condition, named rather than guarded
+
+Staging the artefact is necessary and it is still not quite sufficient, and the
+remaining gap is worth writing down because it is invisible if it ever bites.
+
+`size_policy_drift_check` passes on this branch and says so with a caveat in its
+own output:
+
+> NOT covered by this gate: … per-cell `.gitignore` files nested under
+> `benchmark-data/ic/**` — several published cells carry one that ignores layout
+> artefacts locally. This gate reads the root file only.
+
+Measured: `ic/edge_llm_accel/.gitignore`, added by the published repository's
+initial snapshot import, is exactly that shape —
+
+```
+# Heavy / reproducible backend artifacts — excluded to keep this a lean,
+# results-only commit …
+*.gds
+*.def
+*.spef
+```
+
+A cell published UNDER such a rule would stage its routed DEF correctly and then
+never commit it: `git add` skips it silently, the corpus stays empty, and nothing
+in `LAYOUT_ROUTING.txt` — which records the PUBLISHER's decision, not git's —
+would say why. `_git_ignored` exists in the publisher and already annotates
+`provenance.jsonl` for this case, but it is a record, not a refusal.
+
+**Not guarded here, deliberately.** No such file exists in the corpus repository
+today (the only `.gitignore` it carries is
+`ic/opentitan_aes/input/reference_flow/pre_syn/.gitignore`, holding `syn_out` and
+`syn_setup.sh`), and `benchmark_evidence_publish.py` does not write one. Building
+machinery against a shape nothing currently has would be speculative; naming it
+in the satisfaction condition costs nothing and is checkable by anyone publishing
+the first cell.
+
+**So the full condition is:** one converged cell meeting items 1-4, published by
+a publisher carrying this repair, routed DEF under the 50 MB ceiling, into a tree
+with no `.gitignore` above the cell that excludes `*.def` — and then verified the
+only way that counts, by running `tools/ci/routed_def_corpus.py` against the
+committed result and seeing it print one path instead of `MEASURED EMPTY`.
