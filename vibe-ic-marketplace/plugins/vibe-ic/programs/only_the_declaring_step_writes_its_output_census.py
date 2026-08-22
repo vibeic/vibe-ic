@@ -1,7 +1,31 @@
 #!/usr/bin/env python3
 """Two writers for one path the flow declares as a step's required output.
 
-THIS GATE BLOCKS (rc=1) on a NEW one.
+THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING CHECK.
+=======================================================================
+The gate for this rule is
+`programs/only_the_declaring_step_writes_its_output.py`.
+That one REFUSES: it runs a narrow population with no inventory and goes red
+on a live defect. This
+file does something different and complementary — it reports the WIDE
+population, the classification, and the debt recorded against it.
+
+Both were written independently from the same capture record, by two lanes that
+could not see each other's tree, and on this tree they returned opposite
+verdicts. That is not a bug in either: a wide population with recorded waivers
+PASSES today with the debt written down, and a narrow population with no
+inventory FAILS today because the debt refuses. Only one of those is a gate.
+The ruling (2026-08-22) gave the NAME to the refusing one, and gave this one the
+job it was actually doing.
+
+So: exit status here is INFORMATIONAL. The default is 0 whatever is found,
+because a census that exits non-zero gets wired as a gate by the next person who
+reads the exit code. `--strict` restores a refusing exit for a caller who
+deliberately wants one; nothing in the flow should pass it.
+
+
+
+CENSUS — informational. The gate is `programs/only_the_declaring_step_writes_its_output.py`.
 
 WHAT IT ASKS THE REPOSITORY
 ===========================
@@ -204,6 +228,9 @@ def main(argv=None) -> int:
     ap.add_argument("--self-test", action="store_true",
                     help="assert the control paths are still flow-owned")
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument("--strict", action="store_true",
+                    help="restore a refusing exit; a census "
+                         "is informational by default")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -264,7 +291,7 @@ def main(argv=None) -> int:
     rc = 0
     if new:
         rc = 1
-        print(f"\n[FAIL] {len(new)} declared output path(s) have two writers:")
+        print(f"\n[CENSUS] {len(new)} declared output path(s) have two writers:")
         for f in findings:
             if _key(f) in new:
                 print(f"   {f['path']}  declared by step(s) "
@@ -277,12 +304,18 @@ def main(argv=None) -> int:
               "recursive glob, so a private directory alone is\n  still found.")
     if stale:
         rc = 1
-        print(f"\n[FAIL] {len(stale)} inventory row(s) match nothing:")
+        print(f"\n[CENSUS] {len(stale)} inventory row(s) match nothing:")
         for k in stale:
             print(f"   {k}")
     if rc == 0:
-        print("[PASS] only_the_declaring_step_writes_its_output: no declared "
-              "output path has a second writer.")
+        print(f"[CENSUS] {len(findings)} site(s) classified, "
+              f"{len(known)} recorded as known debt, "
+              f"{len(new)} unrecorded. This is a count, not a "
+              f"verdict — the gate is programs/only_the_declaring_step_writes_its_output.py.")
+    if rc and not a.strict:
+        print("\n  CENSUS: reported, not refused. The gate for this rule is\n"
+              "  programs/only_the_declaring_step_writes_its_output.py — run that for a verdict.")
+        return 0
     return rc
 
 

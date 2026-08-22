@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1178
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1178)
+- **Total programs (excluding helpers / shims):** 1180
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1180)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1169 |
+| `any` | 1171 |
 
 ## Alphabetical listing
 
@@ -351,7 +351,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
 | `evidence_citation_resolves_check` | any | — | a cited evidence artifact must EXIST. |
-| `explicit_argument_outranks_the_environment_pointer` | any | — | An environment pointer that overrules a location the caller NAMED. |
+| `explicit_argument_outranks_the_environment_pointer_census` | any | — | An environment pointer that overrules a location the caller NAMED. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json. |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
@@ -640,7 +640,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
-| `local_clone_does_not_borrow_objects` | any | — | A clone that BORROWS its objects from the repository it was cloned from. |
+| `local_clone_does_not_borrow_objects_census` | any | — | A clone that BORROWS its objects from the repository it was cloned from. |
 | `loop_admission_guard` | any | — | loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills. |
 | `loop_watchdog_compliance_check` | any | — | FORCE the watchdog primitive. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
@@ -719,7 +719,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
-| `only_the_declaring_step_writes_its_output` | any | — | Two writers for one path the flow declares as a step's required output. |
+| `only_the_declaring_step_writes_its_output_census` | any | — | Two writers for one path the flow declares as a step's required output. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `opcode_field_width_consistency_check` | any | v0.2.13 | Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13). |
 | `open_issue_claim_scan` | any | — | Which open issues carry no CLAIMED comment — with the un-readable ones NAMED. |
@@ -831,6 +831,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence. |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using. |
 | `policy_direction_pin_check` | any | — | A DIRECTION argued in prose and left unpinned by every test. vibe-ic. |
+| `population_guard_asserts_equality_not_a_floor` | any | — | A population guard that cannot fail: a literal asserted against its own size. |
 | `population_pin_without_its_member_set` | any | — | A pinned population SIZE with no pin on its MEMBERS. |
 | `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
 | `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
@@ -885,7 +886,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs. |
-| `provenance_value_is_resolved_not_constant` | any | — | A source-naming field filled from a path typed into the emitter. |
+| `provenance_value_is_resolved_not_constant_census` | any | — | A source-naming field filled from a path typed into the emitter. |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `psm_analysis_coverage` | any | — | which power nets did the grid analysis actually answer? |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
@@ -1144,6 +1145,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tristate_self_rx_mask_check` | any | — | Self-RX masking audit for tristate/open-drain tristate bus pins. |
 | `trusted_pytest_entry` | any | — | Isolated pytest entry for the protected landing runtime. |
 | `truth_table_rtl_gen` | any | v0.1.7 | deterministic truth-table → combinational RTL generator. |
+| `two_input_selectors_given_together_must_refuse` | any | — | Two ways to name the input, and nothing decides what happens if both arrive. |
 | `tx_abort_during_transmission_check` | any | v0.108 | Verify TX modules do not abort/reset during active bit-serial transmission. |
 | `tx_bit_timing_units_check` | any | v0.119.29 | verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to. |
 | `tx_bit_width_min_resolution_check` | any | v0.119.20 | advisory gate that flags when the chip's TX bit-clock granularity is too coarse for the smallest L2 timing parameter the chip must place ... |
@@ -1250,7 +1252,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1169 programs)
+### `any` (1171 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1573,7 +1575,7 @@ _(no programs in this group)_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
 - `evidence_citation_resolves_check` — a cited evidence artifact must EXIST.
-- `explicit_argument_outranks_the_environment_pointer` — An environment pointer that overrules a location the caller NAMED.
+- `explicit_argument_outranks_the_environment_pointer_census` — An environment pointer that overrules a location the caller NAMED.
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/ extraction coverage in generated_docs/L*.json.  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
@@ -1861,7 +1863,7 @@ _(no programs in this group)_
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
-- `local_clone_does_not_borrow_objects` — A clone that BORROWS its objects from the repository it was cloned from.
+- `local_clone_does_not_borrow_objects_census` — A clone that BORROWS its objects from the repository it was cloned from.
 - `loop_admission_guard` — loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills.
 - `loop_watchdog_compliance_check` — FORCE the watchdog primitive.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
@@ -1940,7 +1942,7 @@ _(no programs in this group)_
 - `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
-- `only_the_declaring_step_writes_its_output` — Two writers for one path the flow declares as a step's required output.
+- `only_the_declaring_step_writes_its_output_census` — Two writers for one path the flow declares as a step's required output.
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `opcode_field_width_consistency_check` — Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13).  _[v0.2.13]_
 - `open_issue_claim_scan` — Which open issues carry no CLAIMED comment — with the un-readable ones NAMED.
@@ -2052,6 +2054,7 @@ _(no programs in this group)_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence.  _[v0.1.26]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using.
 - `policy_direction_pin_check` — A DIRECTION argued in prose and left unpinned by every test. vibe-ic.
+- `population_guard_asserts_equality_not_a_floor` — A population guard that cannot fail: a literal asserted against its own size.
 - `population_pin_without_its_member_set` — A pinned population SIZE with no pin on its MEMBERS.
 - `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
 - `port_parser` — the SHARED interface-port reader for the deterministic solvers.
@@ -2106,7 +2109,7 @@ _(no programs in this group)_
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provenance_output_hash_completeness_check` — verify that `<project>/provenance.jsonl` carries a complete, on-disk-verifiable hash chain of every tool invocation's outputs.  _[v0.2.102]_
-- `provenance_value_is_resolved_not_constant` — A source-naming field filled from a path typed into the emitter.
+- `provenance_value_is_resolved_not_constant_census` — A source-naming field filled from a path typed into the emitter.
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `psm_analysis_coverage` — which power nets did the grid analysis actually answer?
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
@@ -2363,6 +2366,7 @@ _(no programs in this group)_
 - `tristate_self_rx_mask_check` — Self-RX masking audit for tristate/open-drain tristate bus pins.
 - `trusted_pytest_entry` — Isolated pytest entry for the protected landing runtime.
 - `truth_table_rtl_gen` — deterministic truth-table → combinational RTL generator.  _[v0.1.7]_
+- `two_input_selectors_given_together_must_refuse` — Two ways to name the input, and nothing decides what happens if both arrive.
 - `tx_abort_during_transmission_check` — Verify TX modules do not abort/reset during active bit-serial transmission.  _[v0.108]_
 - `tx_bit_timing_units_check` — verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to.  _[v0.119.29]_
 - `tx_bit_width_min_resolution_check` — advisory gate that flags when the chip's TX bit-clock granularity is too coarse for the smallest L2 timing parameter the chip must place ...  _[v0.119.20]_

@@ -1,7 +1,31 @@
 #!/usr/bin/env python3
 """An environment pointer that overrules a location the caller NAMED.
 
-THIS GATE BLOCKS (rc=1) on a NEW one.
+THIS IS A CENSUS, NOT A GATE. IT MUST NOT BE WIRED AS A BLOCKING CHECK.
+=======================================================================
+The gate for this rule is
+`programs/explicit_argument_outranks_the_environment_pointer.py`.
+That one REFUSES: it runs a narrow population with no inventory and goes red
+on a live defect. This
+file does something different and complementary — it reports the WIDE
+population, the classification, and the debt recorded against it.
+
+Both were written independently from the same capture record, by two lanes that
+could not see each other's tree, and on this tree they returned opposite
+verdicts. That is not a bug in either: a wide population with recorded waivers
+PASSES today with the debt written down, and a narrow population with no
+inventory FAILS today because the debt refuses. Only one of those is a gate.
+The ruling (2026-08-22) gave the NAME to the refusing one, and gave this one the
+job it was actually doing.
+
+So: exit status here is INFORMATIONAL. The default is 0 whatever is found,
+because a census that exits non-zero gets wired as a gate by the next person who
+reads the exit code. `--strict` restores a refusing exit for a caller who
+deliberately wants one; nothing in the flow should pass it.
+
+
+
+CENSUS — informational. The gate is `programs/explicit_argument_outranks_the_environment_pointer.py`.
 
 WHAT IT ASKS THE REPOSITORY
 ===========================
@@ -186,6 +210,9 @@ def main(argv=None) -> int:
     ap.add_argument("--root", default=None)
     ap.add_argument("--inventory", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument("--strict", action="store_true",
+                    help="restore a refusing exit; a census "
+                         "is informational by default")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -225,7 +252,7 @@ def main(argv=None) -> int:
     rc = 0
     if new:
         rc = 1
-        print(f"\n[FAIL] {len(new)} environment pointer(s) overrule a location "
+        print(f"\n[CENSUS] {len(new)} environment pointer(s) overrule a location "
               f"the caller named:")
         for f in findings:
             if _key(f) in new:
@@ -237,12 +264,18 @@ def main(argv=None) -> int:
               "what was scanned and what was not followed.")
     if stale:
         rc = 1
-        print(f"\n[FAIL] {len(stale)} inventory row(s) match nothing:")
+        print(f"\n[CENSUS] {len(stale)} inventory row(s) match nothing:")
         for k in stale:
             print(f"   {k}")
     if rc == 0:
-        print("[PASS] explicit_argument_outranks_the_environment_pointer: no "
-              "pointer replaces a location the caller named.")
+        print(f"[CENSUS] {len(findings)} site(s) classified, "
+              f"{len(known)} recorded as known debt, "
+              f"{len(new)} unrecorded. This is a count, not a "
+              f"verdict — the gate is programs/explicit_argument_outranks_the_environment_pointer.py.")
+    if rc and not a.strict:
+        print("\n  CENSUS: reported, not refused. The gate for this rule is\n"
+              "  programs/explicit_argument_outranks_the_environment_pointer.py — run that for a verdict.")
+        return 0
     return rc
 
 

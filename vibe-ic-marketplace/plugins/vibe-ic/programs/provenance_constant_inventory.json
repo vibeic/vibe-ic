@@ -23,7 +23,7 @@
     },
     {
       "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/phase3_one_shot_runner.py::source::phase3/stage3/pnr/openroad.log",
-      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='phase3/stage3/pnr/openroad.log' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact."
+      "reason": "Pre-existing on the tree this rule shipped with: the emitter stamps source='phase3/stage3/pnr/openroad.log' as a constant, so every run of every design publishes the same source claim and it stays correct-looking when the read failed or the layout moved. Closes by rendering the line from the value the emitter actually opened, and by recording a named-but-unreadable input as UNREADABLE rather than omitting it. Not repaired here: each is a change to what that emitter publishes, and belongs to the lane that owns the artefact. RULING 2026-08-22: this site is REPAIRED on the gate branch (jdistchip), reproduced there as a true positive by reverting it. When that lands, this row matches nothing and must be REMOVED \u2014 which is the only direction this inventory allows, and the census will say so."
     },
     {
       "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/readme_class_detector.py::source::input/docs/README.md",

@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 
+_RULE = "provenance_value_is_resolved_not_constant"
 PROG = (Path(__file__).resolve().parents[1]
-        / "provenance_value_is_resolved_not_constant.py")
+        / "provenance_value_is_resolved_not_constant_census.py")
 
 #: THE DEFECT: the source claim is typed into the emitter.
 _DEFECT = '''\
@@ -81,22 +82,22 @@ def _tree(body: str, inventory=None, name="sample_emit.py") -> Path:
     return root
 
 
-def _run(root: Path, inventory: Path = None):
+def _run(root: Path, *extra, inventory: Path = None):
     return subprocess.run(
         [sys.executable, str(PROG), "--root", str(root), "--inventory",
-         str(inventory or (root / "inventory.json"))],
+         str(inventory or (root / "inventory.json")), *extra],
         capture_output=True, text=True, timeout=300)
 
 
 def test_a_source_field_filled_from_a_path_constant_is_refused():
     """NEGATIVE CONTROL."""
-    r = _run(_tree(_DEFECT))
+    r = _run(_tree(_DEFECT), "--strict")
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "reports/phase3/antenna.rpt" in r.stdout
 
 
 def test_a_subscript_write_is_the_same_shape():
-    r = _run(_tree(_SUBSCRIPT))
+    r = _run(_tree(_SUBSCRIPT), "--strict")
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "provenance" in r.stdout
 
@@ -128,7 +129,7 @@ def test_the_population_is_stated_even_when_clean():
 
 def test_a_stale_inventory_row_is_a_failure():
     r = _run(_tree(_REPAIRED, inventory=[
-        {"key": "programs/gone.py::source::x.json", "reason": "stale"}]))
+        {"key": "programs/gone.py::source::x.json", "reason": "stale"}]), "--strict")
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
 
 
@@ -151,3 +152,23 @@ def test_the_shipped_tree_passes_its_own_rule():
     r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
                        capture_output=True, text=True, timeout=1800)
     assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+
+
+def test_the_census_never_blocks_by_default():
+    """The ruling: this is a census and must not be wired as a blocking check.
+
+    A census that exits non-zero gets wired as a gate by the next person who
+    reads the exit code, so the default is 0 whatever is found — and the
+    output says so and names the gate that does refuse.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True, timeout=1800)
+    assert r.returncode == 0, (
+        f"the census refused by default (rc={r.returncode}); it must report\n"
+        f"{r.stdout}\n{r.stderr}")
+    assert "[CENSUS]" in r.stdout
+    assert "the gate is programs/%s.py" % _RULE in r.stdout, (
+        "the census must name the gate that does the refusing")
