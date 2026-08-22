@@ -704,3 +704,44 @@ A guard satisfied by an implementation it has never seen, and refusing the tree
 both implementations were written against, is the strongest evidence available
 that it enforces the rule and not the edit. It was only obtainable because a
 second independent fix existed to test it against.
+
+
+---
+
+## This branch composes with the sibling branch, measured
+
+A lander wants both: this one for the parity register, the pins, the routing
+entry and the general guard; `origin/jpadsite/pad-site` for the NORTH and
+CORNER orientation fixes I independently confirmed are live on main. They touch
+the same three files, so I merged them in a scratch worktree rather than
+assuming (`evidence/COMPOSES_WITH_THE_SIBLING_BRANCH.md`).
+
+**Six conflict hunks, and every one is the same correction written twice** —
+the retraction of the inertness claim, reached independently on both branches.
+
+Resolved per file, after reading every hunk, because taking one whole side
+blind is a silent revert:
+
+* `_pad_ring.py` → **theirs**. They renamed the table to `SIDE_ORIENT` and
+  ADDED the `S`/`N` entries — the NORTH fix, real code. Mine only re-words the
+  comment above it. Keeping mine would throw away a fix to preserve a paragraph.
+* `pad_ring_gen.py` → **theirs**. Both rename to exactly the same names; theirs
+  additionally drives all four sides from the table.
+* `tests/test_pad_ring.py` → **both**. Theirs tests the NORTH and CORNER fixes;
+  mine adds the identifier guard and the report-key test. Neither rewords the
+  other; choosing would drop real coverage. 92 test functions after grafting.
+
+The merged tree:
+
+    197 passed, 16 skipped, rc 0      suite_write_guard: wrote nothing
+    upstream_contract_parity_check    PASS, 3 entries, rc 0
+    -k "asserts_inertness or refuted_premise"   ->  2 passed
+
+That last line is the load-bearing one: **my general guard passes on THEIR fix,
+inside a real merge.** Third independent confirmation that it enforces the rule
+and not my edit.
+
+**Recommendation for the lander.** Take `jpadsite/pad-site` as the vehicle for
+the pad-ring source — six commits, it fixes NORTH and two CORNERS with an A/B,
+and my rename duplicates its `c56b8e1b1` without adding to it. Take this branch
+for the register, the pins, the routing entry, the capture and the guard.
