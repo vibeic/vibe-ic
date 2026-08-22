@@ -48,6 +48,26 @@ test environment, which the current suite does not assume -- so it is a real
 design question, not a small commit. Evidence: `rotation_probe/`,
 `orient_AB_*`.
 
+## Also on that branch: the acceptance gates, run and answered
+
+Commit 5c75c297c. The gates this repo holds changes to had never been run
+against `next/` -- only the new test had been graded. All four pass (rc=0):
+source_chip_agnostic_check 1544 files, silent_decline_audit 1232,
+prose_polarity_consulted_check, gate_zero_denominator_refuses_check 565 gates.
+The doctrine's own compliance gate: 2 passed, 1 skipped.
+
+ONE ADVISORY FIRED AND IS ANSWERED IN THE MODULE, not left for a reviewer:
+`real_artefact_test_backing_check` reports 0 of 91 tests driven by a CHECKED-IN
+artefact. Correct. This module's strongest tests are driven by neither a fixture
+nor a checked-in artefact -- they query the installed PDK and the ACTUAL
+OPENROAD BINARY, for which the check has no category. Its worry does not apply:
+"a suite that cannot distinguish the change from its own absence" is about
+fixtures authored alongside the code, which cannot disagree with it. A tool can,
+and did. The mutation run the doctrine asks for is recorded beside it.
+
+VERIFIED AGAINST THE POST-BATCH WORLD after every change to the branch: main +
+the frozen tip + `next/` merges with 0 conflicts and 107 passed.
+
 ## 4-6. Flow-owner calls, unchanged, each with its disconfirming check run
 
   * extend #564's zero-denominator probe -- a SCOPE decision, not a constraint;
