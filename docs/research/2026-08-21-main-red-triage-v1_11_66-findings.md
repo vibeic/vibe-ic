@@ -5872,6 +5872,45 @@ and it is the honest inverse of how I was reporting for most of this engagement 
 confident in the summary, casual with the check.
 
 
+## M111 — design A's "Discriminates:" was an ARGUMENT. Here is what is actually established, and what cannot be
+
+Section A entry 4 says design A *"Discriminates: `base_total == 0` and
+`base_land is None` are both real, disclosed conditions"*, evidenced as
+**RED -> GREEN**. **That is a before/after, not a mutation arm**, and the
+discrimination clause beside it is reasoning. This branch has refused that
+distinction in other people's work all week, so:
+
+**WHAT IS ESTABLISHED, by construction and by measurement:**
+
+1. **Non-vacuous by construction.** Every assertion is a BARE SUBSCRIPT —
+   `doc["base_land"]`, `doc["land"]`, `doc["delta"]`, `delta["base_total"]`,
+   `delta["candidate_total"]`. **No `.get(..., default)` anywhere.** A missing key
+   raises `KeyError` and the test fails loudly. It cannot pass because something
+   was absent — which is exactly the defect M14 found in its neighbour and the
+   reason that neighbour is one of the surviving six.
+2. **It bites on real values.** Measured from the verifier's own output:
+   `6 test(s) ran on the candidate, 6 on the base`. So `base_total > 0` is
+   asserted against **6**, not against a constant that cannot be otherwise.
+3. **RED -> GREEN, full-file, both lanes** — and in the CONFIGURED image lane it
+   is among the 128 passes (M90).
+
+**WHAT CANNOT BE ESTABLISHED, AND WHY IT IS THE SAME WALL:** a true mutation arm
+means **preventing an arm from running** and watching the test redden. **That
+requires injecting a control into the arm — which the exact-set env contract
+refuses (M107), and which is the precise reason four of the six surviving reds
+are blocked.** The subject-tree route exists (M92, proven), but building a
+sentinel that suppresses a whole wave is a larger change than the one under test.
+
+**So the honest evidence line for design A is not "discriminates" — it is
+"non-vacuous by construction, asserted against a measured 6, and its live
+mutation arm is blocked by the same contract this branch is reporting."** That is
+weaker than what section A implies and stronger than nothing, and the difference
+between those two is the entire subject of this document.
+
+**Corrected in section A** rather than left as a claim a reviewer would have to
+take on trust.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -5917,7 +5956,7 @@ manifest itself did not.
 | 1 | `test_hermetic_candidate_runner.py`: `save_container` gains `create=` and writes atomically (M16) | HARNESS only. Kills a **4-in-10** flake whose message falsely accuses `hermetic_candidate_runner.py` of leaking containers. A/B 4/10 -> 0/12 on the host; the race does not reproduce in the image at all (M23). The runner is untouched. |
 | 2 | `test_hermetic_candidate_runner.py`: new `rw_bind` behaviour + `test_a_read_write_subject_bind_refuses_before_the_candidate_starts` (M15) | ADDITIVE. First coverage of the `"bind is not exact/read-only"` refusal. Mutation arm proven: delete the `RW is not False` clause and it goes red. Passes in BOTH lanes (M21). |
 | 3 | `test_landing_merge_verdict.py`: the G4 diagnosis fix (M8) | Does NOT change any verdict. Converts a misattributed `TimeoutExpired` into a message naming the true cause, and stops leaking the verifier process. The two tests stay RED either way. |
-| 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. Discriminates: `base_total == 0` and `base_land is None` are both real, disclosed conditions. RED -> GREEN, verified full-file. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
+| 4 | `test_landing_merge_verdict.py`: **design A** — `..._candidate_wave_precedes_parallel_isolated_base_wave` re-founded and renamed to `..._every_arm_of_both_waves_actually_ran` (M24 tail, proposal) | Asserts all four arms from the verdict document (`base_land`, `land`, `base_total`, `candidate_total`) instead of probe-directory markers the arm cannot write. STRONGER than what it replaces — a marker proved an arm STARTED, a record proves it COMPLETED. **Evidence, stated exactly (M111):** NON-VACUOUS BY CONSTRUCTION — every assertion is a bare subscript, so a missing key is a `KeyError`, never a pass. BITES ON REAL VALUES — `base_total > 0` is asserted against a measured **6** (`6 test(s) ran on the candidate, 6 on the base`). RED -> GREEN full-file, and among the 128 passes in the CONFIGURED image lane (M90). **A live mutation arm is NOT established**: suppressing a whole wave needs a control injected into the arm, which the exact-set env contract refuses (M107) — the same wall that blocks four of the six surviving reds. **Note the rename**, so a test-ID diff across this change will misreport it as a fix (M20 tail). |
 | 5 | `test_landing_merge_verdict.py`: **design C** — the three tamper guards re-founded (M24) | Each now asserts the verifier REFUSES (`rc 1`), the tamper did NOT redefine the tree (`expected_tree == verified_tree`), it never reached the real worktree (`candidate_test_worktree_status == "clean"`), and it WAS observed (the planted test in `delta.new_failures`). Specification verified against a live run BEFORE the edit. 3 RED -> GREEN. **Retires** the old `rc 2` / `doc is None` / `"raw attestation failed"` assertions deliberately — that was a hard `Refusal` for an arm dirtying the REAL worktree, which no longer happens; the check moved into `candidate_test_worktree_status`. The reasoning is inline in each test. |
 
 | 6 | `matrix_d3_output_manifest.json`: the measured step-31 entry (M32) | EVIDENCE, not a baseline rewrite. `reports/phase3/drc_signoff.json` measured at **1919 B** from `benchmark-data/ic/spm/v1.9.96_gf180mcuD` — the same declared run root step 31's other entries cite, carrying `provenance.jsonl` AND `reports/orchestrator/`. Gate goes `1 not covered -> 0`. **Closes 3 reds.** Blast radius checked including the one the gate names: `matrix_mutation_ledger` gives an IDENTICAL failure ID set to the pristine baseline. |
