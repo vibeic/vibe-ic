@@ -604,6 +604,38 @@ def _emit(args, project: Path, verdict: str, findings: List[dict],
         if f["severity"] in ("FAIL", "WAIVED"):
             print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
 
+    # vibe-ic#1080 — the numbers this gate COMPUTED, handed over at the one
+    # point it publishes them. Keys are written out in full rather than as
+    # bare names because `worst hold slack` is a TIMING quantity and the
+    # instance counts are DESIGN ones; `emit` keeps an already-qualified key
+    # as it stands, which is what lets one call site place each number in its
+    # own domain instead of flattening them into whichever domain was passed.
+    #
+    # `ws` is the ORFS tail for worst slack and `step_metrics.DIRECTIONS`
+    # declares it `higher`, so a run-to-run `diff` can say better/worse about
+    # hold closure without anybody teaching it what hold slack means.
+    #
+    # Every value below is a scalar BY INSPECTION of `evaluate`; the list-
+    # valued `non_sequential_hold_paths` is deliberately absent, and its size
+    # is carried as a count instead.
+    import step_metrics as _sm  # noqa: PLC0415
+    _m = {
+        "20__flow__verdict": verdict,
+        "20__flow__findings_count": len(findings),
+        "20__flow__evidence": summary.get("evidence"),
+    }
+    if summary.get("worst_hold_slack") is not None:
+        _m["20__timing__hold__ws"] = summary["worst_hold_slack"]
+    if summary.get("non_sequential_hold_paths") is not None:
+        _m["20__timing__non_sequential_hold_path_count"] = len(
+            summary["non_sequential_hold_paths"] or [])
+    for _k in ("post_hold_components", "post_cts_components",
+               "inserted_instance_delta", "post_hold_size", "post_cts_size"):
+        if isinstance(summary.get(_k), (int, float)) \
+                and not isinstance(summary.get(_k), bool):
+            _m[f"20__design__{_k}"] = summary[_k]
+    _sm.emit_best_effort(project, "20", _m)
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
