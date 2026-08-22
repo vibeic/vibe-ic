@@ -1,5 +1,0 @@
-{
-  "ic_name": "ARINC 429 (Mark 33 DITS)",
-  "register_map_present": false,
-  "notes": "ARINC 429 (Mark 33 DITS) is a wire-level avionics protocol specification, not a peripheral block guide. There is no architectural register map at the protocol layer. Concrete ARINC 429 transceiver / controller IP — e.g. Holt HI-3584, HI-3585, HI-8783/8784/8785, Texas Instruments DEI1016, Microchip / DDC BU-69091 — define their own register file (typically: control / status / interrupt-mask / TX FIFO / RX FIFO / label-filter / speed-select / loopback / parity-mode registers) at the device-integration level. Those are covered by individual device datasheets, not by the ARINC 429 specification itself."
-}
