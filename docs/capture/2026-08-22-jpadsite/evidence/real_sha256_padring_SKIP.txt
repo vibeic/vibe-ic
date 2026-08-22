@@ -46,3 +46,31 @@ nobody's night. A `next/` candidate -- and note that CHANGING it is a behaviour
 change to an exit code, which needs its own acceptance run even though no clause
 reads it today, because "nothing reads it today" is exactly the kind of fact
 that stops being true.
+
+THE REAL TREE'S FIGURES, RE-MEASURED FROM THE FILES
+====================================================
+Every figure this report cites about the real sha256 tree, checked against the
+tree rather than against an earlier reading of it:
+
+    DIEAREA ( 0 0 ) ( 873000 873000 )        confirmed, verbatim
+    UNITS DISTANCE MICRONS 1000              confirmed -> 873.0 um square
+    area 0.762 mm^2                          confirmed by arithmetic
+    COMPONENTS 12113                         confirmed, verbatim
+    padring / pad_* artefacts                0, confirmed by find
+    L19 fields.pdk_target                    "sky130", confirmed
+
+ONE DENOMINATOR WAS WRONG AND IT UNDERSTATED THE CLAIM. The report said "gf180
+appears ZERO times across the NINE L-documents". The tree holds TWENTY-EIGHT
+L-document files spanning L1-L27 (L8 appears twice, as _RTL_CONSTANTS and
+_TIMING_WAVEFORM). Counted file by file:
+
+    files                28
+    containing gf180      0
+    containing sky130     5   L1_DATASHEET, L2_FRS, L8_RTL_CONSTANTS,
+                              L9_INTEGRATION_SPEC, L19_CONSTRAINTS_PDK
+
+The zero was right. The denominator was one I had never measured, and it made
+the evidence look weaker than it is: 0 of 28 is a stronger statement than 0 of
+9. That is the third correction in this session that made a claim STRONGER --
+the pattern being that an unmeasured figure is not biased toward flattering
+me, it is just unmeasured.

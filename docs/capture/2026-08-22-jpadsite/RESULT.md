@@ -877,7 +877,7 @@ refused a PDK that had declared the site, and that was true, is fixed, and is
 verified on four PDK trees.
 
 **AND THE DESIGN DOES NOT TARGET gf180mcuD AT ALL.** Raised by the publishing
-agent, verified here: gf180 appears ZERO times across the nine L-documents. L1
+agent, verified here: gf180 appears ZERO times across ALL 28 L-DOCUMENT FILES, spanning L1-L27 (L8 appears twice, as _RTL_CONSTANTS and _TIMING_WAVEFORM) -- counted 2026-08-22 on the real tree, file by file. An earlier draft said "the nine L-documents", a denominator I never measured; the zero was right and understated, since 0 of 28 is stronger evidence than 0 of 9. L1
 declares "目標 PDK | SKY130 主目標" and `sky130_fd_sc_hd`; L9 sets the clock
 period against that library. Every per-side figure in this report is therefore a
 statement about a PDK this design never names.
