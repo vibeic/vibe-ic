@@ -234,6 +234,17 @@ def is_contract(doc: Any) -> bool:
     return isinstance(doc, dict) and doc.get("schema") == C.CONTRACT_SCHEMA
 
 
+#: The declared schema and the NAME pattern of this gate's records. Module-level
+#: because the unit tests assert on the walk directly; see `corpus_contracts`.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_NAME_GLOB = "**/*contract*.json"
+
+
+def corpus_contracts(corpus: Path) -> List[Path]:
+    """Every contract under `corpus`, by DECLARATION, unreadable-named kept in."""
+    return corpus_seam.population(Path(corpus), is_contract, _NAME_GLOB)
+
+
 def check_corpus(named: Path, schema_dir: str, may_be_absent: bool = False,
                  json_out: Optional[str] = None) -> int:
     """Every contract record under `named`, aggregated by severity.

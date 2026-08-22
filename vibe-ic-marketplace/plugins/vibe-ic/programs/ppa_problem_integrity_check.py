@@ -362,6 +362,27 @@ def check_corpus(named: Path, require_impl_differs: bool = False,
     return worst
 
 
+#: Module-level for the same reason as its siblings; see `corpus_candidates`.
+_CONTRACT_SCHEMA = C.CONTRACT_SCHEMA
+_NAME_GLOB = "**/*contract*.json"
+
+
+def corpus_candidates(corpus: Path, baseline: Path) -> List[Path]:
+    """Every contract under `corpus` that is NOT the baseline itself.
+
+    THE BASELINE IS NEVER PAIRED WITH ITSELF: a contract compared against
+    itself matches on every identity by construction, so counting it would let
+    a corpus of ONE document look checked.
+    """
+    corpus = Path(corpus)
+    try:
+        base = Path(baseline).resolve()
+    except OSError:                       # pragma: no cover - defensive
+        base = Path(baseline)
+    return [p for p in corpus_seam.population(corpus, is_contract, _NAME_GLOB)
+            if p.resolve() != base]
+
+
 def check_corpus_against_baseline(named: Path, baseline: str,
                                  require_impl_differs: bool = False,
                                  may_be_absent: bool = False,
@@ -405,22 +426,37 @@ def check_corpus_against_baseline(named: Path, baseline: str,
         return corpus_seam.RC_UNDETERMINED
 
     scan = corpus_seam.collect(corpus, is_contract)
-    unread_rc = corpus_seam.report_unreadable(_GATE, scan)
-    resolved_base = base_path.resolve()
-    arms = [(path, doc) for path, doc in scan.records
-            if path.resolve() != resolved_base]
+    # THE POPULATION COMES FROM `corpus_candidates`, the same function the unit
+    # tests assert on, so a test cannot pass against a walk this CLI does not
+    # use. It keeps an unreadable NAMED contract in, which is why the loop below
+    # re-reads each path instead of taking `scan.records`.
+    arm_paths = corpus_candidates(corpus, base_path)
     print(f"ppa_problem_integrity_check --baseline {base_path} --corpus "
-          f"{corpus}: {scan.denominator(_SCANNED)}, {len(arms)} to pair "
+          f"{corpus}: {scan.denominator(_SCANNED)}, {len(arm_paths)} to pair "
           f"against the baseline")
-    if not arms:
+    if not arm_paths:
         # VACUOUS, and it stays rc 2 even though a baseline WAS read: a gate
         # that has never met a second arm cannot have cleared a comparison.
-        return corpus_seam.worst_rc(
-            [corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan), unread_rc])
+        return corpus_seam.vacuous(_GATE, corpus, _SCANNED, scan)
 
-    rcs: List[int] = [unread_rc]
+    rcs: List[int] = []
     pair_rows: List[Dict[str, Any]] = []
-    for path, doc in sorted(arms, key=lambda r: str(r[0])):
+    for path in arm_paths:
+        doc, why = C.load_json(path)
+        if why is not None or not isinstance(doc, dict):
+            # UNREADABLE IS NOT ABSENT. The pair this file would have formed is
+            # REPORTED rc 2, never dropped: a comparison never attempted is not
+            # a finding about either design, and it is not a pass either.
+            print(f"[{_GATE}] CANNOT CHECK: {path} was NAMED a contract and "
+                  f"could not be read as one, so the pair it would have formed "
+                  f"with {base_path.name} was not attempted. rc=2.",
+                  file=sys.stderr)
+            rcs.append(corpus_seam.RC_UNDETERMINED)
+            pair_rows.append({"baseline": str(base_path),
+                              "candidate": str(path),
+                              "rc": corpus_seam.RC_UNDETERMINED,
+                              "findings": []})
+            continue
         findings = compare_contracts(base_doc, doc, require_impl_differs)
         # BOTH arms get their own mutation clause, exactly as the pair loop in
         # `check_corpus` does; the baseline is an arm too.
@@ -570,4 +606,21 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # AN INTERNAL ERROR IS NOT A FINDING (PPA_INTERFACES §1). Newly REACHABLE
+    # with the corpus modes: while this gate compared ONE hand-named pair a
+    # crash was a local accident, but `--corpus` sweeps a whole campaign, so a
+    # single document whose `identities` are shaped wrong decides the entire
+    # row -- and an unguarded traceback exits 1, which the roll-up reads as
+    # "these two runs were not solving the same problem". That verdict was
+    # never reached by anything. Same shape and same wording as
+    # `ppa_contract_check`'s guard.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - the guard, not the path
+        print(f"{cli_exit.MARK_REFUSE} ppa_problem_integrity_check: internal "
+              f"error {exc.__class__.__name__}: {exc}. This is NOT a finding "
+              f"about any design and NOT a report that something could not be "
+              f"read; it is a defect in this gate. rc=3.", file=sys.stderr)
+        raise SystemExit(cli_exit.RC_BAD_INVOCATION)

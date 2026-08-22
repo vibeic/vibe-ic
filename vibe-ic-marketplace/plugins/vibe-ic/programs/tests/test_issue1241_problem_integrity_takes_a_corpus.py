@@ -93,10 +93,20 @@ def test_a_corpus_holding_only_the_baseline_is_two_and_never_zero(tmp_path):
 
 
 def test_needs_exactly_one_of_candidate_or_corpus(tmp_path):
+    """rc 3, NOT 2 — TIGHTENED, not relaxed. Same reason as its sibling in
+    `test_issue1241_ppa_record_gates_take_a_corpus.py`: PPA_INTERFACES §1 gives
+    2 to UNDETERMINED and 3 to BAD INVOCATION, and the owner ruled that a bad
+    invocation arrives as 3.
+
+    `--baseline` alone names no population, so there is nothing to compare it
+    with; `--baseline --candidate --corpus` asks the pair question and the
+    corpus question at once. `--baseline X --corpus Y` is NOT here, because the
+    2026-08-22 ruling made it a question this gate answers.
+    """
     base = _write(tmp_path / "b" / "contract.json", _contract())
-    assert PI.main(["--baseline", str(base)]) == 2
+    assert PI.main(["--baseline", str(base)]) == 3
     assert PI.main(["--baseline", str(base), "--candidate", "a",
-                    "--corpus", "b"]) == 2
+                    "--corpus", "b"]) == 3
 
 
 def _identity(kind, digest):

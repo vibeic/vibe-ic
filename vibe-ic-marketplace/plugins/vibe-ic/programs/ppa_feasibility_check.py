@@ -190,6 +190,19 @@ def is_candidate_set(doc: Any) -> bool:
             and doc.get("schema") not in _OUTPUT_SCHEMAS)
 
 
+#: Module-level for the same reason as its siblings: the unit tests assert on
+#: the walk directly. `is_candidate_set` decides on the document, so the schema
+#: name here is the one a FIXTURE declares, not a second selector.
+_CANDIDATES_SCHEMA = "vibeic.ppa.candidates.v1"
+_NAME_GLOB = "**/*candidate*.json"
+
+
+def corpus_candidate_sets(corpus) -> list:
+    """Every candidate set under `corpus`, by DECLARATION."""
+    return corpus_seam.population(pathlib.Path(corpus), is_candidate_set,
+                                  _NAME_GLOB)
+
+
 def check_corpus(named: pathlib.Path, contract: Optional[str],
                  no_waivers: bool, may_be_absent: bool = False,
                  json_out: Optional[str] = None) -> int:

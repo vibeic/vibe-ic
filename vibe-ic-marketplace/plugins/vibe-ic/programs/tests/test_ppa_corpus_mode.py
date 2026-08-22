@@ -568,10 +568,14 @@ def test_integrity_baseline_against_corpus_keeps_the_unreadable_verdict(
     c = corpus(tmp_path, "unread-against")
     base = put(c / "base.json", contract_doc)
     put(c / "arm-b.json", second_contract_doc)
-    (c / "broken.json").write_text('{"schema": "vibeic', encoding="utf-8")
+    # NAMED a contract on purpose: `population` keeps an unreadable file only
+    # when its NAME claims it is one of these records. A file called
+    # `broken.json` was never named a contract and was never a subject.
+    (c / "broken_contract.json").write_text('{"schema": "vibeic',
+                                            encoding="utf-8")
     r = gate(INTEGRITY_GATE, "--baseline", str(base), "--corpus", str(c))
     assert "1 unreadable" in (r.stdout + r.stderr), r.stdout + r.stderr
-    assert "broken.json" in r.stderr
+    assert "broken_contract.json" in r.stderr
 
 
 # ===========================================================================

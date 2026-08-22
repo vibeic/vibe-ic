@@ -69,8 +69,18 @@ def test_contract_corpus_present_but_empty_is_two_and_never_zero(tmp_path):
 
 
 def test_contract_corpus_needs_exactly_one_of_contract_or_corpus(tmp_path):
-    assert CC.main([]) == 2
-    assert CC.main(["--contract", "a", "--corpus", "b"]) == 2
+    """rc 3, NOT 2 — TIGHTENED, not relaxed.
+
+    This asserted 2 when it was written. PPA_INTERFACES §1 reserves 2 for
+    UNDETERMINED / "I could not look" and 3 for BAD INVOCATION, and the owner
+    ruled on exactly this: a bad invocation must arrive as 3, "not 2", because a
+    caller that treats 2 as "nothing to check here, carry on" reads a misspelled
+    or incomplete command as a step that had nothing to measure and continues
+    green. 3 cannot be read that way by anyone. Both shapes below are bad
+    invocations: no mode at all, and an exact path together with a population.
+    """
+    assert CC.main([]) == 3
+    assert CC.main(["--contract", "a", "--corpus", "b"]) == 3
 
 
 # --- feasibility corpus ----------------------------------------------------
