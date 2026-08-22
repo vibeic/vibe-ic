@@ -3330,8 +3330,9 @@ by file:
    1   test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
 ```
 
-**17 of 502, concentrated in two files, and 16 of those guard the differential
-landing path** — the arms, the stamp, the base-vs-candidate subtraction. All 17
+**17 of 502, concentrated in two files — but only SIXTEEN of them are new**
+(see the correction at the end of this section), and those sixteen guard the
+differential landing path — the arms, the stamp, the base-vs-candidate subtraction. All 17
 are green on this branch (§44 measured the same three files at 60/0), so they
 arrived with something that landed after this branch forked.
 
@@ -3386,3 +3387,59 @@ could not have found them.
 
 I have told `jmeas3` rather than only recording it, since it is the one datum
 that touches its closed brief.
+
+## 52. `jmeas3` corrected me twice, and both corrections point at its own batch
+
+I sent `jmeas3` the bracket and it measured rather than filed it. Two
+corrections, both verified here before accepting.
+
+**CORRECTION 1 — it is 16, not 17, and one of my own sentences was false.**
+`test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept` is red on
+the BASE `a00f53f20` as well, so it did not arrive with v1.11.68. Verified:
+
+```
+a00f53f20 (base)      1 failed    <- pre-existing
+this branch           1 failed    <- pre-existing HERE TOO
+```
+
+Which means §51's "All 17 are green on this branch" was simply wrong: sixteen
+are, and the seventeenth is red here as well — I had measured that in §33 and
+then contradicted it eighteen sections later. My whole-suite run on `main` could
+not separate arrived-with from already-there; only a base run can, and `jmeas3`
+did the base run. §51 is corrected in place above.
+
+**CORRECTION 2 — it is the ASSEMBLY, not the landing.** "Arrived with v1.11.68"
+covers 29 batch commits plus the lander's version bump. `jmeas3` measured the
+assembly `833e8493f` directly — 17 failed there, 16 new against base — and
+`git diff --name-only 833e8493f..81cd5321b -- tools/` is EMPTY. The landing
+commit touched no `tools/` file. **The batch did it, not the lander.**
+
+And it named the commit: `d5646372f`, *"wire the remaining three gates into the
+differential landing gate"* — `tools/gatekeeper-land-differential.sh` +73/-2,
+with `tools/test_gatekeeper_land_differential.py` **not touched**. The +73 lines
+are the three invocations it had itself verified as correctly wired. Its own
+words for the gap: *"I confirmed the wiring existed; I never ran the suite that
+pins the script the wiring rewires. 'Present and invoked' and 'still correct'
+are different questions and I only asked the first."*
+
+**On my framing, which it declined.** I wrote the finding up as
+not-a-criticism — the method could not have seen it. It refused the exemption:
+the selector's shape was in its own report, the suite is 20 files and 70
+seconds, and it had already listed `gatekeeper-land-differential.sh` among the
+batch's modified files. It had every input needed to ask the question. I think
+its version is more accurate than my generous one, and it is the one recorded
+here: **"the method could not see it" is the finding, not the defence.**
+
+**What it did with the result is the part worth copying.** It did not rewrite
+its `NEW_RED` row — that row records what the arms measured under the stated
+selector, and editing it would misrepresent the run rather than correct it.
+Instead a marked SCOPE LIMIT block sits immediately after the TOTALS row, saying
+the row is true as measured and that its scope excludes a region where the batch
+introduced 16 reds. **The limitation belongs next to the number, not inside it.**
+That is the same append-don't-delete discipline this document uses for its own
+corrections, applied to a published result by someone who had every reason to
+prefer a quiet edit.
+
+**Both of us now recommend the same one-line addition** to any batch measurement
+on this fleet: `pytest -q tools/test_*.py` on BOTH arms. 63–73 s, covers a region
+no plugin-scoped selection reaches, and would have caught all 16 pre-landing.
