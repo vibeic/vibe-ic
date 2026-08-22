@@ -33,6 +33,28 @@ Conflating them would be its own defect: reporting "emission failed" over a
 checker that ran perfectly and found something is a false alarm, and this lane
 has spent its whole length removing claims that outrun their evidence.
 
+WHICH REPAIRS ARE ACTUALLY EXERCISED BY A RUNNING STEP -- MEASURED, NOT ASSUMED.
+Most arms here are STRUCTURAL: they read source and prove the status is consumed
+and no branch is silent. `test_every_added_note_actually_EVALUATES` adds the
+message half, but it evaluates the EXPRESSIONS, not the runner. So the question
+"does any test actually EXECUTE these lines" was answered with `sys.settrace`
+over the two suites that call `step_canonicalize_artefacts` against fixture
+projects (`test_postlayout_lec_nameerror.py`,
+`test_v0_3_26_issue527_spef_sta_canonical.py`):
+
+    SDC block                 12 lines executed   YES
+    DFM block                 12 lines executed   YES
+    thermal screen            11 lines executed   YES
+    flow_compliance refresh    0 lines            NO
+
+Three of the four repairs are covered by real execution of the step. THE FOURTH
+IS NOT: the refresh lives in the finalize path, which no harness in this suite
+reaches, so its evidence is structural plus message-evaluation only.
+
+That gap is DECLARED rather than left implied, because "the tests pass" over a
+line no test executes is the vacuous pass this lane exists to remove. If a
+harness that reaches finalize is added, this paragraph is what to delete.
+
 chip-AGNOSTIC: no design, PDK, vendor, node or codename literal.
 """
 from __future__ import annotations
