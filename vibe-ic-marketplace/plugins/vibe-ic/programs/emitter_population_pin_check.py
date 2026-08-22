@@ -254,6 +254,7 @@ chip-AGNOSTIC: Python and Tcl text structure. No design, PDK, vendor or SKU.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -879,6 +880,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.tests.is_dir():
         return _usage.usage_error(TOOL, f"--tests {args.tests} is not a "
                                         f"directory")
+    # CHECKED BEFORE THE WORK, not after it. `--json <a directory>` used to run
+    # the whole sweep and then die on IsADirectoryError -- a traceback wearing
+    # rc 1, this program's REFUSAL code, so a mistyped argument was
+    # indistinguishable from a population disagreement.
+    if args.json is not None and str(args.json) != "-" and args.json.is_dir():
+        return _usage.usage_error(TOOL, f"--json {args.json} is a directory")
 
     sources = {p.stem: p for p in sorted(args.programs.glob("*.py"))}
     findings: List[dict] = []
@@ -1101,8 +1108,31 @@ def main(argv: Optional[List[str]] = None) -> int:
               "unparsed": unparsed, "not_determined": undecidable,
               "substituted": substituted,
               "findings": findings}
-    if args.json:
-        _atomic.write_json(args.json, report)
+    # `--json -` PUTS THE DOCUMENT ON STDOUT. 34 programs in this corpus
+    # implement that spelling, and `_vacuous_exit` routes its sentinel to stderr
+    # expressly because of it: "these gates support ``--json -``, which puts the
+    # report document on stdout, and a sentinel line mixed into that stream
+    # would make the document unparseable". This program had a `--json` flag and
+    # none of that, so the convention produced a junk file NAMED `-`.
+    #
+    # Where it departs from those 34: they print the human report only when
+    # --json is ABSENT, and this one keeps printing it -- to STDERR, so stdout
+    # stays a parseable document. The reach is printed, always; suppressing it
+    # to honour a convention would trade this file's own rule for someone's
+    # output shape, and stderr costs the document nothing.
+    to_stderr = False
+    if args.json is not None:
+        if str(args.json) == "-":
+            print(json.dumps(report, indent=2))
+            to_stderr = True
+        else:
+            try:
+                _atomic.write_json(args.json, report)
+            except OSError as e:
+                return _usage.usage_error(
+                    TOOL, f"--json {args.json} could not be written: "
+                          f"{e.strerror or e}")
+    out = sys.stderr if to_stderr else sys.stdout
 
     for u in undecidable:
         print(f"  [NOT DECIDABLE] {u['program']}: counter ${u['counter']} is "
@@ -1110,20 +1140,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"in a helper called {u['emitted_per_site']}x, so that is a LOWER "
               f"BOUND, not a count; its {u['denominator_kind']} denominator "
               f"says {u['denominator']} and the shortfall is exactly what a "
-              f"helper produces — NOT compared")
+              f"helper produces — NOT compared", file=out)
     for u in unparsed:
         print(f"  [UNPARSED] {u} — this guard could NOT read it, so nothing in "
-              f"it was examined")
+              f"it was examined", file=out)
     for b in substituted:
         print(f"  [SUBSTITUTED] {b['source']}: {b['characters']} character(s) "
               f"of this file do NOT decode as UTF-8 and were replaced before "
               f"it was read, so what was analysed is not the file — any "
               f"population the replacement landed in went unmatched and is "
-              f"NOT in the counts above")
+              f"NOT in the counts above", file=out)
     for d in denied:
         print(f"  [POLARITY] {d['where']}: {d['what']} `{d['matched']}` sits "
               f"in a statement that DENIES it (\"{d['denial']}\") and is NOT "
-              f"counted")
+              f"counted", file=out)
 
     if counters_examined == 0 and pins_examined == 0:
         # WHY IT IS EMPTY, because the two reasons are not the same fact. "No
@@ -1155,7 +1185,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "this tree may well state one twice" if substituted
                 else "no emitted population is stated twice here")
         print(f"[VACUOUS] {TOOL}: {said}, so nothing was compared; this is NOT "
-              f"a pass [{head}]")
+              f"a pass [{head}]", file=out)
         return _vac.RC_VACUOUS
 
     if findings:
@@ -1165,7 +1195,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"is incremented at {f['increment_sites']} site(s) but "
                       f"its {f['denominator_kind']} denominator says "
                       f"{f['denominator']} — the emitter states one population "
-                      f"twice and disagrees with itself")
+                      f"twice and disagrees with itself", file=out)
             else:
                 print(f"  [POPULATION] {f['test']}:{f['test_line']} pins "
                       f"\"of {f['pinned']} {f['phrase']}\", but "
@@ -1174,10 +1204,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"{', '.join(f['emitted'])} — the population moved and "
                       f"the pin did not")
         print(f"[FAIL] {TOOL}: {len(findings)} population(s) stated twice and "
-              f"disagreeing [{head}]")
+              f"disagreeing [{head}]", file=out)
         return _vac.RC_FAIL
 
-    print(f"[PASS] {TOOL}: every population stated twice agrees [{head}]")
+    print(f"[PASS] {TOOL}: every population stated twice agrees [{head}]", file=out)
     return _vac.RC_PASS
 
 

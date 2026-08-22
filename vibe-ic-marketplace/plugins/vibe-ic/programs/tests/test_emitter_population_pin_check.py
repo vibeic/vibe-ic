@@ -2566,6 +2566,55 @@ def test_an_unmatched_pin_is_reach_and_never_a_finding(tmp_path):
     assert "[FAIL]" not in r.stdout, r.stdout
 
 
+# ── --json - , the corpus spelling ──────────────────────────────────────────
+# 34 programs here implement `if args.json == "-"`, and `_vacuous_exit` routes
+# its sentinel to stderr expressly because of it: the document owns stdout. This
+# program had a --json flag and none of that, so the convention wrote a junk
+# file NAMED `-`.
+
+def test_json_dash_puts_a_parseable_document_on_stdout(tmp_path):
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", "-")
+    assert r.returncode == RC_PASS, r.stdout + r.stderr
+    doc = json.loads(r.stdout)          # must parse ALONE, nothing mixed in
+    assert doc["tool"] == "emitter_population_pin_check", doc
+    assert not (tmp_path / "-").exists(), "a file named '-' was created"
+
+
+def test_json_dash_does_not_lose_the_human_report(tmp_path):
+    """Where this departs from those 34: they print the human lines only when
+    --json is absent. The reach is printed, ALWAYS -- so it moves to stderr,
+    which costs the document nothing."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tests, "--json", "-")
+    assert "COMPARED out of a corpus of" in r.stderr, r.stderr
+    assert "COMPARED out of a corpus of" not in r.stdout, (
+        "the human report is mixed into the document stream:\n" + r.stdout)
+
+
+def test_a_json_path_still_reports_on_stdout(tmp_path):
+    """Only the dash moves the stream. A path argument is unchanged."""
+    progs, tests = _tree(tmp_path)
+    j = tmp_path / "r.json"
+    r = _run(progs, tests, "--json", str(j))
+    assert "COMPARED out of a corpus of" in r.stdout, r.stdout
+    assert json.loads(j.read_text())["tool"] == "emitter_population_pin_check"
+
+
+def test_json_at_a_directory_is_a_usage_error_before_the_work(tmp_path):
+    """It used to run the whole sweep and die on IsADirectoryError: a traceback
+    wearing rc 1, this program's REFUSAL code, so a mistyped argument was
+    indistinguishable from a population disagreement."""
+    progs, tests = _tree(tmp_path)
+    d = tmp_path / "adir"
+    d.mkdir()
+    r = _run(progs, tests, "--json", str(d))
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_USAGE, out
+    assert "Traceback" not in out, out
+    assert "is a directory" in out, out
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
