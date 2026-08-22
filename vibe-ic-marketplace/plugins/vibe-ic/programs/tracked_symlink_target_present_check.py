@@ -118,8 +118,24 @@ corpus. Pointing $VIBE_IC_BENCHMARK_DATA at a clone must still find them and
 still return rc 1 — the flag exists for the case where there is nothing to look
 at, and it must never reach the case where there is.
 
+AND THE SAME DISTINCTION, ONE LEVEL UP, ON THE REGISTER (vibe-ic#1705)
+=====================================================================
+The refusal below already read "a missing register is not an empty one" — and
+applied it only to a file that exists and will not parse. A path with NO file
+at it skipped the branch and left `recorded` at `[]`, the value that means
+MEASURED AND EMPTY. Since the verdict is `hard - recorded`, that turned every
+inherited pointer into a NEW one. Absent, unreadable, truncated, or carrying no
+list of strings at `known` are now all NOT CHECKED (rc 2, path named); only
+`--write-baseline` at a path with nothing at it may bootstrap one, and it may
+never overwrite an unreadable file as though its old value had been empty.
+
+An explicitly empty `{"known": []}` register stays a measurement — of a corpus
+with no broken pointer in it — and the FIRST broken pointer against it is still
+NEW and still exits 1.
+
 Exit: 0 nothing new (or NO_CORPUS, which says so), 1 a new broken pointer or a
-recorded one that no longer appears, 2 nothing was examined.
+recorded one that no longer appears, 2 nothing was examined — including a
+register that states no readable measurement.
 """
 from __future__ import annotations
 
@@ -129,7 +145,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 RC_OK, RC_FINDING, RC_NOTHING = 0, 1, 2
 
@@ -263,6 +279,31 @@ def _is_ignored(root: Path, rel: str) -> bool:
         capture_output=True, timeout=60).returncode == 0
 
 
+def _load_register(path: Path) -> Optional[List[str]]:
+    """The recorded pointers, or ``None`` when NO register could be read.
+
+    ``None`` and ``[]`` are different values and must never be collapsed
+    (vibe-ic#1705): ``[]`` asserts that this tree was measured and carries no
+    known-broken pointer, which is what makes the FIRST one NEW; ``None``
+    asserts nothing at all. Every way of failing to read one lands on ``None``
+    — no file, a directory, unreadable or truncated bytes, a document that is
+    not an object, a ``known`` that is absent or is not a list of strings.
+    """
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    known = doc.get("known")
+    if not isinstance(known, list) or any(not isinstance(k, str)
+                                          for k in known):
+        return None
+    return known
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=None)
@@ -319,18 +360,41 @@ def main(argv=None) -> int:
     else:
         root = _repo_root(Path(a.root or Path.cwd()))
 
-    # THE REGISTER IS READ BEFORE THE POPULATION, so an unreadable one refuses
-    # whatever the corpus turns out to be. A NO_CORPUS run leaves it unevaluated
-    # and has to say so; that count is how a reader sees it.
+    # THE REGISTER IS READ BEFORE THE POPULATION, so one that states no
+    # measurement refuses whatever the corpus turns out to be. A NO_CORPUS run
+    # leaves a readable register unevaluated and has to say so; that count is
+    # how a reader sees it.
     bl_path = Path(a.baseline)
-    recorded = []
-    if bl_path.is_file():
-        try:
-            recorded = json.loads(bl_path.read_text()).get("known") or []
-        except (OSError, ValueError):
-            print(f"[NOT CHECKED] {bl_path} is unreadable — a missing register "
-                  f"is not an empty one", file=sys.stderr)
+    # AND AN ABSENT REGISTER IS A MISSING ONE (vibe-ic#1705). The refusal this
+    # replaces already said "a missing register is not an empty one" — and then
+    # applied it only to a file that exists and will not parse. A path with no file at
+    # it skipped the branch entirely and left `recorded` at `[]`, which is the
+    # value that says MEASURED, AND NOTHING IS RECORDED. `new` is
+    # `hard - recorded`, so against that value every inherited pointer is a
+    # regression. Measured on a synthetic corpus carrying one recorded broken
+    # pointer: rc 0 with the register, rc 1 and "1 NEW committed pointer(s)"
+    # with the same tree and the register moved aside.
+    #
+    # This repo's corpus lives elsewhere since v1.10.56, so the run reaches
+    # NO_CORPUS before the verdict and the fabrication was not observable here
+    # — which is why #1705 could only record this site as inconclusive. It is
+    # latent, not absent.
+    recorded = _load_register(bl_path)
+    if recorded is None:
+        # `--write-baseline` is the operation that CREATES the register, so it
+        # may bootstrap a path with nothing at it. It must not overwrite an
+        # existing unreadable or truncated file as though the measurement it
+        # replaces had been empty.
+        bootstrapping = (a.write_baseline and not bl_path.exists()
+                         and not bl_path.is_symlink())
+        if not bootstrapping:
+            print(f"[NOT CHECKED] no register states a readable measurement at "
+                  f"{bl_path} — absent, unreadable or truncated is not an empty "
+                  f"one, so no pointer found here can be called NEW. Record it "
+                  f"with --write-baseline before asking this gate to attribute "
+                  f"anything. See vibe-ic#1705.", file=sys.stderr)
             return RC_NOTHING
+        recorded = []
 
     rels, err = tracked_symlinks(root, subdir)
     if err:

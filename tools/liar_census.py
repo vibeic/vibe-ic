@@ -646,6 +646,80 @@ def population_report(flow_yaml: Path) -> Dict[str, Any]:
             "unrecognised": unrecognised}
 
 
+def population_delta(before_yaml: Path, after_yaml: Path) -> Dict[str, Any]:
+    """WHICH clauses arrived and WHICH left, between two flow blobs.
+
+    WHY THIS EXISTS
+    ===============
+    `test_nothing_the_flow_declares_is_left_unswept` pins the population with a
+    hand-written literal. The literal is not there to count -- `swept ==
+    declared` already pins that the sweep is WHOLE -- it is there so a flow that
+    silently SHRINKS is caught. A bare count cannot do that job alone: 181 ->
+    181 is indistinguishable from "one clause left and another arrived", and the
+    answer a reader needs is never the count, it is WHICH.
+
+    So every round, the author moving that literal has diffed the CLAUSE SETS of
+    two flow blobs BY HAND and written the added/removed lists into the comment
+    block. The protocol is right, and it is prose -- and on 2026-08-20 it failed
+    the way prose fails. The derivation `180 + 1 - 2 = 179` was computed against
+    the branch's BASE (`053eecd27`); the base moved under the branch when
+    `7fcbc7397` landed one more clause; nobody re-ran the arithmetic against the
+    parent the change actually landed on (`867de4289^`, which measures 181). The
+    literal landed at 179 against a tree measuring 180 -- RED ON ARRIVAL, and it
+    stayed red until `790224904` added a clause and made it 181 against 179.
+
+    This is that protocol as a FUNCTION, so the next round is measured rather
+    than remembered.
+
+    IDENTITY, AND WHY IT IS A MULTISET
+    ==================================
+    A clause is `(step, kind, cmd)`, compared as a MULTISET. The two halves of
+    that guard two different collapses, and only one of them is reachable from
+    the flow as it stands today -- said plainly, because a docstring that claims
+    both are load-bearing would be the kind of overclaim this file exists to
+    catch:
+
+      * `cmd` IS IN THE IDENTITY, and the flow needs it. Step 31 declares
+        `provenance_check` twice, once for the DRC sign-off report and once for
+        the LVS one. Project a clause onto `(step, kind, program)` and those two
+        fold into one, so removing either reports NO CHANGE.
+      * THE MULTISET is not reachable from today's flow -- 181 clauses, 181
+        distinct triples, so no two clauses are identical and a set would answer
+        the same. It is kept because the shape is one copy-paste away in a
+        6300-line YAML, and a set-based diff would then report a deleted
+        duplicate as no change at all. Pinned on a planted fixture, not on the
+        flow, since the flow cannot pin it.
+
+    This function DECIDES nothing and authorises nothing. It reports the two
+    directions separately because they are not the same event: an `added`-only
+    delta is a GROW, a `removed`-only delta is a SHRINK, and both non-empty is a
+    CHURN that a count comparison cannot see at all. Whether a given shrink is
+    legitimate remains a call for the flow's owner.
+
+    Keys:
+      before, after   clauses each blob declares
+      added           [{step, kind, cmd}] -- in `after`, not in `before`
+      removed         [{step, kind, cmd}] -- in `before`, not in `after`
+      shrank          bool -- anything at all left the flow
+    """
+    import collections  # noqa: PLC0415
+
+    def counted(flow_yaml: Path) -> "collections.Counter":
+        return collections.Counter(
+            (c.step, c.kind, c.cmd) for c in discover_clauses(flow_yaml))
+
+    def listed(delta: "collections.Counter") -> List[Dict[str, str]]:
+        return [{"step": step, "kind": kind, "cmd": cmd}
+                for (step, kind, cmd), n in sorted(delta.items())
+                for _ in range(n)]
+
+    before, after = counted(before_yaml), counted(after_yaml)
+    removed = listed(before - after)
+    return {"before": sum(before.values()), "after": sum(after.values()),
+            "added": listed(after - before), "removed": removed,
+            "shrank": bool(removed)}
+
+
 def _dispatching_clause_counts(doc: Any) -> Dict[str, int]:
     """Per step id, how many gate clauses can DISPATCH A PROGRAM.
 
@@ -1411,21 +1485,42 @@ def _run_selection(cwd: Path, selection: List[Path],
     # the flag the broken module is reported as an ERROR node ID, which appears
     # in every arm and cancels in the difference, and the other seven files are
     # actually measured.
+    #
+    # NO FIXED ELAPSED VERDICT, and the plugin that supplied one is no longer
+    # named in this argv. Two independent reasons, both measured.
+    #
+    # (1) CAPABILITY. `-p pytest_timeout` is a HARD import -- pytest refuses to
+    #     start at all when the module is absent. It is absent from the image
+    #     this repo anchors (`ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2e057...`,
+    #     `tools/ci/protected_landing_transition.json` .runner.image) and from
+    #     every 0.2.x/0.3.x tag of it that is on this host; MEASURED there,
+    #     every arm this function started died with `ImportError: Error
+    #     importing plugin "pytest_timeout"` before collecting one test. The
+    #     only lane that ever supplied the plugin was `.github/workflows`, and
+    #     those files are now under `.github/workflows-disabled`. A census that
+    #     cannot start measures nothing, and "nothing" is the value this probe
+    #     reads as "the mutation killed nothing".
+    #
+    # (2) DOCTRINE, already settled elsewhere in this repo and merely late
+    #     arriving here. `--timeout-method=thread` does not fail the TEST; it
+    #     takes the SESSION down, and a killed session prints no `FAILED`
+    #     lines, so `arm.failed` comes back EMPTY -- which is exactly the shape
+    #     this probe reports as a finding. The comment this text replaces said
+    #     so in its own words, and `programs/pytest_per_file_junit.py` carries
+    #     the reproduction ("There is deliberately no pytest-timeout guard on
+    #     the landing path"), as does the retirement of the same idiom from
+    #     `tools/gatekeeper-land.sh` at v1.10.69.
+    #
+    # THE BOUND IS NOT LOST. The replaced comment already named the real one:
+    # the arm's own subprocess ceiling, `subprocess.run(timeout=timeout)` below
+    # (`--mutation-timeout`, 900 s by default). Reaching it returns `None` --
+    # NOT MEASURED -- which the caller reports as a declined arm, instead of an
+    # empty failure set that reads as an accusation. The change is therefore in
+    # HOW LONG an unmeasurable arm takes to be declared unmeasurable, never in
+    # whether a dead arm can be mistaken for a clean one.
     argv = [sys.executable, "-m", "pytest", "-q", "--no-header", "--tb=no",
-            "-rfE", "-p", "no:cacheprovider", "-p", "pytest_timeout",
-            "--continue-on-collection-errors",
-            # 300 s per test, not 120. This bound exists to stop a hung test
-            # from burning the arm's whole budget -- but reaching it KILLS THE
-            # SESSION rather than the test (`--timeout-method=thread`), and a
-            # killed session is a dead arm. Under `--mutation-jobs 8` on a
-            # loaded machine, tests that finish in seconds when idle crossed
-            # 120 s and took their arm down with them; that is how
-            # `drc_report_check` was reported as having no positive control
-            # when an idle re-run of the same code killed 25 tests. The arm's
-            # own subprocess ceiling (`--mutation-timeout`, 900 s by default)
-            # is the real bound; this one only has to be generous enough not to
-            # fire on a slow machine, and `_PYTEST_DONE` catches it when it does.
-            "--timeout=45", "--timeout-method=thread"]
+            "-rfE", "-p", "no:cacheprovider",
+            "--continue-on-collection-errors"]
     argv += [str(p) for p in selection]
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                PYTHONDONTWRITEBYTECODE="1")

@@ -35,6 +35,7 @@ gate merely NAMED IN PROSE by the runner, and a runner that cites its own path.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -92,6 +93,22 @@ def _orphans(m, flow, programs):
     return sorted(o["gate"] for o in m.audit(flow, programs)["orphaned"])
 
 
+
+def _measured_empty(root: Path) -> Path:
+    """An explicitly EMPTY register, which is a measurement of a clean tree.
+
+    These two cases used to pass `nonexistent.json` and read the resulting rc 1
+    as "the orphan was reported". An ABSENT register is not an empty one
+    (vibe-ic#1705) and now yields rc 2 NOT CHECKED, which would have let the
+    planted orphan go unreported while the assertion still went green for the
+    wrong reason. The empty register is what these controls always meant: the
+    audit has a measurement to subtract, and the planted gate is NEW against it.
+    """
+    path = root / "baseline.json"
+    path.write_text(json.dumps({"known": [], "undeclared_known": []}),
+                    encoding="utf-8")
+    return path
+
 # --------------------------------------------------- (a) the planted defects
 # These are the reason the fix cannot be "count more things as wired".
 
@@ -106,7 +123,7 @@ def test_a_declared_gate_that_nothing_runs_is_still_orphaned(tmp_path):
         ci='python3 "$PG/another_check.py"\n')
     assert _orphans(m, flow, programs) == ["lonely_check"]
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 1
+                   "--baseline", str(_measured_empty(tmp_path))]) == 1
 
 
 def test_a_gate_named_only_in_the_runners_prose_is_still_orphaned(tmp_path):
@@ -135,7 +152,7 @@ def test_a_gate_named_only_in_the_runners_prose_is_still_orphaned(tmp_path):
         runner=runner)
     assert _orphans(m, flow, programs) == ["documented_check"]
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 1
+                   "--baseline", str(_measured_empty(tmp_path))]) == 1
 
 
 def test_the_gate_runner_is_not_its_own_proof_of_being_wired(tmp_path):

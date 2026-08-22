@@ -59,6 +59,7 @@ def _no_inherited_pointer(monkeypatch):
     """Every case states its own pointer. Inheriting the operator's would make the
     whole file's result depend on who ran it."""
     monkeypatch.delenv(L.CORPUS_ENV, raising=False)
+    monkeypatch.delenv(L.BOUND_SHA_ENV, raising=False)
 
 
 def _git(repo: Path, *args: str):
@@ -130,6 +131,42 @@ def test_nothing_anywhere_returns_the_named_path_and_says_it_was_named(tmp_path)
     named = tmp_path / "gone"
     got, origin = L.resolve(named)
     assert (got, origin) == (named, L.NAMED)
+
+
+def test_bound_snapshot_forces_external_pointer_over_named_tree(
+        tmp_path, monkeypatch):
+    named = tmp_path / "candidate" / "benchmark-data" / "ic"
+    named.mkdir(parents=True)
+    external = tmp_path / "attested" / "ic"
+    external.mkdir(parents=True)
+    monkeypatch.setenv(L.CORPUS_ENV, str(external.parent))
+    monkeypatch.setenv(L.BOUND_SHA_ENV, "a" * 40)
+
+    got, origin = L.resolve(named, subdir="ic")
+
+    assert (got, origin) == (external, L.ENV), (
+        "a candidate-local corpus shadowed the externally byte-attested "
+        "landing population")
+
+
+def test_bound_sha_without_pointer_is_unscannable_and_refuses(
+        tmp_path, monkeypatch, capsys):
+    named = tmp_path / "candidate" / "benchmark-data" / "ic"
+    named.mkdir(parents=True)
+    monkeypatch.setenv(L.BOUND_SHA_ENV, "a" * 40)
+
+    got, origin = L.resolve(named, subdir="ic", gate="g", announce=True)
+
+    assert origin == L.REFUSED
+    assert not got.is_dir(), (
+        "a partial bound environment resolved to a scannable path")
+    rc = L.refuse("g", named, got, origin, may_be_absent=True,
+                  scanned="published cell(s)")
+    msg = capsys.readouterr().err
+    assert rc == 2
+    assert "nothing was scanned" in msg
+    assert str(named) not in str(got), (
+        "the refusal sentinel is candidate-controlled")
 
 
 # ---------------------------------------------------------------------------

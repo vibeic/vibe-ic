@@ -32,7 +32,6 @@ either runs the program or reads the gate script's own dispatch.
 from __future__ import annotations
 
 import importlib.util
-import os
 import re
 import subprocess
 import sys
@@ -49,9 +48,9 @@ _LAND = _REPO / "tools" / "gatekeeper-land.sh"
 # The stage this issue adds. Named once; every assertion below reads it.
 _STAGE = "run_unselectable_pytest"
 
-# This direct unit-test helper keeps a local diagnostic subprocess bound.  The
-# landing verdict itself has no elapsed ceiling: it is supervised by validated
-# pytest lifecycle progress and records a stall as NORECORD.
+# Every inner subprocess in this file is bounded well under the harness's own
+# --timeout=180 / 3 ceiling (programs/ci_harness_timeout_ceiling_check.py), so
+# a hang here fails ONE test instead of taking the session down unnamed.
 _BOUND = 60
 
 
@@ -86,54 +85,6 @@ def _run(args, cwd=None):
                           timeout=_BOUND, cwd=str(cwd) if cwd else None)
 
 
-def _extract_stage_function() -> str:
-    lines = _LAND.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, line in enumerate(lines)
-                 if line.startswith(f"{_STAGE}() {{"))
-    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
-    return "\n".join(lines[start:end + 1])
-
-
-def _run_stage_against_empty_selected_file(tmp_path):
-    """Execute the shipped shell function over one green + one empty file."""
-    root = tmp_path / "repo"
-    for directory in (
-        root / "tools",
-        root / "skills" / "probe" / "tests",
-        root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
-        "programs" / "tests",
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
-    (root / ".gitignore").write_text(
-        "__pycache__/\n.pytest_cache/\n", encoding="utf-8")
-    (root / "tools" / "gatekeeper-land.sh").write_text(
-        _LAND.read_text(encoding="utf-8"), encoding="utf-8")
-    (root / "tools" / "test_covered.py").write_text(
-        "def test_covered(): assert True\n", encoding="utf-8")
-    (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
-     "programs" / "tests" / "test_covered.py").write_text(
-        "def test_covered(): assert True\n", encoding="utf-8")
-    (root / "skills" / "probe" / "tests" / "test_green.py").write_text(
-        "def test_green(): assert True\n", encoding="utf-8")
-    (root / "skills" / "probe" / "tests" / "test_empty.py").write_text(
-        "# selected by the complement, but no pytest item\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t",
-         "commit", "-qm", "seed"], cwd=root, check=True)
-    shell = (
-        "set -uo pipefail\n"
-        f"ROOT={str(root)!r}\n"
-        f"PROGRAMS={str(_PROGRAMS)!r}\n"
-        "FAILED=0\n" + _extract_stage_function() + "\n" +
-        f"{_STAGE}\n" + 'echo "FAILED=$FAILED"\n')
-    env = dict(os.environ)
-    env.pop("PYTEST_CURRENT_TEST", None)
-    return subprocess.run(["bash", "-c", shell], cwd=root, env=env,
-                          capture_output=True, text=True, timeout=_BOUND)
-
-
 # ── the property ────────────────────────────────────────────────────────────
 
 def test_the_new_stage_is_actually_wired(land_text):
@@ -147,9 +98,33 @@ def test_the_new_stage_is_actually_wired(land_text):
     assert f"{_STAGE}()" in land_text, (
         f"{_STAGE} is not defined in tools/gatekeeper-land.sh — the "
         f"unselectable trees are still unreachable by a landing (#1424)")
-    assert re.search(rf"^{_STAGE}$", land_text, re.M), (
-        f"{_STAGE} is defined but never CALLED — a stage that does not run "
-        f"cannot block anything")
+    # CALLED -- not called IN A PARTICULAR SHAPE. This used to anchor on
+    # the name at the start of a line, optionally behind `if`. The full tier's
+    # independent stages now run at the same time, so the stage is called from
+    # inside the lane body the window launches
+    # (`fn_capture "full:unselectable-tests" run_unselectable_pytest`) and the
+    # column-zero anchor matched nothing at all -- a rule that cannot fail is
+    # not a weaker version of the one it replaced, it is an absent one.
+    #
+    # That the call is REACHED from the top level is not dropped, it is owned
+    # once, by `ci_harness_timeout_ceiling_check`'s execution-prefix digest; a
+    # second copy of that rule here is the drift shape this repo keeps
+    # deleting. What is asserted here is what this file is about: exactly one
+    # call site exists outside the definition.
+    _lines = land_text.splitlines()
+    _define = next(i for i, line in enumerate(_lines)
+                   if line.startswith(f"{_STAGE}() {{"))
+    _close = next(i for i in range(_define + 1, len(_lines))
+                  if _lines[i] == "}")
+    _callers = [i + 1 for i, line in enumerate(_lines)
+                if not (_define <= i <= _close)
+                and not line.lstrip().startswith("#")
+                and re.search(rf"(?<![\w./-]){_STAGE}(?![\w(])", line)]
+    assert len(_callers) == 1, (
+        f"{_STAGE} is defined but is called {len(_callers)} times outside its "
+        f"definition; a stage that does not run cannot block anything, and a "
+        f"stage that runs twice is two lanes where the landing record expects "
+        f"one")
     assert _PROG.name in land_text, (
         f"{_STAGE} does not invoke {_PROG.name}; whatever corpus it runs is "
         f"not the one this issue measures")
@@ -213,23 +188,27 @@ def test_the_selector_still_cannot_emit_anything_in_the_corpus(mod):
         "stage's corpus, it may now overlap the targeted run")
 
 
-def test_the_stage_uses_semantic_progress_not_an_elapsed_verdict(land_text):
-    """A slow-but-progressing session must not become a test failure."""
-    body = land_text.split(f"{_STAGE}() {{", 1)
-    assert len(body) == 2, f"{_STAGE} not found"
-    body = body[1].split("\n}\n", 1)[0]
-    assert "pytest_per_file_junit.py" in body
-    assert "--aggregate-check" in body
-    assert "--timeout" not in body
-    assert "pytest_timeout" not in body
+def test_the_stage_bound_matches_the_other_pytest_stages(land_text):
+    """One harness bound, not two.
 
-
-def test_a_selected_empty_file_cannot_shrink_the_unselectable_denominator(
-        tmp_path):
-    proc = _run_stage_against_empty_selected_file(tmp_path)
-    output = proc.stdout + proc.stderr
-    assert "FAILED=1" in output, output
-    assert "FAIL  unselectable tests" in output, output
+    `ci_harness_timeout_ceiling_check` derives every test's inner-subprocess
+    ceiling from the harness bound. A stage that bounded its pytest differently
+    would make that ceiling ambiguous, and the looser lane is the one that takes
+    the session down instead of one test.
+    """
+    # The bound moved with 7c376e348 (v1.10.69): the stages no longer hand
+    # pytest a `--timeout=`, they drive it through `pytest_per_file_junit.py`,
+    # whose bound is the DRIVER STALL WINDOW. The property is unchanged — one
+    # bound shared by every pytest stage, never a looser lane for this one — so
+    # it is asserted on the bound the script actually declares today.
+    bounds = set(re.findall(r"--stall-after (\S+)", land_text))
+    agg = set(re.findall(r"--aggregate-stall-after (\S+)", land_text))
+    assert not re.search(r"--timeout=\d+", land_text), (
+        "gatekeeper-land.sh reintroduced a second, per-stage pytest bound "
+        "alongside the driver stall window")
+    assert len(bounds) == 1 and len(agg) == 1, (
+        f"gatekeeper-land.sh now carries more than one pytest bound: "
+        f"stall={bounds} aggregate={agg}")
 
 
 def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
@@ -254,11 +233,19 @@ def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
     body = land_text.split(f"{_STAGE}() {{", 1)
     assert len(body) == 2, f"{_STAGE} not found"
     body = body[1].split("\n}\n", 1)[0]
-    assert "pytest_per_file_junit.py" in body, (
-        f"{_STAGE} does not run the semantic pytest driver")
-    assert "PYTHONDONTWRITEBYTECODE=1" in body, (
-        "the stage's pytest may write .pyc into the shipped skills/ tree, "
-        "and nothing else in the landing sequence can see it")
+    # 7c376e348 (v1.10.69) routed the stage's pytest through
+    # `pytest_per_file_junit.py` instead of a bare `python3 -m pytest`, and the
+    # command is written across continued lines — so the token and the pytest it
+    # guards are no longer on ONE line. Join the continuations first, then assert
+    # the same property on the whole command.
+    joined = re.sub(r"\\\n\s*", " ", body)
+    invocations = [ln for ln in joined.splitlines()
+                   if "python3 -m pytest" in ln or "pytest_per_file_junit.py" in ln]
+    assert invocations, f"{_STAGE} runs no pytest at all"
+    for ln in invocations:
+        assert "PYTHONDONTWRITEBYTECODE=1" in ln, (
+            "the stage's pytest may write .pyc into the shipped skills/ tree, "
+            "and nothing else in the landing sequence can see it: " + ln.strip())
 
 
 def test_the_stage_label_carries_no_discovery_count(land_text):
