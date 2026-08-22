@@ -196,6 +196,10 @@ def test_an_inexpressible_stage_is_disclosed_not_refused(tmp_path):
 def test_the_inexpressible_count_is_never_silently_zero(tmp_path):
     root = _tree(tmp_path, _FLOW, {"runner.py": _STAMPED})
     rc, out = _run(root)
+    # Same reason as the disclosure pin in the pointer file: the denominator is
+    # printed before the verdict line, so without this the assertion survives a
+    # gate that never judged anything.
+    assert rc == 0, out
     assert _count_in(out, "0 inexpressible")
 
 

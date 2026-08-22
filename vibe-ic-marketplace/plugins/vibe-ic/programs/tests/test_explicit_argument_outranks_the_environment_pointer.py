@@ -152,6 +152,10 @@ def test_the_disclosure_is_never_silently_zero(tmp_path):
     """A PASS whose scope hides offenders must state how many it hid."""
     _mk(tmp_path, _ANNOUNCED)
     rc, out = _run(tmp_path)
+    # The denominator prints BEFORE the verdict, so this assertion alone is
+    # satisfied by a gate that disclosed its scope and then returned NOT CHECKED.
+    # The disclosure only means anything from a gate that reached a verdict.
+    assert rc == 0, out
     assert _count_in(out, "0 silent reader(s) outside the scope disclosed")
 
 
