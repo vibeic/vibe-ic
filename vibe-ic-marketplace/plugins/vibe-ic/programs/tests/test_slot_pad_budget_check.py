@@ -899,3 +899,61 @@ def test_the_refusal_is_the_USAGE_tier_not_the_vacuous_one():
     p = _traversal_project()
     assert S.main([str(p), "--json", "../out.json"]) == 3
     assert S.main([str(Path(tempfile.mkdtemp(prefix="noslot_")))]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# the published exit-code contract must list every code the program returns
+# --------------------------------------------------------------------------- #
+# Found by reading this branch's own finished diff instead of only running it.
+# Adding the rc-3 usage tier changed what the program RETURNS and left the
+# docstring's "VERDICTS AND EXIT CODES" table listing 0 / 1 / 2 only. That table
+# is what a caller reads to learn which codes to expect, so a wrapper written
+# from it would meet an undocumented 3 and have no rule for it — the same
+# declaration-does-not-match-behaviour shape this branch has been closing all
+# along, this time in its own file.
+
+def test_every_exit_code_the_program_returns_is_documented():
+    import re
+    import subprocess
+
+    proj = _traversal_project()
+    empty = Path(tempfile.mkdtemp(prefix="nocontract_"))
+    prog = str(Path(S.__file__))
+
+    def rc(*argv):
+        return subprocess.run([sys.executable, prog, *argv],
+                              capture_output=True, text=True,
+                              timeout=120).returncode
+
+    observed = {
+        rc(str(proj)),                                  # a real verdict
+        rc(str(empty)),                                 # UNDECIDED
+        rc("--not-a-flag"),                             # usage
+        rc(str(proj), "--json", "../../out.json"),      # usage
+    }
+    assert observed == {0, 2, 3}, f"unexpected exit codes: {sorted(observed)}"
+
+    doc = S.__doc__ or ""
+    # The TABLE ROWS only — the run of indented lines directly under the
+    # heading. Capturing to the next heading instead swept in the prose
+    # underneath, which discusses the codes by name, so deleting a row from the
+    # table left the test green: it was reading the explanation, not the
+    # contract. Verified by deleting a row and watching it fail.
+    m = re.search(r"VERDICTS AND EXIT CODES\n=+\n((?:[ \t]+\S.*\n)+)", doc)
+    assert m, "the program publishes no exit-code contract at all"
+    table = m.group(1)
+    # rc 1 is exercised by the DOES_NOT_FIT tests above; it must still be listed
+    for code in sorted(observed | {1}):
+        assert re.search(rf"\brc {code}\b", table), (
+            f"the program can return {code} and its published contract does "
+            f"not mention it — a caller reading the table has no rule for it")
+
+
+def test_help_is_a_success_not_a_failure():
+    """Documented alongside the usage tier, and easy to get wrong: remapping
+    argparse's exit would make `--help` look like a failure to every wrapper
+    that checks the code."""
+    import subprocess
+    r = subprocess.run([sys.executable, str(Path(S.__file__)), "--help"],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and "usage" in r.stdout.lower()
