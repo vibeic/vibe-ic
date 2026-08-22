@@ -11,6 +11,12 @@ The fixtures below are synthetic on purpose. Driving this against the live
 current repair count, which is the very defect under test one level up.
 
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/<this file>
+
+GREPPING THIS FILE FOR `^def test_` OVERCOUNTS. Several fixtures are synthetic
+test files written to disk, and they contain `def test_...` at column 0 inside a
+string. Measured: 47 real top-level test functions, 50 text matches, and pytest
+collects 47 -- nothing is shadowed or dropped, the three extras are fixture
+contents. Use the AST, or `--collect-only`, when the count matters.
 """
 from __future__ import annotations
 
