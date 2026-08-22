@@ -31,6 +31,7 @@ vendor or part literal appears here or can affect a verdict.
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import sys
@@ -41,6 +42,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from _ppa import area as A                       # noqa: E402
 from _ppa import backends as BK                  # noqa: E402
+from _ppa import benchmark as B                  # noqa: E402
 from _ppa import metrics as M                    # noqa: E402
 from _ppa import power as P                      # noqa: E402
 from _ppa import timing as T                     # noqa: E402
@@ -269,3 +271,90 @@ def test_a_backend_that_needs_an_option_DECLARES_it():
     with pytest.raises(ValueError) as exc:
         BK.driver_for("yosys")(PROGRAMS / "_ppa" / "backends" / "yosys.py")
     assert "stage" in str(exc.value)
+
+
+# ── F-6: A PRODUCER THAT COULD NOT SATISFY ITS OWN CONSUMER'S CONTRACT ─────
+# MEASURED 2026-08-22 on the cross-layer campaign corpus. `ppa_head_to_head_
+# check` returned UNDETERMINED/SCOPE_INCOMPLETE for `h2h_B`: the `power_mw`
+# scope did not declare `mode`. It was not a bad record. `_ppa/power.
+# metric_records` built `base_scope` from five literals plus three keys
+# resolved off the liberty stem, and NO branch of it could set `mode` at all --
+# the only way in was `extra_scope`, and a census of the tree found its three
+# call sites are ALL in tests. So every power record the module has ever
+# written was one required key short BY CONSTRUCTION, refused for a field the
+# producer had no way to fill.
+#
+# The sibling had it all along: `_ppa/timing._mode_for` reads the run's
+# `pvt_matrix.json`. The repair gives power the SAME resolver over the SAME
+# file, so the two axes of one run cannot disagree about that run's mode.
+#
+# These are CENSUS tests in the spirit of the file: they ask whether a producer
+# CAN satisfy the consumer, not whether one hand-built example does.
+
+def _pvt_project(tmp_path, modes):
+    (tmp_path / "constraints").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "constraints" / "pvt_matrix.json").write_text(
+        json.dumps({"modes": modes}), encoding="utf-8")
+    return tmp_path
+
+
+_POWER_RPT = ("# liberty: sky130_fd_sc_hd__tt_025C_1v80.lib\n"
+              "POWER_ANALYSIS_MODE: vectorless\n"
+              "Total   1.0e-3  2.0e-3  3.0e-3  6.0e-3\n")
+
+
+def _power_scope(project):
+    rep = P.parse_power_report(_POWER_RPT, path="p.rpt")
+    rec = P.total_record(rep, stage="phase3_signoff", scenario="default",
+                         project=project)
+    assert rec is not None
+    return rec.get("scope") or {}
+
+
+def test_the_power_producer_CAN_satisfy_every_key_its_consumer_requires(tmp_path):
+    """THE F-6 GUARD, and the one that goes red if the repair is reverted.
+
+    `_ppa/benchmark.REQUIRED_SCOPE['power_mw']` is the consumer's contract.
+    Revert `_ppa/power`'s `mode` resolution and `mode` is missing here for
+    every input, which is the defect: not one power record in the repository
+    could be compared with another."""
+    scope = _power_scope(_pvt_project(tmp_path, ["functional"]))
+    missing = [k for k in B.REQUIRED_SCOPE["power_mw"] if k not in scope]
+    assert not missing, (
+        "the power producer cannot emit these keys its own consumer requires, "
+        f"so every record it writes is SCOPE_INCOMPLETE by construction: {missing}")
+
+
+def test_the_two_axes_of_ONE_run_resolve_the_mode_the_SAME_way(tmp_path):
+    """A power module that resolved the mode by a different rule from its
+    timing sibling would make the two axes of one run disagree about that run,
+    for a reason that has nothing to do with the silicon."""
+    project = _pvt_project(tmp_path, ["functional"])
+    assert P._mode_for(project) == T._mode_for(project)
+
+
+@pytest.mark.parametrize("modes,why", [
+    ([], "pvt_matrix.json declares no modes"),
+    (["functional", "scan"], "declares 2 modes"),
+])
+def test_vacuous_a_mode_nothing_states_is_left_OUT_never_nulled(tmp_path, modes, why):
+    """The module's own rule, applied to the new key: only what was resolved is
+    emitted. A `mode: None` would satisfy the consumer's PRESENCE check and
+    then compare EQUAL to another arm's `None` -- two records that say nothing
+    about their mode, passing as the same mode. That is the hole
+    `SCOPE_SENTINEL` exists to close, and it must not be reopened by the repair
+    that closes SCOPE_INCOMPLETE."""
+    scope = _power_scope(_pvt_project(tmp_path, modes))
+    assert "mode" not in scope, (
+        f"a mode the run does not state was emitted anyway: {scope.get('mode')!r}")
+
+
+def test_a_scope_key_the_producer_could_not_fill_says_WHY(tmp_path):
+    """rc-2-style discipline one layer down: an absence that names its reason
+    is a finding, and a bare absence is a puzzle for the reader."""
+    rep = P.parse_power_report(_POWER_RPT, path="p.rpt")
+    recs = P.metric_records(rep, stage="s", scenario="default",
+                            project=_pvt_project(tmp_path, []))
+    gaps = {(r.get("provenance") or {}).get("mode_gap") for r in recs}
+    assert gaps == {"pvt_matrix.json declares no modes"}, (
+        f"the unfilled `mode` did not name its reason: {gaps}")
