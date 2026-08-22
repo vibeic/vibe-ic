@@ -2774,6 +2774,65 @@ def test_ci_wires_this_gate_so_that_a_vacuous_run_fails():
             f"its exit codes may not mean what its docstring says: {ln!r}")
 
 
+# ── every reach quantity reaches STDOUT, not only the document ──────────────
+
+def _main_assignments():
+    import ast as _ast
+    tree = _ast.parse(PROG.read_text(encoding="utf-8"))
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    found = {}
+    for n in _ast.walk(main):
+        if isinstance(n, _ast.Assign) and isinstance(n.targets[0], _ast.Name):
+            found[n.targets[0].id] = n.value
+    return _ast, main, found
+
+
+def test_every_reach_quantity_in_the_document_also_reaches_the_head_line():
+    """A tier added to `--json` and forgotten in the verdict is invisible to
+    everyone reading a terminal, which is most readers -- CI runs this gate with
+    no --json at all. That is the silent narrowing this file exists to refuse,
+    committed against its own reader.
+
+    Both sides are derived from the code: the head's referenced names and the
+    report's value expressions, compared by NAME. A hand-kept list of "tiers
+    that should be in the head" would be one more thing to forget, and forgetting
+    is the failure being guarded.
+
+    WHAT IT DOES NOT CATCH, measured rather than assumed: a tier whose value is
+    built ONLY from names the head already mentions -- `"phantom": len(unparsed)
+    + 1` slips through, because the intersection is non-empty. Every tier in
+    this file arrived with its own variable (`substituted`, `pins_unmatched`),
+    which this does catch; the composed case is real and uncovered, and saying
+    so is worth more than a stronger-sounding claim."""
+    _ast, main, found = _main_assignments()
+    head, report = found["head"], found["report"]
+    head_names = {x.id for x in _ast.walk(head) if isinstance(x, _ast.Name)}
+
+    # `tool` is the line's own prefix and `findings` has its own [POPULATION]
+    # lines -- both DISCLOSED, neither a count in the bracket. Exempt, and the
+    # exemption for `findings` is checked below rather than trusted.
+    exempt = {"tool", "findings"}
+    missing = []
+    for k, v in zip(report.keys, report.values):
+        if k.value in exempt:
+            continue
+        names = {x.id for x in _ast.walk(v) if isinstance(x, _ast.Name)}
+        if not names & head_names:
+            missing.append(k.value)
+    assert not missing, (
+        "these reach quantities are in the --json document and nowhere in the "
+        f"verdict line, so a reader without --json cannot see them: {missing}")
+
+    printed = set()
+    for n in _ast.walk(main):
+        if isinstance(n, _ast.Call) and getattr(n.func, "id", "") == "print":
+            printed |= {x.id for x in _ast.walk(n) if isinstance(x, _ast.Name)}
+    assert "findings" in printed, (
+        "`findings` is exempt from the head line because it is printed "
+        "separately, and it is no longer printed")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
