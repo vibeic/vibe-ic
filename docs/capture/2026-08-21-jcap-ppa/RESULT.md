@@ -64,6 +64,7 @@ Accepted with no refusal and no unrouted record.
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
 - [Every blockage in this report, measured](#every-blockage-in-this-report-measured)
+- [How much to trust each figure in this report](#how-much-to-trust-each-figure-in-this-report)
 - [Re-measuring the older sweeps, and what it cost to try](#re-measuring-the-older-sweeps-and-what-it-cost-to-try)
 - [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
@@ -2084,6 +2085,39 @@ Both hold. One of them did not hold in the form it was first written: the
 handoff had said to *attach* the crash artefacts, which presumes they exist
 somewhere, and the check turned that into *re-run one arm to produce them* —
 a different instruction with a different cost.
+
+## How much to trust each figure in this report
+
+Every re-measurable figure that was re-measured had moved. Four for four. That is
+worth converting into an instruction rather than a boast, because it means a
+reader cannot treat the numbers here as uniform. They fall into three classes and
+the report now says which is which.
+
+**Bound to live data — cannot go stale without the verifier failing.** Seventeen
+of its fifty checks bind a figure: the batch's own arithmetic (bucket counts, the
+ladder split, the status block, every heading and prose tally that states a
+record count), the two quoted pytest figures, the live gate figures under
+`--slow`, the near-duplicate pair count and maximum, the summary against disk,
+and the bundle's own date. Edit any of them wrongly and the run goes red.
+
+**Re-measured during this lane and current.** The nine sweeps, the record-tree
+counts, the provenance split, the schema-coverage figures, the documented-command
+failure, the six exit codes, the unguarded-import census. Where these moved, the
+row says so and shows both values.
+
+**Dated to the base and NOT re-derivable.** Two rows quote populations whose
+screen was never recorded, so a later attempt produces a conflicting number
+rather than a confirmation — one reconstruction came back at more than twice the
+original. Those rows say so in place, and the relations they support are stated
+in a form that does not lean on the counts. One further row is exempt for a
+different reason its own record gives: the question it asks cannot be answered by
+scanning code at all.
+
+The practical reading: **a figure in this report that is not marked as dated has
+either a check standing over it or a re-measurement behind it.** The two that
+have neither are labelled, and they are labelled because trying to check them is
+what revealed that an unrecorded screen does not merely leave a figure
+unverifiable — it manufactures a disagreement that looks like drift.
 
 ## Re-measuring the older sweeps, and what it cost to try
 
