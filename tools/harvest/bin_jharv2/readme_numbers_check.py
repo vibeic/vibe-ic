@@ -52,6 +52,8 @@ def main():
     def vacuous_in_joined():
         return sum(1 for r in rows('verdicts_joined.tsv')
                    if len(r) >= 5 and 'all 0 file(s)' in r[3] and r[2] in ('LANDED', 'ABANDON', 'DROP'))
+    WORDS = {'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10,
+             'eleven':11,'twelve':12,'thirteen':13,'fourteen':14,'fifteen':15}
     def gates_declared():
         with open(os.path.join(base, 'bin_jharv2', 'check_all.sh')) as f:
             return sum(1 for l in f if l.startswith('add "'))
@@ -61,6 +63,20 @@ def main():
         (r'\*\*authorise deletion\*\* — (\d+) rows do', deletion_bound),
         (r'deletion-bound — (\d+) of \d+',        vacuous_in_joined),
     ]
+    # The gate COUNT is itself a prose claim, and it was not checked. It is written as a word
+    # ("Twelve gates"), which is why the digit-matching claims above never covered it -- a gate that
+    # only sees digits cannot see a number spelled out.
+    wm = re.search(r'\b(' + '|'.join(WORDS) + r') gates\b', txt, re.I)
+    if wm:
+        claimed_g = WORDS[wm.group(1).lower()]
+        actual_g = gates_declared()
+        ok = claimed_g == actual_g
+        print(f"  {'ok  ' if ok else 'WRONG'} /<word> gates/  README={claimed_g}  actual={actual_g}")
+        if not ok: bad += 1
+        checked_prose_extra = 1
+    else:
+        print("  MISSING  no '<word> gates' claim in the README"); bad += 1
+        checked_prose_extra = 0
     print("  -- prose claims --")
     checked_prose = 0
     for rx, fn in CLAIMS:
@@ -75,7 +91,7 @@ def main():
     if checked_prose == 0:
         print("  *** no prose claims matched -- that half of the check is vacuous ***")
         return 2
-    print(f"  checked {len(hits)} table counts + {checked_prose} prose claims, {bad} wrong")
+    print(f"  checked {len(hits)} table counts + {checked_prose + checked_prose_extra} prose claims, {bad} wrong")
     return 1 if bad else 0
 
 if __name__ == '__main__':
