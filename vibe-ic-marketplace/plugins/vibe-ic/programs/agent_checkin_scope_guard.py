@@ -65,6 +65,7 @@ import json
 import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # --------------------------------------------------------------------------
 # Protected zones (repo-root-relative path prefixes). Order matters for
@@ -294,7 +295,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     if args.json:
         try:
-            with open(args.json, "w", encoding="utf-8") as fh:
+            with atomic_writing(args.json, encoding="utf-8") as fh:
                 json.dump(result, fh, indent=2)
         except OSError as exc:
             print(f"ERROR: cannot write --json {args.json}: {exc}", file=sys.stderr)
