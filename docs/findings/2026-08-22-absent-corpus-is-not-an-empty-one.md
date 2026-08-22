@@ -224,8 +224,47 @@ is accounted for below, none of them by this change:
   `test_gate_fixtures_discriminate.py` — **the same 3 IDs are red on pristine
   `origin/main`.** Pre-existing; the parity pair is the protected-tuple defect
   reported in `2026-08-22-protected-tuple-on-main-matches-neither-state.md`.
-* 1 ordering flake in `test_gate_process_attestation.py` under load 45 on 32
-  cores; passes 3/3 in isolation and its fixture script never calls
-  `gate_dispatch_over`, so no changed line is on its path.
+* 1 ordering flake in `test_gate_process_attestation.py`::`test_real_dispatch_
+  writes_owner_only_records_into_its_summary`. Re-measured 2026-08-22 in
+  isolation, and the earlier "passes 3/3 in isolation" in this file was too
+  weak a statement to be worth making: it is a REAL intermittent, not a
+  load artefact. It races on the order two parallel gates append their
+  attestation records, and it flakes **on a pristine `origin/main` worktree
+  too** — 5 passed / 1 failed in 6 consecutive isolated runs there, 2 passed /
+  1 failed in 3 on this branch. Pre-existing, not this change: its fixture
+  script never calls `gate_dispatch_over`, so no line changed here is on its
+  path. Not fixed here because it is a different defect from #1764 and a fix
+  for it belongs in a change somebody chose; recorded rather than left as an
+  unexplained red.
 
 No test was relaxed, no assertion widened, no baseline written.
+
+## Independent re-measurement of this branch, 2026-08-22
+
+The record above was written by the run that made the change. Re-measured after
+it, on a clean worktree of `fix/j1764-absent-is-not-empty` at `9b355d2ba`,
+`PYTHONDONTWRITEBYTECODE=1`, host load 70:
+
+* The 28 test files that name `gate_dispatch_over`, `_gate_dispatch.sh`,
+  `GATE_CORPUS_STATE` or the routed-DEF producer: **597 passed, 6 skipped,
+  1 red** — and the 1 is the `test_gate_process_attestation.py` ordering
+  intermittent above, which flakes on pristine `origin/main` as well.
+* **The red without the fix, reproduced.** The six production files reverted to
+  `origin/main` and every test on this branch kept: **6 failed, 13 passed** in
+  `test_routed_def_corpus_dispatch.py`. The failures are exactly the pair-
+  identity set plus the closing-rc test:
+  `test_an_unconfigured_moved_corpus_is_explicit_no_corpus`,
+  `test_the_absent_exit_code_is_one_number_in_two_languages`,
+  `test_an_absent_corpus_and_a_read_but_empty_one_do_not_share_a_verdict`,
+  `test_the_dispatcher_gives_absent_and_empty_different_rows`,
+  `test_the_shipped_hygiene_script_reports_this_checkout_as_NOT_FOUND`,
+  `test_an_absent_corpus_does_not_close_the_hygiene_dag_green`. The last one
+  captures the whole defect in one log: the producer prints `NO_CORPUS: …
+  NOTHING WAS SCANNED`, the next line calls the corpus `EMPTY`, and the DAG
+  closes rc 0.
+* `test_an_unconfigured_moved_corpus_is_explicit_no_corpus` is the one
+  pre-existing test whose assertion changed. It was **tightened, not relaxed**:
+  every assertion it made on `main` still stands, and `returncode == 0` became
+  `returncode == NO_CORPUS_RC` plus an explicit `returncode != 0`, plus two new
+  assertions that the diagnostic names what it looked for. That reversal IS the
+  behaviour change this issue asked for, and it is argued in full above.
