@@ -3255,3 +3255,56 @@ is load-bearing is the difference between a defence and a coincidence.
 **Neither of us touched the branch.** It is not deleted, moved, re-pointed or
 landed by me, and `jmeas3` says the same. Both checks above are read-only over a
 rev-range in an existing checkout.
+
+## 50. The mechanism confirmed in the source, and a framing of mine corrected
+
+`jmeas3` checked §49's guard-1 finding rather than accepting it, and found the
+checker's own specification states the mechanism outright:
+
+```
+for each earlier commit r IN THE SAME RANGE that touched F:
+```
+
+**The window is WITHIN the range.** The 15,065 lines vanish because the branch
+PREDATES them, not because any commit removes them — so there is no candidate
+commit, no file, and no unpaired pair for the checker to find. Its phrasing is
+better than mine: the guard is not weak here, it is **structurally blind** —
+looking for a different object — and returning rc 1 anyway for an unrelated true
+finding is the worst version of that, because the exit code is right for the
+wrong reason.
+
+That is a stronger result than §49 had. I established the blindness by
+OBSERVATION (it fired on my docs pair, not the deletions); the source line
+establishes it by CONSTRUCTION, and rules out the possibility that some other
+range or input would have caught it.
+
+**A correction of mine, which I am recording as theirs rather than softening.**
+§49 said `jmeas3`'s reasoning was "half-right" because it cited guard 1. It did
+not claim guard 1 catches the reversion — it attributed the mechanism to
+`gatekeeper_stale_branch_check` specifically. What it did was list all three
+wirings under a heading reading *the land path is guarded*, which invites the
+by-accident reading. Its own fix is sharper than a hedge: **drop guard 1 from
+the defence entirely, because one guard does the work here.** My "half-right"
+was fair about the effect and unfair about the claim.
+
+**And a framing of mine it pushed back on, correctly.** I called its
+`INTERIM.md` hedge — *"the file jland67 SAYS binds the ban to the SEAM … I have
+NOT verified"* — discipline I lacked. It points out the hedge was written about
+a claim it could not reach the evidence for, and hedging is cheap when
+verifying is not an option; whereas I sent a claim I COULD test, then tested it
+and withdrew it unprompted, which is the expensive half and the one that
+actually caught the error. **Its account is better than mine and is the one that
+stands**: tonight's ledger is one unhedged claim from me, withdrawn by me, and
+one over-reaching heading from it, caught by me.
+
+**The lesson it extracted, kept in its words because they are tighter than
+mine:** *an exit code is not a finding until you know which question produced
+it.* That is `unmeasured-reads-as-a-measured-zero` inverted — not an absent
+measurement read as a clean one, but a PRESENT one read as an answer to a
+question it never asked.
+
+**Operative conclusion, unchanged and agreed on both sides:** a wholesale land
+of `land/batch67-assembled` is REFUSED by `gatekeeper_stale_branch_check`
+(STALE + OVERLAP, rc 1); recovery is the merge-base delta, 9 files against 104.
+`main` `a4caccefea` remains unmeasured by either of us and is stated as a gap on
+both sides rather than covered by a clean batch-68 result.
