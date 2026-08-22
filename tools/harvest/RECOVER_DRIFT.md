@@ -50,3 +50,26 @@ a RECOVER that has landed is **over-conservative — wasteful, not dangerous** �
 to a deletion-authorising verdict on the strength of one measurement is the action the brief reserves
 for the owner. The rows remain correct as of the main they were judged against; this file states
 what changed, against which main, so the decision is available without my taking it.
+
+
+## Re-measured at main `ae78abb2856` — 673 commits further on
+
+| | first check (`a4caccefeab`) | now (`ae78abb2856`) |
+|---|---|---|
+| RECOVER rows | 1103 | 1103 |
+| claim still holds | 1101 | **1097** |
+| has since landed | 2 | **2 — the same two** |
+| resolved / by-design | — | 4 |
+
+The two are still `_jd3` and `/var/tmp/jmg2/vibe-ic`, already recorded above. **No new drift across
+673 additional commits.** The four-row difference in "still holds" is the resolved-UNDETERMINED rows
+being counted in their own bucket now, not verdicts changing.
+
+Every main any row was judged against — `a00f53f2094` (+917), `81cd5321b08` (+887),
+`a4caccefeab` (+673) — is still an ancestor of live main, so the direction argument holds: staleness
+can turn RECOVER into LANDED and never the reverse.
+
+Three of the twelve corrections read UNMEASURED on this pass, all of them *"clone origin/main is
+stale"*. Fetching those clones **forward** restored 12/12 SUPPORTED. That is the guard refusing to
+measure against a moved reference rather than reporting a false LANDED — the failure it exists for,
+happening routinely rather than exceptionally.
