@@ -24,6 +24,22 @@ Editing the joined file would not hold -- it regenerates, and the disagreement
 would come back silently with nothing to say it had ever been noticed. A gate
 holds. This one is red until the two agree.
 
+TWO KINDS OF DISAGREEMENT, AND THIS GATE CANNOT TELL THEM APART.
+  (1) The consumable is STALE -- regenerated from an older snapshot. The three
+      rows above are this, and so is /home/reyerchu/_jintent/wt in shard B (head
+      c5c2e228244, 6 of 6 owned files differing from current main, measured by
+      jharv2 on .114 and confirmed here from the commit rather than taken on
+      report). Four confirmed deletion-bound errors in the consumable.
+  (2) The HOST MOVED between the two measurements. /home/reyerchu/_jcpath2/wt_new
+      has gone ABANDON -> RECOVER -> ABANDON across three measurements because
+      it and its sibling genuinely diverged and re-converged; both now sit at
+      c0ecd5f1310, tree 5bf932a9082, both clean. BOTH files were correct when
+      written and neither needs fixing.
+So this reports the disagreement and its DIRECTION and stops there. Deciding
+which kind it is means going back to the host -- which is why every shard-C row
+carries the head it was judged at and says "re-measure before acting". A row that
+flaps across regenerations is evidence about the DIRECTORY, not about the file.
+
 PROVING A GATE. This script refuses if either input yields zero rows, because
 "found nothing" and "parsed nothing" print the same thing -- which is the whole
 lesson of tonight. It was proved in both directions before being shipped: red on

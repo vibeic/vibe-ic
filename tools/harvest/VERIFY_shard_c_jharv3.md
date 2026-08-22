@@ -418,3 +418,59 @@ empty joined view            -> REFUSES, exit 1 — not "0 disagreements"
 That last one is the whole night in one line: **"found nothing" and "parsed
 nothing" print the same thing.** A checker that cannot tell them apart will
 eventually report the second and be believed as the first.
+
+### The fourth deletion-bound row, closed by measurement
+
+I flagged `/home/reyerchu/_jintent/wt` to jharv2 and declined to rule on it —
+shard B's row, shard B's grammar, and I had not measured it. jharv2 measured it
+on .114 against current `origin/main`: head `c5c2e228244`, 6 files owned, 6
+differing, working tree clean.
+
+Re-checked here from the commit itself rather than taken on report:
+
+```
+vibe-ic-marketplace/README.md   at c5c2e228244  bb44e3d04a429770
+                                on current main dbd748602e224556
+```
+
+Same values. **`verdicts_shard_b.tsv` says RECOVER and is right; the joined view
+says LANDED and is stale** — regenerated while that worktree still sat on bare
+main, before it moved to `c5c2e228244`. An executor reading the consumable
+deletes six files that differ from main.
+
+So the consumable carries **four** confirmed deletion-bound errors, not three plus
+a suspicion: `_jd3`, `_a1456`, `wt_jwire2` in shard C and `_jintent/wt` in shard
+B. All four measured, none guessed.
+
+### Not every parity disagreement is a stale consumable
+
+jharv2's other flagged row is the counter-example, and `joined_parity.py` would
+misdescribe it without this note. `/home/reyerchu/_jcpath2/wt_new` has gone
+**ABANDON → RECOVER → ABANDON** across three measurements — not indecision, and
+not a stale file. The two worktrees genuinely diverged and re-converged while we
+were writing: they now both sit at `c0ecd5f1310`, tree `5bf932a9082`, both clean
+under `--untracked-files=normal`.
+
+These hosts are live. A shard file and a joined view can disagree because the
+consumable is stale — the four rows above — or because the *host moved between
+the two measurements*, in which case both files were correct at the moment they
+were written and neither needs fixing.
+
+The gate cannot tell those apart, and it should not pretend to. It reports the
+disagreement and the direction; deciding which kind it is requires going back to
+the host. A row that "flaps" across regenerations is evidence about the
+directory, not about the file — which is exactly why every row in shard C carries
+the head it was judged at, and why the instruction beside each one is
+*re-measure before acting*.
+
+### What jharv2 said about their own grammar, kept because it generalises
+
+> I wrote it for a human reader and shipped it as machine-checkable evidence
+> without ever writing the machine.
+
+That is the seventh false red seen from the other side. "Checkable by somebody
+who was not there" was satisfied for a human and assumed for a machine, and the
+assumption went untested because nobody wrote the consumer. It is the same
+sentence as *found nothing and parsed nothing print the same thing*, one altitude
+up: an unexercised reader and an absent reader are indistinguishable until
+something tries to read.
