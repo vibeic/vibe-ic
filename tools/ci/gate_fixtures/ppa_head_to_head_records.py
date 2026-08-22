@@ -211,24 +211,54 @@ def _record(baseline_tuned_by_us: bool) -> dict:
 #: the record. Placing it correctly is also what keeps `$VIBE_IC_BENCHMARK_DATA`
 #: from steering the fixture if a developer happens to have it set: the named
 #: root wins whenever it carries a corpus of its own.
-_RECORD = "benchmark-data/records/first_head_to_head.json"
+#: The corpus directory THIS gate's declaration names. The same checker is
+#: wired three times over three different corpora — `benchmark-data`,
+#: `ppa-crosslayer`, `ppa-e2e` — and a fixture must drive the gate AS THE
+#: DISPATCHER DECLARES IT, so the campaign variants are sibling modules that
+#: reuse this record and only move the directory. The schema lives in ONE place
+#: on purpose: it is a five-generation drift in exactly this record that sent
+#: the original fixture dark, and three copies would have drifted three ways.
+CORPUS = "benchmark-data"
+_RECORD_REL = "records/first_head_to_head.json"
 
 
-def _tree(work: Path, baseline_tuned_by_us: bool) -> Path:
+def _record_path(root: Path, corpus: str) -> Path:
+    return root / corpus / _RECORD_REL
+
+
+def _tree(work: Path, baseline_tuned_by_us: bool,
+          corpus: str = CORPUS) -> Path:
     root = F.git_init(work / "subject")
-    p = root / _RECORD
+    p = _record_path(root, corpus)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(_record(baseline_tuned_by_us), indent=2) + "\n",
                  encoding="utf-8")
     return root
 
 
+def build_can_pass(work: Path, corpus: str) -> Path:
+    """The CAN-PASS subject, for whichever corpus a variant's gate names."""
+    root = _tree(work, baseline_tuned_by_us=False, corpus=corpus)
+    F.git_commit(root)
+    return root
+
+
+def build_can_fail(work: Path, corpus: str):
+    """The CAN-FAIL subject: the same record with the opponent tuned by us."""
+    root = _tree(work, baseline_tuned_by_us=False, corpus=corpus)
+    F.git_commit(root)
+    p = _record_path(root, corpus)
+    doc = json.loads(p.read_text(encoding="utf-8"))
+    doc["arms"][1]["tuned_by_this_project"] = True
+    p.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    F.git_commit(root, "mutate")
+    return root, "tuned_by_this_project"
+
+
 def can_pass(work: Path) -> Path:
     """A record the gate must ACCEPT: same problem on both arms, all three axes,
     no collapsed scalar, the baseline on its own upstream defaults."""
-    root = _tree(work, baseline_tuned_by_us=False)
-    F.git_commit(root)
-    return root
+    return build_can_pass(work, CORPUS)
 
 
 def can_fail(work: Path):
@@ -238,11 +268,4 @@ def can_fail(work: Path):
     the direction of dishonesty a head-to-head has room for, and the record
     carries no other sign of it.
     """
-    root = _tree(work, baseline_tuned_by_us=False)
-    F.git_commit(root)
-    p = root / _RECORD
-    doc = json.loads(p.read_text(encoding="utf-8"))
-    doc["arms"][1]["tuned_by_this_project"] = True
-    p.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    F.git_commit(root, "mutate")
-    return root, "tuned_by_this_project"
+    return build_can_fail(work, CORPUS)
