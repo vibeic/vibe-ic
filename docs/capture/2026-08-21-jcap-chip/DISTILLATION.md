@@ -234,7 +234,21 @@ load-bearing:**
 
 1. take either side to clear the conflict;
 2. run `programs/gen_program_inventory.py` and `tools/gen_programs_index.py`;
-3. update the stated counts in the two bound READMEs **by key**.
+3. update the stated counts in the two bound READMEs **by key, driven by the
+   drift test's own output** — never from a hand-written list of old values.
+
+   Run `test_program_inventory_no_drift.py`, and it names every stale figure
+   exactly:
+
+       plugins/vibe-ic/README.md:222: states 1176 for programs_catalogued,
+                                      tree has 1177
+
+   Apply those pairs. MEASURED, and this is why the step reads this way: fixing
+   them from a hand-maintained list of the counts I had seen before missed
+   `programs_helpers_and_shims` (74 -> 75) entirely, because that population had
+   never appeared in any table I had written down, and the drift test stayed red
+   until the test's own output drove the edit. A list of what you remember is not
+   a list of what is stated.
 
 Step 3 is easy to skip and does not fail quietly — omitting it on a real trial
 merge left three `test_program_inventory_no_drift.py` failures
@@ -438,4 +452,11 @@ quoted from the older table: against v1.11.69 the composed inventory is
 on the old base. That is exactly why the recipe REGENERATES rather than picking a
 side — the right number is whatever the generators say at assembly time, and any
 number written down here is only true of the base it was measured against.
+
+**The branch is verified current against `a4caccefe` (v1.11.69) on every axis:**
+4 conflicts (the same four counter files), 0 unresolved after the recipe, D1
+program-test-coverage PASS over 1252 composed programs, D2 PASS, 23/23 inventory
+drift, 216 of this lane's tests passing, and the twelve gates returning their
+branch verdicts with `only_the_declaring_step`'s six-path finding set
+byte-identical.
 
