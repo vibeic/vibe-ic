@@ -115,7 +115,7 @@ The first time this skill landed (v0.1.34) it captured 9 RTLLM spec-to-RTL
 recoveries into the `ic-expert-agent` skill. But the SAME mechanism applies
 to every step in the Vibe-IC flow — each step has its own canonical target
 program (Bucket A) and target skill (Bucket B), declared in
-`benchmark-harness/CAPTURE_ROUTING.json`:
+`benchmark/CAPTURE_ROUTING.json`:
 
 | Step domain | Bucket A target (program) | Bucket B target (skill) |
 |---|---|---|
@@ -133,7 +133,7 @@ program (Bucket A) and target skill (Bucket B), declared in
 | Analog A7 post-layout resim | `analog_a7_post_layout_resim_check.py` | `analog-extraction-resim` |
 | Mixed-signal M1-M4 | `mixed_signal_m1_top_merge_check.py` | `mixed-signal-cosim` |
 | MCP-EDA tool behavior | `mcp-eda/src/tools/*.js` | per-skill (`synth-doctor`, etc.) |
-| Benchmark harness | `benchmark-harness/score_*.py` | `open-benchmark-methodology` |
+| Benchmark harness | `benchmark/score_*.py` | `open-benchmark-methodology` |
 
 The routing table is consulted by `programs/enhancement_emit.py` to put each
 recovery in the right place.
