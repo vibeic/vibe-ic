@@ -427,10 +427,35 @@ distinct directories, 387 clean". Both numbers are wrong: `146d665` publishes
 directories. The one-hit result is unchanged; only my count of what it was
 measured over was.
 
-Targeted regression (load 61–72 on 32 cores at first measurement): the checker's
-own suite plus every test file that names its rules — 125 passed, 12 skipped —
-and `size_policy_drift_check.py`, which probes `check_folder` as its decision
-entry point, still exits 0.
+Targeted regression, **[re-measured @ a4caccefe]** and this time as an A/B
+rather than a single arm. The set is every test file under `programs/tests/`
+naming `benchmark_evidence_structure_check`, `NESTED_DUPLICATE` or
+`check_folder` — 16 files. Load 75–106 on 32 cores, so the elapsed figures below
+are not comparable to anything and are recorded only to say the runs completed.
+
+| arm | result |
+|---|---|
+| this branch, all 16 files | **240 passed, 62 skipped, 6 failed** (318 s) |
+| `origin/main`, the file carrying all 6 | **52 passed, 61 skipped, 6 failed** (298 s) |
+| both arms, the 6 failing node ids alone | 6 failed / 6 failed, **identical failure set, identical assertion text** |
+
+The 6 are `test_matrix_d3_outputs_produced::test_d3_required_outputs_are_produced`
+at `step15/17/19/20/30/32`, and they are **pre-existing reds on `origin/main`**,
+not introduced here. The subset rule this repo lands on — the candidate's
+failures must be a subset of the base's — is satisfied with an empty difference.
+The claim is not "they look unrelated": the same six node ids were run alone on
+a clean `origin/main` worktree and on this branch, and both the set and the
+assertion text `diff` clean.
+
+They also are not a coincidence of subject. Each asserts
+`assert not cites, _corpus_skip_would_hide(sid, cites)` — the guard that, when
+the corpus is absent, REFUSES by name a record citing a run root no host can
+answer instead of letting it skip. So they are a second, independent
+consequence of the same corpus move this whole record is about, and the repo's
+answer to it there is the same as the answer here: refuse loudly, do not soften.
+
+`size_policy_drift_check.py`, which probes `check_folder` as its decision entry
+point, exits 0 on both arms with **byte-identical output** (`diff` clean).
 
 ### And it does NOT reach the three instances above. Measured, not assumed.
 
@@ -572,6 +597,68 @@ being able to run the landing path, is how a fix becomes an outage.
 So it is measured, named, and left. It is a disclosure defect, not a false
 verdict: no gate says PASS over something it failed, and nothing here is
 weakened by leaving it.
+
+## Named and NOT taken, second: a correct pointer is diagnosed as a broken one
+
+Found while running the A/B above, by doing the one thing the repository's own
+error message tells an operator to do.
+
+`tests/_published_corpus.py::corpus_root` decides what
+`$VIBE_IC_BENCHMARK_DATA` means for **56** test modules. Its docstring sets out
+the case analysis, and the case analysis is deliberate — it exists because
+`VIBE_IC_BENCHMARK_DATA=<empty dir> pytest` once produced *"29 passed, 2
+skipped"*, i.e. a mistyped path turned a whole corpus suite green:
+
+> Nobody set the pointer and the repo has no cells → None. Honest.
+> Somebody SET the pointer and it holds no cells → raise. **They named a corpus.
+> The name is wrong, or the clone failed, or the CI step that was meant to fetch
+> it did nothing.**
+
+Three causes, and on 2026-08-20 a fourth appeared that is none of them: the
+pointer is right, the clone succeeded, the fetch worked, and **the corpus
+genuinely holds zero cells because the publisher withdrew all four**. Measured
+— pointer bound at a real `git clone` of `vibeic/benchmark-data` at its live tip
+`3b58ccd42`:
+
+```
+E   _published_corpus.CorpusPointerBroken: VIBE_IC_BENCHMARK_DATA=… names a
+    corpus with no published cell under ic/<design>/v<version>_<PDK>/ (the path
+    exists but is empty of cells). This is NOT the same as having no corpus:
+    you said where it is. Unset VIBE_IC_BENCHMARK_DATA to run these checks as
+    skipped, or point it at a clone of vibeic/benchmark-data.
+1 error in 2.25s
+```
+
+The module names three causes, all three false; and it closes by advising the
+reader to *point it at a clone of `vibeic/benchmark-data`* — which is exactly
+what was done. **The remedy it prints is the action that produced the error.**
+
+This is the same defect as the one #1764 fixed for the producer — *an absent
+corpus and a measured-empty one are not the same state* — surviving one layer
+down, in the test helper, where nobody looked for it.
+
+**Reach, measured rather than assumed, because it decides how urgent this is.**
+It is **not** on the landing path today. `gatekeeper_review._published_corpus_binding`
+adds the pointer to the environment of the *hygiene set* only
+(`gatekeeper_review.py:1345-1355`, inside the `hygiene_summary_` scope) — which
+is why the routed-DEF row reads `producer rc 0` at all — and pytest runs without
+it, so those 56 modules SKIP rather than error. What this hits is a human or an
+agent who sets the pointer, which is what the message above tells them to do,
+and what the sibling check `evidence_citation_resolves_check.py` documents in
+its own USAGE.
+
+**Not taken, and the reason is the opposite of the usual one.** The obvious edit
+— return `None` for the zero-cell case — is a LOOSENING, and it is the precise
+loosening this module was written to prevent: it would turn 56 modules from
+ERROR to green-by-skip and reinstate the "29 passed, 2 skipped" defect its
+docstring records. The correct fix is a FOURTH state, mirroring #1764: separate
+*"this path is not a corpus"* (broken → raise) from *"this IS the published
+corpus and its cell population is zero"* (measured → skip, loudly, stating the
+measurement). That needs a decision about what identifies a genuine corpus
+clone, and it changes collection behaviour for 56 modules — with no way to run
+the suite that would tell me whether it did. **Measured, named, and left**, with
+its evidence, so the next person starts from a reproduction instead of a
+suspicion.
 
 ## What this deliberately does not do
 
