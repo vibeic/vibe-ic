@@ -41,12 +41,25 @@ ONLY rc 1 STOPS THE STEP, and the bound is deliberate:
   rc 2  INCOMPLETE — most often "no ceiling declared". MEASURED, and this is a
         CORRECTION of the number an earlier version of this block carried: it
         cited 176 of 177 published L19 copies, from a corpus that has since been
-        withdrawn and cannot be re-derived. The sound figure is in this
-        repository and was swept independently for a different gate —
-        `l19_pdk_floorplan_contract_check`: across 136 real converge runs on all
-        5 fleet machines, `die_area_budget_um` is null in 118. So roughly ONE RUN
-        IN SEVEN does declare a die, and this gate is materially less inert than
-        the older number implied.
+        withdrawn and cannot be re-derived at all.
+
+        The better figure is CITED, not measured here, and the difference
+        matters: `l19_pdk_floorplan_contract_check` records that across 136 real
+        converge runs on all 5 fleet machines `die_area_budget_um` is null in
+        118. That is dated, attributed and in this repository — but its
+        population is fleet run trees, which this file's reader may not be able
+        to reach either, so it is an ATTRIBUTED CITATION and not something a
+        reviewer can re-derive from the tree alone.
+
+        What CAN be measured from a developer machine, and was: 24702
+        `L19_CONSTRAINTS_PDK.json` copies, of which 606 declare a die. That
+        population is contaminated — it counts test fixtures and repeated
+        scratch copies, and its declared values include obvious ones
+        ('1234x5678', 'abc') beside real ones — so it does NOT confirm or refute
+        118/136 and must not be quoted as a rate. It establishes only that the
+        field is genuinely populated in practice rather than dead.
+
+        Either way this gate is materially less inert than 176-of-177 implied.
 
         AND THE FIELD IS POPULATABLE, so a null is the design's silence rather
         than the flow's: `floorplan_contract` extracts a die WxH from the

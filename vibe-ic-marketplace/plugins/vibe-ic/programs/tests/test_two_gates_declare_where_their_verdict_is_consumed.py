@@ -858,11 +858,13 @@ def test_the_runner_turns_that_rc_one_into_a_failed_step():
 
 def test_only_rc_one_stops_the_step_and_the_bound_is_deliberate():
     """rc 2 is "no ceiling declared" for 118 of 136 real converge runs across all
-    5 fleet machines — the figure swept for `l19_pdk_floorplan_contract_check`,
-    which is in this repository and reproducible. An earlier version of this
+    5 fleet machines — CITED from `l19_pdk_floorplan_contract_check`, which is
+    dated and attributed and in this repository, though its population is fleet
+    run trees a reader here may not be able to reach. An earlier version of this
     docstring said "176 of 177 published L19 copies", from a corpus withdrawn on
-    2026-08-20 that nobody can re-derive; it overstated the case for this bound
-    by more than an order of magnitude.
+    2026-08-20 that cannot be re-derived at all; it overstated the case for this
+    bound by more than an order of magnitude. A second draft called the
+    replacement "reproducible", which was also wrong — it is a citation.
 
     If rc 2 ever starts stopping the step, 118 of 136 runs go non-green over a
     requirement they never wrote — a product decision this wiring deliberately
