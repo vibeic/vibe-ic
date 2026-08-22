@@ -77,12 +77,32 @@ def _logical_lines(text: str):
     return re.sub(r"\\\n\s*", " ", text).splitlines()
 
 
+def _wiring_text() -> str:
+    """The wiring file, or a SKIP that names what could not be read.
+
+    `programs/tests/` ships with the plugin and `tools/ci/` does not, so on an
+    installed plugin this file has no subject. `_invocations` guarded that from
+    the start; `test_no_ppa_exemption_still_claims_that_no_record_has_been_filed`
+    read WIRING directly and did not, so THREE of four reads were guarded and the
+    fourth raised FileNotFoundError. MEASURED by moving the wiring file aside and
+    running this file's whole family: 1 failed, 44 passed, 9 skipped — the one
+    failure being that traceback, about nothing to do with exemptions.
+
+    A guard that ERRORS because its subject is absent is
+    blocking-because-unreadable, which is the state this family exists to keep
+    apart from a finding.
+    """
+    if not WIRING.is_file():
+        pytest.skip(f"{WIRING} is not in this checkout — the plugin's tests ship "
+                    "without tools/ci/, so this guard has no subject here. "
+                    "NOT a pass and NOT a finding.")
+    return WIRING.read_text(encoding="utf-8")
+
+
 def _invocations():
     """(checker, {flag: raw-argument}) for every PPA record gate in the wiring."""
-    if not WIRING.is_file():                       # pragma: no cover
-        pytest.skip(f"wiring not present at {WIRING}")
     out = []
-    for line in _logical_lines(WIRING.read_text(encoding="utf-8")):
+    for line in _logical_lines(_wiring_text()):
         stripped = line.lstrip()
         if stripped.startswith("#") or "$PG/ppa_" not in line:
             continue
@@ -219,7 +239,7 @@ def test_no_ppa_exemption_still_claims_that_no_record_has_been_filed():
     # this wiring file does, to record what it was corrected from — and a test
     # that could not tell a quotation from a live declaration would force the
     # history to be deleted to stay green.
-    guilty = [line for line in _logical_lines(WIRING.read_text(encoding="utf-8"))
+    guilty = [line for line in _logical_lines(_wiring_text())
               if line.lstrip().startswith("uncheckable_until")
               and "no run in this repository has filed one yet" in line]
     assert guilty == [], (
