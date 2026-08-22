@@ -1007,3 +1007,83 @@ def test_knob_the_space_guard_is_what_makes_that_cost_zero(tmp_path):
     assert without.returncode == 0, without.stderr      # the control
     assert withd.returncode == 1, withd.stdout + withd.stderr
     assert "metal-only ECO" in withd.stderr
+
+
+# ---------------------------------------------------------------------------
+# THE GRADED SIGNAL: DOES THE OPTIMISER GET A GRADIENT AWAY FROM THE DELETION?
+# ---------------------------------------------------------------------------
+# The knob recommendation in this lane leans on a claim about `search_penalty`:
+# that an optimiser is steered out of the spare-deleting region rather than
+# sampling it blind. That is a claim about code and it was made without being
+# measured. Measured:
+#
+#     declared, spares kept      eco SATISFIED       penalty 0.0
+#     declared, spares deleted   eco VIOLATED        penalty 1.0   <- gradient
+#     silent contract, deleted   eco NOT_APPLICABLE  penalty 0.0   <- no gradient
+#
+# The third row sharpens the finding this whole file is about. On a silent
+# contract the hard gate does not refuse the candidate AND the graded penalty
+# gives the search nothing to walk down. Both signals go quiet together, which
+# is worse than either alone: the search is not merely allowed to publish the
+# deletion, it has no reason to look elsewhere.
+def _penalty_for(candidate, pol):
+    result = F.promotion_verdict(candidate, pol)
+    return result, F.search_penalty(result, F.PenaltyWeights())
+
+
+def _deleted_with_tie_off_stated():
+    """A deleted population whose tie-off record EXISTS and says NOT_TIED_OFF.
+
+    `spares(tied=None)` omits the record, which makes the axis UNDETERMINED for
+    a second reason; this fixture keeps the refusal attributable to the count.
+    """
+    return clean_nine() + spares(
+        count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
+        positions=0, tied="NOT_TIED_OFF")
+
+
+def test_penalty_a_deleted_population_carries_a_penalty_term():
+    """The graded half. A search that only saw the hard verdict would have no
+    gradient to walk back along; the axis contributes a term like any other."""
+    _r, pen = _penalty_for(cand("gone", _deleted_with_tie_off_stated()),
+                           policy())
+    assert pen["terms"].get(F.ECO_AXIS) == 1.0, pen["terms"]
+    assert pen["penalty"] >= 1.0
+
+
+def test_penalty_a_preserved_population_carries_none():
+    """A term on every candidate would be a constant, not a signal."""
+    _r, pen = _penalty_for(cand("kept", clean_nine() + spares()), policy())
+    assert F.ECO_AXIS not in pen["terms"], pen["terms"]
+    assert pen["penalty"] == 0.0
+
+
+def test_penalty_on_a_silent_contract_BOTH_signals_go_quiet():
+    """The finding, in its sharpest form.
+
+    With no requirement declared and no route resolved, the candidate that
+    deleted the design's whole spare population is promotable AND carries no
+    penalty. The gate does not refuse it and the search has no reason to move
+    away from it. Two independent mechanisms, one silence.
+    """
+    records = _deleted_with_tie_off_stated()
+    result, pen = _penalty_for(cand("gone", records), silent_policy())
+    assert result.eligible_for_promotion            # the gate is quiet
+    assert F.ECO_AXIS not in pen["terms"]           # the gradient is quiet too
+    assert pen["penalty"] == 0.0
+
+    # and both wake up together once the requirement is declared
+    declared_result, declared_pen = _penalty_for(cand("gone", records),
+                                                 policy())
+    assert not declared_result.eligible_for_promotion
+    assert declared_pen["terms"][F.ECO_AXIS] == 1.0
+
+
+def test_penalty_is_never_mistakable_for_an_eligibility_decision():
+    """The separation this module is built on, checked on THIS axis: the
+    penalty document says `promotable: None` and `basis: SEARCH_ONLY`, so a
+    caller serialising it into a report cannot pass it off as a verdict."""
+    _r, pen = _penalty_for(cand("gone", _deleted_with_tie_off_stated()),
+                           policy())
+    assert pen["promotable"] is None
+    assert pen["basis"] == "SEARCH_ONLY"
