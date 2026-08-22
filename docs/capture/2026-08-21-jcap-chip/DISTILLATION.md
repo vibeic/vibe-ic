@@ -97,7 +97,9 @@ population is rc=2 with zero finding lines. It is proven able to fail.
 * 216 tests across the thirteen test files; 97 across the ratchets a new program
   trips; D1 program-test-coverage PASS over 1250 programs; D2 PASS; shipped-path
   portability rc=0; 53 d9 tests pass with no pinned count disturbed.
-* Sweeps over this repository: ten rc=0, one rc=2, one rc=1.
+* Sweeps over this repository: NINE rc=0, TWO rc=1, one rc=2. (It was ten/one/one
+  until `every_required_metric_key_has_a_producer` was corrected — see below.
+  The TREE did not change; the instrument did.)
 * On two real published run cells the twelve produce **zero** findings; the ones
   with nothing to say answer NOT CHECKED rather than PASS.
 
@@ -256,7 +258,7 @@ merge left three `test_program_inventory_no_drift.py` failures
 0 unresolved conflicts and 23/23 drift tests passing on the composed tree.
 
 **THIS LANE'S GATES ARE UNAFFECTED BY THE COMPOSITION.** All twelve return
-exactly what they return here — ten rc=0, `only_the_declaring_step_writes_its_
+exactly what they return here — nine rc=0, `only_the_declaring_step_writes_its_
 output` rc=1, `pytest_aggregate_carries_its_runtime_identity` rc=2 — over the
 combined source, which now includes the census lane's four new programs and their
 tests. 236 of this lane's tests pass in the composed tree. So the four censuses
@@ -438,7 +440,7 @@ audit; none of this branch's work is on it. Re-measured against the new base:
 |---|---|---|
 | conflicts | 4, all generated counters | **4, same four files** |
 | the three-step regeneration recipe | verified | **still applies unchanged** |
-| this lane's twelve gates | 10 rc=0, 1 rc=1, 1 rc=2 | **identical** |
+| this lane's twelve gates | 10 rc=0, 1 rc=1, 1 rc=2 | **identical** (both figures predate the metric-gate correction; now 9 / 2 / 1) |
 | `only_the_declaring_step` finding set | 6 paths, sha `200f1f446857` | **6 paths, sha `200f1f446857`** |
 
 So main's 214 new commits trip none of these gates, and the LEDGER ROW STILL
@@ -508,3 +510,18 @@ One caution from doing it: I nearly dismissed my own finding because a grep
 reported "408 MEASURED rows" for `reliability.em.violations`. It was counting
 `NOT_MEASURED`, which contains `MEASURED`. Fourth substring trap of this lane, and
 the first that would have reversed a correct conclusion.
+
+The second live FAIL is deterministic too, checked the same way as the first:
+four consecutive runs, the same two axes, finding-set sha `daa3f10510bb`.
+
+    axis 'em'          IS NOT PROVEN BY ANY RUN IN THIS CORPUS
+    axis 'equivalence' IS NOT PROVEN BY ANY RUN IN THIS CORPUS
+
+Re-verified against both current tips: rc=1 against main `a4caccefe` (v1.11.69)
+and rc=1 against the census lane `f55027d18`, so the verdict is a property of the
+published records rather than of which branch it is composed with.
+
+**The sweep tally is now nine rc=0, two rc=1, one rc=2.** Both reds are true
+positives with stable subjects; the rc=2 is a repository correctly reporting that
+it is not a run tree.
+
