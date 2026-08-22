@@ -220,12 +220,79 @@ a substring test is a real check that happens to be satisfiable by prose.
 `contract_check.py` now reports `CONTRACT OK` with **no** provenance note and
 `landed_since_judging: 0`.
 
+## The two checks a re-judgement does not cover: drift and survivability
+
+A content re-judgement decides what the *judged tree* held. Two things it cannot see
+decide whether the verdicts are safe to act on today, and both were measured.
+
+### Drift — all 110 rows re-read on their hosts
+
+`bin_jharv3_s8/drift_probe_s8.sh`, read-only, piped in on stdin, no fetch, nothing
+written: 30 rows on `.108` locally, 36 on `.112` and 44 on `.121` through the `.102`
+nested-ssh hop. Raw: `raw_drift_all_s8_jharv3.tsv`.
+
+**107 rows unmoved, 3 moved, and all 3 are accounted for:**
+
+| path | verdict | judged | now | |
+|---|---|---|---|---|
+| `AI_IC_design/wt_jwire2` | LANDED | `4c77f7f0ae43` | `c190bf024bc2` | same tree; re-judged at the live head today |
+| `wt-j63x8c` | RECOVER | `3ab7fc723e49` | `bc60e88484c1` | session 7's own drift finding; `bc60e88484c1` is the tip of live `harvest/rescue-108-wt-j63x8c-drifted` |
+| `_gf180_priv/wt` | RECOVER | `5240ead2c7ee` | `c130f26f853a` | **new drift**; `c130f26f853a` is the tip of live `refs/heads/next/general-precheck-tells-the-density-gate-the-pdk` |
+
+**Every one of the 36 LANDED rows is clean on disk today** — `mod=0 untracked=0` under
+`--untracked-files=all` — and 35 of the 36 are also unmoved. That matters more than the
+rest of this document: LANDED is the verdict that authorises a deletion, and a LANDED
+directory that has since acquired uncommitted work would be an unrecoverable mistake.
+None has.
+
+### Survivability — 110 of 110 judged heads are held by a live origin ref
+
+Recovery instructions rot. This fleet deleted origin branches from 86 heads to 60 in an
+hour while shard C was being written, and every `git fetch origin harvest/rescue-…`
+line in the file stopped resolving. So containment is re-tested, against what
+`git ls-remote` advertises **now** and never against `refs/remotes`, which is a cache
+of origin and outlives branches origin has deleted.
+
+`bin_jharv3_s8/containment_live_s8.sh`. Origin advertised **1613 refs**, 1576 of whose
+shas are present locally and therefore testable; the set of commits reachable from them
+is built once (16603 commits) and membership is a lookup, rather than 173k per-ref
+walks. Raw: `raw_containment_s8_jharv3.tsv`.
+
+    110 CONTAINED     0 NOT_HELD_BY_ANY_LIVE_ORIGIN_REF
+
+**The reds, shown rather than asserted.** The gate refuses instead of passing when its
+input is degenerate, and it reports the dangerous answer when the dangerous answer is
+true:
+
+    $ git commit-tree <main's tree> -m 'negative control'   # a commit no origin ref holds
+    /control/not-on-origin  bbc80fef6888  NOT_HELD_BY_ANY_LIVE_ORIGIN_REF
+
+    $ (cd /tmp && containment_live_s8.sh …)                 # no repo, so no refs
+    REFUSING: ls-remote advertised only 0 refs
+    exit=2
+
+It also validates the reachable set before using it — every live sha must appear in the
+set built from it, all of `origin/main` must be inside it, and the null sha must not be —
+because an empty set makes every head look lost, and a set built from `refs/remotes`
+makes deleted branches look alive.
+
 ## Shard C after session 8
 
-**110 rows — 73 RECOVER, 36 LANDED, 1 ABANDON.** Two rows moved, both RECOVER -> LANDED,
-both in the direction main's advance created. `bin_jharv3/contract_check.py` reports
-`CONTRACT OK` on the amended file, with `landed_since_judging: 0` and the one
-outstanding contract problem resolved.
+**110 rows — 73 RECOVER, 36 LANDED, 1 ABANDON.** Two rows moved, both RECOVER -> LANDED.
+`bin_jharv3/contract_check.py` reports `CONTRACT OK` on the amended file, with
+`landed_since_judging: 0`, no provenance note, and the one outstanding contract problem
+resolved.
+
+Every row is now judged against `ae78abb285`, every row was re-read on its host today,
+and every judged head is held by a ref origin advertises now:
+
+| check | result |
+|---|---|
+| rows judged against current main | 110 / 110 |
+| rows re-read on their host today | 110 / 110 |
+| judged heads held by a live origin ref | 110 / 110 |
+| LANDED rows clean on disk (`-uall`) | 36 / 36 |
+| verdicts that changed | 2 |
 
 Nothing was deleted. Nothing was written on any other host — every probe was piped in on
 stdin and every temporary file it made was under `/tmp` on the far host and removed by
