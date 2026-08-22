@@ -51,48 +51,52 @@ assert, which is the ART-POWER-FIGURES-X1000 defect this gate exists to remove.
 
 WHAT WOULD HAVE TO CHANGE FOR THIS TO BECOME BLOCKING
 -----------------------------------------------------
-One thing, and it is not in this file: `synth_area_stats_emit` must ESTABLISH
-the unit instead of declining to, so `chip_area_unit` names um^2 — any spelling
-in `_UM2_SPELLINGS` — on EVIDENCE rather than on convention.
+CORRECTED 2026-08-22. An earlier version of this block said the wiring belonged
+in `design_one_shot_runner.step_yosys_synth`, right after the call that writes
+the figure. That is the WRONG STEP, and wiring it there would have produced a
+gate that refuses on every run forever. Measured on both real log shapes:
 
-AND THE ROUTE HAD TO BE CHECKED, because the obvious wording of this paragraph
-— "record the unit the loaded Liberty DECLARES" — is an instruction nobody can
-follow. LIBERTY HAS NO AREA UNIT. Its `units` group declares time, voltage,
-current, capacitance, resistance and power; `area` is a bare number with no unit
-beside it, no program in this repository reads such a unit, and there is nothing
-there to read.
+    step 9   read_verilog / synth -flatten / abc -g cmos2 / stat
+             -> NO `Chip area for module` line at all -> chip_area = None
+    phase 3  read_liberty / dfflibmap -liberty / abc -liberty
+             / stat -liberty <lib>
+             -> Chip area for module '<top>': 5841.196200 -> chip_area set
 
-What CAN be established is the same fact by CROSS-CHECK, from two assets
-`pdk_registry.json` already names for every PDK it carries — `liberty_glob` and
-`cell_lef_glob`. A cell's LEF `SIZE w BY h` is in MICRONS by the LEF spec, so
-`w * h` is that cell's footprint in um^2, and the Liberty `area` for the SAME
-cell either agrees with it or does not. MEASURED inside the shipped EDA image
-(vibeic-eda 0.2.26), over every standard cell present in both files, for TWO of
-the FIVE `pdk_registry.json` entries that ship both globs (the sixth ships
-neither). This gate is chip-AGNOSTIC and `test_the_program_names_no_process_or_
-vendor_token` holds that assertion over this file, so the two libraries are
-identified here by their cell counts and not by name; the procedure above
-re-derives the same figure on any of the five:
+Step 9 synthesises to GENERIC primitives (`abc -g cmos2`) and never loads a
+library, so yosys prints no area at all. The figure this gate reads is written
+LATER, by `phase3_one_shot_runner.step_synth` via `synth_area_stats_emit.
+emit_for_run` — which overwrites step 9's own `stats.json`, because
+`_path_layout.synth_dir` sends both producers to `phase2/stage2/synth/`.
 
-    library A   229 of 229 cells    liberty_area / lef_um2:
-                                      min 1.000000  median 1.000000  max 1.000000
-    library B   405 of 405 cells    min 0.999547  median 1.000000  max 1.000000
+So this gate can see a figure at all ONLY because it is evaluated at
+`final_audit`, after phase 3 has run — which is the very AUDIT_ONLY property
+the block above describes. An inline wiring at step 9 would run BEFORE the
+producer and read `chip_area: None` on every project ever built.
 
-So the Liberty area IS um^2 on both, and — the part that matters here — it is
-DERIVABLE PER PDK from assets the flow already resolves, rather than assumed for
-all PDKs from what two of them happen to do. A derivation must carry a
-TOLERANCE and not an equality: library B's worst cell is 0.999547, i.e. the
-Liberty figure is rounded, and an exact test would reject a correct library.
+THREE THINGS, in order, and none of them is in this file:
 
-That derivation belongs in the PRODUCER, not in this gate, and it is a separate
-change with its own blast radius — it makes this gate LIVE on every run that
-declares a die budget. Once it lands, this gate reaches rc 0 and rc 1 on real
-runs and has a verdict worth carrying inline, and the wiring belongs in
-`design_one_shot_runner.step_yosys_synth` immediately after the
-`_ystat.emit_stats_json(...)` call that writes the figure this gate reads: rc 1
-returning `StepResult(..., "FAIL", ...)` the way that same function's
-`synth_netlist_check` call site already does, rc 2 disclosed and non-green
-rather than silently dropped.
+  1. `emit_for_run(project, log_path, netlist)` must accept the LIBRARY path.
+     Its phase-3 caller already holds it — the same `liberty_c` it interpolates
+     into `stat -liberty` — and hands it to nothing, so the artefact never
+     records which library produced the figure it carries.
+  2. The unit must be ESTABLISHED from that library rather than assumed. Liberty
+     declares no area unit (its `units` group carries time, voltage, current,
+     capacitance, resistance and power; `area` is a bare number), so the
+     evidence is a CROSS-CHECK: a cell's LEF `SIZE w BY h` is in microns by the
+     LEF spec, and `pdk_registry.json` resolves `liberty_glob` and
+     `cell_lef_glob` for every PDK it carries. MEASURED in the shipped EDA image
+     over every standard cell present in both files:
+
+         library A   229 of 229 cells   liberty_area / lef_um2:
+                                          min 1.000000 median 1.000000 max 1.000000
+         library B   405 of 405 cells   min 0.999547 median 1.000000 max 1.000000
+
+     Derivable PER LIBRARY, never assumed for all of them, and with a TOLERANCE
+     rather than an equality: library B's worst cell is 0.999547, so an exact
+     test would reject a correct library.
+  3. Only then is there a verdict worth carrying inline, and the wiring belongs
+     AFTER the phase-3 synthesis that writes the figure — never at step 9. rc 1
+     returns a FAIL of that step; rc 2 stays disclosed and non-green.
 
 That precondition is not left as prose. `test_two_gates_declare_where_their_
 verdict_is_consumed.py` re-measures it and FAILS when it stops holding, so this

@@ -401,33 +401,108 @@ def test_the_evidence_route_the_area_declaration_names_still_exists():
                 f"from the registry any more")
 
 
-def test_the_wiring_the_area_declaration_names_is_still_a_real_place():
-    """The promotion path has to be a place that EXISTS, or the declaration is
-    an instruction nobody can follow.
+def _ystat_mod():
+    saved = list(sys.path)
+    sys.path.insert(0, str(_PROGRAMS))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_ystat_wiring", _PROGRAMS / "_yosys_stat.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = m
+        spec.loader.exec_module(m)
+        return m
+    finally:
+        sys.path[:] = saved
 
-    Anchored on the FUNCTION and on the CALL, never on a line number: a
-    line-anchored citation rots silently the first time anything above it moves,
-    and this file is the only thing standing between the declaration and that.
-    """
-    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
+
+#: The two synthesis log shapes this flow actually produces. Step 9 maps to
+#: GENERIC primitives and loads no library, so yosys prints no area line;
+#: phase 3 maps against a library and prints one.
+_STEP9_LOG = "=== chip_top ===\n   Number of cells:                349\n"
+_PHASE3_LOG = ("=== chip_top ===\n   Number of cells:                349\n"
+               "     349 5.84E+03 cells\n\n"
+               "   Chip area for module '\\chip_top': 5841.196200\n")
+
+
+def test_step_nine_produces_no_area_figure_at_all():
+    """WHY THE DECLARATION NAMES PHASE 3 AND NOT STEP 9.
+
+    An earlier version of the ENFORCEMENT block said the inline wiring belonged
+    in `design_one_shot_runner.step_yosys_synth`. It does not: that step runs
+    `abc -g cmos2` and a bare `stat`, loads no library, and yosys prints no
+    `Chip area for module` line — so a gate wired there reads None on every
+    project ever built and refuses forever. This pins the fact the correction
+    rests on."""
+    ys = _ystat_mod()
+    parsed = ys.parse_stat_block(_STEP9_LOG)
+    assert parsed is not None, "the step-9 fixture no longer parses"
+    assert parsed["chip_area"] is None, (
+        "a library-less synthesis now yields an area figure; the reason "
+        "area_total_vs_budget_check's promotion condition names phase 3 "
+        "rather than step 9 has changed and must be re-derived")
+
+
+def test_the_phase_three_synthesis_is_what_produces_the_figure():
+    """The other half: with a library loaded the same parser DOES get one, so
+    the correction is a statement about which step runs, not about the parser."""
+    ys = _ystat_mod()
+    assert ys.parse_stat_block(_PHASE3_LOG)["chip_area"] is not None
+
+
+def test_the_producer_the_declaration_names_is_still_a_real_place():
+    """The promotion path has to be somewhere that EXISTS. Anchored on the
+    FUNCTION and the CALL, never on a line number."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))
-               if isinstance(n, ast.FunctionDef) and n.name == "step_yosys_synth"),
+               if isinstance(n, ast.FunctionDef) and n.name == "step_synth"),
               None)
     assert fn is not None, (
-        "design_one_shot_runner.step_yosys_synth is gone; the wiring "
-        "area_total_vs_budget_check's ENFORCEMENT block names no longer "
-        "exists and the promotion path must be re-derived")
-    calls = {c.func.attr for c in ast.walk(fn)
-             if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
-    assert "emit_stats_json" in calls, (
-        "step_yosys_synth no longer calls emit_stats_json, so the point the "
-        "declaration names — 'immediately after the call that writes the "
-        "figure this gate reads' — is not there any more")
-    # And the FAIL shape the declaration says to copy is still in that function.
+        "phase3_one_shot_runner.step_synth is gone; the producer the area "
+        "gate's ENFORCEMENT block names no longer exists")
     body = ast.get_source_segment(src, fn) or ""
-    assert "synth_netlist_check" in body, (
-        "the `synth_netlist_check` call site the area declaration points at as "
-        "the model for the rc-1 branch has left step_yosys_synth")
+    assert "emit_for_run" in body, (
+        "step_synth no longer calls emit_for_run, so the point the declaration "
+        "names — the call that writes the figure this gate reads — is not there")
+    assert "-liberty" in body, (
+        "step_synth no longer passes -liberty, so it would stop producing an "
+        "area line and the whole promotion chain must be re-derived")
+
+
+def test_the_emitter_still_cannot_be_told_which_library_produced_the_figure():
+    """PRECONDITION 1 of the corrected promotion condition, and the actionable
+    one: the phase-3 caller HOLDS the library path and the emitter has no
+    parameter to receive it, so the artefact never records which library the
+    figure came from. When that changes, the unit becomes establishable and
+    this declaration has to be re-decided."""
+    emit = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
+    fn = next((n for n in ast.walk(ast.parse(emit))
+               if isinstance(n, ast.FunctionDef) and n.name == "emit_for_run"),
+              None)
+    assert fn is not None, "synth_area_stats_emit.emit_for_run is gone"
+    params = [a.arg for a in fn.args.args] + [a.arg for a in fn.args.kwonlyargs]
+    assert not any("lib" in a.lower() for a in params), (
+        f"emit_for_run now takes {params}; it can be told which library "
+        f"produced the figure, so the unit is establishable and "
+        f"area_total_vs_budget_check's `advisory` declaration must be "
+        f"re-decided rather than left standing")
+
+
+def test_both_producers_write_to_the_same_artefact_path():
+    """The overwrite the correction depends on: phase 3 replaces step 9's own
+    stats.json, which is the only reason a figure is there at final-audit."""
+    saved = list(sys.path)
+    sys.path.insert(0, str(_PROGRAMS))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_pl_wiring", _PROGRAMS / "_path_layout.py")
+        pl = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = pl
+        spec.loader.exec_module(pl)
+    finally:
+        sys.path[:] = saved
+    assert pl.synth_dir(Path("/P")) == Path("/P/phase2/stage2/synth"), (
+        "the synthesis artefact directory moved; the claim that phase 3 "
+        "overwrites step 9's stats.json must be re-measured")
 
 
 # ═══════════════════════════════ THE REASON, RE-MEASURED — `tapeout_docs_gen`
