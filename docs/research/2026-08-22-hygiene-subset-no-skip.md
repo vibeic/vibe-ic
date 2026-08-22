@@ -4188,3 +4188,49 @@ The program half is unprotected and small. The declaration half is in
 `tools/ci/repo_hygiene_gates.sh`, which is a protected `authority` path — so it
 needs the same PREPARE→ACTIVATE route as §58's selector fix, into the same
 already-mixed tuple. Recorded, not done.
+
+## 61. A pinned number that is NOT a bound — the liar-census shrink literal
+
+Branch: `next/liar-census-shrink-pin-follows-the-flow`, off `main` `a4caccefea`,
+one file, +31/−1.
+
+`test_nothing_the_flow_declares_is_left_unswept` is red on clean main with
+`assert 182 == 181` while the sweep itself is HEALTHY: `declared=182`,
+`swept=182`, `unswept=[]`, `unrecognised={}`. The load-bearing pin
+`swept == declared` holds and has never broken.
+
+**The standing rule is "never extend a bound to make it fit", and the first
+reading of this is that 181 → 182 is exactly that.** It is not, and the test
+says so itself: *"The PIN is `swept == declared`; the literal is only there so a
+flow that silently SHRINKS is caught too, and it is meant to move whenever the
+flow does."* Four earlier blocks in that comment move it the same way, each
+recording a measurement rather than a number, and one of them records that
+FAILING to move it left the control red on main for a whole campaign.
+
+What distinguishes maintaining a shrink detector from papering over a shrink is
+the direction, and that is measured rather than asserted — clause SETS diffed
+over the flow YAML blob at each commit:
+
+    pin @100af53b47   declared=181 swept=181   program_exit_zero=115
+    main @a4caccefea  declared=182 swept=182   program_exit_zero=116
+
+    ADDED    step 2  program_exit_zero  slot_pad_budget_check
+    REMOVED  (empty)
+
+One clause arrived and nothing left. A grow, not a churn. Attributed to
+`34466e7262`, "flow(#1347): the pad-budget gate answers before the build".
+
+**Why it lagged, measured rather than guessed.** The pin commit and the adding
+commit are on PARALLEL branches — neither is an ancestor of the other, both
+landed on main, both dated 2026-08-21. The literal was CURRENT against the tree
+its author measured and stale against the trunk the moment the other branch
+landed. That is precisely the failure the pin commit was NAMED for — *"the
+shrink pin was measured against a base that moved, not a sweep that missed"* —
+recurring the same day. It is the fifth recorded lag and the second for this
+reason, and it is the same defect class as
+[[measure-against-the-right-reference]] and [[a-report-is-bound-to-a-sha-not-a-branch-name]].
+
+The detector is not weakened: it now refuses a flow that falls to 181. The open
+question the file already states — a hand-maintained number an author must
+remember while editing a DIFFERENT file is prose wearing an assertion — is
+unchanged and remains the flow owner's call. This change does not take it.
