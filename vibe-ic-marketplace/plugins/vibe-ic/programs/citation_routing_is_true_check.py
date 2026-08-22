@@ -123,6 +123,24 @@ _ROUTING_NAME = "CITATION_ROUTING.txt"
 #: exists. Here the corpus is an ADDITIONAL population, not a replacement one:
 #: see the union in `main`.
 CORPUS_ENV = _corpus.CORPUS_ENV
+
+#: The publishing contract at the ROOT of the corpus tree. Its presence beside an
+#: `ic/` root is what separates "this IS the corpus and it tracks none of my
+#: subject" (a measurement) from "this is not the corpus" (a broken pointer). No
+#: accident produces a tree carrying both: not a mistyped path, not an
+#: unpopulated directory, not a dead clone, not a fetch step that did nothing.
+_CORPUS_CONTRACT = "PUBLISHING.md"
+
+
+def _names_the_published_corpus(root) -> bool:
+    """Positive identification, deliberately not inferred from absence.
+
+    Belongs in `_corpus_location` beside the other four outcomes; that module is
+    protected, so it is spelled here and the lift is recorded as debt at the call
+    site. Kept to two conditions so the two spellings cannot drift far.
+    """
+    return (root / _CORPUS_CONTRACT).is_file() and (root / "ic").is_dir()
+
 _RESOLVES = "RESOLVES"
 # The decisions that assert a reader CANNOT follow the citation. Listed so a
 # decision word this gate has never seen is reported rather than silently
@@ -306,13 +324,54 @@ def main(argv=None) -> int:
                   f"read. NOT a pass.", file=sys.stderr)
             return 2
         if not corpus_files:
+            # THE POINTER BEING RIGHT AND THE CORPUS BEING EMPTY IS A FOURTH
+            # STATE, and until this comment was written it was reported as the
+            # third. The message below named three causes -- a wrong name, a
+            # failed clone, a no-op fetch -- and concluded "a wrong pointer".
+            # Since the publisher withdrew every cell on 2026-08-20 there is a
+            # fourth that is none of them: the pointer is correct, the clone
+            # succeeded, and `vibeic/benchmark-data` really does track zero
+            # CITATION_ROUTING.txt. Telling that operator to fix their pointer
+            # sends them to debug a configuration that is already right.
+            #
+            # Same defect as vibe-ic#1764 fixed in `tools/ci/routed_def_corpus.py`
+            # (rc 0 "the index was read and holds none" vs rc 3 "nothing was
+            # opened"), and as `programs/tests/_published_corpus.py` was repaired
+            # for. This is the third site found asking the question.
+            #
+            # THE rc DOES NOT MOVE. Both rows stay 2, exactly as
+            # `routed_def_corpus`'s docstring puts it -- "BOTH stay NOT CHECKED
+            # and BOTH stay blocking; only the sentence each of them gets is
+            # different". An empty population must never become a clean one, and
+            # nothing here adjudicated a single RESOLVES row.
+            #
+            # WHY THE IDENTITY TEST IS SPELLED HERE RATHER THAN IN
+            # `_corpus_location`, WHICH IS ITS PROPER HOME. That module is the
+            # declared single seam for exactly this question and is where a
+            # fourth caller should find it -- but it is in
+            # `REQUIRED_AUTHORITY_PATHS`, so adding to it cannot land from an
+            # ordinary candidate commit. Lifting this into the seam is the
+            # follow-up, and it is named so the duplication is a recorded debt
+            # rather than a silent second definition.
+            if _names_the_published_corpus(corpus):
+                print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} IS the published "
+                      f"corpus -- it carries {_CORPUS_CONTRACT} beside an ic/ "
+                      f"root -- and its index WAS read: it tracks 0 "
+                      f"{_ROUTING_NAME}. This is a MEASURED zero over a real "
+                      f"corpus, not a wrong pointer, and there is nothing for "
+                      f"you to fix about the pointer. NOTHING WAS ADJUDICATED "
+                      f"-- 0 record(s) read, 0 RESOLVES row(s) decided -- so it "
+                      f"is NOT a pass either.", file=sys.stderr)
+                return 2
             # The pointer was SET and led to a checkout carrying none of this
             # gate's subject. That is somebody's broken configuration, and the
             # opt-in must not reach it.
             print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} is a git checkout but "
-                  f"tracks no {_ROUTING_NAME} at all. A corpus that was NAMED "
-                  f"and carries none of this gate's subject is a wrong pointer, "
-                  f"not an absent corpus.", file=sys.stderr)
+                  f"tracks no {_ROUTING_NAME} at all, and it is not the "
+                  f"published corpus either -- a tree that is carries "
+                  f"{_CORPUS_CONTRACT} beside an ic/ root. A corpus that was "
+                  f"NAMED and carries none of this gate's subject is a wrong "
+                  f"pointer, not an absent corpus.", file=sys.stderr)
             return 2
         print(f"note: {len(corpus_files)} tracked {_ROUTING_NAME} under "
               f"{env_tree}, {len(files)} under {root}", file=sys.stderr)
