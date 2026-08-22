@@ -103,9 +103,40 @@ def _str_consts(node: ast.AST) -> List[str]:
             if isinstance(c, ast.Constant) and isinstance(c.value, str)]
 
 
+#: Calls that LAND BYTES AT A DESTINATION without being `.write_text`.
+#:
+#: MEASURED GAP, and the worst kind. `os.replace` is this repository's OWN
+#: sanctioned way to write an artefact — `_atomic_output.py` exists to make every
+#: declared output arrive by temp-file-then-rename, so the artefact only appears
+#: under its final name if the step completed. This scan enumerated `write_text`,
+#: `write_bytes` and `open(...,'w')` and therefore could not see the CORRECT
+#: idiom: the more properly a step wrote its output, the more invisible it was
+#: here. A second writer using `shutil.copy` or `os.replace` returned rc=0.
+#:
+#: Found by reading the census lane's commit "the write enumeration missed shutil
+#: and the attribute form of open" and asking the same question of this gate.
+DEST_CALLS = {
+    ("shutil", "copy"), ("shutil", "copy2"), ("shutil", "copyfile"),
+    ("shutil", "move"),
+    ("os", "replace"), ("os", "rename"), ("os", "link"), ("os", "symlink"),
+}
+#: Path methods that land bytes at the RECEIVER's own path.
+PATH_DEST_ATTRS = ("replace", "rename", "hardlink_to", "symlink_to")
+
+
+def _dest_arg(node: ast.Call) -> Optional[ast.expr]:
+    """The argument naming where bytes land, for a module-level dest call."""
+    f = node.func
+    if not isinstance(f, ast.Attribute) or not isinstance(f.value, ast.Name):
+        return None
+    if (f.value.id, f.attr) not in DEST_CALLS:
+        return None
+    return node.args[1] if len(node.args) >= 2 else None
+
+
 def _is_write(node: ast.Call) -> bool:
     attr = node.func.attr                           # type: ignore[union-attr]
-    if attr in WRITE_ATTRS:
+    if attr in WRITE_ATTRS or attr in PATH_DEST_ATTRS:
         return True
     if attr != "open":
         return False
@@ -188,6 +219,18 @@ def writers_of(programs: Path, by_basename: Dict[str, Set[str]]
                 for node in ast.walk(scope):
                     if not (isinstance(node, ast.Call)
                             and isinstance(node.func, ast.Attribute)):
+                        continue
+                    dest = _dest_arg(node)
+                    if dest is not None:
+                        names2: Set[str] = set()
+                        if isinstance(dest, ast.Name):
+                            names2 |= var.get(dest.id, set())
+                        for c in _str_consts(dest):
+                            if c in by_basename:
+                                names2.add(c)
+                        for bn in names2:
+                            for full in by_basename[bn]:
+                                found[full].add(fn)
                         continue
                     if not _is_write(node):
                         continue
@@ -280,7 +323,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if findings:
         print(f"[{NAME}] FAIL — a flow-declared output has more than one writer")
         return 1
-    print(f"[{NAME}] PASS — every flow-declared output has a single writer")
+    print(f"[{NAME}] PASS — no flow-declared output with an identified writer has two")
     return 0
 
 

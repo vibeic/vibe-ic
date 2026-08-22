@@ -295,7 +295,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unread:
         print(f"[{NAME}] NOT CHECKED — a candidate file could not be read")
         return 2
-    print(f"[{NAME}] PASS — every clone site builds a self-contained checkout")
+    print(f"[{NAME}] PASS — no clone site creates object alternates")
     return 0
 
 

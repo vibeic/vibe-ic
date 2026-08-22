@@ -233,7 +233,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unread:
         print(f"[{NAME}] NOT CHECKED — a candidate file could not be read")
         return 2
-    print(f"[{NAME}] PASS — every pointer reader names the tree it scanned")
+    print(f"[{NAME}] PASS — no in-scope pointer reader redirects without naming the tree")
     return 0
 
 

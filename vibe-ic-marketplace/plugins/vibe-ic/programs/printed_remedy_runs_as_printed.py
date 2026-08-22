@@ -283,7 +283,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unread:
         print(f"[{NAME}] NOT CHECKED — a candidate file could not be read")
         return 2
-    print(f"[{NAME}] PASS — every printed remedy runs as printed")
+    print(f"[{NAME}] PASS — no printed docker-run remedy puts the command before --skip")
     return 0
 
 

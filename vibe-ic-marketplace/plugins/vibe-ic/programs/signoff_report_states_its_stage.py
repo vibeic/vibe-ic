@@ -323,8 +323,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unstamped:
         print(f"[{NAME}] FAIL — a declared sign-off report states no stage")
         return 1
-    print(f"[{NAME}] PASS — every declared timing/power report is stamped by "
-          f"its emitter")
+    print(f"[{NAME}] PASS — no declared timing/power report with an identified "
+          f"emitter is unstamped")
     return 0
 
 
