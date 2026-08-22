@@ -15,7 +15,7 @@
 > | Is it fixed? | Yes. Seam kept as a FUNCTION keyword, verbatim path restored, budget 240 s → 1800 s | §3 |
 > | Does the wiring fire? | Proved both ways — killed at 5 s → rc 2 blocking; allowed → 89/89 gates in 193 s, rc 1 | §5–6 |
 > | Does the guard stop a RENAME? | Yes — constructed the rename; old test green over it, guard 3 nodes red | §38 |
-> | Does it break anything? | No. Denominator computed four ways; 21 files run for the first time | §33–35 |
+> | Does it break anything? | No. Denominator computed four ways; **18** files run for the first time (2 repo-root + 4 checker-importers + 12 reachers, deduplicated — I had quoted 21 without recounting) | §33–35 |
 > | Are the other reds new? | No. 17 reds examined, every one not fixed here is red on CLEAN MAIN | §36–37 |
 > | Is it landed? | Yes — batch `2d98cacd4b`, lander hash and pin verified together, 148 passed | §29 |
 > | Should the batch be re-assembled for my finding? | **NO.** The base already fails that gate on `jrows`'s finding; mine is additive | §30 |
@@ -1990,6 +1990,14 @@ again rather than quoted again — the additions:
 12. A `comm` against a hand-assembled "already run" list reported 13 unrun files
     and named this branch's OWN seam guard among them. The list had been built
     from a selection file and never included tests run individually.
+
+**A SIXTEENTH claim, and it landed in the navigation header itself.** "21 files
+run for the first time" was quoted in the header written to stop readers acting
+on stale numbers. Recounted from the three source lists, deduplicated: 2
+repo-root + 4 checker-importers + 12 reachers = **18**, no overlap. Corrected in
+place. The lesson does not improve with repetition, but the location does: the
+one paragraph whose whole job is to be trustworthy is the one I filled with an
+uncounted number.
 
 **Twelve, then, not nine** — and the three latecomers are all the same species
 as the original nine: each returned a confident answer that was wrong in the
