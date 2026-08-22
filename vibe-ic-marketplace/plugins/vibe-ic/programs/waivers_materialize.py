@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import waiver_staleness as _ws  # noqa: E402  (after sys.path bootstrap)
+import _waiver_entries as _we  # noqa: E402
 
 _PROGRAM = "waivers_materialize"
 
@@ -83,7 +84,8 @@ def _is_auto_generated(data: Any) -> bool:
         return False
     if data.get("_generator") == "waivers_materialize.py":
         return True
-    entries = list(data.get("waivers") or []) + list(data.get("waived_steps") or [])
+    # #519 — via the ONE shared reader (this site already unioned by hand).
+    entries = _we.entries(data)
     if not entries:
         return False
     return all(

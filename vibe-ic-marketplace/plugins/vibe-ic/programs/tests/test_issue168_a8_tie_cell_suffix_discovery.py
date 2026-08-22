@@ -90,9 +90,30 @@ def test_sky130_conb_unchanged(tmp_path):
     assert out["lo_pin"] == "LO"
 
 
-def test_nangate_logic_cells_still_unmatched(tmp_path):
-    # LOGIC0/1_X1 carry no tie/con token — discovery stays None (identical to
-    # the pre-fix behaviour; the broadening never newly matches them).
+def test_the_a8_suffix_broadening_alone_never_matched_a_bare_logic_name():
+    # SUPERSEDED SCOPE LIMIT. This was `test_nangate_logic_cells_still_
+    # unmatched`, and it asserted the BLAST RADIUS of the #168 A8 change:
+    # broadening the trailing group for ASAP7's `TIE(HI|LO)x1_...` names must
+    # not have started matching nangate's LOGIC0/1_X1 as a side effect. That
+    # was true and still is.
+    #
+    # It was NOT a decision that nangate tie cells should stay undiscovered.
+    # `LOGIC0_X1` / `LOGIC1_X1` are the Nangate / Si2 Open-Cell tie cells, and
+    # leaving them unmatched placed 27,121 design-for-ECO spare cells with
+    # FLOATING inputs on a real run. They are now matched by an EXPLICIT
+    # `logic0` / `logic1` token, not by the A8 suffix rule — so the invariant
+    # this test actually guards is unchanged and is restated here directly:
+    # the A8 trailing-suffix group does not turn a bare `logic`-family name
+    # into a tie cell.
+    for name in ("logic_and2", "logicgate_x1", "and2_logic", "logicx1"):
+        assert not R._V1_6_596_TIE_HI_PAT.search(name), name
+        assert not R._V1_6_596_TIE_LO_PAT.search(name), name
+
+
+def test_nangate_logic_cells_are_now_discovered(tmp_path):
+    # The replacement of the assertion above: the same fixture, the intended
+    # verdict. See test_nangate_tie_cells_are_discoverable.py for the measured
+    # consequence that motivated it.
     out = R._v1_6_596_discover_tie_cells(_write(tmp_path, _NANGATE_LIB))
-    assert out["hi_cell"] is None
-    assert out["lo_cell"] is None
+    assert out["hi_cell"] == "LOGIC1_X1", out
+    assert out["lo_cell"] == "LOGIC0_X1", out

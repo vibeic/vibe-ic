@@ -36,9 +36,31 @@ for the four quartus_* invocations.
 
 HONESTY:
   - No input file, or a file containing NONE of the four quartus_* commands
-    -> SKIP (exit 0): there is genuinely no recompile sequence to validate.
+    -> SKIP (exit 2): there is genuinely no recompile sequence to validate.
     (A partial sequence — at least one stage present — is validated and any
     missing/mis-ordered stage is a real FAIL.)
+
+WHY THE SKIP EXITS 2, NOT 0 (2026-08-03, vibe-ic#693)
+=====================================================
+`flow_compliance_check._check_program_exit_zero` reads rc==0 as a plain PASS
+and rc==2 as `__VACUOUS_HINT__` — the disclosed VACUOUS_PASS tier. This gate's
+skip path exited 0, so "there was no recompile sequence anywhere in this input"
+was indistinguishable from "the recompile sequence was audited and is correct".
+Measured: the flow's only FPGA command line is `quartus_sh --flow compile
+<base>` (design_one_shot_runner), which contains none of the four tokens, so
+every automatic invocation would land on exactly this path.
+
+The `[SKIP]` line-start prefix is load-bearing too: `gate_skip_routing_check`
+matches its skip vocabulary with `str.startswith`, so the previous
+`signaltap_recompile_sequence_check: SKIP — ...` form made the gate report
+`skip_paths: 0` — invisible to the ratchet that exists to count exactly this.
+
+WHERE THIS GATE IS DRIVEN
+=========================
+NOWHERE automatically, and that is deliberate. It is registered in
+`flow/phase1_phase2_phase3.yaml` step 39 (`programs:`) with the reason written
+down; see that entry. It audits an INTERACTIVE silicon-debug recompile that
+only exists when a board is on the bench.
 
 Usage:
     python3 signaltap_recompile_sequence_check.py recompile.sh
@@ -47,9 +69,9 @@ Usage:
 
 Exit codes:
     0 = PASS (all four stages present, correctly ordered, stp has a .stp file)
-        or SKIP (no recompile sequence present in the input)
     1 = FAIL (missing stage / wrong order / bad --stp_file)
-    2 = usage / io error
+    2 = SKIP — NOTHING EXAMINED (no input, or no quartus_* sequence in it).
+        The disclosed-skip tier, never a pass. Also usage / io errors.
 """
 from __future__ import annotations
 
@@ -232,9 +254,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.json:
             args.json.write_text(out)
         print(out)
-        print("signaltap_recompile_sequence_check: SKIP — no input given",
-              file=sys.stderr)
-        return 0
+        print("[SKIP] signaltap_recompile_sequence_check: no input given — "
+              "NOTHING EXAMINED, this is not a pass", file=sys.stderr)
+        return 2
 
     ip = Path(args.input)
     if not ip.is_file():
@@ -249,9 +271,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(out)
 
     if res.status == "SKIP":
-        print("signaltap_recompile_sequence_check: SKIP — no quartus_* "
-              "recompile sequence found in input", file=sys.stderr)
-        return 0
+        print("[SKIP] signaltap_recompile_sequence_check: no quartus_* "
+              "recompile sequence found in input — NOTHING EXAMINED, this is "
+              "not a pass", file=sys.stderr)
+        return 2
 
     if res.findings:
         print(f"signaltap_recompile_sequence_check: FAIL — "
