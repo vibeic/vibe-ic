@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "The register `upstream_contract_parity_check.py` enforces. One entry per",
+    "place where this plugin RE-IMPLEMENTS a computation or a configuration",
+    "contract that an upstream flow already owns.",
+    "",
+    "It is a RATCHET, not a catalogue of everything. It starts at the",
+    "re-implementations that have been measured against their upstream, and it",
+    "grows when the next one is registered. What it guarantees is not that the",
+    "register is complete -- nothing can guarantee that -- but that NO NAME",
+    "INSIDE A REGISTERED ENTRY IS UNACCOUNTED FOR. That is the property whose",
+    "absence let one upstream variable go unread and unmentioned for the whole",
+    "life of a step.",
+    "",
+    "`known_gap` is not an excuse list. Every entry in it carries a reference,",
+    "and the count is printed on every run whether the check passes or fails."
+  ],
+  "entries": [
+    {
+      "id": "pad_ring.upstream_pad_variables",
+      "kind": "contract",
+      "our_module": "programs/_pad_ring.py",
+      "what_we_reimplement": "the pad-ring placement contract: which PDK-scoped variables the step reads before it places a ring",
+      "upstream": {
+        "distribution": "librelane",
+        "file": "librelane/config/flow.py",
+        "extract_regex": "Variable\\(\\s*\"(PAD_[A-Z0-9_]+)\"",
+        "note": "the regex requires the opening quote, so a variable whose name merely CONTAINS the token (a cell-padding knob, for one) is not swept in"
+      },
+      "snapshot": {
+        "measured_on": "2026-08-22",
+        "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+        "distribution_version": "3.1.0.dev1",
+        "file_sha256": "d6caa367322e42cc037a4406a920ebb0f64fdc9245d95235b7c1e42c9c5bf513",
+        "names": [
+          "PAD_LIBS", "PAD_LEFS", "PAD_GDS", "PAD_VERILOG_MODELS",
+          "PAD_SPICE_MODELS", "PAD_CDLS", "PAD_CORNER", "PAD_FILLERS",
+          "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_FAKE_SITES",
+          "PAD_BONDPAD_NAME", "PAD_BONDPAD_WIDTH", "PAD_BONDPAD_HEIGHT",
+          "PAD_BONDPAD_OFFSETS", "PAD_PLACE_IO_TERMINALS", "PAD_EDGE_SPACING",
+          "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
+          "PAD_ROTATION_CORNER"
+        ]
+      },
+      "classification": {
+        "implemented": [
+          "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
+          "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
+          "PAD_ROTATION_CORNER", "PAD_CORNER", "PAD_FILLERS"
+        ],
+        "declared_unperformed": [
+          "PAD_BONDPAD_NAME", "PAD_BONDPAD_OFFSETS", "PAD_PLACE_IO_TERMINALS"
+        ],
+        "omitted_by_design": {
+          "PAD_LIBS": "upstream is HANDED the cell library list. This step is handed nothing: it discovers the reference views from the distribution layout. The information is obtained, by another route -- it is not unread.",
+          "PAD_LEFS": "same as the library list, for the abstract views.",
+          "PAD_GDS": "a layout view list. This step emits a placement and reads no layout.",
+          "PAD_VERILOG_MODELS": "a behavioural model list, for stages that simulate. This step does not simulate.",
+          "PAD_SPICE_MODELS": "a device model list, for stages that solve circuits. This step does not.",
+          "PAD_CDLS": "a netlist view list, for the stage that compares layout against schematic. This step does not compare.",
+          "PAD_BONDPAD_WIDTH": "bond-pad geometry, belonging to the same bond-pad operation the three names in `declared_unperformed` already mark as not performed. STATED PLAINLY BECAUSE IT IS AN INCONSISTENCY IN OUR OWN DECLARATION, not a clean omission: this name and the height beside it belong in that list and are not in it. Registering them here is what makes the gap legible; it does not close it.",
+          "PAD_BONDPAD_HEIGHT": "see the width above -- the same operation, the same inconsistency."
+        },
+        "known_gap": {
+          "PAD_FAKE_SITES": {
+            "reason": "the distribution declares its pad sites through this variable when the abstract views carry no site record. The step never read it, so a site the distribution DOES declare was reported absent, and one design's whole verdict was blocked by our own code looking in the wrong view.",
+            "reference": "vibeic/vibe-ic#1765 (open, version-less) -- the branch that reads the declaration"
+          }
+        }
+      }
+    },
+    {
+      "id": "pad_ring.along_the_row_extent",
+      "kind": "computation",
+      "our_module": "programs/_pad_ring.py",
+      "what_we_reimplement": "how much of a side one placed cell consumes -- the sum that decides whether a ring fits, and the step from one cell to the next",
+      "upstream": {
+        "distribution": "librelane",
+        "file": "librelane/scripts/openroad/common/pad_cfg.tcl",
+        "anchors": [
+          "incr sum_of_cell_widths $width",
+          "[[$inst getMaster] getWidth]"
+        ],
+        "note": "upstream measures a cell in exactly two places -- the fit sum and the along-the-row step -- and both read the master's WIDTH, on all four sides. The anchors are the strings, not line numbers: a line number points ten lines above its subject after the next edit and still looks precise."
+      },
+      "snapshot": {
+        "measured_on": "2026-08-22",
+        "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+        "distribution_version": "3.1.0.dev1",
+        "file_sha256": "a3bae7d559e8c8b9f16d8dc5d086cfd217207ed09667263bd8e183a5c5ebd52c"
+      },
+      "pin_test": {
+        "status": "known_gap",
+        "reason": "nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.",
+        "reference": "vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it"
+      }
+    }
+  ]
+}
