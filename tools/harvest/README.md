@@ -1,7 +1,7 @@
 # vibe-ic worktree harvest — what to read, in order
 
 Three agents produced this directory: `jharvest-triage` (shard A), `jharv2` (shard B and the
-extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 30 markdown files and 80 scripts
+extras), `jharv3` (shard C). A reader currently faces 26 TSVs, 32 markdown files and 80 scripts
 with no entry point, and the oldest handoff predates the verdict files entirely. This is the index.
 
 **Nothing here has been deleted. These files are decisions; acting on them is a separate step.**
@@ -88,6 +88,13 @@ checked against main's history** — 39 files differed, all 39 found on main.
 That last step is why they read SAFE rather than alarming. Compared to *current* main a pruned
 checkout looks catastrophic: ~446 files differ because main moved, and ~17,192 read absent because
 `benchmark-data/` was split out of this repo entirely. Neither is unlanded work.
+
+## 4d. What this does NOT cover
+
+`verdicts_all.tsv` is 1439 decided worktrees, not every vibe-ic checkout on the fleet. A full-depth
+census of three reachable hosts found **4284 checkouts, of which 1144 carry a verdict**. See
+`SCOPE.md`. The job was defined by a 477-worktree roster; the other 1084 rows are beyond it. An
+unjudged checkout is untouched — a wrong verdict is what deletes.
 
 ## 5. Still open, and not mine to close
 
