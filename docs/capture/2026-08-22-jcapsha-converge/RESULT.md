@@ -351,6 +351,52 @@ collection its enclosing scope iterated; it cannot check that the collection
 was the right one. That boundary is where Bucket A ends, and it is further
 along than the shipped implementation reaches.
 
+### I implemented that rule to measure it, and it is wrong too
+
+Stating a rule for someone else to write is cheap. I wrote it
+(`evidence/F1_rule_population_probe.py`, not shipped) and ran it over main:
+
+    absence verdicts                     : 25
+    IN SCOPE (a collection was searched) : 24
+      carry the collection               : 9
+      WOULD BE REFUSED                   : 15
+
+Before writing 15 down as the rule's population I read the refusals it names.
+The first two are model disclosures:
+
+    openroad.py:1071    if not d.is_dir():
+                            o.refuse("RUN_DIR_ABSENT", f"{d}: not a directory")
+
+    otp_image_check.py:176  if not ver_path.exists():
+                                Finding("FILE_MISSING", ..., f"OTP image not found: {ver_path}")
+
+Both name the exact path. There is nothing further to disclose. The probe put
+them "in scope" because unrelated things are iterated elsewhere in the same
+function — its own printout gives it away, `(scope searched: ['e'])`,
+`(scope searched: ['image'])`. **15 is not the rule's population and is not
+quoted as one anywhere in this branch.**
+
+So two implementations, wrong in opposite directions, and neither error is
+visible from inside itself — the first looks clean because 29 of 31 pass, the
+second looks thorough because it finds 15:
+
+| implementation | predicate | error |
+|---|---|---|
+| the prior lane's | message mentions a locus word | passes the real refusal; 2 false positives |
+| my probe | message interpolates something the function iterated | refuses 15; the sampled ones are exemplary |
+
+Both cases turn on the one thing neither looks at — **the condition that raised
+the refusal**. `if not d.is_dir()` → the subject is `d` and the message names
+`d`. `if site is None` → the subject is the lookup that returned None, and the
+provenance of THAT is what the pre-fix message never disclosed. The rule is
+"an absence verdict must name the subject of the condition that raised it": a
+dataflow question from the refusal back to its guard. Still deterministic,
+still Bucket A, and real program work rather than a predicate tweak.
+
+**I did not try a third predicate.** Past this point I would be iterating
+shapes until one came out green on today's corpus, and a predicate arrived at
+that way is fitted to the corpus rather than to the rule.
+
 Shipping it red, or shipping it after quietly widening the word list to swallow
 two hits I had already judged false-positive, would both be worse than shipping
 the honest gap.
@@ -429,6 +475,8 @@ arrivals at one missing entry is the entry being missing.
     evidence/RED_routing_entry.md                the red the routing entry ships with
     evidence/F1_guard_on_current_main.txt        rc 1, the 2 false positives
     evidence/F1_the_guard_does_not_catch_F1.md   the control: it passes the real refusal
+    evidence/F1_two_implementations_wrong_in_opposite_directions.md
+    evidence/F1_rule_population_probe.py         my attempt, measured and rejected
     evidence/F2_parity_PASS_on_current_main.txt  rc 0, the blind pass
     evidence/F2_candidate_UPSTREAM_PINS_vacuous.txt    rc 2, population 0
     evidence/F2_candidate_UPSTREAM_MIRROR_vacuous.txt  rc 2, population 0
