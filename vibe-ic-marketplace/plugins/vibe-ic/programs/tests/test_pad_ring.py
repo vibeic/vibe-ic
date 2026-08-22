@@ -1554,3 +1554,114 @@ def test_corners_alternate_rotation_and_mirror(tmp_path):
     text = _ring_def(root).read_text()
     for c in rep["corners"]:
         assert f"( {c['x']} {c['y']} ) {c['orient']} ;" in text
+
+
+# ── the orientations, MEASURED against the placer rather than pinned ─────────
+#
+# THREE DEFECTS CAME FROM PINNING THEM BY HAND. `SIDE_ORIENT` and
+# `CORNER_ORIENT` now hold the placer's own values, but a CONSTANT CAN DRIFT
+# FROM THE TOOL EXACTLY AS THE OLD COMPUTATION DID -- the previous values were
+# also written down deliberately, and were also wrong. This asks OpenROAD.
+#
+# It skips where the tool or the PDK is absent, which is every host run here;
+# it bites in the container, which is where the suite is measured.
+
+_ORIENT_PROBE = """
+read_lef {tlef}
+foreach f [glob {iolefs}] {{ read_lef $f }}
+make_fake_io_site -name S_IO  -width 0.1 -height 355
+make_fake_io_site -name S_COR -width 355 -height 355
+read_def {defp}
+make_io_sites -horizontal_site S_IO -vertical_site S_IO -corner_site S_COR \\
+  -offset 26 -rotation_horizontal R0 -rotation_vertical R0 -rotation_corner R0
+place_corners {corner}
+place_pad -row IO_SOUTH -location 500 ps -master {pad}
+place_pad -row IO_NORTH -location 500 pn -master {pad}
+place_pad -row IO_WEST  -location 500 pw -master {pad}
+place_pad -row IO_EAST  -location 500 pe -master {pad}
+set b [ord::get_db_block]
+foreach n {{ps pn pw pe}} {{ puts "ORIENT $n [[$b findInst $n] getOrient]" }}
+foreach i [$b getInsts] {{
+  if {{[string match "*{corner}*" [[$i getMaster] getName]]}} {{
+    set bb [$i getBBox]
+    puts "CORNER [$i getName] [$i getOrient] [$bb xMin] [$bb yMin]"
+  }}
+}}
+exit 0
+"""
+
+
+@pytest.mark.skipif(shutil.which("openroad") is None,
+                    reason="openroad not on PATH on this host")
+@pytest.mark.skipif(not _trees_with_an_io_library(),
+                    reason="no installed PDK ships an IO cell library")
+def test_the_placer_agrees_with_the_orientation_constants(tmp_path):
+    """ASK THE TOOL, do not pin it. Three shipped defects were orientations
+    written down by hand -- NORTH rotated where the placer mirrors, and two of
+    four corners likewise. The constants now hold the right values; this is
+    what keeps them right.
+
+    Fails loudly if a future OpenROAD changes the convention, which is the
+    outcome worth having: a constant that silently disagrees with the tool is
+    the defect this test exists to prevent, in its next incarnation."""
+    root, tree = _trees_with_an_io_library()[0]
+    lib = _library_for(root, tree)
+    pad = next((m for m, (w, h) in sorted(lib.masters.items())
+                if w < h and w > 1.0), None)
+    corner = next((m for m, (w, h) in sorted(lib.masters.items())
+                   if w == h and w > 100.0), None)
+    if not (pad and corner):
+        pytest.skip(f"{tree}: no distinguishable pad/corner master")
+    tlefs = sorted(Path(root, tree).glob("libs.ref/*/techlef/*.tlef"))
+    iolefs = sorted(Path(f).parent for f in lib.lefs)
+    if not tlefs or not iolefs:
+        pytest.skip(f"{tree}: no tech LEF or IO LEF directory")
+
+    die = 4000000
+    defp = tmp_path / "probe.def"
+    defp.write_text(
+        'VERSION 5.8 ;\nDIVIDERCHAR "/" ;\nBUSBITCHARS "[]" ;\n'
+        "DESIGN probe ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        f"DIEAREA ( 0 0 ) ( {die} {die} ) ;\nCOMPONENTS 4 ;\n"
+        + "".join(f"- {n} {pad} ;\n" for n in ("ps", "pn", "pw", "pe"))
+        + "END COMPONENTS\nEND DESIGN\n")
+    tcl = tmp_path / "probe.tcl"
+    tcl.write_text(_ORIENT_PROBE.format(
+        tlef=tlefs[0], iolefs=f"{iolefs[0]}/*.lef", defp=defp,
+        corner=corner, pad=pad))
+
+    r = subprocess.run(["openroad", "-no_init", "-exit", str(tcl)],
+                       capture_output=True, text=True, timeout=600)
+    got = {}
+    for ln in r.stdout.splitlines():
+        f = ln.split()
+        if f[:1] == ["ORIENT"]:
+            got[{"ps": "S", "pn": "N", "pw": "W", "pe": "E"}[f[1]]] = f[2]
+    if len(got) != 4:
+        pytest.skip(f"probe did not place four pads: {r.stdout[-400:]}")
+
+    # the tool's names, in DEF spelling, are what the constants must hold
+    measured = {s: PR.ORIENT_ALIASES[o] for s, o in got.items()}
+    assert measured == PR.SIDE_ORIENT, (
+        f"{tree}: the placer produces {measured}; SIDE_ORIENT holds "
+        f"{PR.SIDE_ORIENT}. A constant has drifted from the tool -- which is "
+        f"exactly how NORTH came to carry a rotation where the placer mirrors")
+
+    # AND THE CORNERS, which were the larger defect: two of four carried a
+    # rotation where the placer mirrors. Positions identify which corner is
+    # which -- the instance names are the tool's, not ours.
+    seen = {}
+    for ln in r.stdout.splitlines():
+        f = ln.split()
+        if f[:1] != ["CORNER"]:
+            continue
+        x, y = int(f[3]), int(f[4])
+        pos = ("S" if y < die // 2 else "N") + ("W" if x < die // 2 else "E")
+        seen[pos[::-1] if pos in ("WS", "WN", "ES", "EN") else pos] = \
+            PR.ORIENT_ALIASES[f[2]]
+    if len(seen) == 4:
+        assert seen == PR.CORNER_ORIENT, (
+            f"{tree}: the placer produces {seen}; CORNER_ORIENT holds "
+            f"{PR.CORNER_ORIENT}. The placer ALTERNATES rotation and mirror "
+            f"(R0, MY, R180, MX); a pure rotate_cw walk gives E and W where it "
+            f"writes FN and FS, which is the defect this pins")
