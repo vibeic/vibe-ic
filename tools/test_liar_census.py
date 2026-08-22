@@ -2176,7 +2176,14 @@ def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     # answer, and is deliberately NOT answered here. What is fixed is that the
     # next author can MEASURE the delta against the tree they are landing on
     # instead of reconstructing it by hand from a base that may have moved.
-    assert pop["swept"] == pop["declared"] == 181, pop
+    # 181 -> 182. MEASURED with that function rather than by arithmetic, over
+    # the flow YAML blob at each end: 100af53b4 (the commit that last moved
+    # this literal) declared=181 swept=181 unswept=0, HEAD declared=182
+    # swept=182 unswept=0. added == {('program_exit_zero',
+    # 'slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json'
+    # )} at step 2, removed == {} -- a GROW of exactly one, so the sweep is
+    # still whole and the literal follows the flow, which is what it is for.
+    assert pop["swept"] == pop["declared"] == 182, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

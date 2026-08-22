@@ -148,6 +148,7 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     bound raised to the ceiling. If a row refuses in both arms, something other
     than the deadline is failing it and the row's number is decorative.
     """
+    unboundable = []
     for row in rows:
         red = _record({row["gate"]: "FAIL"})
         tight, _, _ = G.adjudicate(red, [dict(row, max_commits=1)], age)
@@ -165,16 +166,30 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
             # 2026-08-22: `L-doc field producer` and `evidence citation
             # resolves` reached 501 against a ceiling of 500. Asserting the
             # generic message there would have reported a defect that is not
-            # one — and saying nothing would have hidden a row that can never
-            # again be legitimately acknowledged, only renewed or fixed.
+            # one. But it must not be waved through either: this branch used
+            # to `continue`, and that silenced the only signal there was. A row
+            # past the ceiling can NEVER again be legitimately acknowledged --
+            # no legal `max_commits` covers it -- so it is collected and failed
+            # BELOW, with the two numbers that make it actionable, rather than
+            # reported as the generic "some other clause" defect it is not.
             assert any(f.kind == "expired" for f in loose), (
                 f"{row['gate']!r} is {behind} behind, past the ceiling of "
                 f"{G.MAX_BOUND_COMMITS}, so it must expire even at the ceiling")
+            unboundable.append((row["gate"], behind))
             continue
 
         assert not any(f.kind == "expired" for f in loose), (
             f"{row['gate']!r} still expires at the ceiling while only "
             f"{behind} behind -- its stated bound is not what is deciding this")
+
+    assert not unboundable, (
+        "these acknowledged row(s) have aged past the "
+        f"{G.MAX_BOUND_COMMITS}-commit ceiling, so NO legal max_commits can "
+        "cover them and they can never again be legitimately acknowledged: "
+        + ", ".join(f"{g} ({n} behind)" for g, n in unboundable)
+        + ". The row must be fixed, its `since` renewed as a visible act, or "
+        "the row removed because the gate is not genuinely red -- but it "
+        "cannot be left as it is.")
 
 
 def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):

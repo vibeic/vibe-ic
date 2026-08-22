@@ -10,6 +10,65 @@ Renewal is not one of the options."*
 Both verdicts are **real finding, stays red until fixed**. Neither row is
 renewed; both remain expired and both therefore refuse a landing.
 
+> ## RE-MEASURED 2026-08-22 — BOTH VERDICTS ARE SUPERSEDED BY A LOCATION TEST
+>
+> The verdicts below were measured against a population that has since moved,
+> and — more importantly — against a corpus that is **not this repository's**.
+> Kept in full because they were true when measured; do not read them as the
+> current state.
+>
+> ### The discriminating pair
+>
+> Same commit, same gates, same host. Only the WORKTREE LOCATION differs, and
+> each run repeated twice:
+>
+>     worktree under /home/reyerchu   0 passed, 3 failed
+>     worktree outside $HOME          2 passed, 1 failed
+>
+> `L-doc field producer` and `evidence citation resolves` flip; `liar census
+> controls still fire` does not. The two that flip are found by the corpus
+> parent-walk climbing out of the worktree into `/home/reyerchu/benchmark-data/
+> ic` — a directory that is **its own git repository** (HEAD `48644ee`,
+> 2026-08-22) and is not this repo's corpus. benchmark-data left this repo at
+> v1.10.56.
+>
+> So the red these two rows acknowledge was produced by judging a foreign
+> corpus that happened to sit in an ancestor directory of the checkout.
+>
+> ### Neither published state is the honest one
+>
+> Inside `$HOME` the gates FAIL, judging a corpus that is not theirs. Outside,
+> they PASS having scanned nothing — and they say so themselves:
+>
+>     [l_doc_field_producer_check] NO_CORPUS: ... NOTHING WAS SCANNED, 0
+>     published L-doc(s) were examined and nothing is claimed about them
+>
+> and the run's own closing line reads *"all 93 gate(s) passed, but 1 loop
+> corpus expanded over 0 item(s) — NOTHING was checked over"*. A gate that
+> prints "nothing is claimed" and is recorded PASS is the vacuous pass the
+> owner's ruling names.
+>
+> ### Which makes the ruling's SECOND branch the one that applies
+>
+> The population is genuinely empty for any checkout not accidentally sitting
+> under a stray `benchmark-data/`, so per the ruling these must report **rc=2
+> NOT CHECKED with the measured population count**, not rc=0 PASS. The message
+> already exists in both gates; only the return code is wrong.
+>
+> **This is not yet implemented, deliberately.** Flipping rc 0 -> 2 on an
+> absent corpus is a repo-wide behaviour change that turns vacuous passes into
+> blocking NOT CHECKEDs, and there are tests that pin the opposite. The blast
+> radius must be measured before it is changed, and that measurement is not
+> this document.
+>
+> ### Consequence for the two ledger rows
+>
+> Both rows have aged past `MAX_BOUND_COMMITS = 500` (549 behind), so no legal
+> `max_commits` can cover them: they can never again be legitimately
+> acknowledged. They are also, by the measurement above, not genuine repo reds.
+> Their honest disposition is removal-with-a-reason once the gates return rc=2
+> — not renewal, which the ceiling refuses anyway.
+
 ## FIRST, THE OPTION THAT DID NOT APPLY — AND IT IS ALREADY BUILT
 
 The ruling's second branch is already implemented in both gates, and correctly.
