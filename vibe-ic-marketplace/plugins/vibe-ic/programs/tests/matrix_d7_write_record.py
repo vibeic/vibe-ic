@@ -48,9 +48,8 @@ Two real, independent run directories, ledger built by the real emitter
 (2026-08-06):
 
     run                                                D7 residual   W2 promotions
-    /home/reyerchu/_sky130A_r3_run                            335              12
-    /home/reyerchu/campaign_v1544/spm/
-        converge_1.5.44_gf180mcuD                             264               9
+    $HOME/_sky130A_r3_run                                      335              12
+    $HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD         264               9
 
 "335 candidates" is NOT 335 findings, and the gap is the point. Of the 335,
 328 are captured by no ``required_outputs`` entry at all; of those, 327 can be
@@ -95,7 +94,7 @@ design" is stating something the run's own log contradicts.
 END TO END ON A REAL RUN, WITH THE RECORD ACTUALLY COMMITTED
 ============================================================
 The table above is the residual filtered on paper. Measured for real: a copy
-of ``/home/reyerchu/_sky130A_r3_run`` (455 files, mtimes preserved,
+of ``$HOME/_sky130A_r3_run`` (455 files, mtimes preserved,
 ``mtime_fidelity.top_mtime_share`` 0.165 so nothing is withheld) made into a
 git repository, its ledger emitted by ``step_write_ledger`` and COMMITTED, and
 this module pointed at it:
@@ -263,12 +262,74 @@ if str(F.PROGRAMS_DIR) not in sys.path:
 #: relative paths it publishes. Never called to BUILD anything here.
 import step_write_ledger as _swl  # noqa: E402
 
+#: The corpus pointer, for the seam below. Imported for its resolver only; the
+#: pointer is never SEARCHED for, it is offered or it is not.
+import _published_corpus as _pc  # noqa: E402
+
 #: Where ``step_write_ledger.emit()`` puts the run-level record. Under
 #: ``reports/`` and not under ``steps/`` because ``benchmark_evidence_publish``
 #: excludes ``steps/`` by name, so a record written only there could never
 #: reach a published cell — i.e. could never be tracked, i.e. could never be
 #: admissible here.
 RECORD_REL = "reports/write_ledger.json"
+
+#: The directory every record root is spelled under, and the name of the
+#: repository that subtree moved to (``vibeic/benchmark-data``). It is what
+#: makes the corpus rewrite in :func:`record_roots` a plain prefix swap rather
+#: than a lookup table — exactly as ``_corpus_candidate`` does for dimension 3.
+_CORPUS_DIR = "benchmark-data"
+
+
+def _offered_corpus():
+    """A corpus a caller EXPLICITLY offered that is not this repo's own tree.
+
+    THE SAME SEAM DIMENSION 3 WAS GIVEN BY vibe-ic#1703, AND FOR THE SAME
+    MEASURED REASON. Every root this module can name is spelled
+    ``benchmark-data/<...>``; that subtree left this repository, so
+    :func:`record_roots` searching only ``_plugin_tree.repo_root()`` returned
+    the EMPTY population on every host — including a host that had pointed
+    ``VIBE_IC_BENCHMARK_DATA`` at a clone carrying exactly the two roots
+    :data:`test_matrix_d7_outputs_list_complete.RECORD_BOUND_ROOTS` pins. #1703
+    named that shape in dimension 3: "the pointer switched the skip OFF without
+    switching discovery ON", and it was true here too, one dimension over.
+
+    #527 STILL HOLDS IN THE DIRECTION IT WAS WRITTEN FOR. This is not a
+    ``$HOME`` search and not a manifest of machine paths: the operator NAMES
+    the tree, an unset pointer changes nothing, and trackedness is still
+    decided by ``git ls-tree -r HEAD`` in the tree that HOLDS the root
+    (:func:`tracked_at_head`), so it is the CORPUS COMMIT that answers and
+    ``git clean -xdf`` still cannot move a colour. A corpus that is not a git
+    checkout answers the empty set, contributes no root, and the pin above
+    fires by name — loudly, not silently.
+
+    Raises rather than returning ``None`` on a broken pointer, because
+    ``corpus_root()`` does: a named-but-unreadable corpus is a wrong path, not
+    an absent one (``_published_corpus.CorpusPointerBroken``).
+    """
+    corpus = _pc.corpus_root()
+    if corpus is None:
+        return None
+    repo = _plugin_tree.repo_root()
+    if repo is not None and corpus.resolve() == (repo / _CORPUS_DIR).resolve():
+        # Already reached by the in-repo arm; yielding it twice would double
+        # count the same root under two labels.
+        return None
+    return corpus
+
+
+#: Bound for the `git ls-tree` below. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed. This module is not a `test_` file but it is scanned and
+#: it is spent by five test files, which is exactly why the ceiling applies.
+#: The landed value was 120. MEASURED here: `git ls-tree -r HEAD` over this
+#: checkout's 21945 tracked entries takes 0.01 s, so 60 s is a hang detector
+#: for a hung `git`, which is the only way this call can fail to return.
+_LS_TREE_TIMEOUT_S = 60
 
 #: The residual key this dimension reads. Quoted from the emitter's own output
 #: shape rather than guessed; :func:`_load` fails loudly if it disappears.
@@ -350,7 +411,7 @@ def _git_tracked(root: Path) -> frozenset:
     try:
         proc = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-            cwd=str(root), capture_output=True, timeout=120,
+            cwd=str(root), capture_output=True, timeout=_LS_TREE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
@@ -382,20 +443,41 @@ def record_roots() -> Tuple[RecordRoot, ...]:
 
     Empty on a flattened install cache (no repo root, no git work tree), which
     is the correct answer there: nothing is admissible, everything degrades.
+
+    TWO TREES, ONE RULE (vibe-ic#1703's repair, applied here). A record root is
+    looked for in this repository AND in a corpus the operator explicitly
+    offered — see :func:`_offered_corpus` for why searching only the repository
+    made this population empty on every host in existence. The rule does not
+    change between them: the root must carry ``reports/write_ledger.json``
+    TRACKED AT HEAD, and HEAD means the head of whichever tree holds the root.
+    The label keeps its ``benchmark-data/<...>`` spelling in both cases, so a
+    root is the same root whichever tree answered for it and the pin does not
+    have to know which one did.
     """
-    repo = _plugin_tree.repo_root()
-    if repo is None:
-        return ()
     out: List[RecordRoot] = []
-    for rel in sorted(tracked_at_head(repo)):
-        if not rel.endswith("/" + RECORD_REL):
-            continue
-        root_rel = rel[: -(len(RECORD_REL) + 1)]
-        if not root_rel:
-            continue
-        cand = repo / root_rel
-        if cand.is_dir():
-            out.append(RecordRoot(rel=root_rel, path=cand))
+    seen: set = set()
+
+    def _harvest(tree: Path, label_prefix: str) -> None:
+        for rel in sorted(tracked_at_head(tree)):
+            if not rel.endswith("/" + RECORD_REL):
+                continue
+            root_rel = rel[: -(len(RECORD_REL) + 1)]
+            if not root_rel:
+                continue
+            label = label_prefix + root_rel
+            if label in seen:
+                continue
+            cand = tree / root_rel
+            if cand.is_dir():
+                seen.add(label)
+                out.append(RecordRoot(rel=label, path=cand))
+
+    repo = _plugin_tree.repo_root()
+    if repo is not None:
+        _harvest(repo, "")
+    corpus = _offered_corpus()
+    if corpus is not None:
+        _harvest(corpus, _CORPUS_DIR + "/")
     return tuple(out)
 
 

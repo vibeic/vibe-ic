@@ -1,5 +1,0 @@
-{
-  "ic_name": "S/PDIF (IEC 60958 Digital Audio Interface)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Although S/PDIF is the data path to and from audio D/A and A/D converters, the S/PDIF link itself is purely digital. Two physical-layer flavours are defined: (a) coaxial electrical S/PDIF over a 75 Ω cable with 0.5–0.6 V peak-to-peak output level at the transmitter and 0.2 V minimum input level at the receiver, terminated in RCA (typically orange-coded) or BNC; (b) optical S/PDIF over a Toslink JIS F05 / EIAJ fibre-optic link, identical in content to the coaxial form, which inherently provides electrical isolation that breaks ground loops. The analog characteristics of any DAC or ADC connected to the S/PDIF link (sample rate, dynamic range, SNR, jitter sensitivity) are separate from the S/PDIF protocol itself."
-}

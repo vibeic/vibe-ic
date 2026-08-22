@@ -1,5 +1,0 @@
-{
-  "ic_name": "I2S Bus (Inter-IC Sound, UM11732)",
-  "analog_digital_interface_present": false,
-  "signaling_summary": "Digital TTL-compatible signaling on SCK / WS / SD. Input threshold levels: VH = 2.0 V (HIGH), VL = 0.8 V (LOW). Although the protocol is purely digital, I2S is the data-bus interface to A/D and D/A audio converters — the analog characteristics of those converters (sample rate, dynamic range, SNR) are separate from the I2S protocol itself."
-}
