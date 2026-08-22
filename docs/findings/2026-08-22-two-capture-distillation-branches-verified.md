@@ -66,6 +66,36 @@ F15 AND F1 LANDED UNFIXED, and both are red on main right now:
     tree can satisfy. It blocks nothing mechanically. It is now main's false
     statement rather than a branch's.
 
+ALL 32 ON THE LANDED MAIN: rc0 = 26, rc1 = 5, rc2 = 1 (the branch tips were
+25 / 6 / 1). One went GREEN in landing — `signoff_report_states_its_stage`, rc 1
+on the chip tip and rc 0 on main, its three unstamped reports having been
+stamped. The five that are red:
+
+    gate_proof_vocabulary_has_a_producer ....... F15, and the verdict is FALSE
+    only_the_declaring_step_writes_its_output .. F1, findings true, undisposed
+    layer_membership_is_declared_... ........... declared and true
+    metric_constant_across_differing_arms ...... declared and true
+    every_required_metric_key_has_a_producer ... declared and true
+
+AND A CHECKER IMPROVED IN LANDING, which I nearly reported as a regression.
+`declaration_searched_only_inside_a_truncated_window` now finds ELEVEN sites
+where it found ten, because it gained `_module_int_constants` and resolves a
+NAMED bound: `text[:DECL_WINDOW_BYTES]` in flow_gate_enforcement_audit.py:1538
+is now reported as `text[4000]`. Its own docstring records the change —
+"omitted, the rule reads literals only, which is what it did before".
+
+    MY SCANNER WENT THE OTHER WAY, 10 direct sites to 9, and for a minute I had
+    a finding drafted saying a refactor had hidden a site from the rule. The
+    opposite happened: the rule got better and my scanner did not. Third
+    instrument error of the day, second in one turn where I nearly filed a
+    fixed-or-improved thing as broken.
+
+    F9 STILL STANDS, and the distinction is worth keeping straight: naming the
+    BOUND (`text[:NAME]`) is now resolved; binding the SLICE to a name
+    (`head = text[:4000]`, then search `head`) is still invisible. Those are
+    different blindnesses. The checker's 11 against 40 name-bound sites is the
+    same gap as before, one site wider on its side.
+
 F12 AND F17 LANDED UNCHANGED. The same three gates still certify an empty scan.
 And F17 is exactly as warned: 1 of 20 matrix test files exercises `--json`, while
 all 20 had that write path REWRITTEN by the F14 conversion.
