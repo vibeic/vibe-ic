@@ -220,13 +220,22 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
     bound raised to the ceiling. If a row refuses in both arms, something other
     than the deadline is failing it and the row's number is decorative.
     """
+    # COLLECTED, then asserted once. `assert` inside this loop stopped at the
+    # first offending row, so the failure could only ever say "a row" and never
+    # "how many". Measured on the shipped tree: it reported ONE decorative bound
+    # while TWO were present, and the second was only reachable by deleting the
+    # first from the file and re-running. A check that under-reports by a factor
+    # of two is the same defect this test exists to catch, in the test itself.
+    never_expires = []
+    decorative = []
+    past_ceiling = []
     for row in rows:
         red = _record({row["gate"]: "FAIL"})
         tight, _, _ = G.adjudicate(red, [dict(row, max_commits=1)], age)
         loose, _, _ = G.adjudicate(
             red, [dict(row, max_commits=G.MAX_BOUND_COMMITS)], age)
-        assert any(f.kind == "expired" for f in tight), (
-            f"{row['gate']!r} does not expire even at a bound of 1")
+        if not any(f.kind == "expired" for f in tight):
+            never_expires.append(row["gate"])
 
         behind = age(row["since"])
         if behind is not None and behind > G.MAX_BOUND_COMMITS:
@@ -237,16 +246,24 @@ def test_the_bound_is_what_refuses_and_not_some_other_clause(rows, age):
             # 2026-08-22: `L-doc field producer` and `evidence citation
             # resolves` reached 501 against a ceiling of 500. Asserting the
             # generic message there would have reported a defect that is not
-            # one — and saying nothing would have hidden a row that can never
+            # one -- and saying nothing would have hidden a row that can never
             # again be legitimately acknowledged, only renewed or fixed.
-            assert any(f.kind == "expired" for f in loose), (
-                f"{row['gate']!r} is {behind} behind, past the ceiling of "
-                f"{G.MAX_BOUND_COMMITS}, so it must expire even at the ceiling")
+            if not any(f.kind == "expired" for f in loose):
+                past_ceiling.append((row["gate"], behind))
             continue
 
-        assert not any(f.kind == "expired" for f in loose), (
-            f"{row['gate']!r} still expires at the ceiling while only "
-            f"{behind} behind -- its stated bound is not what is deciding this")
+        if any(f.kind == "expired" for f in loose):
+            decorative.append(row["gate"])
+    assert not never_expires, (
+        f"{len(never_expires)} row(s) do not expire even at a bound of 1: "
+        f"{never_expires}")
+    assert not past_ceiling, (
+        f"{len(past_ceiling)} row(s) are past the ceiling of "
+        f"{G.MAX_BOUND_COMMITS} and so must expire even at the ceiling: "
+        f"{past_ceiling}")
+    assert not decorative, (
+        f"{len(decorative)} row(s) still expire at the ceiling -- their stated "
+        f"bound is not what is deciding them: {decorative}")
 
 
 def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
@@ -254,16 +271,26 @@ def test_renewing_by_moving_since_forward_is_what_silences_it(rows, age):
     judgement and not a stuck output."""
     head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    # Same correction as above, for the same reason: one assert per loop reports
+    # one row and hides the rest.
+    not_expiring = []
+    walled = []
     for row in rows:
         expired, _, _ = G.adjudicate(
             _record({row["gate"]: "FAIL"}), [dict(row, max_commits=1)], age)
-        assert any(f.kind == "expired" for f in expired)
+        if not any(f.kind == "expired" for f in expired):
+            not_expiring.append(row["gate"])
         renewed, _, _ = G.adjudicate(
             _record({row["gate"]: "FAIL"}),
             [dict(row, since=head, max_commits=1)], age)
-        assert not any(f.kind == "expired" for f in renewed), (
-            f"{row['gate']!r} cannot be renewed by moving `since` to HEAD, so "
-            f"the row has no legitimate way out and the mechanism is a wall")
+        if any(f.kind == "expired" for f in renewed):
+            walled.append(row["gate"])
+    assert not not_expiring, (
+        f"{len(not_expiring)} row(s) do not expire at a bound of 1: "
+        f"{not_expiring}")
+    assert not walled, (
+        f"{len(walled)} row(s) cannot be renewed by moving `since` to HEAD, so "
+        f"they have no legitimate way out and the mechanism is a wall: {walled}")
 
 
 # --------------------------------------------------------------------------
