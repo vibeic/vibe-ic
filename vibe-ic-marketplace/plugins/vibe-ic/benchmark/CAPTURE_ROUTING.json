@@ -283,6 +283,11 @@
       "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
       "bucket_A_program": "programs/benchmark_run_manifest.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.artefact_write_ownership": {
+      "description": "Wiring a gate's output path against the artefact paths producers already write",
+      "bucket_A_program": "programs/flow_compliance_check.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
