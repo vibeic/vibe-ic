@@ -1,9 +1,0 @@
-{
-  "program": "sdc_exception_correlation_check",
-  "version": "1.0.0",
-  "verdict": "PASS",
-  "false_paths": 0,
-  "multicycle_paths": 0,
-  "known_async_pairs": [],
-  "findings": []
-}
