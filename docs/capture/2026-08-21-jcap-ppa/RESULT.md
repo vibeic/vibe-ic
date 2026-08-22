@@ -80,6 +80,7 @@ Accepted with no refusal and no unrouted record.
 - [Three checks the verifier was missing, two of which could not have failed](#three-checks-the-verifier-was-missing-two-of-which-could-not-have-failed)
 - [Was every commit green? Replayed, and the answer is one](#was-every-commit-green-replayed-and-the-answer-is-one)
 - [This bundle moved, and it was the merge that said so](#this-bundle-moved-and-it-was-the-merge-that-said-so)
+- [A shipped record's evidence was a source screen, and it was wrong](#a-shipped-records-evidence-was-a-source-screen-and-it-was-wrong)
 - [Summary](#summary)
 - [Next](#next)
 
@@ -2515,7 +2516,7 @@ only — whether the row recorded HOW it counted:
 | A-11 | **partial** — the census reproduces within three per cent (1584 → 1544) but its taxonomy does not, because where "extension-only" ends was never stated, and its load-bearing figure needs a judgement no screen makes |
 | A-24 | **not re-derivable** — a plausible reconstruction returned more than twice each figure |
 | A-26 | reproduced, and **closed its own gap**: 2 → 7 documents bound, and the population it left unestimated is now 1215 candidate docstrings of 4026, by a stated screen |
-| A-5 | population not comparable across screens, but the **remedy is demonstrated in-tree** — a sibling refuses both selectors with rc 2 |
+| A-5 | re-measured BY EXECUTION: 8 commands, **6 silently pick one**, 1 refuses with the wrong exit code, 1 returns a green pass on zero work; the remedy is demonstrated in-tree by **4 gates calling a shared seam** with the bad-invocation code — not by argparse, and not by the rc-2 refuser I first credited |
 | A-20 | **not re-derivable** — no screen recorded at all |
 
 Three reproduced, two could not be, one partly. **Every failure is the same
@@ -2971,6 +2972,49 @@ occupy, and the emit line is the exact invocation that produced the bytes in
 historical claim is preserved where it belongs, in this section and in `A-29`,
 rather than in a command line that would fail for whoever tried it.
 
+## A shipped record's evidence was a source screen, and it was wrong
+
+Reading the corpus lane's second decision — *an exact path and a corpus are never
+both silently accepted* — sent me back to my own record for that class. Its
+shipped evidence read: **nine commands take both a single target and a collection
+selector, and NOT ONE declares a mutual-exclusion group.**
+
+That sentence is true. It is also the wrong measurement, and it took five
+consecutive failed probes in one sitting to see why.
+
+| # | probe | what it returned | why it was wrong |
+|---|---|---|---|
+| 1 | count refusal-shaped keywords per gate | 5–11 mentions each | counted my own vocabulary, not behaviour |
+| 2 | run six gates with both selectors | rc=3 on all six | `--report` is not a flag on any of them; argparse rejected an **unknown argument**. Right answer, wrong cause |
+| 3 | re-run with each gate's real flag | one gate rc=2, not 3 | its `--baseline` is a **companion** to a corpus, not a competitor — no conflict to refuse |
+| 4 | grep source for the refusal mechanism | **0 of 6** had one | but I had just watched three of them refuse |
+| 5 | regex the whole tree for the population | 32 commands | `--allow-*` flags are permissions, not collection selectors |
+
+Probe 4 is the one that matters. The refusal is real; it is delegated to a shared
+seam whose exit constant lives in the seam, so a per-file grep for that constant
+sees nothing in any caller. **The layer's actual remedy was invisible to the
+screen that declared the layer had no remedy** — and that screen is what the
+record shipped.
+
+So the population was re-measured by RUNNING all eight commands and reading the
+exit code:
+
+| outcome | count | what a caller sees |
+|---|---|---|
+| refuses via the shared seam, bad-invocation code | 4 (a different set) | both selectors named, and why — **the shape to copy** |
+| silently picks one | 6 of 8 | a verdict about the input they did not name |
+| refuses correctly, returns NOT-CHECKED | 1 of 8 | indistinguishable from "found no artefacts" |
+| **returns a GREEN PASS on `Scanned 0 ICs`** | 1 of 8 | success, over zero work |
+
+The record's substance survived — the gap is real and it is most of the
+population. Its evidence did not. And the correction changed the FIX: an
+implementation that adds a mutual-exclusion group, which is what the record used
+to ask for, fixes six of eight and leaves the wrong-code and vacuous-pass cases
+untouched. The rule has three failure shapes, not one.
+
+Ten over-matched screens in this lane now. Nine were caught in scratch. This one
+shipped, and only a sibling lane's unrelated decision note walked me back into it.
+
 ## Summary
 
 **STATUS**: 40 records emitted and validated — 37 Bucket A, 2 C, 1 T, zero B,
@@ -3123,7 +3167,7 @@ gap was non-empty every single time it was measured.
 
 | rule | naive | after the sweep | outcome |
 |---|---:|---:|---|
-| A-5 | 34 commands | 9 | rescoped; **0 of the 9 guard** — but the remedy is **already demonstrated in-tree**: a sibling uses argparse's mutually exclusive group and refuses both selectors with rc 2, so this is application, not design |
+| A-5 | 8 commands | 8 | re-measured by RUNNING each, after the source screen proved wrong: **6 of 8 silently pick one**, 1 refuses correctly but exits NOT-CHECKED, 1 exits **0 on `Scanned 0 ICs`**. The in-tree remedy is a **shared seam** 4 gates call, exiting bad-invocation — my earlier row credited argparse and held up the rc-2 refuser, which is itself one of the defects |
 | A-7 | 560 hits | 0 | narrowed twice; **runs clean** |
 | A-8 | 24 of 54 axes | 8 | narrowed; found a live defect |
 | A-11 | 362 sites | 12 scanners | **rescoped**; one instance split off. **Its motivating site was fixed on main mid-lane — and the record stands**: the timing selector still picks sign-off reports by filename prefix |
