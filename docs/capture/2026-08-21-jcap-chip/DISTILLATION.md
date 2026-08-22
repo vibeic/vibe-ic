@@ -695,3 +695,43 @@ Counts stay OFF the verdict line — they belong on the denominator line above i
 which is why these read as scope clauses rather than numbers. Verdicts and exit
 codes are unchanged: nine rc=0, two rc=1, one rc=2, 216 tests passing. Only the
 sentences moved, and only toward what was actually measured.
+
+### Five red gates in the composed tree, and NONE of them blocks anything
+
+I wrote earlier that the census lane's gate "will block the batch". **That was
+wrong, and wrong in the way this file keeps describing:** I read
+`THIS GATE BLOCKS (rc=1)` in a docstring as a WIRING fact. It is a statement of
+INTENT. Whether a gate blocks is decided by whether something runs it in a
+blocking position, which is the question I had already answered for my own gates
+and failed to ask about theirs.
+
+Composed tree, all four of their newest gates run correctly with `--root`:
+
+| gate | rc | wired into a runner/hook/workflow? |
+|---|:--:|---|
+| `gate_proof_vocabulary_has_a_producer` | 1 | **no** |
+| `layer_membership_is_declared_not_inferred_from_a_filename_prefix` | 1 | **no** |
+| `metric_constant_across_differing_arms_is_not_measured` | 1 | **no** |
+| `published_absence_claim_is_rechecked_against_the_tree` | 0 | no |
+| `only_the_declaring_step_writes_its_output` (this lane) | 1 | **no** |
+| `every_required_metric_key_has_a_producer` (this lane) | 1 | **no** |
+
+**Five gates at rc=1 in composition and not one of them is wired.** Nothing stops
+the batch. All five are scrapeable by the d9 census tools and will surface there,
+which is the same conclusion this file already reached for this lane's two.
+
+Two things worth separating, because I conflated them:
+
+* `rc=1` is a fact about the tree. All five reds are real findings.
+* "BLOCKS" is an aspiration in a docstring until something invokes the program.
+  Three gates that announce they block, and block nothing, is its own finding —
+  and it is the shape `gatekeeper_review` was already known to have in this
+  repository: a machine declared to refuse that nothing runs.
+
+One non-interaction worth recording: their
+`layer_membership_is_declared_not_inferred_from_a_filename_prefix` refuses a
+population selected by filename prefix, and this lane's gates select populations
+by exactly that (`test_*`). It does NOT flag them — it is scoped to L-doc layer
+membership and flags `power_total_vs_budget_check.py`. Checked rather than
+assumed, because a composed gate reddening this lane's own exclusions would have
+been a real landing problem.
