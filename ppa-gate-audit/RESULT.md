@@ -2160,11 +2160,35 @@ than granting anything. The row's own `why` had already named this exit: the red
 *"closes when that record is either relabelled as a within-project comparison or
 re-measured against an untuned baseline"*.
 
-**`gate_red_since_check` would not have caught it.** Its `stale` finding fires
-only when the acknowledged gate PASSES; this one became NOT_CHECKED, so the row
-would have survived as a live deadline for a red that no longer exists. Recorded
-rather than fixed — the rule belongs to the ledger's owner, and the fix is one
-clause.
+**`gate_red_since_check`'s `stale` finding would not have caught it** — that
+fires only when the acknowledged gate PASSES, and this one became NOT_CHECKED.
+Recorded rather than fixed; the rule belongs to the ledger's owner.
+
+**But the row was not merely obsolete — it had EXPIRED, and that makes the
+deletion a necessity rather than tidiness.** Measured by running the checker
+over the same dispatch record with each ledger:
+
+    base ledger    9 finding(s), rc 1
+    this branch    8 finding(s), rc 1
+
+    the one that differs:
+      [expired] PPA head-to-head records (cross-layer campaign): red since
+      a00f53f20948 — 217 commit(s) ago, and the bound this row set for itself
+      was 200. vibe-ic#1241 owns it
+
+So the acknowledgement had already come due. Leaving it would have been a hard
+`[expired]` failure on a red that no longer exists, and the row's own `why` had
+named this exact exit: the red *"closes when that record is either relabelled as
+a within-project comparison or re-measured against an untuned baseline"*. The
+first of those is what Part 20 did.
+
+The other **eight** findings are pre-existing and none is this branch's: four
+`stale` rows whose gates already passed on `a758f4adc`, and expiries including
+`liar census controls still fire`, 286 commits past a bound of 35. The checker
+was failing on the base tree and fails on this one for the same reasons, one
+row fewer. It is not wired into `repo_hygiene_gates.sh` — it runs in the landing
+gate against a `--summary-json` dispatch record — which is why it took a
+deliberate run to see any of this.
 
 ## One clause of the declaration corrected, and the date untouched
 
