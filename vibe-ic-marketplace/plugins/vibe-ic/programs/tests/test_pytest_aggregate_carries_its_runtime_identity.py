@@ -206,3 +206,68 @@ def test_repository_sweep_is_not_checked_and_says_why():
     rc, out = _run(_PROGRAMS.parents[3])
     assert rc == 2, out
     assert "not a run tree" in out
+
+
+# ── THE ADMISSION NAMES THIS REPO'S OWN RUN-SUMMARY PRODUCER ────────────────
+# The empty population is not an accident of a checkout: the one production
+# writer of a run summary puts it in a temporary directory and lets it go. An
+# admission that says only "none found" invites the reader to conclude the rule
+# has no subject here. It has one; the artefact is never kept.
+
+_DISP = "tools/ci/_gate_dispatch.sh"
+
+
+def _with_dispatcher(tmp_path, body):
+    p = tmp_path / _DISP
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    return tmp_path
+
+
+def test_note_is_absent_when_the_dispatcher_is(tmp_path):
+    """No dispatcher, no claim about one. The gate must not invent a subject."""
+    assert tacri._run_summary_note(tmp_path) is None
+
+
+def test_note_is_absent_when_the_file_emits_no_summary(tmp_path):
+    _with_dispatcher(tmp_path, "#!/bin/sh\necho hello\n")
+    assert tacri._run_summary_note(tmp_path) is None
+
+
+def test_note_names_the_runtime_gap(tmp_path):
+    _with_dispatcher(tmp_path, '#!/bin/sh\n# --summary-json\n'
+                               'printf \'{"declared": 1, "benchmark_data_sha": "x"}\'\n')
+    note = tacri._run_summary_note(tmp_path)
+    assert note is not None
+    assert "does not name the RUNTIME" in note, note
+    assert "recorded here rather than judged" in note, note
+
+
+def test_note_says_so_when_runtime_identity_is_present(tmp_path):
+    """The other direction — the note must not accuse a producer that complies."""
+    _with_dispatcher(tmp_path, '#!/bin/sh\n# --summary-json\n'
+                               'printf \'{"declared": 1, "python": "3.11"}\'\n')
+    note = tacri._run_summary_note(tmp_path)
+    assert note is not None
+    assert "does emit a run summary carrying runtime identity" in note, note
+    assert "does not name the RUNTIME" not in note, note
+
+
+def test_the_note_never_changes_the_verdict(tmp_path):
+    """A disclosure is not a finding. rc stays 2 with and without the note."""
+    bare = _run(tmp_path)
+    _with_dispatcher(tmp_path, '#!/bin/sh\n# --summary-json\n'
+                               'printf \'{"declared": 1, "benchmark_data_sha": "x"}\'\n')
+    withnote = _run(tmp_path)
+    assert bare[0] == 2 and withnote[0] == 2, (bare, withnote)
+    assert "does not name the RUNTIME" in withnote[1]
+    assert "does not name the RUNTIME" not in bare[1]
+
+
+def test_an_unreadable_dispatcher_does_not_break_the_gate(tmp_path):
+    """Guarded on every side: this must never be the reason the gate fails."""
+    d = tmp_path / _DISP
+    d.parent.mkdir(parents=True, exist_ok=True)
+    d.mkdir()                       # a directory where a file is expected
+    assert tacri._run_summary_note(tmp_path) is None
+    assert _run(tmp_path)[0] == 2

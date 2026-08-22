@@ -1405,3 +1405,60 @@ exactly the commit that knows the deadline it wants.
 
 I have NOT written the rows. If you rule (A) or (B) I will do it immediately;
 (B) additionally needs a ruling on wiring, which is already on the list.
+
+## The inert gate, and what its silence was hiding
+
+`pytest_aggregate_carries_its_runtime_identity` returns rc=2 on any source tree
+and always will: the rule's subject is an artefact a test arm writes, and no
+source tree contains one. Honest, and useless — an admission that says only "none
+found" invites the reader to conclude the rule has no subject in this repository.
+
+It has one. Following the signoff lesson — when the artefact is not in the tree,
+look at its producer — the producer is here and tracked:
+
+* `tools/ci/shard_aggregate.py` is NOT it. It PRINTS its verdict
+  (`print("\n".join(lines))`) and writes no document; it consumes shard summaries.
+* `tools/ci/_gate_dispatch.sh` emits this repository's only run summary, and the
+  one production writer puts it in a temporary directory and lets it go.
+
+Its top-level keys, read off the summary build:
+
+    listed_only declared ran decided passed failed not_checked
+    not_checked_unexempted exemptions_expired wiring_errors today wrote_corpus
+    deferred other_shard out_of_scope shard corpora corpus_inputs
+    benchmark_data_sha undisclosed_loops seconds gates
+
+It names the CORPUS it ran against — `benchmark_data_sha`, `corpus_inputs` — and
+does not name the RUNTIME it ran on. The only `python|platform|uname|image|host`
+matches in the whole summary build are the word "host" in two comments. That is
+the capture's finding, alive in a tracked producer: *"the aggregate carried no
+runtime identity, which is what made the five arms necessary."*
+
+### Disclosed, not judged, and why that is the right call
+
+I did NOT redden it and did not touch the dispatcher.
+
+* The rule's stated narrowing already says a gate profile is not a test
+  aggregate — `hygiene_gate_profile.json` was named and excluded when the gate was
+  written. Reddening this would quietly reverse a narrowing the docstring makes a
+  promise about.
+* Editing `_gate_dispatch.sh` is a heavily-gated change whose remedy belongs to
+  whoever owns the tier.
+
+So the ADMISSION now names it. The gate still returns 2 and its finding set is
+unchanged; what changed is that "I could not look" now says what it could not look
+at, which is the standing rule for rc=2 applied to the one gate that will always
+be in that state.
+
+The helper is guarded on every side — absent dispatcher, a dispatcher that emits
+no summary, and a directory where the file should be all yield no note, because
+this must never become the reason the gate fails. It also states the OTHER
+direction: a dispatcher that does carry runtime identity gets a sentence saying
+so, so the note cannot become a permanent accusation nobody re-reads.
+
+**Scope question for the adjudicator, not blocking:** should the rule cover
+tier/gate aggregates as well as test aggregates? The capture's incident is "127
+failures in one tier arm", which is a TIER run, so a reading exists in which the
+dispatcher's summary IS the subject and this is a live FAIL rather than a
+disclosure. I have implemented the narrower reading because it is the one the
+docstring already promised. Say the word and it becomes a finding.
