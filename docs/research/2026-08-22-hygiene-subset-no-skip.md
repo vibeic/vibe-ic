@@ -3135,3 +3135,47 @@ half wrong, in the section a reader is told to read first. It survived four
 retellings before being tested — including in a message to a peer — which is the
 strongest argument in this document for testing the claims you are most
 confident about, rather than the ones that feel shaky.
+
+## 48. `land/batch67-assembled` came back — at its OLD head, and it is now stale against `main`
+
+The watch fired a third time, and this one is worth flagging rather than just
+recording. `land/batch67-assembled` was deleted after the landing (§45) and has
+now REAPPEARED, at the same SHA it was deleted from: `2d98cacd4b`.
+
+**It is now behind `main`, substantially:**
+
+```
+main         a4caccefea   v1.11.69     183 commits the branch does not have
+batch branch 2d98cacd4b   v1.11.68      39 commits main does not have
+2d98cacd4b is an ancestor of main?      NO
+```
+
+**And landing it as-is would be a large reversion.** Diffing just
+`plugins/vibe-ic/programs/` between `main` and that branch:
+
+```
+57 files changed, 155 insertions(+), 8068 deletions(-)
+```
+
+Those 8,068 deletions are `main` content the branch predates — including whole
+test files (`…_declare_where_their_verdict_is_consumed.py`, 619 lines). A
+wholesale land of this branch onto today's `main` would remove them, and it
+would take the version backwards from 1.11.69 to 1.11.68.
+
+**This is exactly the defect class this document has been tracking**, arriving
+from a new direction: `landing_collateral_revert_check`'s own error text names
+it — *"A land that replaces a file wholesale from a stale branch does this;
+applying the branch's OWN delta (`git diff <merge-base>..<branch>`) does not."*
+The branch is not wrong to exist; landing it wholesale would be.
+
+**I am not touching it and I am not assuming the worst.** A restored branch is
+not a landing, and there are ordinary reasons to bring one back — recovering the
+39 commits `main` lacks, salvaging §20–28, or an accidental push from a stale
+local ref. The gate that catches this is wired into the lander (§42) and would
+have to be gotten past deliberately.
+
+**What is worth saying to whoever restored it:** the 39 commits it carries that
+`main` lacks are real and may be worth recovering; the way to recover them is
+the branch's own delta against its merge-base, not the branch as a whole. That
+distinction is the entire content of the gate's error message, and it is the
+difference between adding 39 commits and removing 8,068 lines.
