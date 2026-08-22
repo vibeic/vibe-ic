@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Step-30 ERC + sign-off density-rule verification (real substance).
+"""Step-31 ERC + sign-off density-rule verification (real substance).
 
-This is the Step-30 *physical-verification* density + ERC checker. It is a
-DIFFERENT check from `metal_fill_density_check` (Step 33): Step 30 runs BEFORE
-metal fill, so `filled.def` / `metal_fill.done` do not exist yet and the
-fill-marker logic of `metal_fill_density_check` would wrongly FAIL here.
+This is the Step-31 *physical-verification* density + ERC checker. It is a
+DIFFERENT check from `metal_fill_density_check` (Step 34): the flow's step
+ORDER puts Step 31 before Step 34, so this checker must not key off
+`filled.def` / `metal_fill.done` — the fill-marker logic of
+`metal_fill_density_check` would wrongly FAIL here.
+
+The density artefact it reads, reports/density.{json,rpt}, is written by the
+metal-fill emitter and is declared as Step 34's required_output. The runner
+emits metal fill before the ERC report inside one pass, so the artefact is on
+disk when this gate runs; when it genuinely is not, that is DENSITY_MISSING
+(ERROR, rc=1) — see the exit-code policy in main().
 
 What this verifies (no fabrication, real parsing of the produced artefact):
 
-  DENSITY sub-check (gate condition: a density report exists):
+  DENSITY sub-check (UNCONDITIONAL — see the exit-code policy in main()):
     * The density artefact (reports/density.json or reports/density.rpt, also
       reports/phase3/...) must parse, be non-empty, carry a recognizable EDA
       tool provenance signature, AND contain a real numeric density metric.
@@ -46,6 +53,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -186,7 +194,7 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         findings.append(Finding(
             "ERROR", "DENSITY_MISSING",
             "No density artefact (reports/density.json or reports/density.rpt) "
-            "found — the Step-30 density sub-check cannot verify substance"))
+            "found — the Step-31 density sub-check cannot verify substance"))
         return
 
     stats["density_checked"] = True
@@ -301,10 +309,48 @@ def _check_erc(project_dir: Path, findings: List[Finding], stats: dict) -> None:
         return
 
     if (floating is not None and floating > 0) or clean_no:
+        # ORGANIC #696 — a raw floating-net COUNT > 0 is NOT automatically a
+        # functional ERC defect. The OpenROAD ERC screen reports
+        # structurally-benign floats too: design-for-ECO spare-cell I/O
+        # (intentionally tied-off, pre-placed for a metal ECO), power/ground
+        # rails (VPWR/VGND/vdd/vss SPECIALNETS), and the yosys hilomap
+        # constant-tie net (zero_/one_). Classify the floats BY OWNER and
+        # FAIL only on a positive FUNCTIONAL count. §4.05 no-leak: a genuine
+        # floating SIGNAL net (not spare-owned, not a power/ground rail, not
+        # a tie net) is still functional → ERC_DIRTY FAIL; an unparseable
+        # report with no verbose float list also still FAILs (we cannot
+        # prove the floats are benign, so we do not waive on faith).
+        functional = floating if floating is not None else None
+        classified = None
+        try:
+            import erc_float_owner_classify as _efc  # noqa: PLC0415
+            names = _efc.parse_floats(text)
+            if names:
+                classified = _efc.classify(names)
+                functional = classified["functional_count"]
+        except Exception:
+            classified = None  # fall through to raw-count FAIL
+        if classified is not None and functional == 0:
+            # All floats are structurally benign (spare I/O / power-ground /
+            # tie nets). This is the open-source ERC screen's known benign
+            # set — record as REVIEW/INFO, not a hard ERC_DIRTY failure.
+            stats["erc_clean"] = True
+            stats["erc_floating_benign"] = classified["benign_count"]
+            stats["erc_floating_functional"] = 0
+            findings.append(Finding(
+                "INFO", "ERC_BENIGN_FLOATS",
+                f"ERC floating nets={floating} are 100% structurally benign "
+                f"(spare-cell I/O / power-ground rails / hilomap tie net; "
+                f"by_owner={classified['by_owner']}) — 0 functional floats, "
+                "not an electrical-rule failure (#696)"))
+            return
+        # Genuine functional float(s) — or an unclassifiable report — FAIL.
+        _fn = (f"{functional} functional of {floating}"
+               if (classified is not None and floating is not None)
+               else (str(floating) if floating is not None else "?"))
         findings.append(Finding(
             "ERROR", "ERC_DIRTY",
-            f"ERC not clean: floating nets="
-            f"{floating if floating is not None else '?'}, "
+            f"ERC not clean: floating nets={_fn}, "
             f"clean={'NO' if clean_no else ('YES' if clean_yes else '?')} "
             "— floating signal nets are a real electrical-rule failure"))
         return
@@ -351,7 +397,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
 
 def main(argv: list = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Step-30 ERC + sign-off density-rule verification")
+        description="Step-31 ERC + sign-off density-rule verification")
     ap.add_argument("project_dir", help="Project root directory")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
@@ -367,25 +413,35 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     print(out)
 
     # Exit code policy (honest, never vacuous):
-    #   * The Step-30 gate fires this checker only when reports/density.rpt
-    #     exists, so a missing density artefact at runtime is unexpected and
-    #     is recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL), NOT a
-    #     vacuous pass on absence.
-    #   * rc=2 (SKIP) is reserved for the genuine "step did not apply" case:
-    #     zero findings AND nothing examined (no density artefact present and
-    #     no ERC report). Because a missing density artefact is an ERROR, this
-    #     SKIP path is only reachable when invoked outside the gate condition
-    #     and there is literally nothing to check.
+    #   * The Step-31 gate fires this checker UNCONDITIONALLY (vibe-ic#220 made
+    #     it a plain `program_exit_zero`; it used to be conditional on one of
+    #     the density/ERC artefacts already existing, which disarmed exactly the
+    #     absence case it is here to catch). A missing density artefact is
+    #     therefore recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL),
+    #     NOT a vacuous pass on absence.
+    #   * "examined nothing" FAILS CLOSED (rc=1). It is not rc=0 and it is not
+    #     rc=2. A `nothing_examined and not has_error -> return 2` guard used to
+    #     sit here, describing itself as reachable "when the program is invoked
+    #     directly with literally nothing to check". That was false, and
+    #     measurably so: invoked directly on an empty project directory this
+    #     program exits 1 with DENSITY_MISSING, because `_check_density` runs on
+    #     every invocation and records that ERROR whenever it found no artefact
+    #     — so `nothing_examined and not has_error` could not hold, and the
+    #     branch was dead.
+    #     It is not merely deleted, because deleting it would route that state
+    #     into `report["summary"]["pass"]`, i.e. a VACUOUS rc=0, the moment any
+    #     future sub-check gains a quiet "not applicable" early return. Nothing
+    #     examined is a FAIL: this gate has no not-applicable verdict to offer.
     has_error = report["summary"]["errors_count"] > 0
     nothing_examined = (not stats["density_checked"]
                         and not stats["erc_checked"])
     if nothing_examined and not has_error:
-        return 2
+        return 1
     return 0 if report["summary"]["pass"] else 1
 
 

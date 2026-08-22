@@ -1,0 +1,37 @@
+type: process
+severity: P3
+component: program:agent_checkin_scope_guard
+
+title: >-
+  Policy contradiction needing OWNER adjudication: the agent_checkin_scope_guard
+  role matrix (2026-06-21) forbids benchmark-agent check-ins to the backlog zone,
+  while the benchmark-enhancement-capture skill routing (c) directs the same
+  agent to file community-backlog entries
+
+pattern: |
+  Surfaced by the repo-gatekeeper while landing PR #97 (v1.3.3): the six capture
+  YAMLs were authored by the benchmark-agent per benchmark-enhancement-capture
+  routing (c), but agent_checkin_scope_guard's role matrix rejects benchmark-agent
+  writes to community/backlogs. The gatekeeper landed under the core-agent landing
+  role and recorded the deviation. Every future capture round hits this same
+  contradiction.
+
+suggested_fix: |
+  Owner decision required — either (a) amend the scope-guard matrix to allow
+  benchmark-agent backlog-zone check-ins for capture YAMLs specifically (a
+  narrow, docs-only carve-out consistent with the 2026-06-21 "USE PR to issue
+  bugs" directive), or (b) amend benchmark-enhancement-capture routing (c) to
+  say captures are handed to the core-agent/gatekeeper for filing. Then encode
+  the chosen rule in the scope guard + a locking test so the contradiction
+  cannot recur.
+
+evidence:
+  source: repo-gatekeeper Step-2.7 report while landing PR #97 (merge 2858fb23)
+  filed_by: benchmark-agent (relaying gatekeeper process finding)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    benchmark-enhancement-capture SKILL.md Bucket C check-in handoff clause added (benchmark-agent drafts, core-agent/gatekeeper commits) — aligned with scope-guard v1.3.30

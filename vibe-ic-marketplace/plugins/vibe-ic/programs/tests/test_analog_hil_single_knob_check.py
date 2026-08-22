@@ -84,7 +84,11 @@ def test_error_missing_sizing(tmp_path):
         "iterations": [{"iter": 1, "sizing": _BASE}, {"iter": 2}],
     })
     assert evaluate_file(f).verdict == "ERROR"
-    assert main(["--file", str(f)]) == 2
+    # #693 — exit 1, NOT 2. Exit 2 is `flow_compliance_check`'s cannot-judge
+    # tier (mapped to __VACUOUS_HINT__ = a pass on a blocking slot, "n/a (input
+    # not present)" on an advisory one), so "a garbage file must not vacuously
+    # pass" was doing exactly that.
+    assert main(["--file", str(f)]) == 1
 
 
 def test_error_iterations_not_list(tmp_path):
@@ -98,12 +102,13 @@ def test_garbage_file_is_error(tmp_path):
     f = tmp_path / "hw_sizing_history.json"
     f.write_text("<<< not json")
     assert evaluate_file(f).verdict == "ERROR"
-    assert main(["--file", str(f)]) == 2
+    assert main(["--file", str(f)]) == 1
 
 
-def test_skip_empty_project(tmp_path):
+def test_no_history_is_not_checked_not_pass(tmp_path):
+    # #693 — no artefact is exit 2 = NOT CHECKED, NOT exit 0.
     (tmp_path / "phase3" / "analog").mkdir(parents=True)
-    assert main([str(tmp_path)]) == 0
+    assert main([str(tmp_path)]) == 2
 
 
 def test_missing_file_errors(tmp_path):

@@ -656,11 +656,13 @@ crypto-engine:
   # equivalent open-source implementations.
   #
   # v0.79 (B11): merged the previously-duplicate `crypto-engine:`
-  # entry at line 491 (typical_scaffolds — AES-specific Phase-1
-  # auto-fill defaults) into this entry. The two were orthogonal
-  # schemas (typical_structure = semantic shape; typical_scaffolds
-  # = concrete defaults) and the duplicate YAML key was silently
-  # shadowing this richer entry — see B11 in v079_backlog.md.
+  # entry at line 491 into this entry; the duplicate YAML key was
+  # silently shadowing this richer entry — see B11 in v079_backlog.md.
+  # The concrete-defaults half of that merge (typical_scaffolds) was
+  # REMOVED in #493 — those defaults were AES-128 specific yet sat on
+  # the PARENT of hash-function / stream-cipher / rng, so a SHA-256 or
+  # an RNG inherited them. `typical_structure` below is the surviving
+  # half: semantic shape, explicitly free of algorithm-specific values.
   reference: "Generic memory-mapped crypto engine (secworks/aes, sha256, chacha, trng families)"
   public_source: "NIST FIPS 197 (AES), FIPS 180 (SHA-2), FIPS 202 (SHA-3), RFC 7539 (ChaCha)"
   typical_interface: "Wishbone B4"
@@ -770,59 +772,10 @@ crypto-engine:
     - stream-cipher     # ChaCha, Salsa — has nonce + counter
     - rng               # TRNG / CSPRNG — has entropy source + reseed policy
 
-  # v0.79 (B11): typical_scaffolds — AES-128 specific Phase-1 auto-fill
-  # defaults (rounds=10, 46 cycles/block, etc.). Merged from the duplicate
-  # `crypto-engine:` block that previously shadowed this entry. Subclass
-  # block-cipher overrides round counts for AES-192/256.
-  typical_scaffolds:
-    L2.rounds: 10
-    L2.hw_padding: false
-    L5.datapath_style: "iterative"
-    L5.throughput_cycles_per_block: 46
-    L5.interface_type: "single-buffered"
-    L6.submodule_control_logic:
-      encipher:   {purpose: "Forward block cipher datapath",   states: [IDLE, LOAD, ROUND, DONE]}
-      decipher:   {purpose: "Inverse block cipher datapath",   states: [IDLE, LOAD, ROUND, DONE]}
-      key_expand: {purpose: "Round-key schedule generator",    states: [IDLE, EXPAND, DONE]}
-      sbox:       {purpose: "Substitution lookup (parallel)",  states: []}
-      mixcol:     {purpose: "MixColumns linear diffusion",     states: []}
-      ctrl:       {purpose: "Top FSM coordinating enc/dec/key", states: [IDLE, KEY_INIT, ENCIPHER_ROUND, DECIPHER_ROUND, DONE]}
-    L8R.side_channel_protection: {dpa_masking: false, fault_detection: false, constant_time: false}
-    L8R.implementation_status: "draft"
-    L9.dtop_top_level:
-      module_name: "crypto_top"
-      ports:
-        - {name: clk,       direction: input,  width: 1}
-        - {name: resetn,    direction: input,  width: 1}
-        - {name: start,     direction: input,  width: 1}
-        - {name: encdec,    direction: input,  width: 1,   description: "0=encrypt, 1=decrypt"}
-        - {name: key,       direction: input,  width: 256}
-        - {name: key_len,   direction: input,  width: 2,   description: "00=128, 01=192, 10=256"}
-        - {name: block_in,  direction: input,  width: 128}
-        - {name: block_out, direction: output, width: 128}
-        - {name: done,      direction: output, width: 1}
-    L9.submodules: {encipher: aes_encipher, decipher: aes_decipher, key_expand: aes_key_expand, sbox: aes_sbox, mixcol: aes_mixcol, ctrl: aes_ctrl}
-    L9.instantiation_order:
-      order:
-        - "u_key_expand (KEY_EXPAND) - round-key schedule"
-        - "u_sbox (SBOX) - substitution lookup"
-        - "u_mixcol (MIXCOL) - MixColumns diffusion"
-        - "u_encipher (ENCIPHER) - forward cipher datapath"
-        - "u_decipher (DECIPHER) - inverse cipher datapath"
-        - "u_ctrl (CTRL) - top FSM"
-    L9.internal_wires:
-      - {name: round_key,      width: 128, description: "key_expand → encipher/decipher round key"}
-      - {name: round_num,      width: 4,   description: "ctrl → encipher/decipher round index"}
-      - {name: sbox_in,        width: 8,   description: "encipher → sbox byte in"}
-      - {name: sbox_out,       width: 8,   description: "sbox → encipher substituted byte"}
-      - {name: mixcol_in,      width: 32,  description: "encipher → mixcol column in"}
-      - {name: mixcol_out,     width: 32,  description: "mixcol → encipher column out"}
-      - {name: state_enc,      width: 128, description: "encipher internal state vector"}
-      - {name: state_dec,      width: 128, description: "decipher internal state vector"}
-      - {name: enc_done,       width: 1,   description: "encipher → ctrl done"}
-      - {name: dec_done,       width: 1,   description: "decipher → ctrl done"}
-      - {name: key_expand_done, width: 1,  description: "key_expand → ctrl ready"}
-      - {name: ctrl_mode,      width: 2,   description: "ctrl encoding of active datapath"}
+  # typical_scaffolds — REMOVED in #493 (12 entries). Coverage was 0/201
+  # doc-sets, and once connected the mechanism injected wrong facts. The
+  # reason is recorded in tools/phase1_engine/gap_detect.py
+  # `_RETIRED_MECHANISMS['typical_scaffolds']`; read it before re-adding.
 
 simple-cpu:
   reference: "picoRV32 (claire xenia)"
@@ -830,60 +783,15 @@ simple-cpu:
   typical_regfile_size_32bit: 32
   typical_memory_interface: "Wishbone B4 / AXI4-Lite"
   isa_extensions: ["I", "M (optional)", "C (optional)"]
-  # v0.68 typical_scaffolds — Phase-1 auto-fill injects these when gap
-  # matches a layer-prefixed path here. Lets downstream Yosys synth see
-  # real ports + submodules instead of collapsed placeholders.
-  typical_scaffolds:
-    L2.pipeline_depth: 3
-    L2.pipeline_style: "in-order"
-    L2.issue_width: 1
-    L5.bus_interface: "native-valid-ready"
-    L5.ibus_separate_from_dbus: true
-    L5.cache_sizes: {icache_bytes: 0, dcache_bytes: 0, icache_ways: 0, dcache_ways: 0}
-    L6.submodule_control_logic:
-      regfile:  {purpose: "32x32-bit general-purpose register file", states: []}
-      alu:      {purpose: "Arithmetic-logic unit for R/I-type ops",  states: []}
-      decoder:  {purpose: "Instruction decoder (RVI base + M/C ext)", states: []}
-      pcu:      {purpose: "Program counter + fetch/branch control",  states: [RESET, FETCH, DECODE, EXEC, MEM_ACCESS, WRITEBACK, TRAP]}
-      memif:    {purpose: "Native / AXI4-Lite memory-bus interface", states: [IDLE, VALID, WAIT, COMPLETE]}
-    L8R.reset_vector: "0x00000000"
-    L9.dtop_top_level:
-      module_name: "simple_cpu_top"
-      ports:
-        - {name: clk,        direction: input,  width: 1,  description: "System clock"}
-        - {name: resetn,     direction: input,  width: 1,  description: "Active-low reset"}
-        - {name: mem_valid,  direction: output, width: 1,  description: "Memory txn valid"}
-        - {name: mem_instr,  direction: output, width: 1,  description: "1=instr fetch"}
-        - {name: mem_ready,  direction: input,  width: 1,  description: "Memory slave ready"}
-        - {name: mem_addr,   direction: output, width: 32, description: "Memory address"}
-        - {name: mem_wdata,  direction: output, width: 32, description: "Write data"}
-        - {name: mem_wstrb,  direction: output, width: 4,  description: "Byte strobe"}
-        - {name: mem_rdata,  direction: input,  width: 32, description: "Read data"}
-        - {name: irq_in,     direction: input,  width: 32, description: "External interrupts"}
-    L9.submodules: {regfile: regfile, alu: alu, decoder: decoder, pcu: pcu, memif: memif}
-    L9.instantiation_order:
-      order:
-        - "u_regfile (REGFILE) - 32x32b GPR file"
-        - "u_alu (ALU) - ALU datapath"
-        - "u_decoder (DECODER) - instruction decoder"
-        - "u_pcu (PCU) - program counter + fetch"
-        - "u_memif (MEMIF) - memory-bus interface"
-    L9.internal_wires:
-      - {name: instr,       width: 32, description: "fetched instruction from memif"}
-      - {name: rs1,         width: 5,  description: "decoder → regfile read addr"}
-      - {name: rs2,         width: 5,  description: "decoder → regfile read addr"}
-      - {name: rd,          width: 5,  description: "decoder → regfile write addr"}
-      - {name: rs1_data,    width: 32, description: "regfile → alu operand A"}
-      - {name: rs2_data,    width: 32, description: "regfile → alu operand B"}
-      - {name: alu_op,      width: 4,  description: "decoder → alu opcode"}
-      - {name: alu_result,  width: 32, description: "alu → regfile writeback"}
-      - {name: imm,         width: 32, description: "decoder → alu immediate"}
-      - {name: pc_current,  width: 32, description: "pcu current program counter"}
-      - {name: branch_taken, width: 1, description: "alu/decoder → pcu branch decision"}
-      - {name: mem_req,     width: 1,  description: "pcu → memif fetch request"}
+  # typical_scaffolds — REMOVED in #493 (12 entries). Coverage was 0/201
+  # doc-sets, and once connected the mechanism injected wrong facts. The
+  # reason is recorded in tools/phase1_engine/gap_detect.py
+  # `_RETIRED_MECHANISMS['typical_scaffolds']`; read it before re-adding.
 
-  # v0.79 (A2) L10-L13 K3 typical_* blocks. Note: simple-cpu uses
-  # typical_scaffolds (above) for L1-L23 instead of typical_structure;
+  # v0.79 (A2) L10-L13 K3 typical_* blocks. Note: simple-cpu used to
+  # carry typical_scaffolds for L1-L23 instead of typical_structure;
+  # that block was REMOVED in #493 (see the pointer above), so L1-L23
+  # now has no class-reference block at all for this class.
   # this typical_structure block carries ONLY the L10-L13 layer
   # extensions to anchor per-layer agent fills for the test/cal/seq/lab
   # tail. L10/L12 lean heavily on RISC-V compliance (riscof) and the
@@ -1258,7 +1166,9 @@ peripheral-timer:
   typical_prescaler_bits: 8
 
   # v0.74 post-apb_timer benchmark: peripheral-timer specific structure.
-  # Supplements the parent apb-peripheral typical_scaffolds.
+  # (Previously described as supplementing the parent apb-peripheral
+  # typical_scaffolds; that parent block was REMOVED in #493, so this
+  # block now stands alone.)
   typical_structure:
     L1_datasheet:
       typical_pins:
@@ -1481,66 +1391,10 @@ apb-peripheral:
   typical_data_width: 32
   typical_irq_count: 1
   typical_wait_states: 0
-  typical_scaffolds:
-    L2.clock_name: "HCLK"
-    L2.reset_name: "HRESETn"
-    L2.reset_polarity: "active-low"
-    L2.wait_states: 0
-    L2.pslverr_supported: true
-    L4.register_map:
-      - {offset: "0x00", name: "CTRL",    access: "RW", reset_value: "0x00000000", description: "Control register"}
-      - {offset: "0x04", name: "STATUS",  access: "R",  reset_value: "0x00000000", description: "Status register"}
-      - {offset: "0x08", name: "DATA",    access: "RW", reset_value: "0x00000000", description: "Data/pad-value register"}
-      - {offset: "0x0C", name: "IRQ_EN",  access: "RW", reset_value: "0x00000000", description: "Interrupt enable mask"}
-      - {offset: "0x10", name: "IRQ_STS", access: "W1C", reset_value: "0x00000000", description: "Interrupt status (W1C)"}
-    L4.irq_count: 1
-    L4.irq_type: "level"
-    L5.dft_hooks: []
-    L5.input_synchronizer_depth: 2
-    L6.submodule_control_logic:
-      apb_slave_if: {purpose: "APB3 slave interface (PADDR decode + PREADY)",    states: [IDLE, SETUP, ACCESS]}
-      reg_bank:     {purpose: "Control/status register bank",                    states: []}
-      irq_ctrl:     {purpose: "Interrupt source aggregation + masking",          states: []}
-      func_logic:   {purpose: "Peripheral functional logic (GPIO/timer/etc.)",   states: [IDLE, BUSY]}
-    L8R.address_alignment: "word-aligned"
-    L8R.irq_clear_mechanism: "W1C"
-    L9.dtop_top_level:
-      module_name: "apb_peripheral_top"
-      ports:
-        - {name: HCLK,     direction: input,  width: 1}
-        - {name: HRESETn,  direction: input,  width: 1}
-        - {name: PSEL,     direction: input,  width: 1}
-        - {name: PENABLE,  direction: input,  width: 1}
-        - {name: PWRITE,   direction: input,  width: 1}
-        - {name: PADDR,    direction: input,  width: 12}
-        - {name: PWDATA,   direction: input,  width: 32}
-        - {name: PRDATA,   direction: output, width: 32}
-        - {name: PREADY,   direction: output, width: 1}
-        - {name: PSLVERR,  direction: output, width: 1}
-        - {name: irq,      direction: output, width: 1,  description: "Peripheral interrupt"}
-        - {name: gpio_in,  direction: input,  width: 32, description: "Optional GPIO input pads"}
-        - {name: gpio_out, direction: output, width: 32, description: "Optional GPIO output pads"}
-        - {name: gpio_oe,  direction: output, width: 32, description: "Optional GPIO output enable"}
-    L9.submodules: {apb_slave_if: apb_slave, reg_bank: reg_bank, irq_ctrl: irq_ctrl, func_logic: gpio_core}
-    L9.instantiation_order:
-      order:
-        - "u_apb_slave_if (APB_SLAVE_IF) - APB3 slave interface"
-        - "u_reg_bank (REG_BANK) - control/status registers"
-        - "u_irq_ctrl (IRQ_CTRL) - interrupt source aggregator"
-        - "u_func_logic (FUNC_LOGIC) - peripheral functional core"
-    L9.internal_wires:
-      - {name: reg_wr_en,    width: 1,  description: "APB write enable from slave_if to reg_bank"}
-      - {name: reg_rd_en,    width: 1,  description: "APB read enable"}
-      - {name: reg_addr,     width: 12, description: "decoded register offset"}
-      - {name: reg_wdata,    width: 32, description: "register write data"}
-      - {name: reg_rdata,    width: 32, description: "register read data"}
-      - {name: ctrl_reg,     width: 32, description: "CTRL register bus"}
-      - {name: status_reg,   width: 32, description: "STATUS register bus"}
-      - {name: irq_en_reg,   width: 32, description: "IRQ_EN mask"}
-      - {name: irq_sts_reg,  width: 32, description: "IRQ_STS flags (W1C)"}
-      - {name: irq_source,   width: 8,  description: "func_logic → irq_ctrl source vector"}
-      - {name: gpio_out_reg, width: 32, description: "gpio output register to pads"}
-      - {name: gpio_oe_reg,  width: 32, description: "gpio output-enable register"}
+  # typical_scaffolds — REMOVED in #493 (17 entries). Coverage was 0/201
+  # doc-sets, and once connected the mechanism injected wrong facts. The
+  # reason is recorded in tools/phase1_engine/gap_detect.py
+  # `_RETIRED_MECHANISMS['typical_scaffolds']`; read it before re-adding.
 
 uart-peripheral:
   reference: "alexforencich/verilog-uart"
@@ -1550,64 +1404,10 @@ uart-peripheral:
   typical_frame_format: "8N1"
   typical_oversampling: 8
   typical_fifo_depth: {tx: 0, rx: 0}
-  typical_scaffolds:
-    L3.frame_format:
-      start_bit: "1 low-level bit"
-      stop_bits: "1 high-level bit"
-      parity: "none"
-      bit_encoding: "NRZ"
-      byte_order: "LSB first (UART convention)"
-    L4.bus_interface_family: "AXI-Stream"
-    L4.fifo_depth: {tx_fifo: 0, rx_fifo: 0}
-    L4.status_signals: [tx_busy, rx_busy, rx_overrun_error, rx_frame_error]
-    L4.register_map:
-      - {offset: "0x00", name: "CTRL",   access: "RW", reset_value: "0x00000000", description: "UART control (enable, parity, stop bits)"}
-      - {offset: "0x04", name: "STATUS", access: "R",  reset_value: "0x00000000", description: "tx_busy, rx_busy, overrun, frame-error flags"}
-      - {offset: "0x08", name: "TX_DATA", access: "W", reset_value: "0x00000000", description: "TX byte queue write"}
-      - {offset: "0x0C", name: "RX_DATA", access: "R", reset_value: "0x00000000", description: "RX byte queue read"}
-    L6.submodule_control_logic:
-      tx_fsm:   {purpose: "UART transmitter state machine",      states: [IDLE, START, DATA, PARITY, STOP]}
-      rx_fsm:   {purpose: "UART receiver with oversampling",     states: [IDLE, START_DETECT, DATA, PARITY, STOP_CHECK]}
-      baud_gen: {purpose: "Baud-rate prescaler / strobe gen",    states: []}
-      tx_fifo:  {purpose: "TX FIFO (optional, depth=0 minimal)", states: []}
-      rx_fifo:  {purpose: "RX FIFO (optional, depth=0 minimal)", states: []}
-    L8.bit_period_cycles: 434
-    L8R.irq_output: false
-    L8R.overrun_policy: "drop-new"
-    L9.dtop_top_level:
-      module_name: "uart_top"
-      ports:
-        - {name: clk,       direction: input,  width: 1}
-        - {name: resetn,    direction: input,  width: 1}
-        - {name: prescale,  direction: input,  width: 16, description: "Fclk / (baud * oversample)"}
-        - {name: tx_data,   direction: input,  width: 8}
-        - {name: tx_valid,  direction: input,  width: 1}
-        - {name: tx_ready,  direction: output, width: 1}
-        - {name: rx_data,   direction: output, width: 8}
-        - {name: rx_valid,  direction: output, width: 1}
-        - {name: rx_ready,  direction: input,  width: 1}
-        - {name: txd,       direction: output, width: 1, description: "serial TX line"}
-        - {name: rxd,       direction: input,  width: 1, description: "serial RX line"}
-    L9.submodules: {tx_fsm: uart_tx, rx_fsm: uart_rx, baud_gen: uart_baud_gen, tx_fifo: uart_tx_fifo, rx_fifo: uart_rx_fifo}
-    L9.instantiation_order:
-      order:
-        - "u_baud_gen (BAUD_GEN) - baud-rate strobe generator"
-        - "u_tx_fifo (TX_FIFO) - optional TX FIFO"
-        - "u_tx_fsm (TX_FSM) - transmitter FSM"
-        - "u_rx_fifo (RX_FIFO) - optional RX FIFO"
-        - "u_rx_fsm (RX_FSM) - receiver FSM"
-    L9.internal_wires:
-      - {name: baud_strobe,   width: 1,  description: "strobe from baud_gen to tx/rx"}
-      - {name: tx_fifo_valid, width: 1,  description: "tx_fifo → tx_fsm handshake"}
-      - {name: tx_fifo_data,  width: 8,  description: "tx_fifo → tx_fsm byte"}
-      - {name: tx_fifo_ready, width: 1,  description: "tx_fsm → tx_fifo backpressure"}
-      - {name: rx_fifo_valid, width: 1,  description: "rx_fsm → rx_fifo handshake"}
-      - {name: rx_fifo_data,  width: 8,  description: "rx_fsm → rx_fifo byte"}
-      - {name: rx_fifo_ready, width: 1,  description: "rx_fifo → rx_fsm backpressure"}
-      - {name: tx_busy,       width: 1,  description: "tx_fsm busy status"}
-      - {name: rx_busy,       width: 1,  description: "rx_fsm busy status"}
-      - {name: rx_overrun,    width: 1,  description: "rx_fsm overrun flag"}
-      - {name: rx_frame_err,  width: 1,  description: "rx_fsm frame error"}
+  # typical_scaffolds — REMOVED in #493 (13 entries). Coverage was 0/201
+  # doc-sets, and once connected the mechanism injected wrong facts. The
+  # reason is recorded in tools/phase1_engine/gap_detect.py
+  # `_RETIRED_MECHANISMS['typical_scaffolds']`; read it before re-adding.
 
 spi-peripheral:
   reference: "darkriscv spi core / core_spiflash / OpenCores simple_spi"
@@ -1726,12 +1526,10 @@ bus-controller:
   typical_data_widths: [32, 64, 128, 256, 512]
   typical_topology: "crossbar (memory bus) / arbitrated single-wire (CAN)"
   typical_id_width: 4
-  typical_scaffolds:
-    L2.data_width: 32
-    L2.addr_width: 32
-    L2.strb_width: 4
-    L2.slave_count: 4
-    L2.master_count: 1
+  # typical_scaffolds — REMOVED in #493 (5 entries). Coverage was 0/201
+  # doc-sets, and once connected the mechanism injected wrong facts. The
+  # reason is recorded in tools/phase1_engine/gap_detect.py
+  # `_RETIRED_MECHANISMS['typical_scaffolds']`; read it before re-adding.
   typical_subfamilies: ["memory-bus (AXI/AHB/Wishbone)", "network-bus (CAN/LIN)", "serial (I2C/SPI master)"]
 
   # v0.74 post-can benchmark: bus-controller (network-bus subfamily,
