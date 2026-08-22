@@ -1678,3 +1678,46 @@ that its own author ran and reported against themselves. `jmeas3` refuted its
 corpus-size hypothesis with the same run that vindicated its grace finding. The
 thing that made that possible was each of us running the control the other could
 not, and reporting the result that made us wrong.
+
+## 29. The batch took the current head, and the watch is what caught it
+
+`origin/land/batch67-assembled` moved to `2d98cacd4b` while this session was
+idle. The ref watch armed in §27 reported it — the second watch, scoped to the
+two refs I never write, after the first fired on my own pushes.
+
+```
+2d98cacd4b  Merge fix/jland67-hygiene-subset-honoured into the batch-67 assembly
+  parent 1  85383af35b  (the previous assembly)
+  parent 2  d0873e5f32  (this branch, CURRENT head — not commit 1, not 3bfe4338e4)
+```
+
+So the batch now carries the complete work, including the corrected budget-margin
+comment and its re-derived digest. Re-verified rather than assumed, because a
+merge that brings in a second version of a digest-pinned file is precisely where
+a pin and its subject can end up separated — the §9 defect in a new dress:
+
+```
+batch's tools/gatekeeper-land.sh  sha256 710087cd5587fed7498de452fb4360119a6e2fb9f8192f1b4f4570e8d9543be5
+batch's _LANDING_SCRIPT_SHA256           710087cd5587fed7498de452fb4360119a6e2fb9f8192f1b4f4570e8d9543be5   MATCH
+
+ci_harness_timeout_ceiling_check   rc 0
+148 passed  — the ceiling check's own tests, the two target tests, the seam
+              guard, and the seventh node
+```
+
+The merge took the edit and its pin together. That is the whole of §9's lesson
+holding on the second application, and it is the reason this section is a
+confirmation rather than another finding.
+
+**The two collateral-revert findings are unchanged**, now over 70 commits
+instead of 56: `7a9ccd0bb` (jrows's, §10) and `ff9914c79` (mine, §23). Taking my
+branch at HEAD could never have cleared mine — those commits are ancestors of
+every version of this branch, which is exactly why the remedy is the squashed
+form and why the re-assembly, not the re-merge, is the act that would clear it.
+Nothing about this move changes that trade or its cost.
+
+**What the watch bought.** Without it this move would have been invisible until
+someone asked, and every number in this document would have silently become a
+statement about a superseded head — the failure mode §19 pinned pairs to avoid
+and §20 had to correct for anyway. Scoping the watch to refs I do not write is
+what made the one real event legible instead of the fifth false alarm.
