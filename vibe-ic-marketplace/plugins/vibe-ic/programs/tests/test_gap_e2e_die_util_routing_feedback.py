@@ -251,10 +251,23 @@ class TestRewriteFloorplanDie:
         assert "make_tracks" in out
 
     def test_matches_the_real_pnr_tcl_emit(self):
-        # The rewrite regex must match what _build_pnr_tcl_text actually emits,
-        # or a resize would silently no-op the tcl. Assert against a real emit.
-        src = inspect.getsource(mod._build_pnr_tcl_text)
-        assert 'initialize_floorplan -die_area "0 0 {die_w} {die_h}"' in src
+        """The rewrite regex must match what the pnr tcl actually emits, or a
+        resize silently no-ops and the die never changes.
+
+        AGAINST A REAL EMIT, which is what this test always said it did and did
+        not. It read the SOURCE of `_build_pnr_tcl_text` for a literal, and the
+        emission had moved into `_floorplan_geometry_tcl` in a refactor -- so
+        the assertion was searching one function for a string that lives in
+        another, and had been RED on main. A source-text assertion goes dark the
+        moment the code is reorganised; an emit does not.
+        """
+        emitted = mod._floorplan_geometry_tcl(95, 95, 10, 85, 85, None)
+        assert mod._RE_PNR_FLOORPLAN_DIE.search(emitted), (
+            "the rewrite regex no longer matches the emitted floorplan, so a "
+            "resize would no-op silently:\n" + emitted)
+        out = mod._rewrite_pnr_floorplan_die(emitted, 130, 130, 10, 120, 120)
+        assert '-die_area "0 0 130 130"' in out, out
+        assert '-core_area "10 10 120 120"' in out, out
 
 
 # ---------------------------------------------------------------------------
