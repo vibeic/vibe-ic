@@ -1212,26 +1212,50 @@ def test_the_default_vertical_rotation_proceeds_and_is_told_it_is_inert(
         tmp_path):
     """The other half of the rule, and the half that keeps it honest. A run at
     librelane's default is indistinguishable from a run that set nothing, so it
-    proceeds — and the report SAYS the variable is inert, with the measurement,
-    rather than leaving a reader to find out."""
+    proceeds — and the report SAYS the variable is NOT HONOURED HERE, with the
+    measurement, rather than leaving a reader to find out."""
     root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
     assert _gen(root) == 0
     rep, _ = CHK._unwrap(_report(root))
-    inert = rep["rotation_vertical_inert"]
-    assert inert["variable"] == "PAD_ROTATION_VERTICAL"
-    assert inert["honoured"] is False
-    assert inert["measured_orientation"] == {"W": "MXR90", "E": "R90"}
-    assert "four SEPARATE OpenROAD processes" in inert["reason"]
-    assert inert["librelane_default"] == PR.ROTATION_DEFAULT
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["variable"] == "PAD_ROTATION_VERTICAL"
+    assert rec["honoured"] is False
+    assert rec["measured_orientation"] == {"W": "MXR90", "E": "R90"}
+    assert rec["librelane_default"] == PR.ROTATION_DEFAULT
 
 
-def test_the_inert_disclosure_is_in_every_report_including_the_skip(tmp_path):
+def test_the_disclosure_is_in_every_report_including_the_skip(tmp_path):
     """A disclosure only present on the happy path is not a disclosure."""
     for cfg in (None, _config(), _config(PAD_ROTATION_VERTICAL="R90")):
         root = _project(tmp_path / f"p{id(cfg)}", config=cfg)
         _gen(root)
         rep, _ = CHK._unwrap(_report(root))
-        assert rep["rotation_vertical_inert"]["honoured"] is False
+        assert rep["rotation_vertical_not_honoured"]["honoured"] is False
+
+
+def test_the_disclosure_does_not_claim_the_variable_is_inert(tmp_path):
+    """THE CLAIM THIS PINS WAS SHIPPED WRONG, so it is pinned rather than
+    trusted. The report used to say PAD_ROTATION_VERTICAL was INERT and that
+    'the placer does not read it'. RE-MEASURED 2026-08-22 in OpenROAD
+    26Q3-1581, holding one parameter and varying the other across all four
+    sides: `-rotation_horizontal` moves WEST and EAST, `-rotation_vertical`
+    moves SOUTH and NORTH. The parameters are named for the ROW AXIS, not the
+    side. The original probe varied PAD_ROTATION_VERTICAL while watching only
+    WEST and EAST -- the wrong pairing -- so it correctly saw no change and the
+    wrong conclusion was drawn from a correct measurement.
+
+    The honest claim is NOT HONOURED BY THIS STEP, which is weaker and true.
+    This test fails if 'inert' or 'does not read' comes back."""
+    root = _project(tmp_path, config=_config(PAD_ROTATION_VERTICAL="R0"))
+    assert _gen(root) == 0
+    rep, _ = CHK._unwrap(_report(root))
+    assert "rotation_vertical_inert" not in rep, (
+        "the key asserts inertness in the schema itself")
+    rec = rep["rotation_vertical_not_honoured"]
+    blob = json.dumps(rec).lower()
+    for lie in ("is inert", "does not read it", "the knob does nothing"):
+        assert lie not in blob, f"the disclosure claims {lie!r}, which is false"
+    assert "does not implement" in blob
 
 
 def test_the_gate_catches_a_def_that_contradicts_its_own_geometry(tmp_path):
