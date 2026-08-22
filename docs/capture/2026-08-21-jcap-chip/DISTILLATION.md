@@ -173,3 +173,39 @@ The ruling, which is the owner's and is recorded here rather than argued:
   `pytest_aggregate_carries_its_runtime_identity`. pytest collected it as a test
   module, and — worse — several of its own sibling gates exclude `test_*` from
   their populations, so the checker was invisible to the family it belongs to.
+
+### Composing with the census lane — measured, and the landing recipe
+
+Trial-merged against `jdistmat/matrix-distil` @ `bebd9c1e1` in a throwaway tree
+and discarded; nothing was pushed and no add/add conflict was hand-merged.
+
+**The eight add/add conflicts are gone.** After the ruling's renames — these four
+filenames to the gates, the other lane's to `<rule>_census.py` — the four gates
+and the four censuses coexist, and in the composed tree every one of the four
+disputed filenames carries the GATE (positional path CLI, not `--root`), with the
+census beside it. The gates still refuse correctly in composition:
+`only_the_declaring_step_writes_its_output` rc=1, the other three rc=0.
+
+**Four conflicts remain and NONE may be hand-merged.** All four are generated
+counter files:
+
+    vibe-ic-marketplace/README.md
+    vibe-ic-marketplace/plugins/vibe-ic/README.md
+    programs/INDEX.md
+    programs/PROGRAM_INVENTORY.json
+
+Composed truth is on NEITHER side, measured:
+
+    | population           | this lane | census lane | composed |
+    |----------------------|----------:|------------:|---------:|
+    | programs_top_level   |      1250 |        1254 |     1266 |
+    | programs_catalogued  |      1176 |        1180 |     1192 |
+    | test_files           |      2740 |        2743 |     2756 |
+
+Taking either side, or splitting the hunks, lands a count that is wrong by
+construction. **The resolution is to REGENERATE:** take either side to clear the
+conflict, then run `programs/gen_program_inventory.py` and
+`tools/gen_programs_index.py`, then update the stated counts in the two bound
+READMEs BY KEY. Verified end to end on the real merge: 0 unresolved conflicts and
+23/23 `test_program_inventory_no_drift.py` passing on the composed tree.
+
