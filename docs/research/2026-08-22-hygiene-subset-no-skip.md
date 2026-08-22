@@ -4408,3 +4408,62 @@ rather than guessing. I caught it only because I compare `git ls-remote` to the
 local sha instead of reading the push's own output, which is the habit
 [[keep-or-drop-is-not-safe-to-delete]] exists for. The working form names the
 expected sha: `--force-with-lease=<ref>:<sha>`.
+
+## 64. Every acknowledgement in the ledger has expired, and the review I wired is what will say so
+
+Retiring §61's row sent me to read the rest of `tools/ci/gate_red_since.json`.
+Seven rows remain. Ages computed with the checker's OWN method
+(`git rev-list --count <since>..HEAD`, `gate_red_since_check.py:367`) against
+`main` a4caccefea:
+
+    gate                                bound     age   verdict
+    flow-gate enforcement audit            70     333   EXPIRED
+    L-doc field producer                  210     539   EXPIRED
+    evidence citation resolves            140     539   EXPIRED
+    checker execution wiring               70     313   EXPIRED
+    gates are wired to something           70     313   EXPIRED
+    declaration scans strip comments       70     331   EXPIRED
+    d3 declaration/manifest parity         60     268   EXPIRED
+
+**All seven, by margins of 4× to 8×.** Not one is close.
+
+### The chain, verified step by step rather than inferred
+
+    gate_red_since_check   L3 expired -> findings -> `return _vx.RC_FAIL`
+    gate_red_since_gate    rc 2 -> skipped(-1); rc 1 -> GateResult(rc=1)
+    GateResult.green       rc in (0, -1)            -> False
+    review verdict         blocking = [g for g in gates if not g.green]
+                           non-empty -> REQUEST_CHANGES -> non-zero exit
+    gatekeeper-land.sh     "`run` treats any non-zero as FAIL"  (its own words)
+
+So the landing refuses. **And the site it refuses at is the one this brief put
+there.** §1–6 wired `gatekeeper_review` into `gatekeeper-land.sh` precisely
+because "the lander is the ONE path every landing takes" — and that path now
+consults a ledger in which every deadline has come due.
+
+**The caveat, stated so nobody over-reads this.** `gate_red_since_gate` needs the
+hygiene record; without one it returns rc -1, which counts as green. On 8HD-9 the
+full tier cannot run at all (§31, `argparse` 1.4.0), so nothing here bites on this
+host. It bites on the first host that can produce a record.
+
+### This is the design working, not a defect in it
+
+The checker's docstring is explicit: L3 is *"the deadline actually biting, and it
+is the only reason this program exists rather than a report."* Seven deadlines
+came due. The ledger cannot buy a green — *"the only thing a row does is start a
+clock"* — so there is nothing here to unwind quietly.
+
+**And the repair is NOT to re-date the rows.** That is forbidden outright, and the
+ledger's own doctrine says the same thing from the other side: a row is *"never
+worth adding to silence anything"*. What closes each row is fixing the gate it
+names, and each row's `bound_because` states what that means — the field that
+told me, for §61's row, that the bump was the sanctioned fix rather than my
+reading of one comment.
+
+Three of the seven are already familiar from this document: `checker execution
+wiring` and `gates are wired to something` both name
+`closed_loop_edge_check`, `ppa_pr_scope_check` and `slot_pad_budget_check` — and
+`slot_pad_budget_check` is exactly the clause whose arrival in the flow moved
+§61's literal from 181 to 182. The same gate is the subject of a ledger row, a
+flow clause and a shrink detector, and I met it three separate times tonight
+without noticing it was one thing until now.
