@@ -1065,3 +1065,20 @@ titles** — after the write enumeration, the declaration-shaped regex, and the
 silent unparseable skips. Two were fail-open, one fail-closed, one latent, and
 this one was in the TESTS rather than the gates: the instrument that was supposed
 to catch a regression in a disclosure count could not see one.
+
+**And then the fifth, from the title next to it** — *"pin the population beside
+the member, and prove the pin fires"*. The `_count_in` anchor I had just added was
+used in four files and **never once asserted to FAIL**. A helper that silently
+stopped rejecting anything would reinstate the exact defect it was written to
+remove, and nothing in those files would notice, because every other use asserts
+the TRUE case.
+
+`test_the_count_anchor_actually_fires` now sits beside each of the four copies and
+requires the anchor to refuse `"1 thing"` against `examined 21 thing`. Proven able
+to fail: replacing the anchor with a plain `in` turns it red at exactly that
+assertion, and restoring it turns it green. 232 tests pass.
+
+That is the same standard this lane applied to every gate — *a test that cannot go
+red is not a test* — finally applied to the helper the tests themselves depend on.
+Five findings from one rival lane's commit titles, and the last two were in the
+instruments measuring the instruments.

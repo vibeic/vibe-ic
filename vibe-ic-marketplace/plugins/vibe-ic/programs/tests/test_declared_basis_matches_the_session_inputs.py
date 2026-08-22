@@ -63,6 +63,22 @@ def _count_in(text: str, phrase: str) -> bool:
     """
     return re.search(r"(?<!\d)" + re.escape(phrase), text) is not None
 
+
+def test_the_count_anchor_actually_fires():
+    """PROVE THE PIN FIRES. `_count_in` exists because a substring assertion on a
+    count is not a pin — `"1 inexpressible" in out` is satisfied by an output
+    saying `21 inexpressible`. A helper that silently never rejects anything would
+    reinstate exactly the defect it was added to remove, and nothing else in this
+    file would notice, because every other use of it asserts the TRUE case.
+
+    So: the true case passes, and a preceding digit is refused.
+    """
+    assert _count_in("examined 1 thing", "1 thing")
+    assert not _count_in("examined 21 thing", "1 thing"), (
+        "the anchor did not fire: a tenfold-wrong count still satisfies the pin")
+    assert not _count_in("examined 10 thing", "0 thing")
+    assert _count_in("a, 0 thing", "0 thing")
+
 def _run(root):
     cp = subprocess.run([sys.executable, str(_TOOL), str(root)],
                         capture_output=True, text=True)
