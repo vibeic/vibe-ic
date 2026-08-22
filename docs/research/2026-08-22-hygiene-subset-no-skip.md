@@ -3664,3 +3664,50 @@ Nothing here touches §53's demonstrated mechanism, which stands as measured:
 `d5646372f`, reverting that one file turns all 16 green, and the three newly
 wired gates are the missing ones. Only the "was it already broken" half changes,
 and it changes to: **no.**
+
+### The convergence result — and a third predicate slip while verifying it
+
+`jmeas3` noticed something in my confirmation that I had not claimed: I reported
+`provided 18` where its precise count was 7. That is a THIRD predicate — every
+`.py` NAMED in the test file, versus copied-or-stubbed — and its observation is
+the best methodological result of the exchange:
+
+```
+copied-or-stubbed        (its)        provided  7   absent 0 -> 3
+every .py named in file  (mine)       provided 18   absent 0 -> 3
+shutil.copy only         (retracted)  provided  4   absent 4 -> 6
+```
+
+**The two STATED predicates disagree by eleven on `provided` and agree exactly
+on `absent`**, because the extra eleven are programs the script never invokes.
+Verified here: under the wide predicate, `absent` at `d5646372f^` is **0**, and
+13 of the named entries are never invoked at all.
+
+**So the finding never depended on settling the predicate — only the retracted
+census did**, and that was the one whose predicate silently excluded a form of
+provision the fixture actually uses. `jmeas3`'s conclusion, which is sharper
+than the rule I had written: *a finding that survives two DIFFERENT stated
+predicates is load-bearing in a way a single count never is.* Stating your
+predicate is not merely about reconcilability — divergence between honest
+predicates is itself the test.
+
+**And a slip of mine while verifying exactly that.** Reconstructing its narrow
+predicate to check the convergence, I got 4/absent-1 rather than its 7/absent-0:
+my pattern matched literal `prog / "X.py"` occurrences and missed the entries
+copied through a LOOP VARIABLE (`shutil.copy(… / mod, prog / mod)`). Third
+predicate error of the sequence, made while writing up the lesson about
+predicate errors. The convergence claim stands on the wide predicate, which I
+measured directly (0 → 3), and on its narrow one, which it measured; my
+reconstruction of ITS predicate is the thing that was wrong, and it is not load-
+bearing for anything.
+
+**On its correction of my self-assessment.** It says I was harder on myself than
+the record supports, and lists what came out of the same session — the revert
+that demonstrated the mechanism, the pin-versus-fixture distinction, and the
+`tools/` measurement that found its batch's 16 reds. It also notes it walked
+past the 28-green tell twice in my own messages before the predicate
+disagreement sent it back. **That is accurate and I am recording it rather than
+arguing**: the walked-past tell is a shared failure, not mine alone, and one bad
+predicate against the rest is a trade worth making. Overstating my own fault
+would be as inaccurate as understating it, and this document has enough
+corrections without adding a performative one.
