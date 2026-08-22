@@ -33,8 +33,27 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+#: Repo-root-relative path of the file whose `_EXPECTED` dict this guard
+#: watches. It is fed straight to `git diff --cached -- <path>`, and THAT is
+#: why it has to be exact: git does not complain about a pathspec matching
+#: nothing, it returns an empty diff. An empty diff means no flips, and no
+#: flips means rc=0 — so a wrong path here does not break the guard loudly,
+#: it makes the guard say PASS to everything, forever.
+#:
+#: It named `plugins/vibe-ic/tests/` until vibe-ic#1391. That directory has
+#: never been tracked in this repository (`git log --all --diff-filter=A`
+#: returns nothing for it); the file has always been under `programs/tests/`.
+#: Measured on 75776dbbb with a real `"aes": "AES" -> "AES-XTS"` flip staged
+#: in the real file: `PASS: no fixture _EXPECTED flips in staged diff`, rc=0.
+#:
+#: `test_picker_fixture_thrash_guard.py` could not catch it, and the reason is
+#: worth keeping: it builds its temp repo at `repo / mod._FIXTURE_TEST_REL`,
+#: so it MANUFACTURES whatever directory this constant names and then proves
+#: the logic against it. Every value passes such a test. The pinning test is
+#: `test_issue1391_thrash_guard_watches_a_path_that_exists.py`, which resolves
+#: this constant against the real tree instead of against a fixture.
 _FIXTURE_TEST_REL = (
-    "vibe-ic-marketplace/plugins/vibe-ic/tests/"
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
     "test_phase1_fixtures_regression.py"
 )
 _EXPECTED_LINE_RE = re.compile(

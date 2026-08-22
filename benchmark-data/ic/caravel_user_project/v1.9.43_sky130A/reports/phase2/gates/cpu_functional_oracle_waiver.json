@@ -1,7 +1,0 @@
-{
-  "verdict": "FAIL",
-  "exit_code": 1,
-  "message": "FAIL: connectivity-PASS waiver <evidence> pointer 'phase2/stage1/sim_full_stack/generic_full_stack_run/full_stack.log' does not dereference to a non-empty transcript \u2014 waiver evidence broken.",
-  "capability_gap": "cap:cpu_functional_oracle",
-  "gate": "cpu_functional_oracle_waiver_check"
-}
