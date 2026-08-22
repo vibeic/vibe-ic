@@ -26,8 +26,34 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 >     test_v1_9_63_issue693_repo_process_family_wiring.py        1 red
 >       ::test_the_checker_population_covers_checker_shaped_names
 >
-> **NOT diagnosed here** — out of this census's scope, and naming them without
-> root-causing them is the honest stopping point. **What changes is the framing:
+> **CORRECTED — SIX OF THE SEVEN WERE MY OWN INSTRUMENT.** Run in isolation, the
+> failure names the cause: *"note: **VIBE_IC_BENCHMARK_DATA overrides `--tree`**"*.
+> The pointer I set so D3 could be measured **overrides the tree those tests
+> supply**, so the checker inspects the wrong tree and reports "nothing to
+> enforce". Measured both ways:
+>
+>     test_issue1538...      WITH pointer  6 failed  |  WITHOUT  12 passed  -> ARTEFACT
+>     test_v1_9_63...        WITH pointer  1 failed  |  WITHOUT   1 failed  -> REAL
+>
+> **So the out-of-census population is ONE red, not seven**, and the sample rate
+> falls to 1 file in 160.
+>
+> **THE CENSUS ITSELF IS NOT AFFECTED, and that is measured, not asserted:**
+> **zero** census failures cite the override, and the D3 reds the pointer revealed
+> go **skipped → failed**, not **passed → failed**:
+>
+>     D3 revealed pair       WITH pointer  failed  |  WITHOUT  SKIPPED
+>
+> **That is the whole distinction.** The pointer SUPPLIES a corpus D3 needs — it
+> turns "could not look" into "looked, and it is red". It OVERRIDES a tree
+> `issue1538` already had — it turns "looked at the right thing" into "looked at
+> the wrong one". **Same variable, opposite effects, and only one of them is a
+> measurement.**
+>
+> **The remaining real red is named and NOT diagnosed** —
+> `test_v1_9_63_issue693_repo_process_family_wiring.py::test_the_checker_population_covers_checker_shaped_names`
+> — out of this census's scope, and naming without root-causing is the honest
+> stopping point. **What changes is the framing:
 > the inherited list is NOT main's red set, and this document must not be read as
 > if it were.**
 
