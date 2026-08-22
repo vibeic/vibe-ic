@@ -123,16 +123,35 @@ EXIT CODES
        how many of each, always, and a reader taking rc=0 to mean the whole tree
        was checked is reading more than this exit code carries.
     1  REFUSED — the emitter line, the test line and the two values are printed
-    2  VACUOUS — nothing was compared, for one of TWO reasons the run
-       distinguishes: no counter with a literal denominator and no paired pin
-       exists here (`no-population-stated-twice`), or every one that does exist
-       was withheld above (`declined-every-comparison`). Both announced through
-       `_vacuous_exit`; the second is the one worth coming back to.
+    2  VACUOUS — nothing was compared, and the run says WHICH of four, because
+       each is a different claim and only one of them is about the tree:
+         `corpus-holds-no-program`   the directory holds no program at all, so
+                                     nothing here is a statement about any tree
+         `declined-every-comparison` every population that exists was withheld
+                                     above -- the one worth coming back to
+         `source-bytes-substituted`  the sources were read through byte
+                                     substitution, so a population may not have
+                                     survived to be seen
+         `no-population-stated-twice` the tree was read and states none
+       Announced through `_vacuous_exit`. Pinned against the code by
+       `test_the_documented_vacuous_reasons_are_the_ones_emitted` -- this list
+       said TWO for three commits after the third and fourth were added.
     3  the command line was rejected (`_gate_usage_exit`)
+
+HOW CI RUNS IT, WHICH IS WHY 2 IS NOT 0
+=======================================
+`tools/ci/repo_hygiene_gates.sh` wires it as `run "a printed population agrees
+with its pin"`, and `run` is `_dispatch 0 0`: rc 2 FAILS the suite. It is not
+`run_tolerating_uncheckable`, which exists for probes that need a clean tree and
+treats rc 2 as "could not check". So "this is NOT a pass" is enforced by the
+wiring and not merely asserted in the text above -- change one and the other
+stops meaning what it says.
 
 USAGE
 -----
     emitter_population_pin_check.py [--programs DIR] [--tests DIR] [--json OUT]
+    --json -   puts the report document on stdout and the human report on
+               stderr, the spelling 34 programs in this corpus share
 
 THE REACH, AND WHY IT IS FOUR
 ============================

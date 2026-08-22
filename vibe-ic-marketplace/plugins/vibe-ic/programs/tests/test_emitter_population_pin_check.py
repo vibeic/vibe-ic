@@ -2685,6 +2685,35 @@ def test_every_print_after_the_stream_is_chosen_goes_through_it():
         f"use it, so `--json -` emits them into the document: {unrouted}")
 
 
+def test_the_documented_vacuous_reasons_are_the_ones_emitted():
+    """The EXIT CODES section said VACUOUS had TWO reasons for three commits
+    after the third and fourth were added. Both sides are derived -- the code's
+    from the `reason` assignment in `main`, the docs' from the backticked tokens
+    in the section -- so neither can be the checker's own memory of the answer."""
+    import ast as _ast
+    import re as _re
+    src = PROG.read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    main = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "main")
+    emitted = set()
+    for node in _ast.walk(main):
+        if (isinstance(node, _ast.Assign)
+                and getattr(node.targets[0], "id", "") == "reason"):
+            emitted |= {c.value for c in _ast.walk(node.value)
+                        if isinstance(c, _ast.Constant)
+                        and isinstance(c.value, str)}
+    assert emitted, "no `reason` assignment found in main -- probe is broken"
+
+    doc = _ast.get_docstring(tree)
+    section = doc.split("2  VACUOUS", 1)[1].split("\n    3  ", 1)[0]
+    documented = set(_re.findall(r"`([a-z][a-z-]{5,})`", section))
+    assert emitted == documented, (
+        "the vacuous reason tokens and their documentation have drifted\n"
+        f"  emitted but undocumented: {sorted(emitted - documented)}\n"
+        f"  documented but not emitted: {sorted(documented - emitted)}")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
