@@ -40,6 +40,16 @@ args = sys.argv[1:]
 with (root / "calls.jsonl").open("a", encoding="utf-8") as log:
     log.write(json.dumps(args, sort_keys=True) + "\n")
 
+# CONTAINMENT-ESCAPE SIMULATION. Every docker call happens strictly between the
+# runner's initial and final input digests, so appending here is exactly "a
+# parent-owned input changed while the candidate was running" -- the thing the
+# post-attestation exists to catch. Fired once, so the digest changes once.
+_tamper = os.environ.get("FAKE_DOCKER_TAMPER_PATH")
+if _tamper and not (root / "tampered").exists():
+    (root / "tampered").write_text("1", encoding="utf-8")
+    with open(_tamper, "ab") as _fh:
+        _fh.write(b"ESCAPED\n")
+
 def fail(message, rc=1):
     print(message, file=sys.stderr)
     raise SystemExit(rc)
@@ -336,10 +346,12 @@ def case(tmp_path: Path):
     }
 
 
-def invoke(case, *, behavior="good", command=None):
+def invoke(case, *, behavior="good", command=None, tamper=None):
     env = dict(os.environ)
     env["FAKE_DOCKER_STATE"] = str(case["state"])
     env["FAKE_DOCKER_BEHAVIOR"] = behavior
+    if tamper is not None:
+        env["FAKE_DOCKER_TAMPER_PATH"] = str(tamper)
     cmd = [
         sys.executable, str(RUNNER_PATH), "run",
         "--docker-bin", str(case["docker"]),
@@ -764,3 +776,62 @@ printf 'VIBEIC_PROGRESS {"completed":1,"nonce":"%s","schema":1,"scope":"live","s
         "provisioner_absent": True,
         "volume_absent": True,
     }
+
+
+# ===========================================================================
+# THE PARENT-OWNED INPUTS ARE POST-ATTESTED
+# ===========================================================================
+@pytest.mark.parametrize("owned", ["corpus", "subject", "selection"])
+def test_a_parent_owned_input_changed_during_the_arm_is_refused(case, owned):
+    """The properties `test_landing_merge_verdict` names, asserted against the
+    interface THIS repository actually has.
+
+    WHY THIS TEST EXISTS. Six landing properties -- a green test cannot move B1
+    to another commit; index flags cannot hide changed B1 bytes; replace-refs
+    cannot redefine the verified tree; the caller's checkout is never touched;
+    a relinked parent selection is NORECORD; a B2 corpus mutation is
+    post-attested and NORECORD -- are all ONE mechanism here:
+
+        final_inputs[k] != initial_inputs[k]
+            -> Refusal("candidate input changed between pre-arm and stopped copy")
+
+    MEASURED 2026-08-22 on a4caccefe: that sentence occurs EXACTLY ONCE in the
+    whole repository, in the implementation, and in no test. The six tests that
+    would have covered these properties asserted them through a DIFFERENT
+    design's interface -- shell messages such as "changed or could not
+    re-attest" that this implementation never emits -- so they are red, and
+    they guard nothing. Deleting any clause of the comparison above would
+    therefore have been caught by nothing at all.
+
+    The tamper is driven through the fake docker, which fires strictly between
+    the initial and the final digest, so what is exercised is the real
+    comparison and not a stub of it. `subject` and `selection` are included
+    because the same clause is what makes the B1 properties hold; parametrising
+    proves the guard is per-input and not a single lucky branch.
+    """
+    target = {
+        "corpus": case["corpus"] / "one.def",
+        "subject": case["subject"] / "candidate.py",
+        "selection": case["selection"],
+    }[owned]
+    before = target.read_bytes()
+    proc = invoke(case, tamper=target)
+    assert target.read_bytes() != before, (
+        "the escape hook did not fire, so this arm proves nothing")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "candidate input changed between pre-arm and stopped copy" in (
+        proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert not case["receipt"].exists(), (
+        "a run whose inputs moved under it must leave NO receipt -- that is "
+        "what makes it NORECORD rather than a recorded pass")
+
+
+def test_the_same_run_without_the_tamper_is_recorded(case):
+    """The paired control. Without it the test above could pass because the
+    harness refuses everything, which is the failure mode a one-sided
+    containment test always has."""
+    proc = invoke(case)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "candidate input changed between pre-arm and stopped copy" not in (
+        proc.stdout + proc.stderr)
+    assert case["receipt"].exists(), "the clean run must leave a receipt"
