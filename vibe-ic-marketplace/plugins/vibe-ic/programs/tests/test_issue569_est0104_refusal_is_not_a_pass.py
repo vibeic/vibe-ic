@@ -109,7 +109,13 @@ def test_the_refusal_line_says_why_the_wns_pair_is_uninformative(tmp_path):
     mean. Without this the operator draws the opposite conclusion — that the
     design had converged."""
     out = _run_tcl(tmp_path, "both")
-    assert "2/2" in out, out
+    # 2 -> 3: `repair_timing -hold` joined `repair_design` and
+    # `repair_timing -setup` in the post-route estimate block. The
+    # POPULATION moved, so this pin moves with it and a human says the
+    # number out loud — the emitter's own text went "/2" -> "/3" in the
+    # same change and this pin is what makes that visible rather than
+    # absorbed.
+    assert "3/3" in out, out
     assert "SAME" in out, out
 
 
@@ -129,7 +135,7 @@ def test_one_refusal_is_partial_and_still_applied(tmp_path):
     """One repair ran, so work WAS done — reporting NOT_APPLIED here would be
     the same dishonesty pointing the other way."""
     out = _run_tcl(tmp_path, "one")
-    assert "SPEF_REPAIR_PARTIAL: 1 of 2" in out, out
+    assert "SPEF_REPAIR_PARTIAL: 1 of 3" in out, out
     assert "SPEF_REPAIR_APPLIED_ON_ESTIMATE" in out, out
     assert "SPEF_REPAIR_NOT_APPLIED" not in out, out
 
@@ -166,8 +172,10 @@ def test_the_counter_is_in_the_emitted_text(tmp_path):
     losing the counter entirely."""
     tcl = R._postroute_repair_estimate_tcl("/out", fork_repair_capable=True)
     assert "set _prr_refused 0" in tcl
-    assert tcl.count("incr _prr_refused") == 2, (
-        "both repairs must count toward the refusal total")
+    assert tcl.count("incr _prr_refused") == 3, (
+        "every repair must count toward the refusal total — three since\n"
+        "`repair_timing -hold` joined the block; a repair that refuses\n"
+        "without incrementing makes NOT_APPLIED unreachable")
 
 
 def test_stock_openroad_still_emits_nothing():

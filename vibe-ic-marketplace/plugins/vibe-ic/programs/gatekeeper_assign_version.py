@@ -26,10 +26,14 @@ INTERFACES
                     (default: walk up from this file to the plugin root).
   --from-version    the BASE version to increment from (default: read the repo's
                     CURRENT plugin.json version — i.e. main's version at merge).
-  --write           apply the assigned version to BOTH plugin.json AND the
+  --write           apply the assigned version to plugin.json, the
                     marketplace.json `vibe-ic` entry (keeps them in sync — the
-                    marketplace_version_sync_check invariant). Without --write
-                    the program only PRINTS the assigned version (a dry-run).
+                    marketplace_version_sync_check invariant), AND the shipped
+                    READMEs that state the version in prose (the
+                    plugin_version_prose_sync_check invariant — #621). Without
+                    --write the program only PRINTS the assigned version (a
+                    dry-run). Every restatement of the version has ONE writer,
+                    and it is this program; anything it does not write drifts.
   --json OUT        write {from, assigned, milestone, cadence, wrote[]} JSON.
 
 EXIT CODES
@@ -53,6 +57,7 @@ _PROGRAMS_DIR = _THIS.parent
 sys.path.insert(0, str(_PROGRAMS_DIR))
 import version_bump_monotonic_check as _vbm  # noqa: E402  (reuse parse_semver)
 import plugin_manifest_discovery as _pmd     # noqa: E402  (#152 shared discovery)
+import plugin_version_prose_sync_check as _prose  # noqa: E402  (prose follows #621)
 
 _PATCH_MAX = 99  # patch段 0..99; x.y.99 -> x.(y+1).0
 
@@ -104,13 +109,45 @@ def _read_current(plugin_root: Path) -> Optional[str]:
         return None
 
 
+def _prose_root(manifests: List[Path]) -> Optional[Path]:
+    """The repo root whose PROSE states this plugin's version, or None.
+
+    The prose sites are named relative to the REPO root (`README.md`,
+    `vibe-ic-marketplace/README.md`, ...), so the root is the OUTERMOST ancestor
+    carrying a marketplace.json that references this plugin — `manifests` is
+    ordered nearest-ancestor-first, so that is the last entry. A plugin checked
+    out with no marketplace ancestor states its version in no repo prose, and
+    None says so rather than guessing a root and writing nothing under it.
+    """
+    if not manifests:
+        return None
+    return manifests[-1].parent.parent
+
+
 def _write_version(plugin_root: Path, version: str) -> List[str]:
     """Write `version` into plugin.json AND EVERY marketplace.json that references
-    this plugin (both the NESTED and the REPO-ROOT manifest — #152). Delegates to
-    the SHARED manifest-discovery helper (no hand-rolled single-manifest path that
-    can miss one), then POST-WRITE SELF-CHECKS that all three are in sync and
-    RAISES on any residual drift so a partial write can never ship. Returns the
-    list of files written."""
+    this plugin (both the NESTED and the REPO-ROOT manifest — #152), AND every
+    place the shipped READMEs state it in prose (#621). Delegates to the SHARED
+    manifest-discovery helper (no hand-rolled single-manifest path that can miss
+    one), then POST-WRITE SELF-CHECKS that all of them are in sync and RAISES on
+    any residual drift so a partial write can never ship. Returns the list of
+    files written.
+
+    WHY PROSE IS WRITTEN HERE AND NOT CORRECTED BY HAND
+    ---------------------------------------------------
+    `plugin_version_prose_sync_check` shipped with a working `--fix` and NOTHING
+    EVER CALLED IT: the repo referenced the checker from the hygiene gate (audit
+    only), its own test, and INDEX.md — so every merge advanced the JSON and left
+    the three READMEs a reader meets first behind. Measured on the tree that
+    prompted this: the READMEs said 1.10.2 against a shipped 1.10.29, i.e. the
+    gate had been reporting a true failure for 28 consecutive releases and the
+    release path had no step that could ever clear it.
+
+    Re-typing the number by hand is what produced that drift, so this makes the
+    ONE WRITER of the version write the prose too — the same reason #152 moved
+    manifest writing in here and #800 made emitters READ the version instead of
+    restating it as a literal.
+    """
     wrote = _pmd.write_version_all(plugin_root, version)
     ok, drift = _pmd.verify_synced(plugin_root, expected=version)
     if not ok:
@@ -119,6 +156,24 @@ def _write_version(plugin_root: Path, version: str) -> List[str]:
             f"drift after writing {version!r}: "
             + "; ".join(f"{p} has {found!r} (want {want!r})"
                         for p, found, want in drift))
+
+    _pj, manifests = _pmd.find_plugin_and_manifests(plugin_root)
+    root = _prose_root(manifests)
+    if root is None:
+        return wrote
+    touched = _prose.fix(root, version)
+    wrote.extend(str(root / rel) for rel in sorted(touched))
+    # Same discipline as the manifest self-check above, through the INDEPENDENT
+    # path the hygiene gate uses: re-derive the shipped version from the manifest
+    # and re-read every claim. A claim form `fix` does not recognise, or a file it
+    # could not write, fails the merge here instead of shipping a README that
+    # advertises a version the repo does not ship.
+    verdict, findings, _stats = _prose.audit(root)
+    if verdict != "PASS":
+        raise RuntimeError(
+            "gatekeeper_assign_version post-write self-check FAILED — prose "
+            f"drift after writing {version!r} ({verdict}): "
+            + "; ".join(f["detail"] for f in findings))
     return wrote
 
 
@@ -142,6 +197,14 @@ def assign(repo: Optional[Path], from_version: Optional[str],
             # #152 — the post-write self-check found residual manifest drift.
             # Abort with a clear rc-2 error, not an unhandled traceback.
             return ({"error": str(e), "assigned": nxt}, 2)
+        except OSError as e:
+            # A version file or a prose site could not be written (read-only
+            # checkout, permissions). Same contract as the drift case: the merge
+            # stops on a stated error instead of a traceback, and the caller is
+            # told which restatement of the version is now out of step.
+            return ({"error": f"gatekeeper_assign_version could not write the "
+                              f"version {nxt!r} — prose/manifest may be "
+                              f"partially written: {e}", "assigned": nxt}, 2)
     report = {
         "from": cur,
         "assigned": nxt,
