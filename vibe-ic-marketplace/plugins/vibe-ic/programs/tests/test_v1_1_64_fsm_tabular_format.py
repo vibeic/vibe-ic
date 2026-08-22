@@ -9,6 +9,7 @@ program-GENERATED (all host-score PASS).
 §4.05: still SKIP on any under-specified reset / incomplete table; binary-named
 states are fine because the Moore TB observes only the output (encoding is free).
 """
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,13 @@ PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import full_moore_fsm_synth as F  # noqa: E402
+
+import pytest
+
+#: The repo's existing tool gate (197 files use this shape). Without
+#: it this module raises FileNotFoundError on a host that lacks the
+#: tool, instead of disclosing a skip.
+_HAVE_TOOLS = bool(shutil.which("iverilog"))
 
 _HDR = (
     "I would like you to implement a module named TopModule with the following\n"
@@ -52,6 +60,8 @@ TAB_BIN = _HDR + (
 
 
 def _compiles(rtl, tmp_path):
+    if not _HAVE_TOOLS:
+        pytest.skip("iverilog not installed on this host")
     f = tmp_path / "m.sv"
     f.write_text(rtl)
     cp = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "a.out"), str(f)],

@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "constraints_present": false,
-    "notes": "MIL-STD-1553B is a wire-level protocol spec; there are no PDK / SDC / floorplan / power-grid constraints at the protocol layer. Per-RT controller IP (DDC BU-65170 / BU-61580, Holt HI-6130 / HI-1573, UTMC UT69151, FPGA cores) has its own integration constraints — typical: 16 / 20 MHz protocol clock domain ± 0.01 % short-term stability, RT-address strap pins parity-protected, isolation-transformer pad ring, common-mode rejection at the differential PHY, 18-27 Vp-p transmitter driver, ≥ 75 % shielded couplers. Those constraints live in the silicon vendor's data sheet and the avionics-box mechanical specification, not in MIL-STD-1553B."
-  }
-}
