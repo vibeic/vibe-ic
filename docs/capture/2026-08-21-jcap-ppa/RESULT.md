@@ -3727,11 +3727,26 @@ deal of it states more than any detector I wrote ever credited:
 | record | what it says | what is missing |
 |---|---|---|
 | a scope key the producer cannot establish is omitted | *measured, and every party to it has already said this is wrong* | the population, and how it was counted |
-| layer membership is declared not inferred from a filename prefix | *measured instance, and it resolves a question a lane left open* | one instance is cited; the figure beside it has no screen |
+| ~~layer membership is declared not inferred from a filename prefix~~ | **closed** — carries a stated, re-runnable screen | the original 32 could **not** be recovered; a supplied screen replaces it, see below |
 | a verdict reachable by exhaustion must say whether it exhausted | *measured on the program and on two of its own runs* | which two runs, and what was compared across them |
 
-I caught that omission re-reading my own paragraph, which is the fourth time
-this section has had to correct itself and the reason it is worth as much space
+**One of the three is now closed, and how it closed is the point.** The original
+figure of 32 could not be reproduced: three readings of *a test file selecting a
+population by filename prefix* gave **52** for any identifier-then-star glob,
+**38** excluding the universal every-test prefix, and **17** also requiring the
+source extension. The recorded 32 matches none and sits between two — so the
+original scope is **lost rather than drifted**, and the tell is the magnitude: a
+drift moves a figure by a few, these differ by tens in both directions.
+
+So the record now carries a **supplied** screen rather than a recovered one —
+the broad reading, 52 today — and says which it is. That is a real closure: the
+figure is re-runnable by anyone now, even though the number it replaces is gone.
+The broad reading is deliberate, because the rule's point is that most such
+selectors are *correct* and the record's job is to size the population a
+discriminator must sort, not to count defects.
+
+I caught the naming omission re-reading my own paragraph, which is the fourth
+time this section has had to correct itself and the reason it is worth as much space
 as the records it audits. **That number comes from reading 35 records, not from
 a screen** — which is the only reason I trust it, and it took less time than the
 six re-measurements that produced the six wrong ones. A figure
