@@ -166,9 +166,20 @@ def test_macro_with_no_geometry_is_not_refused(tmp_path: Path, tech: Path):
 # obstruction section (a whole-cell RECT). The target tech LEF does not declare
 # OVERLAP, so the original guard refused the macro and halted phase3 before
 # PnR/DRC/LVS/STA — a FALSE POSITIVE, because dropping an OBS obstruction on an
-# undeclared layer leaves every pin intact and a CLASS BLOCK macro already
-# blocks its own footprint. The guard must refuse ONLY when a PIN PORT lands on
-# an undeclared layer; an OBS-only undeclared layer warns and proceeds.
+# undeclared layer leaves every pin intact. The guard must refuse ONLY when a
+# PIN PORT lands on an undeclared layer; an OBS-only undeclared layer warns and
+# proceeds.
+#
+# CORRECTION (measured). The paragraph above used to continue "...and a CLASS
+# BLOCK macro already blocks its own footprint", and the guard's warning told
+# operators the reader drops "the obstruction rectangle(s) on the undeclared
+# layer" so "the physical result is unchanged". Both halves of that are false,
+# and `test_obs_only_warning_states_the_measured_total_loss` below pins the
+# measurement: the reader STOPS at the first entry it cannot resolve, so
+# everything from there onward is lost — including rectangles on layers the tech
+# LEF DOES declare. The extent layer is conventionally FIRST, so the macro loads
+# with ZERO obstructions. The PIN reasoning is untouched and is why this branch is still
+# non-fatal; the OBSTRUCTION reasoning is replaced by the measured behaviour.
 # ---------------------------------------------------------------------------
 def _macro_lef_split(pin_layer: str, obs_layer: str) -> str:
     """A macro whose PIN PORT and OBS obstruction use DIFFERENT layers."""
@@ -273,3 +284,100 @@ END commercial_otp_macro
 """)
     assert p3.macro_lef_layer_compat_guard(
         "custom:pdk", str(tech), None, [str(otp)]) is None
+
+
+# ---------------------------------------------------------------------------
+# THE OBS-ONLY WAIVER'S PREMISE, MEASURED.
+#
+# The branch above stays non-fatal on its PIN reasoning, which is correct. Its
+# OBSTRUCTION reasoning was not: the operator was told the reader drops "the
+# obstruction rectangle(s) on the undeclared layer" and that "a CLASS BLOCK
+# macro already blocks its own footprint, so the physical result is unchanged".
+#
+# MEASURED against the reader, on the same shape `_obs_only_split_layers`
+# builds — OBS opening on an undeclared layer, then a full-footprint rect on a
+# DECLARED layer, then a third on a second declared layer:
+#
+#     nObstructions = 0     (not 2 — the declared-layer rects go too)
+#     nTerms        = 1     (the pin survives; that half was right)
+#
+# So the macro loads with the correct outline, intact pins, and NO obstruction
+# geometry on ANY layer. The second clause's premise has nothing left to stand
+# on, and every downstream stage treats the footprint as free area.
+#
+# These tests pin the CORRECTED DISCLOSURE, not a changed verdict. Whether the
+# branch should now refuse rather than warn is a separate decision; the
+# blocking verdict lives in `macro_obs_load_parity_check`.
+# ---------------------------------------------------------------------------
+def _obs_only_split_layers() -> str:
+    """A macro whose OBS opens on an undeclared layer and then declares
+    full-footprint obstructions on TWO layers the tech LEF DOES declare."""
+    return """\
+VERSION 5.7 ;
+MACRO block_a
+  CLASS BLOCK ;
+  SIZE 406 BY 143 ;
+  PIN out0
+    DIRECTION OUTPUT ;
+    PORT
+      LAYER LayerA3 ;
+      RECT 140.435 0 140.875 0.6 ;
+    END
+  END out0
+  OBS
+    LAYER zzUndeclaredExtent ;
+      RECT 0 0 406 143 ;
+    LAYER LayerA1 ;
+      RECT 0 0 406 143 ;
+    LAYER LayerA3 ;
+      RECT 0 0 1.2 48.735 ;
+  END
+END block_a
+"""
+
+
+def _split_tech(tmp_path: Path) -> Path:
+    t = tmp_path / "split.tlef"
+    t.write_text("VERSION 5.7 ;\n"
+                 "LAYER LayerA1\n    TYPE ROUTING ;\nEND LayerA1\n"
+                 "LAYER LayerA3\n    TYPE ROUTING ;\nEND LayerA3\n")
+    return t
+
+
+def test_obs_only_undeclared_layer_still_proceeds(tmp_path: Path):
+    """UNCHANGED VERDICT — this is the control. Correcting the disclosure must
+    not re-introduce the halt the branch was added to remove."""
+    mlef = tmp_path / "obs_only_split.lef"
+    mlef.write_text(_obs_only_split_layers())
+    assert p3.macro_lef_layer_compat_guard(
+        "target_pdk", str(_split_tech(tmp_path)), None, [str(mlef)]) is None
+
+
+def test_obs_only_warning_does_not_claim_the_loss_is_partial(
+        tmp_path: Path, capsys):
+    """REGRESSION. The old text told the operator only the entries naming the
+    undeclared layer are dropped, and that the physical result is unchanged.
+    Both are false and neither may be said again."""
+    mlef = tmp_path / "obs_only_split.lef"
+    mlef.write_text(_obs_only_split_layers())
+    p3.macro_lef_layer_compat_guard(
+        "target_pdk", str(_split_tech(tmp_path)), None, [str(mlef)])
+    err = capsys.readouterr().err
+    assert "[WARN]" in err, err
+    assert "physical result is unchanged" not in err, err
+    assert "already blocks its own footprint" not in err, err
+
+
+def test_obs_only_warning_states_the_measured_total_loss(
+        tmp_path: Path, capsys):
+    """REGRESSION. The operator must be told the section is discarded IN FULL
+    and that the macro is left with no obstruction on any layer."""
+    mlef = tmp_path / "obs_only_split.lef"
+    mlef.write_text(_obs_only_split_layers())
+    p3.macro_lef_layer_compat_guard(
+        "target_pdk", str(_split_tech(tmp_path)), None, [str(mlef)])
+    err = capsys.readouterr().err
+    assert "from that entry ONWARD is lost" in err, err
+    assert "NO obstruction geometry on any layer" in err, err
+    # and it must point at the gate that measures it
+    assert "macro_obs_load_parity_check" in err, err

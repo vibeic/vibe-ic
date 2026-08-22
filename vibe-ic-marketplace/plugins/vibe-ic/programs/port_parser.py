@@ -152,9 +152,52 @@ def _header_ports(text: str) -> Tuple[List, List]:
     return ins, outs
 
 
+def _prose_declared_width(text: str, name: str) -> Optional[int]:
+    """The width of an EXPLICIT HDL register/net declaration of the signal `name`
+    stated in the design PROSE (not the port list) — e.g. a description body that
+    says "The register is defined as reg [7:0] q". Returns the declared width, or
+    None when no such explicit numeric declaration for THIS name is present.
+
+    Matches only `reg|wire|logic [hi:lo] <name>` with NUMERIC bounds and the name
+    immediately after the range (a declaration, so an index usage like `q[7]` — name
+    BEFORE the bracket — never matches, and a parametric `[WIDTH-1:0]` range is left
+    to the port list / solver). The trailing `\\b` keeps `q` from matching `q_r` /
+    `queue`. chip-AGNOSTIC: keys on generic Verilog grammar + the port's own name."""
+    best: Optional[int] = None
+    for m in re.finditer(
+        r"\b(?:reg|wire|logic)\s+(?:signed\s+|unsigned\s+)?"
+        r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*" + re.escape(name) + r"\b", text):
+        w = abs(int(m.group(1)) - int(m.group(2))) + 1
+        if best is None or w > best:
+            best = w
+    return best
+
+
+def _recover_prose_widths(text: str,
+                          ports: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
+    """GENERAL width recovery: when a port's width was left UNSPECIFIED by the port
+    list (defaulted to 1), but the design prose EXPLICITLY declares that same signal
+    as a multi-bit register/net (`reg [7:0] q`), adopt the declared width. An
+    explicit port-list width (>1) is authoritative and never overridden; a port the
+    prose does not declare is left untouched. Benchmark-agnostic — fires for any
+    Phase-1 doc whose body pins a width the interface line omitted."""
+    out: List[Tuple[str, int]] = []
+    for name, w in ports:
+        if w == 1:
+            pw = _prose_declared_width(text, name)
+            if pw and pw > 1:
+                w = pw
+        out.append((name, w))
+    return out
+
+
 def parse_ports(text: str) -> Tuple[List, List]:
-    """(ins, outs) as [(name, width)]. Bullet form wins; else the Verilog header."""
+    """(ins, outs) as [(name, width)]. Bullet form wins; else the Verilog header.
+    A port whose width the interface line left unspecified is then recovered from an
+    explicit `reg/wire/logic [hi:lo] <name>` declaration in the prose body, if any."""
     ins, outs = _bullet_ports(text)
-    if ins or outs:
-        return ins, outs
-    return _header_ports(text)
+    if not (ins or outs):
+        ins, outs = _header_ports(text)
+    ins = _recover_prose_widths(text, ins)
+    outs = _recover_prose_widths(text, outs)
+    return ins, outs

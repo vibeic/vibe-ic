@@ -88,7 +88,7 @@ def test_end_to_end_exact_submodules_no_prose_leak(tmp_path):
     (proj / "input" / "docs" / "L8_submodule_integration.md").write_text(_L8)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-2000:]
     l9 = list((proj / "phase1" / "generated_docs").glob("L9*.json"))[0]
     names = {s.get("name") for s in json.loads(l9.read_text()).get(
@@ -112,7 +112,7 @@ def test_real_caravel_round3_artifact_if_present():
     shutil.copytree(base, tmp / "input" / "docs")
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(tmp)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-2000:]
     l9 = list((tmp / "phase1" / "generated_docs").glob("L9*.json"))[0]
     names = {s.get("name") for s in json.loads(l9.read_text()).get(

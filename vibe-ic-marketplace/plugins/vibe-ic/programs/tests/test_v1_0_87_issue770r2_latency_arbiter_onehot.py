@@ -175,7 +175,7 @@ def _write(tmp_path, name, body):
 
 def _run_cli(args):
     r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -346,7 +346,7 @@ def test_478_endstate_fp_passes_via_subprocess(tmp_path):
         [sys.executable, str(_PROG), "--rtl", str(rtl), "--top", "bus_arbiter",
          "--event", "req0", "--output", "grant0", "--expect", "1",
          "--json", str(out_json)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     rep = json.loads(out_json.read_text())
     assert rep["verdict"] == "PASS"
@@ -365,7 +365,7 @@ def test_478_endstate_unreachable_still_blocks_via_subprocess(tmp_path):
         [sys.executable, str(_PROG), "--rtl", str(rtl), "--top",
          "bus_arbiter_dead", "--event", "req0", "--output", "grant0",
          "--expect", "1"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert proc.returncode == 1, (proc.stdout, proc.stderr)
     assert "LATENCY-TIMEOUT" in proc.stdout, proc.stdout
 
