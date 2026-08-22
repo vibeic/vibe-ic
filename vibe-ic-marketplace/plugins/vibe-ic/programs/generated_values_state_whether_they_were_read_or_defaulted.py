@@ -245,7 +245,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[{NAME}] FAIL — a generated value does not say whether it was "
               f"read or defaulted")
         return 1
-    print(f"[{NAME}] PASS — every read-or-defaulted value carries its "
+    print(f"[{NAME}] PASS — no module calling a read-or-default helper drops its "
           f"disclosure")
     return 0
 

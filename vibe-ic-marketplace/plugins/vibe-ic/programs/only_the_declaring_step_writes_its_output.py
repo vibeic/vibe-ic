@@ -280,7 +280,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if findings:
         print(f"[{NAME}] FAIL — a flow-declared output has more than one writer")
         return 1
-    print(f"[{NAME}] PASS — every flow-declared output has a single writer")
+    print(f"[{NAME}] PASS — no flow-declared output with an identified writer has two")
     return 0
 
 

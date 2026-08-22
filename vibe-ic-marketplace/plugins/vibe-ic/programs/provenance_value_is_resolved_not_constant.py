@@ -200,7 +200,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unread:
         print(f"[{NAME}] NOT CHECKED — a candidate file could not be read")
         return 2
-    print(f"[{NAME}] PASS — every source claim is resolved, not typed")
+    print(f"[{NAME}] PASS — no artefact write that emits a resolved subject also types a source path")
     return 0
 
 

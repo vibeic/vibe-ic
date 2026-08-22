@@ -666,3 +666,32 @@ That is not a coincidence and it is not carelessness; it is what happens when a
 rule is named for its intent and then implemented against what is measurable. The
 name is a hypothesis about the check. It has to be re-read against the code every
 time the check changes, and none of the three was.
+
+### Auditing all twelve PASS lines for the same defect
+
+Three verdict lines in one day claimed more than their check established, so the
+remaining nine were audited the same way. The FAIL lines are safe — each describes
+an instance actually found. **The PASS lines are where the overclaim lives**,
+because a PASS is a universal statement and the check almost never covers the
+universe. Seven of twelve were rewritten to say exactly what was checked:
+
+| gate | claimed | now says |
+|---|---|---|
+| `provenance_value_is_resolved_not_constant` | every source claim is resolved | no artefact write that emits a resolved subject also types a source path |
+| `signoff_report_states_its_stage` | every declared report is stamped | no declared report **with an identified emitter** is unstamped |
+| `only_the_declaring_step_writes_its_output` | every declared output has a single writer | no declared output **with an identified writer** has two |
+| `local_clone_does_not_borrow_objects` | every clone site is self-contained | no clone site creates object **alternates** |
+| `printed_remedy_runs_as_printed` | every printed remedy runs | no printed **docker-run** remedy puts the command before `--skip` |
+| `explicit_argument_outranks_the_environment_pointer` | every pointer reader names its tree | no **in-scope** pointer reader redirects without naming it |
+| `generated_values_state_whether_they_were_read_or_defaulted` | every value carries its disclosure | no **module** calling a read-or-default helper drops its disclosure |
+
+The differences are not pedantry. "Every flow-declared output has a single
+writer" was said while 140 of 195 declared outputs had no identified writer and
+were never judged. "Every printed remedy runs as printed" was said by a check that
+knows one failure mode. A reader who trusts those sentences is trusting a
+guarantee nobody made.
+
+Counts stay OFF the verdict line — they belong on the denominator line above it,
+which is why these read as scope clauses rather than numbers. Verdicts and exit
+codes are unchanged: nine rc=0, two rc=1, one rc=2, 216 tests passing. Only the
+sentences moved, and only toward what was actually measured.

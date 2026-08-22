@@ -282,8 +282,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"this gate can see (a producer may exist and never have measured "
               f"it; see the per-axis lines above)")
         return 1
-    print(f"[{NAME}] PASS — every axis has at least one fully-produced proof "
-          f"group")
+    print(f"[{NAME}] PASS — every axis has at least one proof group MEASURED in "
+          f"some run this gate can see")
     return 0
 
 
