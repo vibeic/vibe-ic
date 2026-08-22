@@ -72,7 +72,6 @@
     "kmap_truth_table_oracle_check::parse_kmap",
     "l15_encoding_tables_contract_check::width_scoped_codes",
     "l22_checklist_milestone_emit::extract_milestones",
-    "l_doc_consumer_contract::framed_hits",
     "l_doc_structured_field_count_check::_harvest_staged_fsm_state_count",
     "latency_conformance_check::_bool_param_map",
     "latency_conformance_check::detect_structural_clear_equiv",
