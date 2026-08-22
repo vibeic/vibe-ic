@@ -64,6 +64,7 @@ Accepted with no refusal and no unrouted record.
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
 - [Every blockage in this report, measured](#every-blockage-in-this-report-measured)
+- [The ten requests in the cross-layer source, mapped](#the-ten-requests-in-the-cross-layer-source-mapped)
 - [How much to trust each figure in this report](#how-much-to-trust-each-figure-in-this-report)
 - [Re-measuring the older sweeps, and what it cost to try](#re-measuring-the-older-sweeps-and-what-it-cost-to-try)
 - [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
@@ -1502,7 +1503,7 @@ changed version lines.
 |---|---|
 | `ppa-e2e/FINDINGS.md` F-1..F-18 | A-1, A-2, A-6, A-7, A-8, C-1 — and eleven ALREADY-PROGRAM |
 | `ppa-e2e/RESULT.md` (13 requests) | folded into the above. Paid on this tree: **1, 2, 4, 5, 6, 8, 10, 11, 12**. Partly paid: **3** (8 of 9 axes gained a producer), **9** (three of four scope keys), **13** (host paths yes, the reliability count and the relative output path no). **7** was answered with a DIFFERENT fix than the one requested — the source artefact was not put in the scope; instead the index learned to tell corroboration from conflict, which settles the fatal half and leaves two genuinely disagreeing artefacts refused, on purpose |
-| `ppa-crosslayer/RESULT.md` (10 requests) | T-1; and it is the evidence that F-3 went 0 → 6 axes and that `drv` is the one left |
+| `ppa-crosslayer/RESULT.md` (10 requests) | T-1; and it is the evidence that F-3 went 0 → 6 axes and that `drv` is the one left. **Its ten requests were never mapped the way the other source's thirteen were — that table is below, and five of the ten are unmined** |
 | `jrc_ppa-layer-rc-contract` | A-3, A-4 |
 | `jcorpus_ppa-corpus-mode` | A-5, A-11 |
 | `agent_jppa-tests` | **C-2** (first written as a Bucket-A rule, demoted by its own sweep), **A-22**, and the fourth-instance measurement under A-3 |
@@ -2086,6 +2087,32 @@ Both hold. One of them did not hold in the form it was first written: the
 handoff had said to *attach* the crash artefacts, which presumes they exist
 somewhere, and the check turned that into *re-run one arm to produce them* —
 a different instruction with a different cost.
+
+## The ten requests in the cross-layer source, mapped
+
+The other source's thirteen requests have a paid/unpaid table in this report.
+This one's ten never got the same treatment — the coverage row credited it with
+`T-1` and the evidence for one finding, which is what I took from it rather than
+what it contains. Mapped properly:
+
+| # | request | this batch |
+|---|---|---|
+| 1 | give the runner a first-class synthesis-strategy flag | **unmined** — and it carries a rule: a lever with no actuator has to be turned by writing into the design's own input tree, and the runner's ingest line then reports it as *the design's* declaration |
+| 2 | state that an artefact the search may rewrite cannot sit in the `problem` identity | **unmined** — and it is the same rule as one already enforced for a NEIGHBOURING identity, which is this cluster's signature shape |
+| 3 | the timing module should omit scope keys it cannot establish, not write null | partly **A-2**, from the producer side |
+| 4 | fix the Phase-3 power session or stop the report claiming post-PnR | the class is **F-7** in the eighteen |
+| 5 | a `drv` producer | **A-1** exactly — the axis with no producer for any of its proof names |
+| 6 | declare the schema library or bundle it | the bundled-schema ALREADY-PROGRAM, plus **C-2** for the version matrix |
+| 7 | report how far the equivalence induction got | **unmined** — partial-progress disclosure |
+| 8 | the post-route repair crash, ten reproductions | **T-1** exactly |
+| 9 | name the taps in the area taxonomy | **unmined** — plausibly an instance of **A-1** or **A-25** |
+| 10 | the smaller ones | **unmined** |
+
+**Four are covered exactly, one partly, five are not mined.** They are listed
+rather than absorbed, because a request that is neither paid nor recorded is
+invisible to both the lander and the implementing lane, and this table is the
+only place the five appear. The two worth a record on their evidence are 1 and 2;
+the case for each is written beside it above rather than asserted here.
 
 ## How much to trust each figure in this report
 
