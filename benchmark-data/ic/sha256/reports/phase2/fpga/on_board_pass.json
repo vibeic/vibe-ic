@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "evidence": "usb_hid_tester_verify not run",
-  "design_identity": {
-    "design": "sha256",
-    "ic_name": "sha256",
-    "top": "sha256"
-  }
-}
