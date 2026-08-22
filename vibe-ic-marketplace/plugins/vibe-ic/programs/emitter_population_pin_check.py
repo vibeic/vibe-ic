@@ -870,11 +870,13 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for node in _emitted_nodes(tree):
         for m in INCR.finditer(node.value):
-            # A COMMENTED `incr` is not evidence of a multiplier
-            # either, and the two readers must not disagree about
-            # one script -- that divergence is #711 itself.
-            if _in_an_emitted_comment(node.value, m.start()):
-                continue
+            # POLARITY FIRST, THEN THE COMMENT RULE -- the order `counters_of`
+            # uses, and here it is load-bearing for a second reason. With the
+            # comment rule first this consult became DEAD: measured, deleting
+            # it outright left all 88 tests green, and
+            # `test_a_DENIED_incr_cannot_excuse_a_real_disagreement` went on
+            # passing for a reason other than the one it names. Unreachable
+            # code that a test appears to cover is worse than no code.
             # POLARITY, THE SAME QUESTION `counters_of` ASKS OF THE SAME TEXT.
             # Without this the two readers disagree about one script: a denied
             # `incr` is refused as a member there and counted as evidence of a
@@ -890,6 +892,11 @@ def multiplied_counters(tree: ast.AST) -> Dict[str, int]:
             lo, hi = sentence_scope(node.value, m.start(), m.end(),
                                     extra_breaks=_RECORD_BREAKS)
             if is_denied(node.value[lo:hi]):
+                continue
+            # A COMMENTED `incr` is not evidence of a multiplier either, and
+            # the two readers must not disagree about one script -- that
+            # divergence is #711 itself.
+            if _in_an_emitted_comment(node.value, m.start()):
                 continue
             cur, host = node, None
             while id(cur) in parent:

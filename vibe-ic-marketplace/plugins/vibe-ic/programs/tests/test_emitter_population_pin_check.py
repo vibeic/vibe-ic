@@ -1753,6 +1753,44 @@ def test_the_real_tree_has_no_undecidable_population(real_run):
     assert doc["counters_examined"] == 3, doc
 
 
+# The same shape as EMITTER_DENIED_INCR_IN_A_HELPER, with the denial on a
+# PRINTED line instead of a comment line. That difference is the whole point:
+# once a commented `incr` stopped being a site, the comment version was skipped
+# by EITHER rule, so neither was individually necessary -- deleting the polarity
+# consult in `multiplied_counters` outright left all 88 tests green. Measured.
+EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER = (
+    'def _unused(name):\n'
+    '    return "  puts \\"the fallback does not incr _n; it re-issues %s\\"\\n" % name\n\n\n'
+    'def script():\n    return ("  set _n 0\\n"\n'
+    '            + _unused("a") + _unused("b")\n'
+    '            + "  if {[catch {x}]} { incr _n }\\n"\n'
+    '            + "  if {$_n >= 2} { puts ALL }\\n")\n')
+
+
+def test_a_denial_on_a_PRINTED_line_still_cannot_excuse_a_disagreement(tmp_path):
+    """The polarity consult in `multiplied_counters`, made necessary again.
+
+    Its companion states the denial in a comment, and since a commented `incr`
+    stopped being a site that fixture is skipped by either rule -- so it no
+    longer proves the consult does anything. Measured: with only that test,
+    deleting the consult left the whole suite green, and the test went on
+    passing under a name describing work it no longer forced.
+
+    Here the denial is PRINTED. The comment rule does not apply, so the consult
+    is the only thing standing between a denied `incr` and a lower-bound excuse
+    for a real disagreement."""
+    progs, tests = _tree(tmp_path, EMITTER_DENIED_INCR_PRINTED_IN_A_HELPER,
+                         "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    assert r.returncode == RC_FAIL, (
+        "a denied `incr` on a printed line was read as evidence of a "
+        "multiplier and excused a real disagreement:\n" + r.stdout)
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], doc
+    assert len(doc["findings"]) == 1, doc
+    assert any(d["what"] == "increment" for d in doc["denied_by_polarity"]), doc
+
+
 EMITTER_DENIED_INCR_IN_A_HELPER = (
     'def _unused(name):\n'
     '    return "  # the fallback does not incr _n; it re-issues %s\\n" % name\n\n\n'
