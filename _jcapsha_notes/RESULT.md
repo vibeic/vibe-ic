@@ -22,7 +22,8 @@ Source read in full before anything was written: `_jpadsite_priv/RESULT.md` on
 8hd-3 (476 lines), its `evidence/`, and the whole `origin/main` ->
 `origin/jpadsite/pad-site` diff (4 files, 858 insertions).
 
-Deliverable: `recoveries.json` (5 records) emitted through
+Deliverable: `recoveries.json` (**7 records — 6 Bucket-A, 1 Bucket-D**)
+emitted through
 `enhancement_emit.py` into `candidates/`, both gates green
 (`enhancement_emit` rc 0, `backlog_sanitize_check` rc 0, 0 hard violations,
 0 soft warnings, no unrouted Bucket-A record).
@@ -112,8 +113,11 @@ bondpad-geometry variables — are genuinely outside this step. They are also in
 NEITHER declared tuple, so nothing records that. That is the other half of the
 same rule: out of scope must be *declared* out of scope, not silently absent.
 
-Two enumerable lists, one subtraction, no judgement — so **Bucket A**, as
-`upstream_input_set_pin`.
+Two enumerable lists, one subtraction, no judgement — so **Bucket A**. It was
+filed as `upstream_input_set_pin`; the corpus sweep further down refuted that
+form and the record now ships as
+`refusal_on_absence_falsified_by_the_declaration_grammar`. The old name is left
+standing in this sentence's history only here, where the correction is named.
 
 **The exact decision, named as the brief requires:** the input is the upstream
 config module's declared variable list and this module's own declared-required
@@ -285,23 +289,44 @@ carries the step.
 
 ## The general-core test, applied
 
-None of the five rules reads a pad or a PDK literal:
+None of the **six** Bucket-A rules reads a pad or a PDK literal. Stated as what
+each one's LOGIC actually consumes, which is the brief's test — not what it was
+named after:
 
-* `upstream_input_set_pin` — two variable lists and a subtraction.
-* `upstream_arithmetic_pin` — one AST and a reachability question.
+* `refusal_on_absence_falsified_by_the_declaration_grammar` — a refused name, a
+  set of unread views, and that class's own declaration parser. Reads a
+  grammar, never a pad.
+* `upstream_correspondence_declared_then_pinned` — a declared upstream file, a
+  declared primitive, and an AST. Reads a correspondence, never a dimension.
 * `unhonoured_knob_degrades_loudly` — an exit code and a report key.
-* the Bucket-T record — two symmetric arguments and which case each selects.
-* `component_vocabulary_admits_its_namespace` — a regex and an enumeration.
+* `component_vocabulary_admits_its_namespace` — an advertised prefix and the
+  namespace it points at, enumerated from that namespace's own source.
+* `upstream_convention_not_inverted` — two four-entry mappings, compared.
+* `opposite_side_transform_matches_upstream` — two named transforms, compared.
 
-They were written here first. That is all that is pad-shaped about them.
+The last two are the sharpest evidence for the brief's own point. They are
+named for sides of a pad ring and their logic contains **no side and no pad**:
+one asks whether a re-implementation inverted a documented convention, the
+other whether it substituted a rotation for a mirror. Both are questions about
+any symmetric pair — a differential pair, a bidirectional bus, a mirrored
+macro. They were written here first, and that is all that is pad-shaped about
+them.
+
+THE LIST PREVIOUSLY READ "five rules" AND NAMED THE BUCKET-T RECORD as a member.
+Both were wrong by the time anyone could read them: the T record was withdrawn
+to D — so the general-core test was being applied to a finding that no longer
+existed — and two rules were added after the count was written.
 
 ---
 
 ## What was NOT done, and why
 
-* **No new guard was landed, and the four Bucket-A rules are red for three
+* **No new guard was landed, and the six Bucket-A rules are red for three
   different reasons.** Stated one by one rather than as a group, because they
-  do not share a fix order:
+  do not share a fix order. (This read "four" while two more records — F3c and
+  F3d — were added below it. A count in a summary describing a list that is
+  still growing, which is the defect this whole capture is about, landing on
+  the capture's own prose for the second time.)
   * **F1 and F2** would go RED on `origin/main` today, CORRECTLY — the defects
     they guard are fixed on `origin/jpadsite/pad-site` and that branch has not
     landed. Shipping a correct-but-red gate would block every push on the repo.
@@ -801,12 +826,20 @@ to the capture-routing table. Its red, shown by removing the entry and
 re-running the same emit:
 
 ```
-WARNING: 4 Bucket-A record(s) had no routable `bucket_A_program`
-  - step='phase3.pad_ring' rule='upstream_input_set_pin'
-  - step='phase3.pad_ring' rule='upstream_arithmetic_pin'
+WARNING: 6 Bucket-A record(s) had no routable `bucket_A_program`
+  - step='phase3.pad_ring' rule='refusal_on_absence_falsified_by_the_declaration_grammar'
+  - step='phase3.pad_ring' rule='upstream_correspondence_declared_then_pinned'
   - step='phase3.pad_ring' rule='unhonoured_knob_degrades_loudly'
   - step='phase3.pad_ring' rule='component_vocabulary_admits_its_namespace'
+  - step='phase3.pad_ring' rule='upstream_convention_not_inverted'
+  - step='phase3.pad_ring' rule='opposite_side_transform_matches_upstream'
 ```
+
+RE-DERIVED 2026-08-22. The block above previously showed FOUR records under two
+rule names that no longer exist — the two F1/F2 rules were renamed by the
+corrections below, and F3c and F3d were added after this transcript was taken.
+Re-run by removing the entry and restoring it with a reverse edit, never
+`git checkout`; `git status` was empty afterwards.
 
 Every Bucket-A sketch in this capture is skipped without it, and no
 Bucket-A file is written at all. The step needed its own entry because its
@@ -830,9 +863,29 @@ merge onto origin/main @ 81cd5321b     rc 0, zero conflict markers
 routing table after merge              47 steps — my phase3.pad_ring present,
                                        all 8 of main's new entries preserved
 pytest on the MERGED tree              87 passed, 4 skipped
-enhancement_emit on the MERGED tree    rc 0, A=4 / T=1, routed to
+enhancement_emit on the MERGED tree    rc 0, A=6 / D=1, routed to
                                        programs/pad_ring_gen.py, nothing unrouted
 ```
+
+RE-RUN 2026-08-22 against `origin/main` still at `81cd5321b` (checked, it has
+not moved), from branch head `eede2f5d9`. Every line above is from that re-run,
+not carried forward — the `A=4 / T=1` it replaces was measured before the
+Bucket-T record was withdrawn to D and before F3c and F3d were filed, so it
+named a bucket this capture no longer emits. Split by suite, with the load
+beside each, because one of them is load-dependent:
+
+```
+three routing suites          80 passed, 4 skipped   9s    load 45.8 -> 43.7
+test_issue1130_..._parity      7 passed             69s    load 41.7 -> 39.6
+                                                    -----
+                                                    87 passed, 4 skipped
+suite_write_guard             PASS on both — the session wrote nothing
+```
+
+The load-dependent suite **passed at load 41.7**, where the session below
+records it timing out at load 64.1 and passing at ~4.8. A third point at an
+intermediate load is worth more than the two extremes: it is the observation
+that would have been missing had the bound simply been raised.
 
 Neither side's entries were lost and neither displaced the other — the two
 additions are at different points in the same object. The branch is landable on
@@ -912,7 +965,7 @@ docker run --rm -v <evidence>:/w <image> --skip bash /w/run2.sh
 Measured this session, all on a clean tree:
 
 ```
-enhancement_emit                                     rc 0   A=4 T=1, 0 unrouted
+enhancement_emit                                     rc 0   A=6 D=1, 0 unrouted
 backlog_sanitize_check on the emitted record         rc 0   0 hard, 0 soft
 pytest: the four suites that read the routing table  rc 0   87 passed, 4 skipped
     test_capture_routing_consistency, test_enhancement_emit,
