@@ -10,9 +10,76 @@ was later pushed on a branch of its own, on the requester's explicit instruction
 so that the report has a home other than `/tmp` — it adds this one file and
 nothing else, and neither `main` nor either verified branch was touched.
 
-**Verdicts** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
+**Verdicts, as given** — `jdistmat` LAND with F14 + F15 + F9 + F12 fixed;
 `jdistchip` LAND with F1 fixed. F14 is the only finding that stops anything.
 
+**Both branches landed on main (v1.11.70, `ae78abb28`) during this work.** F14
+was fixed the right way — converted, not registered — and main's wired suite is
+byte-identical to before. F15, F1, F9, F12 and F17 landed unfixed; none is
+wired, so none blocks. The first section below carries the measurements.
+
+
+## THEY LANDED WHILE I WAS WRITING — status at main ae78abb28
+
+```text
+This report was asked for BEFORE a landing. The landing happened during it. Both
+branches are now merged into main at v1.11.70 — `86dd1d463 Merge ...
+jdistmat/matrix-distil` and `b06d52715 Merge ... capture/jdistchip-chip-path-
+rules`. All 32 checkers are on main; 1272 programs parse where 1240 did. Read
+everything below as a record of what was true of the branches, and this section
+as what is true of main now.
+
+F14 WAS FIXED, AND FIXED THE RIGHT WAY. It was the only finding that stopped
+anything, and it is gone:
+
+    atomic_artifact_write_check on ae78abb28 ....... rc 0
+    1272 programs parsed; 513 non-atomic, baseline 515 — main's own numbers
+    all 20 matrix programs now use the helper
+    _atomic_artefact_residual.json ................. 0 rows
+
+    So they were CONVERTED, not registered. The route this report warned
+    against — "the gate permits it, the suite refuses it" — was not taken. The
+    idiom is `import _atomic_artefact as _aa` rather than the
+    `from _atomic_artefact import write_text` form I recommended; both are house
+    style and the outcome is identical.
+
+    MY FIRST READING OF THIS SAID 0 OF 20 CONVERTED. I grepped for
+    `_atomic_artefact import`, which the module-alias form does not match, and
+    for about a minute I had a fixed finding recorded as unfixed. Same
+    imprecise-grep error as the `write_json` mis-citation, twice in one day.
+
+THE WIRED LANDING SUITE IS UNCHANGED. 28 invocations replayed on ae78abb28:
+rc0=26, rc1=0, rc2=2, and diffing row by row against a4caccefe it is IDENTICAL.
+The two rc 2 are the same tolerated pair main always had. The landing did not
+regress the suite.
+
+F15 AND F1 LANDED UNFIXED, and both are red on main right now:
+
+    gate_proof_vocabulary_has_a_producer ....... rc 1   F15, the FALSE red
+    only_the_declaring_step_writes_its_output .. rc 1   F1, six real findings
+    layer_membership / metric_constant ......... rc 1   declared, expected
+
+    Neither F15's nor F1's gate appears anywhere in repo_hygiene_gates.sh — 0
+    wired mentions — so consistent with F5b they cannot fail the landing suite.
+    F15 is the one I would still raise: a gate on MAIN now ships a verdict I
+    measured as false, pinned by three of its own tests, one of which no passing
+    tree can satisfy. It blocks nothing mechanically. It is now main's false
+    statement rather than a branch's.
+
+F12 AND F17 LANDED UNCHANGED. The same three gates still certify an empty scan.
+And F17 is exactly as warned: 1 of 20 matrix test files exercises `--json`, while
+all 20 had that write path REWRITTEN by the F14 conversion.
+
+SO I RAN THE PATH NOBODY TESTS, against the landed main, because that is the
+whole point of having said so in advance:
+
+    20 of 20 programs run with `--json`:  17 rc 0, 3 rc 1 (the declared reds)
+    artefacts written: 20 of 20, valid JSON: 20 of 20, 137 B to 4755 B
+
+    The conversion is sound. That is a measurement and not a reassurance — the
+    same harness returns rc 2 with a NameError on a conversion applied wrongly,
+    which is how this report established the check discriminates at all.
+```
 
 ## ACT ON THIS — the whole answer in one screen. Evidence for every line is below.
 
