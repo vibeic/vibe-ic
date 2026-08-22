@@ -909,7 +909,25 @@ suite_write_guard             PASS on both — the session wrote nothing
 ```
 
 The load-dependent suite **passed at load 41.7**, where the session below
-records it timing out at load 64.1 and passing at ~4.8. A third point at an
+records it timing out at load 64.1 and passing at ~4.8.
+
+CARRIED FORWARD TO THE TIP, AND THE CARRY IS PROVEN RATHER THAN ASSUMED. Those
+numbers were measured at branch head `eede2f5d9`; three commits landed after
+it. Re-running at the tip was attempted and abandoned at load **104.6 on 32
+cores** — 3.3x oversubscribed, where the harness bound is mine and not a
+verdict about the code. So the question was answered the cheap way instead:
+
+```
+files changed eede2f5d9..HEAD    _jcapsha_notes/PROGRESS.md
+                                 _jcapsha_notes/RESULT.md
+                                 _jcapsha_notes/evidence/f3cd_..._MEASURED.txt
+referenced by the four suites    0 of 4, for each of the three
+```
+
+Three markdown/text files inside the capture bundle, and no suite names any of
+them. The measurement cannot have moved. This is the one carry-forward in this
+document that is allowed, and only because the reachability was checked instead
+of the plausibility. A third point at an
 intermediate load is worth more than the two extremes: it is the observation
 that would have been missing had the bound simply been raised.
 
