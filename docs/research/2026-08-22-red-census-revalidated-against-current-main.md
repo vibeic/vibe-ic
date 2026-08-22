@@ -450,3 +450,50 @@ know it is on the table; I should not be the one to put it there.**
 
 **This closes the survey: all three named remedies for the 16-red group are now
 examined**, one refuted by measurement, one recommended, one available-and-declined.
+
+---
+
+# Part 9 — the 4 corpus/bootstrap reds: the ask was ONE option, and it is smaller than it looked
+
+Part 8 applied the "two options means you have not found the third" rule to the
+16-red group. **The 4 corpus/bootstrap reds had it worse: I gave ONE option** —
+*"someone who understands the trusted-parent-evidence protocol must decide whether
+a fixture can satisfy it"* — which is not a remedy list, it is a shrug with a job
+title attached.
+
+**Narrowed by reading the check instead of naming the protocol.**
+
+The blocker is `benchmark_data_landing_checkout.py:161`, and it is one command:
+
+```python
+proc = _git(checkout, "remote", "get-url", "--all", "origin")
+urls = proc.stdout.splitlines() if proc.returncode == 0 else []
+if urls != [expected]:
+    got = urls if urls else ["<missing or unreadable>"]
+    raise Refusal(f"origin must be exactly {expected!r}; observed {got!r}")
+```
+
+**The observed value was `['<missing or unreadable>']`, which is the EMPTY case** —
+so `git remote get-url --all origin` returned NON-ZERO on `$BENCHMARK_B2`. **Not a
+mismatched URL. No origin readable at all.**
+
+**And `$BENCHMARK_B2` is a git WORKTREE**, not a clone —
+`gatekeeper-verify-merge.sh:884` removes it with `git worktree remove`. A worktree
+reads its remotes from the parent's shared config, so `origin` should resolve.
+
+**So the ask is no longer "understand the protocol". It is: why does
+`git remote get-url --all origin` fail on `$BENCHMARK_B2` at the moment the
+trusted-parent-evidence step re-validates it?** That is a question with a
+one-command reproduction, not a design review.
+
+**What I did NOT establish**, and it is the half that decides who can act: whether
+the worktree is absent at that instant, whether the fixture's parent checkout lacks
+the remote, or whether the enumeration step disturbs it. **Three candidates, none
+measured** — and I am naming them as candidates rather than picking the one that
+would make my earlier framing look best.
+
+**The value of the narrowing is who it hands the work to.** "Understand the
+trusted-parent-evidence protocol" needs the protocol's owner. **"Find why one git
+command returns non-zero on a worktree" needs anyone who can run it** — and the
+reproduction is the sentinel fixture already built and reverted on the frozen
+branch.
