@@ -64,15 +64,26 @@ strength of those two sources, not because a ring then fits. On a real ring it
 happened to be a 4.4x error: 19 x 350 = 6650 um against a 1500 um side, which
 refused a ring upstream places.
 
-`PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD
-======================================================
-The same measurement shows the placer does not read it. Silently honouring an
-inert variable is a lie; silently ignoring a declared one is the defect. So it
-degrades loudly in BOTH directions:
+`PAD_ROTATION_VERTICAL` IS NOT HONOURED HERE, AND SAYS SO OUT LOUD
+==================================================================
+THIS SECTION SAID "IS INERT" AND "the placer does not read it" AND BOTH WERE
+WRONG. Re-measured 2026-08-22: `-rotation_horizontal` moves WEST and EAST, and
+`-rotation_vertical` moves SOUTH and NORTH — the parameters are named for the
+ROW AXIS, not the side. The original probe varied PAD_ROTATION_VERTICAL while
+watching only WEST and EAST, so it correctly saw nothing change and the wrong
+conclusion was drawn. The placer DOES read it; THIS STEP does not implement it.
+That is a weaker claim and the true one, and it makes the refusal below MORE
+justified rather than less: the value would have had an effect, and we would
+not have produced it.
+
+Silently ignoring a declared value is the defect; claiming a variable does
+nothing when it does is a different one. So it degrades loudly in BOTH
+directions:
 
     at librelane's default `R0`   — indistinguishable from never having set it
                                     — PROCEED, and carry
-                                    `rotation_vertical_inert` in the report,
+                                    `rotation_vertical_not_honoured` in the
+                                    report,
                                     with the measurement, in EVERY report
                                     including the skips. A disclosure only
                                     present on the happy path is not one.
@@ -85,7 +96,7 @@ degrades loudly in BOTH directions:
                                     knob does nothing.
 
 And the DEF carries the orientation the placer ACTUALLY produces on the
-vertical sides (`_pad_ring.VERTICAL_SIDE_ORIENT`), not the declared one, so the
+sides (`_pad_ring.SIDE_ORIENT`, all four), not the declared one, so the
 footprint a DEF reader derives matches the geometry this step recorded. An
 artefact that disagrees with itself is worse than either half alone.
 
@@ -180,26 +191,36 @@ UPSTREAM_REFUSALS_MADE_MACHINE_READABLE: Tuple[Tuple[str, str], ...] = (
 )
 
 
-#: `PAD_ROTATION_VERTICAL` is INERT, and this is the evidence, carried in the
-#: report so a reader is told rather than left to find out.
-ROTATION_VERTICAL_INERT: Dict[str, Any] = {
+#: `PAD_ROTATION_VERTICAL` is NOT honoured by this step, and this is the
+#: evidence, carried in the report so a reader is told rather than left to find
+#: out. It is NOT "inert" — an earlier version of this constant said so and was
+#: wrong; see `reason`.
+ROTATION_VERTICAL_NOT_HONOURED: Dict[str, Any] = {
     "variable": "PAD_ROTATION_VERTICAL",
     "honoured": False,
     "reason": (
-        "the placer does not read it. MEASURED in four SEPARATE OpenROAD "
-        "processes, one per value so no row from an earlier pass could be "
-        "reused by a later one: PAD_ROTATION_VERTICAL = R0 / R90 / R180 / MX "
-        "all produced WEST orient=MXR90 and EAST orient=R90, 75 um along the "
-        "row and 350 um into the die, IDENTICAL in all four. The vertical-side "
-        "orientation is a constant of the placer, not a function of this "
-        "variable."),
+        "this step does not implement it. RE-MEASURED 2026-08-22 in OpenROAD "
+        "26Q3-1581, holding one rotation parameter and varying the other while "
+        "watching all four sides: `-rotation_horizontal` moves WEST and EAST "
+        "(the VERTICAL sides) and `-rotation_vertical` moves SOUTH and NORTH "
+        "(the HORIZONTAL sides). The parameters are named for the ROW AXIS, "
+        "not the side. The placer therefore DOES honour this variable, on the "
+        "N/S rows; this step places N/S at the orientation the placer produces "
+        "at librelane's default and implements no other. That is why a "
+        "declared non-default is refused rather than ignored: the value would "
+        "have had an effect and this step would not have produced it. (The "
+        "history of this record's own earlier, wrong claim is in the module "
+        "docstring, not here — an artefact field should state what is true "
+        "now, not carry a correction a machine has to parse around.)"),
     "measured_orientation": {"W": "MXR90", "E": "R90"},
     "librelane_default": PR.ROTATION_DEFAULT,
     "what_this_step_does": (
         "emits the orientation the placer produces, so the DEF does not "
         "contradict its own geometry. A run that DECLARES a non-default value "
         "is refused NOT_DETERMINED rather than silently ignored — an author "
-        "who sets a knob is entitled to be told the knob does nothing."),
+        "who sets a knob is entitled to be told the knob is not honoured "
+        "HERE, which is a different and truer statement than telling them it "
+        "does nothing."),
 }
 
 
@@ -243,7 +264,7 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "fillers_placed": None,
         "spacing": None,
         "unperformed": dict(UNPERFORMED),
-        "rotation_vertical_inert": dict(ROTATION_VERTICAL_INERT),
+        "rotation_vertical_not_honoured": dict(ROTATION_VERTICAL_NOT_HONOURED),
         "bterms": None,
         "findings": [],
     }
@@ -298,7 +319,10 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
     corners: List[Dict[str, Any]] = []
     cmaster = cfg["corner_master"]
     for i, pos in enumerate(PR.CORNER_POSITIONS):
-        orient = PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_CORNER"], i)
+        # MEASURED, not rotated from the declared value: the placer
+        # alternates rotation and mirror (R0, MY, R180, MX). A pure
+        # rotate_cw walk gave E and W where the tool writes FN and FS.
+        orient = PR.CORNER_ORIENT[pos]
         dx, dy = PR.footprint(lib.masters[cmaster], orient, units)
         corners.append({
             "instance": f"{cmaster}_{pos}", "master": cmaster,
@@ -309,16 +333,17 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         })
 
     # The vertical sides take the orientation the placer ACTUALLY produces,
-    # measured, not the declared one — see `_pad_ring.VERTICAL_SIDE_ORIENT`.
+    # measured, not the declared one — see `_pad_ring.SIDE_ORIENT`.
     # `PAD_ROTATION_VERTICAL` does not reach this dict because it does not
     # reach the tool either; `main` refuses before here if a run DECLARED a
     # non-default value, so nobody is silently ignored.
-    side_orient = {
-        "S": cfg["rotation"]["PAD_ROTATION_HORIZONTAL"],
-        "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2),
-        "W": PR.VERTICAL_SIDE_ORIENT["W"],
-        "E": PR.VERTICAL_SIDE_ORIENT["E"],
-    }
+    # ALL FOUR SIDES come from the placer's measured orientation, not from the
+    # declared rotation variables. NORTH used to be
+    # `rotate_cw(PAD_ROTATION_HORIZONTAL, 2)` -> S at the default, where the
+    # placer produces MX -> FS: same bbox, MIRRORED not rotated, so a DEF
+    # reader derives different pin positions. Part 3 of the ruling applied to
+    # W/E and missed N.
+    side_orient = dict(PR.SIDE_ORIENT)
     side_width = {
         "S": (urx - llx) - 2 * edge - 2 * corner_sw,
         "N": (urx - llx) - 2 * edge - 2 * corner_sw,
@@ -374,6 +399,23 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         # 6-7. the remainder, halved, is the pad-to-corner spacing
         rest = space_for_fill - between * (n - 1)
         to_corner, odd = divmod(rest, 2)
+        # THE `odd` REFUSAL IS A DELIBERATE DIVERGENCE FROM UPSTREAM. Do not
+        # "fix" it back. `pad_cfg.tcl` computes
+        #     space_side = round((space_for_fill - filler*(n-1)) / 2 * 1000)/1000
+        # in MICRONS, so a remainder that will not halve evenly becomes a
+        # fractional micron. This step works in INTEGER DEF UNITS, where that
+        # value cannot be expressed: an odd remainder has no halving into two
+        # EQUAL gaps, and silently taking the floor would put the ring one DEF
+        # unit off-centre with no record of it. Refusing is stricter than the
+        # tool this step models, and it is the same rule read in a unit system
+        # that cannot round.
+        #
+        # COMPARED STEP BY STEP against pad_cfg.tcl 2026-08-22 in
+        # ghcr.io/vibeic/vibeic-eda:0.3.16: of its eight steps, seven are
+        # identical here -- including step 5-6, where this step floors twice and
+        # upstream once, which is not a difference because
+        # floor(floor(a)/w) == floor(a/w) for integer w. Step 7 is the only
+        # divergence and this comment is it.
         # 8. refuse a corner spacing that is not a multiple of the site width
         if odd or to_corner % site_w:
             findings.append(_finding(
@@ -615,23 +657,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     # pass and it is not a finding about the design — it is the flow's
     # could-not-measure tier, which is exactly what this is. A run that leaves
     # the variable at librelane's default is indistinguishable from a run that
-    # never set it, so it proceeds and is TOLD, in `rotation_vertical_inert`.
-    declared_rotv = PR.normalise_orient(
-        cfg["rotation"]["PAD_ROTATION_VERTICAL"])
-    if declared_rotv != PR.normalise_orient(PR.ROTATION_DEFAULT):
-        raw = json.loads(asg_path.read_text(errors="replace")).get(
-            "PAD_ROTATION_VERTICAL")
+    # never set it, so it proceeds and is TOLD, in
+    # `rotation_vertical_not_honoured`.
+    # BOTH rotation variables, not just the vertical one. They are named for
+    # the ROW AXIS: -rotation_horizontal moves W/E and -rotation_vertical moves
+    # S/N. This step implements neither, so a declared non-default on EITHER is
+    # refused. Refusing only one of them was an artefact of the probe that
+    # measured only one.
+    _rot_var = None
+    for _v in ("PAD_ROTATION_VERTICAL", "PAD_ROTATION_HORIZONTAL",
+               "PAD_ROTATION_CORNER"):
+        if PR.normalise_orient(cfg["rotation"][_v]) != PR.normalise_orient(
+                PR.ROTATION_DEFAULT):
+            _rot_var = _v
+            break
+    if _rot_var is not None:
+        raw = json.loads(asg_path.read_text(errors="replace")).get(_rot_var)
         reason = (
-            f"NOT DETERMINED: this run DECLARES PAD_ROTATION_VERTICAL={raw!r}, "
+            f"NOT DETERMINED: this run DECLARES {_rot_var}={raw!r}, "
             f"a value other than librelane's default "
-            f"{PR.ROTATION_DEFAULT!r}, and the placer does not read it. "
-            f"{ROTATION_VERTICAL_INERT['reason']} Placing the ring anyway "
+            f"{PR.ROTATION_DEFAULT!r}, which this step does not implement. "
+            f"{ROTATION_VERTICAL_NOT_HONOURED['reason']} Placing the ring anyway "
             f"would silently give you the orientation you did not ask for, "
             f"and reporting PASS would say the declaration was honoured. "
             f"Neither is true, so no ring is placed and no verdict is claimed. "
             f"Remove the declaration, or set it to {PR.ROTATION_DEFAULT!r}, to "
             f"proceed on the placer's own measured orientation "
-            f"({ROTATION_VERTICAL_INERT['measured_orientation']}).")
+            f"({ROTATION_VERTICAL_NOT_HONOURED['measured_orientation']}).")
         rep = _report("SKIP", reason, inputs=inputs,
                       io_cell_library=lib.as_dict(), die=die_rec,
                       missing_inputs=[{
