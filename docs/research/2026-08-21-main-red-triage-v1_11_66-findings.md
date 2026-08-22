@@ -5153,6 +5153,7 @@ items 1-3 are independent of them, and item 6 is independent of all of them.
 **Escalation 2 is CLOSED, not deferred.** I had escalated it as needing evidence
 this host lacks. That was wrong (M30) — 10 of the 15 declared run roots are here
 and two carry the artefact. Do not carry it forward as an open item.
+| 7 | `hdl_declaration_scan_strips_comments_check.py`: `stripped_locals` propagates through `for` and comprehension targets, + 5 regression tests (M78) | **A GATE FIX, and the only change here that touches a program rather than a test.** The analyser only propagated "passed through a stripper" across ASSIGNMENT, so `for line in stripped.splitlines()` read as unstripped — the commonest shape for a declaration scan. 10-case A/B: **5 wrong -> 0 wrong**, all four true positives still flagged, so it is a PRECISION fix and not a relaxation. Repo-wide **175 -> 168** sites, **0 newly flagged**, and the gate's BLOCKING list goes **5 names -> 3** with both departures verified false positives in source. Mutation arm: revert the analyser and **4 of the 5 new tests go red**; the fifth passes in both arms by design, as the anti-relaxation control. **Baseline deliberately NOT written** though the gate asks for it on the shrink. |
 
 ## B. ONE DECISION I NEED FROM YOU — a green becomes a red
 
@@ -5168,10 +5169,18 @@ currently passes.**
 * This is not a new defect. It is the M13 defect moved from the silent column to
   the loud one.
 
-**MEASURED SINCE (M22): taking this adds NO red to the CI lane.** In the pinned
-image that test is already failing on its first assertion, because the verifier
-honestly returns `rc 2 = CANNOT_MEASURE` without a Docker CLI. Image lane before
-and after my changes: 22 failed, 112 passed, identical ID sets. The conversion
+**MEASURED SINCE (M22, RE-MEASURED M90): taking this adds NO red to the CI lane.**
+
+> **The evidence for this changed and the conclusion did not.** M22 argued it from
+> *"the verifier returns `rc 2 = CANNOT_MEASURE` without a Docker CLI; image lane
+> 22 failed, 112 passed before and after, identical ID sets."* **That describes an
+> UNCONFIGURED lane** (M90). Re-measured with the lane actually running —
+> **6 failed, 128 passed, byte-identical to the host** — this test is STILL among
+> the failures, for the allowlist reason M91 names. **So it goes from red to red
+> in both lane configurations**, which is a stronger basis than the original: the
+> old argument would have evaporated the moment anyone fixed the lane.
+
+The conversion
 turns a HOST-lane green into a HOST-lane red and nothing else.
 
 So the choice is narrower than I first wrote it. **Take it** — the honest
