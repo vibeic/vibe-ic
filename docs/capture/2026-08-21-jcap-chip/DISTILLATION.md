@@ -1142,3 +1142,51 @@ wherever the manifest actually lives:
 
 The four generated files above are the plausible hits. If any is protected, this
 branch needs the two-landing protected path, not a merge.
+
+## The A/B against bare main: two gates are revert-proofed by real history
+
+Their last title was *"record an A/B about main"*. Running the twelve checkers
+against bare `origin/main` and against this branch — **the same checker binaries in
+both arms, only the subject tree differing** — answers a question a fixture cannot:
+does this gate catch a defect that was really there?
+
+    CHECKER                                              main  branch
+    prepared_checkout_states_the_revision_it_holds          1     0   <-- real-history control
+    provenance_value_is_resolved_not_constant               1     0   <-- real-history control
+    only_the_declaring_step_writes_its_output               1     1       live finding, unowned (user's call)
+    every_required_metric_key_has_a_producer                1     1       live finding
+    pytest_aggregate_carries_its_runtime_identity           2     2       NOT CHECKED — no aggregate in a bare tree
+    the other seven                                         0     0
+
+**The denominator is what makes this trustworthy.** This branch ADDS twelve programs
+and thirteen test files, so a red-to-green move could be an artefact of the
+population changing rather than of anything being fixed. It is not:
+
+    prepared_checkout...  main: "examined 3 revision-selecting checkout site(s)"
+                        branch: "examined 3 revision-selecting checkout site(s)"
+    provenance_value...   main: "examined 2 resolved-subject artefact write(s)"
+                        branch: "examined 2 resolved-subject artefact write(s)"
+
+Same population, different verdict. The delta is the fix.
+
+    main   ip_catalog_reproduce_pull.py:60: a revision is checked out and the
+           outcome is never inspected
+    main   phase3_one_shot_runner.py:37700: this write emits a RESOLVED subject
+           beside a typed path constant
+
+**This corrects an attribution I had wrong.** I had recorded TP-1 (the
+`ip_catalog_reproduce_pull.py` fix) as a finding of
+`generated_values_state_whether_they_were_read_or_defaulted`. It is not — that gate
+reports 0 on both arms with an identical 3-call-site denominator, so it never saw
+that defect. TP-1 was caught by `prepared_checkout_states_the_revision_it_holds`,
+which is the better outcome: the brief singled that checker out as one of the two
+that "would have caught a whole class of last night's false measurements", and the
+A/B shows it catching one that was really on `main`.
+
+**What this does NOT establish.** Ten of the twelve have no real-history control —
+their reds are fixture reds only. That is not a defect (a gate for a defect nobody
+has committed yet has nothing to catch), but it is the honest scope: two gates are
+proven against history, ten against constructed input.
+
+`pytest_aggregate...` returning 2 on both arms is the rc contract working — a bare
+tree has no aggregate to read, and it says so rather than passing.
