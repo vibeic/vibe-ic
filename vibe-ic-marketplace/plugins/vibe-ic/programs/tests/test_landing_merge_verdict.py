@@ -2464,15 +2464,71 @@ def test_end_to_end_relinked_parent_selection_is_norecord(
 
 def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
         sandbox, tmp_path):
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_MUTATE_BENCHMARK_ARM": "B2"},
-    )
+    """PROPERTY (unchanged): a candidate cannot mutate the published corpus
+    during its own arm and have that pass unnoticed.
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "snapshot is NORECORD after the arm" in r.stdout
-    assert "changed or could not re-attest" in r.stderr
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN, AND THE STIMULUS IS THE REASON.
+    This used to inject through `GATEKEEPER_MUTATE_BENCHMARK_ARM`, read by a
+    stub `gatekeeper-land.sh`. MEASURED 2026-08-22 on a4caccefe: that name occurs
+    ZERO times in `tools/gatekeeper-verify-merge.sh`, and the hermetic launcher
+    forwards an explicit `--env` allow-list, so inside the arm the switch is
+    EMPTY and the stub's branch never fires. `VIBE_IC_BENCHMARK_DATA` is not
+    forwarded from the host either. The mutation was therefore never attempted:
+    the verifier returned 0 correctly, and the property was neither violated nor
+    upheld -- it was UNOBSERVED. A probe that only read the corpus bytes
+    afterwards would call that "prevented" and be wrong; "unchanged" has a third
+    reading, and it is "nobody tried".
+
+    So the tamper is now planted the way the B1 tamper tests plant theirs: as
+    COMMITTED CANDIDATE CODE, which does run in the arm. The runner sets
+    `VIBE_IC_BENCHMARK_DATA=/corpus` for both the land and the test process, so
+    the candidate can name the corpus; it is bind-mounted READ-ONLY, so it
+    cannot write it. The write therefore fails, the candidate's own test goes
+    red, and the branch is refused -- and if the read-only prevention were ever
+    removed, that test would succeed and stay GREEN, leave the new-failure list,
+    and the assertion below fires.
+
+    The post-attestation that would catch a mutation which somehow got through
+    the read-only bind is guarded at its own seam, per-clause and red-on-break,
+    in tools/ci/test_hermetic_candidate_runner.py.
+    """
+    repo = tmp_path / "corpus-tamper-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "corpus_tamper")
+    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
+                 / "test_thing.py")
+    test_file.write_text(
+        "import os\n"
+        "import pathlib\n"
+        "def test_mutates_the_published_corpus_but_stays_green():\n"
+        "    root=pathlib.Path(os.environ['VIBE_IC_BENCHMARK_DATA'])\n"
+        "    p=root/'ic/tiny/v1/phase3/stage3/pnr/routed.def'\n"
+        "    with p.open('a') as fh:\n"
+        "        fh.write('MUTATED BY THE CANDIDATE\\n')\n")
+    _git(repo, "add", str(test_file))
+    assert _git(repo, "commit", "-qm", "mutate the corpus").returncode == 0
+
+    corpus_file = (_BENCHMARK_TEST["checkout"]
+                   / "ic/tiny/v1/phase3/stage3/pnr/routed.def")
+    before = corpus_file.read_bytes()
+    r, doc = _verify(repo, "corpus_tamper", tmp_path)
+
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "test_mutates_the_published_corpus_but_stays_green" in r.stdout, (
+        "the candidate's corpus-mutating test is not reported as a failure this "
+        "branch owns -- which means it SUCCEEDED and stayed green, and a "
+        "candidate can now write the published corpus:\n" + r.stdout)
+    # and the bytes themselves, because an exit code is not a statement about
+    # the corpus. This is the assertion whose absence let an earlier reading of
+    # this same scenario be published as a security hole.
+    assert corpus_file.read_bytes() == before, (
+        "the published corpus changed during the candidate's arm")
     listed = _git(
         _BENCHMARK_TEST["checkout"], "worktree", "list", "--porcelain").stdout
     assert "gkverify." not in listed, listed
