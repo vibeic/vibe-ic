@@ -32,6 +32,26 @@ copies are different files — 9892 vs 7455 bytes, neither on main, neither on a
 ref. Tree identity cannot see untracked content, and untracked content was the
 whole of the value. Dropping that directory would have destroyed the only copy.
 
+## The 19 deletion-bound rows are now measured, not disclosed
+
+The rows that authorise deletion — 17 LANDED and 2 ABANDON — carried a disclosure
+that 11 of them rested on an input nobody had measured: untracked content on .112
+and .121, which `git status --porcelain -uno` cannot see and which those hosts
+would not answer for. `.102` is authorised on both; `ssh .102 "ssh .1xx ..."`
+closes it.
+
+**19 of 19: 0 untracked, 0 tracked modifications, HEAD object present, HEAD
+unchanged since judging, 0 owned files differing from main. No verdict changed.**
+
+The same defect exists one level down and is also closed: `-uall` reports untracked
+files and NOT ignored ones. 121 ignored entries were found under those 19 rows, all
+121 attributed by `git check-ignore` to a rule `origin/main`'s own `.gitignore`
+declares generated or scratch. One row's evidence was wrong and is corrected —
+`wt-j63x8c` claimed a twin that "is kept" and is in fact in no shard at all.
+
+See `IGNORED_AND_UNTRACKED_CLOSED_shard_c.md`; gate
+`bin_jharv3/ignored_accounted.py` (`--self-test` shows all five guarantees red).
+
 ## Coverage
 
 All 110 heads were already in the .108 clone, so committed content was compared
