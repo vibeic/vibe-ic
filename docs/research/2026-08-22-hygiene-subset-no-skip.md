@@ -2842,3 +2842,45 @@ is not mine to run, and the content is pushed and named on
 gap is, which is this section. If anyone lands this branch again, the code delta
 is one comment (`3106e4d3c2`) and the rest is documentation — but that
 documentation contains the only account of the escape route that exists.
+
+### §43's "just land it again" is not free either — measured
+
+§43 ended by saying the code delta is one comment and the rest is documentation,
+which reads as *so re-landing is trivial*. Tested, because that is the same
+untested-cost claim §26 and §23 already cost me twice:
+
+```
+merge fix/jland67-hygiene-subset-honoured into main a4caccefea
+  -> CONFLICT, 3 files
+     docs/research/2026-08-22-hygiene-subset-no-skip.md
+     tools/gatekeeper-land.sh
+     vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py
+```
+
+**Not because the content diverged — because the history was rewritten.** `main`
+holds this branch's content as NEW commits, so git sees two independent lineages
+editing the same three files and cannot tell that one is the other plus more.
+
+**All three are the branch being a strict superset**, which is what makes the
+resolution mechanical rather than a judgement call:
+
+```
+gatekeeper-land.sh   13 lines added, 5 replaced — the second comment correction,
+                     and nothing else: main's "259 s lane / four minutes cannot
+                     contain that" replaced by the MEASURED 188-193 s set,
+                     247.5 s review, 3% overrun
+ci_harness_…_check   the digest pin that pairs with it (466a820a -> 710087cd)
+the research doc     §19 on main vs §43 here; append-only, plus the header
+```
+
+**So the resolution is "take the branch" for all three**, and the reason that is
+safe is stated rather than assumed: the lander delta is one comment plus its
+digest re-pin IN THE SAME PAIR, and the doc is additive. Anyone doing it should
+still re-derive the digest by running the checker rather than trusting the
+number above — that is the rule this branch exists to demonstrate, and it costs
+one command.
+
+**Recorded because the alternative was leaving a third untested cost claim in a
+document whose §32 register exists because I made two.** "One comment and some
+docs" was true about the CONTENT and false about the WORK, and the difference is
+exactly the thing a reader would hit.
