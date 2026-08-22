@@ -291,3 +291,30 @@ That split is the whole reason this was catchable instead of silently rotting.
 
 **Final: 12 supported, 0 unsupported, 0 unmeasured, 0 stale, 12 of 12 rows.**
 Nine hermetic arms, no fleet required.
+
+## The fifth occurrence, and the gate that ends it
+
+`verdicts_extras_joined.tsv` is DERIVED from the two extra shard files. I resolved four
+UNDETERMINED evidence strings in `verdicts_extra_8hd7.tsv` and shipped the stale derived file in the
+same commit. Fifth time this session a source moved and its derived artefact did not:
+
+1. verdict re-judged, evidence not regenerated (×3, on three different files)
+2. abandon_audit.sh left on the collapsed `-unormal` after judge.sh was fixed
+3. this one
+
+Knowing a failure mode by name, having written it up four times, did not stop the fifth. So the fix
+is a **gate**, not another regeneration: `derived_freshness_check.py` fails whenever the derived file
+disagrees with its sources.
+
+Two design points it would have been easy to get wrong:
+
+- **Keyed by `(host, path)`, not `path`.** 1084 source rows hold only 1081 distinct paths, because
+  the same path exists on two hosts. A path-keyed comparison drops three rows and then reports
+  agreement — the same error as keying the corrections file by path alone.
+- **Compares evidence, not just verdict.** All four stale rows had the *correct verdict*; only the
+  evidence was stale. A verdict-only check passes while the evidence says the opposite, which is
+  precisely the failure it exists to catch.
+
+Proven red on the shipped state (4 evidence mismatches), green after regenerating, and red again
+under three controls: a mutated evidence cell, a dropped row, and — the one that matters — **empty
+sources return 2, not 0**, because a comparison against nothing agrees with everything.
