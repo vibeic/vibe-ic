@@ -223,15 +223,15 @@ def _sky130_liberty(tmp_path):
     host = pathlib.Path(_LIB_REL)
     if host.is_file():
         return host
-    ver = None
-    for up in _PROGRAMS.parents:
-        v = up / "tools" / "vibeic-eda" / "VERSION"
-        if v.is_file():
-            ver = v.read_text().strip()
-            break
-    if not ver:
+    # The image is RESOLVED, not read out of this repo: the anchor file that
+    # used to name it is deleted, because holding vibeic-eda's version number
+    # here made every image release need a PR here.
+    sys.path.insert(0, str(_PROGRAMS))
+    import _eda_image as _img
+    judged = _img.judged_image()
+    if judged.ref is None:
         return None
-    img = f"ghcr.io/vibeic/vibeic-eda:{ver}"
+    img = judged.ref
     if subprocess.run(["docker", "image", "inspect", img],
                       capture_output=True, text=True).returncode != 0:
         return None
