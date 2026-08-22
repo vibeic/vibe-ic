@@ -909,7 +909,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `_atomic_artefact`, never a bare `open(..., 'w')`: a reader that finds
         # the file half-written cannot tell a truncated report from a short one.
         write_json(out_path, rep, indent=2, sort_keys=True)
-    print(f"slot_pad_budget_check: {rep['verdict']}")
+    # `[CANNOT CHECK]` on the UNDECIDED line, per the house convention recorded
+    # in docs/PPA_INTERFACES.md §1: "print a marker ... so a 2 can never be read
+    # as a silent skip". This program is not a `ppa_*` module and that section
+    # does not formally bind it, but rc 2 here IS the silent-skip shape — no
+    # slots ingested, or no port list found — and a bracketed marker makes the
+    # disclosed skip greppable beside every other gate that discloses one.
+    _mark = "[CANNOT CHECK] " if rep["verdict"] == "UNDECIDED" else ""
+    print(f"{_mark}slot_pad_budget_check: {rep['verdict']}")
     if rep["verdict"] == "UNDECIDED":
         print(f"  {rep.get('reason', 'no reason recorded')}")
     else:

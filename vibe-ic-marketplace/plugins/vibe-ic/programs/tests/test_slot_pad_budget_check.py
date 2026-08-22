@@ -957,3 +957,33 @@ def test_help_is_a_success_not_a_failure():
     r = subprocess.run([sys.executable, str(Path(S.__file__)), "--help"],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0 and "usage" in r.stdout.lower()
+
+
+def test_the_undecided_line_carries_the_disclosed_skip_marker():
+    """`docs/PPA_INTERFACES.md` §1: "Use rc=2, and print a marker
+    (`[CANNOT CHECK]` or `[REFUSE]`) so a 2 can never be read as a silent
+    skip." 66 gates in this tree already spell it `[CANNOT CHECK]`.
+
+    This program is not a `ppa_*` module, so that section does not formally
+    bind it — but rc 2 here IS the silent-skip shape (no slots ingested, or no
+    port list found), and an operator grepping for disclosed skips should find
+    this one beside all the others.
+
+    The marker must appear ONLY on the undecided line: putting it on a real
+    verdict would make a refusal look like a skip, which is the inverse defect
+    and the more dangerous one."""
+    import subprocess
+    prog = str(Path(S.__file__))
+
+    def first_line(*argv):
+        r = subprocess.run([sys.executable, prog, *argv],
+                           capture_output=True, text=True, timeout=120)
+        return r.returncode, (r.stdout.strip().splitlines() or [""])[0]
+
+    rc, line = first_line(str(Path(tempfile.mkdtemp(prefix="nomark_"))))
+    assert rc == 2 and line.startswith("[CANNOT CHECK]"), line
+
+    proj = _traversal_project()
+    rc, line = first_line(str(proj))
+    assert rc == 0 and "[CANNOT CHECK]" not in line, (
+        f"a real verdict wears the disclosed-skip marker: {line}")
