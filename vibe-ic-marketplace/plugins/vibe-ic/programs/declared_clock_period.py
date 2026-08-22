@@ -161,6 +161,25 @@ def parse_period_tables(text: str, source: str = "") -> List[Dict[str, object]]:
                 key = _clean_key(row[key_col])
                 nm = _NUM_RE.search(row[period_col] or "")
                 if key and nm:
+                    # POLARITY, ON THE ROW (vibe-ic#712). A document retires a
+                    # row of a table as readily as it states one, and this read
+                    #
+                    #     | <library> | 10 | this row is no longer used |
+                    #
+                    # as a declared clock period. This program supplies the
+                    # period a design is CONSTRAINED to, so a retired value
+                    # published as a declaration is the #712 harm in its literal
+                    # form: hard-sized from a document that says otherwise,
+                    # citing that document as the authority.
+                    #
+                    # THE ROW IS THE RECORD, so the row is the scope. A denial in
+                    # one row must not retire the row beneath it, and a scope
+                    # measured in characters would do exactly that. The same
+                    # reason `sentence_scope` is not used here: this table has no
+                    # sentences, it has rows.
+                    if _is_denied(lines[j]):
+                        j += 1
+                        continue
                     try:
                         rows.append({
                             "key": key,
