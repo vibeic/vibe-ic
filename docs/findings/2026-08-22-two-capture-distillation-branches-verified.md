@@ -53,11 +53,14 @@ nothing else, and neither `main` nor either verified branch was touched.
          something untrue of this tree. REMEDY TESTED: ~35 lines takes findings
          10 -> 96 and inventory keys 8 -> 52, and its shipped-tree test then
          fails for the right reason. Budget the 44 new rows, or fix the sites.
-    F12  Nine of its fourteen non-census gates answer PASS on an empty scan,
-         where all twelve of the sibling branch refuse. NOT a mechanical fix —
-         I tried it; the branch's own tests distinguish "no corpus" from "a
-         corpus with nothing of this kind in it", and only the first should
-         refuse.
+    F12  THREE of its sixteen non-census gates answer PASS on an empty scan,
+         where all twelve of the sibling branch refuse. CORRECTED DOWNWARD on
+         2026-08-22 from "nine of fourteen" — the nine came from driving the
+         gates BARE, which this report's own warning says not to do; under the
+         `--root` form they accept, thirteen of the sixteen refuse correctly.
+         See the CORRECTION in F12. NOT a mechanical fix — I tried it; the
+         branch's own tests distinguish "no corpus" from "a corpus with nothing
+         of this kind in it", and only the first should refuse.
 
   jdistchip:
     F16  three gates never return 1 on ANY revision of main I tested, including
@@ -398,7 +401,7 @@ and a TMPDIR outside $HOME.
 
       python3 $P($CHIP)/programs/only_the_declaring_step_writes_its_output.py $CHIP
           rc 1, six "declared by step" lines. Verify one by hand:
-          spare_cell_coverage_check.py:222 and
+          spare_cell_coverage_check.py:223 and
           phase3_one_shot_runner.py:21655 both write reports/spare_cell_coverage.json.
 
   F15 — the producers the gate says do not exist:
@@ -419,9 +422,20 @@ and a TMPDIR outside $HOME.
           handling `not in` and windows nested in concatenations finds.
 
   F12 — PASS on nothing. Build a tree holding only .git and an empty
-  programs/, then run each gate against it WITHOUT an inventory override:
+  programs/, then run each gate against it WITHOUT an inventory override —
+  and DRIVE EACH IN THE FORM IT ACCEPTS. This is the step I got wrong when I
+  first published F12; a bare invocation reports three times the true number.
 
-      9 of jdistmat's 14 non-census gates answer rc 0; 0 of jdistchip's 12 do.
+      E=$(mktemp -d)/e; mkdir -p $E/programs; git init -q $E
+      matrix gates:  python3 <prog> --root $E     (positional gives rc 3)
+      chip gates:    python3 <prog> $E            (--root gives rc 3)
+      Score ONLY rc 0. Never score an rc 3 — that is a bad invocation, not a
+      verdict, and it is what makes the two branches look falsely identical.
+
+      3 of jdistmat's 16 non-census gates answer rc 0; 0 of jdistchip's 12 do.
+      The three are layer_membership_is_declared_not_inferred_from_a_filename_
+      prefix, reference_control_resolved_through_a_mutable_ref, and
+      wall_clock_bound_standing_in_for_a_verdict. The other thirteen refuse.
 
   A WARNING THAT COST ME FOUR WRONG FIRST READINGS: an invocation flag changes
   the answer. `--strict` on an advisory rule, `--inventory <empty>` on a rule
@@ -598,7 +612,15 @@ different halves of the question.
   "WHERE MY FIXTURES CAME UP GREEN" below.
 ```
 
-## TABLE — 32 rows.  sweep rc = the checker run against the tree being shipped. — Rows 1-22 are the two branches as they stood at the ORIGINAL SHAs. Rows 23-30 — are what jdistmat added while I was verifying; all are covered to the same four — questions. Rows 23-26 were the F13 collisions and have since been RENAMED to — `*_census` by the author — the row text describes them as I measured them, and — F13 records the resolution I verified.
+## TABLE — 32 rows
+
+`sweep rc` = the checker run against the tree being shipped.
+
+Rows 1–22 are the two branches as they stood at the original SHAs. Rows 23–30
+are what jdistmat added while I was verifying; all are covered to the same four
+questions. Rows 23–26 were the F13 collisions and have since been renamed to
+`*_census` by the author — the row text describes them as I measured them, and
+F13 records the resolution I verified.
 
 ```text
 --- origin/jdistmat/matrix-distil -------------------------------------------
@@ -999,11 +1021,14 @@ SUMMARY OF THE TABLE
                                        (836 at the original tips + 988 at the
                                         new tips, 19 fixture pairs each)
     existing programs that already catch the defect   0 / 37 probed
-    PASS on an empty scan (zero denominator) ......   9 / 26 gates
-                                       (9 of jdistmat's 14 non-census gates;
+    PASS on an empty scan (zero denominator) ......   3 / 28 gates
+                                       (3 of jdistmat's 16 non-census gates;
                                         0 of jdistchip's 12 — see F12. The four
                                         `*_census` files are excluded: rc 0 is
                                         correct by construction for a census.)
+                                       Was published as 9 / 26 and corrected on
+                                       2026-08-22; the 9 was a bare-invocation
+                                       artefact. CORRECTION in F12.
 ```
 
 ## WHERE MY FIXTURES CAME UP GREEN — six cases, four mine, two real
@@ -2126,6 +2151,62 @@ F12 FIX WITH F9 (matrix) — matrix checkers answer PASS on an EMPTY SCAN where
     original matrix rules" and assumed the six added later were better behaved.
     I checked instead of assuming, and the assumption was wrong:
 
+    CORRECTION, 2026-08-22, AFTER PUBLICATION — THE NINE WAS MY INSTRUMENT.
+    Re-running this measurement at today's tips to check it still held, I could
+    not reproduce my own number. The corrected figure is THREE of sixteen, and
+    the finding against this branch is a third of what I published.
+
+    What produced the nine: I drove each gate BARE — no root argument, cwd set
+    to the empty tree. Driven that way at least eleven of the sixteen exit 0.
+    Driven the way they are meant to be driven, `--root <empty tree>`, which all
+    sixteen accept with ZERO bad-invocation returns, only three do:
+
+        --root <empty>  ......  3 of 16 rc 0   (0 returned rc 3)
+        positional      ......  0 of 16 rc 0   (16 returned rc 3 — wrong form)
+        bare, cwd=tree  .....  >=11 of 16 rc 0  <- what I published
+
+    This is the fourth time in this report that an invocation form changed the
+    answer, and this one I had already written the warning against, two hundred
+    lines above: "do not drive them with no arguments — both give the wrong
+    answer." I then did exactly that and published the result.
+
+    IT IS NOT THAT THE AUTHOR FIXED IT. I checked, because a shrinking finding
+    is the pleasant explanation and therefore the one to distrust. Same harness,
+    same empty tree, the tip this report originally measured versus today's:
+
+        00c2a6f33 (measured in this report)  ->  3 of 16 PASS
+        facc28860 (today)                    ->  3 of 16 PASS
+
+    Identical, and the same three names. The branch did not move on this axis;
+    my measurement was wrong when it was written.
+
+    THE THREE THAT GENUINELY PASS ON NOTHING, at facc28860:
+
+        layer_membership_is_declared_not_inferred_from_a_filename_prefix
+            "filename-prefix globs in tests: 0 ... [PASS] every prefix-selected
+             layer population contains its whole relation."
+        reference_control_resolved_through_a_mutable_ref   "modules parsed: 0"
+        wall_clock_bound_standing_in_for_a_verdict         "modules parsed: 0"
+
+    THIRTEEN OF THE SIXTEEN REFUSE CORRECTLY, which is the part my published
+    number hid and which is the fairer reading of this branch. Six answer rc 2
+    with a named reason — e.g. metric_constant_across_differing_arms: "[CANNOT
+    DETERMINE] no multi-arm result set with provably differing arms was found. A
+    verdict over no arms is NOT a pass." Seven answer rc 1. Both are defensible;
+    neither certifies nothing.
+
+    So the finding stands but changes character. It is no longer "this branch
+    does not hold the house doctrine" — it plainly does, in thirteen places.
+    It is "three gates are inconsistent with their own thirteen siblings", which
+    is a smaller fix and an easier argument to make to the author.
+
+    jdistchip is unchanged and confirmed: 0 of 12, each refusing with a named
+    reason, measured with the POSITIONAL root its gates take (`--root` returns
+    rc 3 on all twelve — the mirror image of matrix, and worth knowing before
+    anyone re-runs this).
+
+    The pre-correction measurement is left below as written.
+
       jdistmat, NON-census gates .......... 9 of 14 answer rc 0 on nothing
           the original eight, PLUS `layer_membership_is_declared_not_inferred_
           from_a_filename_prefix` — the NEWEST gate on the branch, and the one
@@ -2544,12 +2625,14 @@ origin/jdistmat/matrix-distil  >> LAND WITH F15 + F14 + F9 + F12 FIXED
     is red entirely on this branch's account.
 
     F12 is the same failure mode as F9 in a second place: a PASS that claims
-    more than the run measured. NINE of this branch's fourteen non-census gates
-    certify an EMPTY SCAN — measured directly, at the last tip, against a tree
-    holding nothing — including the newest gate on the branch. All twelve on the
-    sibling branch refuse, each with a named reason, and the repo's own doctrine
-    says refuse. Three lines each, and worth doing in the same commit as F9
-    because it is one idea, not two.
+    more than the run measured. THREE of this branch's sixteen non-census gates
+    certify an EMPTY SCAN — measured directly, at today's tip, against a tree
+    holding nothing. All twelve on the sibling branch refuse, each with a named
+    reason, and so do thirteen of this branch's own sixteen, which is what makes
+    the three worth fixing: they are inconsistent with their own siblings, not
+    with a foreign standard. Three lines each, and worth doing in the same
+    commit as F9 because it is one idea, not two. (Published as nine of
+    fourteen; corrected downward on 2026-08-22 — see the CORRECTION in F12.)
 
     F2 (one missing sweep test), F6 (one stale docs sentence) and F10 (a latent
     twin of F9 with zero live instances) are follow-up commits, not holds.
@@ -2624,8 +2707,9 @@ RE-VERIFICATION AT THE LATER TIPS
           windows: 3 / slice-then-search sites: 0" and PASSes. Its magnitude was
           later re-derived as 31 in-class of 40 raw, after positive-controlling
           the scanner against the checker's own ten findings.
-      F12 survives — the matrix checkers still exit 0 on an empty scan with the
-          zero printed.
+      F12 survives, but SMALLER THAN PUBLISHED — three matrix gates still exit
+          0 on an empty scan with the zero printed, not nine. See the
+          CORRECTION in F12: the nine was my instrument, not their code.
       Both new suites are green: jdistmat 147 passed (14 test files),
           jdistchip 216 passed, 1 warning (13 test files).
 
