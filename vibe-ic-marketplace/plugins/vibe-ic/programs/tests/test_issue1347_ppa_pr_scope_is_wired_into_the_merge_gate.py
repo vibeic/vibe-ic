@@ -27,6 +27,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import gatekeeper_review as G  # noqa: E402
+import _hostpaths  # noqa: E402
 
 
 def _repo_with_a_surface() -> tuple[Path, str]:
@@ -212,7 +213,6 @@ def test_a_refused_author_override_turns_the_whole_review_REQUEST_CHANGES():
 # Documenting it creates the classic second list. This pins the two together.
 
 def _pr_template() -> Path:
-    import _hostpaths
     return _hostpaths.require_repo(".github", "PULL_REQUEST_TEMPLATE.md")
 
 
@@ -423,3 +423,54 @@ def test_it_writes_no_verdict_FAIL_json_anywhere_under_reports():
         v = _j.loads(p.read_text()).get("verdict")
         assert v not in ("FAIL", "MISSING"), f"{p} declares verdict={v}"
     assert not list(repo.glob("ppa_pr_scope.json"))
+
+
+# --------------------------------------------------------------------------- #
+# this branch's own answers document must not go stale silently
+# --------------------------------------------------------------------------- #
+# Committing `.github/ppa_pr_answers.json` moved THIS branch into the gate's
+# blocking arm. That buys enforcement and costs upkeep: the document names a
+# sha256 of the flow definition and a set of test IDs, and any of them can be
+# invalidated by an ordinary later commit — edit the flow, rename a test, move
+# a file.
+#
+# Without this test the staleness surfaces only at the MERGE GATE, i.e. to the
+# lander, long after the commit that caused it. That is the #306 shape one more
+# time: a check that describes a change already made instead of refusing it at
+# the point it is made. The author should learn it from their own test run.
+#
+# Asked through `verify_evidence` — the checker's OWN verifier — rather than by
+# re-deriving what "valid evidence" means. Measured: it resolves the test NAME,
+# not merely the file, so a renamed test reports UNVERIFIED.
+
+def test_this_branchs_own_answers_document_is_still_valid():
+    import ppa_pr_scope_check as P
+    doc = _hostpaths.require_repo(".github", "ppa_pr_answers.json")
+    repo = _hostpaths.repo_path(".")
+    answers = json.loads(doc.read_text(encoding="utf-8"))
+    assert answers.get("schema") == "vibeic.ppa.pr_answers.v1"
+
+    stale = []
+    checked = 0
+    for a in answers["answers"]:
+        for e in a.get("evidence", []):
+            rec = P.verify_evidence(repo, e)
+            checked += 1
+            if rec["status"] != "VERIFIED":
+                stale.append(f"Q{a['question']} {e.get('kind')} "
+                             f"{e.get('ref')} -> {rec['status']}: "
+                             f"{rec.get('reason', '')}")
+    assert checked, "the answers document carries no evidence at all"
+    assert not stale, (
+        "this branch answers its own merge gate, and that answer has gone "
+        "stale — the gate will refuse the landing:\n  " + "\n  ".join(stale))
+
+
+def test_every_answered_question_carries_at_least_one_entry():
+    """An answer with an empty `evidence` list satisfies nothing; the checker
+    reports MISSING_EVIDENCE for it. Catching that here means the author sees
+    an empty answer they meant to fill in, not the lander."""
+    doc = _hostpaths.require_repo(".github", "ppa_pr_answers.json")
+    answers = json.loads(doc.read_text(encoding="utf-8"))
+    empty = [a["question"] for a in answers["answers"] if not a.get("evidence")]
+    assert not empty, f"questions answered with no evidence: {empty}"
