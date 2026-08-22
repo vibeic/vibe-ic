@@ -322,3 +322,20 @@ def test_an_unreachable_distribution_is_not_a_pass(tmp_path):
     rc, out = run_against(SHIPPED, tmp_path / "no-distribution-here")
     assert rc == 2, out
     assert "could not be re-measured" in out
+
+
+# ── an argument that is accepted must not be silently inert ─────────────────
+
+def test_a_supplied_project_path_is_announced_not_silently_ignored(tmp_path):
+    """The population drivers pass a project positionally. This gate does not
+    read one, and the whole subject of the register beside it is that a knob
+    which changes nothing must say so out loud."""
+    proj = tmp_path / "proj"
+    (proj / "input" / "docs").mkdir(parents=True)
+    (proj / "reports").mkdir(parents=True)
+    p = subprocess.run([sys.executable, str(CHECK), "."],
+                       cwd=proj, capture_output=True, text=True)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert "is not read" in out
+    assert "upstream_names=" in out

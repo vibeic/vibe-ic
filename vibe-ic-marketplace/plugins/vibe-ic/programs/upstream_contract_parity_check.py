@@ -368,6 +368,18 @@ def run(register: Path, distribution_root: Path | None) -> tuple[int, dict]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    # THE POPULATION DRIVERS PASS A PROJECT PATH POSITIONALLY, AND THIS GATE
+    # HAS NO USE FOR ONE. Its subject is the repository's own register, not a
+    # design. Refusing the argument would answer an argparse usage error where
+    # a verdict belongs; accepting it silently would make it exactly the kind
+    # of knob this lane exists to capture -- one an author can set that
+    # changes nothing. So it is accepted AND ANNOUNCED, every run that
+    # supplies it, which is the same ruling applied to this program that the
+    # register applies to the flow.
+    ap.add_argument("project", nargs="?", default=None,
+                    help="accepted for the population drivers and NOT READ: "
+                         "this gate's subject is the repository's own "
+                         "register. Supplying it prints a line saying so.")
     ap.add_argument("--register", default=str(DEFAULT_REGISTER),
                     help="the parity register to enforce")
     ap.add_argument("--distribution-root", default=None,
@@ -376,6 +388,11 @@ def main(argv=None) -> int:
                          "register's recorded snapshot is the denominator.")
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
+
+    if a.project is not None:
+        print(f"NOTE: the project path {a.project!r} is not read — this "
+              f"gate's subject is the repository's own re-implementation "
+              f"register, and it judges the same way from any directory.")
 
     root = Path(a.distribution_root) if a.distribution_root else None
     try:

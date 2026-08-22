@@ -1,0 +1,16 @@
+BASELINE rc=0  21 passed in 2.49s
+  RED   unaccounted upstream name: 1 failed, 20 passed in 2.20s
+  RED   classification upstream dropped: 1 failed, 20 passed in 2.38s
+  RED   implemented name absent from module: 1 failed, 20 passed in 2.46s
+  RED   known_gap the module now implements: 1 failed, 20 passed in 2.36s
+  RED   known_gap without a reference: 1 failed, 20 passed in 2.40s
+  RED   omission without a reason: 1 failed, 20 passed in 2.32s
+  RED   empty register is rc 2: 1 failed, 20 passed in 2.01s
+  RED   undetermined collapses to a pass: 3 failed, 18 passed in 2.10s
+  RED   upstream anchor moved: 1 failed, 20 passed in 2.31s
+  RED   upstream file changed under the snapshot: 1 failed, 20 passed in 2.46s
+  RED   pin test that does not exist: 1 failed, 20 passed in 1.99s
+  RED   name classified twice: 1 failed, 20 passed in 2.15s
+RESTORED rc=0  21 passed in 2.37s
+
+KILLED 12 / 12
