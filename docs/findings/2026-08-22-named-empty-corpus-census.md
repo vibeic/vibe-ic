@@ -182,3 +182,33 @@ and none of them moved, so nothing here depends on it. Whether a stale fallback
 checkout matters to a landing depends on the `GATEKEEPER_BENCHMARK_DATA_SHA`
 pinning protocol, which this record did not trace. Noted so it is not
 rediscovered as new.
+
+## For whoever lands these: two branches, no required order, one half unverifiable alone
+
+The work sits on two branches. **Neither breaks the other and no ordering is
+required**, but one half of this one cannot be *exercised* until the sibling
+lands, and that is worth knowing before a reviewer reads a collection error as a
+defect.
+
+| | `next/corpus-pointer-measured-empty` | `next/citation-routing-named-corpus-is-not-wrong` |
+|---|---|---|
+| subject | `tests/_published_corpus` fourth state; roll-up cell count | `citation_routing_is_true_check` sentence; module hermeticity; this census |
+| protected paths touched | none | none |
+| lands standalone | yes | yes |
+
+Measured with the pointer bound at the real empty corpus:
+
+| what | this branch alone | with the sibling applied |
+|---|---|---|
+| `test_named_empty_corpus_is_not_a_wrong_pointer.py` | **5 passed** | 5 passed |
+| `test_citation_routing_is_true.py` | **1 collection error** | **17 passed, 1 skipped** |
+
+The new test file is independent by construction — it drives the program in a
+subprocess and never imports the corpus helper. The hermeticity edit is not: that
+module imports `_published_corpus`, and until the sibling's fourth state exists,
+a bound pointer at a zero-cell corpus kills its import.
+
+**That is not a regression this branch introduces.** The same module, in the same
+configuration, fails collection identically on `origin/main` — the sibling is
+what repairs it. So this branch is safe to land in any order; only the
+verification of its hermeticity half waits.
