@@ -41,8 +41,18 @@ Report schemas accepted:
                                                          an empty/mis-shaped report)
   * any layer OUTSIDE its window                      → FAIL (rc 1) naming the layer
   * every layer within window                         → PASS (rc 0)
-A layer with a density value but NO window (and no default requested) is reported as
-UNCHECKED and makes the gate FAIL (a metal layer with no density rule is not a pass).
+A layer with a density value and NO window from any source (and no default requested)
+is reported as UNCHECKED and makes the gate FAIL (a metal layer with no density rule
+is not a pass).
+
+A layer whose window is stated on ONE SIDE ONLY is judged on that side. A foundry
+that requires >=30 % coverage and states no ceiling has written a real rule, and the
+null on the other side is a RECORDED ABSENCE this program deliberately preserves
+rather than filling in. The judged side still bites: below the stated minimum is a
+FAIL. The unjudged side is NAMED in `per_layer[l].unjudged_bound` so a one-sided
+verdict never reads as a two-sided one. The distinction that keeps this honest is
+`win is not None` — a supplied window carrying a null bound is a decision on record;
+NO window at all is ignorance, and ignorance stays UNCHECKED.
 
 chip-AGNOSTIC: pure per-layer numeric compare; metal-layer names are discovered from
 the report, no chip literal.
@@ -59,7 +69,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 # Generic default window when no foundry windows are supplied. DISCLOSED as generic.
 _DEFAULT_MIN = 0.30
@@ -224,7 +234,8 @@ def _resolve_window(win: Optional[Window],
 def check(report: Path, windows: Dict[str, Window],
           default_min: Optional[float],
           default_max: Optional[float],
-          windows_provenance: Optional[Dict[str, object]] = None
+          windows_provenance: Optional[Dict[str, object]] = None,
+          provenance_layers: Optional[Set[str]] = None
           ) -> Dict[str, object]:
     if report.is_dir():
         # `.log` LAST, and it is load-bearing. MEASURED: a KLayout density deck
@@ -279,6 +290,7 @@ def check(report: Path, windows: Dict[str, Window],
     per_layer: Dict[str, dict] = {}
     failures: List[str] = []
     unchecked: List[str] = []
+    prov_layers = set(provenance_layers or ())
     for layer, val in sorted(dens.items()):
         win = windows.get(layer)
         label = "supplied"
@@ -286,20 +298,59 @@ def check(report: Path, windows: Dict[str, Window],
             win = report_windows.get(layer)
             label = "report"
         lo, hi, src = _resolve_window(win, default_min, default_max, label)
-        if lo is None or hi is None:
-            # No rule on at least one side and no default to fall back on.
+        # PER-BOUND JUDGEMENT.
+        #
+        # This used to be `if lo is None or hi is None: UNCHECKED`. MEASURED on
+        # a real open-PDK run whose process states a metal-density MINIMUM and
+        # NO maximum: every metal layer came back UNCHECKED and the gate FAILed
+        # on a die measuring 0.4381 / 0.4157 / 0.4685 / 0.5169 / 0.4386 — all
+        # comfortably inside the only rule that foundry wrote. The registry
+        # records why the max is null, in its own words: "MEASURED ABSENCE, not
+        # an omission ... Copying another PDK's ceiling here would be inventing
+        # a rule this foundry does not state."
+        #
+        # So the gate correctly refused to invent a maximum, and then read its
+        # OWN refusal as "no rule at all". A process that states a minimum only
+        # could never pass.
+        # A null bound is a DELIBERATELY UNSTATED rule only when the source
+        # that supplied this layer's window RECORDS ITS OWN PROVENANCE — i.e.
+        # the curated registry, which stores the null next to the deck lines and
+        # tech-LEF lines it read and a note saying the absence is measured. A
+        # bare window tuple handed in by a caller does NOT carry that, and must
+        # not be read as one: `(0.30, None)` from an operator is indistinguishable
+        # from `(0.30, None)` produced by a failed extraction. THAT is the leak,
+        # and `provenance_layers` is what closes it.
+        backed = layer in prov_layers
+        if lo is None and hi is None:
+            # Nothing to judge on either side.
             unchecked.append(layer)
-            per_layer[layer] = {"density": round(val, 4),
-                                "window": None if (lo is None and hi is None)
-                                          else [lo, hi],
+            per_layer[layer] = {"density": round(val, 4), "window": None,
                                 "status": "UNCHECKED"}
             continue
-        ok = lo <= val <= hi
-        per_layer[layer] = {"density": round(val, 4), "window": [lo, hi],
-                            "window_source": src,
-                            "status": "PASS" if ok else "FAIL"}
+        if (lo is None or hi is None) and not backed:
+            # A bound is missing and no source stated a window for this layer.
+            unchecked.append(layer)
+            per_layer[layer] = {"density": round(val, 4), "window": [lo, hi],
+                                "status": "UNCHECKED"}
+            continue
+        ok = (lo is None or val >= lo) and (hi is None or val <= hi)
+        entry = {"density": round(val, 4), "window": [lo, hi],
+                 "window_source": src, "status": "PASS" if ok else "FAIL"}
+        # DISCLOSE the side that was not judged, and WHY. A one-sided verdict
+        # that does not say which side it is silent on reads as a two-sided one.
+        if lo is None or hi is None:
+            side = "minimum" if lo is None else "maximum"
+            entry["unjudged_bound"] = side
+            entry["unjudged_reason"] = (
+                f"the source that supplied this layer's window states no "
+                f"{side}; that is a recorded absence, not an unread rule, so "
+                f"this side is not judged and no bound is invented for it")
+        per_layer[layer] = entry
         if not ok:
-            failures.append(f"{layer}: density={val:.3f} outside [{lo:.2f},{hi:.2f}]")
+            lo_s = "-inf" if lo is None else f"{lo:.2f}"
+            hi_s = "+inf" if hi is None else f"{hi:.2f}"
+            failures.append(
+                f"{layer}: density={val:.3f} outside [{lo_s},{hi_s}]")
 
     # §4.05: an UNCHECKED metal layer (density but no rule) is NOT a pass.
     passed = not failures and not unchecked
@@ -356,14 +407,19 @@ def main(argv: List[str]) -> int:
         dmin, dmax = _DEFAULT_MIN, _DEFAULT_MAX
     windows = _load_windows(Path(ns.windows) if ns.windows else None)
     provenance: Optional[Dict[str, object]] = None
+    prov_layers: Set[str] = set()
     if ns.pdk:
         pdk_windows, provenance = pdk_windows_for(ns.pdk)
         # An explicit --windows file is the operator speaking directly and wins
-        # over the registry, per layer.
+        # over the registry, per layer. A layer the operator overrode is NO
+        # LONGER registry-backed, so it does not inherit the registry's recorded
+        # absence — otherwise naming a PDK on the command line would silently
+        # launder a hand-supplied one-sided window into a foundry statement.
+        prov_layers = set(pdk_windows) - set(windows)
         merged = dict(pdk_windows)
         merged.update(windows)
         windows = merged
-    res = check(Path(ns.report), windows, dmin, dmax, provenance)
+    res = check(Path(ns.report), windows, dmin, dmax, provenance, prov_layers)
     out = json.dumps(res, indent=2)
     if ns.json_out:
         Path(ns.json_out).write_text(out)
