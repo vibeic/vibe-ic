@@ -211,13 +211,30 @@ def not_a_checkout_reason(root: Path, reads: str, *,
     return None
 
 
+#: The opt-in flag MOST callers offer, and the default so every existing caller
+#: keeps the message it had.
+OPT_IN_FLAG = "--corpus-may-be-absent"
+
+
 def refuse(gate: str, named: Path, resolved: Path, origin: str,
-           may_be_absent: bool, scanned: str) -> int:
+           may_be_absent: bool, scanned: str,
+           opt_in_flag: Optional[str] = OPT_IN_FLAG) -> int:
     """The rc for a corpus that could not be resolved, with the reason printed.
 
     `scanned` names what this gate would have examined ("published cell(s)",
     "published run tree(s)", "published gate record(s)") so the NO_CORPUS line
     states a zero over a named population rather than a bare silence.
+
+    `opt_in_flag` is the flag THIS caller offers for "this repo need not carry a
+    corpus", or None when it offers none. It exists because this seam used to
+    name `--corpus-may-be-absent` unconditionally, and vibe-ic#1241 added two
+    callers (`ppa_contract_check --corpus`, `ppa_feasibility_check --corpus`)
+    that deliberately do NOT have it — the rc 0 NO_CORPUS outcome it buys is a
+    gate printing a pass over a population it never opened, which is the one
+    thing those gates are wired through this channel to avoid. The message told
+    the reader to pass a flag that would exit 2 as a usage error. An instruction
+    a reader cannot follow is worse than no instruction: it sends them to debug
+    their own invocation instead of the corpus.
 
     Returns 2 for both UNDETERMINED rows and 0 for NO_CORPUS. It never returns
     1: "the corpus is not here" is not a finding against anything.
@@ -237,8 +254,9 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
         print(f"[{gate}] UNDETERMINED: {CORPUS_ENV}={env} is set and "
               f"{resolved} is not a readable directory, so this gate scanned "
               f"nothing and examined 0 {scanned}. A pointer that is set and "
-              f"wrong is a broken configuration, not an absent corpus, and "
-              f"--corpus-may-be-absent does not excuse it.", file=sys.stderr)
+              f"wrong is a broken configuration, not an absent corpus"
+              + (f", and {opt_in_flag} does not excuse it." if opt_in_flag
+                 else " and nothing excuses it."), file=sys.stderr)
         return 2
     if may_be_absent:
         # rc 0, and it must never read as a scan that happened.
@@ -252,8 +270,11 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
     print(f"[{gate}] UNDETERMINED: no corpus at {named}, so this gate scanned "
           f"nothing and examined 0 {scanned}. A check that could not look has "
           f"not passed. Point {CORPUS_ENV} at a clone of the published-corpus "
-          f"repository, or pass --corpus-may-be-absent if this repo need not "
-          f"carry one.", file=sys.stderr)
+          f"repository"
+          + (f", or pass {opt_in_flag} if this repo need not carry one."
+             if opt_in_flag else
+             ". This gate offers no way to call an absent corpus a pass."),
+          file=sys.stderr)
     return 2
 
 

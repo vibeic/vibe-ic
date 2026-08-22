@@ -236,16 +236,23 @@ def test_the_shipped_gate_makes_a_clean_candidate_eligible(run_dir):
     assert man["frontier_input"]["frontier_stage"] == STAGE
 
 
-def test_every_one_of_the_nine_terms_is_published_as_PASS(run_dir):
+def test_every_term_is_published_and_none_is_silently_absent(run_dir):
     """`audit_manifest` refuses an ELIGIBLE candidate whose vector is partial.
-    The translation must therefore fill all nine, and this asserts it does
-    rather than trusting that the two vocabularies line up."""
+    The translation must therefore fill every term, and this asserts it does
+    rather than trusting that the two vocabularies line up.
+
+    `eco_readiness` is the one term this fixture's policy declares no
+    requirement for, so it reads NOT_APPLICABLE -- which is what
+    `audit_manifest` accepts beside PASS, and is NOT the same as a missing
+    row."""
     _, man = _build(run_dir, "--feasibility-policy",
                     str(run_dir / "policy.json"))
     clean = [c for c in man["candidates"]
              if c["knobs"]["state_encoding"] == "binary"][0]
-    assert clean["feasibility"]["terms"] == \
-        {t: "PASS" for t in S.FEASIBILITY_TERMS}
+    expect = {t: "PASS" for t in S.FEASIBILITY_TERMS}
+    expect["eco_readiness"] = "NOT_APPLICABLE"
+    assert clean["feasibility"]["terms"] == expect
+    assert clean["feasibility"]["verdict"] == S.FEAS_ELIGIBLE
 
 
 def test_the_manifest_records_the_policy_by_digest_not_only_by_path(run_dir):
