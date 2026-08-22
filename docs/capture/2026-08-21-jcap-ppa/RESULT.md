@@ -1823,6 +1823,33 @@ a **refusal** (what to do on a hit).
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
+**What the rubric check does NOT prove, tested rather than assumed.** The three
+patterns match concepts, not literal words, and that is right — but it makes them
+permissive. Fed four strings deliberately:
+
+    a genuinely buildable instruction              passes
+    "should be checked across all the relevant
+      cases and reported when it fails"            passes  <-- pure vagueness
+    a narrative sentence with no instruction       fails
+    "it needs fixing"                              fails
+
+So the check separates an instruction from narrative and from emptiness, and it
+**cannot separate a specific instruction from a plausible-sounding one**. The
+figure it produces is therefore a floor on form, not evidence of precision, and
+this report should not be read as claiming otherwise.
+
+What does carry that weight is different and is elsewhere: the nine sweeps, each
+of which changed what its rule tells a builder; the records that name a file and
+a line rather than a description; and the shortest `fix_action` in the batch
+running to 872 characters of measured specifics. Those are checkable by reading
+one record, which is the honest instrument here.
+
+*A screen written to re-check the rubric across the nine records added since it
+was first applied reported 22 of 35 missing an element. It required the literal
+words where the verifier matches the concepts — the seventh time in this lane a
+screen of mine measured my vocabulary, and the first time it did so against my
+own verifier, which was right.*
+
 **Routing aptness, checked separately from routing existence.** The verifier
 confirms each record's routed program EXISTS; it cannot confirm the routed
 program is the right one, and a misroute sends the implementing lane to the wrong
