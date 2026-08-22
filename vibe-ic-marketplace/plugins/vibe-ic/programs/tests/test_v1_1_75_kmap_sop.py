@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_kmap_sop_completeness.py — pins the deterministic K-map -> RTL SOLVER
+"""test_v1_1_75_kmap_sop.py — pins the deterministic K-map -> RTL SOLVER
 (programs/kmap_sop_synth.py) on the REAL VerilogEval-Human K-map-family prompts and
 on the §4.05 no-leak boundary.
 

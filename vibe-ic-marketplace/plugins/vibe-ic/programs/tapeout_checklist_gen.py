@@ -91,9 +91,28 @@ _CHECKLIST_ITEMS = [
     ("fpga_attestation",   "reports/phase2/fpga/on_board_pass.json",  "blocker",  None),
     # Caravel / Open-MPW shuttle rows (N/A for non-Caravel designs — absent is
     # not a failure there). The gate is the authority, not file presence.
+    #
+    # #1744 — the `mpw_precheck` row addresses a RETIRED shuttle. It is KEPT so
+    # a project carrying old evidence still has somewhere to put it, and so the
+    # retirement is visible rather than looking like an omission. It can no
+    # longer be the answer to "would an outside party accept this", because the
+    # outside party it names stopped answering in 2025.
     ("mpw_precheck",       "**/mpw_precheck/**/*.log",                 "advisory", "mpw_precheck_result_gate"),
+    # The LIVE external refusal. This is the ONLY row on this checklist whose
+    # authority is not us: every other gate named here is a program in this
+    # tree, and a gate we wrote can be made to pass by editing it.
+    ("shuttle_readiness",  "reports/audit/tapeout_readiness.json",     "advisory", "tapeout_readiness_check"),
     ("layout_xor",         "reports/**/xor_report.json",               "advisory", "xor_layout_check"),
 ]
+
+#: Where `tapeout_readiness_check` writes its verdict. Read — never written —
+#: here: this generator does not run EDA tools and does not run that gate. The
+#: path is IMPORTED from the gate that owns it rather than retyped, so the row
+#: above cannot end up watching a file nothing writes.
+try:
+    from tapeout_readiness_check import READINESS_ARTEFACT as _READINESS_ARTEFACT
+except ImportError:  # pragma: no cover - package-context fallback
+    _READINESS_ARTEFACT = "reports/audit/tapeout_readiness.json"
 
 # Human-readable "why the gate, not presence" note per authoritative gate.
 _GATE_NOTES = {
@@ -110,8 +129,15 @@ _GATE_NOTES = {
         "every writable on-chip RAM needs a March-test MBIST wrapper "
         "(N/A when the design is RAM-less).",
     "mpw_precheck_result_gate":
-        "Efabless/chipIgnite shuttle verdict — every required precheck stage "
-        "must carry an explicit PASS (Caravel/Open-MPW only).",
+        "RETIRED (#1744): the Efabless/chipIgnite shuttle operator ceased "
+        "operating in 2025. This row can no longer yield an external verdict — "
+        "an absent run here is NOT_DETERMINED and PERMANENTLY so, never a clean "
+        "shuttle result. See the shuttle_readiness row for the live interface.",
+    "tapeout_readiness_check":
+        "the LIVE external refusal: the shuttle operator's OWN precheck, run "
+        "unmodified, with its own run directory read back. The only authority "
+        "on this checklist that is not a program in this tree — which is why "
+        "its absence is reported as NOT_DETERMINED rather than passed over.",
     "xor_layout_check":
         "computed GDS-vs-golden XOR with an EXPLICIT blackbox-macro waiver "
         "allow-list — replaces the hardcoded 2/7 floor.",
@@ -137,6 +163,67 @@ _GATE_NOTES = {
         "the FINAL routed/ECO netlist re-proven logically == synth/RTL "
         "(Step-13 only proved RTL==synth) — a non-proof is a FAIL, not a pass.",
 }
+
+
+def _external_refusal(project: Path) -> dict:
+    """State what the OUTSIDE party said — including that it said nothing.
+
+    #1744. Every other block in this payload summarises an artefact one of our
+    own programs produced. This one summarises the single interface where the
+    verdict is not ours, and its default is the honest one: with no readiness
+    artefact on disk, the shuttle was never asked, so the verdict is
+    NOT_DETERMINED. It is emitted UNCONDITIONALLY — a key that only appears when
+    there is good news is a key nobody notices is missing, and "the dead vendor
+    said nothing" and "the live shuttle passed us" must not be the same silence.
+
+    This does NOT run the gate. This generator runs no EDA tool and asks no
+    counterparty; it reports the gate's artefact if one is there.
+    """
+    out = {
+        "verdict": "NOT_DETERMINED",
+        "gate": "tapeout_readiness_check",
+        "artefact": _READINESS_ARTEFACT,
+        "present": False,
+        "why": ("no shuttle-readiness artefact on disk: the live external "
+                "refusal interface was never asked, so nothing outside this "
+                "tree has judged this layout. Run `tapeout_readiness_check "
+                "<project>` to obtain one."),
+        "retired_paths": [
+            {"gate": "mpw_precheck_result_gate",
+             "status": "RETIRED",
+             "why": ("the Efabless/chipIgnite shuttle operator ceased "
+                     "operating in 2025; no run of that ladder can produce an "
+                     "external verdict, so its silence is NOT_DETERMINED and "
+                     "permanently so")},
+        ],
+    }
+    path = project / _READINESS_ARTEFACT
+    if not path.is_file():
+        return out
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except Exception:
+        out["present"] = True
+        out["why"] = (f"{_READINESS_ARTEFACT} is present but unparseable — an "
+                      "unreadable verdict is not a verdict")
+        return out
+    out["present"] = True
+    verdict = str(data.get("verdict", "")).strip().upper()
+    # Only the gate's own three tokens are honoured. Anything else — an older
+    # schema, a truncated write, a hand-edited file — is NOT_DETERMINED, because
+    # a token we do not recognise must not be promoted to a pass.
+    out["verdict"] = verdict if verdict in ("PASS", "FAIL",
+                                            "NOT_DETERMINED") else "NOT_DETERMINED"
+    for key in ("shuttle", "shuttle_status", "tool", "reason", "layout",
+                "failed_steps", "undetermined_steps", "uncovered_in_tree"):
+        if key in data:
+            out[key] = data[key]
+    if out["verdict"] != verdict:
+        out["why"] = (f"unrecognised verdict token {verdict!r} in "
+                      f"{_READINESS_ARTEFACT}; read as NOT_DETERMINED")
+    else:
+        out["why"] = str(data.get("reason", ""))[:400]
+    return out
 
 
 def _glob_first(project: Path, pattern: str):
@@ -185,6 +272,7 @@ def main(argv=None) -> int:
         return 2
 
     waivers = _waivers_referencing(project)
+    external_refusal = _external_refusal(project)
 
     items = []
     blockers_present = 0
@@ -277,6 +365,12 @@ def main(argv=None) -> int:
         "gate_references": {
             it["name"]: it["gate"] for it in items if it.get("gate")
         },
+        # #1744 — the ONE verdict on this checklist that is not ours. Emitted
+        # unconditionally, and NOT_DETERMINED by default: the summary above
+        # counts artefacts we produced, and counting only those is how "nobody
+        # outside has looked at this" came to look identical to "an outside
+        # party looked and was satisfied".
+        "external_refusal": external_refusal,
         "open_waivers": waivers,
         "pending_foundry_items": pending_foundry,   # flow v2.3.1 P1-5
         "reviewer_todo": [
@@ -286,7 +380,10 @@ def main(argv=None) -> int:
         ] + [
             f"PENDING_FOUNDRY open item (back-fill after foundry "
             f"reply): {x}" for x in pending_foundry
-        ],
+        ] + ([
+            "EXTERNAL REFUSAL "
+            f"{external_refusal['verdict']}: {external_refusal['why']}"
+        ] if external_refusal["verdict"] != "PASS" else []),
         "notes": (
             "This checklist is a derived inventory of present artefacts. "
             "BLOCKER items missing here MUST be authored before tape-out. "
@@ -308,6 +405,10 @@ def main(argv=None) -> int:
         "verdict": payload["verdict"],
         "blockers_present": blockers_present,
         "blockers_total": blockers_total,
+        # #1744 — printed beside the verdict, not buried in the file. A reader
+        # who sees only READY_FOR_TAPEOUT has been told what OUR artefacts say
+        # and nothing about what anyone outside would do with them.
+        "external_refusal": external_refusal["verdict"],
         "out": str(out_path),
     }, indent=2))
     return 0

@@ -1,6 +1,7 @@
 """Unit tests for `ir_drop_triage_classify.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("ir_drop_triage_classify")
 
 
@@ -63,7 +64,8 @@ class TestBuildTriage:
 
     def test_attribution(self):
         t = mod.build_triage([])
-        assert "v0.1.50" in t["emitted_by"]
+        assert t["emitted_by"] == \
+            f"ir_drop_triage_classify v{shipped_plugin_version()}"
 
 
 class TestMarkdownEmit:

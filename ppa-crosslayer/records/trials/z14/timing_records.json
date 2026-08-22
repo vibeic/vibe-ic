@@ -1,0 +1,1680 @@
+{
+  "schema": "vibeic.ppa.timing_rows.v1",
+  "program": "_ppa.timing",
+  "project": "/home/reyerchu/_jxlayer/run/trials/z14",
+  "row_count": 56,
+  "measured_count": 52,
+  "not_measured_count": 4,
+  "invalid_count": 0,
+  "notes": [
+    "opened 6 STA artefact(s): phase3/stage3/sta/sta_mcorner_ocv.rpt, phase3/stage3/sta/sta_spef_based.rpt, phase3/stage3/sta/sta_spef_multicorner.rpt, reports/phase3/sta_mcorner_ocv.rpt, reports/phase3/sta_spef_based.rpt, reports/phase3/sta_spef_multicorner.rpt"
+  ],
+  "rows": [
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 3.45,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 5,
+        "raw": "worst slack max 3.45"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 7,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 6,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.45,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 9,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.48,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 45,
+        "raw": "Startpoint: __uuf__._445_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.49,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 79,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 0.32,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 126,
+        "raw": "worst slack min 0.32"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 128,
+        "raw": "wns min 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.tns_ns",
+      "status": "NOT_MEASURED",
+      "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": null,
+        "raw": null
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.32,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 130,
+        "raw": "Startpoint: __uuf__._466_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.34,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 158,
+        "raw": "Startpoint: __uuf__._502_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.35,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 186,
+        "raw": "Startpoint: __uuf__._496_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 4.46,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 39,
+        "raw": "worst slack max 4.46"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 38,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 37,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 4.46,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 1,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 5.86,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 11,
+        "raw": "worst slack max 5.86"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 13,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 12,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.86,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 15,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.91,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 51,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.91,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 87,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 0.56,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 133,
+        "raw": "worst slack min 0.56"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 135,
+        "raw": "wns min 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.tns_ns",
+      "status": "NOT_MEASURED",
+      "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": null,
+        "raw": null
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.56,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 137,
+        "raw": "Startpoint: __uuf__._466_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.57,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 165,
+        "raw": "Startpoint: __uuf__._496_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.61,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "phase3/stage3/sta/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 193,
+        "raw": "Startpoint: __uuf__._449_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 3.45,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 5,
+        "raw": "worst slack max 3.45"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 7,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 6,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.45,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 9,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.48,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 45,
+        "raw": "Startpoint: __uuf__._445_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 3.49,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 79,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 0.32,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 126,
+        "raw": "worst slack min 0.32"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 128,
+        "raw": "wns min 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.tns_ns",
+      "status": "NOT_MEASURED",
+      "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": null,
+        "raw": null
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.32,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 130,
+        "raw": "Startpoint: __uuf__._466_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.34,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 158,
+        "raw": "Startpoint: __uuf__._502_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.35,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ff",
+        "voltage_v": 1.95,
+        "temperature_c": -40.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "hold"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_mcorner_ocv.rpt",
+        "sha256": "sha256:ed5069b65909465abe92eba262560e46b8bddd93c25995a095a3b1c526e88414",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 186,
+        "raw": "Startpoint: __uuf__._496_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 4.46,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 39,
+        "raw": "worst slack max 4.46"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 38,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": null,
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 37,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 4.46,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "ss",
+        "voltage_v": 1.6,
+        "temperature_c": 100.0,
+        "rc_corner": null,
+        "clock": "clk",
+        "check": "setup"
+      },
+      "scope_gaps": {
+        "rc_corner": "this report names no RC corner for the section; the RC axis is reported by the multi-corner SPEF report, not this one"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_based.rpt",
+        "sha256": "sha256:6de06fed6c2d321077c3cc3930db794e75139fe314c64cb3d6c5707af278734d",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 1,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 5.86,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 11,
+        "raw": "worst slack max 5.86"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 13,
+        "raw": "wns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.tns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": null,
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 12,
+        "raw": "tns max 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.86,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 15,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.91,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 51,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.setup.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 5.91,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "max",
+        "clock": "clk",
+        "check": "setup"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 87,
+        "raw": "Startpoint: test (input port clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_slack_ns",
+      "status": "MEASURED",
+      "value": 0.56,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 133,
+        "raw": "worst slack min 0.56"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.wns_ns",
+      "status": "MEASURED",
+      "value": 0.0,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 135,
+        "raw": "wns min 0.00"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.tns_ns",
+      "status": "NOT_MEASURED",
+      "reason": "not_reported: the artefact carries no tns line for this view — the tool was not asked, or the query failed",
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": null,
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": null,
+        "raw": null
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.56,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 137,
+        "raw": "Startpoint: __uuf__._466_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.57,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 165,
+        "raw": "Startpoint: __uuf__._496_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    },
+    {
+      "schema": "vibeic.ppa.metric.v1",
+      "metric": "timing.hold.worst_path_slack_ns",
+      "status": "MEASURED",
+      "value": 0.61,
+      "unit": "ns",
+      "scope": {
+        "stage": "post_route_extracted",
+        "mode": "functional",
+        "process": "tt",
+        "voltage_v": 1.8,
+        "temperature_c": 25.0,
+        "rc_corner": "min",
+        "clock": "clk",
+        "check": "hold"
+      },
+      "source": {
+        "path": "reports/phase3/sta_spef_multicorner.rpt",
+        "sha256": "sha256:fbcfc28e6c51008301af9639e82c5e8dcdf8a4c1a7f7ed94586a754a1ba6e0f5",
+        "tool": "opensta",
+        "tool_commit": null,
+        "parser": "_ppa/backends/opensta.py",
+        "parser_sha256": "sha256:054a956d923c110d53b6fd56503d7c25440493963f405eabb7aa31e938db64b1",
+        "line": 193,
+        "raw": "Startpoint: __uuf__._449_ (rising edge-triggered flip-flop clocked by clk)"
+      }
+    }
+  ],
+  "row_digests": [
+    "sha256:608ae34254b5c05493c94db929a071207087f11dc02fdab335cf0d09c346b046",
+    "sha256:63851a231666f1ede604b2e48ae6aeed8c2ff0667bcb5a8d39a8ed34a7c88240",
+    "sha256:2b6c2796aa34aebc7ccbbf5859998029e4fd2a45aeac4610068c60a2f521d4ae",
+    "sha256:360028393dbe348ab47492ba4b78d1dff97f67d5e2177279baff5a5fc8eaeb5d",
+    "sha256:28c482bd445361b9021bfab7a996cf067e751a3c3789ca9ddb781d4bc60466a7",
+    "sha256:424ae5b9fa14d02ec459f167bff0ce93e802191fee43deaa267b46531358d68f",
+    "sha256:ce2b0f1da6d0b81a57f185cfe2c1742a13774f425d81ae71841d47956ec51dc2",
+    "sha256:4fe89269bdaa50950f61b1266b01d0fe91945037132f0bcfa96040613a33bb0f",
+    "sha256:2efaaf17379a1b782d11d7077ee7cdef8769e50abbab98210e478ff157ca7d5a",
+    "sha256:4e8c53cb6c450dd98edcacfab005ad01388a512a7906f1b3b9d9959233569ac0",
+    "sha256:25b9778a8b7039567a929eca9599307c1a4c93dc7d907718b5f0c3978e03bb08",
+    "sha256:15d2e2276559df0d96fc78e0db814527fa102f960651bd4814a6c4237215078f",
+    "sha256:7acba78398778ecc72ea0e8a438179877b12e01b3dad59ccfcce6d4265c4c634",
+    "sha256:79cbaf3f92f189a3c82c0ea544750ba79338194ef66167b6364a6ed521216ecd",
+    "sha256:27f09a14f0c55d089c832f9b19b14909387253880d5d85347ffa37bbd7a10dca",
+    "sha256:aea9ee1427bd5fb0711624e340154a93cd95641ebf9eb30867243051419e5f88",
+    "sha256:1a54f07e1d78323fb25bfcda3b9fe8fdca03bd6102106d5032dc7cb37cc01d05",
+    "sha256:9641fe62ee5b487e44c46dc992a475a23f647ebfcb5a7eb7d36bcf62f77634e9",
+    "sha256:adab72e888d33fd9f458d31e6d5406015a250ad56202648c4e4fd97e41617e08",
+    "sha256:03ba744e6672b4b74f77279cd1f4debe3b6f63880013ca88495968dd75cdc5ad",
+    "sha256:bf3a587e5c1d653bc7aee6565fff7511911f3870699f8c5cfd5be6233e378ab7",
+    "sha256:6ec970e9ff68fb2c19ab80b28b18fe5af4631f945b3fbba40cfc2763891b7d44",
+    "sha256:8b20d56d31c63d995b180b0143734a17b5d1599013e081f831311ee36b449180",
+    "sha256:570844013a9cc24f52ccb81caef68647d08116d676f0b8385b4bddc585b23c72",
+    "sha256:eae9b394ef67ccc0586d5af3be39c234bb7d130950d5ccdf1a4a1d6ca0792518",
+    "sha256:8ae552eff75a5658631234efa56368916fb26f1ee142b8fd82e7bdd3106d3d96",
+    "sha256:db7b3beed364d36f13262488fd33dd06338b84446f5e6bf7156ca7e8310639c8",
+    "sha256:744bedc6bc5d24f432fcdb9fe21d9a7c4fe6ad5735e85f015e9441e0d4925055",
+    "sha256:b822a8ea62996f2644766a52c20c0ea85a9acddb606daf3aa4796bdb9ac0185f",
+    "sha256:7ef6b8dc45aeb88feef1cc8bc22dd5e04d082292867e9e094cd95d5d0512d936",
+    "sha256:f46a9a5ed396d648d2883d0442bfd5b231a7e88363d0ff708d9c2c4b43b1da3a",
+    "sha256:ab588c7bf6b7f4d7d051b153ee7d3a68b655e3db4404df9cbcc7448e8066f9c4",
+    "sha256:76288cc11b8d5ababf108533ff0fb1365c8be6afef651e70b755f5a076ad3d9f",
+    "sha256:33bf86a302f3ac5040a9a8b61b158ffae348f26e07c84d064a73b714a24012d1",
+    "sha256:eafd3e7104ed20edee28e4804a9e9bc5af5384cfbbd9ba7b88fce8dfc78085d5",
+    "sha256:66afca6060580849fc031d4b8af35d71f01ef955323ae02db59d1c111b01d141",
+    "sha256:315678b300c65a7d304fe13e3b7de384043d9c355995a9e25b2887e58765c729",
+    "sha256:47cf84fb9cec3efb9a5f15c0b06ea01012c91c653dbd3b7c2e33de5687b68c2b",
+    "sha256:c0d37dc769736f00f9b03d1d3247e96ce87c8c5af86ca35cc25bb261e7912e90",
+    "sha256:35a2b615d798da6dfa7fe8cc81645e33f8676231a077d585135f0541c21ef0f8",
+    "sha256:3d515f99456d9f90476703ee99062edf9f40a08a1dc5910ca8bd2f5796a7ace4",
+    "sha256:7bae155000ed1c666c1d6782ce3a013cf651b3467bbedb4c79226b9ee665c611",
+    "sha256:977defaae8adaa5a6d04a531aef45f2de7a3e2b0b6ae8ebb39a6e90dd84335ee",
+    "sha256:e1d8a540ecdec07d994cfd310383691379bc8fc6344a22d8c205528e15f1974e",
+    "sha256:2cfe992537f2c382bc3a677254ba9f00305d7a1574cf9ef18cef21d620c47718",
+    "sha256:33f08e2f876cf15228a3afe78f482dd34a806af9801b25086cd8a31c784fae51",
+    "sha256:ba487c92323f38184190c3f9d0b7c81d327810057fae4d1c96e418ccfbd1beda",
+    "sha256:b4e63b9ef7375b54e5bfd68df101a8de5eda694505f5c90ec6fcda9b31f7fd15",
+    "sha256:85d264cb2e3166b086092ba8e03c3dd2dbd57703b9fc58c3f6f35fe21afc0224",
+    "sha256:4c71d2ea16292bc935eb63c8fe6f795b58b439ef28e953766ff5cb87b16fe460",
+    "sha256:65f0c118e126dc47e1c7294c01aeee5bd9902b3e891a49b5ec1e1efd0e60b4e9",
+    "sha256:8af2d53423f1cd195477145264ecc69398b137ff0d1dc6f61640542b52b383dc",
+    "sha256:4c5138967953e0289317b0d2d3af2335fc59563d1b83ea22df15f8d122c13c86",
+    "sha256:c534b695c4b492692a0e4c9515887e0d0a8edcad8761390f89733d2d402b7acc",
+    "sha256:1206a2adef122a5e7b0d1aea5480b44ce55a4424c3fe21e11a9610d9f6f05049",
+    "sha256:90a9d4178baa7cf5f44ab756e791f4d7eae451030460b18b538b8c4b748eadd3"
+  ]
+}
