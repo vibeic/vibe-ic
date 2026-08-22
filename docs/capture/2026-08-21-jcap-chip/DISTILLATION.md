@@ -485,6 +485,43 @@ Two things are worth carrying forward:
   permission to delete is the same error this whole file is about: acting on a
   label instead of on the thing it labels.
 
+**And I then did the destructive version of it myself, at the very end.** Clearing
+my own worktrees I filtered on the string `scratchpad/` instead of on my session
+id, matched
+`/tmp/…/`**`4593726f`**`-…/scratchpad/qv` — another session's — and removed it with
+`git worktree remove --force`.
+
+The filter said "worktrees" and meant "my worktrees": a population boundary drawn
+wider than the thing it named, which is the defect this entire file catalogues.
+Every earlier instance was a gate reading a superset and reporting wrongly. This
+one deleted somebody's tree.
+
+**Re-checked afterwards, and the harm is smaller than I first reported:** `qv` is
+registered again, the directory exists with a live `.git`, and its mtime is later
+than my removal — its owner re-established it and that session is not blocked. My
+first write-up said "the directory is gone", and leaving that standing would have
+been this file's own defect one more time, so it is corrected here and in both
+copies of the incident note.
+
+What survives: it was detached-HEAD, so anything COMMITTED is still in the object
+store; whatever was UNCOMMITTED at the moment of removal is gone. Twelve recent dangling commits that are not
+from this lane are pinned under
+`refs/rescue/jdistchip-accidental-worktree-removal/1..12` so nothing collects
+them — several are `WIP on (no branch)`, the shape an interrupted worktree
+leaves. I did not guess which was `qv`'s HEAD; I pinned the recent non-mine ones.
+The full record, with restore commands, is at
+`/tmp/jdistchip_worktree_removal_incident.txt` and a copy was delivered into that
+session's own scratchpad, which is where its owner would actually look.
+
+**The rule, stated so it is usable:** on a host where many agents share one
+repository, scope every destructive cleanup to the SESSION DIRECTORY —
+
+    git worktree list | grep "/<this-session-id>/"
+
+— never to `scratchpad/`, `jdistchip`, or any other substring that merely tends to
+match your own paths. The session id is the only discriminator that cannot match
+somebody else.
+
 ### RE-MEASURED against main at v1.11.69 — the earlier numbers had a shelf life
 
 Everything above about composition was measured against `origin/main` @
@@ -1000,3 +1037,174 @@ I broke `only_the_declaring_step` doing exactly that in this change (a
 gate answered rc=2 NOT CHECKED until I noticed). Churn in a green gate for an
 empty population is not obviously worth it; the property is recorded here so the
 next person decides with the number in front of them.
+
+### A fourth finding from their commit log: my count assertions were not pins
+
+They pushed six more commits, one titled *"test: a substring assertion on a count
+is not a pin — parse the number"*. Seven of my assertions are exactly that shape.
+Demonstrated rather than reasoned about:
+
+    assertion                              actual output              passes?
+    "1 inexpressible"                      21 inexpressible           YES
+    "0 key(s) observed"                    10 key(s) observed         YES
+    "1 silent reader(s) ... disclosed"     11 silent reader(s) ...    YES
+    "0 declare a stage, 1 declare none"    10 declare a stage, 1 ...  YES
+
+Every one of those tests would have passed against a **tenfold-wrong number**.
+They were written to pin a disclosure count — the counts this file keeps insisting
+must be visible so a PASS bought by an exclusion is legible — and they pinned
+nothing.
+
+Fixed with a non-digit front anchor (`(?<!\d)`) behind a named helper, so the
+intent is in the test rather than in a regex: a count assertion now fails when a
+digit precedes the number. All six demonstrations flip to "correctly FAILS". 228
+tests pass.
+
+**That is the fourth defect this lane owes to reading the other lane's commit
+titles** — after the write enumeration, the declaration-shaped regex, and the
+silent unparseable skips. Two were fail-open, one fail-closed, one latent, and
+this one was in the TESTS rather than the gates: the instrument that was supposed
+to catch a regression in a disclosure count could not see one.
+
+**And then the fifth, from the title next to it** — *"pin the population beside
+the member, and prove the pin fires"*. The `_count_in` anchor I had just added was
+used in four files and **never once asserted to FAIL**. A helper that silently
+stopped rejecting anything would reinstate the exact defect it was written to
+remove, and nothing in those files would notice, because every other use asserts
+the TRUE case.
+
+`test_the_count_anchor_actually_fires` now sits beside each of the four copies and
+requires the anchor to refuse `"1 thing"` against `examined 21 thing`. Proven able
+to fail: replacing the anchor with a plain `in` turns it red at exactly that
+assertion, and restoring it turns it green. 232 tests pass.
+
+That is the same standard this lane applied to every gate — *a test that cannot go
+red is not a test* — finally applied to the helper the tests themselves depend on.
+Five findings from one rival lane's commit titles, and the last two were in the
+instruments measuring the instruments.
+
+### The six line-anchored citations in this file, verified and dated
+
+Their sixth title was *"correct a citation that named the wrong end of the
+chain"*. This file cites code by `FILE:LINE` in six places — and its own lead
+tells the reader that line-anchored citations rot. That is an inconsistency I put
+here, so it is resolved rather than left.
+
+Checked at `d21188dab`, every one still names what the prose says it does:
+
+    atomic_artifact_write_check.py:274   if args.strict and len(current) > len(baseline):
+    _ppa/timing.py:651                   metric = "timing.%s.%s_ns" % (check, kind)
+    _ppa/backends/openroad.py:554        e.emit("design.instance.count", _RE_IFP_NINST, ...)
+    ppa-crosslayer/tools/drv_records.py:73    _CHECKS = (("timing.drv.max_tran_violations", ...
+    ppa-crosslayer/tools/drv_records.py:156   r = {"schema": "vibeic.ppa.metric.v1", "metric": metric,
+    ppa-e2e/tools/build_trials.py:62     ("design.instance.count", {"stage": "floorplan"}),
+
+**The line numbers are navigation, not evidence.** Every one of the six is quoted
+with its content in the prose around it, and the content is what carries the
+argument. If a line has moved by the time you read this, grep the quoted text —
+that is why it is quoted. The citations were true at `d21188dab` and no claim in
+this file depends on them still being true at a line offset.
+
+That is the honest form for a `FILE:LINE` in a document that outlives the file:
+name the sha you checked at, and quote enough that the reader can re-find it
+without you.
+
+### Whether this branch touches a protected path: NOT CHECKED, and why
+
+Their fifth title was *"the protected tuple's drift has grown from two paths to
+eleven"*. That is landing-relevant to me: this branch regenerates
+`PROGRAM_INVENTORY.json`, `INDEX.md` and the README counts, and if any of those sit
+in a protected-landing tuple then this branch does not land by an ordinary merge —
+it needs the PREPARE/ACTIVATE path, and my report would owe the reader that.
+
+I went looking for the manifest. It is not here:
+
+    find  -name '*protected*landing*' / '*landing*transition*'   -> nothing
+    git grep  protected_landing_transition                       -> nothing
+    git grep  -e landing_transition -e PREPARE -e prepare_slot   -> only benchmark-data
+                                                                    prose containing the
+                                                                    word "PREPARE"
+
+The mechanism exists — I have used it — but **it is not present in this repo at
+`main`**, so the question cannot be answered from this checkout.
+
+**That makes the honest verdict NOT CHECKED, not PASS.** This is the same
+distinction the brief demanded of `local_clone_does_not_borrow_objects` and
+`prepared_checkout_states_the_revision_it_holds`: *did not look* and *looked and
+found nothing* must never share a verdict. I did not look — I could not — and
+writing "this branch touches no protected path" would have been an unearned claim
+of exactly the kind the rc=2 rung exists to prevent.
+
+**What the reader should do:** before landing this branch, re-run the intersection
+wherever the manifest actually lives:
+
+    git diff --name-only origin/main...<this branch>   ∩   <manifest>.paths[].path
+
+The four generated files above are the plausible hits. If any is protected, this
+branch needs the two-landing protected path, not a merge.
+
+## The A/B against bare main: two gates are revert-proofed by real history
+
+Their last title was *"record an A/B about main"*. Running the twelve checkers
+against bare `origin/main` and against this branch — **the same checker binaries in
+both arms, only the subject tree differing** — answers a question a fixture cannot:
+does this gate catch a defect that was really there?
+
+    CHECKER                                              main  branch
+    prepared_checkout_states_the_revision_it_holds          1     0   <-- real-history control
+    provenance_value_is_resolved_not_constant               1     0   <-- real-history control
+    only_the_declaring_step_writes_its_output               1     1       live finding, unowned (user's call)
+    every_required_metric_key_has_a_producer                1     1       live finding
+    pytest_aggregate_carries_its_runtime_identity           2     2       NOT CHECKED — no aggregate in a bare tree
+    the other seven                                         0     0
+
+**The denominator is what makes this trustworthy.** This branch ADDS twelve programs
+and thirteen test files, so a red-to-green move could be an artefact of the
+population changing rather than of anything being fixed. It is not:
+
+    prepared_checkout...  main: "examined 3 revision-selecting checkout site(s)"
+                        branch: "examined 3 revision-selecting checkout site(s)"
+    provenance_value...   main: "examined 2 resolved-subject artefact write(s)"
+                        branch: "examined 2 resolved-subject artefact write(s)"
+
+Same population, different verdict. The delta is the fix.
+
+    main   ip_catalog_reproduce_pull.py:60: a revision is checked out and the
+           outcome is never inspected
+    main   phase3_one_shot_runner.py:37700: this write emits a RESOLVED subject
+           beside a typed path constant
+
+**This corrects an attribution I had wrong.** I had recorded TP-1 (the
+`ip_catalog_reproduce_pull.py` fix) as a finding of
+`generated_values_state_whether_they_were_read_or_defaulted`. It is not — that gate
+reports 0 on both arms with an identical 3-call-site denominator, so it never saw
+that defect. TP-1 was caught by `prepared_checkout_states_the_revision_it_holds`,
+which is the better outcome: the brief singled that checker out as one of the two
+that "would have caught a whole class of last night's false measurements", and the
+A/B shows it catching one that was really on `main`.
+
+**What this does NOT establish.** Ten of the twelve have no real-history control —
+their reds are fixture reds only. That is not a defect (a gate for a defect nobody
+has committed yet has nothing to catch), but it is the honest scope: two gates are
+proven against history, ten against constructed input.
+
+`pytest_aggregate...` returning 2 on both arms is the rc contract working — a bare
+tree has no aggregate to read, and it says so rather than passing.
+
+### Does the real-history control survive landing? Yes — checked, not assumed
+
+An A/B against `main` is a wasting asset: the moment this branch lands, both
+main-side defects are fixed and the control that proved the gates evaporates. So the
+question is whether the fixtures preserve the shapes independently.
+
+They do, and both were already there:
+
+    prepared_checkout   test_uninspected_checkout_goes_red      (the main-side shape)
+                        test_inspected_checkout_passes          (its paired green)
+    provenance          test_a_typed_source_beside_a_resolved_subject_goes_red
+                        test_the_antenna_emitter_no_longer_types_its_source
+                                                                (revert-proof anchored
+                                                                 on the real repo file)
+
+Nothing to add. Worth stating anyway, because "the A/B proved it" and "the proof is
+still there after landing" are different claims, and only the second one is durable.
