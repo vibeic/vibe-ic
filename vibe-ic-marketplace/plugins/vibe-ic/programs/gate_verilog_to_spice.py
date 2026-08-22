@@ -18,6 +18,7 @@ CLI:
 Pure Python; no external deps.
 """
 import sys, re, argparse
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # Supply-net names that are GLOBAL (`.GLOBAL VDD VSS`) and must NOT be emitted as
 # subckt ports (the layout extraction treats power as global-only). Exact set +
@@ -138,7 +139,7 @@ def convert(vfile, cellspice, out, include_cells=True):
         n_emit += 1
     lines.append(".ENDS")
     lines.append("")
-    with open(out, "w") as f:
+    with atomic_writing(out) as f:
         f.write("\n".join(lines))
     print(f"wrote {out}: top={top} ports={len(ports)} instances_emitted={n_emit}")
     if unknown:
