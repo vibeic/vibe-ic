@@ -152,7 +152,11 @@ All three orientation defects are live on main. Pending onto the new main:
 
 LANDING STATE CHANGED WHILE THIS REPORT WAS BEING WRITTEN, AND THE CHANGE IS
 LARGE ENOUGH TO BELONG AT THE TOP. MEASURED 2026-08-22, main at `a4caccefe`
-(v1.11.69, 214 commits after the 81cd5321b this report was verified against):
+(v1.11.69, 214 commits after the 81cd5321b this report was verified against).
+SUPERSEDED: main has since moved AGAIN, to `ae78abb28` (v1.11.70). This section
+is kept as the record of the SECOND move; the section above it covers the third
+and is the current one. Three landing states in one day is why nothing here
+pins a head without saying which moment it belongs to:
 
   * THE FIX IS ON MAIN, and all FOUR files there are BYTE-IDENTICAL to this
     branch at b95dd8a9f (sha256 per file). PR #1765 is still OPEN and was not
@@ -171,7 +175,10 @@ LARGE ENOUGH TO BELONG AT THE TOP. MEASURED 2026-08-22, main at `a4caccefe`
         ancestor, and why "is it an ancestor" and "is the content there" gave
         different answers. Both were true; they are different questions.
   * ONE COMMIT DID NOT LAND: `41e6562d2`, the header-count fix and its two
-    tests. Merging this branch into a4caccefe today adds 2 files, +68/-10 --
+    tests. Merging this branch into a4caccefe added 2 files, +68/-10 (TRUE OF
+    THAT MOMENT ONLY -- main has since moved to ae78abb28 / v1.11.70 and the
+    pending figure is +211/-65 across 3 files; see the block at the top of this
+    file, which is the one that is current) --
     MEASURED BY MERGING, and a three-dot diff disagrees: `git diff
     origin/main...41e6562d2` gives +106/-10, overstating by the 38 lines of
     b95dd8a9f's test, which main holds BY CONTENT while the commit is not an
