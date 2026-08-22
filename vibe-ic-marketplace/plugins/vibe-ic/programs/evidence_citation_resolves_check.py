@@ -836,10 +836,13 @@ def main(argv=None) -> int:
     # NAMED path carries no corpus, and announces either way — so a developer
     # who has the pointer exported still runs the gate CI runs when they name a
     # readable root, and still learns which tree produced the verdict.
+    # vibe-ic#1710 — BOUNDED at the repository root. The unbounded
+    # `here.parents` walk that stood here left the checkout and took the
+    # first `_DEFAULT_ROOT_REL` it met above it, so the corpus this gate scanned was
+    # decided by the operator's home directory. See
+    # `_corpus_location.default_named` for the two-clone measurement.
     named = (Path(args.root) if args.root else
-             next((b / _DEFAULT_ROOT_REL for b in here.parents
-                   if (b / _DEFAULT_ROOT_REL).is_dir()),
-                  Path(_DEFAULT_ROOT_REL)))
+             _corpus.default_named(here, _DEFAULT_ROOT_REL))
     root, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
                                    gate="evidence_citation_resolves_check",
                                    announce=True)

@@ -102,6 +102,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+import _corpus_location as _corpus       # sibling program, one seam for all
+
 _DEFAULT_ROOT_REL = "benchmark-data"
 
 #: Where a caller may point us at a clone of the published corpus.
@@ -247,8 +249,12 @@ def main(argv=None) -> int:
     elif args.root:
         root = Path(args.root)
     else:
-        root = next((b / _DEFAULT_ROOT_REL for b in here.parents
-                     if (b / _DEFAULT_ROOT_REL).is_dir()), None)
+        # vibe-ic#1710 — BOUNDED at the repository root. The unbounded
+        # `here.parents` walk that stood here left the checkout and took the
+        # first `_DEFAULT_ROOT_REL` it met above it, so the corpus this gate scanned was
+        # decided by the operator's home directory. See
+        # `_corpus_location.default_named` for the two-clone measurement.
+        root = _corpus.default_named(here, _DEFAULT_ROOT_REL)
 
     if root is None or not root.is_dir():
         if args.corpus_may_be_absent:
