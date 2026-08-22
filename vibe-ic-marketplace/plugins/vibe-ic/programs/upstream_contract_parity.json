@@ -1,99 +1,150 @@
 {
-  "_comment": [
-    "The register `upstream_contract_parity_check.py` enforces. One entry per",
-    "place where this plugin RE-IMPLEMENTS a computation or a configuration",
-    "contract that an upstream flow already owns.",
-    "",
-    "It is a RATCHET, not a catalogue of everything. It starts at the",
-    "re-implementations that have been measured against their upstream, and it",
-    "grows when the next one is registered. What it guarantees is not that the",
-    "register is complete -- nothing can guarantee that -- but that NO NAME",
-    "INSIDE A REGISTERED ENTRY IS UNACCOUNTED FOR. That is the property whose",
-    "absence let one upstream variable go unread and unmentioned for the whole",
-    "life of a step.",
-    "",
-    "`known_gap` is not an excuse list. Every entry in it carries a reference,",
-    "and the count is printed on every run whether the check passes or fails."
-  ],
-  "entries": [
-    {
-      "id": "pad_ring.upstream_pad_variables",
-      "kind": "contract",
-      "our_module": "programs/_pad_ring.py",
-      "what_we_reimplement": "the pad-ring placement contract: which PDK-scoped variables the step reads before it places a ring",
-      "upstream": {
-        "distribution": "librelane",
-        "file": "librelane/config/flow.py",
-        "extract_regex": "Variable\\(\\s*\"(PAD_[A-Z0-9_]+)\"",
-        "note": "the regex requires the opening quote, so a variable whose name merely CONTAINS the token (a cell-padding knob, for one) is not swept in"
-      },
-      "snapshot": {
-        "measured_on": "2026-08-22",
-        "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
-        "distribution_version": "3.1.0.dev1",
-        "file_sha256": "d6caa367322e42cc037a4406a920ebb0f64fdc9245d95235b7c1e42c9c5bf513",
-        "names": [
-          "PAD_LIBS", "PAD_LEFS", "PAD_GDS", "PAD_VERILOG_MODELS",
-          "PAD_SPICE_MODELS", "PAD_CDLS", "PAD_CORNER", "PAD_FILLERS",
-          "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_FAKE_SITES",
-          "PAD_BONDPAD_NAME", "PAD_BONDPAD_WIDTH", "PAD_BONDPAD_HEIGHT",
-          "PAD_BONDPAD_OFFSETS", "PAD_PLACE_IO_TERMINALS", "PAD_EDGE_SPACING",
-          "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
-          "PAD_ROTATION_CORNER"
-        ]
-      },
-      "classification": {
-        "implemented": [
-          "PAD_SITE_NAME", "PAD_CORNER_SITE_NAME", "PAD_EDGE_SPACING",
-          "PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",
-          "PAD_ROTATION_CORNER", "PAD_CORNER", "PAD_FILLERS"
-        ],
-        "declared_unperformed": [
-          "PAD_BONDPAD_NAME", "PAD_BONDPAD_OFFSETS", "PAD_PLACE_IO_TERMINALS"
-        ],
-        "omitted_by_design": {
-          "PAD_LIBS": "upstream is HANDED the cell library list. This step is handed nothing: it discovers the reference views from the distribution layout. The information is obtained, by another route -- it is not unread.",
-          "PAD_LEFS": "same as the library list, for the abstract views.",
-          "PAD_GDS": "a layout view list. This step emits a placement and reads no layout.",
-          "PAD_VERILOG_MODELS": "a behavioural model list, for stages that simulate. This step does not simulate.",
-          "PAD_SPICE_MODELS": "a device model list, for stages that solve circuits. This step does not.",
-          "PAD_CDLS": "a netlist view list, for the stage that compares layout against schematic. This step does not compare.",
-          "PAD_BONDPAD_WIDTH": "bond-pad geometry, belonging to the same bond-pad operation the three names in `declared_unperformed` already mark as not performed. STATED PLAINLY BECAUSE IT IS AN INCONSISTENCY IN OUR OWN DECLARATION, not a clean omission: this name and the height beside it belong in that list and are not in it. Registering them here is what makes the gap legible; it does not close it.",
-          "PAD_BONDPAD_HEIGHT": "see the width above -- the same operation, the same inconsistency."
-        },
-        "known_gap": {
-          "PAD_FAKE_SITES": {
-            "reason": "the distribution declares its pad sites through this variable when the abstract views carry no site record. The step never read it, so a site the distribution DOES declare was reported absent, and one design's whole verdict was blocked by our own code looking in the wrong view.",
-            "reference": "vibeic/vibe-ic#1765 (open, version-less) -- the branch that reads the declaration"
-          }
-        }
-      }
+ "_comment": [
+  "The register `upstream_contract_parity_check.py` enforces. One entry per",
+  "place where this plugin RE-IMPLEMENTS a computation or a configuration",
+  "contract that an upstream flow already owns.",
+  "",
+  "It is a RATCHET, not a catalogue of everything. It starts at the",
+  "re-implementations that have been measured against their upstream, and it",
+  "grows when the next one is registered. What it guarantees is not that the",
+  "register is complete -- nothing can guarantee that -- but that NO NAME",
+  "INSIDE A REGISTERED ENTRY IS UNACCOUNTED FOR. That is the property whose",
+  "absence let one upstream variable go unread and unmentioned for the whole",
+  "life of a step.",
+  "",
+  "`known_gap` is not an excuse list. Every entry in it carries a reference,",
+  "and the count is printed on every run whether the check passes or fails."
+ ],
+ "entries": [
+  {
+   "id": "pad_ring.upstream_pad_variables",
+   "kind": "contract",
+   "our_module": "programs/_pad_ring.py",
+   "what_we_reimplement": "the pad-ring placement contract: which PDK-scoped variables the step reads before it places a ring",
+   "upstream": {
+    "distribution": "librelane",
+    "file": "librelane/config/flow.py",
+    "extract_regex": "Variable\\(\\s*\"(PAD_[A-Z0-9_]+)\"",
+    "note": "the regex requires the opening quote, so a variable whose name merely CONTAINS the token (a cell-padding knob, for one) is not swept in"
+   },
+   "snapshot": {
+    "measured_on": "2026-08-22",
+    "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+    "distribution_version": "3.1.0.dev1",
+    "file_sha256": "d6caa367322e42cc037a4406a920ebb0f64fdc9245d95235b7c1e42c9c5bf513",
+    "names": [
+     "PAD_LIBS",
+     "PAD_LEFS",
+     "PAD_GDS",
+     "PAD_VERILOG_MODELS",
+     "PAD_SPICE_MODELS",
+     "PAD_CDLS",
+     "PAD_CORNER",
+     "PAD_FILLERS",
+     "PAD_SITE_NAME",
+     "PAD_CORNER_SITE_NAME",
+     "PAD_FAKE_SITES",
+     "PAD_BONDPAD_NAME",
+     "PAD_BONDPAD_WIDTH",
+     "PAD_BONDPAD_HEIGHT",
+     "PAD_BONDPAD_OFFSETS",
+     "PAD_PLACE_IO_TERMINALS",
+     "PAD_EDGE_SPACING",
+     "PAD_ROTATION_HORIZONTAL",
+     "PAD_ROTATION_VERTICAL",
+     "PAD_ROTATION_CORNER"
+    ]
+   },
+   "classification": {
+    "implemented": [
+     "PAD_SITE_NAME",
+     "PAD_CORNER_SITE_NAME",
+     "PAD_EDGE_SPACING",
+     "PAD_ROTATION_HORIZONTAL",
+     "PAD_ROTATION_VERTICAL",
+     "PAD_ROTATION_CORNER",
+     "PAD_CORNER",
+     "PAD_FILLERS",
+     "PAD_FAKE_SITES"
+    ],
+    "declared_unperformed": [
+     "PAD_BONDPAD_NAME",
+     "PAD_BONDPAD_OFFSETS",
+     "PAD_PLACE_IO_TERMINALS"
+    ],
+    "omitted_by_design": {
+     "PAD_LIBS": "upstream is HANDED the cell library list. This step is handed nothing: it discovers the reference views from the distribution layout. The information is obtained, by another route -- it is not unread.",
+     "PAD_LEFS": "same as the library list, for the abstract views.",
+     "PAD_GDS": "a layout view list. This step emits a placement and reads no layout.",
+     "PAD_VERILOG_MODELS": "a behavioural model list, for stages that simulate. This step does not simulate.",
+     "PAD_SPICE_MODELS": "a device model list, for stages that solve circuits. This step does not.",
+     "PAD_CDLS": "a netlist view list, for the stage that compares layout against schematic. This step does not compare.",
+     "PAD_BONDPAD_WIDTH": "bond-pad geometry, belonging to the same bond-pad operation the three names in `declared_unperformed` already mark as not performed. STATED PLAINLY BECAUSE IT IS AN INCONSISTENCY IN OUR OWN DECLARATION, not a clean omission: this name and the height beside it belong in that list and are not in it. Registering them here is what makes the gap legible; it does not close it.",
+     "PAD_BONDPAD_HEIGHT": "see the width above -- the same operation, the same inconsistency."
     },
-    {
-      "id": "pad_ring.along_the_row_extent",
-      "kind": "computation",
-      "our_module": "programs/_pad_ring.py",
-      "what_we_reimplement": "how much of a side one placed cell consumes -- the sum that decides whether a ring fits, and the step from one cell to the next",
-      "upstream": {
-        "distribution": "librelane",
-        "file": "librelane/scripts/openroad/common/pad_cfg.tcl",
-        "anchors": [
-          "incr sum_of_cell_widths $width",
-          "[[$inst getMaster] getWidth]"
-        ],
-        "note": "upstream measures a cell in exactly two places -- the fit sum and the along-the-row step -- and both read the master's WIDTH, on all four sides. The anchors are the strings, not line numbers: a line number points ten lines above its subject after the next edit and still looks precise."
-      },
-      "snapshot": {
-        "measured_on": "2026-08-22",
-        "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
-        "distribution_version": "3.1.0.dev1",
-        "file_sha256": "a3bae7d559e8c8b9f16d8dc5d086cfd217207ed09667263bd8e183a5c5ebd52c"
-      },
-      "pin_test": {
-        "status": "known_gap",
-        "reason": "nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.",
-        "reference": "vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it"
-      }
-    }
-  ]
+    "known_gap": {}
+   },
+   "_history": [
+    "2026-08-22 jcapsha: PAD_FAKE_SITES moved known_gap -> implemented. The gap is closed on main: programs/_pad_ring.py carries parse_pad_site_declarations, discover_io_site_declarations and IoLibrary.resolve_site. It was NOT moved when the fix landed, and the staleness rule that exists to catch exactly that could not see the closure, because the module consumes the name through a regex and _mentions() asked for a bare quoted literal. Predicate widened to AST string literals in the same change. Prior classification: {\"reason\": \"the distribution declares its pad sites through this variable when the abstract views carry no site record. The step never read it, so a site the distribution DOES declare was reported absent, and one design's whole verdict was blocked by our own code looking in the wrong view.\", \"reference\": \"vibeic/vibe-ic#1765 (open, version-less) -- the branch that reads the declaration\"}"
+   ]
+  },
+  {
+   "id": "pad_ring.along_the_row_extent",
+   "kind": "computation",
+   "our_module": "programs/_pad_ring.py",
+   "what_we_reimplement": "how much of a side one placed cell consumes -- the sum that decides whether a ring fits, and the step from one cell to the next",
+   "upstream": {
+    "distribution": "librelane",
+    "file": "librelane/scripts/openroad/common/pad_cfg.tcl",
+    "anchors": [
+     "incr sum_of_cell_widths $width",
+     "[[$inst getMaster] getWidth]"
+    ],
+    "note": "upstream measures a cell in exactly two places -- the fit sum and the along-the-row step -- and both read the master's WIDTH, on all four sides. The anchors are the strings, not line numbers: a line number points ten lines above its subject after the next edit and still looks precise."
+   },
+   "snapshot": {
+    "measured_on": "2026-08-22",
+    "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+    "distribution_version": "3.1.0.dev1",
+    "file_sha256": "a3bae7d559e8c8b9f16d8dc5d086cfd217207ed09667263bd8e183a5c5ebd52c"
+   },
+   "pin_test": {
+    "status": "test",
+    "test": "programs/tests/test_upstream_pin_pad_cfg.py::test_the_fit_sum_and_the_row_step_both_accumulate_the_width",
+    "note": "THE PIN IS TWO-SIDED AND THE TWO HALVES LIVE IN DIFFERENT FILES. OURS: programs/tests/test_pad_ring.py::test_the_spacing_is_upstreams_arithmetic -- the fixture's pad master is 75 x 350 and each side is 1_280_000 DEF units, so four pads summed by WIDTH fit with 196_000-unit gaps and four summed by HEIGHT (1_400_000) do not fit at all; that test goes red the moment the extent returns to the oriented footprint. THEIRS: the named test above, plus the three beside it in the same file -- sha256 against this snapshot, both cell measurements reading getWidth, and the master's height reaching nothing but a puts diagnostic. The upstream half SKIPS, and does not pass, when no distribution is reachable."
+   },
+   "_history": [
+    "2026-08-22 jcapsha: pin_test known_gap -> test. The gap was real and specific -- OUR half was pinned behaviourally all along, THEIRS was a sentence in a comment. Closed by reading the upstream file out of the image this snapshot records (sha256 verified equal) and asserting the three properties our Python mirrors. Prior: {\"status\": \"known_gap\", \"reason\": \"nothing compares our along-the-row extent against upstream's. Ours summed the ORIENTED footprint, so a vertical side summed the master's height instead of its width -- a factor of more than four on the side that was measured -- and the divergence surfaced only as an unrelated refusal, long after it was introduced.\", \"reference\": \"vibeic/vibe-ic#1765 (open, version-less) -- the branch that makes the extent the master's width on all four sides and adds the test that pins it\"}"
+   ]
+  },
+  {
+   "id": "digital_hardmacro.lef_write_route",
+   "kind": "computation",
+   "our_module": "programs/digital_hardmacro_gen.py",
+   "what_we_reimplement": "the Magic command sequence that writes a hardmacro's LEF abstract, and which of upstream's two routes it takes. THE FIRST NON-PAD ENTRY: the register shipped with two entries and both were pad_ring.*, which reads as a pad register however the docstring is worded. Same register, unchanged, on a subject with no pad in it.",
+   "upstream": {
+    "distribution": "librelane",
+    "file": "librelane/scripts/magic/lef.tcl",
+    "anchors": [
+     "if { $::env(MAGIC_LEF_WRITE_USE_GDS) } {",
+     "lappend lefwrite_opts -hide",
+     "lappend lefwrite_opts -pinonly"
+    ],
+    "note": "MAGIC_LEF_WRITE_USE_GDS picks between two routes and its default is FALSE -- read the views and the DEF, not the GDS alone. That default is load-bearing: the producer's docstring records that the GDS-only route yielded, on a real signed-off run, an abstract with an outline, obstructions and ZERO PINS, because the port labels sit on layers the PDK's Magic technology does not map. GEOMETRY from the GDS, PORTS from the DEF."
+   },
+   "snapshot": {
+    "measured_on": "2026-08-22",
+    "measured_in": "ghcr.io/vibeic/vibeic-eda:0.3.24",
+    "file_sha256": "067772b60a08a2c41fe947ca61ac84cf25272534962e78788acbeabefcf9b4b8"
+   },
+   "pin_test": {
+    "status": "test",
+    "test": "programs/tests/test_upstream_pin_magic_lef.py::test_upstream_still_has_two_routes_and_the_default_reads_the_def",
+    "note": "Two-sided, in one file. THEIRS: sha256 against this snapshot, the two-route branch with read_def on the default side, and the two abstraction knobs still spelled -hide and -pinonly under their own conditions -- SKIPPED, never passed, when no distribution is reachable. OURS: build_lef_tcl emits `gds read` AND `def read`, emits -hide for the abstract and withholds it for the full LEF, and emits -pinonly only when asked. Our half needs nothing external and always runs."
+   },
+   "_history": [
+    "2026-08-22 jcapsha: added. The upstream-parity rule is general and the register's own contents were the weakest evidence for that -- two entries, both pads. This is the same register on a Magic LEF-write sequence."
+   ]
+  }
+ ]
 }

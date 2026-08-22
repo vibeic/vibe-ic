@@ -1,0 +1,7 @@
+=== absence_verdict_names_its_search_space_check ===
+  files parsed     : 1280
+  absence verdicts : 31
+  naming a locus   : 29
+  FAIL: 2 absence verdict(s) name no search space. 'Not found' that does not say where it looked cannot be told apart from 'not looked for':
+    _pad_ring.py:778  PAD_CONFIG_VARIABLE_ABSENT
+    _ppa/backends/openroad.py:740  ROUTE_WIRELENGTH_BY_LAYER_ABSENT

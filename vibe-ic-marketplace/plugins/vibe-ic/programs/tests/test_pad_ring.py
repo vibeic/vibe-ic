@@ -1801,3 +1801,65 @@ def test_the_refusal_names_the_variable_actually_declared(tmp_path, var,
     # reason passed it 3/3.
     _assert_no_retracted_claim(printed, "the console line")
     _assert_no_retracted_claim(rep["reason"], "the refusal reason")
+
+
+
+
+# --------------------------------------------------------------------------- #
+# a refuted finding must lose its identifier
+# --------------------------------------------------------------------------- #
+def test_the_report_key_does_not_assert_the_refuted_premise(placed):
+    """`PAD_ROTATION_VERTICAL` is NOT inert; it steers the SOUTH and NORTH rows,
+    and this step does not implement it. The distinction is not cosmetic: the
+    old key `rotation_vertical_inert` asserted the refuted proposition IN THE
+    SCHEMA, where every consumer keys on it and none of them reads the
+    retraction published elsewhere."""
+    rep, _ = CHK._unwrap(_report(placed))
+    assert "rotation_vertical_not_honoured" in rep, sorted(rep)
+    assert "rotation_vertical_inert" not in rep, (
+        "the report still carries a key asserting the variable is inert")
+    rec = rep["rotation_vertical_not_honoured"]
+    assert rec["honoured"] is False
+    assert "does not implement it" in rec["reason"], rec["reason"]
+    assert "the placer does not read it" not in rec["reason"], (
+        "the reason still says the tool ignores the variable, which is the "
+        "claim that was measured false")
+
+
+
+
+
+
+def test_no_identifier_in_the_pad_ring_producer_asserts_inertness():
+    """The general rule, not the one variable: a proposition the project has
+    recorded as FALSE may not survive in an IDENTIFIER — a name, a schema key,
+    a function. Every consumer keys on the identifier and none of them reads
+    the retraction published elsewhere.
+
+    PROSE IS DELIBERATELY NOT POLICED, and the first version of this test got
+    that wrong. It scanned every string literal and excluded the specific
+    sentences I had written, which made it pass on my edit and FAIL on an
+    independent fix of the same defect (`origin/jpadsite/pad-site`) whose
+    docstring retracts the claim by QUOTING it — 'THIS SECTION SAID "IS INERT"
+    … AND BOTH WERE WRONG'. A retraction has to be able to name what it
+    retracts. A guard whose pass condition is "contains the phrases the author
+    happened to use" is fitted to one edit, not to the rule; measured
+    three ways, this version FAILS on main, and PASSES on both independent
+    fixes."""
+    import ast
+    src = (PROGRAMS / "pad_ring_gen.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and "INERT" in node.id.upper():
+            offenders.append(f"name: {node.id}")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)) and "inert" in node.name.lower():
+            offenders.append(f"def: {node.name}")
+        elif isinstance(node, ast.Dict):
+            for k in node.keys:
+                if (isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        and "inert" in k.value.lower()):
+                    offenders.append(f"schema key: {k.value!r}")
+    assert not offenders, (
+        f"identifiers still assert a proposition measured false: {offenders}")

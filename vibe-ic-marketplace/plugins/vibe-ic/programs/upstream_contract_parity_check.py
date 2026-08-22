@@ -84,6 +84,7 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -130,14 +131,67 @@ def _module_text(entry: dict) -> str:
     return p.read_text(encoding="utf-8", errors="replace")
 
 
-def _mentions(text: str, name: str) -> bool:
-    """The name occurs in the module as a quoted literal.
+def _string_literals(text: str) -> "list[str] | None":
+    """Every string literal in the module that is not a docstring.
 
-    A bare substring match would be satisfied by a name that only ever appears
-    in a comment saying we do NOT read it, which is the exact sentence this
-    register exists to make unnecessary.
+    `None` if the module does not parse — the caller then falls back to the
+    textual test rather than reporting "not mentioned" from a parse failure,
+    which would be a verdict about our parser dressed up as a verdict about
+    the module.
     """
-    return (f'"{name}"' in text) or (f"'{name}'" in text)
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None) or []
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings]
+
+
+def _mentions(text: str, name: str) -> bool:
+    r"""The name occurs in the module INSIDE A STRING LITERAL THE CODE EVALUATES.
+
+    The standard is unchanged and is the one the register was built on: prose
+    does not count. A name that appears only in a comment or a docstring —
+    including a comment saying we do NOT read it — is still not a mention,
+    because that sentence is exactly what this register exists to replace.
+
+    WHAT CHANGED, AND WHY IT IS A WIDENING OF THE EVIDENCE AND NOT OF THE
+    STANDARD. This used to ask for the name as a BARE QUOTED LITERAL,
+    `"NAME"` or `'NAME'`. That is one of the forms in which a module consumes
+    a name, not all of them, and the form it misses is the one actually in
+    use here: a name consumed through a PATTERN.
+
+        _pad_ring.py:490
+            r"^[^\S\n]*dict\s+set\s+::env\(\s*PAD_FAKE_SITES\s*\)\s+"
+
+    That is a string literal the module evaluates and matches against a PDK
+    file. It is a consumption of the name in every sense the register cares
+    about, and the old predicate answered False on it. MEASURED CONSEQUENCE:
+    the register went on classifying `PAD_FAKE_SITES` a `known_gap` while the
+    change that closed that gap was on main, and the staleness rule below —
+    written for precisely this — never fired, because it is guarded by this
+    predicate. The check exited 0 over its own blind spot.
+
+    So this reads string literals from the AST instead of matching quote
+    characters in raw text. A comment is not a string literal and a docstring
+    is excluded explicitly, so nothing prose-shaped becomes a mention. What
+    becomes visible is the module's own evaluated strings, whatever quoting,
+    prefix or concatenation they were written with.
+    """
+    lits = _string_literals(text)
+    if lits is None:
+        return (f'"{name}"' in text) or (f"'{name}'" in text)
+    return any(name in lit for lit in lits)
 
 
 def check_contract_entry(entry: dict) -> tuple[list, dict]:
@@ -329,11 +383,36 @@ def verify_snapshot(entry: dict, root: Path) -> list:
     return findings
 
 
+def _basis_line(basis: dict) -> str:
+    """WHAT THIS VERDICT WAS MEASURED AGAINST, printed at every verdict.
+
+    Without this the PASS reads as "our re-implementations agree with
+    upstream" when what was actually compared, absent a distribution root, is
+    our code against OUR OWN RECORD of upstream — the register's snapshot. Both
+    print the same way and only one of them is a statement about upstream.
+
+    This is the rule the whole register exists for, turned on the register's own
+    verdict: an answer must say which sources it read. It was missing here until
+    someone asked what the PASS was over.
+    """
+    total = basis.get("entries_total", 0)
+    reread = basis.get("upstream_reread") or []
+    root = basis.get("distribution_root")
+    if not root:
+        return (f"BASIS: the register's RECORDED SNAPSHOTS for all {total} "
+                f"entry/entries. Upstream was NOT re-read on this run — pass "
+                f"--distribution-root to compare against a live distribution. "
+                f"This verdict is about our code against our own record.")
+    return (f"BASIS: upstream re-read under {root} for {len(reread)} of "
+            f"{total} entry/entries{'' if len(reread) == total else ' — the rest were not reached'}.")
+
+
 def run(register: Path, distribution_root: Path | None) -> tuple[int, dict]:
     entries = load_register(register)
     findings: list = []
     undetermined: list = []
     per_entry: dict = {}
+    reread: list = []          # entries whose upstream file was ACTUALLY re-read
 
     for entry in entries:
         eid = entry.get("id") or "<unnamed entry>"
@@ -349,21 +428,27 @@ def run(register: Path, distribution_root: Path | None) -> tuple[int, dict]:
                     f"'contract' and 'computation'")
             if distribution_root is not None:
                 f = f + verify_snapshot(entry, distribution_root)
+                reread.append(eid)
             findings.extend(f)
             per_entry[eid] = counts
         except Undetermined as exc:
             undetermined.append(str(exc))
             per_entry[eid] = {"undetermined": str(exc)}
 
+    basis = {"upstream_reread": sorted(reread),
+             "entries_total": len(entries),
+             "distribution_root": str(distribution_root) if distribution_root
+                                  else None}
     if undetermined:
         return 2, {"verdict": "NOT_DETERMINED", "entries": len(entries),
                    "per_entry": per_entry, "undetermined": undetermined,
-                   "findings": findings}
+                   "findings": findings, "basis": basis}
     if findings:
         return 1, {"verdict": "FAIL", "entries": len(entries),
-                   "per_entry": per_entry, "findings": findings}
+                   "per_entry": per_entry, "findings": findings,
+                   "basis": basis}
     return 0, {"verdict": "PASS", "entries": len(entries),
-               "per_entry": per_entry, "findings": []}
+               "per_entry": per_entry, "findings": [], "basis": basis}
 
 
 def main(argv=None) -> int:
@@ -416,6 +501,7 @@ def main(argv=None) -> int:
     # The denominator is printed on every run, at every verdict.
     for eid, counts in report["per_entry"].items():
         print(f"  {eid}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+    print("  " + _basis_line(report.get("basis") or {}))
 
     if rc == 2:
         print(f"NOT DETERMINED: {len(report['undetermined'])} entry/entries "

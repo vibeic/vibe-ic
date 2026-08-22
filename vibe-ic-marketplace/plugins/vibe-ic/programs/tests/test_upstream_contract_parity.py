@@ -80,18 +80,24 @@ def test_the_denominator_is_printed_at_every_verdict():
 # ── the two reds this lane exists for ───────────────────────────────────────
 
 def test_an_upstream_name_in_no_class_is_a_finding(tmp_path):
+    # The name is taken from `implemented`, which every contract entry has by
+    # construction. It used to be taken from `known_gap`, which made the test
+    # depend on the shipped register still HAVING an open gap: closing the
+    # last one turned this red with an IndexError, in a test whose subject has
+    # nothing to do with gaps. A test that borrows its fixture from live data
+    # asserts today's contents, not the rule.
     doc = shipped_doc()
     ent = contract_entry(doc)
-    gaps = ent["classification"]["known_gap"]
-    dropped = sorted(gaps)[0]
-    del gaps[dropped]
+    impl = ent["classification"]["implemented"]
+    dropped = sorted(impl)[0]
+    impl.remove(dropped)
 
     rc, out = run(write(tmp_path, doc))
     assert rc == 1, out
     assert dropped in out
     assert "no class" in out
 
-    gaps[dropped] = {"reason": "restored", "reference": "restored"}
+    impl.append(dropped)
     rc, out = run(write(tmp_path, doc))
     assert rc == 0, out
 
@@ -153,10 +159,20 @@ def test_a_declared_unperformed_name_must_be_recorded_in_the_module(tmp_path):
 # ── the classes cannot become an excuse list ────────────────────────────────
 
 def test_a_known_gap_without_a_reference_is_a_finding(tmp_path):
+    # The gap is INJECTED rather than borrowed from the shipped register, so
+    # the rule is tested whether or not the repo currently has an open gap —
+    # and a green repo is the state we want this to keep working in. The name
+    # comes from `omitted_by_design`, whose members are by definition NOT
+    # consumed by the module, so the staleness rule ("classified known_gap and
+    # DOES appear") cannot also fire and make the assertion below pass for the
+    # wrong reason.
     doc = shipped_doc()
     ent = contract_entry(doc)
-    name = sorted(ent["classification"]["known_gap"])[0]
-    ent["classification"]["known_gap"][name]["reference"] = "  "
+    cls = ent["classification"]
+    name = sorted(cls["omitted_by_design"])[0]
+    del cls["omitted_by_design"][name]
+    cls.setdefault("known_gap", {})[name] = {"reason": "injected by the test",
+                                             "reference": "  "}
 
     rc, out = run(write(tmp_path, doc))
     assert rc == 1, out
@@ -255,6 +271,18 @@ def test_a_named_pin_test_that_exists_passes(tmp_path):
 # ── snapshot drift, measured against a root we build ────────────────────────
 
 def _fake_root(tmp_path: Path, body: str) -> Path:
+    """A distribution that satisfies EVERY registered entry by construction.
+
+    It used to hard-code the two pad files. Registering a third entry — a
+    Magic LEF-write sequence, the first with no pad in it — then made three
+    unrelated tests fail with rc 2, because the new entry's upstream file was
+    not under this root and the checker correctly reported NOT DETERMINED. The
+    tests were right, the checker was right, and the helper was the thing that
+    knew a fixed list.
+
+    It now reads the register, so the next entry costs nothing here. Each test
+    still perturbs only the entry it is about.
+    """
     root = tmp_path / "root"
     (root / "librelane" / "config").mkdir(parents=True)
     (root / "librelane" / "config" / "flow.py").write_text(body,
@@ -265,6 +293,17 @@ def _fake_root(tmp_path: Path, body: str) -> Path:
      / "pad_cfg.tcl").write_text(
         "incr sum_of_cell_widths $width\n[[$inst getMaster] getWidth]\n",
         encoding="utf-8")
+
+    for entry in shipped_doc()["entries"]:
+        rel = (entry.get("upstream") or {}).get("file")
+        if not rel:
+            continue
+        path = root / rel
+        if path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        anchors = (entry.get("upstream") or {}).get("anchors") or []
+        path.write_text("\n".join(anchors) + "\n", encoding="utf-8")
     return root
 
 
@@ -339,3 +378,43 @@ def test_a_supplied_project_path_is_announced_not_silently_ignored(tmp_path):
     assert p.returncode == 0, out
     assert "is not read" in out
     assert "upstream_names=" in out
+
+
+# ── the verdict must say what it was measured against ───────────────────────
+
+def test_a_pass_without_a_distribution_says_it_compared_against_its_own_record():
+    """The rule this register exists for, turned on its own verdict.
+
+    Absent a distribution root, what is compared is our code against OUR OWN
+    RECORD of upstream — the snapshot in the register. That is a useful check
+    and it is NOT a statement about upstream, and the two print identically
+    unless the verdict says which. This was missing until someone asked what
+    the PASS was over.
+    """
+    rc, out = run(SHIPPED)
+    assert rc == 0, out
+    assert "BASIS:" in out, out
+    assert "NOT re-read" in out, out
+    assert "our own record" in out, out
+
+
+def test_a_pass_with_a_distribution_says_how_many_entries_it_re_read(tmp_path):
+    doc = shipped_doc()
+    ent = contract_entry(doc)
+    root = _fake_root(tmp_path, _minimal_upstream(ent["snapshot"]["names"]))
+    for e in doc["entries"]:          # the shas are of the REAL upstream files
+        e.get("snapshot", {})["file_sha256"] = ""
+    rc, out = run_against(write(tmp_path, doc), root)
+    assert "BASIS:" in out, out
+    assert "re-read under" in out, out
+    assert f"for {len(doc['entries'])} of {len(doc['entries'])}" in out, out
+
+
+def test_the_basis_is_printed_at_a_failing_verdict_too(tmp_path):
+    """A disclosure present only on the happy path is not a disclosure."""
+    doc = shipped_doc()
+    impl = contract_entry(doc)["classification"]["implemented"]
+    impl.remove(sorted(impl)[0])
+    rc, out = run(write(tmp_path, doc))
+    assert rc == 1, out
+    assert "BASIS:" in out, out

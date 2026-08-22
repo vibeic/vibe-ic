@@ -1,0 +1,3 @@
+  pad_ring.upstream_pad_variables: upstream_names=20, implemented=8, declared_unperformed=3, omitted_by_design=8, known_gap=1
+  pad_ring.along_the_row_extent: anchors=2, pin=known_gap
+PASS: 2 registered re-implementation(s); every upstream name and every registered computation is accounted for.
