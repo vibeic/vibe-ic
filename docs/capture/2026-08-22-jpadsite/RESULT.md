@@ -119,6 +119,37 @@ faster than the caveats:
 It is a real measurement of the geometry and not a verdict on this design's pad
 ring. Sections 4 and CORRECTION carry all of it with the evidence.
 
+WHAT LANDED IN v1.11.70, AND WHY THE ORIENTATION FIXES DID NOT
+===============================================================
+main advanced 673 commits to `ae78abb28` (v1.11.70) on 2026-08-22. Of the six
+commits on this branch beyond the old merge-base, TWO are ancestors of the new
+main and FOUR are not:
+
+    b95dd8a9f  07:55  ANCESTOR   the LEF-wins precedence test
+    41e6562d2  10:08  ANCESTOR   the header count (11 + 8 = 19 -> 12 of 20)
+    c56b8e1b1  15:13  not        PAD_ROTATION_VERTICAL is not inert
+    6c3ebe447  15:23  not        NORTH mirrored, not rotated
+    7ab8f80f0  15:24  not        the north control that observes a value
+    725f9352f  15:30  not        two of four corners mirrored
+
+THE BATCH SNAPSHOTTED THIS BRANCH AT 10:08. Everything authored after that --
+all four orientation commits, spanning 15:13 to 15:30 -- was never in it. The
+merge-base of this branch and main is exactly 41e6562d2.
+
+THAT IS NOT WHAT THE FREEZE APPEARED TO PROMISE, and it is worth writing down
+plainly rather than leaving it to be inferred. The freeze instruction said the
+branch was "frozen at whatever it holds right now, and that is what ships". At
+freeze time it held 725f9352f. What shipped is what it held at 10:08. No
+complaint attaches to that -- an assembly has to snapshot somewhere and mine
+moved after it did -- but a reader comparing the branch to main needs to know
+the snapshot point, not the freeze point.
+
+CONSEQUENCE, MEASURED ON `ae78abb28`: `^SIDE_ORIENT` 0, `^CORNER_ORIENT` 0,
+`^VERTICAL_SIDE_ORIENT` 1, the disclosure key still `rotation_vertical_inert`,
+and line 301 still `PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_CORNER"], i)`.
+All three orientation defects are live on main. Pending onto the new main:
++211/-65 across 3 files, 0 conflicts, 106 passed merged.
+
 LANDING STATE CHANGED WHILE THIS REPORT WAS BEING WRITTEN, AND THE CHANGE IS
 LARGE ENOUGH TO BELONG AT THE TOP. MEASURED 2026-08-22, main at `a4caccefe`
 (v1.11.69, 214 commits after the 81cd5321b this report was verified against):
