@@ -3153,7 +3153,7 @@ gap was non-empty every single time it was measured.
 | A-34 | 2 runs, 3.8 s and 1795 s | **identical JSON** | the depth field exists for the other half of the method |
 | A-35 | 1 required scope key, 5 carried | **0 name the composition** | one component IS named — `fill` — and the rest are not |
 | A-36 | declaration honoured verbatim | **0 satisfiability checks** | and the producible set is not declared anywhere, so build that first |
-| A-37 | 23 refusal messages | **0 carry a remedy** | the first clean sweep in this lane to survive its own control |
+| A-37 | 23 **marked** refusals | **0 carry a remedy** | survived its control — and its denominator is the marked subset, blind to unmarked refusals by construction |
 | A-38 | 3 null-emitting sites | **44 recorded refusals** | the doc forbids it in bold, the gate refuses it, a sibling module already fixed it |
 | A-39 | 20 entry points | **15 unguarded** | an escaped exception exits on the finding code; 5 siblings already guard it |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
