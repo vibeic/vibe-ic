@@ -216,3 +216,52 @@ stale rule in it is a rule somebody will act on.
 WHAT IS ACTUALLY NEEDED: one yes/no from the `jdistmat/matrix-distil` and
 `jcap-ppa` authors -- "did the rewrite supersede these eleven?" -- after which the
 rest of the file merges mechanically and the batch assembles 16 of 16.
+
+## 8. Correction to §7: the blocker is ONE row, and eleven are mechanical
+
+§7 said eleven entries needed a ruling from two authors. That was measured by KEY,
+and the key was the thing that moved. Measured by CONTENT it collapses.
+
+Every one of `jdistmat`'s twelve "removals" has an EXACT content match among its
+twelve "additions" -- identical `pattern`, `docstring`, `expected_signal` and
+`fix_action`, similarity 1.00 on all twelve. Only `rule_name` changed form:
+
+    "gate proof vocabulary has a producer"  ->  gate_proof_vocabulary_has_a_producer
+    "population guard asserts equality not a floor"
+                                           ->  population_guard_asserts_equality_not_a_floor
+
+That is a RENAME of the identity field from prose to a snake_case slug, not a
+deletion. Comparing by key made a rename look like twelve deletes and twelve
+unrelated adds.
+
+So what each side did to those rows is INDEPENDENT:
+
+    jdistmat  renames the row               (rule_name)
+    jcap-ppa  updates the row's content     (fix_action on 11, docstring on 2)
+
+which is an ordinary three-way merge -- take the renamed row, apply the content
+edit. Git could not see it because the rename changed the identity of a LIST
+ENTRY, and a JSON list has no key for git to follow.
+
+**ELEVEN of the twelve are therefore mechanical.** The mapping is not guesswork:
+each is pinned by a 1.00 content match, so which renamed row receives which edit
+is determined, not chosen.
+
+**ONE row is a real question, and it is the whole blocker:**
+
+    an optional import is guarded by capability not by exception type
+        jdistmat RENAMED it   (to optional_import_is_guarded_by_capability...)
+        jcap-ppa DELETED it
+
+A delete against a rename. Nobody should infer which wins: either `jcap-ppa`
+retired the rule deliberately, or it deleted a row whose replacement it had not
+seen. That is one yes/no from one author.
+
+Merged mechanically the file holds 45 rows (jdistmat's 14, twelve of them renamed,
+plus jcap-ppa's 31 new), or 44 if the deletion stands.
+
+THE GENERAL POINT, because it will recur: a JSON LIST has no key, so any tool --
+git included -- compares its entries positionally or by whole value. A change to
+an identity field inside such a list is indistinguishable from delete+add, and a
+"conflict" of that shape is worth re-measuring by CONTENT before anyone is asked
+to adjudicate it. Here it turned twelve authorial decisions into one.
