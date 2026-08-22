@@ -5,6 +5,21 @@ host 8hd-3 · 2026-08-22 · branch `next/red-census-vs-current-main`, cut from
 
 ## IF YOU READ ONE SCREEN, READ THIS
 
+> **THIS DOCUMENT CITES A DOCUMENT THAT IS NOT ON THIS BRANCH.** It refers
+> throughout to the frozen branch's section C and its `M`-numbered findings. **That
+> file — `docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md` — lives on
+> `ptmo/main-red-triage-v11166` and is NOT on `origin/main`**, so a reader here
+> cannot open it. Until that branch lands:
+>
+> ```sh
+> git show ptmo/main-red-triage-v11166:docs/research/2026-08-21-main-red-triage-v1_11_66-findings.md
+> ```
+>
+> **This is an ordering dependency, not an oversight:** this branch rides the batch
+> AFTER the frozen one, and the references resolve the moment it lands. **Stated
+> because a dangling citation is the same defect whether it points at a missing
+> section or a missing file, and this document has spent 18 parts saying so.**
+
 **The frozen branch `ptmo/main-red-triage-v11166` @ `88cf416b6` still merges
 cleanly onto current main and the merged tree was RUN** (Part 5): 11 files, no
 conflicts, `6 failed / 128 passed` — the same failing set it measures alone. **It
