@@ -64,6 +64,7 @@ Accepted with no refusal and no unrouted record.
 - [Does any commit describe a change it does not carry?](#does-any-commit-describe-a-change-it-does-not-carry)
 - [How often the instrument was the problem](#how-often-the-instrument-was-the-problem)
 - [Every blockage in this report, measured](#every-blockage-in-this-report-measured)
+- [The one claim class that keyword screens cannot audit](#the-one-claim-class-that-keyword-screens-cannot-audit)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -2073,6 +2074,36 @@ Both hold. One of them did not hold in the form it was first written: the
 handoff had said to *attach* the crash artefacts, which presumes they exist
 somewhere, and the check turned that into *re-run one arm to produce them* —
 a different instruction with a different cost.
+
+## The one claim class that keyword screens cannot audit
+
+Five classes of claim in this report were audited by building a screen over the
+prose: absences, universals, temporal states, superseded denominators, and
+blockages. Each found something. The sixth class is the one an implementer
+actually builds from — the **mechanism**: *because X, Y*. A wrong count misleads;
+a wrong mechanism misdirects the fix, which is what `A-17`'s original argument
+did.
+
+The screen was built and it does not work. It asked which mechanism-asserting
+record sections show a CONTRAST supporting them — the mechanism present against
+absent — and reported that 14 of 25 show none. Tested against a section I had
+personally run two groupings on that same day, it found no contrast there either:
+that section says *"again on"*, *"by `source.tool`"*, *"MIXED"* and *"grouping"*,
+and the screen was looking for the words I happened to think of. It was measuring
+my vocabulary, not the presence of a contrast, and a fourth guess at the word
+list would measure the fourth guess.
+
+**So the figure is withdrawn rather than refined**, and the honest answer is that
+this question is already answered mechanically somewhere else: the sweep table.
+Every rule in it now carries a sweep, and a sweep IS the contrast — a before and
+an after over a named population. That is why nine sweeps changed nine rules
+while five prose audits changed the prose. A mechanism stated in a paragraph can
+only be read; a mechanism with a population and a sweep can be run.
+
+The general lesson, measured across four attempts: **a keyword screen over one's
+own prose measures the author's vocabulary.** It is worth building once to find
+what it happens to catch, and it is never worth wiring, because the vocabulary it
+encodes is the one blind spot guaranteed to be shared with the text.
 
 ## The honest sentences, checked verbatim against the records
 
