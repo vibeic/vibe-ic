@@ -171,7 +171,7 @@ endmodule
 
 def _run_lcc(args):
     cp = subprocess.run([sys.executable, str(_LCC), *args],
-                        capture_output=True, text=True, timeout=180)
+                        capture_output=True, text=True, timeout=60)
     return cp.returncode, cp.stdout + cp.stderr
 
 
