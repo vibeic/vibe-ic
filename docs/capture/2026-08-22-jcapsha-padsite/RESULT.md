@@ -152,6 +152,14 @@ Both were run against their own tree, in a detached worktree at `0c1a7b4c8`:
       1278 files parsed, 3 declared mirrors, 0 undeclared candidates
     their five test files                          31 passed, 7 skipped
 
+I checked what the 7 skips ARE rather than reporting the count, because an
+uncharacterised skip is the same shape this lane is about. They decline BY
+NAME and they name the missing input — "upstream ... is not on this host:
+$VIBEIC_LIBRELANE_ROOT is unset or does not carry it and `librelane` is not
+importable. The question could not be put here; it is put in the container
+image that ships the flow." That is an honest decline, not a vacuous pass,
+and it is the one thing a skip count alone cannot tell you.
+
 Real denominators on both, so neither is a gate that walked nothing. Load was
 92 on 32 cores throughout, so no timing conclusion is drawn from any of it.
 
