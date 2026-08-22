@@ -6,6 +6,7 @@ MEMBER SET different. That is the whole claim, and it is arithmetic.
 """
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -105,7 +106,12 @@ def test_a_count_only_pin_is_refused():
     r = _run(_tree(_DEFECT))
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert "test_sample.py" in r.stdout
-    assert "69" in r.stdout
+    # ANCHORED TO THE COUNT POSITION. The finding renders as
+    #   test_sample.py  N pin(s): 69 via <derived_by> (line L)
+    # so a bare `"69" in r.stdout` is also satisfied by a LINE NUMBER of 69,
+    # or by 169/690. It must be the pinned COUNT that is 69.
+    assert re.search(r"\b69 via ", r.stdout), (
+        f"69 is not reported as the pinned count\n{r.stdout}")
 
 
 def test_a_member_pin_beside_the_count_is_not_refused():
