@@ -39,6 +39,31 @@ private copies of a negation vocabulary is the defect #712 exists to answer, and
 a census that re-implemented `_searches_prose` would drift from the thing that
 actually decides the census.
 
+A THIRD SPELLING EXISTS, AND IS REFUSED
+=======================================
+`out.append({...})` -- a list of records -- writes a declared value as surely as
+a dict entry does, and neither the gate nor this census counts it. Widening to
+it was measured rather than argued:
+
+    census as it stands                 : 259
+    + `append({...})` counted as a write: 781   (522 more)
+
+Refused. The two spellings this census does add are KEYED writes -- a dict entry
+and a set-add under a key -- and the key is where the discrimination comes from:
+a function that writes `out[name] = value` is publishing THAT name's value.
+`append` drops the key, so the predicate stops selecting extractors and starts
+selecting every parser that builds records, most of them reading RTL, DEF or
+SPICE.
+
+The point of this file is a list short enough for a human to READ, and seven
+defects came out of reading 46. Nobody reads 781, and a number nobody reads
+records no debt at all -- it would convert a working instrument into a statistic.
+
+If the keyed spellings are ever exhausted, the honest way to reach `append` is a
+predicate that keeps the key -- `append({"name": X, "value": Y})` with a literal
+key -- not the bare call.
+
+
 WHAT READING THEM ACTUALLY FOUND
 ================================
 The count is a shape; the defects are what a human finds by reading. Every entry
