@@ -4041,6 +4041,37 @@ it, and the instruction caught its own defect. **That is the first thing tonight
 that failed loudly rather than plausibly.**
 
 
+## M76 — the self-invalidation class, closed: every documented selector is line-anchored
+
+M75 fixed one self-matching command. **The class needed checking, not the
+instance** — a defect that arrives by publication arrives the same way for every
+published command.
+
+**Audited all four selectors the header publishes.** Each now matches **exactly
+once** in the document, and the reason is structural rather than lucky:
+
+| selector | occurrences |
+|---|--:|
+| `^## M[0-9]+` | the headings only |
+| `^## D\. Corrections` | 1 |
+| `^### .*instrument defects, consolidated` | 1 |
+| `^\*\*The common shape` | 1 |
+
+**They are all LINE-ANCHORED, and the quoted copies live inside a `>`
+blockquote** — so a quoted copy can never satisfy `^`. The one that broke was the
+only one using bare phrases.
+
+**So the rule is mechanical, not a habit to remember:** *a selector published
+inside a document must be anchored to something the quoted copy cannot be —
+a line start, a heading marker, a digest.* Under a `>` quote, `^` is exactly that.
+
+**This is the fifth class-fix and the last one available**, and it is the only one
+whose correctness I can state as a property rather than a measurement: the other
+four (re-derivation commands, a named authority, a duplication rule, deleting the
+decaying count) all still depend on somebody choosing to run something. **This one
+holds because markdown indents quotes.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
