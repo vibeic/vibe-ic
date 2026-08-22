@@ -1,7 +1,7 @@
 {
   "date": "2026-08-22",
   "totals": {
-    "A": 40,
+    "A": 41,
     "B": 0,
     "C": 2,
     "D": 0,
@@ -29,7 +29,8 @@
       "programs/crosslayer_rewrite_equivalence.py",
       "programs/_ppa/timing.py",
       "programs/benchmark_run_manifest.py",
-      "programs/gen_program_inventory.py"
+      "programs/gen_program_inventory.py",
+      "programs/landing_merge_verdict.py"
     ],
     "bucket_T": [
       "OpenROAD"
@@ -56,7 +57,8 @@
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_crosslayer_rewrite_equivalence_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs__ppa_timing_rule_sketches.py",
     "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_benchmark_run_manifest_rule_sketches.py",
-    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_gen_program_inventory_rule_sketches.py"
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_gen_program_inventory_rule_sketches.py",
+    "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_A_programs_landing_merge_verdict_rule_sketches.py"
   ],
   "bucket_C_dir": "docs/capture/2026-08-21-jcap-ppa/candidates/bucket_C_backlogs",
   "bucket_C_files": [

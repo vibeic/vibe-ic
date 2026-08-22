@@ -1,4 +1,4 @@
-# The PPA cluster, DISTILLED — 43 records, and the eighteen already-program claims of which seventeen hold
+# The PPA cluster, DISTILLED — 44 records, and the eighteen already-program claims of which seventeen hold
 
 The twenty-odd lanes that converged on the measurement layer all captured. None
 distilled. This lane turns that cluster into records the next blind run can be
@@ -48,7 +48,7 @@ Accepted with no refusal and no unrouted record.
 - [The rule for each of the eighteen](#the-rule-for-each-of-the-eighteen)
 - [The eighteen, and what is true on this tree](#the-eighteen-and-what-is-true-on-this-tree)
 - [The three the brief named — they are one shape, and the shape is already a program](#the-three-the-brief-named--they-are-one-shape-and-the-shape-is-already-a-program)
-- [The 43 records](#the-43-records)
+- [The 44 records](#the-44-records)
 - [One change outside the capture bundle](#one-change-outside-the-capture-bundle)
 - [Where each record came from](#where-each-record-came-from)
 - [The one thing I could not settle — now settled, and it did not go where I expected](#the-one-thing-i-could-not-settle--now-settled-and-it-did-not-go-where-i-expected)
@@ -90,7 +90,7 @@ Accepted with no refusal and no unrouted record.
 | bucket | n | |
 |---|---:|---|
 | **T** | 1 | forked place-and-route tool faults after its own route completes |
-| **A** | 40 | deterministic rules — the default, and every one names its predicate |
+| **A** | 41 | deterministic rules — the default, and every one names its predicate |
 | **B** | **0** | see below: no candidate survived the "name the undecidable decision" test |
 | **C** | 2 | one where the plumbing is the work; one DEMOTED FROM A by its own sweep |
 | **D** | **0** | see below: nothing met the honest-discard bar |
@@ -232,7 +232,7 @@ asymmetry the brief calls the richest material, as a rule.
 
 ---
 
-## The 43 records
+## The 44 records
 
 Every one carries the command and the number. The two questions the skill exists
 for are answered per record: **(o)** would it have fired on the original defect,
@@ -1017,8 +1017,8 @@ bad pairing was reachable rather than hypothetical.
 
 Checked, and the batch passes:
 
-    Bucket-A records            40     (22 when the rule was written)
-    distinct target programs    21
+    Bucket-A records            41     (22 when the rule was written)
+    distinct target programs    22
     targets that are unwired     0
 
 **That is the result to want and not the one to assume** — I had not verified it
@@ -1661,6 +1661,45 @@ new files.
 **(d)** yes — it keys on the pairing of a tracked-set enumeration with a tracked
 output, and names no generator.
 
+### A-43 · an enforcement point named as the only one must be proven present · `repo.enforcement_point`
+
+A sibling lane recorded that on its machine the pre-push hook **refuses every
+push from an isolated working copy**, because the corpus it inspects is untracked
+and therefore absent there. I have pushed from an isolated copy all batch and
+was never refused, so I went to find out why.
+
+    tracked hook       tools/git-hooks/pre-push     present, executable, 23743 bytes
+    installed hook     .git/hooks/pre-push          ABSENT
+    hooks directory    core.hooksPath               not configured
+
+The hook does not run here. And the document that names it *the only
+enforcement* records the other two rungs as already gone — automation disabled
+at the account level, branch protection returning not-protected — so on this
+machine **the number of enforcement points that actually execute is zero.**
+
+Three tests reference the hook. All three locate the **tracked** copy and assert
+on its text; **none asserts that it is installed.** Testing the script is not
+testing that it runs, and a hook takes effect only from an untracked location
+that every fresh clone starts without.
+
+**This batch is the evidence that it is not theoretical.** Nine pushes were made
+from an isolated copy during it and not one was gated. From my side a successful
+push looked exactly like a push that had passed — which is this batch's own
+central class, arriving in the first person.
+
+So the enforcement point has two observable states, refuse-everything and
+enforce-nothing, and which one a person gets is decided by an untracked file
+nobody checks.
+
+*What I did about my own pushes:* ran the gate the hook would have run, with the
+documented pointer. `rc=0`, and it says why — *no evidence folders changed since
+`origin/main`, nothing to enforce*, which is correct for a branch that touches
+none.
+
+**(o)** yes — the installed path is absent, so the check fails where it stands.
+**(d)** yes — it compares a resolved hook path against a tracked source and
+names no particular hook.
+
 
 ### C-1 · A generated report header must be derived from the inputs the session actually opened · `phase3.sta`
 
@@ -1765,8 +1804,8 @@ artefact class that declares its layout is covered by the same check.
 
 ## One change outside the capture bundle
 
-`benchmark/CAPTURE_ROUTING.json` gains **14** steps. Without them **17 of the
-43 records** here emit UNROUTED — the ones routed at those nine — and the
+`benchmark/CAPTURE_ROUTING.json` gains **15** steps. Without them **18 of the
+44 records** here emit UNROUTED — the ones routed at those nine — and the
 emitter's own warning says to add the entry. The other 24 route against entries
 main already carries, because half of the steps this lane wrote landed with the
 earlier snapshot. *These two figures have now moved twice, each time because a
@@ -2017,7 +2056,7 @@ had never checked that systematically. The rubric: a buildable `fix_action` name
 a **predicate** (what to compute), a **population** (what to compute it over) and
 a **refusal** (what to do on a hit).
 
-    Bucket-A records                          40     (26 when the rubric was applied)
+    Bucket-A records                          41     (26 when the rubric was applied)
     shortest fix_action                       > 300 characters
     genuinely missing a rubric element         0
 
@@ -2098,9 +2137,9 @@ advice, which is the thing this whole batch exists to stop producing.
 
 The brief warns that *"a fabricated near-duplicate is worse"* than a missing
 record. The emitter enforces that only for the buckets that write a backlog, so
-the patterns were unchecked by anything. Over **all 43 records**:
+the patterns were unchecked by anything. Over **all 44 records**:
 
-    pairs compared                      903
+    pairs compared                      946
     maximum similarity                 0.41
     pairs above 0.40                      0
 
@@ -3192,7 +3231,7 @@ fix into a rule.
 
 ## Summary
 
-**STATUS**: 43 records emitted and validated — 40 Bucket A, 2 C, 1 T, zero B,
+**STATUS**: 44 records emitted and validated — 41 Bucket A, 2 C, 1 T, zero B,
 zero D. 18 ALREADY-PROGRAM claims examined, 17 holding and 1 (F-2) disproven by
 execution, each named with the program that enforces
 each. All 18 findings carry a stated rule. Every claim in this document is
@@ -3220,7 +3259,7 @@ bucket. My 37 resolve as:
 |---|---:|---|
 | ALREADY-PROGRAM | 18 claims, **17 hold** | not records — listed above with their enforcing program; F-2's guard is shown unfalsifiable |
 | **AUGMENT-EXISTING** | 22 | A-1, A-2, A-5 … A-11, A-14 … A-21, A-23, A-24, A-26, A-27, A-28, A-29 |
-| **EXTRACT-NEW** | 18 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42 |
+| **EXTRACT-NEW** | 19 | A-3, A-4, A-13, A-22, A-25, A-30, A-31, A-32, A-33, A-34, A-35, A-36, A-37, A-38, A-39, A-40, A-41, A-42, A-43 |
 | KEEP-JUDGMENT | 0 | every candidate reduced to a named predicate |
 
 **Contention warnings for whoever applies these**, because the skill asks for
@@ -3378,6 +3417,7 @@ gap was non-empty every single time it was measured.
 | A-40 | 8 aggregation sites | **3 unguarded** | rc 2 outranks rc 1 by integer order; CONFIRMED by execution — adding a run took a corpus from rc 1 to rc 2 |
 | A-41 | 138 gate output paths | **2 confirmed** | a gate's output path equals a producer's; the overwrite is documented in the producer's own source and repaired after the fact |
 | A-42 | 3 tracked-set generators | **2 unguarded** | guards the query FAILING but not the query answering about the previous commit |
+| A-43 | 3 tests reference the hook | **0 assert installation** | the tracked hook is present, the installed one is absent, and 9 pushes this batch went ungated |
 | C-2 | 131 handlers | 0 confirmed | **DEMOTED out of Bucket A** |
 | A-1 | 34 names | **26 declared, 8 derived** | **swept, and it overturns the row**: 3 of 4 registries are declared tables; timing composes its 8 from three format strings, and a missed expansion is a false positive shaped like a finding |
 | A-2 | 3 axes | **1 declared** | **swept, and it overturns the row**: FP-free by construction needs BOTH sides declared; only timing declares its emitted keys, power declares one, area none |
