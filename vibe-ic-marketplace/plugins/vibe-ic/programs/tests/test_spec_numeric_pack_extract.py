@@ -214,3 +214,45 @@ def test_chip_agnostic_rename_invariance():
     assert kinds == {"rounding_mode", "width_convert"}
     wc = next(it for it in a if it["kind"] == "width_convert")
     assert (wc["in_width"], wc["out_width"], wc["ratio"]) == (32, 8, "4:1")
+
+
+# ── polarity: a spec states a RETIRED width as readily as a live one (#712) ──
+#
+# Found by `prose_polarity_census`, which counts extractors the blocking gate
+# cannot see. `_detect_width_pairs` published both of these as EXPLICIT stated
+# pairs, and a caller receiving one cannot tell it from a live statement.
+
+def _pairs(text):
+    import spec_numeric_pack_extract as M
+    return {(a, b) for a, b, _ in M._detect_width_pairs(text)}
+
+
+def test_a_retired_width_pair_is_not_published_as_stated():
+    assert _pairs("The path from 8-bit to 16-bit is no longer supported.") == set()
+
+
+def test_an_explicitly_negated_width_pair_is_not_published():
+    assert _pairs("The block does not pack from 8-bit to 16-bit.") == set()
+
+
+def test_a_denial_does_not_refuse_a_LIVE_pair_beside_it():
+    """The other direction, and the one this fix nearly broke. The shared
+    vocabulary breaks on ". " and not on ".\\n", so the scope of the live match
+    reached back over the full stop into the denial and refused it -- returning
+    NOTHING for a document that plainly states 8 to 32."""
+    text = ("The path from 8-bit to 16-bit is no longer supported.\n"
+            "Data is packed from 8-bit to 32-bit words.")
+    assert _pairs(text) == {(8, 32)}
+
+
+def test_a_denial_wrapped_across_two_lines_is_still_a_denial():
+    """`"\\n"` alone would have been the wrong break: a spec wraps mid-sentence,
+    and breaking on every newline misses this -- an under-reach that publishes a
+    denied value, which is the failure being fixed."""
+    assert _pairs("The path from 8-bit to 16-bit is no\nlonger supported.") == set()
+
+
+def test_a_plainly_stated_pair_is_still_published():
+    """The control arm. A fix that refused everything would pass the four tests
+    above and be worthless."""
+    assert _pairs("Data is packed from 8-bit to 32-bit words.") == {(8, 32)}

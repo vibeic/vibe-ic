@@ -70,6 +70,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from _prose_polarity import is_denied, sentence_scope
+
 # ---------------------------------------------------------------------------
 # Comment / fence stripping is NOT done here: a CVDP prompt's status-flag and
 # mode definitions frequently live in the markdown prose AND in the embedded
@@ -213,6 +215,23 @@ def _detect_saturation(text: str) -> Optional[str]:
 #   "32 -> 8", "32-to-8", "32:8 downscale"
 #   "downscale/upscale ... NN ... to ... MM"
 # Captured: (in_width, out_width).
+#: A SENTENCE THAT ENDS AT A LINE END IS STILL A SENTENCE. The shared
+#: vocabulary breaks on ". " and on a blank line, but a specification wraps its
+#: paragraphs and writes ".\n" -- so without these the scope of a match reached
+#: backwards over the full stop into the previous sentence, and a DENIAL there
+#: refused a live pair standing beside it. Measured on
+#:
+#:     The path from 8-bit to 16-bit is no longer supported.
+#:     Data is packed from 8-bit to 32-bit words.
+#:
+#: which returned NOTHING once polarity was asked: the false refusal, which is
+#: the failure the other direction of this trade produces.
+#:
+#: `"\n"` alone would be wrong here. A spec wraps mid-sentence, and breaking on
+#: every newline would miss a denial written across two lines -- an under-reach
+#: that publishes a denied value, which is the failure being fixed.
+_LINE_END_BREAKS = (".\n", "!\n", "?\n")
+
 _WIDTH_PAIR_PATTERNS: List["re.Pattern[str]"] = [
     # "<adj> NN-bit width to <adj> width of MM-bit[s]" (axis up/down-scale form)
     re.compile(
@@ -302,10 +321,29 @@ def _ratio_str(a: int, b: int) -> str:
 
 def _detect_width_pairs(text: str) -> List[Tuple[int, int, str]]:
     """Return [(in_width, out_width, evidence)] for every EXPLICIT in->out width
-    statement. De-duplicated by (in,out). §4.05: only a stated numeric pair."""
+    statement. De-duplicated by (in,out). §4.05: only a stated numeric pair.
+
+    POLARITY IS ASKED (vibe-ic#712). A specification states a retired width as
+    readily as a live one, and this reader published both:
+
+        "The path from 8-bit to 16-bit is no longer supported."  -> (8, 16)
+        "The block does not pack from 8-bit to 16-bit."          -> (8, 16)
+
+    Both were returned as EXPLICIT stated pairs, which is a denied value
+    published as a declaration -- the defect #712 exists to answer, and the one
+    the polarity baseline names: it is how a design gets hard-sized onto
+    another chip's die while citing its own document as the authority.
+
+    The sentence around each match is asked, and a denied pair is dropped rather
+    than published. Dropped and not merely down-ranked, because a caller that
+    receives it cannot tell it from a stated one."""
     found: Dict[Tuple[int, int], str] = {}
     for rx in _WIDTH_PAIR_PATTERNS:
         for m in rx.finditer(text):
+            lo, hi = sentence_scope(text, m.start(), m.end(),
+                                    extra_breaks=_LINE_END_BREAKS)
+            if is_denied(text[lo:hi]):
+                continue
             try:
                 iw, ow = int(m.group(1)), int(m.group(2))
             except (ValueError, IndexError):
