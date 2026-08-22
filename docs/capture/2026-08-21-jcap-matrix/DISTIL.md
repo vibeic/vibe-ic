@@ -48,3 +48,21 @@ A record here that names no program is NOT an oversight: it carries a measured
 reason — already implemented elsewhere, half implemented, no static signature,
 or a population too thin to earn a gate. Re-deriving those measurements is the
 work this file exists to save.
+
+## OUT OF SCOPE: the records that are not Bucket A (1 of 11)
+
+The DISTIL brief covered the Bucket-A records only. These were NOT
+examined, and are listed so a reader of a capture with 11 records and 10 dispositions can tell
+*considered and excluded* from *missed*. The reason on each line is the
+record's own `why_not_bucket_a` field, not a judgement added here.
+
+- **[C]** A landing's gate verdict is not recoverable from the repository
+  > A deterministic rule can detect a missing attestation trailer, but there
+  > is no trailer to detect: the landing tool must first be changed to write
+  > its verdict into the commit, and every commit already on the branch
+  > needs a stated disposition before any rule can refuse anything. The
+  > exact input a program would see today is a commit message whose only
+  > evidence is a free-text sentence somebody chose to type, and no
+  > predicate over that text can distinguish a landing that ran the gates
+  > and passed from one that never started them.
+

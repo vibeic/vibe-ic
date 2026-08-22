@@ -6,6 +6,7 @@ asserted rc 0 here would be asserting the defect away.
 """
 from __future__ import annotations
 
+import shutil
 import re
 import subprocess
 import sys
@@ -146,3 +147,28 @@ def test_the_shipped_tree_is_RED_and_that_is_the_point():
     # ANCHORED, not a substring: "6 outside" is contained in "16 outside".
     assert re.search(r"glob 20, relation 26, 6 outside(?!\d)", r.stdout), (
         f"the ppa layer population moved; re-derive the finding\n{r.stdout}")
+
+
+def test_no_test_files_read_is_undetermined_not_a_pass():
+    """The denominator that decides is TESTS READ, not globs in scope.
+
+    A tree whose only prefix glob is test discovery HAS been examined and found
+    nothing in scope -- the tests above pin that as a real rc 0. A tree with no
+    test files at all was not examined, and the `[PASS]` sentence is then a
+    universal claim over the empty set.
+
+    A first attempt keyed this on `prefix_globs` and turned three of the tests
+    above red, correctly, by conflating the two.
+    """
+    root = Path(tempfile.mkdtemp(prefix="lmzero_"))
+    try:
+        (root / ".git").mkdir()
+        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+         / "tests").mkdir(parents=True)
+        r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                           capture_output=True, text=True, timeout=900)
+        assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}"
+        assert "0 test files were read" in r.stdout, r.stdout
+        assert "[PASS]" not in r.stdout, r.stdout
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

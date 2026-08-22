@@ -137,12 +137,35 @@ class DerivedArtifact:
     check: tuple[str, ...]
 
 
+_INV = "vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py"
+
 REGISTRY: tuple[DerivedArtifact, ...] = (
     DerivedArtifact(
         path="vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md",
         generator="tools/gen_programs_index.py",
         regenerate=("python3", "tools/gen_programs_index.py"),
         check=("python3", "tools/gen_programs_index.py", "--check"),
+    ),
+    # PROGRAM_INVENTORY.json is the SECOND file every program-adding branch
+    # rewrites, and it conflicted alongside INDEX.md on a real merge of
+    # jdistmat/matrix-distil into main a4caccefe. Unregistered, it was named as
+    # a FOREIGN path and refused the whole resolution -- including the derived
+    # half that was resolvable -- so the merge was finished by hand.
+    #
+    # `--check-artifact`, NOT `--check`. Full --check also binds stated counts
+    # in the two READMEs, which regenerating this artefact cannot fix. Measured:
+    # with the JSON freshly regenerated, --check was still red on five README
+    # lines. Registered with --check, this entry would therefore leave `check`
+    # red after a correct regeneration, and the degradation table above turns
+    # that into rc 2, UNMEASURABLE -- reporting an unmeasurable tree where the
+    # artefact is provably correct. The prose obligation is real and full
+    # --check still enforces it at landing; it is not the question a
+    # post-merge resolver asks.
+    DerivedArtifact(
+        path="vibe-ic-marketplace/plugins/vibe-ic/programs/PROGRAM_INVENTORY.json",
+        generator=_INV,
+        regenerate=("python3", _INV),
+        check=("python3", _INV, "--check-artifact"),
     ),
 )
 

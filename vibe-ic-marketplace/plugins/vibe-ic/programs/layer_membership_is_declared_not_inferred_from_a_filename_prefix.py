@@ -116,14 +116,17 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     progs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
     tests = progs / "tests"
     if not progs.is_dir() or not tests.is_dir():
-        return [], {"prefix_globs": 0, "layers_examined": 0, "layers_short": 0}
+        return [], {"tests_read": 0, "prefix_globs": 0, "layers_examined": 0,
+                    "layers_short": 0}
 
     users: Dict[str, Set[str]] = {}
+    tests_read = 0
     for p in sorted(tests.rglob("test_*.py")):
         try:
             src = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        tests_read += 1
         for m in _PREFIX_GLOB.finditer(src):
             pre = m.group(1)
             if pre in _NOT_A_LAYER:
@@ -155,7 +158,9 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
             findings.append({"layer": pre, "glob": len(globset),
                              "relation": len(relation), "outside": outside,
                              "selected_by": sorted(by)})
-    return findings, {"prefix_globs": len(users), "layers_examined": examined,
+    return findings, {
+        "tests_read": tests_read,
+        "prefix_globs": len(users), "layers_examined": examined,
                       "layers_short": len(findings)}
 
 
@@ -210,6 +215,19 @@ def main(argv=None) -> int:
               "imports the layer's package; keep the glob as one\n  contributor "
               "and assert the relation is a superset of it.")
         return 1
+
+    # A GREEN FROM AN EMPTY DENOMINATOR IS NOT A PASS -- and the denominator
+    # that decides it is TESTS READ, not globs in scope. Those are different:
+    # a tree whose only prefix glob turns out to be test discovery HAS been
+    # examined and found nothing in scope, which is a real rc 0. A tree with no
+    # test files at all was not examined, and "every prefix-selected layer
+    # population contains its whole relation" over the empty set is vacuously
+    # true. An earlier attempt keyed this on `prefix_globs` and turned three of
+    # this file's own tests red -- correctly, because it conflated the two.
+    if denom.get("tests_read", 0) == 0:
+        print("[CANNOT DETERMINE] layer_membership_is_declared: 0 test files "
+              "were read, so no layer population was examined. NOT a pass.")
+        return 2
 
     print("[PASS] layer_membership_is_declared: every prefix-selected layer "
           "population contains its whole relation.")

@@ -271,6 +271,18 @@ def main(argv=None) -> int:
         for k in stale:
             print(f"   {k}")
     if rc == 0:
+        # A COUNT OVER AN EMPTY POPULATION IS NOT A COUNT. `[CENSUS] 0 site(s)`
+        # is honest only if something was read; over a tree this program parsed
+        # NOTHING it is indistinguishable from a clean result. Measured: on an
+        # empty tree this returned 0 -- and still 0 under `--strict`, so the
+        # "--strict is where a caller asks for the refusal" argument did not cover
+        # it either. Exiting 0 is a census's contract for a REAL population, not a
+        # licence to report over none.
+        if denom.get("modules_parsed", 0) == 0:
+            print("[CANNOT DETERMINE] explicit_argument_outranks_the_environment_pointer_census: 0 modules were parsed -- "
+                  "nothing was read, so the count is not a measurement. NOT a pass.")
+            return 2
+
         print(f"[CENSUS] {len(findings)} site(s) classified, "
               f"{len(known)} recorded as known debt, "
               f"{len(new)} unrecorded. This is a count, not a "
