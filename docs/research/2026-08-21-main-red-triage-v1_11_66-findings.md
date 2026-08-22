@@ -5787,6 +5787,48 @@ which is a different shape from the one I started reporting, and only measuremen
 moved it.**
 
 
+## M109 — applied the session's own lesson to my own shipped change. It holds
+
+Four times a count answered the wrong question, and three times the answer was in
+a docstring I had not read. **I had not applied that to the one program change
+this branch ships.** I verified the analyser fix by measurement — a 10-case
+battery, a repo-wide A/B, a mutation arm — and never read the module's own
+statement of what it is for.
+
+**Read now. The fix is squarely the contract, not merely compatible with it:**
+
+> **IT IS A DATAFLOW QUESTION, NOT A PRESENCE ONE** — and that distinction is the
+> whole reason this program exists rather than a one-line grep [...] What is asked
+> here is whether the STRING FLOWING INTO THIS CALL passed a stripper, **resolved
+> by a local def-use walk.**
+
+**Assignment-only was an incomplete def-use walk.** `for` targets and
+comprehension targets are bindings; a walk that ignores them answers the presence
+question for those names, which is the exact thing the docstring says the program
+exists NOT to do. **The fix does not extend the contract — it finishes
+implementing it.**
+
+**AND THE ACCEPTANCE CRITERION IS A POSITIVE CONTROL, so I checked it RAN:**
+
+> POSITIVE `fmeda_fault_injection_coverage.detect_safety_mechanism` at the commit
+> BEFORE its fix MUST be flagged. NEGATIVE the same function AFTER the fix must
+> NOT be. **A detector that does not flag the known instance is not measuring the
+> right thing, however plausible its output.**
+
+    -k "POSITIVE or NEGATIVE"  ->  2 passed, 0 skipped
+
+**Not "2 passed" read off a summary line** — `-rs` confirms neither skipped, and
+neither can pass vacuously: the POSITIVE asserts a flag, so an empty blob fails
+it. **The known instance is still flagged with my change in place.** Given this
+document's history with skipped cells reported as green, checking that was not
+optional.
+
+**This is the first time in the engagement that reading a contract CONFIRMED
+rather than corrected**, and it is worth recording for exactly that reason. The
+discipline is not a way of finding errors — it is a way of knowing which claims
+survive it. **Three of my "open questions" did not survive; this one did.**
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
