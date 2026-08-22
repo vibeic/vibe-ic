@@ -49,6 +49,7 @@ def control(name: str, must_fail: bool) -> None:
 
 # 1. bucket counts: records vs the table in the report
 counts = collections.Counter(r["bucket"] for r in RECS)
+control("bucket-rows", re.search(r"\| \*\*Z\*\* \| (\d+) \|", MD) is None)
 for b in ("A", "C", "T"):
     m = re.search(rf"\| \*\*{b}\*\* \| (\d+) \|", MD)
     check(f"bucket {b} count agrees with the report table",
@@ -124,8 +125,14 @@ def slug(x: str) -> str:
 byslug = {slug(h) for _, h in heads}
 defs = [d for f in CAND.glob("*.py")
         for d in re.findall(r"^def rule_(\w+)\(", f.read_text(), re.M)]
+# `all()` over an empty list is True, so if the glob or the `def` regex ever
+# stopped matching this check would pass while examining nothing, printing
+# "0 sketches" inside a green run. Assert the population exists first, and prove
+# the assertion bites by running it against an empty one.
+control("sketch-resolution", not (bool([]) and all(d in byslug for d in [])))
 check("every sketch resolves to its section by name",
-      all(d in byslug for d in defs), f"{len(defs)} sketches")
+      bool(defs) and all(d in byslug for d in defs),
+      f"{len(defs)} sketches, {len(byslug)} section slugs")
 
 # 9. every Bucket-A rule has a row in the sweep table.
 #    THIS ONE DRIFTED ONCE: the table was written at 14 rules and silently

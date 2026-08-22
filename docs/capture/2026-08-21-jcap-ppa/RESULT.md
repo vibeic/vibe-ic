@@ -60,6 +60,7 @@ Accepted with no refusal and no unrouted record.
 - [No near-duplicates — and the first number I published from a broken instrument](#no-near-duplicates--and-the-first-number-i-published-from-a-broken-instrument)
 - [The ALREADY-PROGRAM claims — can the guards they name actually fail?](#the-already-program-claims--can-the-guards-they-name-actually-fail)
 - [The brief's own requirements, audited against the finished records](#the-briefs-own-requirements-audited-against-the-finished-records)
+- [The verifier audited as an artefact, not used as one](#the-verifier-audited-as-an-artefact-not-used-as-one)
 - [The honest sentences, checked verbatim against the records](#the-honest-sentences-checked-verbatim-against-the-records)
 - [Traceability — a sketch must lead back to its narrative](#traceability--a-sketch-must-lead-back-to-its-narrative)
 - [The verification is a command, not a paragraph](#the-verification-is-a-command-not-a-paragraph)
@@ -1891,6 +1892,32 @@ A third flag was my screen's fault, not the records': the Bucket-T record looked
 figure-free because I searched the field the Bucket-A records use, and the ladder
 puts a T record's measurement in `problem` and `bad_sample`, where it is dense
 with them. Check 46 encodes that exemption rather than repeating my mistake.
+
+## The verifier audited as an artefact, not used as one
+
+Every claim in this report rests on `verify.py`, and five defects have been found
+in it so far — each one incidentally, while it was being used for something else.
+So it was audited deliberately, on the question this batch keeps asking of other
+people's guards: **can each check fail?**
+
+    check() calls                                        48
+    with a control within the surrounding lines          46
+    without                                               2
+
+One of the two was genuinely vacuous. *"Every sketch resolves to its section by
+name"* was `all(d in byslug for d in defs)`, and **`all()` over an empty list is
+`True`** — so if the glob or the `def` regex ever stopped matching, the check
+would pass while examining nothing, printing `0 sketches` inside a green run.
+That is precisely the shape this report documents elsewhere: an empty check and a
+clean check print the same.
+
+Fixed by asserting the population is non-empty first, and **proved by removing
+it**: with the sketch files moved aside the check now reads `0 sketches` and goes
+RED, where before it would have gone green. The files were restored and the tree
+confirmed clean. The other was already safe — its guard clause makes a missing
+table row a failure rather than a pass — and it now carries a control anyway, so
+the audit's own figure is zero uncontrolled checks rather than "two I judged to
+be fine".
 
 ## The honest sentences, checked verbatim against the records
 
