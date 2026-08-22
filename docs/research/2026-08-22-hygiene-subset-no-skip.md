@@ -2762,3 +2762,40 @@ its finding persists. I flagged mine as a blocker for hours and it resolved
 itself in the landing; the one I said was the binding constraint is the one
 still there. §30 called that ordering right, and it is the only prediction in
 this document that the world tested afterwards.
+
+### §42 refined once, then closed
+
+Two of the three missing inputs I named turn out to be unobtainable from here,
+and one hypothesis I offered in §42's favour is weaker than I made it sound.
+
+**The landing journal is not in the repo.** `gatekeeper-land.sh:120-139` enables
+the record ONLY when `VIBEIC_LANDING_PROGRESS` and `VIBEIC_LANDING_COMPLETION`
+are set to `/evidence/landing-progress.jsonl` and
+`/evidence/landing-completion.json`, and only under
+`GATEKEEPER_VERIFY_ARM=A2|B2`. That is container evidence inside the
+merge-verification run, not a committed artefact. I cannot read it, and neither
+can anyone working from a clone.
+
+**And "the landing probably used a different base" is weaker than I implied.**
+`gatekeeper-verify-merge.sh:156` defaults `BASE="origin/main"` — the same base
+my measurement used. So that particular ordinary explanation is not supported by
+the code, and I should not have offered it first.
+
+**What remains genuinely open**, and why I am stopping here rather than
+narrowing further: `gatekeeper-verify-merge.sh` is a DIFFERENTIAL — it runs a
+base arm and a candidate arm and `landing_merge_verdict.py` subtracts by printed
+label, so a gate's disposition depends on both arms, not on the candidate's rc
+alone. Whether `cheap:collateral-revert` survives that subtraction, and what
+`--batch` does to it, are properties of a run I did not observe and of a verdict
+path I have not read. Those are answerable — by reading
+`landing_merge_verdict.py`'s treatment of that label, or by the container
+evidence — and they are answerable by someone whose brief this is.
+
+**Closing it deliberately.** I am not pursuing this further, for a reason worth
+stating: I have the ability to keep probing and no ability to observe the run,
+and that combination produces a case rather than a finding. The measurement
+stands, the missing inputs are named, one of my own explanations is withdrawn,
+and the disposition belongs to whoever holds the landing. Continuing past that
+line would be building an argument against someone else's work with tools that
+cannot reach the evidence — which is the accusing-direction version of every
+error §32 already lists.
