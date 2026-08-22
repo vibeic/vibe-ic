@@ -1,6 +1,0 @@
-{
-  "tool": "opensta",
-  "source": "reports/phase3/power.rpt",
-  "verdict": "PASS",
-  "evidence": "report_power output below"
-}
