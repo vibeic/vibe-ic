@@ -4902,6 +4902,64 @@ Whether it SHOULD be run that way is the lane owner's call, and a dedicated daem
 remains the safer shape.
 
 
+## M91 — THE ANSWER TO THE RULING'S SECOND QUESTION: six reds, ONE cause, and the fix shape is already proven
+
+With the lane configured (M90) the suite is down to six, and I had called two of
+them *"bootstrap-corpus tests in the same family"* — a guess. **Measured, and the
+guess was right for a reason better than the one I gave.**
+
+**Both bootstrap failures are the same KeyError:**
+
+    assert len(delta["corpus_transitions"]) == 1
+    E   KeyError: 'corpus_transitions'
+
+and both drive the verifier with `GATEKEEPER_STUB_ROUTED_TRANSITION=1`.
+
+**THE ALLOWLIST, checked for every test control involved:**
+
+    GATEKEEPER_STUB_ROUTED_TRANSITION   occurrences in the runner:  0
+    GATEKEEPER_STUB_BASE_EXPANDED       occurrences in the runner:  0
+    GATEKEEPER_CONCURRENCY_PROBE_DIR    occurrences in the runner:  0
+    GATEKEEPER_VERIFY_ARM               occurrences in the runner:  8   <- the only one
+
+**ALL SIX SURVIVING REDS ARE ONE DEFECT:**
+
+| tests | control that cannot cross |
+|---|---|
+| `b2_corpus_mutation`, `relinked_parent_selection` | `GATEKEEPER_STUB_ROUTED_TRANSITION` |
+| `trusted_verifier_..._bootstrap_evidence`, `post_bootstrap_equal_corpus` | + `GATEKEEPER_STUB_BASE_EXPANDED` |
+| `interruption_kills_...`, `pid_only_term_kills_...` | `GATEKEEPER_CONCURRENCY_PROBE_DIR` |
+
+**One cause, three knobs, six tests.** Every one of them is a test control that
+used to cross as an environment variable and cannot, because the hermetic arm's
+environment is a CLOSED SEVEN-NAME ALLOWLIST validated per arm. Not six findings.
+Not "the hermetic migration" in the vague sense I used before — **one mechanism,
+nameable in a sentence, with the allowlist as the proof.**
+
+**AND THE FIX SHAPE IS ALREADY PROVEN TO WORK.** M83's build was reverted for a
+different reason (container identification), but it established the thing that
+matters here: **a committed SENTINEL FILE in the subject tree DOES cross** — the
+hang fired, the run went 33 s to 111 s and reached `hermetic Git subject PASS`.
+**The subject tree is a channel; the environment is not.**
+
+So the remedy for all six is one shape: **express the test control as DATA IN THE
+SUBJECT TREE rather than as an environment variable.** That is exactly what design
+D proposed for the corpus half — *"express it as data"* — and what design B's
+sentinel proved for the interrupt half. **B and D are not two designs. They are
+one design applied to two symptoms of one defect.**
+
+**And it is a STRONGER guarantee than what it replaces**, which is the part worth
+keeping: an env flag can be set by accident in a real landing, and a committed
+file cannot be. The allowlist is not an obstacle to work around — **it is the
+security property, and the tests were relying on the hole it closed.**
+
+**What still blocks the interrupt pair specifically** is unchanged and separate:
+even with the hang firing, the test cannot identify the arm's container (M82/M83),
+and that needs one line in a protected file. **The corpus and bootstrap four have
+no such second blocker** — their remedy is entirely in the subject tree, which is
+not protected.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
