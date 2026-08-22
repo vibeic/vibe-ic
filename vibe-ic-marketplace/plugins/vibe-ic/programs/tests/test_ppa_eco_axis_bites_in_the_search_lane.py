@@ -891,3 +891,25 @@ def test_cost_the_other_refused_arm_is_a_trade_and_not_a_loss():
     objs = _objectives()
     assert not PA.dominates(_point("z21"), _point("z23"), objs)
     assert not PA.dominates(_point("z23"), _point("z21"), objs)
+
+
+# ---------------------------------------------------------------------------
+# THE MANIFEST THIS LANE PUBLISHES STILL VALIDATES
+# ---------------------------------------------------------------------------
+# The ECO stance added four keys to the toolchain block of a document that has a
+# SHIPPED schema. `search_manifest.v1` is permissive there today
+# (`toolchain: {"type": "object"}`, top-level additionalProperties true), so the
+# keys are legal -- but that is a fact about the schema, and a schema that is
+# later tightened would break this lane silently. Validated against a REAL
+# produced manifest rather than read off the schema file.
+def test_the_published_manifest_still_validates_with_the_eco_stance(tmp_path):
+    from _ppa import schema_validation as SV
+    schema = json.loads(
+        (_PROGRAMS.parent / "schemas" / "ppa"
+         / "search_manifest.v1.schema.json").read_text(encoding="utf-8"))
+    _rc, man = _run_campaign(_campaign(tmp_path))
+    added = sorted(k for k in man["toolchain"]
+                   if "eco" in k or "delivery" in k)
+    assert added == ["feasibility_delivery_path", "feasibility_eco_declared",
+                     "feasibility_eco_note", "feasibility_eco_state"], added
+    assert SV.engine_or_skip(schema).errors(man) == []
