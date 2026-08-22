@@ -180,10 +180,20 @@ admission:
 Each of those 24 is correctly undecidable -- a program that states no `of N ...`
 anywhere offers nothing for a pin to disagree with -- and the reach sentence
 already in the verdict describes them exactly. Reaching them means calling
-`pins_of` on every parsed test instead of on the 227 that clear `em`: measured
-3.65s on top of 9.5s, +37%. The previous commit refused a +41% walk to carry one
+`pins_of` on every parsed test instead of on the 227 that clear `em`: 3.58s on
+top of 9.47s, +38%. The previous commit refused a +42% walk to carry one
 disclosure number, and this is the same trade at the same price, so it gets the
 same answer. Reproduce either figure by walking `tests/` with `pins_of`.
+
+BOTH ARE MEDIANS OF FIVE, and that is not pedantry. Both figures were first
+taken from a SINGLE run, and both are the whole reason work was refused rather
+than done -- a decision resting on one timing rests on whatever else the machine
+was doing that second. Re-measured at this tip: the program 9.36-9.58s and
+222 MB peak RSS across five runs, the `pins_of` sweep 3.57-3.61s, the
+`emitted_script_of` walk 3.98-4.06s. They held, and the walk was understated:
+41% was really 42%. Elsewhere on this branch a single timing did NOT hold -- one
+19.4s reading of the census gate against three of 10.9-11.3s at the same load --
+so the habit is worth the seconds it costs.
 
 DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's
 81 emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`,
