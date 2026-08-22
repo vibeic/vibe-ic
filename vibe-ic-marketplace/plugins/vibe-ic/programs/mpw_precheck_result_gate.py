@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 """v1.2.76 — mpw_precheck RESULT parser gate (TAPEOUT-SIGNOFF P0#2, parser half).
 
+RETIRED SHUTTLE (vibe-ic#1744) — READ THIS BEFORE TRUSTING A VERDICT FROM HERE
+=============================================================================
+The counterparty this program addresses, the Efabless/chipIgnite open-MPW
+shuttle, CEASED OPERATING IN 2025. It no longer accepts submissions and it no
+longer refuses them. Nothing below is broken; it is pointed at a party that
+stopped answering.
+
+That distinction is the whole point of keeping this file. A gate we wrote can
+be made to pass by editing it; an external refusal cannot. This was the ONE
+interface in the tree whose verdict was not ultimately ours, and it is now
+aimed at nothing — so a run that produces no evidence here means
+NOT DETERMINED, permanently, and never "nothing to worry about".
+
+The LIVE external refusal is `tapeout_readiness_check.py`, which wraps the
+shuttle operator's own tool for the currently-running open-MPW path. Ask that
+one for a submittability verdict. This file is kept, not deleted, so the
+retirement is on the record rather than looking like an orphan.
+
 Doctrine: the Efabless/chipIgnite sky130 open-MPW shuttle gate is
 `efabless/mpw_precheck` — a Docker suite that runs a fixed ladder of
 license / makefile / default / documentation / consistency / gpio_defines /
