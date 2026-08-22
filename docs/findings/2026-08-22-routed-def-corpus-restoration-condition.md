@@ -130,8 +130,26 @@ produces. A cell published in that shape leaves the row saying
 `is EMPTY — nothing was checked over it` while a routed DEF is published, and
 nothing anywhere would say otherwise.
 
-This is not a hypothetical shape. It is the shape of a run tree that is
-committed to the published corpus right now.
+This is not a hypothetical shape, and it is not an inference about the producer
+either. Run against two synthetic corpus checkouts that differ only in that one
+directory:
+
+| corpus contains | producer rc | items on stdout |
+|---|---|---|
+| `ic/demo/v9.9.9_openpdkx/phase3/stage3/pnr/routed.def` | 0 | **1** |
+| `ic/demo/v9.9.9_openpdkx/phase3/`**`phase3`**`/stage3/pnr/routed.def` | 0 | **0** |
+| no routed DEF at all | 0 | **0** |
+
+Rows two and three are the same bytes. Nothing downstream can tell the blocking
+row's *stated* reason (`is EMPTY`) from the unstated one (*a routed DEF is
+published where I cannot count it*).
+
+`test_routed_def_population_is_depth_exact.py` pins all three. The pin is not
+vacuous: mutating a **copy** of the producer from `len(parts) == 6` /
+`parts[2:]` to `len(parts) >= 6` / `parts[-4:]` gives 2 failed / 1 passed, while
+the identical harness over a byte-identical copy gives 3 passed — so the colour
+is the mutation and not the scaffold. The tracked producer was not touched
+(`git status --porcelain` empty; sha256 `d04b8215…` before and after).
 
 **And it is the same defect class the withdrawal was made for.** `u_hawaii_adc`
 was withdrawn because its run wrote a second audit at `reports/`**`reports`**`/audit/…`
