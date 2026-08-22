@@ -497,3 +497,52 @@ trusted-parent-evidence protocol" needs the protocol's owner. **"Find why one gi
 command returns non-zero on a worktree" needs anyone who can run it** — and the
 reproduction is the sentinel fixture already built and reverted on the frozen
 branch.
+
+---
+
+# Part 10 — one of Part 9's three candidates is now the leading one, by a controlled test
+
+Part 9 named three candidates for why `git remote get-url --all origin` returns
+non-zero on `$BENCHMARK_B2`, and measured none. **Two of the three are now
+testable without the fixture, because they are claims about git rather than about
+this repo.**
+
+**Controlled test** — a bare remote, a clone, a worktree of that clone:
+
+    clone's origin                       -> /tmp/.../remote.git   rc=0
+    WORKTREE's origin                    -> /tmp/.../remote.git   rc=0
+    same command after `worktree remove` -> "cannot change to ...: No such file
+                                            or directory"          rc!=0, stdout EMPTY
+
+**A worktree DOES inherit its parent's origin.** So *"the fixture's parent
+checkout lacks the remote"* and *"the enumeration disturbs the config"* both
+predict a WRONG URL or a readable one — **neither produces the empty case.**
+
+**An ABSENT PATH produces the empty case, and `_origin` renders empty as exactly
+the string that was observed:**
+
+```python
+urls = proc.stdout.splitlines() if proc.returncode == 0 else []
+got = urls if urls else ["<missing or unreadable>"]
+```
+
+**So the leading candidate is that `$BENCHMARK_B2` is NOT THERE when the
+trusted-parent-evidence step re-validates it** — not that its config is wrong.
+
+**What this does NOT establish**, and the distinction matters: I have shown that
+an absent path produces the observed string. **I have NOT shown that the path was
+absent in that run** — a broken-but-present worktree could conceivably produce it
+too. **This raises one candidate above the others; it does not close the
+question.**
+
+**And it is cheap to close.** One line of instrumentation — `ls -d "$BENCHMARK_B2"`
+immediately before the re-validation — settles it. **That is a different order of
+work from "understand the trusted-parent-evidence protocol", which is where this
+item stood two commits ago.**
+
+**Note on the instrument:** the controlled test failed TWICE for setup reasons
+before it ran — an empty commit left the clone with no checkout, then the bare
+remote's default `HEAD` pointed at `master` while the push created `main`. **Both
+failures looked like results.** The fixture in this repo does
+`symbolic-ref HEAD refs/heads/main` for exactly that reason, and copying what the
+repo already does is what made the test work.
