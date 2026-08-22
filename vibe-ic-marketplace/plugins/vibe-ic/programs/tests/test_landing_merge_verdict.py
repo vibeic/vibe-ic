@@ -2422,20 +2422,130 @@ def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
     assert not list(cache.glob("*"))
 
 
+_WAVE_ARTEFACTS = (
+    "b1-runner.log", "b2-runner.log",
+    "b1-hermetic-receipt.json", "b2-hermetic-receipt.json",
+    "base-subject",
+    "a1-runner.log", "a2-runner.log",
+    "a1-hermetic-receipt.json", "a2-hermetic-receipt.json",
+)
+
+
+def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
+    """When each wave artefact FIRST appeared in the verifier's run directory.
+
+    The run directory is `mktemp -d -t gkverify.XXXXXX`, so pointing the
+    verifier's TMPDIR at a caller-owned directory makes every arm artefact
+    host-visible under a known name while the run is still going.  First-seen
+    times are recorded rather than live set membership because cleanup removes
+    the run directory and `publish_validated_arm_artifact` consumes receipts:
+    a "does it exist now" reading flickers back to False at the end of the run,
+    and the ORDER things appeared in is what the wave property is about.
+    """
+    seen: dict[str, float] = {}
+    start = time.monotonic()
+    deadline = start + _T
+    while proc.poll() is None and time.monotonic() < deadline:
+        runs = sorted(run_root.glob("gkverify.*"))
+        if runs:
+            for name in _WAVE_ARTEFACTS:
+                if name not in seen and (runs[0] / name).exists():
+                    seen[name] = round(time.monotonic() - start, 3)
+        time.sleep(interval)
+    return seen
+
+
 def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
         sandbox, tmp_path):
-    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel."""
-    probe = tmp_path / "parallel-arms"
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
-    )
-    assert r.returncode == 0, r.stdout + r.stderr
+    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel.
+
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED, word for word; only the vantage point it is observed from has
+    moved, and the reason it had to move is the property next door.
+
+    It used to be observed from INSIDE the arms: the stub landing gate wrote
+    `<ARM>.started` into `GATEKEEPER_CONCURRENCY_PROBE_DIR`, and the fixture's
+    own test file waited for its siblings' markers to appear.  A cross-arm
+    rendezvous through a shared host directory is exactly what the hermetic
+    launcher exists to make impossible — each arm is a container with
+    `network: none` whose only writable surface is a private tmpfs and a
+    private evidence volume — and MEASURED on a4caccefe the name is not on the
+    launcher's `--env` allow-list either, so inside an arm the variable is
+    EMPTY, the stub's branch never fires and no marker is ever written. The
+    only thing that directory received was `cleanup.*`, written host-side by
+    `cleanup_event`. An arm CANNOT see another arm, by design; asserting the
+    wave structure through an inter-arm channel therefore cannot be repaired,
+    it can only be moved.
+
+    So it is observed where the parallelism actually lives: the parent shell,
+    which launches B1/B2, `wait`s for both, rebuilds the base wave, and only
+    then launches A1/A2 and waits for those.  Every arm's runner log is created
+    by the launch redirection and every arm's receipt is sealed at its exit, so
+    the order those files appear in IS the wave structure, observed from
+    outside without asking any arm to cooperate.
+
+    MARGINS, measured on this host: B receipts at 5.2s/7.7s, the base subject
+    at 9.3s, the A logs at 10.59s/10.61s, the first A receipt at 12.1s. The
+    wave boundary this test asserts has 2.9s of daylight and the A overlap
+    window is 1.5s, both sampled every 20ms. A poller that misses a phase
+    collapses two first-seen times together and the strict `<` below FAILS —
+    the failure mode is loud, not a quiet pass.
+    """
+    run_root = tmp_path / "verifier-tmp"
+    run_root.mkdir()
+    out = tmp_path / "wave.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", "innocuous_green", "--base", "main",
+         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "TMPDIR": str(run_root),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])})
+    seen = _first_seen_wave_artefacts(proc, run_root)
+    try:
+        stdout, stderr = proc.communicate(timeout=_T)
+    except subprocess.TimeoutExpired:                     # pragma: no cover
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    doc = json.loads(out.read_text()) if out.is_file() else None
+
+    assert proc.returncode == 0, stdout + stderr
     assert doc["verdict"] == "LAND_OK"
-    assert {p.name for p in probe.iterdir()} >= {
-        "A2.started", "B1.started", "B2.started"}
     assert doc["base_land"] is not None
     assert doc["delta"]["new_failures"] == []
+
+    # NON-VACUITY FIRST. Every arm has to have been WATCHED, or the ordering
+    # below is a comparison between two absences. This is the assertion that
+    # would have caught the defect this test was blind to for four days: the
+    # old body read a probe directory that was never written to, and could
+    # only say the markers were missing, never that no arm had ever run.
+    missing = [name for name in _WAVE_ARTEFACTS if name not in seen]
+    assert not missing, (f"never observed {missing}; the poller saw {seen}")
+
+    # THE CANDIDATE WAVE PRECEDES. No base-wave artefact exists until BOTH
+    # candidate receipts are sealed -- the base subject is not even
+    # materialized while candidate code is running, which is what makes the
+    # base wave isolated from it rather than merely later.
+    candidate_wave_done = max(seen["b1-hermetic-receipt.json"],
+                              seen["b2-hermetic-receipt.json"])
+    base_wave_started = min(seen["base-subject"], seen["a1-runner.log"],
+                            seen["a2-runner.log"])
+    assert candidate_wave_done < base_wave_started, seen
+
+    # THE BASE WAVE IS PARALLEL. Both A arms are launched before either has
+    # sealed a receipt, so they were in flight at the same time.
+    assert max(seen["a1-runner.log"], seen["a2-runner.log"]) < min(
+        seen["a1-hermetic-receipt.json"],
+        seen["a2-hermetic-receipt.json"]), seen
+    # ... and so was the candidate wave, which is the same launch shape one
+    # wave earlier and is why the base wave is not simply the whole run.
+    assert max(seen["b1-runner.log"], seen["b2-runner.log"]) < min(
+        seen["b1-hermetic-receipt.json"],
+        seen["b2-hermetic-receipt.json"]), seen
 
 
 def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
