@@ -648,3 +648,44 @@ def test_the_real_sha256_fits_only_after_a_fold_and_says_so():
     sr = R.step_slot_pad_budget(_real_ic_project("sha256"), "chip_top")
     assert sr.status == "PASS", f"a fittable design was refused: {sr.detail[:120]}"
     assert "FITS_AFTER_FOLD" in sr.detail
+
+
+# --------------------------------------------------------------------------- #
+# EVERY gate's declaration, not just this branch's two
+# --------------------------------------------------------------------------- #
+# The two per-file guards above protect the two gates this branch wired. They
+# say nothing about the other forty-three.
+#
+# SURVEYED: 45 programs carry a real (anchored) ENFORCEMENT declaration and
+# none is currently unread — so this is a fragility, not an outstanding bug.
+# The thinnest margin measured was 91 bytes. One paragraph added above that
+# line and the gate goes silently UNDECLARED, with nothing else turning red;
+# that is precisely how it happened twice on this branch.
+#
+# Anchored via the audit's OWN `_DECL_RE`. A survey using
+# `text.find("ENFORCEMENT:")` counts prose MENTIONS as declarations — measured,
+# it produced three false alarms, one of them a runner whose docstring mentions
+# the token at byte 1.3 million.
+
+def test_no_gate_declaration_anywhere_sits_outside_the_readers_window():
+    import flow_gate_enforcement_audit as A
+    progs = PROG
+    unread, thin = [], []
+    for p in sorted(progs.glob("*.py")):
+        m = A._DECL_RE.search(p.read_text(errors="replace"))
+        if not m:
+            continue                      # no declaration is a different question
+        margin = A.DECL_WINDOW_BYTES - m.start()
+        if margin <= 0:
+            unread.append(f"{p.stem} at byte {m.start()}")
+        elif margin < 200:
+            thin.append(f"{p.stem} margin {margin}B")
+    assert not unread, (
+        "these gates DECLARE an enforcement intent the audit never reads — "
+        "present, correctly spelt, and reported as UNDECLARED:\n  "
+        + "\n  ".join(unread)
+        + "\nMove the declaration above the prose; the window is "
+          f"{A.DECL_WINDOW_BYTES} bytes.")
+    assert not thin, (
+        "a declaration is within 200 bytes of vanishing; one paragraph added "
+        "above it un-declares the gate silently:\n  " + "\n  ".join(thin))
