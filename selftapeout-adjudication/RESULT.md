@@ -447,7 +447,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J91). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J93). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -2955,6 +2955,18 @@ placement, CTS, hold) returns **the same verdict**, `layouts_found=0`,
 `declaration_answered=0/18`, `emitted_by: general_precheck v1.11.68`. *(Confirmed I
 did not disturb the live run in that directory: `find -printf '%f %s'` before and
 after is identical.)*
+
+**★ AND THE TIER NOW HAS A POSITIVE CONTROL (J93).** Nothing on this host has ever
+produced a finished layout, so `general_precheck` returns `layouts_found=0` every time —
+which raises the one question never put to this adjudication: *is NOT_DETERMINED a fact
+about these chips, or the only thing the instrument can say?* Measured: a project with no
+layout returns **`NOT_DETERMINED`, layouts_found 0**; the same project plus **one file
+where the pre-check globs** returns **`FAIL`, layouts_found 1**, naming
+`KLayout.ReadLayout`, `Checker.KLayoutAntenna`, `Checker.MagicDRC`, `Checker.KLayoutDRC`.
+**The instrument discriminates** — `NOT_DETERMINED` is what it says ABOUT these chips
+because no layout exists for them, not its only output. *(The control file is NOT a
+layout — one line of text where the glob looks — and FAIL is the CORRECT answer for it.
+Nothing here claims any chip passes.)*
 
 **This moves no verdict. It moves the four UNDETERMINED rows from INFERRED to
 MEASURED** — the brief's own pre-check now answers NOT_DETERMINED about each chip,
