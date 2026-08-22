@@ -1787,3 +1787,70 @@ a blocker and §23 asserted a benefit, and neither was measured. Measuring
 dissolved the blocker and dissolved the benefit with it. A decline and a
 recommendation are both claims, and this document has now had to correct one of
 each.
+
+## 31. §27 was wrong: a quiet host does not close it — THIS host cannot run the tier at all
+
+§27 named the one piece of evidence still a reconstruction and said what would
+close it: `GATEKEEPER_NO_STAMP=1 bash tools/gatekeeper-land.sh` on a quiet host.
+The fleet went quiet — load 44 → 7.3, 29 pytest arms → 3, hygiene runners → 0 —
+so it was run. It does not close it, and the reason is a HOST defect that no
+amount of quiet fixes.
+
+**Three refusals, each correct, each teaching something:**
+
+1. **On this branch**, cheap tier: `version_bump_monotonic_check: version
+   REGRESSED: current 1.11.67 < previous 1.11.68`. This branch is based on the
+   pre-v1.11.68 batch base and never merged `main`, so the lander will not land
+   it alone. That is §25's "no value except as part of batch 67" arriving as a
+   machine verdict rather than an argument.
+
+2. **On the batch head, in a linked worktree**: `landing_tier_checkout_preflight`
+   REFUSED — a linked worktree's git dir is registered in a repository this run
+   does not control, and `git worktree prune` there would remove the tree
+   mid-tier. It names the remedy (run in a clone) and cites the measurement
+   behind it: four gates lost to pure collateral in one such run. A local clone
+   hardlinks its objects and cost seconds.
+
+3. **On the batch head, in a proper clone** — cheap tier PASSED, preflight
+   PASSED, and then:
+
+```
+REFUSE  the protected landing test runtime cannot run on this host.
+  lane     auto
+  runner   /home/reyerchu/.local/lib/python3.10/site-packages/pytest/__init__.py
+  probe rc 2
+  stderr   ArgumentParser.__init__() got an unexpected keyword argument 'allow_abbrev'
+```
+
+**The cause, diagnosed rather than guessed:**
+
+```
+/home/reyerchu/.local/lib/python3.10/site-packages/argparse.py   (argparse 1.4.0)
+```
+
+The ancient PyPI `argparse` BACKPORT is installed in the user site and SHADOWS
+the stdlib module. It predates `allow_abbrev` (stdlib, Python 3.5), so anything
+that reaches the user site and passes that keyword dies. Confirmed both ways:
+stdlib `argparse` accepts `allow_abbrev` here, and `python3 -I` — the isolated
+interpreter — is fine. Only the host lane, which by design adds the user site,
+is poisoned.
+
+**So the remedy in §27 was wrong and is corrected here.** A quiet host is
+necessary and not sufficient. What this host needs first is the stray
+`argparse` backport removed from `~/.local/lib/python3.10/site-packages`. That
+is a change to the OWNER'S ENVIRONMENT, not to this repository, and it is not
+mine to make unilaterally — it is reported with the diagnosis so the decision is
+one command for whoever owns the account.
+
+**What the run DID establish, and it is not nothing.** The lander refused three
+times and every refusal was correct, specific, and named its remedy. In
+particular the third one refused rather than proceeding — it says so in its own
+words: continuing would report every selected file as NORECORD, "hundreds of
+lines naming hundreds of innocent files", none of which would be a verdict about
+the commit. That is this repository's own `unmeasured-is-not-a-pass` doctrine
+executing on the landing path, under a real runtime defect, and it is the
+closest thing to an end-to-end demonstration this host can currently produce.
+
+The review's wiring therefore remains proven by the extracted chain (§5, §6) and
+by the batch head's 148 passing tests, and the end-to-end run remains open —
+now with a named blocker that is a package on a disk rather than a busy host.
