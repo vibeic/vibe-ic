@@ -1300,3 +1300,56 @@ def test_publication_negative_control_the_clause_is_what_refuses(tmp_path):
     assert codes == [], (
         "with the clause removed the manifest STILL does not audit clean, so "
         f"the refusal measured above is not coming from it: {codes}")
+
+
+# ---------------------------------------------------------------------------
+# THE FINDING, THROUGH THE SHIPPED CLI, ON THE SHIPPED CAMPAIGN
+# ---------------------------------------------------------------------------
+# Everything else here builds its own inputs. This runs `ppa_feasibility_check`
+# -- unmodified, as a subprocess -- over two candidate sets committed in this
+# repo, and compares what it says about the arm that KEPT all ten spare cells
+# against the arm that DELETED all ten:
+#
+#     trial  spares in its own plan   eco_readiness   candidate verdict
+#     z23              10             NOT_APPLICABLE  UNDETERMINED
+#     p04               0             NOT_APPLICABLE  UNDETERMINED
+#
+# Identical. Nothing a reader of that output could use to tell them apart.
+#
+# (Both are UNDETERMINED overall for an unrelated reason -- `em` and
+# `equivalence` are unmeasured in these sets, which is the finding of
+# `ppa-gate-audit/RESULT.md`, not of this file. The row below asserts the ECO
+# axis specifically, so it cannot pass or fail on that account.)
+def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
+    """The whole audit in one assertion, with nothing authored by a test.
+
+    Skipped, never silently passed, when the campaign tree is absent.
+    """
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip("the cross-layer campaign records are not in this tree; "
+                    "NOT OBSERVED")
+
+    seen = {}
+    for trial in ("z23", "p04"):
+        cands = trials / trial / "candidates.json"
+        plan = trials / trial / "spare_cells.json"
+        if not (cands.is_file() and plan.is_file()):
+            pytest.skip(f"{trial} is not fully present in this tree")
+        p = subprocess.run(
+            [sys.executable, str(CHECK), "--candidates", str(cands)],
+            capture_output=True, text=True)
+        assert p.returncode in (F.RC_PASS, F.RC_FAIL, F.RC_UNDETERMINED), p.stderr
+        # the axis row, parsed from the CLI's own stdout line
+        assert f"[eco_readiness " in p.stdout, p.stdout
+        status = p.stdout.split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
+        spares = json.loads(plan.read_text(encoding="utf-8"))["count"]
+        seen[trial] = (spares, status)
+
+    assert seen["z23"][0] == 10, seen        # kept every declared spare
+    assert seen["p04"][0] == 0, seen         # deleted every one
+    assert seen["z23"][1] == seen["p04"][1] == "NOT_APPLICABLE", (
+        f"the shipped CLI now distinguishes these two arms: {seen}. That is "
+        f"the gap this file measures being CLOSED -- re-measure the report "
+        f"rather than trusting it.")
