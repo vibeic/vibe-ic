@@ -29,13 +29,22 @@
 > **WHAT IN THIS TABLE CAN GO STALE, and what it is pinned to.** Rows about what
 > this BRANCH does — fixed, wiring, rename, breakage — are measurements of a
 > frozen tree and stay true. FIVE rows describe a MOVING world: *are the other
-> reds new* and *is there a gate defect* describe `main`; *can §20–56 be landed
+> reds new* and *is there a gate defect* describe `main`; *can §20–69 be landed
 > from here* describes this host; *what is still open* is a list that others can
-> close. **All four are as measured against `main` a4caccefea on 2026-08-22 —
-> re-check them before acting, they are not maintained.** This table has already
-> gone stale three ways (a cached count, a claim §47 retracted, and a landing
-> state the world moved past); the fix for the first two was to remove the
-> moving value, and this line is the fix for the rest.
+> close. **All FIVE were measured against `main` a4caccefea on 2026-08-22 —
+> re-check them before acting, they are not maintained.**
+>
+> **`main` HAS SINCE MOVED to `ae78abb285` (v1.11.70, 238 files).** Everything
+> load-bearing was re-checked against it in §69 and holds — the flow is still
+> 182/182, the ledger still 8 rows with the same five stale, the fixture debt
+> still 14 — with two exceptions: another agent shipped HALF of §62's race fix,
+> and the protected drift went 11 → 12. Re-read §69 before trusting a number
+> here.
+>
+> This table has now gone stale FIVE ways (a cached count, a claim §47 retracted,
+> a landing state the world moved past, a section range, and an "All four" left
+> behind when the sentence above it became FIVE). The fix for a moving value is
+> to delete it; this line is the fix for what cannot be deleted.
 >
 > **Superseded, do not act on** — *this list went stale too and is now current
 > to §57; if you add a retraction below, add it here:*
@@ -4785,3 +4794,197 @@ Protected paths whose live bytes match NEITHER recorded state: **11 → 12.** Th
 landing moved another one without a PREPARE. §63's finding is not static debt —
 it accrues with every batch that touches a protected path, and the parity gate
 will keep saying so.
+
+## 70. Re-measured against the new `main` — 22 → 4 again, and the ledger merge held
+
+§66's aggregate was against `a4caccefea`. `main` is now `ae78abb285`, so it was
+re-run rather than carried forward. Interleaved, two rounds, on the NEW main and
+the four LANDABLE branches (the selector rule is excluded — it edits a protected
+path and cannot land without the PREPARE of §63):
+
+    round1   NEW main 22 failed / 723 passed      merged 4 failed / 754 passed
+    round2   NEW main 22 failed / 723 passed      merged 4 failed / 754 passed
+
+Identical counts and identical name sets, both rounds, both arms.
+
+**And the name sets are identical to the OLD main's as well.** The landing's
+message claims nine reds fixed; none of them is in this lane. Every red these
+branches close is still red on the new `main`, and the four survivors are the
+same four blocked items. That was worth one `diff` rather than an assumption.
+
+### The ledger merge was the real risk, and it held
+
+The landing also edited `tools/ci/gate_red_since.json` — appending `|| SUPERSEDED`
+notes to the `bound_because` of BOTH rows §64 kept, while leaving `since` and
+`max_commits` untouched (no re-dating; the discipline held on their side too).
+
+`next/retire-five-stale-acknowledgements` rewrites that whole file from the OLD
+text. Git reported the merge clean, and **clean is not correct** — a
+whole-file rewrite merged against someone's in-place edit is exactly where an
+annotation disappears without a conflict. Checked the merged CONTENT rather than
+the exit code:
+
+    L-doc field producer          carries the landing's note: True
+    evidence citation resolves    carries the landing's note: True
+
+Both preserved. The line-level merge kept their edits to the two surviving rows
+and applied my deletion of the five.
+
+### What their notes say, because it revises §64 rather than confirming it
+
+* **L-doc field producer:** the corpus moved and now holds NO L-doc carrying a
+  `fields` object at all, so the remedy §64 quoted — populate the fields or
+  declare them optional — *"is no longer the question. The gate returns rc 2
+  UNDETERMINED over a zero denominator, which is correct behaviour; what is
+  wrong is the DISPATCH recording rc 2 as FAIL."* That is a different defect
+  from the one the row was opened for, and it is not in `benchmark-data`.
+* **evidence citation resolves:** the corpus shrank from 1037 enumerated files
+  to 70; the figures are now 132 baseline entries resolving and 5 dangling, not
+  the 113 and 4 §64 quoted. The shape of the reasoning stands; the counts moved.
+
+Neither changes what my branch does — a gate at rc 2 is not PASS, so neither row
+is stale and both correctly stay. But §64's account of *why* they are red is now
+superseded on the first one, and the fix it points at is the wrong fix.
+
+## 71. "The dispatch is wrong" is off by one layer — and the real fix is doubly not mine
+
+§70 quoted the landing's superseding note on `L-doc field producer`: the corpus
+moved, the gate now answers rc 2 UNDETERMINED over a zero denominator, *"which is
+correct behaviour; what is wrong is the DISPATCH recording rc 2 as FAIL."*
+
+**The first half is right and the attribution is one layer off.** The row is
+declared with plain `run`:
+
+    run "L-doc field producer"  "$ROOT" python3 "$PG/l_doc_field_producer_check.py" \
+        --corpus-may-be-absent
+
+and `_gate_dispatch.sh` says what that means, in its own comment above the
+alternative wrapper:
+
+    # Same as `run`, but rc 2 means "could not check" rather than "found a
+    # defect" … rc 1 (a real finding) still fails; rc 2 is LOUD …
+    # the wrapper exists so that wiring one is a visible, reviewable act
+
+So the dispatch is doing exactly what the declaration asks. What is wrong is the
+DECLARATION: a gate whose corpus has legitimately gone to zero is still wired
+with the wrapper that treats "could not look" as a defect.
+
+### Why that distinction is worth making rather than nitpicking
+
+It moves the item between owners. "The dispatch records rc 2 as FAIL" reads as a
+bug in shared machinery that anyone may fix. The truth is that swapping the
+wrapper is gated twice over, and both gates are deliberate:
+
+* `repo_hygiene_gates.sh` is one of the 47 PROTECTED paths, so the change needs
+  the PREPARE of §63 — the same one §58 and §60 need.
+* The dispatcher REFUSES a tolerant wrapper with no dated exemption beside it:
+  *"tolerance has to be bought, not defaulted into."* So the change is
+  necessarily `uncheckable_until <YYYY-MM-DD> <why>` — **adding an exemption**,
+  which this brief forbids me outright and which the wrapper's own comment
+  designs to be "a visible, reviewable act".
+
+**A third item for the one PREPARE, then**, and the only one of the three that
+also needs a dated judgement rather than just an authorisation. §58's selector
+rule and §60's `--repo` arguments are mechanical once authorised; this one asks
+someone to name a date by which the corpus question gets answered.
+
+**And the note itself is a model of the thing this document keeps asking for.**
+It did not delete the superseded reasoning — it appended `|| SUPERSEDED 2026-08-22,
+kept because it was true when measured`, and left `since` and `max_commits`
+untouched. That is the append-only correction discipline, applied by someone else,
+to a row I had just measured and written up. The only thing it got wrong is which
+layer to hand the defect to.
+
+## 72. §71 rests on a premise I quoted instead of measuring, and it does not reproduce
+
+§71 analysed WHY `L-doc field producer` is red, taking from the landing's note
+that the gate *"returns rc 2 UNDETERMINED over a zero denominator"* and building
+a wrapper-mismatch argument on it. **I never ran the gate to check that, and it
+is not what happens here.**
+
+Measured on `main` ae78abb285, the declared invocation, both corpus conditions:
+
+    pointer UNSET                          rc 1
+    VIBE_IC_BENCHMARK_DATA=~/benchmark-data rc 1
+
+    [FAIL] 3 field(s) READ by a checker that NO document populates
+       floorplan_hints:      1 reader(s), present in 4 doc(s), populated in 0
+       power_budget_uw:      1 reader(s), present in 4 doc(s), populated in 0
+       sdc_constraints_path: 1 reader(s), present in 4 doc(s), populated in 0
+
+**rc 1 with a real finding over a denominator of FOUR, not rc 2 over zero.** So
+the wrapper question §71 spent a section on is MOOT: rc 1 fails under `run` and
+under `run_tolerating_uncheckable` alike. Nothing about the declaration is what
+keeps this row red.
+
+### What is true, and the part I cannot settle from here
+
+The corpus commit the note cites, `b971220`, is real and is a DESCENDANT of this
+host's clone HEAD (`146d6656`, 2026-08-18). Sampling 400 L-doc JSONs at that
+commit by blob, **247 carry a `fields` object** — evidence against "holds NO
+L-doc carrying a `fields` object at all", though `grep` for the key is coarser
+than whatever predicate the checker applies.
+
+What I did NOT do is check out `b971220` in `~/benchmark-data`. That clone is on
+a shared host with nineteen live worktrees and other agents' sessions
+([[the-shared-checkout-has-19-live-worktrees]]); moving its HEAD to satisfy my
+curiosity would change what every other agent's gate reads. So the honest
+position is: **the note may describe a state reachable at a newer corpus HEAD
+than this host holds, and on the tree anyone here can actually measure, the gate
+is rc 1 with a non-empty denominator.**
+
+### The lesson, which is not subtle
+
+§70 recorded their note carefully and correctly — it IS what the ledger says. §71
+then reasoned from it as though quoting were measuring. One command would have
+caught it, and I ran that command only because a number in my own earlier notes
+(rc 1) contradicted the quote and I finally noticed the contradiction.
+
+**A peer's measurement is evidence, not a premise.** It deserves the same
+treatment as my own: re-run it before building on it, especially when it
+supersedes something and therefore arrives with authority. §71's conclusion —
+that the item needs the PREPARE plus a dated exemption — is *withdrawn*: it
+answers a question the tree does not pose.
+
+## 73. §72 was also too strong — this host cannot test the note, and that is measurable
+
+§71 reasoned from a quote. §72 withdrew it and said the note **does not
+reproduce**. That is the second overstatement in a row on the same item, and the
+evidence for it was one measurement short.
+
+**The missing measurement was sitting in the sibling row.** Its note says the
+corpus *"shrank from 1037 enumerated files to 70"*. Run the `evidence citation
+resolves` gate on this host and it reports:
+
+    149 contributing doc(s) of 1037 file(s) enumerated, 105 citation(s) checked
+
+**1037 — the PRE-shrink figure.** So `~/benchmark-data` on 8HD-9 (HEAD
+`146d6656`, 2026-08-18) predates the corpus move, and every measurement I took of
+both gates read the OLD corpus. The note may be exactly right about the new one.
+
+So the honest statement is not "the note is wrong" but **"nobody on this host can
+currently reproduce it, and here is the measured reason"** — which is what the
+ledger note now says, and what it should have said the first time.
+
+What survives unchanged: on the tree anyone here can measure, `L-doc field
+producer` exits **rc 1** over a denominator of **four**, matching this row's
+ORIGINAL `why` word for word. §71's wrapper argument stays withdrawn either way,
+because rc 1 fails under both wrappers.
+
+### Three passes on one claim, each tighter than the last
+
+    §71   quoted their premise and reasoned from it        WRONG
+    §72   measured, and called the premise refuted         TOO STRONG
+    §73   measured WHY the two disagree                    what I can defend
+
+The pattern is worth naming because the failure mode changed each time and the
+correction never came from being told. §71 fell to treating a peer's authority as
+evidence; §72 fell to the opposite reflex — my measurement contradicts theirs,
+therefore theirs is wrong — which is the same error with the roles swapped. Both
+skipped the question that settles it: *what would make both observations true?*
+Here, one clone being four days behind.
+
+**And the instrument that answered it was a gate I was not investigating.** The
+citation gate's summary line carries the corpus size, so it dates the corpus for
+free. Neither of my two attempts thought to ask a NEIGHBOURING gate what tree it
+was looking at.
