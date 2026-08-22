@@ -641,3 +641,28 @@ records to show for it. The remedy is a scope question — either the gate widen
 the trees that actually emit metric records, or it states that it speaks only for
 `programs/` and stops concluding "on any design, ever" from that. Still another
 lane's program; still not repaired here.
+
+### The same lesson, applied to my own gate an hour later
+
+Having diagnosed the other lane's FAIL as a verdict claiming more than its check
+established, the obvious next question was whether mine did too. It did.
+
+`every_required_metric_key_has_a_producer` ended its FAIL with
+
+    "an axis proves from a metric nothing emits"
+
+and that is FALSE of what it finds. Both flagged axes HAVE live producers —
+`_ppa/signoff.py` (inside the plugin) and `ppa-e2e/tools/signoff_records.py`
+declare `reliability.em.violations` and `equivalence.verdict` by name. What is
+true is that no run ever MEASURED them: 0 MEASURED against 370 NOT_MEASURED each.
+
+The filename asks a WIRING question. The finding is about EVIDENCE. The verdict
+line now says evidence, and says explicitly that a producer may exist and never
+have measured it.
+
+Three gates in this repository, in one day, whose verdict line named something
+other than what the check established — two of mine and one of another lane's.
+That is not a coincidence and it is not carelessness; it is what happens when a
+rule is named for its intent and then implemented against what is measurable. The
+name is a hypothesis about the check. It has to be re-read against the code every
+time the check changes, and none of the three was.

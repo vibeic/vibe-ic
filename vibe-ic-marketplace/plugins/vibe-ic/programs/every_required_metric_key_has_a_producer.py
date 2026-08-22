@@ -263,7 +263,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"gate walked an empty set. Not a pass.", file=sys.stderr)
         return 2
     if unprovable:
-        print(f"[{NAME}] FAIL — an axis proves from a metric nothing emits")
+        # SAY WHAT WAS FOUND, NOT WHAT THE FILENAME ASKS.
+        #
+        # This line used to read "an axis proves from a metric nothing emits",
+        # and that is FALSE of what this gate actually finds. Both flagged axes
+        # HAVE live producers — `_ppa/signoff.py` and `ppa-e2e/tools/
+        # signoff_records.py` declare `reliability.em.violations` and
+        # `equivalence.verdict` by name. What is true is that no run has ever
+        # MEASURED them: 0 MEASURED against 370 NOT_MEASURED apiece.
+        #
+        # The wiring question ("is there a producer") and the evidence question
+        # ("did any run measure it") are different, and a verdict line that
+        # answers one while naming the other is the same defect this lane
+        # diagnosed in another lane's gate an hour earlier. The filename asks
+        # the wiring question; the finding is about evidence; the line now says
+        # evidence.
+        print(f"[{NAME}] FAIL — an axis has no MEASURED evidence in any run "
+              f"this gate can see (a producer may exist and never have measured "
+              f"it; see the per-axis lines above)")
         return 1
     print(f"[{NAME}] PASS — every axis has at least one fully-produced proof "
           f"group")
