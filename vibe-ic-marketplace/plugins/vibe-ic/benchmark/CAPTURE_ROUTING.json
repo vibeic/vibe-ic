@@ -299,6 +299,26 @@
     "ppa.timing_scope": {
       "bucket_A_program": "programs/_ppa/timing.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
+    "benchmark.aggregate_verdict": {
+      "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
+      "bucket_A_program": "programs/benchmark_run_manifest.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "flow.artefact_write_ownership": {
+      "description": "Wiring a gate's output path against the artefact paths producers already write",
+      "bucket_A_program": "programs/flow_compliance_check.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.generated_manifest": {
+      "description": "Regenerating a tracked manifest whose subject is the tracked file set",
+      "bucket_A_program": "programs/gen_program_inventory.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "repo.enforcement_point": {
+      "description": "Proving that a named client-side enforcement point is installed and current",
+      "bucket_A_program": "programs/landing_merge_verdict.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {
