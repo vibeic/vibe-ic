@@ -21,6 +21,30 @@ goes stale the moment one is added, which is the same fault this file records
 against the program's own docstring. Re-derive it, never re-read it: swap
 3c3c51aee's program in and run this file.)
 
+IF THIS AREA GOES RED FOR A REVIEWER OR A RE-MEASURE, READ THIS FIRST
+====================================================================
+`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+bounds its subprocess at `timeout=55` -- WALL CLOCK, at three call sites -- and
+its subject is `prose_polarity_consulted_check.py` over the whole corpus.
+
+That subject is not a fixed cost. Measured on this machine: about 10s idle, 19.4s
+under a load average near 20, and it has been OBSERVED failing at 58.25s under a
+load average of 71 and passing on the next run with nothing changed. So a red
+there can mean the census is broken, or it can mean the machine was busy, and
+the two are not distinguishable from the failure alone.
+
+To tell them apart, run the gate DIRECTLY:
+
+    python3 programs/prose_polarity_consulted_check.py ; echo $?
+
+rc 0 means the census is intact and the test hit its wall clock. rc 1 means a
+real polarity-blind extractor and the number it names is the finding.
+
+This note lives HERE because the bound lives in a file this branch may not
+loosen, and a warning nobody can find is not a warning. It is not this file's
+growth: the program is 0.18% of the corpus by bytes, and the gate measures the
+same with it swapped back to the author's 326-line revision.
+
 MUTATION, TWO SWEEPS
 ====================
 Guards: every `if ...: continue` in the program deleted in turn -- 20 sites, 8
