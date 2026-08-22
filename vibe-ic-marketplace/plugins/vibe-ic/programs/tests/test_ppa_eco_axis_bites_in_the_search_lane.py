@@ -276,7 +276,7 @@ def test_finding_the_shipped_campaign_contracts_declare_neither_key():
     empty scan is NOT OBSERVED and must not read as "every contract is fine".
     """
     import pytest
-    trials = (_PROGRAMS.parents[3] / "ppa-crosslayer" / "records" / "trials")
+    trials = _campaign_trials()
     if not trials.is_dir():
         pytest.skip(f"the cross-layer campaign records are not in this tree "
                     f"({trials}); this row was NOT OBSERVED, not satisfied")
@@ -774,8 +774,38 @@ CAMPAIGN_ARMS = (("z23", 10, True), ("p08", 10, True),
                  ("p04", 0, False), ("z21", 0, False))
 
 
+#: A file in the repo root that is not this lane's, so finding it means the
+#: anchor below resolved to a REPO and not merely to some directory that
+#: happens to lack `ppa-crosslayer`.
+_ROOT_WITNESS = "vibe-ic-marketplace"
+
+
+def _repo_root():
+    """The repo root, or a FAILURE -- never a silent skip.
+
+    Every row that reads shipped records locates them from `_PROGRAMS.parents[3]`,
+    and every one of them SKIPS when it finds nothing. That is right when the
+    records are genuinely absent and WRONG when the arithmetic has gone stale:
+    move the plugin one directory and all of them skip, reporting NOT OBSERVED
+    about a tree they never looked at. "The records are not here" and "I am
+    looking in the wrong place" would share a verdict, which is the one thing
+    this lane refuses everywhere else.
+
+    So the anchor is CHECKED. A root that does not carry `_ROOT_WITNESS` is a
+    broken calculation and fails loudly; a root that carries it and lacks the
+    records is a real absence and the caller may skip.
+    """
+    root = _PROGRAMS.parents[3]
+    assert (root / _ROOT_WITNESS).is_dir(), (
+        f"the repo-root anchor `_PROGRAMS.parents[3]` resolved to {root}, which "
+        f"carries no `{_ROOT_WITNESS}` -- the path arithmetic is stale, and "
+        f"every record-reading row in this file would otherwise SKIP and report "
+        f"NOT OBSERVED about a tree it never looked at")
+    return root
+
+
 def _campaign_trials():
-    return _PROGRAMS.parents[3] / "ppa-crosslayer" / "records" / "trials"
+    return _repo_root() / "ppa-crosslayer" / "records" / "trials"
 
 
 def _eco_only_policy():
@@ -1149,7 +1179,7 @@ def test_penalty_is_never_mistakable_for_an_eligibility_decision():
 # worse than the silence it replaces.
 def _real_project_dirs():
     """Real, non-fixture directories in this repo that look like run trees."""
-    root = _PROGRAMS.parents[3]
+    root = _repo_root()
     out = []
     for phase3 in sorted(root.glob("docs/research/**/phase3"))[:12]:
         d = phase3.parent
@@ -1394,7 +1424,7 @@ def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
 # uncounted. It is a DISCLOSURE, not a gate -- the rows below fail if the
 # numbers drift so somebody re-measures, and say which way.
 def _hygiene_script():
-    return _PROGRAMS.parents[3] / "tools" / "ci" / "repo_hygiene_gates.sh"
+    return _repo_root() / "tools" / "ci" / "repo_hygiene_gates.sh"
 
 
 def test_the_hygiene_declaration_and_the_axis_table_disagree_on_the_count():
@@ -1451,3 +1481,36 @@ def test_the_axis_the_declaration_omits_is_not_applicable_on_every_candidate():
     assert set(seen) == {"NOT_APPLICABLE"}, (
         f"the tenth axis now reports {sorted(set(seen))} on the campaign; it "
         f"was uniformly NOT_APPLICABLE when this was measured")
+
+
+def test_the_repo_root_anchor_fails_loudly_when_it_goes_stale(monkeypatch,
+                                                              tmp_path):
+    """The guard, SHOWN TO FIRE. A check that has only ever run against a
+    correct tree has not been shown to detect anything.
+
+    Point the anchor at a directory that is not a repo root and assert
+    `_repo_root()` RAISES rather than returning a path the record-reading rows
+    would then quietly skip on.
+    """
+    import pytest
+    # sanity: it does not fire on the real tree
+    assert _repo_root().is_dir()
+
+    fake = tmp_path / "not" / "a" / "repo" / "root" / "deep" / "enough"
+    fake.mkdir(parents=True)
+    monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", fake)
+    with pytest.raises(AssertionError) as exc:
+        _repo_root()
+    assert _ROOT_WITNESS in str(exc.value)
+    assert "stale" in str(exc.value)
+
+    # and the distinction it protects: a root that DOES carry the witness but
+    # has no records is a real absence, and must NOT raise -- otherwise the
+    # guard has replaced one conflation with another.
+    real_shape = tmp_path / "empty_repo"
+    (real_shape / _ROOT_WITNESS).mkdir(parents=True)
+    deep = real_shape / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", deep)
+    assert _repo_root() == real_shape
+    assert not (_repo_root() / "ppa-crosslayer").exists()
