@@ -69,6 +69,24 @@ never re-implemented):
                                          manual habit). See `repo_hygiene_gate`
                                          for why the list is INVOKED and not
                                          derived from the gate names.
+  * landing_is_one_commit_check.py     — a single landing is ONE commit;
+                                         a batch declares its own shape
+  * gatekeeper_stale_branch_check.py   — (already above) and its two
+                                         change-set neighbours, which
+                                         were spawned here and unlisted
+                                         until 2026-08-22:
+  * acceptance_control_check.py        — ADVISORY: the control a change
+                                         cites must be the SHA it names
+  * real_artefact_test_backing_check.py — ADVISORY: a change whose tests
+                                         are all self-authored fixtures
+                                         cannot tell itself from its own
+                                         absence
+  * ci_ran_at_all_check.py             — an absent CI run is DISCLOSED,
+                                         never rendered as a passing one
+  * ppa_pr_scope_check.py              — the PPA Appendix-C merge
+                                         condition: every applicable
+                                         question backed by evidence a
+                                         machine can re-verify
 
 THE §4.05 / GENERAL / NO-CHEAT BOUNDARY  (read this — it is load-bearing)
 ========================================================================

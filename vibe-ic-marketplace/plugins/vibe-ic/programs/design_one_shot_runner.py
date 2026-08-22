@@ -8476,6 +8476,19 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
                       extras={"exit_code": rc})
 
 
+def _usage_rc() -> int:
+    """The rc-3 USAGE tier, read from the module that owns it (#712).
+
+    Resolved rather than written as a literal so this step and
+    `_gate_usage_exit` cannot drift apart; falls back to 3 only if the module
+    is unavailable, which is the value it defines today."""
+    try:
+        import _gate_usage_exit as _u
+        return int(_u.RC_USAGE)
+    except Exception:                                     # pragma: no cover
+        return 3
+
+
 def step_slot_pad_budget(project: Path, top_name: str) -> StepResult:
     """Flow step 2 — can this design's declared interface be bonded out at all?
 
@@ -8531,6 +8544,17 @@ def step_slot_pad_budget(project: Path, top_name: str) -> StepResult:
         status = "PASS"
     elif rc == 1:
         status = "FAIL"
+    elif rc == _usage_rc():
+        # A REJECTED COMMAND LINE IS THIS STEP'S OWN BUG (#712). Since the gate
+        # adopted `_gate_usage_exit`, rc 3 is reachable here, and the argv it
+        # rejected was built ten lines up by this function. Letting it fall into
+        # the `else` below would report a disclosed SKIP for "I called the gate
+        # wrongly" — the same collision the rc-3 tier exists to end, one level
+        # out. It is FAIL for the same reason the merge gate blocks on rc 3:
+        # the fault is the caller's, and a caller that cannot invoke its own
+        # gate must not report that as the gate having nothing to say.
+        status = "FAIL"
+        detail = f"the pad-budget gate REJECTED this step's command line: {detail}"
     else:
         status = "SKIP"
     return StepResult("slot_pad_budget", status, time.time() - t0, detail,
