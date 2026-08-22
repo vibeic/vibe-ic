@@ -1556,6 +1556,23 @@ def test_corners_alternate_rotation_and_mirror(tmp_path):
         assert f"( {c['x']} {c['y']} ) {c['orient']} ;" in text
 
 
+# ANSWERING `real_artefact_test_backing_check`, WHICH REPORTS 0 OF 91 HERE.
+# That number is correct and the doctrine asks for a mutation run or a reason;
+# both are given.
+#
+# THE REASON: this module's strongest tests are driven by neither a fixture nor
+# a checked-in artefact. They query the INSTALLED PDK and, below, the ACTUAL
+# OPENROAD BINARY. The check has no category for that, and its worry does not
+# apply to it -- "a suite that cannot distinguish the change from its own
+# absence" is about fixtures authored alongside the code, which cannot disagree
+# with it. A tool CAN disagree, and did: it is how three shipped orientations
+# were found to be wrong.
+#
+# THE MUTATION RUN, which is what the doctrine says actually proves the point:
+#   SIDE_ORIENT["N"]  -> its shipped-wrong value  => this test RED, naming FS vs S
+#   CORNER_ORIENT SE  -> its shipped-wrong value  => this test RED, naming FN vs E
+# Both are the ORIGINAL defects, reproduced and caught.
+#
 # ── the orientations, MEASURED against the placer rather than pinned ─────────
 #
 # THREE DEFECTS CAME FROM PINNING THEM BY HAND. `SIDE_ORIENT` and
