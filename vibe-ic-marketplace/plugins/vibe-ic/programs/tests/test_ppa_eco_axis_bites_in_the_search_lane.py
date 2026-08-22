@@ -1341,9 +1341,19 @@ def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
             [sys.executable, str(CHECK), "--candidates", str(cands)],
             capture_output=True, text=True)
         assert p.returncode in (F.RC_PASS, F.RC_FAIL, F.RC_UNDETERMINED), p.stderr
-        # the axis row, parsed from the CLI's own stdout line
-        assert f"[eco_readiness " in p.stdout, p.stdout
-        status = p.stdout.split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
+        # The axis row, parsed from the CLI's own stdout. ANCHORED ON THE TRIAL
+        # ID, not on the first occurrence of the marker: the verdict line's
+        # shape is not this test's to rely on, and it has already moved once --
+        # it gained a `<candidates path>: ` prefix and a block of per-axis
+        # MISSING detail lines. Taking the first match would silently start
+        # reading a different candidate's row the day a run carries two.
+        rows = [ln for ln in p.stdout.splitlines()
+                if "[eco_readiness " in ln and f"{trial}:" in ln]
+        assert len(rows) == 1, (
+            f"expected exactly one eco_readiness verdict row naming {trial}, "
+            f"got {len(rows)}; the CLI's output shape moved and this row is "
+            f"no longer reading what it thinks:\n{p.stdout}")
+        status = rows[0].split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
         spares = json.loads(plan.read_text(encoding="utf-8"))["count"]
         seen[trial] = (spares, status)
 
@@ -1422,10 +1432,11 @@ def test_the_axis_the_declaration_omits_is_not_applicable_on_every_candidate():
         p = subprocess.run(
             [sys.executable, str(CHECK), "--candidates", str(cands)],
             capture_output=True, text=True)
-        for line in p.stdout.splitlines():
-            if "[eco_readiness " in line:
-                seen.append(line.split("[eco_readiness ", 1)[1]
-                            .split("]", 1)[0].strip())
+        rows = [ln for ln in p.stdout.splitlines() if "[eco_readiness " in ln]
+        assert rows, (cands, p.stdout)
+        for line in rows:
+            seen.append(line.split("[eco_readiness ", 1)[1]
+                        .split("]", 1)[0].strip())
     assert len(seen) >= len(sets), (len(seen), len(sets))
     assert set(seen) == {"NOT_APPLICABLE"}, (
         f"the tenth axis now reports {sorted(set(seen))} on the campaign; it "
