@@ -16,6 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -61,7 +62,15 @@ def test_detector_general_not_brand_keyword():
     """Per memory: 'enhancements must be general, not keyword'. The
     detector's regex catalog must NOT contain brand names (AMBA, AXI,
     AHB, APB, Wishbone, TileLink, ACE, CHI). Anyone reading the source
-    must see SHAPE patterns only."""
+    must see SHAPE patterns only.
+
+    WHOLE WORDS, not substrings. The bare-substring form of this check
+    fired on the word "chip" (`CHI` inside `chip`) the first time ordinary
+    prose was added to this block — and it would equally have fired on
+    "interface", "replace" or "trace" for `ACE`. A brand name appears in a
+    regex catalog as a token, so a token is what is searched for; matching
+    inside longer words made the check reject the one vocabulary a chip
+    classifier cannot avoid."""
     mod = _load()
     src = (PROGRAMS / "ic_class_profile.py").read_text()
     forbidden = ["AMBA", "AXI", "AHB", "APB", "ACE",
@@ -70,7 +79,7 @@ def test_detector_general_not_brand_keyword():
     detector_block_end = src.find("def _looks_like_bus_interconnect_protocol")
     block = src[detector_block_start:detector_block_end]
     for brand in forbidden:
-        assert brand.lower() not in block.lower(), (
+        assert not re.search(rf"\b{re.escape(brand)}\b", block, re.I), (
             f"bench-keyword {brand!r} found in detector regex block; "
             f"per memory enhancements must be general, not keyword.")
 
@@ -78,7 +87,7 @@ def test_detector_general_not_brand_keyword():
 def test_detector_real_amba_axi_l_docs_trigger():
     """The real benchmark_phase1/arm_aix L1/L2 must trigger the detector."""
     mod = _load()
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
     if not arm.is_dir():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")
@@ -137,7 +146,7 @@ def test_detect_ic_class_routes_amba_axi_to_bus_protocol(tmp_path):
     """The full detect_ic_class on the AMBA AXI L docs must return
     'bus_interconnect_protocol', not 'digital_arithmetic_primitive'."""
     mod = _load()
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix")
     if not (arm / "phase1" / "generated_docs" / "L1_DATASHEET.json").is_file():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")
