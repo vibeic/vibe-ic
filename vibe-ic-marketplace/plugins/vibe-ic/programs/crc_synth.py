@@ -49,6 +49,8 @@ if str(_HERE) not in sys.path:
 
 import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
 
+from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
+
 Port = Tuple[str, int]
 
 
@@ -146,11 +148,48 @@ def _parse_width(prompt: str) -> Optional[int]:
     return None
 
 
+def _first_live(pattern: str, prompt: str):
+    """The first match of `pattern` in `prompt` that is NOT denied, or None.
+
+    ONE HELPER FOR EVERY READ IN THIS FILE (vibe-ic#712). The polynomial was
+    guarded first and its siblings were not, which is the divergence this whole
+    class of repair exists to answer: two readers of one document disagreeing
+    about a denial. A prompt states a retired CRC convention as readily as a
+    live one --
+
+        "The init value 0xFFFFFFFF is no longer used; use 0x0000."  -> 0xFFFFFFFF
+        "reflect_in = true is no longer used."                      -> reflect_in
+
+    -- and each of those builds a CRC that computes a different remainder and
+    does not interoperate with the thing it exists to talk to.
+
+    A denied match does not END the search: a prompt that retires one convention
+    and states another must yield the second, not nothing.
+    """
+    for m in re.finditer(pattern, prompt):
+        lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                                extra_breaks=LINE_END_BREAKS)
+        if is_denied(prompt[lo:hi]):
+            continue
+        return m
+    return None
+
+
 def _parse_poly(prompt: str) -> Optional[Tuple[int, Optional[int]]]:
     """Return (poly_value, implied_width|None) or None. Tries, in order:
     a stated `POLY[=:] <literal>`, a `polynomial 0x..`, an `x^..+..+1` form."""
     # POLY = 8'b10101010  /  POLY: 0xAA  /  generator polynomial = 16'h1021
-    m = re.search(
+    # POLARITY (vibe-ic#712). A prompt is written by a person, and a person
+    # retires a polynomial as readily as they state one:
+    #
+    #     "The polynomial 0x04C11DB7 is no longer used; use 0x1021."
+    #
+    # returned 0x04C11DB7. A CRC built on the retired polynomial computes a
+    # different remainder and will not interoperate with the thing it is for.
+    #
+    # `finditer`, not `search`: a denied statement must not END the search, or a
+    # prompt that retires one polynomial and gives another yields nothing.
+    m = _first_live(
         r"(?i)\b(?:POLY|polynomial|generator\s+poly\w*)\b[^\n]*?"
         r"((?:\d+)?'[bBhHdHoO][0-9a-fA-F_]+|0x[0-9a-fA-F]+|\bx\s*\^[^\n]*?\b1\b)",
         prompt)
@@ -178,7 +217,7 @@ def _parse_poly(prompt: str) -> Optional[Tuple[int, Optional[int]]]:
 def _parse_init(prompt: str) -> Optional[int]:
     """Init/seed value. A clearly stated 'init=', 'initial value', or the cited
     algorithm's 'crc_reg = 0' / 'when reset crc_out will be zero' => 0."""
-    m = re.search(
+    m = _first_live(
         r"(?i)\b(?:init(?:ial)?(?:\s+value)?|seed)\b\s*[:=]?\s*"
         r"((?:\d+)?'[bBhHdHoO][0-9a-fA-F_]+|0x[0-9a-fA-F]+|\d+)",
         prompt)
@@ -208,9 +247,9 @@ def _parse_reflect_xor(prompt: str) -> Optional[Tuple[bool, bool, int]]:
     mentions_reflect = re.search(r"(?i)\breflect|\brefin\b|\brefout\b|\bmirror", prompt)
     if mentions_reflect:
         # reflect mentioned -> require an explicit boolean pin for BOTH or SKIP.
-        rin = re.search(r"(?i)\b(?:reflect[_\s]?in|refin)\b\s*[:=]?\s*"
+        rin = _first_live(r"(?i)\b(?:reflect[_\s]?in|refin)\b\s*[:=]?\s*"
                         r"(true|false|1|0|yes|no)", prompt)
-        rout = re.search(r"(?i)\b(?:reflect[_\s]?out|refout)\b\s*[:=]?\s*"
+        rout = _first_live(r"(?i)\b(?:reflect[_\s]?out|refout)\b\s*[:=]?\s*"
                          r"(true|false|1|0|yes|no)", prompt)
         if not (rin and rout):
             return None  # ambiguous reflect -> SKIP
