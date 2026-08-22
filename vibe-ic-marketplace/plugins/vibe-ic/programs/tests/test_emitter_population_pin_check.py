@@ -105,6 +105,57 @@ def real_run(tmp_path_factory):
     return r, json.loads(out.read_text())
 
 
+def test_no_counter_with_a_threshold_is_silently_missed():
+    """The verdict reads `3 ... COMPARED out of 1238 program(s) SCANNED`, and a
+    reader is entitled to ask whether the extractor is simply blind.
+
+    Pinned as a RELATIONSHIP, not as a total: every program whose emitted script
+    increments a counter either yields a comparable population, or states no
+    numeric threshold on that counter for there to be anything to compare. A
+    program that states BOTH and yields nothing is the extractor going quietly
+    narrow, which is the failure this file exists to refuse."""
+    import ast as _ast
+    import re as _re
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import emitter_population_pin_check as E
+
+    missed, considered = [], []
+    for prog in sorted(PROGRAMS_DIR.glob("*.py")):
+        try:
+            tree = _ast.parse(prog.read_text(errors="replace"))
+        except SyntaxError:
+            continue
+        script = E.emitted_script_of(tree)
+        for name in set(E.INCR.findall(script)):
+            # A POPULATION, on this program's own terms. One `incr` is an
+            # accumulator, not a population stated twice, and `$_ci < 5` is a
+            # loop bound, not a denominator -- the first version of this probe
+            # ignored both and reported three false misses in
+            # phase3_one_shot_runner. The instrument was wrong, not the code.
+            sites = len(_re.findall(r"\bincr\s+" + _re.escape(name) + r"\b",
+                                    script))
+            if sites < E.MIN_POPULATION:
+                continue
+            if not _re.search(r"\$" + _re.escape(name) + r"\s*(>=|==)\s*\d+",
+                              script):
+                continue
+            considered.append((prog.name, name))
+            rows, _refused = E.counters_of(tree)
+            if not any(r[0] == name and r[2] for r in rows):
+                missed.append((prog.name, name))
+
+    # A PROBE THAT EXAMINED NOTHING PROVES NOTHING. If `emitted_script_of` ever
+    # returns empty, `missed` is empty too and this test passes while checking
+    # no tree at all.
+    assert considered, (
+        "this probe found no emitted counter to check anywhere in the corpus, "
+        "so its silence is not evidence")
+    assert not missed, (
+        "these emitted counters state a membership at MIN_POPULATION sites or "
+        "more AND a literal threshold, and this guard compared neither: "
+        + repr(missed))
+
+
 def test_the_shipped_corpus_is_clean(real_run):
     """The corpus sweep, pinned: this guard must be green on the tree it ships
     in. It is also the file that records the reach — small, and stated."""
@@ -2409,7 +2460,7 @@ def test_the_verdict_says_out_of_how_many(tmp_path):
                                           encoding="utf-8")
     r = _run(progs, tests)
     assert r.returncode == RC_PASS, r.stdout + r.stderr
-    assert "out of a corpus of 2 program(s) and 1 test(s)" in r.stdout, r.stdout
+    assert "out of a corpus of 2 program(s) and 1 test(s) SCANNED" in r.stdout, r.stdout
 
 
 def test_the_corpus_is_in_the_json_report(tmp_path):

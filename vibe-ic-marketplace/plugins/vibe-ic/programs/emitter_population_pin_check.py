@@ -134,6 +134,27 @@ USAGE
 -----
     emitter_population_pin_check.py [--programs DIR] [--tests DIR] [--json OUT]
 
+THE REACH, AND WHY IT IS FOUR
+============================
+On the tree this ships in, the verdict reads `3 emitted counter denominator(s)
+and 1 test pin(s) COMPARED out of a corpus of 1238 program(s) and 2727 test(s)
+SCANNED`, and three-out-of-1238 invites the conclusion that the extractor is
+blind to almost everything. It is not. Measured on 8efee1b4ce:
+
+    programs whose EMITTED script contains `incr `   : 4
+      yielding a counter with a literal denominator  : 1   (3 denominators)
+      with no numeric comparison on that counter     : 3
+
+The other three state a membership and never state a threshold, so there is no
+second statement for the first to disagree with -- nothing was skipped. The
+phenomenon is RARE; the reach is not narrow. That is checkable rather than
+asserted: `test_no_counter_with_a_threshold_is_silently_missed` walks every
+program on every run and holds the RELATIONSHIP -- a counter with both a
+membership and a literal threshold must yield a comparison -- rather than the
+number 4, which goes stale the day a lane adds an emitter, and a stale reach
+claim is how this kind of file starts lying.
+
+
 --json, AND WHAT IT CARRIES
 ---------------------------
 A machine-readable report with no written schema is a contract nobody can rely
@@ -153,7 +174,8 @@ need not read the source:
     not_determined       populations declined because K is a LOWER BOUND, not a
                          count. `program` / `counter` / `increment_sites` /
                          `denominator` / `denominator_kind` / `emitted_per_site`
-    corpus               what there WAS to examine: {"programs": P, "tests": T}.
+    corpus               what was SCANNED: {"programs": P, "tests": T}. Not a
+                         count of what could be compared -- see THE REACH.
                          A count of comparisons made carries no meaning without
                          it -- "0 compared" out of 214 programs and out of an
                          empty directory are the same number and not the same
@@ -1020,7 +1042,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # from the one it prints.
     head = (f"{counters_examined} emitted counter denominator(s) and "
             f"{pins_examined} test pin(s) COMPARED out of a corpus of "
-            f"{len(sources)} program(s) and {tests_seen} test(s); {len(denied)} match(es) "
+            f"{len(sources)} program(s) and {tests_seen} test(s) SCANNED; {len(denied)} match(es) "
             f"not counted because the statement DENIES them; {len(unparsed)} "
             f"source(s) NOT examined because they would not parse; "
             f"{len(undecidable)} population(s) NOT DECIDABLE; "
