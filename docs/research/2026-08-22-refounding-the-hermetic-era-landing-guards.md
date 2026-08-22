@@ -5,7 +5,8 @@ specified — both channels confirmed from source, with a safety bound — and
 deliberately NOT built. D's mechanism is fully described and NOT built, for a
 doctrinal reason stated with it.**
 
-**Effect, measured in both lanes:** host `9 failed -> 6 failed` (134 collected,
+**Effect, measured in both lanes** (authority: **M65** in the findings document —
+this is a reference, re-derive there): host `9 failed -> 6 failed` (134 collected,
 nothing newly red); pinned image `22 failed -> 22 failed`, unchanged. **The
 repair is invisible to CI**, because all 22 die on the absent Docker CLI before
 reaching any re-founded assertion (M27). It exists so the policy call in

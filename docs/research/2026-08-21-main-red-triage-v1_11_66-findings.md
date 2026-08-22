@@ -19,6 +19,20 @@ host 8hd-3 · started 2026-08-21 · **69 sections (M0–M74); read this header b
 > That is four commands. **Every stale number in this document — six blockers, a
 > section count, an instrument tally, a corrections list, a red inventory — cost
 > less than that to check and more than that to believe.**
+>
+> **THE RED COUNTS HAVE NINE COPIES.** `9 failed → 6 failed` appears eight times
+> here and once in the proposal document. They agree today (**M65** re-measured
+> and diffed by ID), but nine copies of one number will diverge. **M65 is the
+> authority**; treat the rest as references. Re-derive with:
+>
+> ```sh
+> cd vibe-ic-marketplace/plugins/vibe-ic && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+>   python3 -m pytest -q -p no:cacheprovider -p no:pytest_ethereum \
+>   programs/tests/test_landing_merge_verdict.py | tail -1
+> ```
+>
+> **Diff the failing IDs, never the totals** — two runs matching on count with
+> different sets is a trap this document fell into twice.
 
 **SCOPE HAS GROWN PAST THE TITLE IT STARTED WITH.** This began as RUN 8 —
 "v1.11.62 and the ownership question" — and M0 below still states that premise,
