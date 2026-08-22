@@ -59,6 +59,12 @@ is the outcome:
         WEST -> orient MXR90, EAST -> orient R90
         75 um along the row, 350 um into the die, IDENTICAL in all four.
 
+    THAT SECOND SOURCE IS THE PROBE WHOSE INFERENCE WAS WRONG, and it is
+    left standing because its MEASUREMENT is correct and still supports the
+    width claim. What it does NOT support is "the variable is inert" — the
+    rows it watched are the ones the OTHER parameter drives. Read the next
+    section before drawing anything from it.
+
 The correction is right whichever way it moves a verdict — it was made on the
 strength of those two sources, not because a ring then fits. On a real ring it
 happened to be a 4.4x error: 19 x 350 = 6650 um against a 1500 um side, which
@@ -76,6 +82,23 @@ That is a weaker claim and the true one, and it makes the refusal below MORE
 justified rather than less: the value would have had an effect, and we would
 not have produced it.
 
+RE-CONFIRMED INDEPENDENTLY on this commit's own base, not carried forward from
+the correction's tree: the same `make_io_sites` -> `place_pad` -> `place_corners`
+call shape librelane's `pad_cfg.tcl` uses, one OpenROAD process per (H, V, C)
+triple, an open 5V IO cell library with a square corner cell, DEF orientations
+read back from odb.
+
+    at the defaults H=V=C=R0     SOUTH R0    NORTH MX    WEST MXR90  EAST R90
+    H=R90  (V, C at default)     SOUTH R0    NORTH MX    WEST MX     EAST R180
+    H=R180 (V, C at default)     SOUTH R0    NORTH MX    WEST MYR90  EAST R270
+    V=R90  (H, C at default)     SOUTH R90   NORTH MYR90 WEST MXR90  EAST R90
+    V=R180 (H, C at default)     SOUTH R180  NORTH MY    WEST MXR90  EAST R90
+    V=MX   (H, C at default)     SOUTH MX    NORTH R0    WEST MXR90  EAST R90
+
+  H moves W/E only; V moves S/N only. Held in OpenROAD 26Q3-1666, and the
+  default row is identical in 26Q3-1535 — so the correction is a property of
+  the placer, not of one build.
+
 Silently ignoring a declared value is the defect; claiming a variable does
 nothing when it does is a different one. So it degrades loudly in BOTH
 directions:
@@ -87,13 +110,15 @@ directions:
                                     with the measurement, in EVERY report
                                     including the skips. A disclosure only
                                     present on the happy path is not one.
-    declared non-default          — refuse **rc 2, NOT DETERMINED**, naming the
-                                    variable and saying the placer ignores it.
-                                    Never rc 0 and never rc 1: "I cannot
-                                    honour what you asked" is neither a pass
-                                    nor a finding about the design. An author
-                                    who sets a knob is entitled to be told the
-                                    knob does nothing.
+    declared non-default          — refuse **rc 2, NOT DETERMINED**, naming
+                                    the variable ACTUALLY declared and saying
+                                    THIS STEP does not implement it. Never rc 0
+                                    and never rc 1: "I cannot honour what you
+                                    asked" is neither a pass nor a finding
+                                    about the design. An author who sets a knob
+                                    is entitled to be told it was not honoured
+                                    here — not to be told, falsely, that it
+                                    does nothing anywhere.
 
 And the DEF carries the orientation the placer ACTUALLY produces on the
 sides (`_pad_ring.SIDE_ORIENT`, all four), not the declared one, so the
@@ -670,18 +695,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         rep = _report("SKIP", reason, inputs=inputs,
                       io_cell_library=lib.as_dict(), die=die_rec,
                       missing_inputs=[{
-                          "input": "a pad rotation the placer can honour",
+                          "input": "a pad rotation this step implements",
                           "path": PR.ASSIGNMENT_REL,
-                          "variables_absent": ["PAD_ROTATION_VERTICAL"]}],
+                          "variables_absent": [_rot_var]}],
                       findings=[_finding(
-                          "INFO", "PAD_ROTATION_VERTICAL_NOT_HONOURED",
-                          reason)])
+                          "INFO", f"{_rot_var}_NOT_HONOURED", reason)])
         _write(project, args.json, rep)
         _skip_marker(project, reason)
         print(f"=== {PROGRAM} ({project.name}) ===")
         print("  verdict: SKIP (NOT DETERMINED)")
-        print(f"  PAD_ROTATION_VERTICAL_NOT_HONOURED: declared {raw!r}, "
-              f"placer ignores it")
+        # The console line says what the record says. It used to claim the
+        # placer disregards the variable, which is false; this line is the
+        # half a human reads, so the correction has to reach it too.
+        print(f"  {_rot_var}_NOT_HONOURED: declared {raw!r}, "
+              f"not implemented by this step")
         return 2
 
     cfg_rec = {
