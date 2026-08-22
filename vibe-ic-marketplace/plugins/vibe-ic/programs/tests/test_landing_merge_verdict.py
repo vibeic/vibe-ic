@@ -1784,7 +1784,11 @@ if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
     echo "=== FAILURES ABOVE — no routed transition record ==="
     exit 2
   fi
-  echo "  FAIL  repo hygiene gates"
+  # The gate LINE is emitted with the others, after the opening sentinel: a
+  # `  FAIL  ` line printed before the sentinel is outside the record the
+  # verifier parses, and an arm whose log closes with ALL GATES PASS while it
+  # exits 1 is refused as "no complete terminal record for rc=1".  Nothing had
+  # ever run this branch under the semantic landing record to notice.
   STUB_HYGIENE_STATE=FAIL
   STUB_HYGIENE_RC=1
 fi
@@ -1816,6 +1820,9 @@ if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
+if [ "$STUB_HYGIENE_STATE" = "FAIL" ]; then
+  echo "  FAIL  repo hygiene gates"
+fi
 SEL="$(mktemp -t stub_sel.XXXXXX)"
 JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
 ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
@@ -1848,10 +1855,11 @@ fi
 # `landing_publish` also sets FAILED from the journal it wrote.
 landing_publish
 if [ "$STUB_TARGETED_STATE" = "SKIP" ] \
-   && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+   && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ] \
+   && [ "$FAILED" = "0" ]; then
   echo "  REPORT  merge verifier owns the independent targeted-test evidence"
   echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
-elif [ "$STUB_TARGETED_STATE" = "FAIL" ]; then
+elif [ "$FAILED" != "0" ]; then
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 else
   [ "$STUB_STAMP" = "1" ] \
@@ -2149,12 +2157,136 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
                "A2 duplicated the targeted suite already measured by A1")
 
 
+_ROUTED_GATE_MARKER = "routed-corpus-gate.enabled"
+_ROUTED_ACTIVATION_MARKER = "routed-corpus-producer.activated"
+
+
+def _routed_activation_repo(sandbox, tmp_path, base_already_expanded=False):
+    """A subject whose CANDIDATE COMMIT activates the routed-DEF producer.
+
+    The EMPTY-to-expanded bootstrap is a fact about two SUBJECTS, not about two
+    environments: arm A2 runs the base commit's landing gate and arm B2 runs
+    the candidate's, so which population each declares has to be decided by
+    what is COMMITTED on each side.  That is also the only channel that
+    survives the hermetic launcher, which forwards an explicit --env allow-list
+    and carries no test switch into an arm.
+
+    Base commit: the routed-DEF gate is dispatched over an EMPTY population.
+    Candidate commit: it adds the activation marker, so the same gate is
+    dispatched over the real routed corpus -- exactly the one-use activation
+    the bootstrap exists for.  `base_already_expanded` puts the marker on the
+    BASE too, which is the post-activation world where no transition is due.
+    """
+    repo = tmp_path / "routed-activation-repo"
+    cloned = subprocess.run(["git", "clone", "-q", str(sandbox), str(repo)],
+                            capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+
+    land = repo / "tools/gatekeeper-land.sh"
+    text = land.read_text()
+    armed = ('if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \\\n'
+             '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
+             '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n')
+    assert armed in text, "the stub's routed-transition switch moved"
+    text = text.replace(armed, (
+        'if [ -f "$ROOT/%s" ] \\\n'
+        '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
+        '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n'
+        % _ROUTED_GATE_MARKER))
+    producer = ('    if [ "$GATEKEEPER_VERIFY_ARM" = "A2" ] \\\n'
+                '       && [ "${GATEKEEPER_STUB_BASE_EXPANDED:-0}" != "1" ]; then\n')
+    assert producer in text, "the stub's population producer moved"
+    text = text.replace(producer,
+                        '    if [ ! -f "$ROOT/%s" ]; then\n'
+                        % _ROUTED_ACTIVATION_MARKER)
+    land.write_text(text)
+    (repo / _ROUTED_GATE_MARKER).write_text("routed corpus gate is dispatched\n")
+    tracked = ["tools/gatekeeper-land.sh", _ROUTED_GATE_MARKER,
+               _PROTECTED.MANIFEST_PATH]
+    if base_already_expanded:
+        (repo / _ROUTED_ACTIVATION_MARKER).write_text("already activated\n")
+        tracked.append(_ROUTED_ACTIVATION_MARKER)
+    _write_activated_manifest(repo)
+    _git(repo, "add", *tracked)
+    assert _git(repo, "commit", "-qm",
+                "dispatch the routed corpus gate").returncode == 0
+
+    _git(repo, "checkout", "-q", "-b", "activate_producer")
+    (repo / _ROUTED_ACTIVATION_MARKER).write_text("the producer is activated\n")
+    (repo / "routed-activation-note.txt").write_text("activate routed corpus\n")
+    _git(repo, "add", "-A")
+    assert _git(repo, "commit", "-qm",
+                "activate the routed producer").returncode == 0
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
 def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
         sandbox, tmp_path):
-    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion."""
-    r, doc = _verify(
-        sandbox, "routed_transition", tmp_path,
-        env_extra={"GATEKEEPER_STUB_ROUTED_TRANSITION": "1"})
+    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion.
+
+    PROPERTY UNCHANGED, INTERFACE MOVED, AND THEN THE PROPERTY DID NOT HOLD.
+    Read the failure before repairing anything: THIS TEST IS THE MESSENGER.
+
+    The stimulus used to be `GATEKEEPER_STUB_ROUTED_TRANSITION`, read by the
+    stub landing gate inside an arm. MEASURED on a4caccefe: the name occurs
+    ZERO times in `tools/gatekeeper-verify-merge.sh` and is not on the hermetic
+    launcher's `--env` allow-list, so inside an arm it is EMPTY, the stub's
+    branch never fired, no arm ever declared a routed corpus, and the old test
+    died on `KeyError: 'corpus_transitions'` -- reporting a missing key for a
+    transition nothing had asked for.
+
+    It is now expressed the way the real thing is: the CANDIDATE COMMIT
+    activates the producer. A2 runs the base commit's gate over an EMPTY
+    population, B2 runs the candidate's over the real routed corpus, and that
+    is a fact about two subjects rather than two environments -- which is the
+    only channel the containment leaves open.
+
+    WITH THE STIMULUS FINALLY DELIVERED, MAIN CANNOT SUPPLY THE EVIDENCE. The
+    verifier detects the EMPTY base correctly and calls
+    `build_trusted_transition_evidence`, which enumerates and executes the
+    routed corpus and then re-attests the corpus snapshot with
+    `validate_benchmark_snapshot "$BENCHMARK_B2"`. That validator is
+    `benchmark_data_landing_checkout.py validate`, which requires the directory
+    to be a git checkout whose `origin` is exactly the canonical benchmark-data
+    remote. `$BENCHMARK_B2` is not such a checkout: since the commit that
+    introduced both halves (7c376e3481, v1.10.69, 2026-08-18) it is built by
+    `materialize_hermetic_git_subject`, i.e. `git init` over an object-exact
+    tree, which has NO remote at all. Measured directly, outside this fixture,
+    with the production argument list:
+
+        real checkout   -> [PASS] benchmark-data private worktree validated
+        materialized    -> [NORECORD] origin must be exactly
+                           'https://github.com/vibeic/benchmark-data.git';
+                           observed ['<missing or unreadable>']
+
+    so the one-use bootstrap dies with `benchmark-data B2 changed during
+    trusted parent evidence execution` -- a message that blames a mutation
+    when nothing mutated. It fails CLOSED (the landing is refused, never
+    granted), so it is a liveness defect and not a hole; but the property this
+    test names does not hold, and the honest thing is to leave the test
+    asserting the property rather than rewrite it to match the behaviour.
+
+    THE FIX IS NOT ON THIS BRANCH ON PURPOSE. `tools/gatekeeper-verify-merge.sh`
+    is a protected authority path; changing it is a PREPARE/ACTIVATE protected
+    landing transition and belongs to the repo-gatekeeper, not to a test
+    repair. Its shape is stated in the report: re-attest `$BENCHMARK_B2` as
+    what it IS -- compare its tree digest against the one already bound in the
+    B2 arm receipt's `inputs.corpus`, the same digest
+    `compare_hermetic_shared_inputs` reads -- instead of asking a materialized
+    snapshot for a git remote it cannot have. With that one line replaced, this
+    test passes; nothing else about the bootstrap is broken.
+
+    Its sibling below is the paired control: the SAME fixture with one bit
+    different (the base already activated) reaches a verdict and passes, so
+    nothing here is a broken fixture -- the only difference is whether the
+    bootstrap path is entered at all.
+    """
+    repo = _routed_activation_repo(sandbox, tmp_path)
+    r, doc = _verify(repo, "activate_producer", tmp_path)
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
@@ -2166,7 +2298,18 @@ def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
     assert transition["candidate_items"] == 1
     assert transition["replacement_gates"] == 4
     assert len(transition["parent_evidence_sha256"]) == 64
-    assert "trusted EMPTY→expanded evidence supplied" in r.stdout
+    assert transition["corpus"] == "published cells carrying a routed DEF"
+    # The four replacement gates are NOT_CHECKED under a live bound, which is
+    # the only kind of unknown allowed to replace an EMPTY base. An unbounded
+    # NOT_CHECKED here would mean an unknown candidate result had been accepted
+    # in place of a measured one.
+    assert transition["bounded_not_checked"] == [
+        "DRC PASS is not vacuous (tiny)",
+        "inner FAILs reach the verdict (tiny)",
+        "macro OBS not crossed (tiny)",
+        "new tool diagnostic id (tiny)",
+    ], transition
+    assert transition["benchmark_data_sha"], transition
 
 
 def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
@@ -2212,6 +2355,21 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
             "GATEKEEPER_STUB_BASE_EXPANDED": "1",
         })
 
+    """After activation, evidence must not demand another one-use transition.
+
+    THE PAIRED CONTROL, and it used to be green for the wrong reason. It
+    asserted that no transition is claimed -- true, but only because the switch
+    it set reached no arm, so neither side ever declared a routed corpus and
+    there was nothing a transition could have been claimed about. Same fixture
+    as the bootstrap test with one bit different: the base commit carries the
+    activation marker too, so BOTH arms enumerate the real routed corpus,
+    `base_has_exact_legacy_routed_empty` is correctly false, and the ordinary
+    differential answers without any one-use evidence.
+    """
+    repo = _routed_activation_repo(sandbox, tmp_path,
+                                   base_already_expanded=True)
+    r, doc = _verify(repo, "activate_producer", tmp_path)
+
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
     delta = doc["hygiene_finding_delta"]
@@ -2222,6 +2380,9 @@ def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
         + repr(sorted(delta)))
     assert delta["corpus_transitions"] == []
     assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
+
+    assert delta.get("corpus_transitions", []) == []
+    assert "exact corpus transition" not in r.stdout
 
 
 def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
@@ -2518,6 +2679,108 @@ def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
     """
     r, doc = _verify(sandbox, "innocuous_green", tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+_WAVE_ARTEFACTS = (
+    "b1-runner.log", "b2-runner.log",
+    "b1-hermetic-receipt.json", "b2-hermetic-receipt.json",
+    "base-subject",
+    "a1-runner.log", "a2-runner.log",
+    "a1-hermetic-receipt.json", "a2-hermetic-receipt.json",
+)
+
+
+
+
+
+
+def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
+    """When each wave artefact FIRST appeared in the verifier's run directory.
+
+    The run directory is `mktemp -d -t gkverify.XXXXXX`, so pointing the
+    verifier's TMPDIR at a caller-owned directory makes every arm artefact
+    host-visible under a known name while the run is still going.  First-seen
+    times are recorded rather than live set membership because cleanup removes
+    the run directory and `publish_validated_arm_artifact` consumes receipts:
+    a "does it exist now" reading flickers back to False at the end of the run,
+    and the ORDER things appeared in is what the wave property is about.
+    """
+    seen: dict[str, float] = {}
+    start = time.monotonic()
+    deadline = start + _T
+    while proc.poll() is None and time.monotonic() < deadline:
+        runs = sorted(run_root.glob("gkverify.*"))
+        if runs:
+            for name in _WAVE_ARTEFACTS:
+                if name not in seen and (runs[0] / name).exists():
+                    seen[name] = round(time.monotonic() - start, 3)
+        time.sleep(interval)
+    return seen
+
+
+
+
+
+
+def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
+        sandbox, tmp_path):
+    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel.
+
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
+    UNCHANGED, word for word; only the vantage point it is observed from has
+    moved, and the reason it had to move is the property next door.
+
+    It used to be observed from INSIDE the arms: the stub landing gate wrote
+    `<ARM>.started` into `GATEKEEPER_CONCURRENCY_PROBE_DIR`, and the fixture's
+    own test file waited for its siblings' markers to appear.  A cross-arm
+    rendezvous through a shared host directory is exactly what the hermetic
+    launcher exists to make impossible — each arm is a container with
+    `network: none` whose only writable surface is a private tmpfs and a
+    private evidence volume — and MEASURED on a4caccefe the name is not on the
+    launcher's `--env` allow-list either, so inside an arm the variable is
+    EMPTY, the stub's branch never fires and no marker is ever written. The
+    only thing that directory received was `cleanup.*`, written host-side by
+    `cleanup_event`. An arm CANNOT see another arm, by design; asserting the
+    wave structure through an inter-arm channel therefore cannot be repaired,
+    it can only be moved.
+
+    So it is observed where the parallelism actually lives: the parent shell,
+    which launches B1/B2, `wait`s for both, rebuilds the base wave, and only
+    then launches A1/A2 and waits for those.  Every arm's runner log is created
+    by the launch redirection and every arm's receipt is sealed at its exit, so
+    the order those files appear in IS the wave structure, observed from
+    outside without asking any arm to cooperate.
+
+    MARGINS, measured on this host: B receipts at 5.2s/7.7s, the base subject
+    at 9.3s, the A logs at 10.59s/10.61s, the first A receipt at 12.1s. The
+    wave boundary this test asserts has 2.9s of daylight and the A overlap
+    window is 1.5s, both sampled every 20ms. A poller that misses a phase
+    collapses two first-seen times together and the strict `<` below FAILS —
+    the failure mode is loud, not a quiet pass.
+    """
+    run_root = tmp_path / "verifier-tmp"
+    run_root.mkdir()
+    out = tmp_path / "wave.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", "innocuous_green", "--base", "main",
+         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "TMPDIR": str(run_root),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])})
+    seen = _first_seen_wave_artefacts(proc, run_root)
+    try:
+        stdout, stderr = proc.communicate(timeout=_T)
+    except subprocess.TimeoutExpired:                     # pragma: no cover
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    doc = json.loads(out.read_text()) if out.is_file() else None
+
+    assert proc.returncode == 0, stdout + stderr
     assert doc["verdict"] == "LAND_OK"
     # A2 (base gate arm) and B2 (candidate gate arm) each produced a record.
     assert doc["base_land"] is not None, "arm A2 produced no landing record"
@@ -2527,6 +2790,38 @@ def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
     assert delta["base_total"] > 0, f"arm A1 measured nothing: {delta}"
     assert delta["candidate_total"] > 0, f"arm B1 measured nothing: {delta}"
     assert delta["new_failures"] == []
+
+    assert doc["base_land"] is not None
+    assert doc["delta"]["new_failures"] == []
+
+    # NON-VACUITY FIRST. Every arm has to have been WATCHED, or the ordering
+    # below is a comparison between two absences. This is the assertion that
+    # would have caught the defect this test was blind to for four days: the
+    # old body read a probe directory that was never written to, and could
+    # only say the markers were missing, never that no arm had ever run.
+    missing = [name for name in _WAVE_ARTEFACTS if name not in seen]
+    assert not missing, (f"never observed {missing}; the poller saw {seen}")
+
+    # THE CANDIDATE WAVE PRECEDES. No base-wave artefact exists until BOTH
+    # candidate receipts are sealed -- the base subject is not even
+    # materialized while candidate code is running, which is what makes the
+    # base wave isolated from it rather than merely later.
+    candidate_wave_done = max(seen["b1-hermetic-receipt.json"],
+                              seen["b2-hermetic-receipt.json"])
+    base_wave_started = min(seen["base-subject"], seen["a1-runner.log"],
+                            seen["a2-runner.log"])
+    assert candidate_wave_done < base_wave_started, seen
+
+    # THE BASE WAVE IS PARALLEL. Both A arms are launched before either has
+    # sealed a receipt, so they were in flight at the same time.
+    assert max(seen["a1-runner.log"], seen["a2-runner.log"]) < min(
+        seen["a1-hermetic-receipt.json"],
+        seen["a2-hermetic-receipt.json"]), seen
+    # ... and so was the candidate wave, which is the same launch shape one
+    # wave earlier and is why the base wave is not simply the whole run.
+    assert max(seen["b1-runner.log"], seen["b2-runner.log"]) < min(
+        seen["b1-hermetic-receipt.json"],
+        seen["b2-hermetic-receipt.json"]), seen
 
 
 def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
@@ -2541,16 +2836,102 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
     assert "candidate planted this base log" not in r.stdout
 
 
+def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
+    """Run the verifier with a caller-visible run directory.
+
+    Returns (returncode, verdict-doc-or-None, stdout, stderr, fired) where
+    `fired` says whether `when_b1_starts` was actually called with the run
+    directory while the candidate wave was in flight.  It is returned rather
+    than assumed because "the corpus is unchanged" and "nobody tried" are the
+    same bytes: a tamper test that cannot say its stimulus was delivered is
+    reporting a third outcome it has not enumerated.
+    """
+    run_root = tmp_path / "verifier-tmp"
+    run_root.mkdir(parents=True)
+    out = tmp_path / "verdict.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
+         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "TMPDIR": str(run_root),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])})
+    fired = False
+    deadline = time.monotonic() + _T
+    while (when_b1_starts is not None and not fired
+           and proc.poll() is None and time.monotonic() < deadline):
+        runs = sorted(run_root.glob("gkverify.*"))
+        if runs and (runs[0] / "b1-runner.log").exists():
+            when_b1_starts(runs[0])
+            fired = True
+            break
+        time.sleep(0.02)
+    try:
+        stdout, stderr = proc.communicate(timeout=_T)
+    except subprocess.TimeoutExpired:                     # pragma: no cover
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"the verifier never finished:\n{stdout}\n{stderr}")
+    doc = json.loads(out.read_text()) if out.is_file() else None
+    return proc.returncode, doc, stdout, stderr, fired
+
+
 def test_end_to_end_relinked_parent_selection_is_norecord(
         sandbox, tmp_path):
-    r, doc = _verify(
-        sandbox, "innocuous_green", tmp_path,
-        env_extra={"GATEKEEPER_RELINK_SELECTION": "1"},
-    )
+    """PROPERTY (unchanged): a relinked parent-owned test selection is
+    NORECORD -- never a recorded verdict about a selection that moved.
 
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc is None
-    assert "changed/relinked the parent-owned test selection" in r.stderr
+    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+), AND THE HAND THAT
+    DOES THE RELINKING IS THE PART THAT MOVED. It used to be the candidate's
+    own landing gate: the stub read `GATEKEEPER_RELINK_SELECTION`, reached into
+    the parent's run directory and swapped `selection.txt` for a symlink to a
+    byte-identical copy. Under the hermetic launcher an arm is a container that
+    is handed `/input/selection.txt` as a read-only bind and cannot name the
+    run directory at all, so that stimulus is not merely undetected -- it
+    cannot be expressed. MEASURED on a4caccefe: the switch occurs ZERO times in
+    `tools/gatekeeper-verify-merge.sh` and is not on the launcher's `--env`
+    allow-list, so the stub branch never fired and the old test was asserting
+    a refusal for something nothing had attempted.
+
+    The relink is therefore planted where a relink can still happen: on the
+    HOST, in the parent's own run directory, while the candidate wave is in
+    flight. That is the threat the surviving code is written against -- the
+    verifier re-reads and re-attests its inputs precisely because it does not
+    assume the candidate is the only process on the machine -- and it is the
+    reason a content comparison is not enough: the copy is byte-identical, so
+    `cmp` on the bytes cannot see it. What sees it is
+    `hermetic_landing_arm_receipt._resolved_file`, which refuses a supplied
+    input path that is not a DIRECT regular file, before any of its bytes are
+    allowed to bind an arm's receipt.
+
+    ASSERTED: rc 2, NO verdict document, and the refusal names both the arm
+    receipt and the selection. Plus the paired control in the same harness --
+    the same run with the relink withheld is a recorded LAND OK -- because a
+    refusal that also fires without the tamper is a ban, not a check.
+    """
+    def relink(run):
+        selection = run / "selection.txt"
+        copy = run / "selection-copy.txt"
+        copy.write_bytes(selection.read_bytes())
+        selection.unlink()
+        selection.symlink_to(copy)
+
+    rc, doc, stdout, stderr, fired = _verify_watching_the_run_dir(
+        sandbox, "innocuous_green", tmp_path / "relinked", relink)
+    assert fired, "the relink was never planted, so nothing was tested"
+    assert rc == 2, stdout + stderr
+    assert doc is None, "a run whose selection moved still wrote a verdict"
+    assert "arm receipt is NORECORD" in stderr, stderr
+    assert "selection is not a direct regular file" in stderr, stderr
+
+    control_rc, control_doc, control_out, control_err, _ = (
+        _verify_watching_the_run_dir(
+            sandbox, "innocuous_green", tmp_path / "untampered"))
+    assert control_rc == 0, control_out + control_err
+    assert control_doc is not None and control_doc["verdict"] == "LAND_OK"
 
 
 def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
