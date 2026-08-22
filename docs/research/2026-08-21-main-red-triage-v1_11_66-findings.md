@@ -5096,6 +5096,37 @@ did so because somebody had reasoned about them and written the reason down —
 not because I had assumed them.**
 
 
+## M94 — a re-confirmation, and the inflated claim I nearly made from it
+
+Swept the two branch documents I had NOT audited (the triage table and the
+scratch-root rule) for the claims M90 retracted: **0 hits, and the pattern was
+verified against the two documents that DO contain them (46 and 6) before the
+zeros were believed.**
+
+The triage table buckets three ids as `IMAGE-ONLY`, all in a file this branch
+changes. **Re-ran that A/B in the image lane at today's HEAD:**
+
+    pristine origin/main (a00f53f20), image lane    3 failed, 43 passed
+    this branch,                      image lane   46 passed
+
+**And then I nearly reported it as three reds closed that I had not known about.**
+It is not. **M-1235 already proved exactly this, with a fuller arm than mine** —
+unmodified / fixed / host / and a REVERT mutation arm. The document had it right
+the first time.
+
+**Why the mistake was available.** I had spent the day establishing that the image
+lane was unrunnable, so an image-lane result looked new by default. **The seal-ring
+tests never needed Docker** — that lane was always runnable for them, and only the
+tests that drive the hermetic runner were blocked. *"The image lane was
+unrunnable"* is false as a general statement; **it was unrunnable for one class of
+test, and I had generalised it into a property of the lane.**
+
+**What the re-run legitimately adds, and it is narrow:** the fix still holds at
+HEAD after roughly fifty further commits, in the lane where it matters. That is a
+regression check, not a discovery, and it is worth one line rather than a section
+of credit.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
