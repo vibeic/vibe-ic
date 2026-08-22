@@ -592,3 +592,29 @@ So this one was proven in both directions before being shipped:
 It also refuses rather than passing if it extracts zero paths from either input, because "found
 nothing" and "parsed nothing" are the same output — which is the through-line of this entire
 night.
+
+## The one row of mine the joined view gets wrong in the direction that deletes
+
+jharv3's `joined_parity.py` found eight rows where a shard file and `verdicts_joined.tsv`
+disagree; two are mine, and they flagged rather than guessed one of them because it is my row and
+my grammar. Measured here, on `.114`, against current `origin/main` `81cd5321b08`:
+
+    /home/reyerchu/_jintent/wt        head c5c2e228244
+    owned = 6        differing = 6        working tree 0 lines (--untracked-files=normal)
+    e.g. vibe-ic-marketplace/README.md
+         here bb44e3d04a429770761e28655fb8bbc15bfb835e9183b8c2ae3ce4c41a1b9c3b
+         main dbd748602e224556cc879b0eb980714958916ac6385aa85ca95232f1a99609c8
+
+**`verdicts_shard_b.tsv` says RECOVER and is right. `verdicts_joined.tsv` says LANDED and is
+stale** — it was regenerated from a snapshot taken while this worktree still sat on bare main,
+before it moved to `c5c2e228244`. An executor reading the consumable would delete six files that
+differ from main.
+
+The other, `/home/reyerchu/_jcpath2/wt_new`, disagrees in the safe direction (ABANDON here,
+RECOVER there) and costs effort rather than content. My ABANDON was independently re-verified:
+both it and `_jcpath2/mut` sit at `c0ecd5f1310`, tree `5bf932a9082`, both clean.
+
+Together with the 1083 absent rows this is the same wound twice: **the last file anyone reads
+reflects an older state of the work.** Mine was invisible, jharv3's was visible and stale. Their
+`joined_parity.py` catches rows that arrive with the wrong verdict; my `extras_coverage.py`
+catches rows that never arrive. Neither alone would have found both.
