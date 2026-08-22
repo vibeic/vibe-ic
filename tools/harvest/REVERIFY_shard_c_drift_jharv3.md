@@ -85,9 +85,40 @@ replaced, so nothing was rewritten away):
 - **2950 of 2950** rescued commits contained.
 - 0 not contained, 0 objects absent.
 
+## 6. The drift sweep widened from 20 rows to all 110
+
+Section 3 read the 20 deletion-bound directories. The other 90 were then read the same way, on
+the hosts that own them — 30 on .108 directly, 36 on .112 and 44 on .121 through the .102 hop,
+one connection per host, read-only, no fetch in any shared clone.
+
+**110 of 110 directories still exist and are still checkouts** — 0 GONE, 0 without a `.git`.
+**Five HEADs had moved**, three of them the ones already named above:
+
+| path | verdict | head now | re-judged at the new head |
+|---|---|---|---|
+| `AI_IC_design/wt_jwire2` | RECOVER | `4b1285a1865e` | holds — snapshot not on main; head IS the current tip of live `fix/jwire2-hygiene-wiring` |
+| `_gf180_priv/wt` | RECOVER | `5240ead2c7ee` | holds — snapshot not on main; contained by this branch and by `harvest/rescue-reanchor-heads` |
+| `_jcapture` | LANDED | `b6aaf6608531` | holds — snapshot on main |
+| `_jd3` | LANDED | `66e0806689ec` | holds — snapshot on main |
+| `wt-j63x8c` | ABANDON | `3ab7fc723e49` | already recorded; both heads on this branch |
+
+No verdict changed, and no drifted head is single-copy: each of the five is either a snapshot main
+already has or is contained by a live origin ref, each checked with `ls-remote` and by walking the
+ref rather than from `refs/remotes`. `fix/jwire2-hygiene-wiring` is the case that makes that
+distinction load-bearing — it was force-pushed earlier today, so it existed throughout while what
+it contained changed.
+
+**Nine directories carry uncommitted content** (`_v1123` 384 modified, `_advkill_lgate`,
+`_adv_lgate_unknown`, `_LRNdh`, `wt_k3_dep` in the thousands, `_a1456`, `AI_IC_design/wt-all`, and
+both `caravel-slew-drv` twins one untracked file each). **All nine carry RECOVER**, so none of them
+is deletion-bound and none is an exposure this file authorises. All 20 deletion-bound rows are
+clean.
+
+Raw: `raw_drift_sweep_all110_s5_jharv3.tsv` — every row's head, tree and disk state as read.
+
 ## What was not done
 
 Nothing was deleted, on any host. No working tree, index or HEAD was modified anywhere — the
-remote reads were `rev-parse` and `status`, and no clone was fetched but this one. The 90
-RECOVER rows were not re-read on disk this session; their heads' containment was re-checked, and
-their content claims stand as measured at 13:36 against the same `origin/main`.
+remote reads were `rev-parse` and `status`, and no clone was fetched but this one. All 110 rows were re-read on disk (section 6), but only the drifted heads were re-judged for
+content: the 105 rows whose HEAD has not moved stand as measured at 13:36 against the same
+`origin/main`, which has not moved either.
