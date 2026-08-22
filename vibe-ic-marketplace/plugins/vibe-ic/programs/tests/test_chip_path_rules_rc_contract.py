@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import ast
 import io
 import re
 import json
@@ -300,3 +301,98 @@ def test_the_denominator_sweep_can_fail():
         "sweep above could never fail")
     assert shapes("examined 0 widget(s)\n[g] NOT CHECKED — none\n")[0]
     assert shapes("[g] NOT CHECKED — flow/phase1.yaml is absent\n")[1]
+
+
+# ── AN ASSERTION THAT COMPARES A LITERAL TO ITS OWN SIZE ────────────────────
+# Standing rule: such an assertion can never fail, so it is the defect and not
+# the guard. It is worth a sweep rather than vigilance because it arrives by
+# editing -- a list grows by one, the number beside it is updated to match, and
+# the assertion that was once a real expectation becomes a tautology in the same
+# keystroke.
+
+def _self_referential_assertions(source: str):
+    """(line, why) for assertions that cannot fail by construction."""
+    found = []
+    tree = ast.parse(source)
+    for scope in ast.walk(tree):
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        sizes = {}
+        for n in ast.walk(scope):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                    and isinstance(n.targets[0], ast.Name) \
+                    and isinstance(n.value, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+                v = n.value
+                sizes[n.targets[0].id] = len(
+                    v.keys if isinstance(v, ast.Dict) else v.elts)
+
+        def _len_of(x):
+            if isinstance(x, ast.Call) and isinstance(x.func, ast.Name) \
+                    and x.func.id == "len" and len(x.args) == 1 \
+                    and isinstance(x.args[0], ast.Name):
+                return x.args[0].id
+            return None
+
+        for n in ast.walk(scope):
+            if not isinstance(n, ast.Assert) or not isinstance(n.test, ast.Compare):
+                continue
+            if not n.test.comparators:
+                continue
+            left, right = n.test.left, n.test.comparators[0]
+            a, b = _len_of(left), _len_of(right)
+            if a and b and a == b:
+                found.append((n.lineno, f"len({a}) compared to len({a})"))
+            elif a and isinstance(right, ast.Constant) \
+                    and isinstance(right.value, int) and sizes.get(a) == right.value:
+                found.append((n.lineno, f"len({a}) == {right.value}, and {a} is a "
+                                        f"literal of exactly {right.value} here"))
+            elif isinstance(left, ast.Name) and isinstance(right, ast.Name) \
+                    and left.id == right.id:
+                found.append((n.lineno, f"{left.id} compared to itself"))
+    return found
+
+
+def test_the_self_reference_detector_finds_known_positives():
+    """VALIDATE THE INSTRUMENT ON A KNOWN ANSWER BEFORE TRUSTING ITS ZERO.
+
+    A sweep that reports nothing is indistinguishable from a sweep that looks at
+    nothing, and this lane has already been bitten by exactly that.
+    """
+    probe = ("def t1():\n"
+             "    KNOWN = ['a', 'b', 'c']\n"
+             "    assert len(KNOWN) == 3\n"
+             "def t2():\n"
+             "    ROWS = {'x': 1}\n"
+             "    assert len(ROWS) == len(ROWS)\n"
+             "def t3():\n"
+             "    ROWS = ['a', 'b']\n"
+             "    assert len(ROWS) == 5\n"
+             "def t4(x):\n"
+             "    seen = compute()\n"
+             "    assert len(seen) == 3\n")
+    lines = sorted(l for l, _ in _self_referential_assertions(probe))
+    assert lines == [3, 6], (
+        f"the detector found {lines}, expected the two known positives at lines "
+        f"[3, 6] and neither of the two real expectations at 9 and 12")
+
+
+def test_no_assertion_in_this_lane_compares_a_literal_to_its_own_size():
+    lane = ("local_clone", "prepared_checkout", "printed_remedy", "declared_basis",
+            "pytest_aggregate", "explicit_argument", "provenance_value",
+            "only_the_declaring", "signoff_report", "every_required_metric",
+            "measurement_only", "generated_values", "chip_path_rules")
+    here = Path(__file__).resolve().parent
+    targets = [p for p in sorted(here.glob("test_*.py"))
+               + sorted(_PROGRAMS.glob("*.py")) if any(n in p.name for n in lane)]
+    assert targets, "the sweep found no files, so its zero would mean nothing"
+    bad = []
+    for p in targets:
+        try:
+            for line, why in _self_referential_assertions(
+                    p.read_text(encoding="utf-8")):
+                bad.append(f"{p.name}:{line} — {why}")
+        except SyntaxError:
+            continue
+    assert not bad, (
+        "these assertions cannot fail by construction, so they are the defect "
+        "and not the guard:\n  " + "\n  ".join(bad))
