@@ -4072,6 +4072,43 @@ decaying count) all still depend on somebody choosing to run something. **This o
 holds because markdown indents quotes.**
 
 
+## M77 — I hit the empty-input class in my own check; the repo does not have it (instrument verified)
+
+While verifying the branch touched no protected path, my throwaway check used
+`grep -cFf <(...)`. The substitution came out **empty**, and an empty pattern file
+matches **every** line — so it reported `9`, which was simply the total file count.
+**It would have reported "all 9 protected" for any branch, including a clean one.**
+I caught it only because 9-of-9 was too round to believe.
+
+Re-measured properly — parse asserted non-empty before any verdict is printed:
+
+    protected paths parsed: 53   (assert non-empty, else refuse)
+    changed files:           9
+    PROTECTED PATHS TOUCHED: 0
+
+**That is the third instance of one class in this work**: an empty pytest selector
+that swept the whole suite, an empty denominator scored as PASS, and now an empty
+grep pattern that matched everything. The class is not "empty means zero" — it is
+that **emptiness is indistinguishable from a real answer**, and it lands on
+whichever side flatters the run.
+
+**So I scanned the repository for the same shape** — `grep -f` / `-Ff` whose pattern
+source is a variable or a process substitution:
+
+    result: 0 occurrences
+
+**And I did NOT accept that zero on its own.** A zero from a regex I had just
+written is exactly the empty denominator I was hunting. I planted a control file
+with three positives — `<(cat list)`, `"$PATTERNS"`, and bare `$EXCLUDES` — and the
+scanner found all three. **Only then is the repository's zero evidence.**
+
+**The finding is a clean negative, and the discipline is the point:** the repo
+already carries this rule as `gate_zero_denominator_refuses_check` (#564), and it
+holds in the shell-checker surface too. The defect was in MY instrument, not the
+repository's — which is the correct outcome to report, and the one I would have
+missed had I let a round number pass.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
