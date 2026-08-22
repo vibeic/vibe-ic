@@ -2,9 +2,14 @@
 
 Assembled during the freeze so no time is lost when it does. NOTHING here is in
 the frozen branch, and nothing here is a reason to reopen it. Ordered by
-(evidence already gathered) x (cost to do).
+(evidence already gathered) x (cost to do). ITEMS 1 AND 3 ARE DONE, on
+`next/padring-spacing-provenance`, based on the frozen tip 725f9352f -- not on
+pre-batch main, because `next/` rides the batch AFTER this one and the code
+those commits touch exists only in the batch. Basing it on main was my first
+attempt and the test failed with AttributeError, which is what that phrase
+means in practice.
 
-## 1. `next/padring-spacing-provenance` — ONE COMMENT, evidence complete
+## 1. TAKEN — `next/padring-spacing-provenance`, commit 5ffaab5f6
 
 This step REFUSES an odd remainder at step 7 of upstream's spacing algorithm
 where `pad_cfg.tcl` halves and rounds to 3 decimals. The refusal is correct for
@@ -32,7 +37,7 @@ This needs no new ruling; the standing authority already decided the shape --
 the wide-population version becomes a census that records debt and is never
 wired as blocking. Evidence: `rc2_clause_path_decision.md`.
 
-## 3. An orientation check that MEASURES rather than pins
+## 3. TAKEN — same branch, commit 561d78257
 
 Three defects this session were orientations this step COMPUTED where OpenROAD
 PRODUCES them, and they survived every check because a mirror and a rotation
