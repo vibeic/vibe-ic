@@ -36,6 +36,40 @@ about something it never observed.
 The two were found by different lanes on the same day, from different
 directions, which is why one rule carries both.
 
+COVERAGE, MEASURED — and the two clauses are NOT equal
+=======================================================
+CLAUSE A IS A RULE. Population on the tree this shipped with: 654 modules
+contain a handler that swallows everything, and 10 unbound spawns name a
+checking program. It returns 5, of which FOUR were found by asking the
+repository rather than by anyone noticing. It generalises.
+
+CLAUSE B IS A REGRESSION GUARD, NOT A RULE, AND SAYING SO IS THE POINT. Its
+population is **1** — `full_suite_run_check.py`, which is the instance the
+capture measured. It finds 1 of 1. By the standard this repository holds its
+own gates to, that makes it a regression test wearing a rule's name, and it is
+labelled here rather than left to read as coverage.
+
+WIDENING IT WAS TRIED AND MEASURED, not assumed impossible. The name-shaped
+population is itself the defect `invocation_proved_by_parse_not_by_text`
+describes — a population defined by a NAME rather than by STRUCTURE. The
+structural replacement is to read the module's own DOCSTRING NODE and take the
+programs that CLAIM their subject is whether something ran:
+
+    structural population                                    24
+    of those, flagged by "no subprocess / Popen / returncode" 15
+
+Fifteen is not coverage, it is noise. The flag condition assumes that observing
+a run requires SPAWNING one, and it does not: reading a run's artefact — a
+report, a log, a JSON record — is the normal and correct way, and most of those
+15 do exactly that. The widened form would ship a false positive on a dozen
+sound checkers.
+
+So clause B stays narrow and stays labelled. What it actually guards is the
+re-introduction of one specific shape: a program whose subject is a RUN, with
+no artefact to read AND no way to start or observe a process. A future lane
+that wants a real rule here needs a predicate for "has no evidence to read
+either", which is a different question from the one this clause asks.
+
 DECLARING A SPAWN ADVISORY
 ==========================
 Where a spawn is deliberately advisory, say so at the call site — a comment
@@ -185,6 +219,8 @@ def scan_clause_b(path: Path, root: Path) -> List[dict]:
 def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
     findings: List[dict] = []
     parsed = 0
+    clause_a_pop = 0
+    clause_b_pop = 0
     bases = [root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
              root / "tools"]
     for base in bases:
@@ -194,10 +230,20 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
             if "node_modules" in p.parts:
                 continue
             parsed += 1
+            try:
+                _t = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+                if _swallowing_handlers(_t):
+                    clause_a_pop += 1
+            except (OSError, SyntaxError, ValueError):
+                pass
+            if "tests" not in p.parts and _RUN_SUBJECT_RE.search(p.name):
+                clause_b_pop += 1
             a = scan_clause_a(p, root)
             findings.extend(a)
             findings.extend(scan_clause_b(p, root))
     return findings, {"modules_parsed": parsed,
+                      "clause_a_population": clause_a_pop,
+                      "clause_b_population": clause_b_pop,
                       "clause_a_findings": sum(1 for f in findings
                                                if f["clause"] == "A"),
                       "clause_b_findings": sum(1 for f in findings
@@ -247,7 +293,11 @@ def main(argv=None) -> int:
         return 2
 
     print(f"  modules parsed:                 {denom['modules_parsed']}")
+    print(f"  clause A population:            {denom['clause_a_population']}"
+          f"   (modules with a swallow-all handler)")
     print(f"  discarded gate spawns (A):      {denom['clause_a_findings']}")
+    print(f"  clause B population:            {denom['clause_b_population']}"
+          f"   <- a REGRESSION GUARD, not a rule; see COVERAGE")
     print(f"  run-subject, cannot run (B):    {denom['clause_b_findings']}")
     print(f"  inventory rows applied:         {len(known)}")
 

@@ -163,6 +163,57 @@ def test_a_bad_invocation_is_rc_3():
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
+def test_the_run_states_each_clause_population_not_only_its_findings():
+    """Two clauses, two denominators, and they are not equal in strength.
+
+    Clause A is a rule over 654 modules. Clause B has a population of ONE and
+    finds it, which makes it a regression guard. A verdict printing only the
+    finding counts lets the second read as coverage — the exact confusion this
+    rule family exists to end.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+    r = subprocess.run([sys.executable, str(PROG), "--root", str(root)],
+                       capture_output=True, text=True, timeout=1800)
+    assert "clause A population:" in r.stdout
+    assert "clause B population:" in r.stdout
+    assert "REGRESSION GUARD" in r.stdout, (
+        "clause B must be labelled in the verdict, not only in the docstring")
+
+
+def test_clause_b_is_honest_about_finding_one_of_one():
+    """Pins the shape of the admission, not just its wording.
+
+    If clause B's population ever grows beyond the one module, it stops being a
+    regression guard and the COVERAGE section has to be re-derived — so this
+    fails rather than silently keeping a stale label.
+    """
+    root = Path(__file__).resolve().parents[5]
+    if not (root / ".git").exists():
+        pytest.skip("not a checkout")
+    sys.path.insert(0, str(PROG.parent))
+    import spawned_gate_whose_status_is_discarded as S
+
+    pop = set()
+    for base in (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs",
+                 root / "tools"):
+        if not base.is_dir():
+            continue
+        for f in base.rglob("*.py"):
+            if "tests" in f.parts or "node_modules" in f.parts:
+                continue
+            if S._RUN_SUBJECT_RE.search(f.name):
+                pop.add(f.name)
+
+    assert pop == {"full_suite_run_check.py"}, (
+        f"clause B's population MOVED: entered "
+        f"{sorted(pop - {'full_suite_run_check.py'})}, left "
+        f"{sorted({'full_suite_run_check.py'} - pop)}. Re-derive the COVERAGE "
+        f"section — the 'regression guard, not a rule' label may no longer be "
+        f"true, in either direction.")
+
+
 def test_the_shipped_tree_passes_its_own_rule():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
