@@ -28,7 +28,10 @@ def main():
     want = [l.strip() for l in open(man) if l.strip()]
     if not want:
         print("  *** manifest empty -- nothing to check ***"); return 2
-    # a fixed, spread sample: full containment per ref is a full object walk per ref
+    # The sample is a PRE-FILTER only. It used to be the whole test, and that is the same narrowness
+    # that let a live-but-moved ref pass the citation gate: a ref holding these 5 and missing the
+    # other 2958 would have been counted a full carrier. Candidates that pass the sample are then
+    # verified by FULL containment -- one object walk each, affordable because there are a handful.
     sample = [want[0], want[len(want)//4], want[len(want)//2], want[3*len(want)//4], want[-1]]
     ls = subprocess.run(['git', '-C', repo, 'ls-remote', 'origin'], capture_output=True, text=True)
     if ls.returncode != 0:
@@ -52,11 +55,27 @@ def main():
             if r.returncode != 0:
                 ok = False; break
         if ok:
-            carriers.append(name)
-    print(f"  manifest {len(want)} commits, sampled {len(sample)}")
-    print(f"  origin refs carrying the whole sample: {len(carriers)} (need >= {MIN_REFS})")
-    for c in carriers:
-        print(f"      {c}")
+            carriers.append((name, sha))
+    print(f"  manifest {len(want)} commits; {len(carriers)} ref(s) passed the {len(sample)}-commit pre-filter")
+    full = []
+    for name, sha in carriers:
+        # walk the SHA, not the origin ref NAME. An origin ref name need not resolve locally --
+        # measured: the mirror branch reported "cannot walk" and was silently dropped from the
+        # carrier count, understating redundancy 3 -> 2. A gate that quietly loses a carrier is the
+        # same defect as one that quietly counts a partial one.
+        walk = subprocess.run(['git', '-C', repo, 'rev-list', '--objects', '--no-object-names', sha],
+                              capture_output=True, text=True)
+        if walk.returncode != 0:
+            print(f"      {name}: object {sha[:11]} not present locally -- fetch it before judging"); continue
+        reach = set(walk.stdout.split())
+        missing = sum(1 for c in want if c not in reach)
+        if missing == 0:
+            print(f"      {name}  carries all {len(want)}")
+            full.append(name)
+        else:
+            print(f"      {name}  PARTIAL -- missing {missing} of {len(want)}; not counted")
+    carriers = full
+    print(f"  refs carrying the WHOLE manifest: {len(carriers)} (need >= {MIN_REFS})")
     if len(carriers) < MIN_REFS:
         print(f"  *** redundancy has fallen to {len(carriers)} -- one deletion from total loss ***")
         return 1
