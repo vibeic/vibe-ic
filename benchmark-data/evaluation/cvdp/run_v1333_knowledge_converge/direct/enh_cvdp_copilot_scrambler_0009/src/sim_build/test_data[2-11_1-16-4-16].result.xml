@@ -1,8 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1783362393" />
-    <testcase name="test_inter_block" classname="test_deinter_block" file="/code/src/test_deinter_block.py" lineno="7" time="0.011809587478637695" sim_time_ns="210.0" ratio_time="17782.16219490037">
-      <failure error_type="AssertionError" error_msg="[ERROR] DUT output does not match model output: 0x0 != 0xa98f&#10;assert 0 == 43407" />
-    </testcase>
-  </testsuite>
-</testsuites>
