@@ -1,5 +1,0 @@
-{
-  "ic_name": "MIPI I3C Basic Specification v1.0",
-  "lab_calibration_present": false,
-  "notes": "MIPI I3C Basic v1.0 is a wire-level protocol specification; no analog reference / trim / calibration loop at the protocol layer. Per-device sensor calibration (ADC offset, oscillator trim, sensor zero-point, temperature compensation) is documented in individual sensor datasheets, not in the I3C Basic spec. The only protocol-level lab-style measurement quantity is tSCO (Clock-to-Data Turnaround Delay) for slaves with high BCR[0]; reported via GETMXDS Direct CCC (0x94) so the Master can adjust SCL slew for that device."
-}
