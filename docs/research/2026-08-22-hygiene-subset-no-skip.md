@@ -1619,3 +1619,62 @@ that flag makes it remove the stamp instead of minting one, so the run is
 non-destructive. It is the one piece of evidence in this document that remains
 a reconstruction, and naming it is worth more than an extra assertion that the
 reconstruction was faithful.
+
+## 28. Resolved: TWO defects, and the second one is not mine
+
+`jmeas3` ran the `--stall-grace 900` test §18 named, got outcome 2 (completes
+but still errors), then correctly refuted its OWN corpus-size explanation with
+the same run — if volume were the cause, more time would have helped, and 900 s
+cleared none of the survivors. Its replacement hypothesis is that an **EMPTY
+loop corpus** emits a refusal gate whose LABEL the coverage protocol never
+planned for, so the label arrives unplanned. It then handed me the falsifying
+test, because this host has the corpus that makes that loop non-empty and its
+does not.
+
+**Run here, both arms at `--stall-grace 900` so the watchdog cannot fire:**
+
+```
+BOUND   (loop corpus NON-EMPTY — this corpus holds 1 routed DEF)
+        declared 89  decided 78  wiring_errors 0   WATCHDOG_STALL 0  CORPUS_LABEL 0
+
+UNBOUND (loop corpus EMPTY)
+        declared 86  decided 75  wiring_errors 7   WATCHDOG_STALL 0  CORPUS_LABEL 7
+```
+
+**The hypothesis holds.** A long grace does not clear the CORPUS_LABEL class —
+seven survive at 900 s, matching `jmeas3`'s four surviving on its tree. A
+NON-EMPTY loop corpus clears them completely, at that same long grace. And my
+earlier unbound run, re-classified, had already said so without my noticing: its
+seven were **zero** watchdog-shaped, because it finished in 258 s and nothing
+was ever killed.
+
+**So the variable was never binding, never corpus size, and never load.** It is
+whether the loop corpus `published cells carrying a routed DEF` yields items.
+Binding mattered on this host only because this corpus happens to contain the
+one routed DEF that makes it non-empty; `jmeas3`'s 114-cell clone is larger and
+contains none, so bound-with-114-cells behaves exactly like unbound here.
+
+### The two defects, separated
+
+| | what | evidence | whose |
+| --- | --- | --- | --- |
+| (a) | `DEFAULT_STALL_GRACE_S = 300` in the runner vs `_HYGIENE_STALL_GRACE_S = 1800` in the review, never forwarded | raising the grace takes WATCHDOG_STALL 4 → 0 | §18, mine |
+| (b) | the coverage protocol has no plan for the refusal label an EMPTY loop corpus emits | CORPUS_LABEL survives a 3x grace; goes to 0 only when the loop is non-empty | `jmeas3`'s, confirmed here |
+
+They are independent: (b) survives the fix for (a). Reproduction for (b) is now
+named and cheap — any tree, bound to a corpus with no routed DEF (or unbound),
+`--stall-grace 900`.
+
+**Neither of us is fixing either**, and for the same stated reason both times:
+they are flow-level, and (a) in particular is a safety trade — the grace exists
+so a HUNG run is not read as a slow one. What has changed is that a taker no
+longer inherits a mystery. They inherit two named defects, a reproduction each,
+and a table saying which symptom belongs to which.
+
+**The method note worth keeping.** This took five readings between two agents —
+"red on main", "host contention", "the grace explains it", "corpus size", and
+finally the empty loop — and every wrong one was discarded by a MEASUREMENT
+that its own author ran and reported against themselves. `jmeas3` refuted its
+corpus-size hypothesis with the same run that vindicated its grace finding. The
+thing that made that possible was each of us running the control the other could
+not, and reporting the result that made us wrong.
