@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+
 
 # ---------------------------------------------------------------------------
 # Per-PDK power-net default lists. These are the names Magic's `ext2spice`
@@ -196,6 +198,7 @@ def _normalize_pdk(pdk: str) -> str:
 def build_supplementary_setup_tcl(
     pdk: str,
     options: Optional[LvsSetupOptions] = None,
+    cell_lef: Optional[Path] = None,
 ) -> str:
     """Generate the supplementary Netgen LVS setup TCL fragment.
 
@@ -210,7 +213,8 @@ def build_supplementary_setup_tcl(
     out: List[str] = []
     out.append(
         "#---------------------------------------------------------------\n"
-        "# Vibe-IC plugin v0.1.49 — supplementary Netgen LVS setup\n"
+        f"# Vibe-IC plugin v{_pmd.running_plugin_version()} — supplementary "
+        "Netgen LVS setup\n"
         "# Closes the open-source SkyWater-style net-level gap by\n"
         "# globalising power nets and (optionally) flattening top\n"
         "# circuits to match the layout vs schematic hierarchy.\n"
@@ -219,7 +223,25 @@ def build_supplementary_setup_tcl(
         "#---------------------------------------------------------------"
     )
 
-    if not pdk_key:
+    # A project-staged (i.e. every commercial) PDK resolves to the synthetic
+    # name `custom:pdk`, which is in no table, so this emitter used to write
+    # LVS_SETUP_SKIPPED and globalise NOTHING — leaving netgen to see one flat
+    # power net per cell instance and diverge from the schematic on every std
+    # cell. The PDK declares its own rails: harvest the `USE POWER|GROUND` pin
+    # names from its std-cell LEF instead of skipping. Consulted ONLY when the
+    # name is unknown, so every named-PDK lane is byte-for-byte unchanged.
+    _lef_nets: List[str] = []
+    if not pdk_key and cell_lef:
+        try:
+            from lvs_power_aware_netlist_emit import model_from_cell_lef as _m
+        except Exception:  # pragma: no cover - import shape varies by caller
+            _m = None  # type: ignore[assignment]
+        if _m is not None:
+            _model = _m(cell_lef)
+            if _model is not None:
+                _lef_nets = list(_model.pg_pins)
+
+    if not pdk_key and not _lef_nets:
         out.append(
             f"puts stdout \"LVS_SETUP_SKIPPED: unknown PDK '{pdk}'; "
             "no power-net globalisation applied. Net-level LVS may "
@@ -228,7 +250,8 @@ def build_supplementary_setup_tcl(
         return "\n".join(out) + "\n"
 
     # --- Rule 1 — global power-net declarations -------------------------
-    power_nets = list(PDK_POWER_NETS.get(pdk_key, [])) + list(opts.extra_power_nets)
+    power_nets = (list(PDK_POWER_NETS.get(pdk_key, [])) + _lef_nets
+                  + list(opts.extra_power_nets))
     # Deduplicate while preserving order (Python 3.7+ dict).
     power_nets = list(dict.fromkeys(power_nets))
 
