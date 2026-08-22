@@ -2119,6 +2119,33 @@ by reading the output rather than by any instrument, then generalised — a
 whole-document backtick-balance pass reports 16 odd-count lines in 8 runs, all 8
 pairing across a line break, 0 real breaks.
 
+### A manifest that could never verify on the branch that carries it
+
+Shipping `verify_manifest.py` immediately found something the manifest's four
+previous regenerations could not: **on the published branch it was unsatisfiable
+by construction.** Ten evidence files are `.log`/`.def`, the repo's `.gitignore`
+drops them at `git add`, and the manifest listed all of them — so a reader who
+checked out the bundle and verified it would get ten absences and no way to know
+they were expected. That flaw was present in the 60-entry version too. Nothing
+saw it because nothing verified it; the manifest had a NOTE telling readers to
+regenerate it and no way for a reader to check that anyone had.
+
+It also found a generator shipped without its output: `gen_omitted.py` was in the
+bundle, `OMITTED_BY_GITIGNORE.md` was not, so the omission was undeclared as well
+as unverifiable. Regenerated from `git ls-files` — the generator's own docstring
+records why it asks git rather than diffing directories, since an earlier version
+compared trees and reported "0 files absent" while ten were missing.
+
+The manifest now verifies in both places and names the difference. A declared
+absence prints `ABSENT-BY-DESIGN <path> (gitignore; declared)` and passes; an
+UNDECLARED absence fails; and an absence with no declaration present at all is
+rc 2, not a pass. All three graded:
+
+    private tree, all present        63 verified,  0 absent   rc 0
+    simulated checkout, 10 dropped   53 verified, 10 declared rc 0
+    plus one undeclared absence      BAD, named              rc 1
+    declaration itself missing       UNDETERMINED, named     rc 2
+
 ## Evidence index — everything in `evidence/`, and what each file settles
 
 Audited 2026-08-22: every file below exists, and every claim in this report

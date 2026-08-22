@@ -12,13 +12,18 @@
 # It also fails on any file present on disk and absent here, so the manifest
 # cannot go quietly stale by addition.
 #
-# REGENERATED 2026-08-22 after adding english_only_check.py and
 # verify_manifest.py, and after adding English renderings beside the six quoted
 # L-document lines in RESULT.md. Branch jpadsite/pad-site @ 725f9352f (FROZEN);
-# main ae78abb28.
 # NOTE: editing any file below invalidates this manifest — regenerate it
 #       in the same breath, or the fingerprints describe a prior state.
+# REGENERATED 2026-08-22 after adding english_only_check.py,
+# verify_manifest.py and the generated OMITTED_BY_GITIGNORE.md.
+# Ten .log/.def entries below are dropped by .gitignore on the published
+# branch; verify_manifest.py reads the omission declaration and reports
+# each by name as ABSENT-BY-DESIGN. Branch jpadsite/pad-site @ 725f9352f
+# (FROZEN); main ae78abb28.
 NEXT_AGENDA.md 4759B sha256:f8ab31acdaa1e2ccb86d05a19beab858aa0320ffa4292edbe356eb8e4d05691d
+OMITTED_BY_GITIGNORE.md 2217B sha256:60afce979c94f6274fb3a007c3221298b8ee98b304c356df435e4ce7a822593e
 arithmetic_selfcheck.py 20278B sha256:bd079d61b325567e0bf9e5c37aeec5e82de0cb8828d1d964aba9b66bc09ee661
 build_sha256_padring.py 4187B sha256:1834fe654cda0d7f8a885eb7edbfe8f9f6d36beeb9e26bd9e984969e7bf830c2
 claims_with_no_file.sh 3210B sha256:3bb9bb154b7e1dd3d5ccb96c7b8f9c1f89d3a370b9d81d2883c4454445e89bd0
@@ -79,4 +84,4 @@ sha256_gf180_padring_DEFAULT_R0.json 35280B sha256:b894ea320cec456bd707208003cac
 sha256_gf180_padring_R0_does_not_fit.json 19991B sha256:6c5cea2efaeea499b25c07ba536f469b098128cea4a2a4aade2b1b4e1c49fac3
 sha256_gf180_padring_report.json 33747B sha256:3d767112861b7a2f9705e339bcaba9ec3a3837b3596e3afbe45b46afa5d6554f
 spacing_transcription_compared.txt 4528B sha256:55d3692d994f31627797d4114be796662b39d11409a7d2b48a4bbf5dcfeafa00
-verify_manifest.py 2681B sha256:fc4549d0b4730a5a578c5e635463d9248eabae378124ca7679ed7a880f005705
+verify_manifest.py 4600B sha256:f4777282b4fc5e49d9f35716aa55eb7f8710051cbca6e4bfa830ca027dc4d3cf
