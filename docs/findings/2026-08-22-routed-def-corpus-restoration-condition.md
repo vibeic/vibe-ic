@@ -140,11 +140,44 @@ displayed. `INDEX.md` turns that into rule 3 and adds the instruction:
 
 > Check for a nested `reports/reports/` before committing.
 
-That instruction names one spelling of the bug. The corpus contains two others
-(`phase2/phase2/`, `phase3/phase3/`) that nobody checked for, and **no program
-in this repository detects any of them** — `grep -rn 'reports/reports'` over
-`programs/` and `tools/` returns nothing, and there is no general nested-duplicate
-detector either.
+That instruction names one spelling of the bug. The corpus contains three
+directories with that shape and **not one of them is the spelling the
+instruction names**:
+
+| same-name nesting, published corpus @ `3b58ccd42` | files |
+|---|---|
+| `protocol_parity/lpc/phase2/phase2` | 12 |
+| `protocol_parity/lpc/phase3/phase3` | 28 |
+| `protocol_parity/usb_pd/reports/phase3/phase3` | 24 |
+
+Measured before this change, **no program in this repository detected any of
+them**: `grep -rn 'reports/reports'` over `programs/` and `tools/` returned
+nothing, and there was no general nested-duplicate detector either.
+
+### The third one is the withdrawal, reproduced
+
+`protocol_parity/usb_pd` is not merely misshapen. Four report names exist at
+BOTH `reports/phase3/` and `reports/phase3/phase3/`, and **three of the four
+differ in content**:
+
+| report | outer (what consumers read) | inner (one directory deeper) |
+|---|---|---|
+| `foundry_handoff_audit.json` | `"verdict": "SKIP"`, `found: []`, both required files **missing** | `"verdict": "PASS"`, both **found** |
+| `si_crosstalk.json` | no SPEF, structural screen, `max_crosstalk_noise: 0.0` | real SPEF, `max_crosstalk_noise: 1791.87` of 1800 mV, 500 coupling-dominated nets |
+| `si_crosstalk.rpt` | differs | differs |
+| `gds_size.json` | identical | identical |
+
+The two copies are not two writes of one run: their own `chip_gds` /`spef`
+fields name **different source trees** (`vibe-ic/benchmark_phase1/usb_pd/…`
+against `AI_IC_design/_usb_pd_phase3_stage/…`, the second in a repository that
+has since been retired). One published cell therefore carries two runs' answers
+to the same question, at two depths, and every consumer reads exactly one of
+them.
+
+That is the `u_hawaii_adc` shape — a second, contradictory verdict one directory
+too deep — still committed, in a different design, twenty-one months of
+convention later. It is why the rule below is a program and not another line in
+a contract.
 
 ## Decision: BLOCKING stays, and it buys no exemption
 
@@ -170,7 +203,7 @@ published and omits the shape it must be published in.
 
 ## What is fixed here, and what is only filed
 
-**Fixed (this commit):** `benchmark_evidence_structure_check.py` gains a
+**Fixed (this branch):** `benchmark_evidence_structure_check.py` gains a
 `NESTED_DUPLICATE` nonconformance. A cell whose run tree contains a directory
 nested directly inside a same-named parent is refused at publish time. It is a
 new refusal on an unprotected checker that `benchmark_evidence_publish.py`
@@ -179,6 +212,29 @@ so it needs no new wiring, and it is strictly tightening — it can turn no red
 green. It closes the gap between "a cell is published" and "the routed-DEF loop
 can see it", which is what makes the restoration condition above true rather
 than hopeful.
+
+The red, with the same test file on both arms:
+
+| arm | result |
+|---|---|
+| final tests vs `origin/main`'s checker (byte-identical copy) | **6 failed**, 1 passed |
+| final tests vs the fixed checker | **7 passed** |
+
+The 1 that passes on the red arm is the negative control — the canonical cell,
+which carries `phase3/` and `reports/phase3/` in one tree, must not be refused.
+It is written first so that a rule matching the NAME rather than the ADJACENCY
+is caught by a test instead of by a reviewer.
+
+And the rule is measured rather than argued. Over the full historical
+published-cell corpus at the last commit that carried it — 5 cells, **388**
+distinct directories — it fires exactly **once**, on
+`u_hawaii_adc/v1.9.86_sky130A/reports/reports`. One true positive, 387 clean
+directories, zero false positives.
+
+Targeted regression (load 61–72 on 32 cores): the checker's own suite plus every
+test file that names its rules — 125 passed, 12 skipped — and
+`size_policy_drift_check.py`, which probes `check_folder` as its decision entry
+point, still exits 0.
 
 **Filed, not fixed:** `routed_def_corpus.py` hardcodes `may_be_absent=True`, so
 "a corpus was read and holds no routed DEF" and "no corpus was supplied at all"
