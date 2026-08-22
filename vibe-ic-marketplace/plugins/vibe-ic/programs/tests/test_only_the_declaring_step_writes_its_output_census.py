@@ -6,6 +6,7 @@ That control is `--self-test` and it is driven here.
 """
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -13,6 +14,18 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+
+def _count(out: str, label: str) -> int:
+    """The integer on the population line `label`, or -1 if absent.
+
+    A SUBSTRING assertion on a count is not a pin. `"declared concrete output
+    paths:  1"` is a PREFIX of the same line ending `121`, so it passed for 1,
+    121 and 199 alike -- and would refuse 2 -- which pins nothing. This reads
+    the number so the caller can state the relation it actually means.
+    """
+    m = re.search(rf"^\s*{re.escape(label)}:\s+(\d+)\s*$", out, re.M)
+    return int(m.group(1)) if m else -1
 
 _RULE = "only_the_declaring_step_writes_its_output"
 PROG = (Path(__file__).resolve().parents[1]
@@ -122,7 +135,11 @@ def test_a_glob_or_alternation_is_not_a_single_owned_path():
     """A set cannot have one owner, so those declarations are out of scope."""
     r = _run(_tree({"emit_coverage.py": _DECLARING}))
     assert r.returncode == 0
-    assert "declared concrete output paths:  1" in r.stdout, (
+    # EXACTLY ONE on this SYNTHETIC fixture: the glob and the OR alternation
+    # must not each become an owned path. The old form asserted the SUBSTRING
+    # "declared concrete output paths:  1", which also passes for 121 and 199
+    # -- right answer, vacuous predicate.
+    assert _count(r.stdout, "declared concrete output paths") == 1, (
         f"the glob and the OR alternation were counted as owned paths\n"
         f"{r.stdout}")
 

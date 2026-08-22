@@ -58,7 +58,7 @@ Each carries its measured reason:
   DEFERRED, population 2. The flow declares exactly two STA sign-off reports and the module writing them stamps STA_BASIS 41 times; the reader's docstring records the instance as repaired. A gate would be population 2, findings 0.
 
 * **`test_aggregate_carries_its_runtime_identity`**  
-  HALF IMPLEMENTED. Producer side done: `pytest_per_file_junit.py:438` stamps interpreter, entry point and plugin set. Consumer side missing and it is the half that matters: `landing_merge_verdict.py` does not compare the two arms' runtime stamps before subtracting. The remedy is a guard inside the program that decides whether a branch lands.
+  HALF IMPLEMENTED. Producer side done: `trusted_pytest_entry.py:268` stamps the identity — `schema`, `python` (the interpreter), `entry`, `plugin` and `modules` — and exports it as `VIBEIC_PYTEST_RUNTIME_IDENTITY`; `_pytest_progress_plugin.py:144` forwards it onto the `session_start` record and `pytest_per_file_junit.py:438` (`_runtime_identity`) VALIDATES it, returning None on any ambiguity. (Corrected 2026-08-22: this line previously cited `pytest_per_file_junit.py:438` as the stamp. That function is the CONSUMER-side validator, not the producer — it takes a value and returns the identity or None. The disposition is unchanged, since a producer does exist; the citation named the wrong end of the chain.) Consumer side missing and it is the half that matters: `landing_merge_verdict.py` does not compare the two arms' runtime stamps before subtracting. The remedy is a guard inside the program that decides whether a branch lands.
 
 
 A record here that names no program is NOT an oversight: it carries a measured

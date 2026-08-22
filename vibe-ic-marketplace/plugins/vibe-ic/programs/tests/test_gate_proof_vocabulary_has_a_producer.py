@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -20,6 +21,18 @@ _PROGRAMS = PROG.parent
 
 sys.path.insert(0, str(_PROGRAMS))
 import gate_proof_vocabulary_has_a_producer as R          # noqa: E402
+
+def _count(out: str, label: str) -> int:
+    """The integer on the population line `label`, or -1 if absent.
+
+    A SUBSTRING assertion on a count is not a pin. `"axes examined:        1"`
+    is a PREFIX of `"axes examined:        14"`, so it passes for 1, 14, 19 and
+    100 -- and fails for 2 -- which pins nothing and refuses arbitrarily. This
+    reads the number and lets the caller state the relation it actually means.
+    """
+    m = re.search(rf"^\s*{re.escape(label)}:\s+(\d+)\s*$", out, re.M)
+    return int(m.group(1)) if m else -1
+
 
 
 def test_the_consumer_is_excluded_and_that_is_what_makes_it_discriminate():
@@ -110,5 +123,66 @@ def test_the_shipped_tree_is_RED_on_drv():
     # joins it, and its missing name is `design_for_eco.spares.count` — whose
     # producer is the open flow-ownership question on
     # `reports/spare_cell_coverage.json`, NOT something to waive here.
-    assert "feasibility axes:          10" in r.stdout, (
+    assert _count(r.stdout, "feasibility axes") == 10, (
         f"the axis population moved; re-derive the finding\n{r.stdout}")
+
+
+_FEASIBILITY = """\
+class Proof:
+    def __init__(self, metric, kind=None):
+        self.metric = metric
+
+
+class Axis:
+    def __init__(self, name, groups):
+        self.name = name
+        self.groups = groups
+
+
+DEFAULT_AXES = (Axis("alpha", ((Proof("timing.alpha.value"),),)),)
+"""
+
+
+def _synthetic(*, produced: bool) -> Path:
+    """A tree with ONE axis, whose proof name is or is not emitted.
+
+    `tempfile.mkdtemp`, not pytest's `tmp_path`: in this image that fixture's
+    path contains a newline.
+    """
+    root = Path(tempfile.mkdtemp(prefix="gpv_"))
+    (root / ".git").mkdir()
+    progs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    ppa = progs / "_ppa"
+    ppa.mkdir(parents=True)
+    (ppa / "__init__.py").write_text("")
+    (ppa / "feasibility.py").write_text(_FEASIBILITY)          # the CONSUMER
+    name = "timing.alpha.value" if produced else "timing.unrelated.value"
+    (ppa / "emitter.py").write_text(f'NAME = "{name}"\n')      # a PRODUCER
+    return root
+
+
+def test_a_tree_whose_axis_is_produced_EXITS_ZERO():
+    """THE PASS PATH, END TO END. rc 1, 2 and 3 each had a test; rc 0 did not.
+
+    This gate is red by design on the tree it ships with, so the pass branch is
+    never reached there -- meaning the reward for REPAIRING the defect was the
+    one outcome nobody exercised. If `[PASS]` cannot render, the discovery
+    would arrive only once someone had already done the work.
+    """
+    r = subprocess.run([sys.executable, str(PROG), "--root",
+                        str(_synthetic(produced=True))],
+                       capture_output=True, text=True, timeout=900)
+    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+    assert "[PASS]" in r.stdout
+    assert _count(r.stdout, "axes with no produced name") == 0
+
+
+def test_the_same_tree_with_the_name_UNPRODUCED_is_refused():
+    """The other arm: same fixture, one string changed, so the rc 0 above is
+    the PRODUCED-ness and not the shape of the tree."""
+    r = subprocess.run([sys.executable, str(PROG), "--root",
+                        str(_synthetic(produced=False))],
+                       capture_output=True, text=True, timeout=900)
+    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+    assert "alpha" in r.stdout
+    assert _count(r.stdout, "axes with no produced name") == 1
