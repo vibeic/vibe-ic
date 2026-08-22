@@ -3351,3 +3351,38 @@ closes exactly the piece I identified, and it is offered as that.
 landing I did not observe, and each needs its own attribution — the same
 boundary as §18, §28, §39 and §42. Reproduction is one command on `main`:
 `python3 -m pytest -q tools/test_gatekeeper_land_differential.py`.
+
+### Bracketed: the 16 arrived with v1.11.68, not with batch 67
+
+Not a diagnosis — a bracket, because knowing WHEN costs one run each and is the
+single most useful input for whoever does diagnose.
+
+```
+a00f53f20  v1.11.66   28 passed              GREEN
+81cd5321b0 v1.11.68   16 failed, 12 passed   RED
+a4caccefea v1.11.69   16 failed              RED
+this branch (forked at 546487a8a, pre-1.11.68)  60 passed across 3 files   GREEN
+```
+
+**`test_gatekeeper_land_differential.py` went red between v1.11.66 and v1.11.68
+— i.e. with the batch-68 landing, not the batch-67 one.** That also explains why
+this branch is green: it forked from the v1.11.67 assembly, which descends from
+v1.11.66, and never carried whatever broke them.
+
+**Two things follow that are worth stating.**
+
+First, **batch 67 did not break them**, so §44's careful "not this branch's" can
+be sharpened to "not this batch's either" — the same one-step-further
+attribution §36–37 needed, applied here without my having to be told twice.
+
+Second, and less comfortable: **`jmeas3`'s brief WAS batch 68**, and it measured
+that batch as closed. These 16 arrived with it. That is not a criticism of its
+work — repo-root `tools/` is outside every plugin-scoped selection (§33), so a
+batch measurement built on that selection cannot see them, which is exactly the
+blind spot this document has been mapping. It is the clearest demonstration yet
+that the gap has real consequences: a batch was measured, reported and closed
+while carrying 16 red tests in the guard for the landing path, and the method
+could not have found them.
+
+I have told `jmeas3` rather than only recording it, since it is the one datum
+that touches its closed brief.
