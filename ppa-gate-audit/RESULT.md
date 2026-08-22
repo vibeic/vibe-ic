@@ -3141,3 +3141,87 @@ ASSUMED -- all eleven PPA programs, across four wiring surfaces:
 
 No program changed in this part. Prose only, and it exists because a claim I
 had already landed was false.
+
+
+# Part 30 — the producer half: three tools that reported success over a verdict
+
+HOW THIS WAS REACHED, AND IT IS THE FOURTH CORRECTION TO A COVERAGE SENTENCE OF
+MINE. Part 29 said the sweep was complete over "four wiring surfaces". That
+number came from the greps I happened to run. Enumerating every tracked,
+invocation-capable file that references a PPA gate returns 33, and the class I
+had missed entirely is the CAMPAIGN TOOLING under `ppa-crosslayer/tools/` and
+`ppa-e2e/tools/` -- including the two tools that WROTE the corpus this audit is
+about.
+
+THE FINDING. `ppa-crosslayer/tools/head_to_head.py` writes a record into
+`records/`, runs `ppa_head_to_head_check.py` on it, prints the return code, and
+then `return 0` -- unconditionally. Its `ppa-e2e` twin does the same, and there
+the plumbing makes it starker: `main` computes `max(a or 0, b or 0)`, so the
+worst-rc machinery existed and was being fed a hardcoded success.
+`ppa-crosslayer/tools/gen_declaration.py` carries the asymmetric half -- it
+propagates `contract_build`'s rc sixteen lines up and discards
+`contract_check`'s, and the discarded one is the half that JUDGES rather than
+produces.
+
+SCOPED HONESTLY, BECAUSE MY FIRST DRAFT OVERSTATED IT. The verdict is NOT
+thrown away. Those tools pass `--json <tag>_report.json`, and the reports do
+carry `"ok": false` with the refusal -- `h2h_A_report.json` was opened and
+checked rather than assumed. The defect is the EXIT STATUS alone. That still
+warrants repair: an exit code is what an orchestrator reads, and a build step
+that reports success having just been told rc 1 misreports to its caller
+whatever it wrote to disk. "The gate was ignored" was the more dramatic claim
+and the false one.
+
+REPAIRED: all three now return the checker's `returncode`. The record file is
+deliberately LEFT ON DISK when refused -- a refused record is the evidence
+needed to fix it, and unlinking it would trade one silent outcome for another.
+
+THE GUARD IS A LEDGER, for the same reason the STA-stamp guard is. Every
+campaign tool invoking a `*_check.py` through `subprocess` must route that
+`returncode` to its own exit status, or be listed with a reason. Three entries
+are listed, each stating why:
+
+    analyze.py        collects rc into a `fails` list and reports that list
+    readjudicate.py   raises SystemExit on a non-zero producer rc, and records
+                      the second invocation's code as `_exit_code_observed`
+    build_arm.py      a BUILDER, not a publisher: it reads the feasibility
+                      report it just produced and writes the adjudication
+                      FORWARD AS DATA -- `feasibility_verdict` and the per-axis
+                      statuses land in assembly.json
+
+`build_arm.py` was found BY THE GUARD, not by my survey, which is the argument
+for having written it. Three further arms keep the ledger honest: a stale entry
+that now propagates is refused, every entry must state a reason, and the
+premise is pinned so the rule cannot pass by finding nothing.
+
+A DEFECT IN MY OWN TEST, SURFACED BY THE NEGATIVE CONTROL. `_verdict_is_consumed`
+read `.value` on both `ast.Return` and `ast.Raise`. `ast.Raise` carries its
+expression on `.exc`, so every `raise` reached raised AttributeError -- and the
+control therefore "failed" by CRASHING rather than asserting. A red nobody can
+read is not a red. Repaired, and the reason is recorded in the helper's own
+docstring: a structural test that cannot read its own subject must not be
+counted as having checked it. Without running the control I would have shipped
+a guard that was green by luck.
+
+TWO STALE REPORTS, WHICH MY OWN EARLIER CHANGE CAUSED. Regenerating all
+fourteen `h2h_*_report.json` against the current gate showed all fourteen
+"drifting" -- but for twelve of them the only difference is the absolute
+`record` path baked in at generation time, which is an artefact of where the
+regeneration ran and not a drift. For h2h_A and h2h_B the refusal block itself
+was superseded (SCOPE_SENTINEL / SCOPE_INCOMPLETE -> STAGE_CONTRADICTS_BASIS)
+by the Part 25 ordering repair. Only that block was rewritten, leaving the
+original `record` path intact so no spurious diff is introduced: 4 lines
+changed across the two files.
+
+NEGATIVE CONTROL I -- the four propagations reverted to `return 0`:
+
+    1 failed, 3 passed
+    E  AssertionError: these tools run a checker and never route its
+       `returncode` to their own exit status, so they report SUCCESS to their
+       caller over a refusal. ... ['ppa-crosslayer/tools/gen_declaration.py::
+       build (`c`)', 'ppa-crosslayer/tools/head_to_head.py::main (`r`)',
+       'ppa-e2e/tools/head_to_head.py::build (`r`)']
+
+NO VERDICT MOVED. cross-layer 14 records / 2 refused / rc 1, end-to-end 2 / 1
+refused / rc 1 -- unchanged. Regression 2043 passed, 4 failed, the same four
+identical on pristine origin/main. chip-AGNOSTIC source guard: PASS.

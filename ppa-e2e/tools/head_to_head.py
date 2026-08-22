@@ -185,7 +185,22 @@ def build(tag, use_diagnostic_power):
     if r.stderr.strip():
         print(r.stderr.strip(), file=sys.stderr)
     print(f"ppa_head_to_head_check rc={r.returncode}")
-    return 0
+    # PROPAGATE THE GATE'S VERDICT INTO THE EXIT STATUS. This was `return 0`,
+    # unconditionally, while `main` below already computes
+    # `max(a or 0, b or 0)` -- the worst-rc plumbing existed and was fed a
+    # hardcoded success, which is the starker half of the same defect.
+    #
+    # SCOPED HONESTLY: the verdict is NOT thrown away -- `--json` above persists
+    # the checker's full report, `"ok": false` and refusal included. The defect
+    # is the EXIT STATUS alone. It still matters, because an exit code is what
+    # an orchestrator reads, and a tool that reports success having just been
+    # told rc 1 misreports to its caller whatever it wrote to disk.
+    #
+    # The record file is deliberately LEFT ON DISK when refused: a refused
+    # record is the evidence needed to fix it, and unlinking it would trade one
+    # silent outcome for another. What changes is only that this tool stops
+    # reporting success over a verdict it was given.
+    return r.returncode
 
 
 def main() -> int:

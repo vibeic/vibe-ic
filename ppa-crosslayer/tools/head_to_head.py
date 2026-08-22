@@ -218,7 +218,24 @@ def main(argv=None) -> int:
     if r.stderr.strip():
         print(r.stderr.strip())
     print(f"ppa_head_to_head_check rc={r.returncode}")
-    return 0
+    # PROPAGATE THE GATE'S VERDICT INTO THE EXIT STATUS. This was `return 0`,
+    # unconditionally, so a caller that checks the exit status of the tool that
+    # WROTE this corpus was told success over a refusal.
+    #
+    # SCOPED HONESTLY, because the first draft of this comment overstated it:
+    # the verdict is NOT thrown away. `--json records/<tag>_report.json` above
+    # persists the checker's full report beside the record, and those reports do
+    # carry `"ok": false` with the refusal -- h2h_A_report.json was checked. So
+    # the defect is the EXIT STATUS alone, not the disclosure. That is still
+    # worth repairing: an exit code is what an orchestrator reads, and a build
+    # step that reports success having just been told rc 1 is misreporting to
+    # its caller whatever it wrote to disk.
+    #
+    # The record file is deliberately LEFT ON DISK when refused: a refused
+    # record is the evidence needed to fix it, and unlinking it would trade one
+    # silent outcome for another. What changes is only that this tool stops
+    # reporting success over a verdict it was given.
+    return r.returncode
 
 
 if __name__ == "__main__":
