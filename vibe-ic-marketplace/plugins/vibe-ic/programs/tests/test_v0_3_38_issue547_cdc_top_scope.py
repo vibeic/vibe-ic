@@ -17,7 +17,7 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase2_one_shot_runner as P2  # noqa: E402
+import design_one_shot_runner as P2  # noqa: E402
 
 
 # The reopen's exact shape: hierarchical single-board-clock design whose

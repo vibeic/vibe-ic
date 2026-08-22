@@ -1,0 +1,95 @@
+type: enhancement
+severity: P2
+component: program:verilogeval_tier_pipeline
+plugin_version: "1.1.98"
+
+title: >-
+  Floor detection only proves golden-vs-its-own-testbench self-consistency;
+  it misses a golden that is self-consistent but contradicts the prompt's own
+  deterministically-extractable spec (K-map / truth-table / explicit equation)
+
+pattern: |
+  The Tier-5 floor detector (floor_evidence) proves a dataset defect by
+  renaming the golden reference to the top module and scoring it against the
+  problem's OWN hidden testbench: if the golden-as-DUT does not score zero
+  mismatches, it is flagged a floor. This catches exactly ONE defect class —
+  a STRUCTURAL floor where the golden/testbench pair is internally broken
+  (the golden fails to compile, or golden-as-DUT mismatches the testbench).
+
+  It is BLIND to a second, distinct defect class — a SEMANTIC floor — because
+  the hidden testbench is GENERATED FROM the golden, so "golden vs its own
+  testbench" is a tautology that always passes. When the golden is internally
+  self-consistent (passes its own testbench) yet CONTRADICTS the problem
+  prompt's own stated, machine-extractable spec, the detector returns "not a
+  floor". A spec-faithful blind solver then authors the spec-correct RTL,
+  which the golden-derived testbench rejects, and the run charges the solver
+  with a FAIL on a case where the SOLVER IS RIGHT AND THE GOLDEN IS WRONG.
+
+  Concretely, this surfaces when a prompt carries a structured spec that a
+  program can extract and turn into an independent oracle — a Karnaugh-map
+  grid, a truth table, an explicit boolean/arithmetic equation, an embedded
+  "fix the bug" snippet whose only working behavior pins the intended
+  function — and the golden's full input/output behavior disagrees with that
+  prompt-derived oracle on at least one input combination. Today nothing
+  compares the golden against the PROMPT; the only oracle ever consulted is
+  the golden itself.
+
+  Impact: such cases are mislabeled Tier-2/Tier-3 (AI-gated) instead of
+  Tier-5 (floor). A blind benchmark run then (a) under-reports the solver's
+  true accuracy by counting a spec-faithful-correct answer as a fail, and
+  (b) can trigger wasted convergence effort trying to "fix" an unsolvable
+  case whose only passing answer requires emitting a spec-violating value to
+  match the buggy golden — which is the over-fit/oracle-peek the no-cheat
+  doctrine forbids.
+
+suggested_fix: |
+  Add a SEMANTIC spec-conformance floor check that builds an oracle from the
+  PROMPT (not from the golden) and flags a floor when the golden contradicts
+  it. Two layers, program-first then LLM-gated:
+
+  1. Deterministic (Bucket A) — for the prompt sub-classes whose spec is
+     fully machine-extractable: a Karnaugh-map grid, a truth table, or an
+     explicit closed-form equation present in the prompt text. Extract the
+     spec-truth function, brute-force-enumerate the full input space, and
+     compare the golden's actual output (run under the testbench harness, or
+     evaluated structurally) against the prompt-derived truth on every input.
+     Any disagreement => SEMANTIC FLOOR with a cited (input, golden, spec)
+     triple as evidence. Zero false positives by construction: it only fires
+     when an independently-extracted, prompt-stated structure is violated.
+
+  2. LLM-gated (Bucket B) — for prose-only intent (e.g. a "fix the bug"
+     prompt whose only behavioral hint is the embedded snippet's
+     single-working-bit polarity). An AI semantic check reads the prompt and
+     the golden and asserts whether the golden contradicts the prompt's only
+     stated behavioral hint. GATE it on the program first confirming the
+     golden is internally self-consistent (passes its own testbench) AND that
+     the structural-extraction layer did not already decide — so the AI step
+     only adjudicates the genuinely prose-bound residual, never overrides a
+     deterministic verdict. Per the negative-no-leak requirement, pair it
+     with fixtures that are NEAR the boundary but spec-faithful, asserting the
+     check does NOT fire on a sound golden.
+
+  Wire both into floor_evidence in the VerilogEval tier pipelines (and the
+  shared spec-extraction path), so a future blind run auto-reclassifies a
+  semantic-floor case as Tier-5 instead of charging the solver with a fail.
+  Keep it general: key on the presence of an extractable structure, never on
+  any specific problem id.
+
+id: "ORGANIC-20260624-semantic-golden-spec-floor-detect"
+submitted_at: "2026-06-24T02:55:00+08:00"
+session_context: >-
+  312-case VerilogEval-v2 + VerilogEval-Human 5x-clean-run stability study.
+  Two problems passed their own golden-derived testbench yet were proven
+  (one by exhaustive K-map-vs-golden enumeration, one by buggy-snippet
+  polarity analysis) to contradict their own prompt; the spec-faithful
+  blind answer FAILED while only the spec-violating value matched the
+  golden. The existing floor_evidence (golden-vs-its-own-test) returned
+  "not a floor", so they were mislabeled AI-gated tiers and counted as
+  solver failures rather than dataset-defect floors.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    semantic_spec_floor_check.py wired into both verilogeval tier pipelines; test present

@@ -37,7 +37,7 @@ def test_validate_mount_accepts_exact_match(monkeypatch):
     monkeypatch.setattr(mod, "_container_mounts",
                         lambda c: [(Path("/srv/designs"), "/foss/designs")])
     # Exact source match
-    mod._validate_mount("iic-eda", Path("/srv/designs"), "/foss/designs")
+    mod._validate_mount("vibeic-eda", Path("/srv/designs"), "/foss/designs")
 
 
 def test_validate_mount_accepts_parent_relationship(monkeypatch):
@@ -49,7 +49,7 @@ def test_validate_mount_accepts_parent_relationship(monkeypatch):
     # _docker_path translation wouldn't be right. The validator's contract is:
     # mount_host must BE the source (exact) or have the source as an ancestor.
     # The "/srv/designs" is an ancestor of "/srv/designs/sub", so this passes.
-    mod._validate_mount("iic-eda", Path("/srv/designs/sub"), "/foss/designs")
+    mod._validate_mount("vibeic-eda", Path("/srv/designs/sub"), "/foss/designs")
 
 
 def test_validate_mount_rejects_unmounted_path(monkeypatch):
@@ -58,7 +58,7 @@ def test_validate_mount_rejects_unmounted_path(monkeypatch):
     monkeypatch.setattr(mod, "_container_mounts",
                         lambda c: [(Path("/home/x/AI_IC_design"), "/foss/designs")])
     with pytest.raises(SystemExit) as ei:
-        mod._validate_mount("iic-eda", Path("/home/x/vibe-ic"), "/foss/designs")
+        mod._validate_mount("vibeic-eda", Path("/home/x/vibe-ic"), "/foss/designs")
     msg = str(ei.value)
     assert "NOT an actual bind mount" in msg
     assert "/home/x/AI_IC_design" in msg
@@ -71,7 +71,7 @@ def test_validate_mount_rejects_wrong_destination(monkeypatch):
     monkeypatch.setattr(mod, "_container_mounts",
                         lambda c: [(Path("/srv/designs"), "/some/other/dest")])
     with pytest.raises(SystemExit) as ei:
-        mod._validate_mount("iic-eda", Path("/srv/designs"), "/foss/designs")
+        mod._validate_mount("vibeic-eda", Path("/srv/designs"), "/foss/designs")
     assert "NOT an actual bind mount" in str(ei.value)
 
 
@@ -80,7 +80,7 @@ def test_validate_mount_rejects_no_mounts(monkeypatch):
     mod = _load_module()
     monkeypatch.setattr(mod, "_container_mounts", lambda c: [])
     with pytest.raises(SystemExit) as ei:
-        mod._validate_mount("iic-eda", Path("/srv/designs"), "/foss/designs")
+        mod._validate_mount("vibeic-eda", Path("/srv/designs"), "/foss/designs")
     assert "no bind mounts" in str(ei.value)
 
 
@@ -96,7 +96,7 @@ def test_container_mounts_parses_docker_inspect_output(monkeypatch):
     }])
     monkeypatch.setattr(mod.subprocess, "check_output",
                         lambda *a, **kw: fake_output)
-    result = mod._container_mounts("iic-eda")
+    result = mod._container_mounts("vibeic-eda")
     assert (Path("/host/path/a"), "/foss/designs") in result
     assert (Path("/host/path/b"), "/foss/eda") in result
     # Empty Source should be dropped
