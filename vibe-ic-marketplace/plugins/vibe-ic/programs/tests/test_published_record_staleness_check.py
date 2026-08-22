@@ -59,10 +59,21 @@ import _record_adjudication as _ra         # noqa: E402
 import published_record_staleness_check as P  # noqa: E402
 import si_mcf_sta_check as SI              # noqa: E402
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 _REPO = _PROGRAMS.parents[3]
+#: The CLI's DEFAULT corpus argument — still this path, whatever it holds. Used
+#: only by the read-only control, whose subject is the program, not the cells.
 _CORPUS = _REPO / "benchmark-data"
 _FIXTURES = _PROGRAMS / "tests" / "fixtures" / "si_mcf_zero_coupling"
 _CLI = _PROGRAMS / "published_record_staleness_check.py"
+#: The register the CLI loads when it is given no corpus argument. Naming it
+#: here lets the two published-corpus tests keep the register/corpus PAIRING
+#: when the cells are read from a clone elsewhere — handing the CLI an explicit
+#: corpus root suppresses the default register on purpose (see its comment),
+#: so the pairing has to be restored explicitly or every recorded entry would
+#: look PAID.
+_DEFAULT_REGISTER = _PROGRAMS / P.DEFAULT_BASELINE
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -510,8 +521,18 @@ def test_strict_fails_when_a_publishing_gate_registers_nothing(tmp_path):
 
 # ── 5. the debt register: it may only shrink ───────────────────────────────
 def _baseline(tmp_path: Path, keys) -> Path:
+    """A register in the shape ``--write-baseline`` produces.
+
+    The bookkeeping fields are not decoration. Since #922 the READ path refuses
+    a register the writer could not have produced, so a fixture that omits them
+    describes a file this program is right to reject — it would pin the wrong
+    behaviour and hide the one these fields exist to catch.
+    """
     p = tmp_path / "register.json"
-    p.write_text(json.dumps({"known": list(keys)}, indent=2) + "\n")
+    keys = sorted(str(k) for k in keys)
+    p.write_text(json.dumps({"previous_size": None, "size": len(keys),
+                             "scope_expanded": None, "known": keys},
+                            indent=2) + "\n")
     return p
 
 
@@ -653,18 +674,36 @@ def test_ignore_baseline_gives_the_raw_answer(tmp_path):
     assert _run(root, "--baseline", str(bl), "--ignore-baseline")[0] == 1
 
 
+@needs_corpus
 def test_the_shipped_register_is_current(tmp_path):
     """Every recorded entry is still stale, and nothing stale is unrecorded.
 
-    Run against the DEFAULT corpus and the DEFAULT register — the pairing the
+    Run against the PUBLISHED corpus and the DEFAULT register — the pairing the
     register describes — so a corrected record or a newly-superseded one shows
     up here rather than in whoever next reads CI.
+
+    The old guard asked whether `<repo>/benchmark-data` was a directory. It
+    still is — it holds the design INPUT — while the result cells moved to
+    vibeic/benchmark-data, so the guard passed and the CLI then answered rc 2
+    (VACUOUS_PASS, 0 records found). That is "I could not look" being reported
+    as a defect in the register.
+
+    When the cells are read from a clone, the register must be named
+    explicitly: handing the CLI a corpus root deliberately suppresses the
+    default register, and without it every recorded entry would read as PAID.
     """
-    if not _CORPUS.is_dir():
-        pytest.skip("no published corpus here")
-    r = subprocess.run([sys.executable, str(_CLI)],
-                       capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, r.stderr
+    argv = [sys.executable, str(_CLI)]
+    if corpus_root() != _CORPUS:
+        argv += [str(corpus_root()), "--baseline", str(_DEFAULT_REGISTER)]
+    # 60 s, not 120 (vibe-ic#1711). This is the only call in this file that
+    # runs over the PUBLISHED corpus rather than a tmp_path fixture, so it is
+    # the one where a generous bound looks defensible — and it is not: under
+    # `--timeout-method=thread` the 180 s session clock kills the whole run
+    # before a 120 s bound can fire, taking every other file's verdict with it.
+    # MEASURED against a real 28,166-file clone of `vibeic/benchmark-data`:
+    # 1.45 s wall, 267 published records adjudicated. 60 s is 41x that.
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # ── 6. the behavioural pin no fingerprint can give ─────────────────────────
@@ -959,7 +998,7 @@ def test_write_baseline_still_drops_an_entry_that_was_re_adjudicated(tmp_path):
 
 
 # ── 8. the real corpus, which is why this program exists ───────────────────
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="no published corpus here")
+@needs_corpus
 def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     """Structural, so it survives the benchmark-agent correcting the records.
 
@@ -969,7 +1008,8 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     denominator adds up, and that every staleness it reports is reproducible
     from the named record's own fields.
     """
-    rc, rep, _se = _report(_CORPUS, tmp_path)
+    _CELLS = corpus_root()
+    rc, rep, _se = _report(_CELLS, tmp_path)
     assert rc in (0, 1)
     s = rep["summary"]
     assert s["records_found"] > 0
@@ -980,7 +1020,7 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     for f in rep["findings"]:
         if f["kind"] != P.STALE:
             continue
-        rec = json.loads((_CORPUS / f["record"]).read_text())
+        rec = json.loads((_CELLS / f["record"]).read_text())
         assert rec["verdict"] == f["carried_verdict"]
         # The gate-SPECIFIC substance, keyed on which gate declared the rule.
         # This line used to run for EVERY stale record — a si_mcf_sta_check
@@ -1099,3 +1139,161 @@ def test_ignore_is_asked_of_git_rather_than_matched_here():
     src = inspect.getsource(P._target_deliberately_untracked)
     assert "check-ignore" in src
     assert "fnmatch" not in src and "re.match" not in src
+
+
+# ── 9. MAY ONLY SHRINK is enforced on the READ path too (vibe-ic#922) ──────
+#
+# The ratchet lived entirely inside --write-baseline. A register is a JSON
+# file, so the writer was never the only way to add an entry to it, and adding
+# one by hand is exactly how a NEW superseded record stops being NEW.
+_A_WRITTEN_REASON = ("a rule was newly registered for this gate, so records "
+                     "it never reached are adjudicated for the first time")
+
+
+def _write_register(root: Path, bl: Path, *args, programs_dir: Path = None):
+    """Produce a register the sanctioned way — through the writer."""
+    return _run(root, "--baseline", str(bl), "--write-baseline", *args,
+                programs_dir=programs_dir)
+
+
+def _a_superseded_key(root: Path, tmp_path: Path) -> str:
+    """The debt key of a superseded record in ``root``, taken from the report
+    the program itself emits rather than rebuilt here."""
+    _rc, rep, _se = _report(root, tmp_path, "--ignore-baseline")
+    stale = [f for f in rep["findings"] if f["kind"] == P.STALE]
+    assert stale, "fixture carries no superseded record"
+    return P.debt_key(stale[0])
+
+
+def _add_superseded(root: Path, rel: str) -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(_si_record(verdict="PASS", coupling_pairs=0),
+                            indent=2) + "\n")
+
+
+def test_an_entry_appended_by_hand_is_not_read_as_recorded_debt(tmp_path):
+    """THE BYPASS, end to end through the CLI.
+
+    --write-baseline refuses to GROW the register without a written reason.
+    Nothing asked the same question of the file it reads, so the refusal was
+    one text editor away from optional: append the key of a NEW superseded
+    record and the gate whose whole job is to FAIL on it reports PASS.
+
+    Measured on the unfixed program: rc 0 at the last step.
+    """
+    root = _corpus(tmp_path, {
+        "ic/aj/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=4)})
+    bl = tmp_path / "register.json"
+    rc, _so, se = _write_register(root, bl)
+    assert rc == 0, se
+    assert json.loads(bl.read_text())["known"] == []
+
+    # a superseded record lands afterwards — the gate must FAIL on it
+    _add_superseded(root, "ic/ak/reports/phase3/si_mcf_sta_check.json")
+    assert _run(root, "--baseline", str(bl))[0] == 1
+
+    # ... and appending its key by hand must not be how that stops
+    doc = json.loads(bl.read_text())
+    doc["known"] = sorted(doc["known"] + [_a_superseded_key(root, tmp_path)])
+    bl.write_text(json.dumps(doc, indent=2) + "\n")
+
+    rc2, _so2, se2 = _run(root, "--baseline", str(bl))
+    assert rc2 == 1, "a hand-grown register silenced a NEW superseded record"
+    assert "outside --write-baseline" in se2
+
+
+def test_the_same_growth_through_the_writer_is_still_trusted(tmp_path):
+    """THE GUARD THAT MUST NOT MOVE.
+
+    Rejecting the hand-grown register is worth nothing if the legitimate one
+    is rejected too — that is a gate that says FAIL more often, not a ratchet.
+    Same corpus, same entry, same final `known` list as the test above; the
+    only difference is which path produced the file. This must pass both
+    before and after the fix.
+    """
+    root = _corpus(tmp_path, {
+        "ic/al/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=4)})
+    bl = tmp_path / "register.json"
+    assert _write_register(root, bl)[0] == 0
+
+    _add_superseded(root, "ic/am/reports/phase3/si_mcf_sta_check.json")
+    rc, _so, se = _write_register(root, bl, "--scope-expanded",
+                                  _A_WRITTEN_REASON)
+    assert rc == 0, se
+    assert len(json.loads(bl.read_text())["known"]) == 1
+    assert _run(root, "--baseline", str(bl))[0] == 0, "the writer's own output"
+
+
+def test_a_reason_is_spent_by_the_write_it_authorised(tmp_path):
+    """A `scope_expanded` kept past its write pre-authorises the NEXT growth.
+
+    That is the standing-permission shape #922 is named for, reproduced one
+    file over: with a reason parked in the register forever, growing it needs
+    only a forged number. The writer records the reason for the write that
+    grew, and for no other.
+    """
+    root = _corpus(tmp_path, {
+        "ic/an/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=4)})
+    bl = tmp_path / "register.json"
+    assert _write_register(root, bl)[0] == 0
+
+    _add_superseded(root, "ic/ao/reports/phase3/si_mcf_sta_check.json")
+    assert _write_register(root, bl, "--scope-expanded",
+                           _A_WRITTEN_REASON)[0] == 0
+    assert json.loads(bl.read_text())["scope_expanded"] == _A_WRITTEN_REASON
+
+    # the next write grows nothing, so the reason is spent
+    assert _write_register(root, bl, "--scope-expanded",
+                           _A_WRITTEN_REASON)[0] == 0
+    assert json.loads(bl.read_text())["scope_expanded"] is None
+    assert _run(root, "--baseline", str(bl))[0] == 0
+
+    # ... and one put back by hand is not read as authorisation
+    doc = json.loads(bl.read_text())
+    doc["scope_expanded"] = _A_WRITTEN_REASON
+    bl.write_text(json.dumps(doc, indent=2) + "\n")
+    rc, _so, se = _run(root, "--baseline", str(bl))
+    assert rc == 1
+    assert "standing authorisation" in se
+
+
+def test_a_register_that_records_no_size_is_reported_not_trusted(tmp_path):
+    """`size` is the count the writer sanctioned, and it is what a hand-append
+    leaves behind. "No size recorded" is therefore the state a hand-edit
+    reaches the moment someone notices the field, so it cannot be waved
+    through as nothing-to-check."""
+    root = _corpus(tmp_path, {
+        "ic/ap/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=4)})
+    bl = tmp_path / "register.json"
+    assert _write_register(root, bl)[0] == 0
+    doc = json.loads(bl.read_text())
+    doc.pop("size")
+    bl.write_text(json.dumps(doc, indent=2) + "\n")
+
+    rc, _so, se = _run(root, "--baseline", str(bl))
+    assert rc == 1
+    assert "records no `size`" in se
+    # and the writer is the repair route, so it must not be blocked by the
+    # very defect it exists to fix
+    assert _write_register(root, bl)[0] == 0
+    assert _run(root, "--baseline", str(bl))[0] == 0
+
+
+def test_the_shipped_register_is_a_state_the_writer_could_have_produced():
+    """Asked of the program's own validator, on the file this repo ships.
+
+    v1.8.75 grew it 2 -> 5 by hand — `previous_size: 2` beside five entries
+    with `scope_expanded: null`, a document `--write-baseline` exits 1 on. The
+    growth was real and justified; the reason was in the commit message and in
+    the file's own `_comment`, i.e. everywhere except the field the ratchet
+    reads.
+    """
+    shipped = _PROGRAMS / P.DEFAULT_BASELINE
+    if not shipped.is_file():                          # pragma: no cover
+        pytest.skip("no default register in this tree")
+    assert P._register_defects(shipped) == []
