@@ -1899,6 +1899,17 @@ the tree DOES support is the correlation — 10 of 10 arms with a non-redundant
 accumulator fail, 0 of 52 preserving arms do — which is a netlist property and is
 the lead worth having.
 
+*And the family's loss is larger than the crash count, which changes how urgent
+this is.* The affected family holds **18** arms. **10** hit the fault. A further
+**2** produced no number because the resume path — the mitigation, working as
+designed — consumed the remainder of their hour-long trial budget. So the real
+loss is **12 of 18**, and two of those twelve are attributable to the RECOVERY
+rather than to the crash. A fix that merely let the repair pass skip the
+offending instance quickly would recover those two on top of the ten, and the
+current mitigation cannot be left standing as the answer. Nothing was done to
+make any of the twelve pass: no repair step disabled by hand, no budget raised
+for them, no routed database patched.
+
 **(o)** yes — the samples ARE the original, retained.
 **(d)** the enhancement is stated as a behaviour, not as a patch to these ten
 inputs: the stage must exit non-zero with a named diagnostic on any instance it
