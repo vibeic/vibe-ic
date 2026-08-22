@@ -263,3 +263,63 @@ candidate with `VIBE_IC_BENCHMARK_DATA` bound as
 tools/ci/gate_red_since.json --repo <repo>`. If `citation routing is true`
 appears red on both, it needs a row — or, better, the repair on this branch plus
 whatever makes its subject present again.
+
+## Re-taken at `ae78abb28` (v1.11.70): the population MOVED, the verdict did not
+
+`main` advanced 673 commits from `a4caccefe` while this record was being written.
+A census is a claim about a denominator, so the denominator was re-counted rather
+than assumed — and it had changed.
+
+| like-for-like scope (`programs/*.py`, `tools/ci/*.py`) | n |
+|---|---|
+| corpus-resolving files at `a4caccefe` | 28 |
+| corpus-resolving files at `ae78abb28` | **30** |
+| removed | 0 |
+
+The original 28 reproduces exactly at its own sha, so the number was right and is
+now out of date — which is the whole reason it was re-taken. The two additions:
+
+- `explicit_argument_outranks_the_environment_pointer.py`
+- `content_pinned_authority_verified_only_at_merge.py`
+
+**Neither carries the defect.** Checked both ways rather than by reading intent:
+neither contains a pointer-blaming refusal (`grep` for *"wrong pointer"* / *"is a
+broken configuration"* → 0 in both), and both were driven against the real empty
+corpus — the first exits 0 stating its denominator (*"examined 6 in-scope
+corpus-pointer reader(s)"*), the second exits 0. **30 of 30 counted, 20 driven,
+still exactly one defective site.**
+
+*A run of mine that was not a result: the second program first reported
+`ModuleNotFoundError: No module named '_atomic_artefact'` because I had copied it
+to `/tmp`, which breaks its sibling imports. That is a measurement of my
+invocation, not of the program. Re-run in place, with `--root`, it exits 0.*
+
+### The new gate does not supersede this branch, and it says why itself
+
+`explicit_argument_outranks_the_environment_pointer` is aimed at the same seam,
+so the question is live. It enforces one thing: *"a site that reads the corpus
+pointer and can redirect its subject with it MUST say so on its output."*
+`citation_routing_is_true_check` already announced (`note: … adds a corpus to
+scan`) before this branch and still does; what this branch repairs is the
+**content of the refusal**, which that rule does not reach.
+
+It also declines, explicitly, to arbitrate a **live contract split** it
+documents: `_corpus_location` holds that *"the pointer replaces a missing corpus;
+it does not replace a present one"*, while three consumers deliberately hold the
+opposite (*"THE POINTER WINS OVER THE PATH, ANNOUNCED (#1710)"*). That split is
+useful context for this branch's hermeticity change — which takes neither side,
+and instead says that a unit test naming its own `--root` is not the place the
+question gets decided.
+
+### Neither branch introduces an instance under either new gate
+
+Run against clean `main` and both branches:
+
+| gate | `main` | `next/corpus-pointer-measured-empty` | this branch |
+|---|---|---|---|
+| `explicit_argument_outranks_the_environment_pointer` | **PASS**, 6 in-scope readers, 2 disclosed | **PASS**, identical | **PASS**, identical |
+| `content_pinned_authority_verified_only_at_merge` | rc 0 | rc 0 | rc 0 |
+
+The second gate's WARN count is 12 on `main` and 11 on both branches — lower,
+because the branches sit on the older base where one fewer authority file
+differs. Nothing is introduced by either branch under either rule.
