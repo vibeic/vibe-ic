@@ -39,7 +39,10 @@ git rev-list --count a00f53f20..origin/main            # commits since base -> 2
 # the merge, in a throwaway worktree — verify by RUNNING it, not by exit 0:
 git worktree add -q --detach /tmp/mt origin/main && cd /tmp/mt \
   && git merge --no-commit --no-ff $F                  # conflicts        -> none
-# the census, with the pointer set — WITHOUT it, 61 D3 cells report nothing:
+# the census — NOTE THE `cd`: these paths are plugin-relative and FAIL from the
+# repo root, where the three commands above are run. Measured, not assumed.
+cd vibe-ic-marketplace/plugins/vibe-ic
+# with the pointer set — WITHOUT it, 61 D3 cells report nothing:
 VIBE_IC_BENCHMARK_DATA=<a benchmark-data checkout> python3 -m pytest \
   programs/tests/test_matrix_d3_outputs_produced.py \
   programs/tests/test_matrix_63x8_coverage.py \
