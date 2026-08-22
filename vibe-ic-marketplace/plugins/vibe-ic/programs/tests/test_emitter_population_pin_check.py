@@ -3308,6 +3308,47 @@ def test_the_statement_stop_rests_on_a_true_premise():
         f"stop -- so the stop may now be hiding an answer: {not_expressions}")
 
 
+def test_this_program_is_on_none_of_the_THREE_registers():
+    """The brief's one non-negotiable rule, made mechanical.
+
+    #712's green can be obtained honestly -- the extractor consults polarity --
+    or by any of three register edits: adding this program to the baseline of
+    known offenders, adding it to the `_NOT_PROSE` exemption list, or arranging
+    for the gate to stop counting it. The first two are one line each and both
+    read as PASS afterwards.
+
+    So membership is checked in all three, not argued. If a later red here is
+    ever closed by exempting this program instead of fixing it, this fails and
+    names which register it was written into."""
+    import json as _json
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    try:
+        import prose_polarity_consulted_check as gate
+    except ImportError as e:
+        pytest.skip(f"the #712 gate is not importable here ({e})")
+
+    me = PROG.stem
+    exempt = getattr(gate, "_NOT_PROSE", {})
+    exempt_names = list(exempt) if isinstance(exempt, dict) else list(exempt or ())
+    assert exempt_names, "the exemption register is empty -- probe is looking at the wrong name"
+    on_exempt = [n for n in exempt_names if me in n]
+    assert not on_exempt, (
+        f"this program has been written into the `_NOT_PROSE` exemption "
+        f"register: {on_exempt}. That closes the row by declaring the question "
+        f"inapplicable, which is the move the brief forbids")
+
+    baseline = PROGRAMS_DIR / "prose_polarity_baseline.json"
+    if not baseline.is_file():
+        pytest.skip("no polarity baseline in this checkout")
+    known = _json.loads(baseline.read_text(encoding="utf-8"))["known"]
+    assert known, "the baseline is empty -- probe is looking at the wrong key"
+    on_base = [n for n in known if me in n]
+    assert not on_base, (
+        f"this program has been added to the baseline of known polarity-blind "
+        f"extractors: {on_base}. A census that grew because someone told it to "
+        f"expect one more has learned nothing")
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
