@@ -2960,3 +2960,42 @@ attribution problem. What is established here is narrow and checkable: they are
 on `main`, they are not this branch's, they are green on this branch, and they
 are in a file no routine selection reaches. Reproduction is one command:
 `python3 -m pytest -q tools/test_gatekeeper_land_differential.py` on `main`.
+
+## 45. `land/batch67-assembled` is gone — the batch closed, and what that leaves
+
+The watch fired a second time, on a DELETION: `land/batch67-assembled` no longer
+exists on the remote. That is the ordinary end of a landed batch, and it is
+recorded because of what it settles and what it strands.
+
+```
+refs/heads/land/batch67-assembled   deleted   (was 2d98cacd4b)
+refs/heads/land/*                   land/one-assembled 264a48ffa3 remains
+fix/jland67-hygiene-subset-honoured 6935f0a3e4   unaffected
+```
+
+**Settled: batch 67 is closed.** The landing at `a4caccefea` (v1.11.69) was the
+end of it, not an intermediate step, and the two collateral-revert findings §42
+weighed are now historical — `jrows`'s pair is on `main` and stays there; mine
+never landed.
+
+**Stranded: the batch's own head.** `2d98cacd4b` carried this branch at
+`d0873e5f32` — §20–28, including the two-defect resolution reached with
+`jmeas3`. `main` landed the earlier `3bfe4338e4` state (§43), so those sections
+never reached `main` and the branch that held them is deleted. The commit is
+still reachable in this local clone; on the remote it now depends on nothing but
+`fix/jland67-hygiene-subset-honoured`, which is why that branch existing matters
+more than it did an hour ago.
+
+**Nothing here needs action from me**, and the reason is worth stating rather
+than assumed: a deleted landing branch after a successful landing is correct
+housekeeping, not a loss. What was lost is documentation that was never on
+`main` in the first place, and it is preserved on a pushed branch that says so
+in §43. If nobody takes that branch, the §39 escape-route finding and the
+`jmeas3` collaboration disappear with it; if anybody does, §44 measured the
+recipe end to end.
+
+**The watch has now caught both things it was armed for** — `main` moving (§41,
+which needed the AST to avoid a false alarm about a skip button) and the batch
+moving twice, ending in this deletion. Scoping it to refs I never write is what
+made all three events legible; the first version, which included my own
+branches, would have buried them under my own pushes.
