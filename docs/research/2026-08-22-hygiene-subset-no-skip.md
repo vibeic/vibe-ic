@@ -4578,3 +4578,44 @@ neither default selection. The claim holds.
 Two claims, same sweep, one wrong and one right — which is the argument for
 running the sweep rather than trusting that a document written carefully is
 therefore correct.
+
+## 66. The six branches measured TOGETHER: 22 → 4, twice, with every number accounted for
+
+Each branch was verified in isolation and the set never was. That is the same
+denominator error this document catches elsewhere, so before calling any of it
+finished: all six merged onto `main`, run against clean `main`, **interleaved
+across two rounds** because a single pair cannot separate a real difference from
+the hour.
+
+    round1   main 22 failed / 722 passed      merged 4 failed / 753 passed
+    round2   main 22 failed / 722 passed      merged 4 failed / 753 passed
+
+Identical counts AND identical failure NAME SETS in both arms across both rounds.
+
+**Every number accounts for itself.** The 18 failures that disappear are exactly
+what these branches target — 16 differential lander tests, the PPA fixture pair,
+the liar-census shrink pin. The 13 extra passes are exactly what they add: 2
+differential guards, 10 gate fixtures (one pair test each), 1 kill/rm race guard.
+18 + 13 = 31, the observed change in passes, with nothing unexplained.
+
+**The four survivors are the four already written up as blocked**, and the merged
+tree introduces nothing new:
+
+    gate_mutation_fixture_check      4 fixture rows still owing (§60: 3 cannot
+                                     be fixtured, 1 deliberately parked)
+    landing_runtime_preflight_gate   the argparse 1.4.0 host lane (§31)
+    phase_b_activated_parity  ×2     the drifted protected tuple (§63)
+
+### One thing this measurement does NOT show, stated because it would be easy to imply
+
+`test_hermetic_candidate_runner` appears in NEITHER arm's stable set. The race
+simply did not fire in these four runs — main was quiet for it in both rounds.
+So this comparison is silent about §62's fix; it neither confirms nor refutes it.
+What demonstrates that fix is the dedicated probe: 41 leaks in 200 concurrent
+kill/rm rounds before, 0 after, and the guard that goes red at 8 of 60 without
+it. A whole-lane count would have been the wrong instrument for a race, which is
+§62's own point arriving one section later.
+
+That also means main's TRUE red count in this lane is 22 or 25 depending on
+whether the race fires — so anyone comparing arms here must interleave, and must
+not read a 22-vs-25 difference as a regression.
