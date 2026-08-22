@@ -3259,7 +3259,7 @@ lines, two of them comments):
 
 | | `-root_buf clkbuf_16` (today) | `-root_buf clkbuf_8` |
 |---|---|---|
-| post-hold residual | **2 042**, still searching at 7 min | **8**, done in **2 m 35 s** |
+| post-hold residual | **2 042** — `recovered 0 of 2 042` — in **13 m 28 s** | **8** in **2 m 35 s** (**5.2×** faster) |
 | hold violations found | 2 595 | 1 522 (**−41 %**) |
 | hold buffers inserted | 262 | 149 (**−43 %**) |
 | post-hold movable | 5 957 992.32 µm² | 5 847 894.26 µm² (**−110 098.06**) |
@@ -3270,7 +3270,11 @@ by which master the flow names as `-root_buf`, not by the design.** The area del
 FAILED — `placed.def` predates spare insertion, so neither probe reproduces the arm's
 absolute numbers — and the registration said in advance that the two are then compared
 to each other, which is the controlled result. `rootfit` does NOT legalize outright
-either: residual 8, `PROBE_PRESWAP_OK=0`, exactly as predicted.)*
+either: residual 8, `PROBE_PRESWAP_OK=0`, exactly as predicted. **Both probes have since
+TERMINATED** — `rootbig` at 13 m 28 s with `recovered 0 of 2 042`, which is the
+all-or-nothing shape J73 measured at five dies, with this one on the nothing side. The
+sentence that used to read "still searching at 7 min" was a live read and is corrected
+where it stood.)*
 
 **This does NOT revise the published die.** 6.139–6.171 mm is what the flow **as it is**
 would build and option E is not adopted; *if* it were, the same fixed point gives

@@ -132,6 +132,19 @@ for die, p in ARMS:
 # against "none yet" and so reported MOVED on a reading that had not moved -- the
 # ledger's own third instrument defect of this dispatch.  The published value and the
 # measured value have to be in the SAME vocabulary or the comparison is decoration.
+# J88's two probes are TERMINAL -- both printed PROBE_DONE -- so they are pinned as
+# completed readings.  The sentence they replaced ("still searching at 7 min") was a
+# live read that decayed within the hour; a terminal fact cannot.
+for _tag, _want in (("j88_rootbig", "2042"), ("j88_rootfit", "8")):
+    try:
+        _t = open(f"meas/_j88/{_tag}.log", errors="replace").read()
+    except OSError:
+        _t = ""
+    _r = re.findall(r"Violations remain:\s*(\d+)", _t)
+    row("frozen", f"{_tag} terminal post-hold residual", _want,
+        (_r[-1] if _r else "no log") if "PROBE_DONE" in _t else "STILL RUNNING",
+        note="terminal: the probe printed PROBE_DONE, so this reading is final")
+
 row("live-open", "any arm printed POST_HOLD_LEGALIZE_*", "none yet",
     "none yet" if all(v is None for _, v in verdicts)
     else ", ".join(f"{d}:{v}" for d, v in verdicts if v),

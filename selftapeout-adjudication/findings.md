@@ -6950,3 +6950,26 @@ verdict that moves with a decision nobody has taken is not a verdict.
 different — was still inside its first rung's diamond search seven minutes later, on
 `2 042 remaining illegal cells`, which is exactly where five arms have been for up to
 thirteen hours. **Nothing was configured to show that; it is what the pair did.**
+
+### ★ CORRECTION (J88) — "still running at 7 min" has an ending, and it is sharper
+
+That sentence was a live read, published while the run was going. It decayed within the
+hour, which is the class J79's ledger exists for, and it is corrected here rather than
+left to be discovered:
+
+```
+rootbig (clkbuf_16)   13 m 28 s   residual 2 042 at every rung
+                                  diamond recovery: recovered 0 of 2 042
+rootfit (clkbuf_8)     2 m 35 s   residual 8
+                                  ratio 5.2x
+```
+
+**It terminated, and the ending is worse for the 50-site root than the open-ended
+version was.** `recovered 0/2042` is not "slow"; it is the **all-or-nothing** shape J73
+measured across five dies, with this one on the nothing side. Both probes now have a
+`PROBE_DONE` and neither legalizes (`PROBE_PRESWAP_OK=0` for both), so the comparison
+that stands is **2 042 in 13 m 28 s against 8 in 2 m 35 s** — two terminal numbers rather
+than one number and one open clock.
+
+The claim is now a **terminal fact** and cannot decay again, which is why it goes into
+the ledger as a completed reading rather than a running one.
