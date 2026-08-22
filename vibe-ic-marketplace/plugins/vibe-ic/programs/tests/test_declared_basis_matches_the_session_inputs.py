@@ -74,6 +74,39 @@ def test_session_without_parasitics_is_pre_layout():
     assert dbmtsi.session_basis(_PRE) == "PRE_LAYOUT"
 
 
+import pytest
+
+
+@pytest.mark.parametrize("body,expect", [
+    ("read_spef design.spef\n",                     "POST_ROUTE"),
+    ("if {$have} {\n    read_spef design.spef\n}\n", "POST_ROUTE"),
+    ("\tread_spef design.spef\n",                   "POST_ROUTE"),
+    ("read_spef design.spef;\n",                    "POST_ROUTE"),
+    ("[read_spef design.spef]\n",                   "POST_ROUTE"),
+    ("catch {read_spef design.spef} err\n",         "POST_ROUTE"),
+    ("# read_spef design.spef\n",                   "PRE_LAYOUT"),
+    ("#read_spef design.spef\n",                    "PRE_LAYOUT"),
+    ('puts "would read_spef here"\n',               "PRE_LAYOUT"),
+])
+def test_read_spef_is_recognised_at_any_command_position(body, expect):
+    """MEASURED: `^\\s*read_spef` reported PRE_LAYOUT for
+
+        catch {read_spef design.spef} err
+        [read_spef design.spef]
+
+    Both DO load parasitics, so calling the session PRE_LAYOUT makes this gate
+    emit a FALSE FINDING against a report correctly claiming POST_ROUTE — a false
+    accusation, the worst direction for a rule about artefacts that claim more
+    than they measured.
+
+    A Tcl command may begin at a line start or after `{`, `[` or `;`. A word
+    inside a quoted string is preceded by none of those, which the last case
+    pins so the widening does not swallow prose.
+    """
+    deck = "read_liberty x.lib\nread_verilog d.v\nlink_design top\n" + body + "report_power\n"
+    assert dbmtsi.session_basis(deck) == expect
+
+
 def test_the_stamp_is_read_through_the_one_reader():
     import _sta_basis
     assert dbmtsi._sta_basis is _sta_basis
