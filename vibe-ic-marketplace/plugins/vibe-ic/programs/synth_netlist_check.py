@@ -420,7 +420,7 @@ def audit_netlist(
 # nothing at all.
 #
 # The measurement itself is real: `_yosys_stat.emit_stats_json` parses the
-# yosys `stat` block out of the synth log and writes `cells`, `chip_area_um2`,
+# yosys `stat` block out of the synth log and writes `cells`, `chip_area`,
 # the `netlist` it measured and that netlist's `netlist_sha256`. What was never
 # checked is that the accounting DESCRIBES THE NETLIST BEING GATED.
 #
@@ -571,7 +571,8 @@ def audit_area_stats(netlist_path: Path) -> Tuple[List[Finding], dict]:
         "stats_json": str(stats_path) if stats_path.is_file() else None,
         "area_rpt": str(area_path) if area_path.is_file() else None,
         "recorded_cells": None,
-        "recorded_chip_area_um2": None,
+        "recorded_chip_area": None,
+        "recorded_chip_area_unit": None,
         "recorded_netlist": None,
         # The whole verdict, laid out so a reader can redo it by hand.
         "audited_netlist": str(netlist_path),
@@ -614,7 +615,7 @@ def audit_area_stats(netlist_path: Path) -> Tuple[List[Finding], dict]:
 
         # BOTH PRODUCERS' SPELLINGS, on purpose. Step 9's ONE declared area
         # artefact has TWO writers and they do not share a payload schema:
-        # `_yosys_stat` writes `cells` / `chip_area_um2`, while
+        # `_yosys_stat` writes `cells` / `chip_area`, while
         # `synth_area_stats_emit` writes `cell_count` / `chip_area`
         # (programs/synth_area_stats_emit.py:424,428). Reading only the first
         # spelling made this gate blind on exactly the artefacts the second
@@ -625,10 +626,14 @@ def audit_area_stats(netlist_path: Path) -> Tuple[List[Finding], dict]:
         # unmeasured. Neither producer's field is preferred; whichever is
         # present is read, and `recorded_cells_field` says which one was.
         cells, cells_field = _first_present(rec, ("cells", "cell_count"))
-        area, area_field = _first_present(rec, ("chip_area_um2", "chip_area"))
+        # NEW NAME FIRST, legacy second: an artefact written before the
+        # rename still reads, and a fresh one is never matched by the
+        # name that asserted a unit it did not carry.
+        area, area_field = _first_present(rec, ("chip_area", "chip_area_um2"))
         info["recorded_cells"] = cells
         info["recorded_cells_field"] = cells_field
-        info["recorded_chip_area_um2"] = area
+        info["recorded_chip_area"] = area
+        info["recorded_chip_area_unit"] = rec.get("chip_area_unit")
         info["recorded_chip_area_field"] = area_field
         info["recorded_netlist"] = rec.get("netlist")
 

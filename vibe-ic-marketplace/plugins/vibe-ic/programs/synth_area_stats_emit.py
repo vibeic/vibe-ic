@@ -422,8 +422,10 @@ def build_report(project: Path, log_path: Path,
         # figure in the library's own area unit and does not restate it, so
         # naming a concrete unit here would be an invention.
         "chip_area": block.area,
-        "chip_area_unit": "cell-library area unit (as declared by the "
-                          "library the synthesis script loaded)",
+        # THE ONE SENTENCE, imported rather than repeated. Both producers
+        # parse the same yosys line and must say the same thing about its unit;
+        # two copies of a string are two things that can drift.
+        "chip_area_unit": _ystat.AREA_UNIT_UNESTABLISHED,
         "sequential_area": block.seq_area,
         "cell_count": block.row_cell_sum,
         "cell_types": len(block.rows),

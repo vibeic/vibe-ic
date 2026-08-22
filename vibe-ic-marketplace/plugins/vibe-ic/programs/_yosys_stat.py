@@ -69,6 +69,30 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
+#: THE UNIT IS NOT ESTABLISHED BY THIS PARSER, AND THE FIELD NAME MUST NOT SAY
+#: IT IS (2026-08-22).
+#:
+#: yosys computes `Chip area for module` by summing each cell's `area` from the
+#: Liberty it loaded, so the figure carries THAT LIBRARY's area unit — and
+#: Liberty has no area unit to declare: its `units` group carries time, voltage,
+#: current, capacitance, resistance and power, and `area` is a bare number.
+#:
+#: This module used to write the figure to a field whose NAME asserted square
+#: micrometres, which nothing in the input carries. Its sibling producer
+#: `synth_area_stats_emit` parses the SAME yosys line, refuses to name the unit,
+#: and has a test saying why — `test_issue457_synth_area_stats_emit::
+#: test_does_not_invent_an_area_unit`: "naming a concrete unit here would be an
+#: invention". One producer was held to that rule and the other was not, so the
+#: same number was unit-asserted here and unit-unknown there, and
+#: `synth_netlist_check` read whichever was present into a variable whose name
+#: asserted the unit again. A figure acquiring a unit by being copied into a
+#: differently-named field is the ART-POWER-FIGURES-X1000 shape, one axis over.
+#:
+#: The rule is now the same for both producers, and this constant is the one
+#: place the sentence lives so the two cannot drift apart.
+AREA_UNIT_UNESTABLISHED = ("cell-library area unit (as declared by the "
+                          "library the synthesis script loaded)")
+
 # `=== <module> ===` section header that opens each per-module stat block.
 _MODULE_RE = re.compile(r"^\s*===\s+(\S+)\s+===\s*$", re.M)
 # `Number of cells:  NNNN`
@@ -162,7 +186,9 @@ def parse_stat_block(text: str) -> Optional[Dict[str, Any]]:
         cells             int    — cell count from the tool's own stat line
         cells_source      str    — which stat line form was parsed
         top_module        str|None
-        chip_area_um2     float|None  — only present with `stat -liberty`
+        chip_area         float|None  — only present with `stat -liberty`;
+                                 its unit is `chip_area_unit`, never assumed
+        chip_area_unit    str    — the unestablished-unit sentence
         cell_histogram    {cell_type: count}
         stat_block        [str]  — verbatim tail of the parsed block
     """
@@ -175,7 +201,8 @@ def parse_stat_block(text: str) -> Optional[Dict[str, Any]]:
         "cells": cells,
         "cells_source": source,
         "top_module": _last_module_name(text),
-        "chip_area_um2": None,
+        "chip_area": None,
+        "chip_area_unit": AREA_UNIT_UNESTABLISHED,
         "cell_histogram": _histogram(text),
         "stat_block": _stat_block_tail(text),
     }
@@ -183,9 +210,9 @@ def parse_stat_block(text: str) -> Optional[Dict[str, Any]]:
     if areas:
         mod, val = areas[-1]
         try:
-            out["chip_area_um2"] = float(val)
+            out["chip_area"] = float(val)
         except ValueError:
-            out["chip_area_um2"] = None
+            out["chip_area"] = None
         if out["top_module"] is None:
             out["top_module"] = mod
     return out

@@ -110,7 +110,7 @@ def test_parses_liberty_annotated_stat_block():
     assert s is not None
     assert s["cells"] == 349
     assert s["top_module"] == "spm"
-    assert s["chip_area_um2"] == pytest.approx(5841.1962)
+    assert s["chip_area"] == pytest.approx(5841.1962)
     assert s["cell_histogram"]["sg13g2_dfrbpq_1"] == 64
     assert s["cell_histogram"]["sg13g2_xor2_1"] == 5
     # metric rows are NOT cell types
@@ -123,7 +123,7 @@ def test_parses_bare_generic_stat_block():
     assert s is not None
     assert s["cells"] == 446
     assert s["top_module"] == "spm"
-    assert s["chip_area_um2"] is None
+    assert s["chip_area"] is None
     assert s["cell_histogram"] == {"$_DFF_P_": 64, "$_NAND_": 221,
                                    "$_NOR_": 127, "$_NOT_": 34}
 
@@ -138,7 +138,7 @@ def test_parses_classic_labelled_stat_block():
 def test_takes_the_last_stat_block_when_several_are_printed():
     s = ys.parse_stat_block(GENERIC_LOG + "\n" + LIBERTY_LOG)
     assert s["cells"] == 349
-    assert s["chip_area_um2"] == pytest.approx(5841.1962)
+    assert s["chip_area"] == pytest.approx(5841.1962)
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ def test_emit_writes_the_declared_artefact(tmp_path):
     assert written == synth / "stats.json"
     on_disk = json.loads(written.read_text())
     assert on_disk["cells"] == 349
-    assert on_disk["chip_area_um2"] == pytest.approx(5841.1962)
+    assert on_disk["chip_area"] == pytest.approx(5841.1962)
 
 
 def test_emit_writes_nothing_when_nothing_was_measured(tmp_path):

@@ -228,10 +228,35 @@ def test_the_recorded_register_did_not_grow_to_absorb_the_two():
 # is measured here on every run rather than believed.
 
 def _producer_area_unit_literal() -> str:
-    """The `chip_area_unit` string `synth_area_stats_emit` actually writes, read
-    from its AST rather than copied. The value is an implicit concatenation of
-    two literals, so a regex over the source would see half of it."""
+    """The `chip_area_unit` string `synth_area_stats_emit` actually writes.
+
+    TWO SHAPES, both resolved, because the producer moved between them and this
+    guard is supposed to follow the VALUE rather than pin a spelling:
+
+      1. a SHARED CONSTANT — `_ystat.AREA_UNIT_UNESTABLISHED`. The figure has
+         two producers parsing the same yosys line, and they were made to share
+         one sentence so they could not drift into disagreeing about the unit.
+      2. an inline literal, which is what this file was first written against.
+         Kept so the guard still works on a tree from before that change.
+
+    It RAISES when it can resolve neither. A resolver that fell back to a guess
+    would measure the wrong string and report the precondition as still holding
+    when nobody had checked — which is the failure this whole guard exists to
+    prevent, one level up.
+    """
     src = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
+    if "_ystat.AREA_UNIT_UNESTABLISHED" in src:
+        saved = list(sys.path)
+        sys.path.insert(0, str(_PROGRAMS))
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "_ystat_areaunit", _PROGRAMS / "_yosys_stat.py")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            return mod.AREA_UNIT_UNESTABLISHED
+        finally:
+            sys.path[:] = saved
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.Dict):
             continue
@@ -241,10 +266,11 @@ def _producer_area_unit_literal() -> str:
                     and isinstance(v.value, str)):
                 return v.value
     raise AssertionError(
-        "synth_area_stats_emit no longer writes a literal `chip_area_unit`; "
-        "the promotion precondition recorded in area_total_vs_budget_check's "
-        "ENFORCEMENT block was written against that literal and must be "
-        "re-derived before the declaration is trusted")
+        "synth_area_stats_emit writes `chip_area_unit` from neither a shared "
+        "constant this resolver knows nor an inline literal; the promotion "
+        "precondition recorded in area_total_vs_budget_check's ENFORCEMENT "
+        "block was written against that value and must be re-derived before "
+        "the declaration is trusted")
 
 
 def test_the_area_figures_only_producer_still_declines_to_name_the_unit():
