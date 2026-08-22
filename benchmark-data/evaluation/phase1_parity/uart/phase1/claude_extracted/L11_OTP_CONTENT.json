@@ -1,5 +1,0 @@
-{
-  "ic_name": "PC16550D UART",
-  "otp_present": false,
-  "notes": "PC16550D has no on-chip OTP / fuse / configuration ROM. All configuration is via the run-time register file (LCR, MCR, FCR, IER, DLL, DLM). The Scratchpad register (SCR) is volatile RAM and not OTP."
-}
