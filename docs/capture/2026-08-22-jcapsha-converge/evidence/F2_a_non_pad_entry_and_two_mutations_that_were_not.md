@@ -126,3 +126,30 @@ rather than constructed — after `sorted(known_gap)[0]` and
 reaches into the shipped artefact for its fixture asserts today's contents, and
 fails the day the artefact legitimately changes** — which is precisely the day
 the register is doing its job.
+
+## Checked and clean: the gate does not contradict its producer
+
+F1's fix established, for the pad ring, that "the gate cannot contradict its own
+producer over which file it opened". `digital_hardmacro_check.py` cites the SAME
+upstream file as the producer this entry registers, so the same question is
+live here. Checked:
+
+| | says |
+|---|---|
+| upstream `lef.tcl` | `lef write … {*}$lefwrite_opts`; `-hide` appended unless `MAGIC_WRITE_FULL_LEF`; `-pinonly` when `MAGIC_WRITE_LEF_PINONLY` |
+| producer (`:372`) | "`-hide` unless `MAGIC_WRITE_FULL_LEF`, plus `-pinonly` when `MAGIC_WRITE_LEF_PINONLY`" |
+| gate (`:1012`) | "`lef write … [-hide] [-pinonly]`, and `MAGIC_WRITE_LEF_PINONLY` decides whether a labelled port PLUS the connected metal is the pin, or only the labelled patch" |
+
+They agree with each other and with the file. **No finding.** The one
+imprecision is a comment at the gate's `:359` writing `lef write … -hide
+[-pinonly]`, which reads as unconditional where upstream conditions it; the
+producer's docstring has it right and the gate's own `:1012` has it right. Not
+worth a record.
+
+No second register entry was added for the gate. It consumes the same upstream
+facts as the producer, and those facts are already asserted by this entry's pin;
+a second entry would duplicate the upstream assertions and give a false
+impression that two independent things are pinned.
+
+Recorded because a check that came back clean is a result, and the register's
+value is partly that it makes this question cheap to ask.
