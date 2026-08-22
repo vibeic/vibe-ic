@@ -1,5 +1,0 @@
-{
-  "ic_name": "Low Pin Count (LPC) Interface",
-  "otp_content": "N/A — LPC is a bus protocol, no one-time-programmable fuse content defined.",
-  "applicable": false
-}

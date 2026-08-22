@@ -102,15 +102,84 @@ The claim-side vocabulary the gate does type out is natural-language
 QUANTIFIERS ("no", "only", the CJK equivalents) — the grammar of assertion, not
 the vocabulary of any PDK.
 
+THE REPORT STATES THE ENVIRONMENT IT WAS TAKEN IN
+=================================================
+Every fact this gate uses is read from an INSTALLED tree, so the same commit
+legitimately gets different answers in different environments — and until
+vibe-ic#1491 the report did not say which environment produced the answer it
+carried. Measured on one host, one commit, one tree: `--container <name>` gave
+`[FAIL]` over 134 documents and 7 claims; the same command without it gave
+`VACUOUS_PASS` over 0 documents. Both are correct readings of their own
+environment and neither said so.
+
+Worse, FOUR different environments printed one sentence,
+`installed_pdk_root_unreadable`:
+
+    the root does not exist                     -> nothing was read
+    the root exists and holds no PDK            -> it WAS read, and was empty
+    the root exists and cannot be opened        -> a real read error
+    `docker exec` never ran at all              -> the backend, not the root
+
+The fourth is the one that bites. `docker_backends` turned every failure —
+container down, container misnamed, docker absent, deadline expired — into an
+empty listing, and the report then said `backend_not_exercised: []`, i.e. it
+asserted that the container backend HAD run. So `--container <name>` could be
+wired at a call site, be completely inert, exit 2, and read as "this host has
+no PDK". A repair that cannot be distinguished from doing nothing is not a
+repair, and the same class one level down is what #965 and #981 were about.
+
+So the root is PROBED for its state rather than inferred from an empty list,
+each state gets its own reason token, `backend_not_exercised` is computed from
+what actually ran, and `installed_pdk_root_state` plus the `[ENVIRONMENT]` line
+appear on EVERY run, pass or not. A verdict states where it was taken.
+
+A SECOND THING THE ENVIRONMENT MOVED, IN SILENCE: HOW MUCH WAS READ
+-------------------------------------------------------------------
+The walk of one installed PDK is bounded at `_MAX_PDK_FILES`. That bound is
+about the machine, not about the design, and it decided verdicts. Measured on
+one host, one commit, one claim, with the real bound and the SAME two artefacts
+installed either way:
+
+    PDK holds 20000 files, and the second `.lib` falls past the cut
+                        -> CORROBORATED, `[PASS]`, rc 0
+    the same PDK with the filler removed, both `.lib` files listed
+                        -> UNDECIDED, `VACUOUS_PASS`, rc 2
+
+The claim ("this PDK ships only the typical library") is FALSE both times. The
+first run agreed with it, because agreement was quantified over a listing that
+stopped, and `truncated_at` — recorded one line after the walk — was read by
+nothing: not by a verdict branch, not by `_emit_human`, not by the
+`[ENVIRONMENT]` line. rc 0 is this gate's ONLY route to a pass, so the cap
+could manufacture the one verdict that means "I looked and it was true".
+
+The asymmetry is the same one #981 settled for directories, applied to the
+population itself. A CONTRADICTION stands under truncation: one artefact in the
+part that WAS listed falsifies a denial, and the unread tail cannot rescue it.
+An AGREEMENT does not: it is a universal over every artefact installed, and a
+listing that stopped never covered that set. Agreement quantified over files
+that were never listed is not agreement.
+
 EXIT CODES / VERDICT
 ====================
 The report always carries a machine-readable top-level `verdict`, and the exit
 code is routed from the gate's own conclusion via `_vacuous_exit` (#515):
 
-    verdict FAIL            rc 1   >=1 claim CONTRADICTED by the installed tree
+    verdict FAIL            rc 1   >=1 claim CONTRADICTED by the installed tree,
+                                   OR a backend the caller NAMED could not be
+                                   reached (`failure_kind: environment`)
     verdict PASS            rc 0   >=1 claim DECIDED, none contradicted
     verdict NOT_APPLICABLE  rc 2   nothing decidable was examined, + the
                                    `VACUOUS_PASS:` sentinel on stderr
+
+The asymmetry in the FAIL row is deliberate and is the #1491 repair. A host
+that simply has no installed PDK is NOT_APPLICABLE — that is a fact about the
+host and making every PDK-less host red would be a verdict about the machine.
+But a caller that passes `--container <name>` has ASSERTED an environment; when
+that environment does not answer, the gate has not "found nothing applicable",
+it has failed to run. `cvdp_gate` settled the identical question for an absent
+`iverilog` (#1345): a check that COULD NOT RUN and a check that found nothing
+wrong are not the same result, and the one that could not run must not be the
+quieter of the two.
 
 rc 0 from this gate means "at least one factual claim about the installed PDK
 was settled BY EXAMINING THE ARTEFACTS IT IS ABOUT, and none of them was
@@ -125,9 +194,34 @@ to buy rc 0 by defaulting to agreement now either contradicts (rc 1) or is
 refused, and a run whose every claim is refused is `all_claims_undecided`,
 which is rc 2 with the `VACUOUS_PASS:` sentinel — not a pass.
 
+REACHING THE ARTEFACTS FROM CI (vibe-ic#1076)
+=============================================
+Everything above describes a gate that could only ever look when somebody had
+already started a container for it. Nobody had. The wired call site passed no
+`--container`, no CI host carries a local `/foss/pdks`, and the gate therefore
+occupied a slot in the hygiene roll-up while scanning 0 documents — the state
+#1076 is about.
+
+The repair is NOT a new way to read a PDK. `--from-image` starts one ephemeral
+container from the image this repo ANCHORS and hands it to the already-tested
+`docker_backends`; it removes the requirement that somebody else start the
+container first, and nothing else. The mechanism was already accepted in the
+same hygiene script — the sibling `pdk_via_patch_meets_layer_min_width_check`
+reaches the installed PDKs from CI with a flag of the same name — so the claim
+"the artefacts are covered by nothing automatic" was a fact about this file's
+missing flag, not about the artefacts.
+
+`--advisory` changes the EXIT CODE AND NOTHING ELSE, and only for rc 1. The
+verdict word stays FAIL and every contradiction stays printed, because an
+advisory gate is honest only while the finding is still stated. It deliberately
+does NOT downgrade rc 2: that tier means "I could not look", and laundering it
+into 0 would make the roll-up count this gate as CHECKED AND CLEAN over a tree
+it never opened — #1076 reintroduced through the flag that fixes it.
+
 Usage:
     python3 input_doc_pdk_claim_vs_installed_pdk_check.py <tree>
-        [--pdks-root /foss/pdks] [--container <name>] [--json out.json|-]
+        [--pdks-root /foss/pdks] [--container <name>]
+        [--from-image [--image TAG]] [--advisory] [--json out.json|-]
 """
 from __future__ import annotations
 
@@ -145,11 +239,88 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+import _container_exec  # noqa: E402
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+import _eda_image as _img  # noqa: E402 — the one site that answers "which image"
 import _vacuous_exit  # noqa: E402
 
 GATE = "input_doc_pdk_claim_vs_installed_pdk"
 
 DEFAULT_PDKS_ROOT = "/foss/pdks"
+
+# ── the installed root's STATE, which an empty listing cannot express ───────
+#
+# `entries()` returns [] for a root that is absent, for a root that is present
+# and empty, for a root that cannot be opened, and for a backend that never ran.
+# Those are four different worlds and the gate used to print one sentence over
+# all of them (vibe-ic#1491). A prober answers the question the listing cannot.
+ROOT_READ = "read"
+ROOT_ABSENT = "absent"
+ROOT_NOT_A_DIRECTORY = "not_a_directory"
+ROOT_UNREADABLE = "unreadable"
+ROOT_BACKEND_UNAVAILABLE = "backend_unavailable"
+#: No prober was supplied with an injected backend, so the reason an empty
+#: listing came back is genuinely unknown. Recorded as unknown, never as empty.
+ROOT_UNPROBED = "unprobed"
+
+#: The machine-readable reason token each state contributes. Distinct by
+#: construction: collapsing any two of them is the defect this table removes.
+_ROOT_STATE_REASON = {
+    ROOT_ABSENT: "installed_pdk_root_absent",
+    ROOT_NOT_A_DIRECTORY: "installed_pdk_root_not_a_directory",
+    ROOT_UNREADABLE: "installed_pdk_root_unreadable",
+    ROOT_BACKEND_UNAVAILABLE: "container_backend_unavailable",
+    ROOT_UNPROBED: "installed_pdk_root_state_unknown",
+    ROOT_READ: "installed_pdk_root_holds_no_pdk",
+}
+
+# Container-side deadline for one backend round trip, in seconds. The landing
+# harness bounds a whole pytest SESSION at 180s with `--timeout-method=thread`,
+# and `ci_harness_timeout_ceiling_check` derives the per-call ceiling as
+# `180 // 3 = 60`; `_container_exec` adds `CLIENT_GRACE_S` on top of this
+# number for its client-side backstop, so the total stays under that ceiling.
+# Measured 2026-08-14 on a live image: the whole gate answers in 3.0s over six
+# installed PDKs, so this bound is a safety net rather than a budget.
+_CONTAINER_DEADLINE_S = 40
+
+# ── the image this repo ANCHORS, READ rather than restated (vibe-ic#1076) ───
+#
+# `--from-image` decides which artefacts this gate adjudicates against, so the
+# image it opens is part of the verdict. Two ways to name it were available and
+# only one of them cannot drift:
+#
+#   * a literal `DEFAULT_IMAGE = "...:X.Y.Z"` in this file, kept in step by
+#     `tools/vibeic-eda/sync_image_version.py` REGISTERING the file. That is
+#     what the sibling did, and it works exactly as long as the registration
+#     is remembered — a second place the version can be wrong;
+#   * READING `tools/vibeic-eda/VERSION`, which is where the anchor lived. An
+#     anchor bump then applied here with no edit and no registration.
+#
+# BOTH ARE GONE, because both remembered vibeic-eda's VERSION NUMBER in this
+# repo and so charged a PR here per image release. The question is now answered
+# by `_eda_image.judged_image()`, which resolves an immutable DIGEST for the
+# image already on this host. #927's property survives — a digest is not a
+# pointer a third party can re-point — and the version number does not.
+#
+# None still comes back WITH A REASON rather than a floating tag: a gate whose
+# answer a third party's push can change is not a gate. An explicit `--image`,
+# or the `VIBEIC_EDA_IMAGE` override, still wins.
+
+# Bounds for the ephemeral-container calls `--from-image` makes. All three are
+# short because none of them may PULL: the presence probe below runs first, so
+# a cold host is answered in a fraction of a second instead of spending minutes
+# fetching ~23 GB inside a hygiene gate. MEASURED on 8HD-7 with the image
+# present: probe 0.07s, `docker run -d` 1.0s, `docker rm -f` 0.42s, whole gate
+# over the full repo tree 23s. With the image ABSENT the probe answers in
+# 0.11s and nothing else runs. These bounds are safety nets, not budgets.
+_IMAGE_PROBE_TIMEOUT_S = 60
+_IMAGE_START_TIMEOUT_S = 120
+_IMAGE_STOP_TIMEOUT_S = 120
+
+# How long the ephemeral container is asked to stay alive. Comfortably over the
+# whole gate's measured 23s, and short enough that a container leaked by a run
+# that was killed before its `finally` reaps itself instead of holding the host.
+_IMAGE_CONTAINER_TTL_S = 600
 
 # Document formats treated as design-input prose. A document-container format
 # list, not a PDK vocabulary; overridable on the command line.
@@ -206,7 +377,9 @@ SCOPE_WIDTH_CHARS = 30
 
 # Reading a whole PDK tree to answer one sentence is not worth an unbounded
 # walk; these bound the work and every truncation is DISCLOSED in the report
-# (a silent cap would be the same defect one layer down).
+# AND WITHHELD FROM AGREEMENT (a silent cap would be the same defect one layer
+# down, and until vibe-ic#1491 that is exactly what it was: `truncated_at` was
+# written onto the record and read by nothing).
 _MAX_PDK_FILES = 20000
 _MAX_SECTION_BYTES = 4_000_000
 
@@ -339,13 +512,35 @@ class InstalledTree:
     def __init__(self, root: str,
                  lister: Optional[Callable[[str], List[str]]] = None,
                  reader: Optional[Callable[[str], Optional[str]]] = None,
-                 walker: Optional[Callable[[str], List[str]]] = None):
+                 walker: Optional[Callable[[str], List[str]]] = None,
+                 prober: Optional[Callable[[str], Tuple[str, str]]] = None):
         self.root = root.rstrip("/") or "/"
         self._lister = lister or _local_file_lister
         self._reader = reader or _local_reader
         self._walker = walker or _local_walker
+        # The prober defaults ONLY alongside the default lister. An injected
+        # backend that supplies no prober cannot have its silence explained by
+        # probing the LOCAL disk — that would answer about a tree the backend
+        # never touched — so it is recorded as unknown instead.
+        self._prober = prober or (_local_prober if lister is None else None)
         self._cache: Dict[str, List[str]] = {}
         self._walk_cache: Dict[str, List[str]] = {}
+        self._probe: Optional[Tuple[str, str]] = None
+
+    def probe_root(self) -> Tuple[str, str]:
+        """WHY the root listed the way it did: `(state, detail)`.
+
+        Called only when the listing yielded no PDK, so the happy path costs
+        nothing and a container run still answers in one bulk round trip.
+        """
+        if self._probe is None:
+            if self._prober is None:
+                self._probe = (ROOT_UNPROBED,
+                               "this backend supplies no prober, so an empty "
+                               "listing cannot be explained")
+            else:
+                self._probe = self._prober(self.root)
+        return self._probe
 
     def entries(self, path: str) -> List[str]:
         """Immediate entry names of `path` (files and directories)."""
@@ -383,6 +578,30 @@ def _local_file_lister(path: str) -> List[str]:
         return sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())
     except OSError:
         return []
+
+
+def _local_prober(path: str) -> Tuple[str, str]:
+    """Why the LOCAL listing of `path` came back the way it did.
+
+    `_local_file_lister` returns [] for an absent root, a non-directory root, a
+    root that cannot be opened, and a root that is genuinely empty. Only the
+    last of those is a fact about the PDKs; the other three are facts about the
+    machine, and reporting them as one was vibe-ic#1491.
+
+    `os.listdir` rather than `Path.iterdir`, because `iterdir` is lazy and a
+    permission error surfaces on the first `next()` — outside the `try` a
+    careless caller would write.
+    """
+    p = Path(path)
+    if not p.exists():
+        return ROOT_ABSENT, "the path does not exist on this host"
+    if not p.is_dir():
+        return ROOT_NOT_A_DIRECTORY, "the path exists but is not a directory"
+    try:
+        os.listdir(path)
+    except OSError as exc:
+        return ROOT_UNREADABLE, str(exc)
+    return ROOT_READ, ""
 
 
 def _local_walker(path: str) -> List[str]:
@@ -441,6 +660,167 @@ def _strip_banner(lines: Sequence[str]) -> List[str]:
     return out
 
 
+def pinned_image(explicit: Optional[str] = None) -> Tuple[Optional[str], str]:
+    """`(image, why_not)` — the EDA image this run reads the installed PDK from.
+
+    Exactly one of the two is ever non-empty. `why_not` is a sentence a reader
+    can act on, because "the gate could not open an image" must never reach the
+    report as "the gate found nothing".
+
+    Delegates to `_eda_image.judged_image()` so this file holds no second copy of
+    "which image may a gate look inside" — the drift that folding
+    `pdk_registry_selectable_check._image_tag` into the same helper also ended.
+    The returned reference is DIGEST-PINNED, so the report names the bytes it
+    read rather than a tag whose meaning moves.
+    """
+    judged = _img.judged_image(explicit=explicit)
+    return (judged.ref, "") if judged.ref else (None, judged.why_not)
+
+
+def start_pinned_container(explicit_image: Optional[str] = None
+                           ) -> Tuple[Optional[str], Optional[Callable[[], None]],
+                                      str]:
+    """Start one ephemeral container from the pinned image.
+
+    Returns `(container_id, stop, why_not)`; `container_id` and `why_not` are
+    mutually exclusive, and `stop` is None whenever nothing was started.
+
+    WHY A CONTAINER AND NOT A COPY-OUT. The sibling's `stage_from_image` copies
+    every tech LEF out of the image into a temp dir, which works because it
+    needs a FIXED, SMALL file set. This gate walks whatever subtree a claim
+    happens to name, so a copy-out would mean copying the PDK trees whole.
+    Reusing `docker_backends` adds no second way to read the installed tree —
+    it is the same path `--container` has always used.
+    """
+    image, why = pinned_image(explicit_image)
+    if image is None:
+        return None, None, why
+    # PRESENCE IS PROBED BEFORE ANYTHING IS STARTED, and this is not a
+    # micro-optimisation. `docker run` on an absent tag PULLS: measured here,
+    # that is ~23 GB and minutes, inside a gate whose whole job takes 23s — and
+    # a hygiene run that silently downloads a multi-gigabyte image is a gate
+    # people switch off. An absent image is a fact about the HOST, it is
+    # reported as one (rc 2, NOT_CHECKED, under the declared exemption), and
+    # pulling it stays the operator's deliberate call.
+    try:
+        probe = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True, text=True, timeout=_IMAGE_PROBE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"{image}: docker unusable: {type(exc).__name__}: {exc}"
+    if probe.returncode != 0:
+        return None, None, (
+            f"{image} is not present on this host (docker image inspect "
+            f"rc={probe.returncode}); this gate does not pull it, because a "
+            f"multi-gigabyte download is the operator's call, not a gate's")
+    try:
+        r = subprocess.run(
+            ["docker", "run", "-d", *_dmem.docker_memory_flags(),
+             "--pull", "never", "--entrypoint", "sleep",
+             image, str(_IMAGE_CONTAINER_TTL_S)],
+            capture_output=True, text=True, timeout=_IMAGE_START_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"{image}: docker unusable: {type(exc).__name__}: {exc}"
+    if r.returncode != 0:
+        return None, None, (f"{image}: docker run rc={r.returncode}: "
+                            f"{(r.stderr or '').strip()[:200]}")
+    cid = (r.stdout or "").strip()
+    if not cid:
+        return None, None, f"{image}: docker run printed no container id"
+
+    def _stop() -> None:
+        # Best effort and deliberately quiet: a leaked container is a mess, but
+        # a gate that fails because CLEANUP failed would be reporting a verdict
+        # about docker while claiming one about the design.
+        try:
+            subprocess.run(["docker", "rm", "-f", cid],
+                           capture_output=True, timeout=_IMAGE_STOP_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    return cid, _stop, ""
+
+
+def _docker_exec(container: str, cmd: str) -> Tuple[bool, str, str]:
+    """Run `cmd` in `container`. Returns `(reached, stdout, why_not)`.
+
+    `reached` answers ONE question — did the container run this command at all
+    — and it is a different question from whether the command found anything.
+    The old shape returned `Optional[str]` and collapsed the two: a container
+    that was down, misnamed, or absent produced `None`, `None` became `[]` one
+    layer up, and `[]` was reported as an empty PDK root (vibe-ic#1491).
+
+    Routed through `_container_exec.run_in_container`, the repo's sanctioned
+    site for this call, so the deadline runs as the tool's PARENT INSIDE the
+    container and can signal it. A client-side `timeout=` bounds only the local
+    docker client and leaves the containerised tool running as an orphan, which
+    is what `container_exec_deadline_check` exists to find; this call site used
+    to be one of its findings.
+    """
+    try:
+        cp = _container_exec.run_in_container(
+            container, cmd, deadline_s=_CONTAINER_DEADLINE_S)
+    except Exception as exc:  # docker absent, container wedged past the grace
+        return False, "", f"{type(exc).__name__}: {exc}"
+    # A killed run has no verdict. `describe_result` names the deadline and the
+    # missing-`timeout` cases in the module that owns those exit codes.
+    why = _container_exec.describe_result(cp, _CONTAINER_DEADLINE_S)
+    if why:
+        return False, "", why
+    if cp.returncode != 0:
+        detail = (cp.stderr or "").strip().splitlines()
+        return False, "", (f"`docker exec {container}` exited "
+                           f"{cp.returncode}"
+                           + (f": {detail[0]}" if detail else ""))
+    return True, cp.stdout or "", ""
+
+
+def docker_prober(container: str) -> Callable[[str], Tuple[str, str]]:
+    """Why the CONTAINER listing of a root came back the way it did.
+
+    One round trip that exits 0 whenever the container is reachable, so a
+    non-zero rc is unambiguously "the backend did not run" and never "the
+    directory was empty". Without this, wiring `--container <name>` at a call
+    site can be entirely inert and still report the container backend as
+    exercised — the trap sitting directly under vibe-ic#1491's own first ask.
+    """
+    _ABSENT, _NOTDIR, _NOPERM, _OK = (
+        "__ROOT_ABSENT__", "__ROOT_NOT_A_DIR__", "__ROOT_UNREADABLE__",
+        "__ROOT_READ__")
+
+    def prober(path: str) -> Tuple[str, str]:
+        q = shlex.quote(path)
+        reached, out, why = _docker_exec(
+            container,
+            f"if [ ! -e {q} ]; then echo {_ABSENT}; "
+            f"elif [ ! -d {q} ]; then echo {_NOTDIR}; "
+            f"elif ls -1pL {q} >/dev/null 2>&1; then echo {_OK}; "
+            f"else echo {_NOPERM}; fi")
+        if not reached:
+            return ROOT_BACKEND_UNAVAILABLE, why
+        # `_strip_banner` for the same reason every other consumer here uses
+        # it: `bash -lc` prepends the image's login banner to stdout.
+        lines = _strip_banner(out.splitlines())
+        token = lines[-1] if lines else ""
+        mapping = {_ABSENT: (ROOT_ABSENT,
+                             "the path does not exist inside the container"),
+                   _NOTDIR: (ROOT_NOT_A_DIRECTORY,
+                             "the path exists inside the container but is not "
+                             "a directory"),
+                   _NOPERM: (ROOT_UNREADABLE,
+                             "the path cannot be listed inside the container"),
+                   _OK: (ROOT_READ, "")}
+        if token not in mapping:
+            # The container answered, and the answer is not one of ours. That
+            # is a fact about the backend, not about the root.
+            return ROOT_BACKEND_UNAVAILABLE, (
+                "the container answered with no recognisable state token "
+                f"({token[:80]!r})")
+        return mapping[token]
+
+    return prober
+
+
 def docker_backends(container: str
                     ) -> Tuple[Callable[[str], List[str]],
                                Callable[[str], Optional[str]],
@@ -448,15 +828,8 @@ def docker_backends(container: str
     """Lister + reader + bulk walker that see the tree INSIDE the container."""
 
     def _run(cmd: str) -> Optional[str]:
-        try:
-            r = subprocess.run(
-                ["docker", "exec", container, "bash", "-lc", cmd],
-                capture_output=True, text=True, timeout=120)
-        except Exception:
-            return None
-        if r.returncode != 0:
-            return None
-        return r.stdout or ""
+        reached, out, _why = _docker_exec(container, cmd)
+        return out if reached else None
 
     def lister(path: str) -> List[str]:
         # -L DEREFERENCES, and it is load-bearing: -p appends the trailing
@@ -751,16 +1124,63 @@ def _refuse_corroboration_over_a_barren_directory(
     return rec
 
 
+def _refuse_agreement_over_a_truncated_population(
+        rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Withhold agreement that was quantified over a listing that stopped.
+
+    `files_under` caps one PDK's walk at `_MAX_PDK_FILES`, and the cap is a
+    fact about the machine's patience, not about the design. Until vibe-ic#1491
+    `truncated_at` was written onto the record one line after the walk and read
+    by NOTHING, so every route to CORROBORATED — the gate's only route to rc 0
+    — could run over a population it had not finished listing. Measured with
+    the real bound: an exclusivity claim that is FALSE against the installed
+    tree returned `[PASS]` when 20000 unrelated files pushed the falsifying
+    artefact past the cut, and UNDECIDED when the same two artefacts were
+    listed in full.
+
+    CONTRADICTED is deliberately left alone. A denial is falsified by ONE
+    artefact in the part that WAS listed, and nothing in the unread tail can
+    put that artefact back; an agreement is a universal over the whole install,
+    and a listing that stopped never covered it. That is the #981 asymmetry —
+    stated there for the directories a claim names — applied to the population
+    the claim is answered over.
+
+    Applied LAST, on the finished record, for the reason the barren-directory
+    refusal is: every route to CORROBORATED passes through here, including
+    routes added later, rather than each route having to remember. The withheld
+    reason is KEPT under `corroboration_withheld`, so a reader can see what the
+    gate would have said and why it did not say it. UNDECIDED is counted
+    nowhere, so a run whose only claim lands here is `all_claims_undecided` —
+    rc 2 with the `VACUOUS_PASS:` sentinel, never a pass.
+    """
+    bound = rec.get("truncated_at")
+    if rec.get("verdict") != "CORROBORATED" or not bound:
+        return rec
+    rec["verdict"] = "UNDECIDED"
+    rec["corroboration_withheld"] = rec.get("reason", "")
+    rec["reason"] = (
+        f"the walk of '{rec.get('subject_pdk')}' stopped at the {bound}-file "
+        "bound, so the installed artefacts were never fully listed; agreeing "
+        "with this claim would be a statement about every artefact installed, "
+        "including the ones past the cut. A contradiction found in the part "
+        "that WAS listed would still stand — agreement quantified over files "
+        "that were never listed is not agreement")
+    return rec
+
+
 def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
     """Settle one claim against the installed tree, or refuse to.
 
-    Two steps, deliberately separate. `_decide_against_the_tree` reads the tree
-    and answers; `_refuse_corroboration_over_a_barren_directory` then withholds
-    an agreement whose population the read did not cover. Splitting them is
-    what lets a CONTRADICTION survive a narrowing that a CORROBORATION may not.
+    Three steps, deliberately separate. `_decide_against_the_tree` reads the
+    tree and answers; `_refuse_corroboration_over_a_barren_directory` then
+    withholds an agreement whose NAMED DIRECTORIES the read did not cover; and
+    `_refuse_agreement_over_a_truncated_population` withholds one whose FILE
+    LISTING stopped at the bound. Splitting them is what lets a CONTRADICTION
+    survive a narrowing, and a cap, that a CORROBORATION may not.
     """
-    return _refuse_corroboration_over_a_barren_directory(
-        _decide_against_the_tree(claim, tree))
+    return _refuse_agreement_over_a_truncated_population(
+        _refuse_corroboration_over_a_barren_directory(
+            _decide_against_the_tree(claim, tree)))
 
 
 def _decide_against_the_tree(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
@@ -1012,11 +1432,15 @@ def run(tree_root: Path, pdks_root: str,
         lister: Optional[Callable[[str], List[str]]] = None,
         reader: Optional[Callable[[str], Optional[str]]] = None,
         walker: Optional[Callable[[str], List[str]]] = None,
+        prober: Optional[Callable[[str], Tuple[str, str]]] = None,
         ) -> Dict[str, Any]:
     """Adjudicate every decidable claim in `tree_root` against `pdks_root`."""
     if container and lister is None and reader is None and walker is None:
         lister, reader, walker = docker_backends(container)
-    tree = InstalledTree(pdks_root, lister=lister, reader=reader, walker=walker)
+        if prober is None:
+            prober = docker_prober(container)
+    tree = InstalledTree(pdks_root, lister=lister, reader=reader,
+                         walker=walker, prober=prober)
 
     report: Dict[str, Any] = {
         "gate": GATE,
@@ -1040,33 +1464,77 @@ def run(tree_root: Path, pdks_root: str,
             "no artefact of the claimed format; agreement would be a "
             "statement about a directory that was never read, so it is "
             "withheld — a contradiction found in the others still stands",
+            "a claim whose PDK holds more files than the walk's bound; "
+            "agreement would be a statement about artefacts past the cut, so "
+            "it is withheld — a contradiction found in the listed part still "
+            "stands",
         ],
     }
 
     installed = discover_installed_pdks(tree)
     report["installed_pdks"] = installed
     if not installed:
-        # NAME THE BACKEND THAT CAME BACK EMPTY (vibe-ic#981). The wired call
-        # site passes no `--container`, so on a host with no local PDK tree
-        # this is the branch that always fires and the container backend —
-        # `docker_backends`, and with it the `-L` dereference that #964 exists
-        # for — is not merely undecided, it is NOT EXECUTED AT ALL. "I could
-        # not look" and "I could not look, and here is the half of me that
-        # never ran" are different disclosures, and only the second one tells a
-        # reader that a whole code path is being certified by nothing.
-        report["verdict"] = "NOT_APPLICABLE"
+        # NAME THE BACKEND THAT CAME BACK EMPTY (vibe-ic#981), and then say WHY
+        # it came back empty (vibe-ic#1491). The wired call site passes no
+        # `--container`, so on a host with no local PDK tree this is the branch
+        # that always fires and the container backend — `docker_backends`, and
+        # with it the `-L` dereference that #964 exists for — is not merely
+        # undecided, it is NOT EXECUTED AT ALL.
+        #
+        # #981 disclosed the un-run half. It did not fix the sentence: an
+        # absent root, a root holding no PDK, an unopenable root and a backend
+        # that never ran all printed `installed_pdk_root_unreadable`, and the
+        # fourth also printed `backend_not_exercised: []` — asserting that the
+        # container backend HAD run when `docker exec` had never returned. The
+        # root is PROBED now, and the disclosure is computed from what actually
+        # ran rather than from which flags were passed.
+        state, detail = tree.probe_root()
+        report["installed_pdk_root_state"] = state
+        if detail:
+            report["installed_pdk_root_probe"] = detail
+        unreached = state == ROOT_BACKEND_UNAVAILABLE
+        # "Exercised" is a measurement, not a restatement of the argv. A
+        # `--container` that never reached its container leaves the container
+        # backend in this list, so wiring the flag can no longer be inert and
+        # look exercised at the same time.
+        report["backend_not_exercised"] = (
+            ["container"] if (unreached or not container) else [])
+        token = _ROOT_STATE_REASON.get(state, "installed_pdk_root_unreadable")
+        note = ""
+        if unreached:
+            note = ("; the container backend was NAMED but never ran, so "
+                    "nothing about the installed PDK was learned by this run")
+        elif not container:
+            note = ("; the container backend was NOT exercised by this run — "
+                    "pass --container <name> to read the PDK inside the EDA "
+                    "image")
         report["reason"] = (
-            "installed_pdk_root_unreadable "
-            f"(backend: {report['installed_pdk_source']}"
-            + ("; the container backend was NOT exercised by this run — "
-               "pass --container <name> to read the PDK inside the EDA image)"
-               if not container else ")"))
-        report["backend_not_exercised"] = [] if container else ["container"]
+            f"{token} (backend: {report['installed_pdk_source']}"
+            + (f"; {detail}" if detail else "")
+            + note + ")")
+        if unreached:
+            # A caller that passes `--container <name>` has ASSERTED an
+            # environment. When that environment does not answer, the gate has
+            # not "found nothing applicable" — it has failed to run, and the
+            # quieter of the two verdicts is the wrong one (#1345). A host that
+            # merely has no installed PDK keeps the NOT_APPLICABLE tier below.
+            report["verdict"] = "FAIL"
+            report["failure_kind"] = "environment"
+        else:
+            report["verdict"] = "NOT_APPLICABLE"
         report["documents_scanned"] = 0
         report["claims"] = []
         report["counts"] = {"contradicted": 0, "corroborated": 0,
                             "undecided": 0}
         return report
+    # A listing that yielded PDK names IS a successful read of the root, so the
+    # happy path records the state without paying for a second round trip. Both
+    # keys are recorded on EVERY route through this function, not only the
+    # empty one: the whole point of #1491 is that a verdict which does not say
+    # where it was taken cannot be compared with another verdict at the same
+    # commit.
+    report["installed_pdk_root_state"] = ROOT_READ
+    report["backend_not_exercised"] = [] if container else ["container"]
 
     docs = find_input_documents(tree_root, doc_suffixes)
     report["documents_scanned"] = len(docs)
@@ -1088,6 +1556,16 @@ def run(tree_root: Path, pdks_root: str,
 
     results = [adjudicate(c, tree) for c in claims]
     report["claims"] = results
+    # HOW MUCH WAS READ is part of the environment a verdict was taken in
+    # (vibe-ic#1491), so it is disclosed beside the root and the backend rather
+    # than only inside a per-claim record nobody prints. Named per PDK, because
+    # the bound is per PDK: one oversized install does not make the answer
+    # about the others partial.
+    truncated = sorted({r.get("subject_pdk") for r in results
+                        if r.get("truncated_at") and r.get("subject_pdk")})
+    if truncated:
+        report["population_truncated"] = truncated
+        report["population_truncated_at"] = _MAX_PDK_FILES
     counts = {
         "contradicted": sum(1 for r in results if r["verdict"] == "CONTRADICTED"),
         "corroborated": sum(1 for r in results if r["verdict"] == "CORROBORATED"),
@@ -1112,7 +1590,35 @@ def run(tree_root: Path, pdks_root: str,
     return report
 
 
+def _environment_line(report: Dict[str, Any]) -> str:
+    """The one line that makes two verdicts at the same commit comparable.
+
+    vibe-ic#1491 measured `[FAIL]` over 134 documents and `VACUOUS_PASS` over 0
+    from the same tree on the same host, minutes apart, with nothing in either
+    output naming what differed. Printed on EVERY run — a disclosure that
+    appears only when the news is bad teaches a reader to read its absence as
+    good news.
+    """
+    bits = [f"root={report.get('installed_pdk_root')}",
+            f"backend={report.get('installed_pdk_source')}",
+            f"state={report.get('installed_pdk_root_state', 'unrecorded')}",
+            f"installed_pdks={len(report.get('installed_pdks') or [])}"]
+    unrun = report.get("backend_not_exercised") or []
+    if unrun:
+        bits.append(f"not_exercised={','.join(unrun)}")
+    cut = report.get("population_truncated") or []
+    if cut:
+        bits.append(f"truncated_at_{report.get('population_truncated_at')}"
+                    f"={','.join(cut)}")
+    probe = report.get("installed_pdk_root_probe")
+    line = f"[ENVIRONMENT] {GATE}: {' '.join(bits)}"
+    return line + (f"\n              probe: {probe}" if probe else "")
+
+
 def _emit_human(report: Dict[str, Any]) -> None:
+    print(_environment_line(report))
+    if report.get("failure_kind") == "environment":
+        print(f"[ENVIRONMENT-FAILURE] {report.get('reason')}")
     for r in report.get("claims", []):
         if r["verdict"] == "CONTRADICTED":
             print(f"[CONTRADICTED] {r['document']}:{r['line']}")
@@ -1142,13 +1648,56 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="installed PDK root (default %(default)s)")
     ap.add_argument("--container", default=None,
                     help="read the installed PDK inside this container")
+    ap.add_argument("--from-image", action="store_true",
+                    help="start an ephemeral container from the EDA image this "
+                         "host holds, by digest, and read the installed PDK in it")
+    ap.add_argument("--image", default=None,
+                    help="image for --from-image (default: the newest "
+                         "vibeic-eda image on this host, pinned to its digest; "
+                         "or $VIBEIC_EDA_IMAGE)")
+    ap.add_argument("--advisory", action="store_true",
+                    help="return 0 on a FAIL, while still printing the verdict "
+                         "and every contradiction (rc 2 is NOT downgraded)")
     ap.add_argument("--doc-suffix", action="append", default=None,
                     help="input-document suffix (repeatable)")
     ap.add_argument("--json", default=None, help="JSON report path, or - for stdout")
     args = ap.parse_args(argv)
 
-    report = run(Path(args.tree), args.pdks_root, container=args.container,
-                 doc_suffixes=tuple(args.doc_suffix or DEFAULT_DOC_SUFFIXES))
+    # An explicit `--container` wins: it names an environment the caller has
+    # ASSERTED, and #1491's whole point is that such an assertion must be
+    # honoured and then judged, not quietly replaced with one of ours.
+    container, stop_container, from_image_why = args.container, None, ""
+    if args.from_image and not container:
+        container, stop_container, from_image_why = start_pinned_container(
+            args.image)
+        if container is None:
+            # An unreachable image is NOT a clean PDK. Fall through with no
+            # container so `run` takes its own vacuous path, rather than this
+            # branch inventing either a pass or a failure about a tree it never
+            # opened. The reason is carried into the REPORT below, because a
+            # disclosure that lives only on stderr is one a JSON consumer never
+            # sees.
+            print(f"[WARN] --from-image could not start a container: "
+                  f"{from_image_why}", file=sys.stderr)
+    try:
+        report = run(Path(args.tree), args.pdks_root, container=container,
+                     doc_suffixes=tuple(args.doc_suffix
+                                        or DEFAULT_DOC_SUFFIXES))
+    finally:
+        if stop_container is not None:
+            stop_container()
+
+    if args.from_image and container is None:
+        # `run` cannot know this: from inside, a `--from-image` that failed and
+        # a plain local run are the same call. Left unamended, the reason ends
+        # in "pass --container <name> to read the PDK inside the EDA image" —
+        # advice this caller HAS already taken, which reads as though nobody
+        # tried. Naming what was tried and why it failed is the difference
+        # between "no PDK here" and "no PDK here, and here is the reason".
+        report["from_image_unavailable"] = from_image_why
+        report["reason"] = (f"{report.get('reason', 'unspecified')}"
+                            f"; --from-image was requested and could not start "
+                            f"a container: {from_image_why}")
 
     if args.json == "-":
         print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -1166,7 +1715,22 @@ def main(argv: Optional[List[str]] = None) -> int:
           file=sys.stderr)
     if skipped:
         _vacuous_exit.announce_vacuous(GATE, reason)
-    return _vacuous_exit.exit_code(passed, skipped)
+    rc = _vacuous_exit.exit_code(passed, skipped)
+    # ONLY A REAL FAIL IS TOLERATED, and the asymmetry is the whole point.
+    # rc 1 is "I looked and found something"; rc 2 is "I could not look".
+    # Downgrading rc 2 would make `run_tolerating_uncheckable` read 0 and count
+    # this gate as CHECKED AND CLEAN over a tree it never opened — vibe-ic#1076
+    # reintroduced through the flag that fixes it.
+    if args.advisory and rc == 1:
+        # The SIBLING's shape (`pdk_via_patch_meets_layer_min_width_check`):
+        # advisory changes the exit code and NOTHING else. The verdict word
+        # above is still FAIL, every contradiction is still printed in full,
+        # and this line says so — so a tolerated finding cannot be misread as
+        # an absent one, which is the only way an advisory gate stays honest.
+        print(f"  (--advisory: returning 0. The verdict above is "
+              f"{report.get('verdict')}.)")
+        return 0
+    return rc
 
 
 if __name__ == "__main__":

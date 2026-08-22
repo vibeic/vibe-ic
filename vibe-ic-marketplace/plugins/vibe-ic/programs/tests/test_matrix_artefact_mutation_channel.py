@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
@@ -85,7 +86,24 @@ from typing import Dict, List, Tuple
 import pytest
 
 import matrix_mutation_ledger as L
+
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if callable(progress):
+        progress(scope, completed, total)
 from matrix_63x8 import flowref as F
+
+#: WHERE THE EVIDENCE WENT. Every entry in ``L.ARTEFACT_MUTATIONS`` names ONE
+#: published run — `ic/spm/v1.10.18_sky130A` — and the published runs now live
+#: in https://github.com/vibeic/benchmark-data rather than in this checkout.
+#: A test whose subject is a PUBLISHED CELL cannot be answered here, and the
+#: honest rendering of "I could not look" is a SKIP naming the corpus, not a
+#: failure that claims the entry rotted. Same rule vibe-ic#1357 established for
+#: an absent TOOL. Point ``VIBE_IC_BENCHMARK_DATA`` at a clone and every one of
+#: them runs exactly as before — and can still fail.
+from _published_corpus import needs_corpus  # noqa: E402
 
 #: Bound for the two git launches in this file. NOT a round number picked by
 #: feel, and not the 120 s the first draft used — `ci_harness_timeout_ceiling_check`
@@ -128,7 +146,36 @@ def replay_results() -> Dict[str, L.ReplayResult]:
     plan = [(m.name, m.witness) for m in L.ARTEFACT_MUTATIONS]
     return {r.mutation: r
             for r in L.replay_many(plan, jobs=8,
-                                   timeout=_ARTEFACT_REPLAY_TIMEOUT_S)}
+                                   timeout=_ARTEFACT_REPLAY_TIMEOUT_S,
+                                   progress_callback=lambda completed, total:
+                                   _domain_progress(
+                                       "matrix-artefact-replays",
+                                       completed, total))}
+
+
+def test_artefact_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
+    replay_results.cache_clear()
+    seen = []
+
+    def fake_many(plan, **kwargs):
+        frozen = tuple(plan)
+        callback = kwargs["progress_callback"]
+        for completed in range(1, len(frozen) + 1):
+            callback(completed, len(frozen))
+        return ()
+
+    monkeypatch.setattr(L, "replay_many", fake_many)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_domain_progress",
+        lambda scope, completed, total:
+        seen.append((scope, completed, total)))
+    assert replay_results() == {}
+    assert len(L.ARTEFACT_MUTATIONS) == 8
+    assert seen == [
+        ("matrix-artefact-replays", completed, 8)
+        for completed in range(1, 9)
+    ]
+    replay_results.cache_clear()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -198,6 +245,7 @@ def test_an_artefact_entry_never_counts_as_cell_coverage():
 # LOCK 1 — does the entry resolve, right now?
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("name", [m.name for m in L.ARTEFACT_MUTATIONS])
+@needs_corpus
 def test_lock1_the_entry_resolves_against_the_live_tree(name):
     """The run exists, the artefact exists, each edit finds EXACTLY the number
     of sites it recorded, and the flow still wires the gate verbatim.
@@ -416,6 +464,7 @@ def test_the_readme_finding_table_is_not_vacuously_empty():
 # LOCK 2 — replay, and it is the only lock that is proof
 # ══════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("name", [m.name for m in L.ARTEFACT_MUTATIONS])
+@needs_corpus
 def test_lock2_the_replay_reproduces_the_recorded_verdict(name):
     """Perform the byte edit on a real copy and re-run the step's own gate.
 
@@ -448,6 +497,7 @@ def test_lock2_the_replay_reproduces_the_recorded_verdict(name):
         f"{advice}\n{r.detail}")
 
 
+@needs_corpus
 def test_the_replay_ran_and_is_not_starved(record_property):
     """Anti-starvation guard on this file's own instrument.
 
@@ -474,6 +524,13 @@ def test_the_replay_ran_and_is_not_starved(record_property):
 
 def test_the_replay_never_mutates_the_published_run():
     """CONTROL: the corpus is byte-identical after every replay above.
+
+    CORPUS-GATED even though it is GREEN without one, and that is the point.
+    With no published run to copy, every replay refuses at resolution, ``git
+    status`` over a path this checkout does not have prints nothing, and the
+    assertion passes having watched no copy of anything. A control that reports
+    "the corpus was not modified" when there was no corpus to modify is the
+    exact shape of gate this campaign exists to remove, so it skips instead.
 
     ``replay_artefact`` raises if its own stat manifest moves, so reaching this
     line already means it did not. The assertion here is the independent one:
@@ -504,31 +561,78 @@ def test_the_replay_never_mutates_the_published_run():
 # ══════════════════════════════════════════════════════════════════════
 # NOT_REPLAYABLE is a reported verdict, never a quiet pass
 # ══════════════════════════════════════════════════════════════════════
+def _fixture_corpus(tmp_path, base) -> Path:
+    """A one-run corpus built HERE, carrying exactly the bytes *base* edits.
+
+    WHY A FIXTURE AND NOT THE PUBLISHED RUN. The control below is about
+    ``resolve_artefact``'s REFUSALS — plugin behaviour — and the published run
+    was only the convenient thing to break a field of. Pointed at the corpus it
+    inherited two defects: with the corpus absent three of its four cases failed
+    for the corpus's reason rather than the broken field's, and the fourth
+    ("run_dir") PASSED for the wrong reason, because the real ``run_dir`` was
+    missing too and every refusal read "is not a directory". Built here it can
+    neither skip nor pass by accident, and it now exercises the same four
+    refusals on every checkout, corpus or no corpus.
+
+    The file is synthesised from the entry's own ``edits``, so the ``edits``
+    case below still breaks a site that genuinely resolves first.
+    """
+    root = tmp_path / "corpus"
+    target = root / "ic" / "probe" / base.artefact
+    target.parent.mkdir(parents=True, exist_ok=True)
+    parts = [e.frm for e in base.edits for _ in range(e.count)]
+    assert parts, f"{base.name} records no edit; nothing to build a fixture from"
+    text = "\n".join(parts) + "\n"
+    for e in base.edits:
+        # Overlapping edit texts would make the site count something other than
+        # what the entry recorded. REFUSE loudly rather than build a fixture the
+        # control would then measure the wrong thing against.
+        assert text.count(e.frm) == e.count, (
+            f"the fixture for {base.name} carries {text.count(e.frm)} "
+            f"occurrence(s) of {e.frm[:40]!r}, not the recorded {e.count}; "
+            f"re-point this control at an entry whose edits do not overlap")
+    target.write_text(text, encoding="utf-8")
+    return root
+
+
 @pytest.mark.parametrize("broken,expect_in_reason", [
     ("run_dir", "is not a directory"),
     ("artefact", "does not exist"),
     ("gate", "no longer wires this command"),
     ("edits", "occurrence"),
 ])
-def test_control_an_unreplayable_entry_reports_not_replayable(broken,
-                                                              expect_in_reason):
-    """CONTROL (negative direction): break one field of a REAL entry and the
-    replay must refuse with a reason naming what broke.
+def test_control_an_unreplayable_entry_reports_not_replayable(
+        broken, expect_in_reason, tmp_path, monkeypatch):
+    """CONTROL (negative direction): break one field of an entry that RESOLVES,
+    and the replay must refuse with a reason naming what broke.
 
     Four independent ways an entry rots, each checked separately, because a
     single "something went wrong" would not tell an author which one. None of
     them may resolve, none may replay, and none may be mistaken for a pass.
+
+    The subject is the REFUSAL, so the run it is measured against is built in
+    ``tmp_path`` (see :func:`_fixture_corpus`) rather than read out of the
+    published corpus. The gate clause is still the LIVE one from the flow yaml —
+    that half must stay real or the ``gate`` case would be checking a string
+    this repository never issues.
     """
     base = L.ARTEFACT_MUTATIONS[0]
+    monkeypatch.setenv(L.BENCHMARK_DATA_ENV, str(_fixture_corpus(tmp_path, base)))
+    intact = replace(base, run_dir="ic/probe")
+    assert L.resolve_artefact(intact) is None, (
+        f"the UNBROKEN fixture entry does not resolve "
+        f"({L.resolve_artefact(intact)}); the four refusals below would then "
+        f"prove nothing about the field each one breaks")
+
     if broken == "run_dir":
-        mut = replace(base, run_dir="ic/zz_no_such_published_run")
+        mut = replace(intact, run_dir="ic/zz_no_such_published_run")
     elif broken == "artefact":
-        mut = replace(base, artefact="reports/phase3/zz_no_such_file.rpt")
+        mut = replace(intact, artefact="reports/phase3/zz_no_such_file.rpt")
     elif broken == "gate":
-        mut = replace(base, gate=base.gate + " --zz-not-in-the-flow")
+        mut = replace(intact, gate=intact.gate + " --zz-not-in-the-flow")
     else:
-        mut = replace(base, edits=(L.Edit("zz_bytes_that_are_not_there",
-                                          "anything", 1),))
+        mut = replace(intact, edits=(L.Edit("zz_bytes_that_are_not_there",
+                                            "anything", 1),))
 
     problem = L.resolve_artefact(mut)
     assert problem, f"breaking {broken!r} still resolved cleanly"
@@ -545,6 +649,7 @@ def test_control_an_unreplayable_entry_reports_not_replayable(broken,
     assert r.not_replayable, "NOT_REPLAYABLE carries no reason"
 
 
+@needs_corpus
 def test_control_the_baseline_must_pass_or_the_entry_is_already_red(
         tmp_path, monkeypatch):
     """CONTROL: an entry whose gate is ALREADY failing may not report a red.
@@ -638,6 +743,7 @@ def test_a_zero_denominator_refuses_rather_than_passing(monkeypatch):
         L.by_name.cache_clear()
 
 
+@needs_corpus
 def test_the_canary_run_is_never_written_by_this_repository():
     """The seed set names ONE run, and that run must be a published artefact of
     the corpus rather than something this branch created.
