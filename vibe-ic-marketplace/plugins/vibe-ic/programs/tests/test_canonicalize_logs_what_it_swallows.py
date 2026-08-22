@@ -240,6 +240,144 @@ def test_the_refresh_no_longer_calls_itself_BLOCKING():
         "audit read by _derive -- so the note is a shrug rather than a warning")
 
 
+def _added_note_expressions():
+    """Note/print calls AT the four spawn sites, selected by POSITION.
+
+    SELECTED BY POSITION AND NOT BY NAME, and that is the whole point. The
+    first version of this collector looked for expressions containing
+    `sdc_check_json.relative_to` -- and when the `_rel_to` bug was reintroduced
+    as a control, the note stopped containing that string, so the collector did
+    not collect it and the behavioural arm stayed GREEN over the exact defect
+    it was written to catch. A guard that recognises its subject by the string
+    the defect deletes cannot see the defect.
+
+    So the window is structural: each spawn's `try`, plus the statements
+    immediately after it (the file-absent branch, which is where
+    `thermal_screen` reads its status). Renaming or rewriting a note cannot
+    move it out of that window.
+    """
+    tree = ast.parse(RUNNER.read_text(encoding="utf-8", errors="replace"))
+    windows = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Try):
+                continue
+            u = ast.unparse(node)
+            if not any(p in u for p, _ in _SPAWNS):
+                continue
+            end = getattr(node, "end_lineno", node.lineno) or node.lineno
+            windows.append((fn, node.lineno, end + 12))
+
+    out = []
+    for fn, lo, hi in windows:
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            nm = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+            if nm not in ("append", "print"):
+                continue
+            if nm == "append" and ast.unparse(f.value) != "notes":
+                continue
+            if lo <= node.lineno <= hi:
+                out.append((fn.name, node.lineno, node))
+    return out
+
+
+def test_every_added_note_actually_EVALUATES():
+    """THE BEHAVIOURAL HALF. Everything else in this file is structural.
+
+    WHY IT EXISTS, from a defect I shipped into my own working tree and caught
+    only by reading: the first version of the SDC findings note called
+    `_rel_to(project, ...)`, a helper that does not exist in the runner. Inside
+    its `try` that raises NameError, is caught by the very `except Exception`
+    added to end the silence, and emits a note claiming the EMISSION failed --
+    a false message manufactured by the repair itself.
+
+    NO STRUCTURAL ASSERTION IN THIS FILE WOULD HAVE CAUGHT IT. `.returncode`
+    was present, the note count was right, the handler was not a bare `pass`.
+    The source LOOKED repaired and the runtime path was broken. So each added
+    note argument is compiled and EVALUATED here against a real
+    `subprocess.CompletedProcess`, which is what catches a wrong attribute, a
+    bad f-string, or a name that is not there.
+
+    It does NOT run the runner -- these are the message expressions only, in a
+    stubbed namespace. Stated so this arm is not read as end-to-end coverage
+    it does not have.
+    """
+    import subprocess as _sp
+
+    exprs = _added_note_expressions()
+    assert exprs, (
+        "no note expression in the runner reads any of the bound subprocess "
+        "results, so either the repair was reverted or this arm has lost its "
+        "subject -- relocate it rather than leaving it green over nothing")
+
+    project = pathlib.Path("/tmp/_probe_project")
+    known = {
+        "_dfm": _sp.CompletedProcess(["x"], 3, stdout="out\n", stderr="err\n"),
+        "_th": _sp.CompletedProcess(["x"], 4, stdout="", stderr="boom\n"),
+        "_fc": _sp.CompletedProcess(["x"], 1, stdout="", stderr=""),
+        "r": _sp.CompletedProcess(["x"], 1, stdout="", stderr="sdc\n"),
+        "sdc_check_json": project / "reports/phase2/sdc_check.json",
+        "project": project,
+        "sys": sys,
+    }
+
+    # THE NAMESPACE IS DERIVED FROM THE FUNCTION, NOT HAND-LISTED. A hand-list
+    # made this arm fail on correct code: the SDC block binds `tail` while the
+    # others bind `_tail`, and a stub set that knew only `_tail` reported a
+    # NameError the runtime would never raise. A guard that invents failures is
+    # worse than one that misses them.
+    #
+    # So every name the enclosing function ASSIGNS is bound here, to a
+    # permissive stub where its real value is unknown. A name that is never
+    # assigned anywhere in the function -- which is exactly what `_rel_to`
+    # was -- is still absent, and still raises.
+    class _Any(str):
+        def __getitem__(self, k):
+            return self
+        def __getattr__(self, k):
+            return self
+        def __call__(self, *a, **k):
+            return self
+
+    for fname, lineno, node in exprs:
+        fn = next((f for f in ast.walk(ast.parse(
+            RUNNER.read_text(encoding="utf-8", errors="replace")))
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and f.name == fname), None)
+        assigned = set()
+        if fn is not None:
+            for x in ast.walk(fn):
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store):
+                    assigned.add(x.id)
+                elif isinstance(x, ast.ExceptHandler) and x.name:
+                    assigned.add(x.name)
+                elif isinstance(x, (ast.Import, ast.ImportFrom)):
+                    for a in x.names:
+                        assigned.add((a.asname or a.name).split(".")[0])
+            for a in fn.args.args + fn.args.kwonlyargs:
+                assigned.add(a.arg)
+        ns = {n: _Any("stub-line") for n in assigned}
+        ns.update(known)
+        for arg in node.args:
+            expr = ast.Expression(ast.fix_missing_locations(arg))
+            try:
+                value = eval(compile(expr, "<note>", "eval"), {}, dict(ns))
+            except Exception as exc:  # noqa: BLE001 - reporting the failure IS the test
+                pytest.fail(
+                    f"{fname}:{lineno} builds a note that raises "
+                    f"{type(exc).__name__}: {exc}. A repair whose own message "
+                    f"cannot be produced reports a failure that did not happen. "
+                    f"Expression: {ast.unparse(arg)[:200]}")
+            assert isinstance(value, str) and value.strip(), (
+                f"{fname}:{lineno} builds an empty note; a blank line is the "
+                "silence this repair exists to end")
+
+
 def test_the_step_does_not_start_blocking_on_it():
     """THE PAIRED HALF. This repair is about silence, not leniency.
 
