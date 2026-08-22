@@ -183,7 +183,7 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
-LIVE, not remembered: 177<!--figure:blocking_clauses--> blocking clauses over
+LIVE, not remembered: 178<!--figure:blocking_clauses--> blocking clauses over
 68<!--figure:gated_steps--> gated steps. This is the denominator a reader
 wants, and it moves with the yaml: the digits are written by
 ``tools/gen_matrix_63x8_census.py`` and the ``<!--figure:...-->`` anchors name
@@ -1683,6 +1683,91 @@ def _f_ppa_h2h_claim_contradicted(p: Path) -> None:
     })
 
 
+def _f_slot_pad_over_budget(p: Path) -> None:
+    """A design whose declared interface cannot be bonded out on the one slot
+    the project ingested — and still cannot after every fold is applied.
+
+    Reddens the Step-2 clause
+    ``slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json``,
+    wired BLOCKING in vibe-ic#1347. The clause arrived with no fixture, so it
+    fell back to EMPTY, and EMPTY cannot reach it. That is the program working
+    correctly, MEASURED verbatim on an empty project:
+
+        rc 2  slot_pad_budget_check: UNDECIDED
+                no slot files under input/submission_template/slots — step
+                0.5ic has not run
+
+    rc 2 is this flow's disclosed-skip tier, so the cell banked a VACUOUS_PASS
+    and the gate was declared blocking while nothing could make it block.
+
+    The fixture supplies BOTH halves the program needs before it will answer:
+    the slot inventory step 0.5ic ingests, and the step-1 RTL the gate globs
+    out of ``phase2/stage1/rtl``. The slot is written in the INGESTED shape —
+    ``pads.lists[].raw`` — because that is the only shape a real chip-path
+    project has, and reading the operator's RAW ``PAD_<SIDE>`` keys instead is
+    a defect this program already shipped once (it counted zero pads and
+    returned DOES_NOT_FIT with an authoritative-looking "0").
+
+    MEASURED, verbatim, through the same consumer this suite grades with:
+
+        rc 1  slot_pad_budget_check: DOES_NOT_FIT
+                declared signal bits            : 193
+                largest slot digital signal pads: 52
+                over by                         : 3.71x  (after folding every
+                                                  candidate: 2.48x)
+
+    THE FOLD MARGIN IS THE POINT, not a detail. This gate deliberately reports
+    fold candidates without applying them, because whether two buses are ever
+    simultaneously live is a PROTOCOL fact it does not decide — so a red that
+    a competent bond-out could fold away would be a red about arithmetic and
+    not about fitting. 2.48x over AFTER folding every candidate is a red no
+    bond-out decision can remove, which is the fact the step exists to refuse.
+    The one candidate the program names (a 64-bit input and a 64-bit output of
+    equal width) is therefore present on purpose: the fixture exercises the
+    fold path and still reddens, rather than dodging it.
+
+    Chip-, vendor- and PDK-AGNOSTIC: the module is ``chip_top`` with arithmetic
+    port names, the pad instance names are the generic per-side lists, and no
+    design, foundry or process literal appears. No oracle is consulted.
+    """
+    # The pad inventory, in the shape `submission_template_ingest` writes:
+    # 40 bidirectional + 12 input = 52 digital signal pads, plus analog, power
+    # and corner pads the gate must NOT count as signal.
+    entries = (
+        [f"bidir\\[{i}\\].pad" for i in range(40)]
+        + [f"inputs\\[{i}\\].pad" for i in range(12)]
+        + [f"analog\\[{i}\\].pad" for i in range(2)]
+        + [f"dvdd_pads\\[{i}\\].pad" for i in range(9)]
+        + [f"dvss_pads\\[{i}\\].pad" for i in range(9)]
+        + [f"corner\\[{i}\\].pad" for i in range(4)]
+        + ["clk_pad", "rst_n_pad"])
+    q = len(entries) // 4 + 1
+    sides = ("PAD_SOUTH", "PAD_EAST", "PAD_NORTH", "PAD_WEST")
+    chunks = [entries[:q], entries[q:2 * q], entries[2 * q:3 * q],
+              entries[3 * q:]]
+    _w(p, "input/submission_template/slots/slot_1x1.json", {
+        "slot": "slot_1x1",
+        "die_area": {"width": "3932"},
+        "pads": {"pattern": "^PAD.*$",
+                 "lists": [{"key": k, "raw": c, "count": len(c)}
+                           for k, c in zip(sides, chunks)]},
+    })
+    # 193 declared signal bits against 52 pads. The two 64-bit operands and the
+    # 64-bit result give the program exactly one fold candidate to find, and
+    # applying it still leaves the design over the budget.
+    _w(p, "phase2/stage1/rtl/chip_top.v", """
+module chip_top (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire [63:0] operand_a,
+    input  wire [63:0] operand_b,
+    output wire [63:0] result,
+    output wire        valid
+);
+endmodule
+""")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -1721,6 +1806,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EXTRACT_ILLEGAL_OVERLAP": _f_extract_illegal_overlap,
     "CROSSLAYER_REFUTED": _f_crosslayer_refuted,
     "PAD_DECL_PARTIAL": _f_pad_decl_partial,
+    "SLOT_PAD_OVER_BUDGET": _f_slot_pad_over_budget,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1729,6 +1815,23 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic#1347 wired `slot_pad_budget_check` BLOCKING on Step 2 and shipped
+    # it with no fixture, so it fell back to EMPTY and banked a VACUOUS_PASS —
+    # a gate declared blocking that nothing could make block. EMPTY cannot
+    # reach it by design: with no ingested slot the program answers rc 2
+    # "UNDECIDED: no slot files ... step 0.5ic has not run", which is this
+    # flow's disclosed-skip tier and is not an answer to "can this gate fail?".
+    #
+    # MEASURED through `_evaluate_clause` on this tree:
+    #   EMPTY                 tier=VACUOUS_PASS  rc 2 UNDECIDED (no slot files)
+    #   SLOT_PAD_OVER_BUDGET  tier=FAIL          rc 1 DOES_NOT_FIT, 193 bits
+    #                                            against 52 pads, still 2.48x
+    #                                            over after folding every
+    #                                            candidate
+    # The red is earned on the design's own declared interface against the
+    # operator's own pad list, not on a malformed file — and it survives the
+    # fold path, so it is not a red a bond-out decision could remove.
+    ("2", "slot_pad_budget_check . --json reports/phase2/gates/slot_pad_budget.json"): "SLOT_PAD_OVER_BUDGET",
     # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
