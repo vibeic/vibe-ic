@@ -223,3 +223,36 @@ tests. 236 of this lane's tests pass in the composed tree. So the four censuses
 introduce no finding in the gates, and the gates introduce none in the censuses'
 population.
 
+### One composed failure, and it is NOT a composition artefact
+
+Running the repo's own ratchets over the composed tree turned up two failures in
+`test_issue1082_atomic_write_gate.py`. Measured on each branch ALONE:
+
+    this lane @ 1252a5a11         atomic_artifact_write_check  rc=0
+    census lane @ bebd9c1e1       atomic_artifact_write_check  rc=1
+    composed                      atomic_artifact_write_check  rc=1
+
+    census lane alone: 1254 programs parsed, 529 write their declared report
+                       destination NON-atomically, residual baseline 515
+
+So it does not arise from composing. It is pre-existing on the census lane's
+branch and simply carries into the merge, with the SAME 16 unregistered
+offenders in both — four `*_census.py` and twelve other programs of that lane
+(`population_guard_asserts_equality_not_a_floor.py`,
+`invocation_proved_by_parse_not_by_text.py`, and ten more). **None is from this
+lane**, and this lane's twelve gates are not among them.
+
+The fix is not a baseline edit. `_atomic_artefact_residual.json` is a RATCHET —
+`test_the_shipped_residual_only_ever_shrinks` fails if the count grows — so
+registering the sixteen would be refused by the ratchet's own test. They have to
+write atomically.
+
+Recorded here, not repaired here: they are another lane's programs, and ruling
+F13 gave this lane one item. Stated so the batch assembler meets it as a known,
+attributed item with a named remedy rather than as a surprise at merge time.
+
+**Everything else in the composed tree holds:** D1 program-test-coverage PASS
+over all 1266 composed programs (the four censuses all carry tests), D2 PASS,
+131 of 133 ratchet/census tests pass, and this lane's twelve gates return exactly
+their branch verdicts.
+
