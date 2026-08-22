@@ -56,7 +56,7 @@ nothing lands in the delete bucket by construction.
 | `verdicts_extra_8hd7.tsv` | 633 | jharv2 |
 | `verdicts_unreachable_resolved.tsv` | 80 | earlier resolution pass |
 
-## 4b. Host 108 — 89 more decided worktrees, in a different vocabulary
+## 5. Host 108 — 89 more decided worktrees, in a different vocabulary
 
 `shard_c/108_verdicts.tsv` (jharv3, copied byte-for-byte from `harvest/shard-c-108-jharv3`) holds
 **89 decided worktrees on host 108**, and **56 of those paths appear in no other verdict file here**.
@@ -70,7 +70,7 @@ that is unrecoverable. See `shard_c/108_PROVENANCE.md`.
 
 **30 of them authorise deletion; all 30 have now been through `predelete_guard.sh` and measured SAFE** — see `shard_c/108_DROP_guard_results.tsv`.
 
-## 4c. Every deletion-bound row now has a recorded guard result
+## 6. Every deletion-bound row now has a recorded guard result
 
 **230 of 230** — 229 measured, 1 honestly UNVERIFIABLE (its directory is gone from all seven hosts). An executor selecting `LANDED`/`ABANDON` from `verdicts_all.tsv` can look up each one:
 
@@ -93,14 +93,26 @@ That last step is why they read SAFE rather than alarming. Compared to *current*
 checkout looks catastrophic: ~446 files differ because main moved, and ~17,192 read absent because
 `benchmark-data/` was split out of this repo entirely. Neither is unlanded work.
 
-## 4d. What this does NOT cover
+## 7. What this does NOT cover
 
 `verdicts_all.tsv` is 1439 decided worktrees, not every vibe-ic checkout on the fleet. A full-depth
 census of six reachable hosts found **13,308 checkouts, of which 1,416 carry a verdict — 11%**. See
 `SCOPE.md`. The job was defined by a 477-worktree roster; the other 1084 rows are beyond it. An
 unjudged checkout is untouched — a wrong verdict is what deletes.
 
-## 5. Still open, and not mine to close
+## 8. What went wrong, written down
+
+| document | what it records |
+|---|---|
+| `RESCUE_REANCHOR.md` | every `harvest/rescue-*` ref was **deleted from origin** mid-session; 2945 commits re-anchored, nine worktrees' commits were briefly the only copy in existence |
+| `REFLOG_SWEEP_INCIDENT.md` | **I pushed refs to 15 repositories outside this brief.** All 16 removed, each verified first to hold nothing that repo already had. A GitHub secret-scanning rule caught the scope error before I did. Also the three bugs behind it. |
+| `SCOPE.md` | 1439 verdicts is not 13,308 checkouts — and the untracked-file sweep, the one category no rescue anchor can reach |
+| `RECOVER_DRIFT.md` | what +214 commits of main did to 1103 RECOVER rows (answer: 2) |
+
+These are in the index deliberately. A reader deciding whether to trust the verdicts should be able
+to find the places the method failed without going looking for them.
+
+## 9. Still open, and not mine to close
 
 - **All 49 deletion-bound rows in `verdicts_joined.tsv` have now been measured** —
   `JOINED_DELETION_GUARD_RESULTS.tsv`: **41 SAFE, 3 safe-by-twin, 5 HOLD CONTENT** against live main.
@@ -141,7 +153,7 @@ unjudged checkout is untouched — a wrong verdict is what deletes.
   can turn RECOVER into LANDED but never the reverse; a force-push would invalidate that and the
   rows would need re-judging, not re-labelling.
 
-## 6. Verifying all of it
+## 10. Verifying all of it
 
     bash tools/harvest/bin_jharv2/check_all.sh
 
