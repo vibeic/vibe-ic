@@ -99,8 +99,34 @@ _INVENTORY_NAME = "spawned_gate_status_inventory.json"
 
 _SPAWNERS = ("run", "call", "check_call", "check_output", "Popen")
 
+#: `os.system` / `os.popen` are spawns too, and `os.system` is the archetypal
+#: DISCARDED status: it returns an exit code and has no `check=` at all. They
+#: are matched only on the `os` module, so an unrelated `.system()` method on
+#: some other object is not a spawn.
+#:
+#: ADDED 2026-08-22 by an audit of this file's OWN enumerations, prompted by
+#: six instrument errors in one session that were all the same shape: a list of
+#: the cases I expected, not of the cases the tree uses. There are ZERO real
+#: `os.system` call sites today — both occurrences are strings inside test
+#: fixtures — so this closes a latent gap and changes no finding.
+_OS_SPAWNS = ("system", "popen")
+
+
+def _is_os_spawn(node) -> bool:
+    f = getattr(node, "func", None)
+    return (isinstance(f, ast.Attribute) and f.attr in _OS_SPAWNS
+            and isinstance(f.value, ast.Name) and f.value.id == "os")
+
+
 #: An argv element naming a checking program.
-_CHECKER_RE = re.compile(r"[\w/]*(?:_check|_audit|_gate|_gates|_scan)\.py$")
+#: A checker named in an argv. The name may END the string (an element of
+#: an argv LIST) or sit mid-string (a `os.system` command line), so the
+#: trailing anchor is a word boundary and not `$`. MEASURED: with `$` the
+#: os.system form was invisible even after `os.system` was added to the
+#: spawn set — widening the spawn list alone closed nothing, and the test
+#: that proves the firing is what found it.
+_CHECKER_RE = re.compile(
+    r"[\w/]*(?:_check|_audit|_gate|_gates|_scan)\.py(?=[\s'\"]|$)")
 
 #: Clause B: the tokens a program needs to start a process or read a status.
 _RUN_TOKENS = ("subprocess", "Popen", "os.system", "returncode",
@@ -133,7 +159,7 @@ def _is_spawn(node: ast.AST) -> bool:
     f = node.func
     attr = f.attr if isinstance(f, ast.Attribute) else (
         f.id if isinstance(f, ast.Name) else None)
-    return attr in _SPAWNERS
+    return attr in _SPAWNERS or _is_os_spawn(node)
 
 
 def _check_is_on(node: ast.Call) -> bool:
