@@ -32,11 +32,6 @@ import _corpus_location as CL  # noqa: E402
 
 FLAG = "--corpus-may-be-absent"
 
-#: Which programs offer the opt-in, checked against the source rather than
-#: restated here, so a program that gains or loses it cannot leave this stale.
-OFFERS = ("ppa_head_to_head_check.py", "l_doc_field_producer_check.py",
-          "evidence_citation_resolves_check.py")
-OFFERS_NOT = ("ppa_contract_check.py", "ppa_feasibility_check.py")
 
 
 def _refusal_text(capsys, **kw) -> str:
@@ -82,33 +77,69 @@ def test_dropping_the_flag_never_changes_the_verdict(capsys):
         assert with_flag == without == 2, origin
 
 
-def test_no_program_tells_the_reader_to_pass_a_flag_it_does_not_have():
-    """THE ONE THIS FILE IS FOR, asserted against the real programs.
+def _reaches_the_corpus_refusal():
+    """Every program that can print the corpus refusal, DERIVED from source.
 
-    ONE DIRECTION ONLY, and the other direction is not a defect. A gate that
+    WHY THIS IS NO LONGER A LIST. `OFFERS` / `OFFERS_NOT` were hand-written when
+    five programs called `_corpus_location.refuse` directly. The walk then moved
+    into `_ppa_corpus`, which refuses on their behalf, and both halves went out
+    of date at once:
+
+      * the population grew from 5 to 8 — ppa_measurement_check, ppa_pareto_check
+        and ppa_problem_integrity_check reach the refusal through the seam and
+        were tested by nothing here;
+      * `OFFERS_NOT` became false — ppa_contract_check and ppa_feasibility_check
+        now DO offer --corpus-may-be-absent, so a list claiming they do not is a
+        stale row of exactly the kind this lane keeps finding.
+
+    A program reaches the refusal if it names either corpus module. Derived, so
+    the next program to join is covered without anybody remembering.
+    """
+    out = []
+    for f in sorted(PROGRAMS.glob("*.py")):
+        src = f.read_text(encoding="utf-8", errors="replace")
+        if "_corpus_location" in src or "_ppa_corpus" in src:
+            out.append(f.name)
+    return out
+
+
+def test_the_population_is_not_empty():
+    """The denominator. Every assertion below iterates it."""
+    assert _reaches_the_corpus_refusal(), (
+        "no program references either corpus module — this detector has gone "
+        "dark rather than the seam having gone away")
+
+
+def test_no_program_tells_the_reader_to_pass_a_flag_it_does_not_have():
+    """THE ONE THIS FILE IS FOR, over a DERIVED population.
+
+    ONE DIRECTION ONLY, and the other is deliberately not asserted. A gate that
     OFFERS the flag and does not mention it may simply have it already in
     effect: `l_doc_field_producer_check` and `evidence_citation_resolves_check`
-    both take the rc 0 NO_CORPUS branch on an absent corpus, which is a
-    different sentence that correctly names no flag. Asserting the converse
-    would have failed both of them for behaving correctly — measured, it did,
-    which is why the clause is gone rather than the programs being "fixed".
+    take the rc 0 NO_CORPUS branch on an absent corpus, a different sentence
+    that correctly names no flag. An earlier draft asserted the converse and
+    FAILED both of them for behaving correctly; the clause was removed rather
+    than the programs bent to satisfy it.
 
     What is always wrong is advertising an option the program would reject.
     """
-    wrong = []
-    for prog in OFFERS + OFFERS_NOT:
+    wrong, checked = [], 0
+    for prog in _reaches_the_corpus_refusal():
         path = PROGRAMS / prog
-        if not path.is_file():                     # pragma: no cover
-            continue
         helptext = subprocess.run(
             [sys.executable, str(path), "--help"], capture_output=True,
             text=True, timeout=120).stdout
+        if "--corpus" not in helptext:
+            continue            # no corpus mode: it cannot print this refusal
         out = subprocess.run(
             [sys.executable, str(path), "--corpus", "/nonexistent-xyz"],
             capture_output=True, text=True, timeout=120)
+        checked += 1
         if FLAG in (out.stderr + out.stdout) and FLAG not in helptext:
             wrong.append(f"{prog} tells the reader to pass {FLAG} and its "
                          f"--help does not offer it")
+    assert checked, ("no program with a --corpus mode was exercised; the filter "
+                     "above has narrowed this test to nothing")
     assert wrong == [], "\n  ".join([""] + wrong)
 
 
