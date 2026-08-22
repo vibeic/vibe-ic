@@ -54,6 +54,7 @@ import rtl_hygiene_lint as HY            # noqa: E402
 import latency_conformance_check as LAT  # noqa: E402
 import clause_smoke_tb as CS             # noqa: E402
 import iface_conformance_v2 as IF        # noqa: E402
+from _sim_tools import NEEDS_SIM  # noqa: E402
 
 HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
@@ -251,6 +252,7 @@ def test_g5_context_satisfies_prompt_named_submodule_port():
     assert not any(x.kind == "MISSING-PORT" and "wr_ptr" in x.message for x in f1)
 
 
+@NEEDS_SIM
 def test_g5_embedded_call_passes_extracted_code_and_context(tmp_path, monkeypatch):
     """END-STATE: the embedded iface-check inside cvdp_gate routes through the
     extracted RTL + the record's context RTL — proven by capturing the args the
