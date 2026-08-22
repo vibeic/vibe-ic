@@ -775,6 +775,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # A TREE IS DERIVED FROM AND THEN DROPPED, NEVER CACHED. Caching them was
     # measured at 596 MB peak RSS against 221 MB for the pre-polarity revision
+    # (3c3c51aee -- NAMED, because the batch head has since advanced onto
+    # this work and no longer serves as a 'before')
     # -- ~820 program ASTs held live, two of them over 2 MB of source -- and the
     # allocator and GC pressure that buys makes EVERY parse in the run about
     # twice as slow, including parses of files the cache never touched. On this

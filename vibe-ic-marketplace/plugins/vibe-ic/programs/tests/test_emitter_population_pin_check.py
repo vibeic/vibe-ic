@@ -447,6 +447,7 @@ def test_the_emitter_side_is_NOT_asked_the_same_question(tmp_path):
 
     NEGATIVE CONTROL, MEASURED, because this test's value is entirely in
     catching a change nobody has made yet and its red against the pre-fix
+    program (3c3c51aee)
     program was only a `KeyError` on an absent JSON key -- a weak red, and said
     so when it landed. Adding the symmetry itself to `phrases_of`
 
@@ -519,7 +520,8 @@ def test_the_gate_clears_phrases_on_SPELLING_not_on_the_argument():
 
 #: Five ways a real emitter spells the same honest script -- three `incr` sites
 #: and a denominator of 3. `emitted_script_of` reads string LITERALS where the
-#: pre-polarity revision read the raw file, so each of these is a way the
+#: pre-polarity revision (3c3c51aee) read the raw file, so each of these is a
+#: way the
 #: narrowing could have lost a site.
 _SPELLINGS = {
     "adjacent literals":
@@ -570,8 +572,12 @@ def test_the_narrowing_loses_no_site_in_any_emitter_spelling():
     holds exactly ONE counter -- so it is measured against constructed spellings
     instead of taken on the one real sample.
 
-    MEASURED against the pre-polarity revision of this file: all five agree,
-    site for site and denominator for denominator.
+    MEASURED against the pre-polarity revision of this file -- 3c3c51aee,
+    NAMED because `origin/land/batch68-assembled` has since advanced onto the
+    first four commits of this work and re-running the comparison against the
+    batch head now compares this code with ITSELF: all five agree, site for
+    site and denominator for denominator. Re-verified against 3c3c51aee after
+    the batch moved; 0 diverging spellings.
 
     A SIXTH SPELLING IS DELIBERATELY NOT IN THIS SET, and is named rather than
     quietly dropped: an emitter that builds each repair through a HELPER CALL
