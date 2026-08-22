@@ -45,15 +45,23 @@ projects (`test_postlayout_lec_nameerror.py`,
     SDC block                 12 lines executed   YES
     DFM block                 12 lines executed   YES
     thermal screen            11 lines executed   YES
-    flow_compliance refresh    0 lines            NO
+    flow_compliance refresh   18 lines executed   YES
 
-Three of the four repairs are covered by real execution of the step. THE FOURTH
-IS NOT: the refresh lives in the finalize path, which no harness in this suite
-reaches, so its evidence is structural plus message-evaluation only.
+ALL FOUR are covered by real execution, including the emitted message: line
+`_fc = _sp_fc.run(...)`, the `if _fc.returncode != 0:` that reads it, and the
+`[INFO] flow_compliance refresh returned rc=...` print itself all run, under
+`test_hold_corner_coverage_check.py`, `test_phase3_cache_producer_identity.py`,
+`test_phase3_postpnr_disclosure_and_gds_guard.py` and their neighbours, which
+drive the runner far enough to reach finalize.
 
-That gap is DECLARED rather than left implied, because "the tests pass" over a
-line no test executes is the vacuous pass this lane exists to remove. If a
-harness that reaches finalize is added, this paragraph is what to delete.
+AN EARLIER VERSION OF THIS PARAGRAPH SAID THE FOURTH WAS **NOT** REACHED, and
+it was wrong. The first measurement traced only the two suites that call
+`step_canonicalize_artefacts` -- the refresh is not in that step, so of course
+it did not appear -- and "no harness in this suite reaches it" was generalised
+from a sample of three. Tracing the suites that call the runner's `main` shows
+it plainly. The correction is left visible rather than silently overwritten,
+because the mistake was not the measurement but the SCOPE claimed for it, which
+is the recurring defect this whole lane has documented.
 
 chip-AGNOSTIC: no design, PDK, vendor, node or codename literal.
 """
