@@ -80,7 +80,7 @@ def _logical_lines(text: str):
 
 def _rows():
     """(label, claimed_n, unit, argv) for every PPA --corpus row stating a number."""
-    lines = _logical_lines(WIRING.read_text(encoding="utf-8"))
+    lines = _logical_lines(_wiring_text())
     out = []
     for i, line in enumerate(lines):
         if not line.startswith(("run ", "run_tolerating_uncheckable ")):
@@ -118,7 +118,7 @@ def _numbered_exemptions():
     cover, and it is measured from the file rather than from the guard's own
     parser, so the two can be compared.
     """
-    lines = _logical_lines(WIRING.read_text(encoding="utf-8"))
+    lines = _logical_lines(_wiring_text())
     out = []
     for i, l in enumerate(lines):
         if not l.startswith("uncheckable_until"):
@@ -133,6 +133,28 @@ def _numbered_exemptions():
         lab = re.search(r'"([^"]*)"', nxt)
         out.append(lab.group(1) if lab else nxt[:60])
     return out
+
+
+def _wiring_text() -> str:
+    """The wiring file, or an explicit SKIP naming what could not be read.
+
+    `programs/tests/` SHIPS WITH THE PLUGIN and `tools/ci/` does not. Run the
+    plugin's suite anywhere but a full checkout of this repository and
+    `WIRING.read_text()` raises FileNotFoundError — a hard ERROR, which is this
+    guard becoming blocking-because-unreadable. MEASURED by moving the file
+    aside: every test in this file errored on the traceback below, none of them
+    on anything about exemptions.
+
+    "I could not look" is not a finding and it is not a pass. It is a skip that
+    NAMES the thing it could not read. The same rule this file already applies
+    to an absent corpus, applied to its own subject — it was left out here on
+    the first pass, which is why it is written down rather than quietly added.
+    """
+    if not WIRING.is_file():
+        pytest.skip(f"{WIRING} is not in this checkout — the plugin's tests "
+                    "ship without tools/ci/, so this guard has no subject to "
+                    "read here. NOT a pass and NOT a finding.")
+    return WIRING.read_text(encoding="utf-8")
 
 
 def _corpus_of(argv):
