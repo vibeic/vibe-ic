@@ -710,3 +710,115 @@ def test_acceptance_the_floor_on_the_row_is_the_designs_and_not_the_gates():
     assert ev[F.ECO_M_SURVIVING]["limit"]["min"] == 7
     # and nine against a floor of seven is not a violation at all
     assert axis7.status == F.AXIS_SATISFIED
+
+
+# ---------------------------------------------------------------------------
+# THE CAMPAIGN THAT MOTIVATED THE AXIS, ADJUDICATED BY IT
+# ---------------------------------------------------------------------------
+# Everything above runs on fixtures. This runs the SHIPPED producer over the
+# SHIPPED `spare_cells.json` of four real trials and hands the records to the
+# SHIPPED gate. It is the only row here where no number was authored by a test.
+#
+#   trial  area um2   power W    spares   the axis says
+#   z23      6106     0.000541     10     FEASIBLE      <- admitted
+#   p08      6291     0.000562     10     FEASIBLE
+#   p04      6136     0.000559      0     INFEASIBLE    <- the published winner
+#   z21      6011     0.000545      0     INFEASIBLE    <- the Pareto winner
+#
+# The two arms the axis refuses are the two the campaign published as winners,
+# and it refuses them from their own artefacts. The arm it admits is smaller
+# AND cooler than the PnR-only winner it replaces, which is the answer to "this
+# gate is expensive".
+PRODUCER = _PROGRAMS / "ppa_eco_spare_records.py"
+
+#: The DESIGN's requirement, and it lives here because it is a statement about
+#: a design -- the shipped default run of this design carried ten spares at
+#: density 0.02, so ten is what it says it needs. Nothing in the gate may hold
+#: this number.
+CAMPAIGN_DECL = {"required": True, "min_spare_cells": 10}
+
+#: (trial, spares its own spare_cells.json records, does the axis admit it)
+CAMPAIGN_ARMS = (("z23", 10, True), ("p08", 10, True),
+                 ("p04", 0, False), ("z21", 0, False))
+
+
+def _campaign_trials():
+    return _PROGRAMS.parents[3] / "ppa-crosslayer" / "records" / "trials"
+
+
+def _eco_only_policy():
+    """The ECO axis alone. The bundles below carry ECO records and nothing
+    else, and a verdict dragged to UNDETERMINED by eight axes nobody supplied
+    evidence for would say nothing about design-for-ECO."""
+    pol = F.policy_from_document(
+        {"required_views_by_axis": {F.ECO_AXIS: [{"stage": "post_route"}]},
+         "eco_readiness": dict(CAMPAIGN_DECL)})
+    return dataclasses.replace(
+        pol, axes=tuple(a for a in pol.axes if a.name == F.ECO_AXIS))
+
+
+def test_real_the_axis_admits_the_eco_preserving_arm_and_refuses_the_winners(
+        tmp_path):
+    """End to end on shipped artefacts: real producer, real gate, no fixtures.
+
+    Skipped -- not silently passed -- when the campaign tree is absent. An
+    empty scan is NOT OBSERVED, and a green from an empty denominator is the
+    thing this whole lane exists to refuse.
+    """
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip(f"the cross-layer campaign records are not in this tree "
+                    f"({trials}); this row was NOT OBSERVED")
+
+    pol = _eco_only_policy()
+    seen = {}
+    for trial, spares_recorded, admitted in CAMPAIGN_ARMS:
+        plan = trials / trial / "spare_cells.json"
+        if not plan.is_file():
+            pytest.skip(f"{plan} is not in this tree; NOT OBSERVED")
+        out = tmp_path / f"{trial}.json"
+        p = subprocess.run(
+            [sys.executable, str(PRODUCER), "--spare-plan", str(plan),
+             "--stage", "post_route", "--json", str(out)],
+            capture_output=True, text=True, cwd=str(tmp_path))
+        assert p.returncode == 0, (trial, p.stdout, p.stderr)
+
+        records = json.loads(out.read_text(encoding="utf-8"))["records"]
+        r = F.promotion_verdict({"candidate_id": trial, "metrics": records},
+                                pol)
+        count = next((e["value"] for e in r.axes[0].as_dict()["evidence"]
+                      if e.get("metric") == F.ECO_M_COUNT), None)
+
+        assert count == spares_recorded, (trial, count, spares_recorded)
+        assert r.eligible_for_promotion is admitted, (
+            f"{trial} records {count} spare(s) and the axis "
+            f"{'admits' if r.eligible_for_promotion else 'refuses'} it; "
+            f"expected the opposite")
+        seen[trial] = (r.verdict, F.set_exit_code([r]))
+
+    # stated as verdicts too, so a reader of a failure sees which way each went
+    assert seen["z23"] == (F.FEASIBLE, F.RC_PASS)
+    assert seen["p08"] == (F.FEASIBLE, F.RC_PASS)
+    assert seen["p04"] == (F.INFEASIBLE, F.RC_FAIL)
+    assert seen["z21"] == (F.INFEASIBLE, F.RC_FAIL)
+
+
+def test_real_the_two_refused_arms_are_the_ones_the_campaign_published(
+        tmp_path):
+    """The cost of the axis, named. It refuses the published PnR-only winner
+    (p04) and the published Pareto winner (z21) -- and the arm it admits is
+    SMALLER and COOLER than p04, so the win survives the gate. Read from each
+    arm's own artefact, not from the report's prose."""
+    import pytest
+    trials = _campaign_trials()
+    if not trials.is_dir():
+        pytest.skip("the cross-layer campaign records are not in this tree; "
+                    "NOT OBSERVED")
+    counts = {}
+    for trial, _n, _adm in CAMPAIGN_ARMS:
+        plan = trials / trial / "spare_cells.json"
+        if not plan.is_file():
+            pytest.skip(f"{plan} is not in this tree; NOT OBSERVED")
+        counts[trial] = json.loads(plan.read_text(encoding="utf-8"))["count"]
+    assert counts == {"z23": 10, "p08": 10, "p04": 0, "z21": 0}, counts
