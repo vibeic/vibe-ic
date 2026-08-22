@@ -1,5 +1,0 @@
-{
-  "ic_name": "Serial Gigabit Media Independent Interface (SGMII)",
-  "otp_content": "N/A — SGMII is a SerDes link protocol, no one-time-programmable fuse content defined.",
-  "applicable": false
-}
