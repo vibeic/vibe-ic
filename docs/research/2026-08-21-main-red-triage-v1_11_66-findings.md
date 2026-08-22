@@ -4653,6 +4653,53 @@ skip exists for records whose root the pointer can reach, and setting the pointe
 leaves these exactly as they are.
 
 
+## M87 — M86's open question, ANSWERED: step 30 is not a production gap. It joins group 1
+
+M86 split the matrix family and left one question open: *"is `critical_path.sp`
+produced at all?"* — labelled UNKNOWN rather than guessed. **Answered by reading
+the flow, and the answer moves step 30 into group 1.**
+
+**What I checked first, and why it misled me:**
+
+    grep "critical_path.sp"  over programs/*.py   ->  0 writers
+    grep "critical_path"     over the flow yaml   ->  0 mentions
+
+Both true, and both the wrong question. **Step 30 declares its outputs as GLOBS:**
+
+    required_outputs:
+      - "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp"
+      - "phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json"
+
+**`critical_path.sp` is not a name the flow knows — it is the file that happened to
+satisfy `*.sp` in the run the record cites.** Searching for the literal name found
+nothing because nothing declares that literal; the declaration is one level up.
+
+**And no repo program writes it because no repo program is supposed to.** Step 30's
+program is `spice_correlation_check` — a CHECKER. The `.sp` comes from the EDA
+toolchain (`skills: [ams-sim]`, `mcp_tools: [eda_spice]`) against
+`required_inputs: from: external, check: none — the PDK device models / tech decks
+(PDK_ROOT, outside the project tree)`. **The same external-input shape as `0.5ic`.**
+
+**So step 30 is NOT a flow gap wearing a corpus gap's clothes**, which is what I
+allowed it might be. The outputs are declared, the producer is the toolchain, and
+the citation is a `home` run root exactly like the other five. **The only thing
+that distinguishes it is that this host happens to hold PNR and ECO run trees and
+no SPICE one** — a fact about this host, not about the flow.
+
+**REVISED: the matrix family is ONE group of six, not two.** Six reds, all citing
+`home`-kind run roots, all resolvable by publishing a run tree of the right kind
+or waiving with disclosure. **One decision, six reds** — better than M86's "one
+decision closes five, and one needs an investigation first".
+
+**Why I am correcting this loudly rather than editing M86 quietly.** M86's split
+was the right shape from the evidence I had, and its caution was correct — I
+refused to let `/tmp/matrix_d6_*` fixture scratch read as evidence of production,
+and that refusal still stands. **But "I did not measure it" is a reason to go and
+measure it, not a resting place**, and I had the flow definition open the whole
+time. The unknown survived one commit because I wrote it down instead of
+answering it.
+
+
 # ===== REQUESTS TO THE LANDER =====
 
 Branch `ptmo/main-red-triage-v11166`. **Five files:** this document, a design
@@ -4739,7 +4786,7 @@ every row that named a person turned out to be hiding a requirement (M34).
 | **Flow-gate enforcement audit** (3 reds + 1 blocking hygiene FAIL) | **REAL blocker, but REDESCRIBED — M80.** Audit exit 1: 172 gates, 19 can block, 153 AUDIT_ONLY (88%), 131 undeclared. Both named gates sit in the BLOCKING `program_exit_zero` slot and are still AUDIT_ONLY (no runner invokes them inline). **My note said `advisory` truthful for both; that is true of the WIRING and wrong as an action** — writing the line DECIDES rather than describes. For `area_total_vs_budget_check` `advisory` would ratify the exact defect it was written to remove (*'a figure produced and never compared'*): wire it, or declare `blocking` and stay red. `tapeout_docs_gen` is a GENERATOR, not a check — a classification question, same shape as (b) and as M70's hygiene gate. | **3 questions: 1 product, 2 classification** |
 | **Re-founding B and D** (2 + 2 reds) | **B: BUILT, RUN, REVERTED — M83.** The sentinel hang WORKS (33s -> 111s, reaches `hermetic Git subject PASS`), but the arm's container cannot be identified: label value is receipt-only, `refs/gk-verify` exists **only on the `--pr` path** and these tests use `--ref`, and every mount lives under an unannounced `mktemp -d`. **One line in `gatekeeper-verify-merge.sh` (PROTECTED) would fix it** — write `RUN_ID` into the probe dir it already writes cleanup markers to. Reverted rather than ship a vacuous pass. **D: blocker retired (M79)** — a real published cell IS tracked (`ic/spm/v1.5.58_ihp-sg13g2`, with `routed.def`), and the sandbox fixture already publishes one. **A and C are DONE.** | **one line, in a protected file** |
 | **Coverage bridge** (2 reds) | ~~vocabulary (M33)~~ ~~registry lookup (M37)~~ ~~policy call (M38)~~ — **M39: probably a DEFECT.** `verilator_coverage_measure.py:54,445` documents rc=3→`WAIVED-DEFERRED` as the DESIGNED path for an absent executable, so the test asks for what the program says it does. **SETTLED (M45): NOT a flow defect.** `flow_compliance_check:10057` — the waiver branch is guarded `and not vacuous_hints`, so a step carrying both resolves `VACUOUS_PASS` **by explicit design**. The waiver hint IS carried; only its branch was declined, so nothing prints.<br>**DO NOT fix by asserting `VACUOUS-PASS` (M46).** That goes green while deleting the waiver-path coverage the test exists for — a relaxation wearing a correction's clothes. ~~Fix the FIXTURE~~ — **M69: that conflicts with the fixture's own rule** (*"ONLY the real runner emitters, no hand-written artefacts"*). Enrichment must come from RUNNING the emitters for a testbench, a redesign — or the scenario is intentionally minimal and the deferral path is unreachable in it. Owner's call, now with the trade-off named. | **answered + a fix to avoid** |
-| **Matrix family** (6 D3 reds measured) | **TWO GROUPS, not one — M86.** Measured by CITATION: **5 of the 6 (15/17/19/20/32) cite ONE root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`, kind `home`), so they are one unreproducible run tree cited five times. **Their artefacts EXIST on this host** in other `home` trees (`_c3_adc_scratch/dehand*` has all four PNR DEFs; 10+ trees have `eco_trigger_decision.json`) — a PUBLICATION gap, not a production one; **one decision closes five**. **Step 30 is separate**: two different roots, `critical_path.sp` absent host-wide and `correlation.json` present ONLY in `/tmp/matrix_d6_*` TEST FIXTURE scratch. Whether the flow produces them is UNKNOWN — not measured, and not to be closed by publishing until it is. | **1 publication decision + 1 open question** |
+| **Matrix family** (6 D3 reds measured) | **ONE group of six — M86 measured, M87 corrected.** All six cite `home`-kind run roots, and **5 of them cite the SAME root** (`campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`) — one unreproducible tree cited five times. **Their artefacts EXIST here** in other `home` trees (`_c3_adc_scratch/dehand*` carries all four PNR DEFs; 10+ trees carry `eco_trigger_decision.json`). **Step 30 joins them (M87)**: its outputs ARE declared, as GLOBS (`phase3/stage3/spice/*.sp`), produced by the EDA toolchain from external PDK models — `critical_path.sp` is just what satisfied the glob. **Not a production gap.** One publication-or-waiver decision closes all six. Never by widening the skip. | **ONE decision, six reds** |
 | **`0.5ic`** (2 reds) **+ `slot_pad_budget_check`** | **ACQUIRED — M85. The artefact is no longer absent.** Cloned `gf180mcu-project-template` at the pinned `0de7e394337a1f` (Apache-2.0, open PDK, scratch only, NOT vendored). **`0.5ic` has RUN**: `INGESTED, slots_shipped=4, fixtures=10`. **The checker has REPORTED**, across 18 tracked `chip_top` sources: 2 FITS, 3 FITS_AFTER_FOLD, **3 DOES_NOT_FIT** (usb_pd 109, ibex 262, opentitan_aes 515 bits), 10 UNDECIDED. `slot_1x1` is the LARGEST slot (74 pads vs 72/72/56), so those three fit NO slot this operator ships. It was never a network or permission blocker — it was a `git clone` nobody had run. | **acquired; wiring + fit are owner calls** |
 | **CI image has no Docker CLI** (12 IMAGE-ONLY reds + 1 skipped cell) | a Docker CLI + daemon, OR the third option: thread `--docker-bin` through the verifier so these drive a fake docker as `test_hermetic_candidate_runner.py` already does — which trades a strong unrunnable guarantee for a weaker runnable one AND opens a seam on a protected path (M31). | **lane decision, 3 options** |
 | **`magic` / 0.8 s lease** (2 reds) | **M60: the `magic` one is NOT a flake — 10/10 deterministic, same id.** `magic` cannot launch here (`launch_error after 0s`); the guard still REJECTS and correctly reports tool-absence instead of the pinless-abstract reason it could not reach. Environment-dependent, same family as the 12 IMAGE-ONLY reds. **M62: DIAGNOSED — `assert elapsed > 4.5` failed at 1.86 s.** The test pins a MINIMUM wall-clock duration as a proxy for "the inner session ran long enough to have something to relay", so **it fails when the host is FAST, not slow.** "Load-confounded" (my brief-2 call, accepted at the time) is BACKWARDS. Real flake, 1/8. `magic`: 10/10 deterministic, environment. Both ratios recorded — M36's gap closed. | **both diagnosed; both labels were wrong** |
