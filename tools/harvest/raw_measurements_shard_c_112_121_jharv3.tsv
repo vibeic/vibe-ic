@@ -1,3 +1,10 @@
+# SUPERSEDED FOR CHECKING VERDICTS -- read this first.
+# This run measured against main a00f53f2094, which is now stale. verdicts_shard_c.tsv was
+# built from the LATER run against 81cd5321b, published beside this file as
+# raw_measurements_shard_c_112_121_currentmain_jharv3.tsv. Checking the verdicts against
+# THIS file reports false disagreements: 18 of its 80 rows differ in nadd/ndel/code_add,
+# and 5 of 67 sha256-pair rows do not match. Use the currentmain file for that.
+# Kept because it is a true record of what was measured against the main of the time.
 # jharv3 independent raw measurements of shard C rows on .112 and .121, taken from .108 via .102.
 # NOT a verdict file. This is the measurement jharv2 asked to cross-check against verdicts_shard_c_80_recovered.tsv.
 # host	path	state	head	branch	main_sha	own	differ	novel	super	nadd	ndel	code_add	trk_edits	subject	evidence(file|sha_head|sha_main|lines_head|lines_main)
