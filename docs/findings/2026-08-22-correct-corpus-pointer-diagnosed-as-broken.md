@@ -579,3 +579,52 @@ got there. Pairing each exemption with the line immediately after it gave "20
 Skipping comments gave "24 + 1 `gate_serial`". Only the third pass was the
 answer. My first pass produced the number 20 as well, from a different mistake
 than the one that produced the landed 20.*
+
+## Re-verified 673 commits later, at `ae78abb28` (v1.11.70)
+
+`main` moved from `a4caccefe` to `ae78abb28` while this record was being written
+— 673 commits. Evidence attaches to a sha, so every load-bearing figure was taken
+again at the new tip rather than carried forward.
+
+| | at `a4caccefe` | at `ae78abb28` |
+|---|---|---|
+| `uncheckable_until` declarations | 25 | **25** |
+| dated `2026-11-30` | 3 | **3** |
+| dated `2027-02-28` | 22 | **22** |
+| expired (date ≤ 2026-08-22) | 0 | **0** |
+| exemptions inside `_per_published_cell_gates` | 4 | **4** |
+| routed-DEF producer, pointer bound | rc 0, 0 items | **rc 0, 0 items** |
+
+Nothing moved. `docs/findings/2026-08-21-routed-def-corpus-is-empty-adjudication.md`
+and `tools/ci/repo_hygiene_gates.sh` are both untouched across those 673 commits,
+and so are all four source files this work edits — so the corrections above still
+describe the tree they will land into.
+
+### Why this branch is NOT rebased onto that tip
+
+It was rebased, and the rebase was reverted, because pushing it fired a real
+gate:
+
+```
+pre-push: FAILED — no collateral revert within the push
+  FAIL: COLLATERAL REVERT: 25 finding(s) in 687 commit(s). 2be4c0b42 removes 52
+  of the 68 line(s) 7027c15ce added to …/test_f3d_opposite_side_is_a_mirror.py
+```
+
+Neither commit is mine — both are another agent's `capture(padring)` work,
+already on `main`. **687 = my 14 + main's 673.** A force-push of a rebased branch
+makes the hook's range `<old remote tip>..<new tip>`, which sweeps in every
+commit `main` gained by a different route, and the gate then audits `main`'s own
+history as though this push introduced it.
+
+That is not a defect in the gate — for a non-rebasing push the range is exactly
+right, and the check it performs is one this repository needs. It is a property
+of force-pushing a rebase, and the correct response is not to argue with it:
+the branch sits at `813c61783`, based on `a4caccefe`, exactly as it was pushed
+and verified. The merge queue rebases onto current `origin/main` and re-runs the
+required checks on the rebased tree at merge time, which is where that work
+belongs and where the range is computed correctly.
+
+**So "673 behind" is the intended state of a candidate, not staleness** — and the
+table above is the evidence that being behind costs nothing here: every figure
+reproduces at the tip it will be merged onto.
