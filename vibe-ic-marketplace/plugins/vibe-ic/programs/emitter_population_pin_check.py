@@ -185,14 +185,25 @@ already in the verdict describes them exactly. Reaching them means calling
 disclosure number, and this is the same trade at the same price, so it gets the
 same answer. Reproduce either figure by walking `tests/` with `pins_of`.
 
-DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's 82
-emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`, `MHz`,
-`APs`, `Cat`. A pin matching one of those would produce a comparison, and a
-comparison against junk can produce a WRONG red -- the worst outcome this file
-has. Measured: no test in the corpus pins any of the nine, so the risk is
-theoretical rather than live. Tightening `PHRASE` on no evidence of harm would
-narrow the extractor to fix a fault nobody has, which is the trade this file
-argues against everywhere else, so it is recorded and not acted on.
+DEGENERATE TAILS. `PHRASE` takes `of <digits> <words>`, and 9 of the corpus's
+81 emitter tails are junk that prose produced: `and`, `or`, `L`, `V`, `Gb`,
+`MHz`, `APs`, `Cat`. A pin matching one of those would produce a comparison,
+and a comparison against junk can produce a WRONG red -- the worst outcome
+this file has. Measured: no test in the corpus pins any of the nine, so the
+risk is theoretical rather than live. Tightening `PHRASE` on no evidence of
+harm would narrow the extractor to fix a fault nobody has, which is the trade
+this file argues against everywhere else, so it is recorded and not acted on.
+
+(81, not the 82 an earlier revision of this paragraph recorded. The missing
+one is `links dangling`, and it is the comment rule working on the shipped
+tree rather than on a fixture: `benchmark_evidence_publish.py` emits
+
+    # directory was later renamed: 83 of 83 links dangling. Measured on the
+
+and that sentence is a HISTORY, not a claim the script makes. Before
+`_in_an_emitted_comment`, 83 was a value that emitter "states", so a test
+pinning the retired 83 would have matched it and raised nothing. One phantom
+claim, in a corpus of 1238 programs, and it was live.)
 
 
 The other three state a membership and never state a threshold, so there is no
