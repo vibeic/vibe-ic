@@ -199,6 +199,33 @@ FLOORPLAN_DEF_REL = "phase3/stage3/pnr/floorplan.def"
 PADRING_DEF_REL = "phase3/stage3/pnr/padring.def"
 PADRING_SKIPPED_REL = "phase3/stage3/pnr/padring.SKIPPED.txt"
 REPORT_REL = "reports/phase3/padring.json"
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: The docstring above says this module borrows upstream's shape — its variable
+#: names verbatim, its eight numbered steps in their order. A borrowing stated
+#: only in prose drifts silently: the along-the-row extent was taken from the
+#: ORIENTED footprint here while upstream measures the MASTER, and on a real
+#: ring that was a 4.4x error that surfaced as an unrelated refusal. Our side of
+#: that invariant is pinned (`test_a_vertical_side_sums_the_master_width_not_
+#: its_height`). THEIRS WAS NOT, so an upstream change would land here as a
+#: divergence nothing asks about.
+#:
+#: `pinned_by` names a test that reads the UPSTREAM artefact. It is machine-
+#: readable so `upstream_mirror_is_pinned_check` can require it rather than
+#: trust that somebody wrote one.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/scripts/openroad/common/pad_cfg.tcl",
+    "mirrors": (
+        "the per-side pad arithmetic: the fit sum and the along-the-row step. "
+        "Upstream measures a cell in exactly two places and BOTH read the "
+        "master's width, on all four sides; there is no getHeight anywhere in "
+        "its side arithmetic."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_pad_cfg.py"
+        "::test_upstream_side_arithmetic_measures_the_master_width"),
+}
+
+
 ASSIGNMENT_REL = "phase3/stage3/pnr/pad_assignment.json"
 
 SCHEMA = "vibe-ic/padring/1"
@@ -808,8 +835,9 @@ def validate_assignment(obj: object) -> Dict[str, object]:
     if not seen:
         raise AssignmentError(
             "PAD_CONFIG_VARIABLE_ABSENT",
-            "all four side lists are empty — a ring of no pads assigns "
-            "nothing, and an empty set is not a pad ring")
+            f"all four side lists are empty in {ASSIGNMENT_REL} "
+            f"({', '.join(SIDE_VAR[s] for s in SIDES)}) — a ring of no pads "
+            f"assigns nothing, and an empty set is not a pad ring")
 
     rots = {}
     for var in ("PAD_ROTATION_HORIZONTAL", "PAD_ROTATION_VERTICAL",

@@ -174,6 +174,25 @@ _GDS_GLOBS = (
 )
 #: LibreLane's own PDK variable, so an environment already configured for the
 #: canonical open-source flow needs no second declaration here.
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: The header above says the seal-ring INTERFACE is taken from upstream
+#: unchanged — four flags, and a named skip on the same unset variable. That is
+#: a contract with a tool this module does not own, and a contract stated only
+#: in prose is one nothing re-reads.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/steps/klayout.py",
+    "mirrors": (
+        "the seal-ring generator contract: the four-flag command line, the "
+        "PDK-scoped script variable whose absence is a named skip, and the "
+        "second code path that additionally exports the tool search path so "
+        "the technology definition loads."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_klayout_sealring.py"
+        "::test_upstream_sealring_contract_is_the_one_this_module_drives"),
+}
+
+
 _ENV_SCRIPT = "KLAYOUT_SEALRING_SCRIPT"
 #: The path every PDK config.tcl that declares the variable actually builds:
 #: `$PDK_ROOT/$PDK/libs.tech/klayout/tech/scripts/sealring.py`. This is PDK

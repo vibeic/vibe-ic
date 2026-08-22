@@ -343,6 +343,27 @@ def emit_liberty(design: str, pins: List[Pin]) -> str:
 
 # ── the LEF: Magic, through the PDK's own magicrc ─────────────────────────
 
+#: WHAT THIS MODULE MIRRORS FROM UPSTREAM, AND WHAT PINS IT THERE
+#:
+#: `build_lef_tcl` below follows upstream's LEF-writing script, and three of
+#: its decisions are DEFAULTS READ OFF UPSTREAM rather than choices made here:
+#: the abstract (`-hide`) form, the absence of `-pinonly`, and the read-views
+#: route rather than the GDS-only one. A default that upstream changes and we
+#: do not is a silent divergence in a signed-off artefact — the GDS-only route
+#: was measured to produce a LEF with ZERO PINS on a real run.
+UPSTREAM_MIRROR: Dict[str, str] = {
+    "upstream": "librelane/scripts/magic/lef.tcl",
+    "mirrors": (
+        "the LEF write sequence and its three PDK-scoped knobs, whose upstream "
+        "defaults this module bakes in: the abstract form unless the full-LEF "
+        "flag is set, no pin-only unless its flag is set, and the read-views "
+        "route rather than the GDS-only one."),
+    "pinned_by": (
+        "tests/test_upstream_mirror_magic_lef.py"
+        "::test_upstream_lef_write_defaults_are_the_ones_this_module_bakes_in"),
+}
+
+
 def build_lef_tcl(top: str, gds: str, def_file: str, out_lef: str,
                   full_lef: bool, pinonly: bool) -> str:
     """The Magic TCL, following `librelane/scripts/magic/lef.tcl`.

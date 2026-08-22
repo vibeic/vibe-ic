@@ -1,0 +1,28 @@
+type: bug
+severity: P1
+component: program:pad_ring_gen
+plugin_version: "1.11.69"
+
+title: >-
+  Two side-selecting option families use opposite axis vocabularies across one call boundary
+
+root_cause_layer: forked_tool
+tool: "OpenROAD"
+generating_step: "phase3.pad_ring"
+golden_sample: "none -- there is no expected-output artefact for this; the evidence is a pair of complementary sweeps and a geometry check, all reproducible from `docs/capture/2026-08-22-jcapsha-sha256-recovery/evidence/` (`probe_row.tcl`, `probe_row2.tcl`, `probe_site.tcl`, `probe_bbox.tcl`)"
+bad_sample: "``docs/capture/2026-08-22-jcapsha-sha256-recovery/evidence/`rotation_axis_vocabulary.md`"
+problem: |
+  The pad module's IO-row command takes a horizontal and a vertical family of options (a site and a rotation in each) and applies the horizontal family to the EAST and WEST rows and the vertical family to the SOUTH and NORTH rows -- naming a row by the axis PERPENDICULAR to its run. The flow script that drives it names rows by the axis they RUN ALONG, in the same file that passes the options through, so each option family is delivered to the side-pair opposite the one the caller's own vocabulary assigns it. Nothing on either side of the boundary declares which convention is in force, and no error is raised.
+tool_enhancement: |
+  In the pad module's IO-row command, state which side-pair each option family governs -- in the command's own help text and in one informational line at call time naming the rows it just built and the option each took its orientation from. Better, accept unambiguous per-side aliases so a caller never has to know the convention. The driving flow script must then map its own side vocabulary onto the tool's explicitly rather than passing names through as if the two agreed. Verification: hold one family constant and sweep the other, then swap; the row orientations that move must be the ones the caller's documentation says that family controls.
+
+pattern: |
+  Two layers of one shipped toolchain use the same axis words for opposite pairs of sides, and a configuration variable crosses over silently at the boundary between them. An author who sets the knob gets a real effect on the sides they did not name, and every single-axis experiment confirms 'this knob does nothing' -- because the sweep reads the sides that the OTHER knob steers while holding that other knob constant. The wrong conclusion is reproducible, survives being re-run in separate processes to remove a caching confound, and is refuted only by sweeping the complementary axis.
+
+suggested_fix: |
+  Disclose the side-pair each option family governs at the tool's own interface, and reconcile the two vocabularies in the adapter that spans them.
+
+id: "ORGANIC-20260822-io-row-option-families-use-opposite-axis-vocabularies"
+submitted_at: "2026-08-22T12:42:08+08:00"
+session_context: >-
+  Found while converging on a prior lane's conclusion that the vertical-rotation variable is inert. Four separate tool processes had shown the east/west orientation constant across every value of it. Sweeping the horizontal family instead moved east/west and left south/north still; a single call with two distinguishable sites and two different rotations then showed both families routing the same way, and the row bounding boxes confirmed the row names mean what they say. The data behind the inertness conclusion was correct; the conclusion was not.

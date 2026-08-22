@@ -757,7 +757,16 @@ def _emit_route(o: ParseOutcome, e: _LogEmitter, text: str) -> None:
                 "route.wirelength.by_layer.um", "MEASURED", "um",
                 _scope("detailed_route", layer=layer), src, value=_f(val)))
         if not rows:
+            # NAME THE WINDOW, not just the pattern. "no rows matched" and
+            # "the window I matched in was empty" print the same way and are
+            # different findings — the second is a bug in the block bounds
+            # above, and a reader cannot tell them apart without the offsets.
             o.note("ROUTE_WIRELENGTH_BY_LAYER_ABSENT",
+                   searched_in=(f"the router log, chars [{start}:{stop}] — the "
+                                f"window after the LAST of {len(total_hits)} "
+                                f"`Total wire length` match(es) and before the "
+                                f"next `Total number of vias`"),
+                   searched_window_chars=stop - start,
                    detail="no `Total wire length on LAYER` rows follow the last total")
 
     # The router's own DRC trajectory, through the ONE shared reader.
