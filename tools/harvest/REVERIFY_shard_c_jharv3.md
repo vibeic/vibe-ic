@@ -269,3 +269,60 @@ harness noticing, and these 29 rows. A check over nothing passes.
 **Nothing here changes a shard-C verdict.** Shard C is clean on both guarantees. What
 this says is that an executor reading `verdicts_joined.tsv` would delete three
 directories this shard verified as holding work that is not on main.
+
+---
+
+## Fourth round: the sweep behind every deletion-bound row ran `-uno`
+
+Chasing the empty-set universal into my own shard found the same unexamined input
+one level down, and this one is mine, not the consumable's.
+
+`remote_measure.sh` measures cleanliness with:
+
+```
+git status --porcelain -uno
+```
+
+`-uno` **excludes untracked files.** So "the working tree is clean", which 17 LANDED
+rows and 2 ABANDON rows rest on, was measured over a domain that cannot contain an
+untracked file. Deletion destroys untracked bytes: they are on no commit and on no
+ref, and they are precisely what made the one wrong verdict in this shard — two
+worktrees with identical HEAD trees and two different untracked handoff documents.
+
+15 of the 17 LANDED rows also have an **empty owned set**, so their "every file this
+branch owns is byte-identical to main" is itself a universal over nothing. That part
+is sound — a tree with no diff against its merge-base holds nothing outside main's
+history — but it is sound only for *committed* content, which is the half `-uno`
+measures.
+
+Of the 19 deletion-bound rows:
+
+- **8 are on this host.** Re-measured with `--untracked-files=all`: every one has
+  **0 untracked and 0 tracked modifications**. Now stated in the row as a fact.
+- **11 are on .112/.121**, which this session cannot reach. Untracked content there
+  was never examined by anything. Only one untracked-preservation ref exists on
+  origin (`harvest/rescue-112-untracked-caravel-handoffs`) and it covers none of
+  these paths.
+
+Those 11 rows now carry the limit in the row itself, naming the missing input and
+the command that closes it, rather than leaving "clean" to be read as more than it
+was measured to mean. **No verdict changed** — the committed content really is on
+main — and the 91 RECOVER rows are untouched, since RECOVER destroys nothing.
+
+`vacuous_universal.py` gained a third guarantee: a deletion-bound row must *account*
+for untracked content, either way. Silence is the same unexamined-input failure as
+the empty-set universal. All three guarantees pass both arms and stay quiet on a
+clean row:
+
+```
+  vacuous           unblinded=1 blinded=0 clean=0   LOAD-BEARING
+  stale             unblinded=1 blinded=0 clean=0   LOAD-BEARING
+  untracked_silent  unblinded=1 blinded=0 clean=0   LOAD-BEARING
+```
+
+Amended shard C against it: 19 deletion-bound rows, 0 vacuous, 0 stale,
+0 unaccounted.
+
+The honest summary of this round: I verified 8 of my 19 deletion-bound rows are safe
+to act on and disclosed that 11 rest on an input nobody measured. That is a weaker
+claim than the one the file made before, and it is the true one.

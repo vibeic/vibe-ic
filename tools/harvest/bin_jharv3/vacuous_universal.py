@@ -39,6 +39,14 @@ DELETION_BOUND = {"LANDED", "ABANDON"}
 # a universal quantifier whose domain is stated to be empty
 VACUOUS = re.compile(r"\ball\s+0\s+(?:file|path|entry)\(?s?\)?\b", re.I)
 MAIN_CITE = re.compile(r"\bmain\s+([0-9a-f]{9,40})\b")
+# THIRD GUARANTEE: deletion destroys untracked bytes, which are on no commit and on no
+# ref. The sweep behind these rows ran `git status --porcelain -uno`, which EXCLUDES
+# untracked files, so "the working tree is clean" was measured over a domain that
+# cannot contain them. A deletion-bound row must therefore ACCOUNT for untracked
+# content -- either state it was checked, or state it was not. Silence is the same
+# unexamined-input failure as the empty-set universal, and it is what produced the one
+# wrong verdict in shard C: two identical HEAD trees, two different untracked handoffs.
+UNTRACKED = re.compile(r"untracked", re.I)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.environ.get("VIBEIC_REPO") or subprocess.run(
@@ -89,6 +97,8 @@ def scan(name, text, main, rep):
         rep["deletion_bound"] += 1
         if VACUOUS.search(ev):
             rep["vacuous"].append((name, path, verdict, VACUOUS.search(ev).group(0)))
+        if not UNTRACKED.search(ev):
+            rep["untracked_silent"].append((name, path, verdict))
         cited = MAIN_CITE.findall(ev)
         if main and cited and not any(main.startswith(c) or c.startswith(main[:9]) for c in cited):
             rep["stale"].append((name, path, verdict, cited[0]))
@@ -109,7 +119,8 @@ def run(files, rep):
 
 
 def blank():
-    return {"deletion_bound": 0, "vacuous": [], "stale": [], "error": [], "main": ""}
+    return {"deletion_bound": 0, "vacuous": [], "stale": [], "untracked_silent": [],
+            "error": [], "main": ""}
 
 
 def report(rep):
@@ -121,12 +132,17 @@ def report(rep):
     for name, path, verdict, cited in rep["stale"]:
         print("STALE    %s: %s says %s judged against main %s, not current"
               % (name, path, verdict, cited))
+    for name, path, verdict in rep["untracked_silent"]:
+        print("UNTRACKED-SILENT %s: %s says %s without accounting for untracked content"
+              % (name, path, verdict))
     for e in rep["error"]:
         print("ERROR    %s" % e)
-    bad = len(rep["vacuous"]) + len(rep["stale"]) + len(rep["error"])
+    bad = (len(rep["vacuous"]) + len(rep["stale"])
+           + len(rep["untracked_silent"]) + len(rep["error"]))
     print()
     print("  vacuous universals: %d" % len(rep["vacuous"]))
     print("  stale main cites  : %d" % len(rep["stale"]))
+    print("  untracked unaccounted: %d" % len(rep["untracked_silent"]))
     if bad:
         print("\nFAIL: %d deletion-bound row(s) rest on evidence that cannot bear them." % bad)
         return 1
@@ -141,19 +157,25 @@ def self_test():
     main = "1" * 40
     cases = {
         "vacuous": "path\tverdict\tevidence\n/w\tLANDED\tall 0 file(s) match main %s\n" % main,
-        "stale":   "path\tverdict\tevidence\n/w\tLANDED\t3 files match main %s\n" % ("9" * 40),
+        "stale":   "path\tverdict\tevidence\n/w\tLANDED\t3 files match main %s, untracked checked: 0\n" % ("9" * 40),
+        "untracked_silent": "path\tverdict\tevidence\n/w\tLANDED\t3 files match main %s\n" % main,
     }
-    clean = "path\tverdict\tevidence\n/w\tLANDED\t3 file(s) match main %s\n" % main
+    clean = ("path\tverdict\tevidence\n/w\tLANDED\t3 file(s) match main %s; "
+             "untracked checked: 0 files\n" % main)
     ok = True
     for guarantee, text in cases.items():
         r = blank(); scan("t", text, main, r)
         caught = len(r[guarantee]) == 1
         # blinded arm: the guarantee removed must MISS the same row
-        saved = globals()["VACUOUS"] if guarantee == "vacuous" else globals()["MAIN_CITE"]
-        globals()["VACUOUS" if guarantee == "vacuous" else "MAIN_CITE"] = re.compile(r"(?!x)x")
+        gname = {"vacuous": "VACUOUS", "stale": "MAIN_CITE",
+                 "untracked_silent": "UNTRACKED"}[guarantee]
+        saved = globals()[gname]
+        # blinding UNTRACKED means making it match everything (so nothing is ever silent);
+        # blinding the other two means making them match nothing.
+        globals()[gname] = re.compile(r"") if guarantee == "untracked_silent" else re.compile(r"(?!x)x")
         rb = blank(); scan("t", text, main, rb)
         missed = len(rb[guarantee]) == 0
-        globals()["VACUOUS" if guarantee == "vacuous" else "MAIN_CITE"] = saved
+        globals()[gname] = saved
         # and it must not fire on a clean row
         rc = blank(); scan("t", clean, main, rc)
         quiet = len(rc[guarantee]) == 0
