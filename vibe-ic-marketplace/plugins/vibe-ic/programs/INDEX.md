@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1182
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1182)
+- **Total programs (excluding helpers / shims):** 1183
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1183)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1173 |
+| `any` | 1174 |
 
 ## Alphabetical listing
 
@@ -679,6 +679,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted, and judge any PER-LAYER density it carries. |
 | `metal_fill_emit` | any | — | per-layer density metal fill on the streamed GDS. |
 | `metal_layer_density_check` | any | — | PER-LAYER metal-density sign-off gate for tapeout. |
+| `metric_constant_across_differing_arms_is_not_measured` | any | — | An axis that takes ONE value on every arm was not measured under that lever. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves stray top-level entries and stray `reports/` flat artefacts into the canonical Phase/Stage/Step layout... |
 | `migrate_to_layout_p` | any | — | pre-v2 → Layout P project migration. |
 | `milstd1553_protocol_synth` | any | v0.1.83 | MIL-STD-1553B protocol synth helper. |
@@ -1254,7 +1255,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1173 programs)
+### `any` (1174 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1904,6 +1905,7 @@ _(no programs in this group)_
 - `metal_fill_density_check` — Verify metal fill was inserted, and judge any PER-LAYER density it carries.
 - `metal_fill_emit` — per-layer density metal fill on the streamed GDS.
 - `metal_layer_density_check` — PER-LAYER metal-density sign-off gate for tapeout.
+- `metric_constant_across_differing_arms_is_not_measured` — An axis that takes ONE value on every arm was not measured under that lever.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves stray top-level entries and stray `reports/` flat artefacts into the canonical Phase/Stage/Step layout...
 - `migrate_to_layout_p` — pre-v2 → Layout P project migration.
 - `milstd1553_protocol_synth` — MIL-STD-1553B protocol synth helper.  _[v0.1.83]_
