@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """pg_rail_geometry_check — 每一條宣告的電源/地軌，在 DEF 裡都必須至少帶一段佈線幾何，否則它只是一個名字。
 
+ENFORCEMENT: advisory — this gate is reached through the final compliance
+audit (step 31's `all_of`), not invoked inline by any runner, which is also
+true of its two neighbours there. `flow_gate_enforcement_audit` classifies that
+wiring as AUDIT_ONLY, so declaring `blocking` here would state an intent the
+wiring does not deliver and would register as a contradiction in that audit.
+Promoting it is a flow-owner decision with real blast radius, not a side effect
+of adding the gate.
+
 A power rail declared in the DEF's `SPECIALNETS` section but carrying **no
 routed geometry at all** binds every pin on it to nothing. The pins look
 connected — their net pointer is valid — but there is no metal on the net.
@@ -70,14 +78,6 @@ chip-AGNOSTIC: parses the DEF's own SPECIALNETS grammar and compares rails to
 each other within the same file. No rail name, chip name, PDK SKU or vendor
 literal appears anywhere in this program — the rail above is spelled `<RAIL>`
 for exactly that reason.
-
-ENFORCEMENT: advisory — this gate is reached through the final compliance
-audit (step 31's `all_of`), not invoked inline by any runner, which is also
-true of its two neighbours there. `flow_gate_enforcement_audit` classifies that
-wiring as AUDIT_ONLY, so declaring `blocking` here would state an intent the
-wiring does not deliver and would register as a contradiction in that audit.
-Promoting it is a flow-owner decision with real blast radius, not a side effect
-of adding the gate.
 
 Exit codes
 ----------
