@@ -196,18 +196,28 @@ def _audit_ring(project: Path, rep: Dict[str, Any],
             continue
         if not lib.resolved:
             continue
-        site = lib.sites.get(name)
+        site = lib.resolve_site(name)
         if site is None:
             out.append(_finding(
                 "PAD_SITE_NOT_FOUND",
-                f"{var}={name!r} is not a SITE in the IO cell library this "
-                f"run resolved (PAD-class sites: "
-                f"{lib.as_dict()['pad_class_sites']})"))
+                f"{var}={name!r} is declared by neither PDK view this run "
+                f"resolved — not as a LEF SITE record and not as a tech-view "
+                f"pad site declaration (PAD-class sites available: "
+                f"{lib.pad_class_site_names()})"))
         elif site["class"] != "PAD":
             out.append(_finding(
                 "PAD_SITE_CLASS_NOT_PAD",
                 f"{var}={name!r} has CLASS {site['class'] or '(none)'!r}, "
                 f"expected PAD"))
+
+    for name, recs in sorted(lib.site_declaration_conflicts.items()):
+        out.append(_finding(
+            "PAD_SITE_DECLARATION_AMBIGUOUS",
+            f"pad site {name!r} is declared at {len(recs)} different sizes by "
+            f"the PDK tech views this run resolved "
+            f"({[dict(r, size=list(r['size'])) for r in recs]}) — the site "
+            f"width is what the ring's spacing arithmetic rounds to, so it is "
+            f"not re-derivable and this gate does not pick one"))
 
     # ── per-cell corroboration ─────────────────────────────────────────────
     extent: Dict[str, Tuple[int, int]] = {}
@@ -503,8 +513,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     lefs = ([Path(p) for p in args.io_lef] if args.io_lef
                             else PR.discover_io_lefs(args.pdk_root, args.pdk))
+                    # Both PDK views, the same two the producer reads. An
+                    # auditor that consulted only the LEF would report
+                    # PAD_SITE_NOT_FOUND against a ring the PDK had in fact
+                    # declared the site for.
+                    decls = PR.discover_io_site_declarations(
+                        args.pdk_root, args.pdk)
                     findings.extend(
-                        _audit_ring(project, producer, PR.IoLibrary(lefs)))
+                        _audit_ring(project, producer,
+                                    PR.IoLibrary(lefs, decls)))
                     if not findings:
                         verdict, rc = "PASS", 0
                         reason = (

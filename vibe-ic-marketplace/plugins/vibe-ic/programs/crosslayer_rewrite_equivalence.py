@@ -101,12 +101,16 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _design_module_set import (  # noqa: E402 — vibe-ic#712 comment strip
+    strip_comments as _strip_hdl_comments,
+)
 from lec_run import (  # noqa: E402 — the ONE mature equiv recipe + parser
     parse_equiv_output as _parse_equiv_output,
     run_yosys_equiv as _run_yosys_equiv,
     _container_available as _container_available,
     _resolve_gold_files as _resolve_rtl_files,
 )
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#1470
 
 PROGRAM = "crosslayer_rewrite_equivalence"
 
@@ -166,7 +170,14 @@ def module_params(rtl_text: str, top: str) -> str:
     the parameter is rejected by the frontend with `Non-constant range in
     declaration` — measured on a parameterised multiplier before this was
     added, where it turned the whole latency-offset mode into a silent
-    0-points-compared NOT_MEASURED."""
+    0-points-compared NOT_MEASURED.
+
+    COMMENTS ARE STRIPPED FIRST. `_MODULE_RE` matches `module\s+(\w+)`, and a
+    commented-out or merely DESCRIBED module — `// module mul_pipelined(...)` in
+    a header block, or a `/* ... */` note quoting an older header — mints a
+    module that does not exist. The strip is applied to the value that REACHES
+    the scan, not to a sibling."""
+    rtl_text = _strip_hdl_comments(rtl_text)
     for m in _MODULE_RE.finditer(rtl_text):
         if m.group("name") == top:
             return (m.group("params") or "").strip()
@@ -186,7 +197,12 @@ def module_ports(rtl_text: str, top: str) -> List[Tuple[str, str, str]]:
     Handles both the ANSI header form (`module m(input wire [7:0] a, ...)`)
     and the non-ANSI form (`module m(a, b); input [7:0] a;`). Returns [] when
     the module is not found — the caller turns that into NOT_MEASURED, never
-    into an empty-but-fine wrapper."""
+    into an empty-but-fine wrapper.
+
+    COMMENTS ARE STRIPPED FIRST, for the same reason as `module_params`: a
+    commented-out header would otherwise supply this function's port list, and
+    the wrapper it builds is compared against the real design."""
+    rtl_text = _strip_hdl_comments(rtl_text)
     for m in _MODULE_RE.finditer(rtl_text):
         if m.group("name") != top:
             continue
@@ -676,12 +692,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.json).stem + "_delay_wrapper.v"))
         Path(wrapper_v).parent.mkdir(parents=True, exist_ok=True)
         params_txt = module_params(merged, args.top)
-        Path(wrapper_v).write_text(
-            build_delay_wrapper(args.top, ports, args.top, wrapper_top,
+        atomic_write_text(Path(wrapper_v),
+                          build_delay_wrapper(args.top, ports, args.top, wrapper_top,
                                 offset, args.clock, params_txt,
                                 reset=args.reset,
                                 reset_active_low=args.reset_active_low),
-            encoding="utf-8")
+                          encoding="utf-8")
         # The CANDIDATE gets a 0-deep pass-through wrapper with the SAME inner
         # instance name. It changes nothing electrically and exists only so
         # that `flatten` stamps the same `u_inner.` prefix on both sides:
@@ -698,11 +714,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             cand_wrapper_top = f"{args.top}__align0"
             cand_wrapper_v = str((project / args.json).with_name(
                 Path(args.json).stem + "_align_wrapper.v"))
-            Path(cand_wrapper_v).write_text(
-                build_delay_wrapper(args.top, cand_ports, args.top,
+            atomic_write_text(Path(cand_wrapper_v),
+                              build_delay_wrapper(args.top, cand_ports, args.top,
                                     cand_wrapper_top, 0, args.clock,
                                     params_txt),
-                encoding="utf-8")
+                              encoding="utf-8")
 
     if not _container_available(args.container):
         return fail_not_measured(
@@ -717,7 +733,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                         cand_wrapper_top=cand_wrapper_top)
     ys_host = (project / args.json).with_name(Path(args.json).stem + ".ys")
     ys_host.parent.mkdir(parents=True, exist_ok=True)
-    ys_host.write_text(script, encoding="utf-8")
+    atomic_write_text(ys_host, script, encoding="utf-8")
 
     t0 = time.time()
     launched, raw = _run_yosys_equiv(args.container, str(ys_host.resolve()),
@@ -726,7 +742,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     elapsed = time.time() - t0
     rpt_host = (project / args.json).with_suffix(".rpt")
     rpt_host.parent.mkdir(parents=True, exist_ok=True)
-    rpt_host.write_text(raw or "", encoding="utf-8")
+    atomic_write_text(rpt_host, raw or "", encoding="utf-8")
 
     if not launched:
         return fail_not_measured(
@@ -748,13 +764,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                                              cand_wrapper_v=cand_wrapper_v,
                                              cand_wrapper_top=cand_wrapper_top)
         ref_ys = ys_host.with_name(Path(args.json).stem + "_refute.ys")
-        ref_ys.write_text(ref_script, encoding="utf-8")
+        atomic_write_text(ref_ys, ref_script, encoding="utf-8")
         _launched2, raw2 = _run_yosys_equiv(
             args.container, str(ref_ys.resolve()), timeout=args.timeout,
             workdir=str(Path(baseline_files[0]).parent))
-        (project / args.json).with_name(
-            Path(args.json).stem + "_refute.rpt").write_text(
-                raw2 or "", encoding="utf-8")
+        atomic_write_text((project / args.json).with_name(
+            Path(args.json).stem + "_refute.rpt"),
+                          raw2 or "",
+                          encoding="utf-8")
         refuted = parse_refutation(raw2) if _launched2 else None
 
     status, rc, explanation = classify(parsed, refuted)

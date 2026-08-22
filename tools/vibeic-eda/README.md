@@ -93,11 +93,19 @@ it clones the existing container's mounts / cmd / user / workdir onto the new im
 refuses to interrupt an in-flight EDA job (override with `FORCE=1`), and verifies the
 image ID after the swap. Run it as your normal user (not root/sudo).
 ```bash
-./restart-eda.sh              # recreate on the PINNED version from ./VERSION
+./restart-eda.sh              # recreate on the newest vibeic-eda image THIS HOST holds, by DIGEST
 ./restart-eda.sh 0.2.11       # or any explicit tag / full image ref
 ```
-The no-argument default is deliberately the pinned `VERSION`, never a floating
-`latest` — a stale local `latest` would silently hand you an outdated toolchain.
+The no-argument default is deliberately a **digest**, never a floating `latest` —
+a stale local `latest` would silently hand you an outdated toolchain, and this
+host's `latest` really can be stale (measured 2026-08-21: local `latest` and the
+registry's `latest` were two different images at the same minute).
+
+It used to be `$(cat ./VERSION)` — vibeic-eda's version number kept in the vibe-ic
+repo, which meant a PR there for every image release. That file is gone; the
+script asks
+`vibe-ic-marketplace/plugins/vibe-ic/programs/_eda_image.py --judged` instead, so
+"which image" has one implementation rather than a bash second opinion.
 
 ---
 

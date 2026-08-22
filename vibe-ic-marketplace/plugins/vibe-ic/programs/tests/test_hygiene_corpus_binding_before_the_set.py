@@ -14,6 +14,11 @@ MEASURED on this host, clean `origin/main` 3199e9b3, 2026-08-20:
 
     pointer UNSET  75 of 80 decided, 71 passed, 4 failed, 5 NOT CHECKED, 239s
                    -- and the routed-DEF corpus EMPTY and BLOCKING
+                      (that row now reads NOT FOUND and BLOCKING: with the
+                      pointer unset nothing was OPENED, and vibe-ic#1764
+                      stopped that state borrowing the sentence for a corpus
+                      that WAS read and holds none. Still blocking, still
+                      never a pass; only the sentence moved.)
     pointer SET    77 of 83 decided, 73 passed, 4 failed, 6 NOT CHECKED, 241s
                    -- `published-evidence index honest` FAILS: a real, committed
                       INDEX.md staleness the empty corpus hid outright

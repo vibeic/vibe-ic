@@ -28,14 +28,20 @@ _spec = importlib.util.spec_from_file_location(
 C = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(C)
 
+from _ppa import benchmark as B          # noqa: E402  the fairness conditions
+from _ppa import canonical_json as cj    # noqa: E402  the only serializer
 
-#: The shape #1121 asks for: identical problem, both triples, their defaults.
-#: Numbers are arbitrary and carry no design meaning — the checker never
-#: interprets them beyond the three better-is directions.
-#: `design` is declared PER ARM and not once at the top level, deliberately:
-#: a shared block would ASSERT that both arms ran the same problem, whereas
-#: two independent declarations let the checker COMPARE them and refuse when
-#: they differ. The identity has to be evidence, not a heading.
+
+#: The shape v2 asks for: one contract proven by hash, identical scope on every
+#: axis, both arms feasible over the same question, and an opponent that was
+#: allowed to tune. Numbers are arbitrary and carry no design meaning -- the
+#: checker never interprets them beyond the three better-is directions.
+#:
+#: `design` is declared PER ARM and not once at the top level, deliberately: a
+#: shared block would ASSERT that both arms ran the same problem, whereas two
+#: independent declarations let the checker COMPARE them and refuse when they
+#: differ. The identity has to be evidence, not a heading. The same argument is
+#: why `contract` is per arm.
 _DESIGN = {
     "spec_sha256": "a" * 64,
     "pdk": "PDK_UNDER_TEST",
@@ -43,25 +49,92 @@ _DESIGN = {
     "corners": ["c_slow", "c_typ"],
 }
 
+#: The contract carries MORE than `design` does, on purpose: the two extra keys
+#: are the ones a v1 record could differ on while passing C1, which is the whole
+#: reason the hash exists beside the four declared fields.
+_CONTRACT_BODY = {
+    "spec_sha256": "a" * 64,
+    "pdk": "PDK_UNDER_TEST",
+    "clock_target_ns": 10.0,
+    "corners": ["c_slow", "c_typ"],
+    "floorplan": {"utilisation_target": 0.55},
+    "permitted_cells": "the PDK's own default set, unmodified",
+}
+_CONTRACT_SHA = cj.digest_of(_CONTRACT_BODY)
+
+_PHYS = "post_route_extracted"
+_AREA_SCOPE = {"stage": _PHYS}
+_TIMING_SCOPE = {"stage": _PHYS, "mode": "functional", "process": "PROC_SLOW",
+                 "voltage_v": 1.62, "temperature_c": 125.0,
+                 "rc_corner": "max", "check": "setup", "clock": "clk"}
+_POWER_SCOPE = {"stage": _PHYS, "mode": "functional", "process": "PROC_SLOW",
+                "voltage_v": 1.62, "temperature_c": 125.0,
+                "activity_basis": "vectorless"}
+
+
+def _metric(value, unit, scope):
+    return {"status": "MEASURED", "value": value, "unit": unit,
+            "scope": copy.deepcopy(scope)}
+
+
+def _ppa(area, wns, power):
+    return {"area_um2": _metric(area, "um^2", _AREA_SCOPE),
+            "timing_wns_ns": _metric(wns, "ns", _TIMING_SCOPE),
+            "power_mw": _metric(power, "mW", _POWER_SCOPE)}
+
+
+#: Every floor check, clean, in both arms. The SET matters as much as the
+#: values: an arm asked fewer questions looks exactly as good as one asked more.
+def _feasible():
+    return {"checks": {name: {"violations": 0, "source": f"<{name} report>"}
+                       for name in B.FEASIBILITY_FLOOR}}
+
+
+#: The SUBJECT may search a space it wrote -- it is our flow. The BASELINE may
+#: not, and it gets a budget no smaller than ours. Equal budgets here so that a
+#: test which shrinks one is measuring only that.
+def _subject_tuning():
+    return {"supported": True, "performed": True,
+            "budget": {"trials": 200, "cpu_hours": 96.0},
+            "search_space": {"source": "authored_for_this_comparison",
+                             "ref": "this project's own search space",
+                             "authored_by_this_project": True}}
+
+
+def _baseline_tuning():
+    return {"supported": True, "performed": True,
+            "budget": {"trials": 200, "cpu_hours": 96.0},
+            "search_space": {"source": "official",
+                             "ref": "the opponent's own published search space",
+                             "authored_by_this_project": False}}
+
+
 CLEAN = {
+    "schema": "vibeic.ppa.comparison.v2",
     "arms": [
         {
             "flow": "subject-flow", "role": "subject", "version": "x",
             "design": dict(_DESIGN),
+            "contract": {"sha256": _CONTRACT_SHA,
+                         "body": copy.deepcopy(_CONTRACT_BODY)},
             "measurement_basis": "signed_off_gds",
             "config_source": "this repo",
             "tuned_by_this_project": True,
-            "ppa": {"area_um2": 1000.0, "timing_wns_ns": -0.10,
-                    "power_mw": 5.00},
+            "ppa": _ppa(1000.0, -0.10, 5.00),
+            "feasibility": _feasible(),
+            "tuning": _subject_tuning(),
         },
         {
             "flow": "baseline-flow", "role": "baseline", "version": "y",
             "design": dict(_DESIGN),
+            "contract": {"sha256": _CONTRACT_SHA,
+                         "body": copy.deepcopy(_CONTRACT_BODY)},
             "measurement_basis": "signed_off_gds",
             "config_source": "upstream default config, unmodified",
             "tuned_by_this_project": False,
-            "ppa": {"area_um2": 1200.0, "timing_wns_ns": -0.30,
-                    "power_mw": 6.00},
+            "ppa": _ppa(1200.0, -0.30, 6.00),
+            "feasibility": _feasible(),
+            "tuning": _baseline_tuning(),
         },
     ],
 }
@@ -154,7 +227,14 @@ def test_the_report_emits_no_overall_figure(tmp_path):
         assert word not in blob
     assert "overall" not in blob
     per = rep["derived_verdict"]["per_baseline"]["baseline-flow"]
-    assert set(per) == set(C.AXES), "the verdict is a triple, not a word"
+    assert set(per) == set(C.AXES) | {"pareto"}, (
+        "the verdict is a triple plus a RELATION, and never a word to quote")
+    # `pareto` is the one non-axis key, and it must be a relation from a closed
+    # set -- never a number. A numeric Pareto rank would be the collapsed
+    # figure this record refuses to CARRY, re-entering through the verdict.
+    assert per["pareto"] in {"SUBJECT_DOMINATES", "BASELINE_DOMINATES",
+                             "EQUAL", "INCOMPARABLE"}
+    assert not isinstance(per["pareto"], (int, float))
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +253,7 @@ def test_a_tuned_baseline_is_refused_even_when_we_would_have_won(tmp_path):
     when the numbers were awkward it would be an excuse, not a rule."""
     doc = copy.deepcopy(CLEAN)
     doc["arms"][1]["tuned_by_this_project"] = True
-    doc["arms"][1]["ppa"]["area_um2"] = 99999.0   # baseline made to look awful
+    doc["arms"][1]["ppa"]["area_um2"]["value"] = 99999.0   # baseline made to look awful
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_REFUSED
     assert rep["refusal"]["code"] == "BASELINE_TUNED_BY_US"
@@ -222,8 +302,8 @@ def test_a_loss_is_derived_and_does_not_fail_the_gate(tmp_path):
     theirs is better.' A gate that only passes when we win would make the
     honest outcome unpublishable."""
     doc = copy.deepcopy(CLEAN)
-    doc["arms"][0]["ppa"]["area_um2"] = 2000.0        # ours worse
-    doc["arms"][0]["ppa"]["power_mw"] = 9.0           # ours worse
+    doc["arms"][0]["ppa"]["area_um2"]["value"] = 2000.0        # ours worse
+    doc["arms"][0]["ppa"]["power_mw"]["value"] = 9.0           # ours worse
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_OK, rep
     per = rep["derived_verdict"]["per_baseline"]["baseline-flow"]
@@ -234,7 +314,7 @@ def test_a_loss_is_derived_and_does_not_fail_the_gate(tmp_path):
 
 def test_an_asserted_verdict_that_contradicts_the_numbers_is_refused(tmp_path):
     doc = copy.deepcopy(CLEAN)
-    doc["arms"][0]["ppa"]["area_um2"] = 2000.0        # ours worse on area
+    doc["arms"][0]["ppa"]["area_um2"]["value"] = 2000.0        # ours worse on area
     doc["verdict"] = {"baseline-flow": {"area_um2": "SUBJECT_BETTER"}}
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_REFUSED, rep
@@ -245,7 +325,7 @@ def test_an_asserted_verdict_that_agrees_is_accepted(tmp_path):
     """The differential half of the test above: same record, verdict corrected.
     Without this, the refusal could be 'any asserted verdict is refused'."""
     doc = copy.deepcopy(CLEAN)
-    doc["arms"][0]["ppa"]["area_um2"] = 2000.0
+    doc["arms"][0]["ppa"]["area_um2"]["value"] = 2000.0
     doc["verdict"] = {"baseline-flow": {"area_um2": "BASELINE_BETTER"}}
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_OK, rep
@@ -255,8 +335,8 @@ def test_direction_of_better_is_not_uniform(tmp_path):
     """Timing is the axis where HIGHER is better. A checker that treated all
     three the same would pass every test above and still be wrong."""
     doc = copy.deepcopy(CLEAN)
-    doc["arms"][0]["ppa"]["timing_wns_ns"] = -0.90    # ours worse
-    doc["arms"][1]["ppa"]["timing_wns_ns"] = -0.05
+    doc["arms"][0]["ppa"]["timing_wns_ns"]["value"] = -0.90    # ours worse
+    doc["arms"][1]["ppa"]["timing_wns_ns"]["value"] = -0.05
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_OK, rep
     per = rep["derived_verdict"]["per_baseline"]["baseline-flow"]
@@ -286,7 +366,7 @@ def test_two_baselines_are_allowed(tmp_path):
     doc = copy.deepcopy(CLEAN)
     second = copy.deepcopy(doc["arms"][1])
     second["flow"] = "other-baseline"
-    second["ppa"]["area_um2"] = 900.0                 # this one beats us
+    second["ppa"]["area_um2"]["value"] = 900.0                 # this one beats us
     doc["arms"].append(second)
     rc, rep = _run(tmp_path, doc)
     assert rc == C.RC_OK, rep

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vibeic.ppa.agent_handoff.v1",
+  "title": "PPA agent handoff",
+  "description": "The record of a deterministic pass explicitly waiving to an agent. It exists so that a handoff is auditable after the fact: which reason was claimed, what the program had already decided before it gave up, and which exact evidence context and policy were in force. A handoff that cannot be paired back to those is one nobody can review, and reviewability is the only thing that makes reaching a model acceptable at all.",
+  "type": "object",
+  "required": ["schema", "reason", "question", "autonomy_level", "situation_sha256", "policy_sha256", "handoff_sha256", "handling"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "vibeic.ppa.agent_handoff.v1"},
+    "reason": {
+      "enum": ["PROGRAM_WAIVE", "AMBIGUOUS_ROOT_CAUSE", "MULTI_DOMAIN_CONFLICT", "NOVEL_TOOL_FAILURE", "PLATEAU", "SEARCH_SPACE_EXHAUSTED", "CROSS_LAYER_REQUIRED", "HUMAN_REQUESTED_REVIEW"],
+      "description": "Closed set, spec 4.6. A reason outside it is refused rather than passed along, because an unenumerated reason is one no reviewer can weigh against the others."
+    },
+    "question": {
+      "type": "string",
+      "description": "What the agent is being asked. Checked against the never-delegated set at the moment the handoff is built, not at the moment the reason is chosen: no reason makes a never-delegated question delegable."
+    },
+    "autonomy_level": {"enum": ["B0", "A0", "A1", "A2", "A3"]},
+    "explain_only": {
+      "type": "boolean",
+      "description": "True at B0 and A0. Stated in the handoff itself so the constraint travels with the request rather than living only in the sender."
+    },
+    "expected_response": {"const": "vibeic.ppa.agent_proposal.v1"},
+    "policy_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "situation_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "context_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "handoff_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Identity of this handoff, over the document without this key. It is what a returning proposal cites, which is what stops an agent answering an easier question than the one it was given."
+    },
+    "program_already_decided": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "violated": {"type": "array", "items": {"type": "string"}},
+        "clean": {"type": "array", "items": {"type": "string"}},
+        "undetermined": {"type": "array", "items": {"type": "string"}}
+      },
+      "description": "What the deterministic pass settled before waiving. Carried so a reviewer can ask the question that matters: could a rule have decided this?"
+    },
+    "never_delegated": {"type": "array", "items": {"type": "string"}},
+    "handling": {"const": "DATA_ONLY_NEVER_INSTRUCTION"}
+  }
+}

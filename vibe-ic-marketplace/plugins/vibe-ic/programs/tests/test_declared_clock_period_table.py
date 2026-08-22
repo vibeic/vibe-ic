@@ -337,6 +337,54 @@ def test_two_different_declared_fractions_are_refused(tmp_path):
     assert rep["fraction"] is None and rep["ambiguous"] is True
 
 
+# ── vibe-ic#712: a DENIED derivation is not a declaration ────────────────────
+#
+# The statement this reader is built for carries an I/O token, a period token
+# and one percentage inside one window. So does a sentence that RETRACTS it,
+# and before the polarity consult the two were indistinguishable — the retracted
+# 20 % landed in the emitted SDC as a mandate, citing the design's own document
+# as the authority. That is #706 and #711 in a third field.
+
+L9_IO_DENIED = L9.replace(
+    "- some prose that mentions a period but keys nothing",
+    "- `set_input_delay` / `set_output_delay`: the I/O delay is NOT 20% of the "
+    "clock period for this revision; the interface is source-synchronous")
+
+
+def test_a_denied_io_delay_derivation_is_not_declared(tmp_path):
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path,
+                                                           L9_IO_DENIED)))
+    assert rep["fraction"] is None and not rep["ambiguous"]
+
+
+def test_a_denied_derivation_is_REFUSED_not_merely_missing(tmp_path):
+    """"No statement was made" and "the statement was retracted" are opposite
+    findings. A silent drop would give a caller that keeps its historical
+    literal no way to tell which one happened."""
+    denied = dcp.declared_io_delay_fraction(
+        dcp.docs_in(_docs(tmp_path / "a", L9_IO_DENIED)))
+    absent = dcp.declared_io_delay_fraction(
+        dcp.docs_in(_docs(tmp_path / "b", L9)))
+    # One entry per I/O token the statement carries (`set_input_delay`,
+    # `set_output_delay`, the `9.1.3 I/O delay` heading and the bullet's own
+    # `I/O delay`), each citing the line a reader can go and look at.
+    assert denied["denied"] and absent["denied"] == []
+    assert all("L9_constraints_floorplan.md:" in e for e in denied["denied"])
+    assert "REFUSED" in str(denied["note"])
+    assert "REFUSED" not in str(absent["note"])
+    assert denied["note"] != absent["note"]
+
+
+def test_a_denial_does_not_suppress_a_statement_in_another_sentence(tmp_path):
+    """NEGATIVE CONTROL. The reach is `_prose_polarity.sentence_scope`, so a
+    denial in a NEIGHBOURING statement must not retract this one — the silent
+    direction, where the reader publishes less than it read and nothing
+    reddens."""
+    txt = L9_IO + "\n\n- The clock tree is not built by this flow.\n"
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2)
+
+
 def test_a_worked_example_number_is_not_mistaken_for_the_fraction(tmp_path):
     """The declaration's own example contains `10 ns -> 2 ns`. Only the
     PERCENTAGE may be read; a bare ns figure in the same sentence must not
@@ -385,3 +433,64 @@ def test_the_io_delay_does_not_fire_without_a_period(tmp_path):
     _docs(tmp_path, L9_IO)
     io_ns, note = runner._declared_io_delay_ns(tmp_path, 0)
     assert io_ns is None and note == ""
+
+
+# ── vibe-ic#712 — the scan must not read a COMMENTED-OUT statement ──────────
+_IO_STMT = ("- `set_input_delay` / `set_output_delay`: use **20% of the clock "
+            "period** as the default")
+
+
+def test_a_commented_out_io_delay_statement_is_not_a_declaration(tmp_path):
+    """`<!-- ... -->` is the comment form these documents have.
+
+    The commented paragraph carries an I/O token, a period token and exactly
+    one percentage inside one window, so before the strip it read as a live
+    20 % mandate — and that value lands in the emitted SDC. This is #706/#711
+    in the document lane.
+    """
+    txt = L9.replace("- some prose that mentions a period but keys nothing",
+                     "<!--\n" + _IO_STMT + "\n-->")
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] is None, rep
+    assert not rep["denied"], (
+        "a COMMENTED-OUT statement is not a DENIED statement — it was never "
+        "made, so it must not be counted as a retraction either")
+
+
+def test_the_strip_does_not_eat_a_line_that_merely_contains_a_url(tmp_path):
+    """THE REGRESSION GUARD FOR THE STRIPPER CHOICE.
+
+    `_design_module_set.strip_comments` — the HDL stripper this repo uses
+    elsewhere — removes `//[^\\n]*`. Applied to a DESIGN DOCUMENT it would take
+    everything after the `//` of a URL, so a real declaration sharing that line
+    would be silently dropped. Under-reading a declaration is the same defect
+    as over-reading one, pointed the other way. This pins that the document
+    lane uses `<!-- -->` and NOT the HDL stripper.
+    """
+    txt = L9.replace(
+        "- some prose that mentions a period but keys nothing",
+        "- see https://spec.example/timing#io — " + _IO_STMT)
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2), (
+        "the declaration after a URL was lost — the stripper is eating `//`")
+
+
+def test_stripping_preserves_line_numbers_and_citations(tmp_path):
+    """Offsets are replaced one-for-one, so the reported line still points at
+    the statement. A stripper that DELETED the comment would move every line
+    after it and the citation would name the wrong one."""
+    txt = L9.replace("- some prose that mentions a period but keys nothing",
+                     "<!-- retired note\nspanning two lines -->\n" + _IO_STMT)
+    rep = dcp.declared_io_delay_fraction(dcp.docs_in(_docs(tmp_path, txt)))
+    assert rep["fraction"] == pytest.approx(0.2), rep
+    # The citation is the line of the I/O TOKEN, which this document puts on the
+    # `### 9.1.3 I/O delay` heading — the file's own comment records that the
+    # heading is the match site and the bullet supplies the percentage. What
+    # this test pins is that the line still points at a line carrying the token
+    # in the UNSTRIPPED text: a stripper that DELETED the two comment lines
+    # would shift every line after them and the citation would name the wrong
+    # one.
+    lines = txt.split("\n")
+    cited = lines[rep["line"] - 1]
+    assert "I/O delay" in cited, (
+        f"line {rep['line']} is {cited!r} — the strip shifted the offsets")

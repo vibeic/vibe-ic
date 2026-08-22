@@ -360,15 +360,45 @@ if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
   # in gatekeeper-land.sh — one way to name the stamp, so the two cannot drift.
   STAMP="$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   HEAD_SHA="$(git rev-parse HEAD)"
+  # LINE 1 IS THE COMMIT, AND ONLY THE COMMIT. `gatekeeper-land.sh` writes a
+  # one-line stamp; `gatekeeper-land-differential.sh` writes the same first line
+  # and then `base=`, `tier=`, `host=`. Reading line 1 keeps BOTH writers valid
+  # here, and the direction of the incompatibility is the safe one: an OLDER
+  # hook, which reads the whole file, sees a mismatch and REFUSES a differential
+  # stamp rather than accepting it blind.
   if [ ! -f "$STAMP" ]; then
     echo "pre-push: FAILED — the full suites have not been run for this commit" >&2
-    echo "    run: tools/gatekeeper-land.sh" >&2
+    echo "    run: tools/gatekeeper-land.sh --differential" >&2
     FAILED=1
-  elif [ "$(cat "$STAMP")" != "$HEAD_SHA" ]; then
+  elif [ "$(head -1 "$STAMP")" != "$HEAD_SHA" ]; then
     echo "pre-push: FAILED — the gatekeeper stamp is for a different commit" >&2
-    echo "    stamped: $(cut -c1-9 < "$STAMP")   pushing: ${HEAD_SHA:0:9}" >&2
-    echo "    re-run:  tools/gatekeeper-land.sh" >&2
+    echo "    stamped: $(head -1 "$STAMP" | cut -c1-9)   pushing: ${HEAD_SHA:0:9}" >&2
+    echo "    re-run:  tools/gatekeeper-land.sh --differential" >&2
     FAILED=1
+  else
+    # A DIFFERENTIAL VERDICT IS ABOUT A PAIR, NOT A COMMIT.
+    #
+    # `--differential` answers "does this commit break anything the BASE does
+    # not". If `main` moved between the gate and the push, that pass describes a
+    # comparison against a tree nobody is about to create — the same staleness
+    # `gatekeeper-verify-merge.sh --reassert` exists to catch on the merge path,
+    # and one the single-SHA stamp could not express at all. The remote tip is
+    # already in hand: git hands it to this hook on stdin as `remote_sha`, which
+    # `PUSH_BASE` carries out of the loop.
+    #
+    # Only checked when the stamp DECLARES a base. A plain one-line stamp is the
+    # absolute tier, which claims nothing about a base and is unaffected.
+    STAMP_BASE="$(sed -n 's/^base=//p' "$STAMP" | tail -1)"
+    if [ -n "$STAMP_BASE" ] && [ -n "${PUSH_BASE:-}" ] \
+       && [ "$PUSH_BASE" != "origin/main" ] && [ "$STAMP_BASE" != "$PUSH_BASE" ]; then
+      echo "pre-push: FAILED — the differential was measured against a base that has moved" >&2
+      echo "    verified against: ${STAMP_BASE:0:9}" >&2
+      echo "    the remote is at: ${PUSH_BASE:0:9}" >&2
+      echo "    Commits landed in between, so 'this breaks nothing new' was" >&2
+      echo "    decided about a different tree. Rebase and re-run:" >&2
+      echo "    tools/gatekeeper-land.sh --differential" >&2
+      FAILED=1
+    fi
   fi
 fi
 
