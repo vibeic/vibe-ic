@@ -95,7 +95,7 @@ from .flowref import StepId
 # ──────────────────────────────────────────────────────────────────────
 # Dimensions
 # ──────────────────────────────────────────────────────────────────────
-DIMENSIONS: Tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8)
+DIMENSIONS: Tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 DIMENSION_NAMES: Dict[int, str] = {
     1: "wiring",
@@ -106,6 +106,7 @@ DIMENSION_NAMES: Dict[int, str] = {
     6: "skip_discipline",
     7: "outputs_list_complete",
     8: "missing_caught",
+    9: "verdict_consumed",
 }
 
 #: One line per dimension — the question the cell actually asks.
@@ -124,9 +125,18 @@ DIMENSION_QUESTIONS: Dict[int, str] = {
     6: "Is every skip / vacuous-pass disclosed rather than counted as a pass?",
     7: "Is required_outputs complete — does the step emit artefacts it never declares?",
     8: "When a declared output IS missing, which mechanism catches it?",
+    9: "When this step FAILs, does the verdict reach the exit code — or is it reported and discarded?",
 }
 
 #: Field name each dimension occupies in ``.audit_63x8.json``. Index = dim - 1.
+#:
+#: This tuple is EIGHT long and must stay that way. The 2026-07 audit asked
+#: eight questions; a dimension added after it has no record in that file and
+#: must read ``ABSENT_FROM_AUDIT``. Padding this tuple to keep the index
+#: arithmetic tidy would make dimension 9 inherit dimension 8's prose as its
+#: own history — a stored verdict about a different question, which is the
+#: disease this package exists to stamp out. :func:`_history_from_raw` guards
+#: the length instead.
 AUDIT_FIELDS: Tuple[str, ...] = (
     "d1_wiring",
     "d2_runnable",
@@ -245,6 +255,13 @@ def _history_from_raw(doc: Dict[str, Any]) -> Dict[Tuple[str, int], Tuple[str, s
     for rec in doc.get("steps") or []:
         sid = flowref.normalize_id(rec.get("step_id"))
         for dim in DIMENSIONS:
+            if dim - 1 >= len(AUDIT_FIELDS):
+                # A dimension added AFTER the 2026-07 audit. It has no field in
+                # that document, so it has no history — say so. Never fall back
+                # to a neighbouring field: that would hand this cell a verdict
+                # recorded about a different question.
+                out[(sid, dim)] = (ABSENT, "")
+                continue
             value = rec.get(AUDIT_FIELDS[dim - 1])
             if value is None:
                 # Present step, absent cell. Honest signal, not an error.

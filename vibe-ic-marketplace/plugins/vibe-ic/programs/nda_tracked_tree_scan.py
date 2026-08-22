@@ -151,8 +151,15 @@ def _tracked(repo: Path, ref: str = None):
     symlinks outright, claiming the path scan already covered them, but the
     path scan reads the LINK's own name and never the target it points at.
     """
-    cmd = (["git", "-C", str(repo), "ls-files", "-s"] if ref is None
-           else ["git", "-C", str(repo), "ls-tree", "-r", "--full-tree", ref])
+    # `-z`: NUL-separated records and RAW paths. Without it git C-QUOTES any
+    # path that is not plain ASCII (`"a/\346\225\264 .json"`), and `_blobs`
+    # then asks `cat-file` for that quoted string, which cannot resolve — so
+    # every non-ASCII path comes back `missing`. That is the same failure the
+    # `_toplevel` docstring above records from #416, reached by a different
+    # route: the enumeration and the lookups must agree BY CONSTRUCTION.
+    # Measured on a repo carrying 401 such paths: 401 unresolvable before, 0 after.
+    cmd = (["git", "-C", str(repo), "ls-files", "-s", "-z"] if ref is None
+           else ["git", "-C", str(repo), "ls-tree", "-r", "-z", "--full-tree", ref])
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         # #416. An empty list scans clean. "git would not tell me what is
@@ -162,7 +169,9 @@ def _tracked(repo: Path, ref: str = None):
             f"git could not enumerate the tracked tree "
             f"({' '.join(cmd[3:])}): {r.stderr.strip()[:200]}")
     out = []
-    for line in r.stdout.splitlines():
+    for line in r.stdout.split("\0"):        # -z: records are NUL-separated
+        if not line:
+            continue
         try:
             meta, rel = line.split("\t", 1)
             mode = meta.split()[0]
@@ -301,7 +310,12 @@ def _blobs(repo: Path, rels: List[str], ref: str = None):
             if not header:
                 break
             parts = header.split()
-            if len(parts) < 3:
+            # `cat-file --batch` echoes the REQUEST before `missing`, so a path
+            # containing a space produces THREE tokens ending in `missing` and a
+            # count-based test walks straight into `int(b"missing")`, killing the
+            # whole scan. Key on the size field: a header is usable only when its
+            # third token is a number.
+            if len(parts) < 3 or not parts[2].isdigit():
                 # "<obj> missing". #416: this used to `continue`, which made
                 # a request that resolved to NOTHING indistinguishable from a
                 # file that carried no token — and that is how 3316 dropped

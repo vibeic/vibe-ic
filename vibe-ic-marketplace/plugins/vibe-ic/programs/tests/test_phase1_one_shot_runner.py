@@ -40,8 +40,32 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent / \
     "phase1_one_shot_runner.py"
 
+#: `_run`'s default, and now the ONLY bound in this file. NOT a round number
+#: picked by feel: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the
+#: pytest harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The default was already 60 and correct. Two call sites OVERRODE it with 300,
+#: which is the shape a per-call bound invites: the safe default is declared
+#: once and then walked past one keyword at a time. MEASURED here: the runner
+#: over a tmp_path project with one staged prompt takes 2.23 s worst of six
+#: calls, so neither override was buying anything — 60 s is ~27x measured.
+#: The two sites still PASS it explicitly rather than falling through to the
+#: default. Dropping the keyword altogether also silences the finding, but it
+#: does so by making the bound unreadable: the gate resolves a module-level
+#: int and a literal, never a parameter forwarded from a signature default, so
+#: those two call sites would have left its denominator (`bounded_sites`)
+#: instead of satisfying it. A green earned by becoming invisible to the check
+#: is the failure this gate family exists to prevent, so the count is held:
+#: 745 readable bounds before this change, 745 after.
+_RUN_TIMEOUT_S = 60
 
-def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
+
+def _run(args: list,
+         timeout: int = _RUN_TIMEOUT_S) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
         capture_output=True, text=True, timeout=timeout,
@@ -96,7 +120,7 @@ def test_reverse_one_staged_input_and_the_same_run_completes(tmp_path):
     project.mkdir(parents=True, exist_ok=True)
     _stage_prompt(project)
     cp = _run([str(project), "--ic-name", "TST_CHIP", "--mode", "prompt"],
-              timeout=300)
+              timeout=_RUN_TIMEOUT_S)
     assert cp.returncode == 0, cp.stderr
     body = json.loads(
         (project / "reports" / "phase1_one_shot.json").read_text())
@@ -123,7 +147,7 @@ def test_integration_report_shape(tmp_path):
     # different thing.
     _stage_prompt(project)
     cp = _run([str(project), "--ic-name", "TST_CHIP", "--mode", "prompt"],
-              timeout=300)
+              timeout=_RUN_TIMEOUT_S)
     assert cp.returncode == 0
     body = json.loads(
         (project / "reports" / "phase1_one_shot.json").read_text())

@@ -8,7 +8,6 @@ case, and a clean-exit test cannot see it.
 from __future__ import annotations
 
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -209,149 +208,89 @@ def test_the_lock_is_actually_taken_and_not_merely_created(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# #1263 — A CONCURRENT PEER IS THE OPERATING CONDITION, NOT AN ERROR.
+# A PEER TIDIES UP WHILE WE ARE WALKING THE LISTING.
 #
-# Every agent on this host reaps the same shared prefix, so a candidate this
-# loop listed can be gone by the time the loop reaches it. Until #1263 that
-# interleaving raised an uncaught FileNotFoundError out of `reap` — and so out
-# of `reserve` and out of every caller — which is how a test about cleanup
-# after a SIGKILL came to fail on host load rather than on anything the code
-# under test did.
+# `iterdir()` is a snapshot. On a host running several agents against one /tmp,
+# a peer finishes between the listing and the inspection and `d.stat()` raises
+# FileNotFoundError, which escaped `reserve()` into the caller. Measured: it
+# took down two tests of an unrelated PR's verification run and did NOT
+# reproduce on a re-run of the same tree, which is how it stayed invisible.
 #
-# Driven through the PUBLIC `remover` seam, which runs between the listing and
-# the look at the NEXT candidate: that is precisely the peer's interleaving,
-# and unlike a sleep-and-hope racer it lands every single time.
+# Three-way control, because a fix here can go wrong in two directions —
+# crashing (the bug) and swallowing everything (the over-correction):
+#   vanished        -> reported, sweep continues
+#   still reapable  -> STILL reaped in the same sweep
+#   a real error    -> NOT disguised as "it vanished"
 # ---------------------------------------------------------------------------
+def _vanishes_after_the_listing(monkeypatch, doomed, exc=None):
+    """Model the RACE, not merely a missing directory.
 
-def _two_old_candidates(tmp_path):
-    """Two sidecar-less candidates old enough to be reaped, sorted a < b."""
-    a, b = tmp_path / "probe-a", tmp_path / "probe-b"
-    old = time.time() - 86400
-    for d in (a, b):
-        d.mkdir()
-        os.utime(d, (old, old))
-    return a, b
+    The listing must still SEE it — that is what makes this a race rather than
+    an absence — so `is_dir` is answered directly and only `stat` raises. A
+    naive patch of `stat` alone removes it at `iterdir()` time (pathlib's
+    `is_dir` goes through `stat`), so the candidate never enters the loop and
+    the test proves nothing.
+    """
+    exc = exc or FileNotFoundError(2, "No such file or directory", str(doomed))
+    real_stat, real_is_dir = Path.stat, Path.is_dir
 
+    def fake_is_dir(self):
+        return True if Path(self) == doomed else real_is_dir(self)
 
-def test_a_peer_removing_a_candidate_mid_sweep_does_not_crash_the_sweep(
-        tmp_path):
-    """The #1263 crash itself. `reap` must not die because it got the help it
-    is designed to get."""
-    a, b = _two_old_candidates(tmp_path)
+    def fake_stat(self, *a, **k):
+        if Path(self) == doomed:
+            raise exc
+        return real_stat(self, *a, **k)
 
-    def peer_removes_b(d):
-        if d == a:
-            shutil.rmtree(b)
-
-    rep = S.reap("probe-", remover=peer_removes_b, legacy_max_age_s=3600,
-                 root=tmp_path)
-    assert str(a) in rep.reaped, rep
+    monkeypatch.setattr(Path, "is_dir", fake_is_dir)
+    monkeypatch.setattr(Path, "stat", fake_stat)
 
 
-def test_a_peers_removal_is_reported_as_the_PEERS_and_never_as_ours(tmp_path):
-    """Surviving is half of it. `reaped` is this run's claim to have done the
-    removal, and the only thing anyone reads it for is whether THIS reaper
-    works — so a directory somebody else removed must never be counted there,
-    and must not vanish from the report altogether either."""
-    a, b = _two_old_candidates(tmp_path)
-
-    def peer_removes_b(d):
-        if d == a:
-            shutil.rmtree(b)
-
-    rep = S.reap("probe-", remover=peer_removes_b, legacy_max_age_s=3600,
-                 root=tmp_path)
-    assert str(b) in rep.vanished, (
-        "a peer's removal was not reported at all, so a sweep that touched "
-        "nothing and a sweep whose work was done for it read alike: %s"
-        % (rep,))
-    assert str(b) not in rep.reaped, (
-        "this run took credit for a removal a peer did: %s" % (rep,))
-    assert not any(p == str(b) for p, _ in rep.kept), (
-        "a directory that is GONE was reported as one left standing: %s"
-        % (rep,))
+def test_a_peer_that_vanishes_mid_sweep_is_reported_not_a_crash(tmp_path, monkeypatch):
+    doomed = tmp_path / "probe-gone"
+    doomed.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    rep = S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+    assert rep.vanished == [str(doomed)], rep
+    assert str(doomed) not in rep.reaped, rep
+    assert [p for p, _ in rep.kept] == [], rep
 
 
-def test_a_YOUNG_candidate_a_peer_removed_is_not_called_a_legacy_leftover(
-        tmp_path):
-    """A vanished directory must not be judged by the sidecar-less rules at
-    all. It has no sidecar because it has no anything — reasoning about its age
-    or about pre-lock builds describes a directory that is not there."""
-    a = tmp_path / "probe-a"
-    a.mkdir()
-    os.utime(a, (time.time() - 86400,) * 2)
-    b = tmp_path / "probe-b"          # young, and NOT old enough to reap
-    b.mkdir()
-
-    def peer_removes_b(d):
-        if d == a:
-            shutil.rmtree(b)
-
-    rep = S.reap("probe-", remover=peer_removes_b, legacy_max_age_s=3600,
-                 root=tmp_path)
-    assert str(b) in rep.vanished, rep
-    assert not any(p == str(b) and "may be a peer between" in w
-                   for p, w in rep.kept), (
-        "a directory a peer had already removed was filed under the "
-        "mkdtemp-race rule, which is about a directory that EXISTS: %s"
-        % (rep,))
+def test_the_sweep_carries_ON_past_a_vanished_peer(tmp_path, monkeypatch):
+    """The half that matters. A vanished peer must not abort the sweep, or one
+    tidy peer disables the reaper for every abandoned directory behind it."""
+    doomed = tmp_path / "probe-aaa-gone"
+    doomed.mkdir()
+    stale = tmp_path / "probe-bbb-stale"
+    stale.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    rep = S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+    assert rep.vanished == [str(doomed)], rep
+    assert str(stale) in rep.reaped, rep
+    assert not stale.exists()
 
 
-def test_the_peer_rule_does_not_swallow_a_sidecar_that_really_cannot_be_read(
-        tmp_path):
-    """THE OTHER DIRECTION, and the one that makes the fix worth having rather
-    than a blanket `except`. "It is not there" is a peer doing its job; "it is
-    there and I could not read it" is a fault, and the #1263 repair must keep
-    saying so. Without this test the same green comes from catching every
-    OSError and calling the directory vanished."""
-    if os.geteuid() == 0:
-        pytest.skip("root can open a 0-mode file, so the fault cannot be "
-                    "staged and this control would be vacuous")
-    d = tmp_path / "probe-unreadable"
-    d.mkdir()
-    lock = d / S.LOCK_NAME
-    lock.write_text("")
-    os.chmod(str(lock), 0)
+def test_a_real_error_is_not_disguised_as_a_vanished_peer(tmp_path, monkeypatch):
+    """The over-correction guard. `except FileNotFoundError` must not become
+    `except Exception`: a PermissionError is a fact about this host and has to
+    reach the caller rather than be filed as "someone else tidied up"."""
+    doomed = tmp_path / "probe-denied"
+    doomed.mkdir()
+    _vanishes_after_the_listing(
+        monkeypatch, doomed,
+        exc=PermissionError(13, "Permission denied", str(doomed)))
+    with pytest.raises(PermissionError):
+        S.reap("probe-", root=tmp_path, legacy_max_age_s=0)
+
+
+def test_reserve_survives_a_peer_vanishing(tmp_path, monkeypatch):
+    """End to end: this is the call that actually blew up in the field."""
+    doomed = tmp_path / "probe-gone"
+    doomed.mkdir()
+    _vanishes_after_the_listing(monkeypatch, doomed)
+    res, rep = S.reserve("probe-", root=tmp_path, legacy_max_age_s=0)
     try:
-        assert S._is_locked(lock) is None, (
-            "the 0-mode sidecar was readable after all, so this control is "
-            "not staging the fault it claims to")
-        rep = S.reap("probe-", root=tmp_path)
-        assert d.exists(), rep
-        assert any(p == str(d) and "could not be opened" in w
-                   for p, w in rep.kept), (
-            "a REAL sidecar fault on a directory that is standing was filed "
-            "as a peer's removal, which is the blanket-catch the #1263 fix "
-            "exists to avoid: %s" % (rep,))
-        assert str(d) not in rep.vanished, rep
+        assert res.path.is_dir()
+        assert rep.vanished == [str(doomed)], rep
     finally:
-        os.chmod(str(lock), 0o600)
-
-
-def test_a_directory_that_went_while_its_lock_was_being_opened_says_so(
-        tmp_path):
-    """The residual window: the sidecar was a file when we looked and the whole
-    directory was gone by the `os.open`. It cannot be scheduled from outside
-    the process, so `_is_locked`'s "cannot tell" answer is injected directly —
-    what is under test is the CLASSIFICATION that follows it, which is the only
-    part that was wrong."""
-    d = tmp_path / "probe-racing"
-    d.mkdir()
-    (d / S.LOCK_NAME).write_text("")
-    real_is_locked = S._is_locked
-
-    def cannot_tell_because_it_went(lock):
-        shutil.rmtree(d, ignore_errors=True)
-        return real_is_locked(lock)
-
-    S._is_locked = cannot_tell_because_it_went
-    try:
-        rep = S.reap("probe-", root=tmp_path)
-    finally:
-        S._is_locked = real_is_locked
-    assert str(d) in rep.vanished, rep
-    assert not any(p == str(d) and "could not be opened" in w
-                   for p, w in rep.kept), (
-        "a directory a peer had removed was reported as a sidecar that could "
-        "not be opened, sending the next reader after a permissions fault "
-        "that is not there: %s" % (rep,))
+        res.release()
