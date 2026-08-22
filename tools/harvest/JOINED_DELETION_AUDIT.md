@@ -248,3 +248,46 @@ from passing: a correction on a tree that genuinely holds content must be SUPPOR
 fail-closed clone with no probe must be UNMEASURED rather than either verdict. The probe arms need
 their own fail-closed fixture — a measurable clone never reaches that branch, so reusing the clean
 fixture left it dead code until I noticed the arm was passing for the wrong reason.
+
+## The corrections file went stale while I was writing it, and the checker caught it
+
+Keyed by path alone, a corrections file reports "done" as soon as **one** file is fixed. Measured:
+jharv3's `9507f4f3e1` corrected `_a1456`, `_jd3` and `wt_jwire2` in `verdicts_joined.tsv` — and the
+same three rows still read LANDED in `verdicts_unreachable_resolved.tsv`. Fixed in one place, not
+all places; I have done the same four times this session. Corrections are now keyed by
+**(target_file, path)**: 12 rows across three files for 7 distinct worktrees.
+
+Three parsing bugs had to be found before the checker could be believed, and each produced a
+confident wrong answer rather than an error:
+
+| bug | symptom | why it lies |
+|---|---|---|
+| `ssh` reads stdin | `supported=1 unsupported=0` rc=0 | it checked **1 of 10 rows**; a short loop reports no failures |
+| **tab is IFS whitespace** | 12 of 16 "probe unreadable" | `IFS=$'\t' read` collapses consecutive tabs, so an EMPTY field vanishes and every later column shifts left — `probe` was receiving the branch sha |
+| `FETCH_HEAD` | 16 of 16 "row not found" | a `git fetch origin main` one command earlier repointed it; the lookups read main's tree, where `tools/harvest/*.tsv` does not exist |
+
+The third is the same `FETCH_HEAD` overwrite that made my own deliverables appear missing earlier
+today. Twice in one session, from the same cause.
+
+### And then main moved, which is what the whole design is for
+
+Live `origin/main` is now `a4caccefeab`, **+214 commits** past the `81cd5321b08` these corrections
+were measured against — and `81cd5321b08` is an ancestor, so the drift direction argument holds.
+
+Re-run against live main, four corrections no longer held:
+
+    verdicts_joined.tsv                _jintent/wt          now contained in main
+    verdicts_joined.tsv                _agentjob_jliar/wt   now contained in main
+    verdicts_shard_a.tsv               _agentjob_jliar/wt   now contained in main
+    verdicts_unreachable_resolved.tsv  _jd3                 now contained in main
+
+Exactly the predicted direction: staleness turns RECOVER into LANDED, never the reverse. Their
+original LANDED verdicts are now correct, so the corrections are **withdrawn**, not deleted —
+recorded in `corrections_withdrawn.tsv` with what changed and against which main.
+
+The checker derives main LIVE, because a checker asks *is this true now*; the corrections file
+RECORDS the main its measurement used, because a writer must not claim a freshness it does not have.
+That split is the whole reason this was catchable instead of silently rotting.
+
+**Final: 12 supported, 0 unsupported, 0 unmeasured, 0 stale, 12 of 12 rows.**
+Nine hermetic arms, no fleet required.
