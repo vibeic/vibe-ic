@@ -1208,3 +1208,98 @@ They do, and both were already there:
 
 Nothing to add. Worth stating anyway, because "the A/B proved it" and "the proof is
 still there after landing" are different claims, and only the second one is durable.
+
+## A gate that passed on its own motivating incident
+
+The A/B said ten of twelve gates have no real-history control. Chasing that
+produced the worst finding in this lane, and it is against my own work.
+
+I ran five of the always-green gates against five revisions of `main` spanning
+2026-08-09 to 2026-08-22. None ever returned 1. Then I read what the capture says
+about those same five, and every one of them carries:
+
+    "fires_on_original": "Yes"
+
+and three carry `measured_after: "Not fixed."` The capture says the defect is
+there. My gates said PASS. Both cannot be true.
+
+**Three of the five dissolved on inspection, and the reasons are worth keeping.**
+
+* `local_clone_does_not_borrow_objects` — the capture asks for a scan refusing any
+  local clone that does not disable hardlinked storage. Implemented as written it
+  is wrong here: `landing_tier_checkout_preflight.py:35` refuses object
+  ALTERNATES, explicitly accepts "a local hardlink clone" (`:42`), and PRINTS
+  `git clone {root} <somewhere>` as its own remedy (`:137`). The literal rule
+  reddens the remedy its sibling gate prints. The narrowing is right and the
+  checker states it.
+* `printed_remedy_runs_as_printed` — the capture says "not present on the default
+  branch". It has since landed: `container_image_provenance.py:169-177` now prints
+  both forms and explains the leading-argument requirement. rc=0 is correct.
+* `explicit_argument_outranks_the_environment_pointer` — scoped to the
+  announcement by an earlier stated narrowing.
+
+**The fourth did not dissolve.** `signoff_report_states_its_stage` was keyed on
+the flow's `required_outputs`. The capture's own two multi-corner sign-off reports
+are emitted and never declared, so they landed in the DISCLOSED bucket where no
+input can redden them. The gate could see the incident and had decided in advance
+not to count it.
+
+    DISCLOSED — phase3_one_shot_runner.py emits sta_spef_multicorner.rpt, which
+                the flow does not declare as any step's required output.
+    DISCLOSED — phase3_one_shot_runner.py emits sta_mcorner_ocv_posteco.rpt, ...
+
+Measured on `main`: `sta_FF.rpt` carries six `STA_BASIS` occurrences; both
+multi-corner reports carry none. That is the capture's sentence exactly — "the
+single-corner one carried the stage statement and both multi-corner sign-off
+reports carried none".
+
+### The key that works, and the two obvious keys that do not
+
+The capture says the rule is "keyed on the step's own declaration of what its
+evidence is". Two candidate keys failed:
+
+* **The flow's `required_outputs`** — excludes the incident by construction.
+* **The sign-off gate's evidence globs** (`sta_signoff_rigor_check.py:226-228`) —
+  `sta_spef_multicorner.rpt` matches only the catch-all `*sta*.rpt`, so adopting
+  the globs means adopting a catch-all.
+
+Arm B is keyed on the module's own demonstrated convention: a module that stamps
+one timing/power report it emits knows how to stamp, so a sibling it emits
+unstamped is an omission, not a scope question. A module that stamps nothing is
+outside the population. No external list, nothing to arbitrate.
+
+### Two corrections I had to make to arm B before it was worth shipping
+
+Both were found by reading the findings rather than the exit code.
+
+1. **The copy exclusion was inverted.** `_publish_artefact_mirror` was reddened;
+   its docstring says it copies `src` to `dst` and records a MIRROR. A republished
+   byte-identical copy cannot state a basis its producer did not. But my first
+   exclusion treated any `read_text`/`read_bytes` as copying — and every report
+   generator reads the tool log it summarises, so the population emptied and the
+   whole gate went green. The signal is the DATAFLOW: bytes read from one path
+   reaching a write unchanged.
+2. **The scan could not see the repo's own atomic write.** The doctrine here is
+   temp-file + `os.replace`, so a correct emitter never calls `write_text` on its
+   destination. `_measure_posteco_mcorner_ocv` writes
+   `sta_mcorner_ocv_posteco.rpt` by `replace` — the capture's own report, invisible
+   to the scan for that reason alone. Reverting just that widening drops it back
+   out of the finding set, which is what the new test pins.
+
+### What it reports now, and what I did NOT do
+
+Three emitters in `phase3_one_shot_runner.py`: `sta_mcorner_ocv_posteco.rpt`,
+`power.rpt`, `si_crosstalk.rpt`. The capture states the remedy as "three added
+statements in the multi-corner emitters" — the same count, though I have not
+verified they are the same three.
+
+**I did not author the stamps.** `STA_BASIS` is a claim about which side of
+place-and-route a report measures; asserting `POST_ROUTE` for a session whose
+inputs were never read is the unearned claim this whole lane exists to prevent.
+`_emit_power_report` already takes the `basis` argument that answers it for one of
+the three; the other two need their sessions read first. That is the owner's call,
+and it is now a fourth decision on the list.
+
+The gate is therefore rc=1 on this repository, pinned as a SET by
+`test_repository_arm_a_is_clean_and_arm_b_reports_the_known_set`, which goes red
+if a new one appears and red if one is fixed.
