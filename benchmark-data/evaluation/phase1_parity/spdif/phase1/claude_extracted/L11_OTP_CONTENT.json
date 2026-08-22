@@ -1,5 +1,0 @@
-{
-  "ic_name": "S/PDIF (IEC 60958 Digital Audio Interface)",
-  "otp_present": false,
-  "notes": "S/PDIF (IEC 60958 type II) is a wire-level streaming digital-audio protocol; it does not define any OTP / fuse content at the protocol layer. Individual S/PDIF transmitter / receiver ICs may use OTP for analog-trim of the Toslink LED bias, coax driver level calibration, or device serial-number storage, but those are per-device implementation choices and are not part of the IEC 60958 spec."
-}
