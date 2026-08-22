@@ -175,8 +175,11 @@ by the same mechanism.
     GREEN   5 pin(s) resolved; every anchor present            rc 0
     RED     the historical drift injected into a COPY of
             upstream (the fit sum switched to the height)      rc 1, anchor named
-    TESTS   9 passed in the image; 8 passed 1 skipped on a
-            host with no upstream tree
+    PROBE   driven as `<program> <project>` from an empty project: rc 0,
+            with the ignored project path disclosed  (see below)
+    TESTS   15 passed in the image across both new files; 10 passed 1 skipped
+            on a host with no upstream tree, the skip being the real-tree
+            test declining rather than passing
 
 Same command, same code, upstream swapped. Nine tests; the file does not collect
 without the program, which is the trivial red, and the two that matter are the
@@ -261,6 +264,36 @@ used, on any gate. No assertion was weakened to make a red go away, and the one
 guard behaviour I did loosen — accepting a tuple as well as a list for the pin
 declaration — was my check inventing a house-style requirement out of the first
 file it read, and it is recorded in the code as that.
+
+## The new guard reproduced, in itself, the defect class it audits
+
+Found by driving it the way this repo's population probes drive every
+`*_check.py` — `<program> <project>`, from a structurally empty project — rather
+than only the way I had been calling it.
+
+    upstream_reimplementation_pin_check.py: error: unrecognized arguments: .
+    RC=2
+
+**argparse's usage error and this program's honest "I could not look" were
+wearing the same exit code.** A population probe reading that gets a disclosed
+skip from a program that never ran. It is exactly the conflation the repo has
+already had to route around twice — at the umbrella (#492: "rc 2 carried two
+unrelated meanings ... Recording the second as a skip is what let 39 registered
+gates be permanently silent") and again in a gate's wiring (#1347, which moved a
+glob out of the flow clause into the program so a missing directory becomes an
+ANSWER rather than a usage error). A check ADDING a third instance would be the
+defect it exists to catch, one level up.
+
+Fixed by accepting the driver positional and answering with the program's own
+verdict, disclosing on stdout AND in the record that a project path was handed
+over and not consulted. Two tests pin it; the red without the fix is a
+`SystemExit` from argparse, which the test names as such rather than letting it
+read as a failure of the check.
+
+Recorded here rather than quietly fixed, because the interesting part is the
+method: **I did not find it by review. I found it by driving the new thing the
+way its actual callers drive it, which is the one check I nearly skipped
+because the program worked when I ran it myself.**
 
 ## What did NOT ship, and why
 

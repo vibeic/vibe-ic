@@ -167,3 +167,52 @@ def test_the_shipped_pins_resolve_against_the_installed_upstream_tree():
     absent = [c for c in read if c["status"] == "ABSENT"]
     assert not absent, f"upstream no longer carries: {absent}"
     assert res["pins_declared"] >= 1
+
+
+def test_a_driver_positional_is_answered_not_rejected(tmp_path, capsys):
+    """rc 2 must be THIS program's refusal, never argparse's usage error.
+
+    THE RED without the fix is a `SystemExit`: the population drivers in this
+    repo invoke every `*_check.py` as `<program> <project>`, argparse rejects
+    the unknown positional and exits 2 — the same code this program uses for an
+    honest "I could not look". The repo has had to route around that
+    conflation at the umbrella and again in a gate's wiring; a check ADDING a
+    third instance of it would be the defect it exists to catch, one level up.
+    """
+    progs = tmp_path / "programs"
+    progs.mkdir()
+    _module_declaring(progs, _pins())
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    saved = UP.DEFAULT_UPSTREAM_ROOTS
+    UP.DEFAULT_UPSTREAM_ROOTS = (str(empty),)
+    try:
+        rc = UP.main([str(tmp_path / "some-project"),
+                      "--programs-dir", str(progs),
+                      "--upstream-root", str(empty)])
+    except SystemExit as exc:          # what argparse does with an unknown arg
+        raise AssertionError(
+            f"the driver positional was rejected as a usage error "
+            f"(SystemExit {exc.code}) instead of being answered") from exc
+    finally:
+        UP.DEFAULT_UPSTREAM_ROOTS = saved
+    assert rc == UP.RC_CANNOT_CHECK
+    cap = capsys.readouterr()
+    assert "NOT DETERMINED" in cap.err, "rc 2 must carry this program's words"
+    assert "is NOT read" in cap.out, (
+        "a project path that is accepted and ignored must be DISCLOSED, or the "
+        "next reader believes it was examined")
+
+
+def test_the_ignored_project_path_is_in_the_artefact_too(tmp_path):
+    """On stdout is for a person; in the record is for whatever reads it next."""
+    progs = tmp_path / "programs"
+    progs.mkdir()
+    _module_declaring(progs, _pins())
+    up = tmp_path / "up"
+    _fake_upstream(up, ANCHOR)
+    out = tmp_path / "r.json"
+    assert UP.main([str(tmp_path / "proj"), "--programs-dir", str(progs),
+                    "--upstream-root", str(up), "--json", str(out)]) == UP.RC_OK
+    import json as _json
+    assert _json.loads(out.read_text())["project_argument_ignored"].endswith("proj")

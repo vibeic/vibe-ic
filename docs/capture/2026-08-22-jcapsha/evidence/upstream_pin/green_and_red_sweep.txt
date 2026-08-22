@@ -11,8 +11,12 @@ sed -i "s/incr sum_of_cell_widths \$width/incr sum_of_cell_widths \$height/" $F/
 grep -n "incr sum_of_cell_widths" $F/pad_cfg.tcl
 PYTHONDONTWRITEBYTECODE=1 python3 upstream_reimplementation_pin_check.py --upstream-root /tmp/fakeroot 2>&1; echo "RC=$?"
 echo
-echo "######## the tests, in the image (the real-tree pin test RUNS here) ########"
-cd tests && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest test_upstream_reimplementation_pin.py -q --basetemp=/tmp/pt2 2>&1 | tail -4
+echo "######## driven the way the population probes drive a *_check.py ########"
+mkdir -p /tmp/ep/input/docs /tmp/ep/reports && cd /tmp/ep
+PYTHONDONTWRITEBYTECODE=1 python3 /work/vibe-ic-marketplace/plugins/vibe-ic/programs/upstream_reimplementation_pin_check.py . 2>&1 | tail -4; echo "RC=$?"
+echo
+echo "######## the tests, in the image ########"
+cd /work/vibe-ic-marketplace/plugins/vibe-ic/programs/tests && PYTHONDONTWRITEBYTECODE=1 python3 -m pytest test_upstream_reimplementation_pin.py test_refusal_names_its_search_space.py -q --basetemp=/tmp/pt3 2>&1 | tail -4
 '
 ######## GREEN: corpus sweep, real upstream tree ########
 <unknown>:166: SyntaxWarning: invalid escape sequence '\s'
@@ -51,8 +55,15 @@ RC=0
     PRESENT     pad_ring_gen.py -> librelane/config/flow.py
 RC=1
 
-######## the tests, in the image (the real-tree pin test RUNS here) ########
+######## driven the way the population probes drive a *_check.py ########
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/pad_cfg.tcl
+    PRESENT     pad_ring_gen.py -> librelane/scripts/openroad/common/io.tcl
+    PRESENT     pad_ring_gen.py -> librelane/config/flow.py
+[PASS] 5 pin(s) resolved; every anchor is present in the upstream file it names
+RC=0
+
+######## the tests, in the image ########
   <unknown>:166: SyntaxWarning: invalid escape sequence '\s'
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-9 passed, 1 warning in 5.39s
+15 passed, 1 warning in 6.84s

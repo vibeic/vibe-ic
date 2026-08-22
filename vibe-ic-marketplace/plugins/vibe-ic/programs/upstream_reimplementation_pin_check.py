@@ -255,6 +255,17 @@ def check(programs_dir: Path, roots: List[Path]) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # ACCEPTED AND NOT READ, deliberately. This flow's population drivers
+    # invoke every `*_check.py` as `<program> <project>`. Rejecting that
+    # positional makes argparse exit 2 — THE SAME CODE this program uses for an
+    # honest "I could not look", and the same conflation the repo has now had
+    # to route around three times (#492 at the umbrella, #1347 in a gate's
+    # wiring). A usage error must not wear a refusal's exit code, so the
+    # argument is accepted and the program answers its own question about the
+    # program tree, which is what it audits.
+    ap.add_argument("project", nargs="?", default=None,
+                    help="accepted for driver compatibility and NOT read: this "
+                         "check audits the program tree, not a project")
     ap.add_argument("--programs-dir", default=str(Path(__file__).resolve().parent),
                     help="directory of programs to audit (default: this one)")
     ap.add_argument("--upstream-root", action="append", default=[],
@@ -265,6 +276,13 @@ def main(argv=None) -> int:
 
     roots = _roots(a.upstream_root)
     res = check(Path(a.programs_dir), roots)
+    if a.project is not None:
+        # In the artefact as well as on stdout: a reader of the JSON must be
+        # able to see that a project path was handed over and not consulted.
+        res["project_argument_ignored"] = a.project
+        print(f"[SCOPE] a project path ({a.project!r}) was passed and is NOT "
+              f"read: this check audits the program tree at "
+              f"{a.programs_dir}")
 
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
