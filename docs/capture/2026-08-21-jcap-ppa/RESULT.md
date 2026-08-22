@@ -3558,8 +3558,8 @@ number and not the question.
     records                                            47
       fix text quotes a figure                         35
         names a literal command                         6
-        describes HOW the count was taken              23
-        neither — a bare number                        12
+        describes HOW the count was taken              26
+        neither — a bare number                         9
 
 The brief is explicit about this: *the command, the number, the before and
 after.* On the strict reading, 29 figure-bearing records fall short.
@@ -3622,9 +3622,24 @@ deliberately: an independent count would have to re-derive what counts as a
 gate, and a second definition of one population is exactly how two figures about
 one thing begin to disagree.
 
-The remaining 12 are work for whoever continues, and it is the first thing I
-would do: a figure without its question is a memory, which is the brief's own
-word for what this loop exists to stop producing.
+**Three more were screened after that correction, and the split between what I
+could fix and what I could not is the useful part.** Those three were figures I
+measured myself in this pass, so the question was still in hand: the distinct
+output paths in the flow document, the presence-and-absence of two hook paths,
+and the axis structure read from the policy module rather than counted in
+source. Writing their screens took minutes because nothing had to be
+reconstructed.
+
+The remaining **nine** were measured earlier in the batch, before screens were
+being written down at all. Re-deriving them means reconstructing the question
+first — which is exactly the cost this record documents, now paid at the wrong
+end. **That asymmetry is the whole argument for the rule:** a screen written
+beside its number costs nothing, and the same screen recovered afterwards costs
+a search that may not converge, as the basis-stamp figure above shows.
+
+Nine records remain, and that is the first thing I would do next. A figure
+without its question is a memory, which is the brief's own word for what this
+loop exists to stop producing.
 
 ## Summary
 
