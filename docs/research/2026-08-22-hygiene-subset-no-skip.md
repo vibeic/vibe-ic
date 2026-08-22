@@ -3330,11 +3330,14 @@ by file:
    1   test_liar_census.py::test_nothing_the_flow_declares_is_left_unswept
 ```
 
-**17 of 502, concentrated in two files — but only SIXTEEN of them are new**
-(see the correction at the end of this section), and those sixteen guard the
-differential landing path — the arms, the stamp, the base-vs-candidate subtraction. All 17
-are green on this branch (§44 measured the same three files at 60/0), so they
-arrived with something that landed after this branch forked.
+**17 of 502, concentrated in two files — but only SIXTEEN of them are NEW.**
+Those sixteen guard the differential landing path — the arms, the stamp, the
+base-vs-candidate subtraction — and they are green on this branch, so they
+arrived with something that landed after it forked. The seventeenth,
+`test_liar_census…::test_nothing_the_flow_declares_is_left_unswept`, is red on
+the base `a00f53f20` AND on this branch (§33 measured it here and I contradicted
+that in the first draft of this section). **See §52: `jmeas3` separated the two
+by running the base, which a whole-suite run on `main` cannot do.**
 
 **Why this is worth having rather than another red list.** The region is defined
 by being unreachable: §33 (no plugin-scoped selection reaches `tools/`), §39
