@@ -1,8 +1,0 @@
-{
-  "note": "STA on GENUINE SERV core synth netlist. Default 10ns SDC used wrong clock port 'clk' (chip port is i_clk) -> 'No paths found'. Corrected to i_clk.",
-  "clock_port": "i_clk",
-  "default_10ns": {"SS_wns_ns": -15.00, "TT_wns_ns": -3.91, "FF_wns_ns": 1.88, "overall": "VIOLATED (SS/TT)"},
-  "relaxed_30ns": {"SS_slack_ns": 5.00, "TT_slack_ns": 16.09, "FF_slack_ns": 21.88, "overall_pass": true},
-  "critical_path": "dfxtp/Q -> lpflow_isobufsrc_1 (SS 15.61ns) -> nand2 -> nor2 -> edfxtp/DE  (SERV RF-in-flops read path; large unbuffered iso-buffer + fanout)",
-  "honest_note": "SERV is bit-serial; the 576x2-bit RF maps to ~1300 enabled flops. The unbuffered RF iso-buffer read path dominates timing. The L7 10ns baseline was measured against the STUBBED golden core; the GENUINE full RV32I+flop-RF closes at 30ns (33MHz) across SS/TT/FF. Honest relaxation, reported."
-}

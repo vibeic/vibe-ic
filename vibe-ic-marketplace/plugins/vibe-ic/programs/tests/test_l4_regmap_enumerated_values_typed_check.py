@@ -114,3 +114,185 @@ def test_skip_on_bare_fpga(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
     assert "SKIP" in r.stdout
     assert "ic_class=bare_fpga" in r.stdout
+
+
+# ===========================================================================
+# Layer-gate strengthening (batch: layergate-2) — S1/S2/S3.
+#
+# Each strengthening gets an explicit negative control (gutted layer =>
+# FAIL) AND its positive control (well-formed => PASS). All fixtures are
+# SYNTHESIZED neutral data: invented register/field names, invented
+# codes, no vendor tokens.
+# ===========================================================================
+
+# --- S1: the gate was VACUOUS on the production emitter's field shape ---
+
+def test_s1_negative_control_field_name_alias_is_seen(tmp_path):
+    """The production Phase-1 L4 emitter writes a field's name as
+    ``field_name``. Before S1 the gate resolved every such name to ""
+    and reported SKIP — it could not fail on real output at all.
+    A gate that cannot fire proves nothing, so this must now FAIL."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"field_name": "OPT_SEL", "bits": "3:2", "access": "RW"},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "OPT_SEL" in r.stdout
+
+
+def test_s1_positive_control_field_name_alias_with_enum_passes(tmp_path):
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"field_name": "OPT_SEL", "bits": "3:2", "access": "RW",
+             "enumerated_values": [
+                 {"code": "2'b00", "meaning": "bypass"},
+                 {"code": "2'b01", "meaning": "engaged"},
+             ]},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS" in r.stdout
+
+
+# --- S2: token-presence _has_enum accepted a bare list ---
+
+def test_s2_negative_control_bare_token_list_is_not_a_binding(tmp_path):
+    """``enumerated_values: ["alpha", "beta"]`` used to PASS: two members,
+    no code, no meaning. A decoder cannot be built from a token list, so
+    this must FAIL."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"name": "OPT_MODE", "bits": "1:0",
+             "enumerated_values": ["alpha", "beta"]},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "code->meaning binding" in r.stdout
+
+
+def test_s2_negative_control_code_without_meaning_fails(tmp_path):
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"name": "OPT_MODE", "bits": "1:0",
+             "enumerated_values": [{"code": "00"}, {"code": "01"}]},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_s2_positive_control_mapping_form_is_a_binding(tmp_path):
+    """The mapping shape {"00": "idle", "01": "busy"} binds code to
+    meaning just as well as a list of dicts — it must PASS."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"name": "OPT_MODE", "bits": "1:0",
+             "enumerated_values": {"00": "idle", "01": "busy"}},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- S3: hardcoded ">= 2" forced fabrication ---
+
+def test_s3_negative_control_declared_code_must_be_captured(tmp_path):
+    """The field's own description declares one code. L4 captured none.
+    That is a real capture gap and must FAIL — with the code named, so
+    the fix is mechanical rather than inventive."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_vec", "fields": [
+            {"field_name": "OPT_MODE", "bits": "1:0",
+             "description": "Always set to 2'b01 to select vectored mode."},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "2'b01" in r.stdout
+
+
+def test_s3_positive_control_single_declared_code_is_enough(tmp_path):
+    """THE anti-fabrication control. The input declares exactly ONE legal
+    code. Under the old flat ">= 2 entries" rule, passing would have
+    required INVENTING a second code. Capturing the one code the input
+    states must now be sufficient."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_vec", "fields": [
+            {"field_name": "OPT_MODE", "bits": "1:0",
+             "description": "Always set to 2'b01 to select vectored mode.",
+             "enumerated_values": [
+                 {"code": "2'b01", "meaning": "vectored mode"},
+             ]},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS" in r.stdout
+
+
+def test_s3_all_declared_codes_must_be_captured(tmp_path):
+    """Two codes declared, one captured => still incomplete."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_vec", "fields": [
+            {"field_name": "OPT_MODE", "bits": "1:0",
+             "description": "0x0 = direct, 0x1 = vectored.",
+             "enumerated_values": [{"code": "0x0", "meaning": "direct"}]},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_s3_codes_in_description_trigger_even_without_name_keyword(tmp_path):
+    """Eligibility is now also DERIVED from the design's own text: a
+    multi-bit field whose description declares codes is enum-eligible
+    even if its name matches no keyword."""
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_x", "fields": [
+            {"field_name": "ZZQ", "bits": "1:0",
+             "description": "0b00 = low, 0b11 = high."},
+        ]}
+    ]})
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "ZZQ" in r.stdout
+
+
+# --- the waiver the docstring promised but no code ever read ---
+
+def test_waiver_now_actually_suppresses(tmp_path):
+    proj = _make(tmp_path, {"registers": [
+        {"name": "reg_ctrl", "fields": [
+            {"name": "OPT_MODE", "bits": "1:0"},
+        ]}
+    ]})
+    (proj / "waivers.json").write_text(json.dumps({
+        "l4_regmap_enum_intentional_simplification":
+            "This synthesized fixture intentionally omits the enum so the "
+            "documented waiver path is exercised end to end in test.",
+    }))
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "waived" in r.stdout
+
+
+def test_both_directions_on_one_edit(tmp_path):
+    """Same field, same declared code. Only the capture differs."""
+    field = {"field_name": "OPT_MODE", "bits": "1:0",
+             "description": "Always set to 2'b01 to select vectored mode."}
+    bad = _make(tmp_path / "b", {"registers": [
+        {"name": "reg_vec", "fields": [dict(field)]}]})
+    good_field = dict(field)
+    good_field["enumerated_values"] = [
+        {"code": "2'b01", "meaning": "vectored mode"}]
+    good = _make(tmp_path / "g", {"registers": [
+        {"name": "reg_vec", "fields": [good_field]}]})
+
+    r_bad, r_good = _run(bad), _run(good)
+    assert r_bad.returncode == 1, r_bad.stdout
+    assert r_good.returncode == 0, r_good.stdout
+    assert r_bad.returncode != r_good.returncode

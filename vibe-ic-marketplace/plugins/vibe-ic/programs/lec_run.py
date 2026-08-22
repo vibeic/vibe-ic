@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -63,6 +64,7 @@ from _rtl_include_hub import (  # noqa: E402
     drop_include_hubs as _drop_include_hubs,
     macro_headers_first as _macro_headers_first,
 )
+import _hardmacro_stage as _hms  # noqa: E402 — staged SRAM/IP macro blackbox
 
 PROGRAM = "lec_run"
 
@@ -75,7 +77,25 @@ DEFAULT_LIBERTY = (
 # ~2k compared points through equiv_induct -seq 64) runs far past the old
 # 1800s, and a killed run produced NO evidence — indistinguishable at the
 # gate from a real mismatch. Tunable via --timeout for smaller budgets.
-DEFAULT_YOSYS_TIMEOUT_S = 7200
+# ORGANIC-20260801 — VIBEIC_LEC_YOSYS_TIMEOUT_S overrides the default for very
+# large (>1M-cell) golds whose MONOLITHIC equiv legitimately exceeds — or is
+# deliberately bounded below (a giant gold that cannot converge in any open-tool
+# budget honestly lands SKIPPED-CONDITION, never a fake PASS) — the historical
+# 7200s. Symmetric with the synth step's VIBEIC_PHASE2_SYNTH_TIMEOUT_S. The
+# runner reads this SAME constant for its outer subprocess budget and inherits
+# the env into the lec_run subprocess, so both stay in lock-step. Byte-identical
+# (7200) when the env var is unset. chip-AGNOSTIC.
+def _env_yosys_timeout_default() -> int:
+    try:
+        v = int(os.environ.get("VIBEIC_LEC_YOSYS_TIMEOUT_S", "") or 0)
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    return 7200
+
+
+DEFAULT_YOSYS_TIMEOUT_S = _env_yosys_timeout_default()
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
 
@@ -126,16 +146,35 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 
 # BUDGET-EXHAUSTED marker (#155 POSITIVE timeout discriminator). run_yosys_equiv
 # (below) writes this EXACT string into the raw log ITSELF when the yosys
-# subprocess is KILLED by the wall budget (`subprocess.TimeoutExpired`) — it is
-# NOT tool output a design could emit, so it can never be spoofed by a
-# genuine-garbage log. Post-memory_map a memory-bearing design is genuinely
-# satgen-modelable, so equiv_induct ATTEMPTS the full sequential proof; on a
-# large design (e.g. sha256's memory-inclusive miter) that induction can exceed
-# the LEC wall clock, leaving no final equiv_status → parse_error. A killed run
-# produced NO comparison, so the cause must be NAMED (raise --timeout) instead of
-# read as a mismatch that was never found.
+# subprocess is KILLED by the wall budget — it is NOT tool output a design could
+# emit, so it can never be spoofed by a genuine-garbage log. Post-memory_map a
+# memory-bearing design is genuinely satgen-modelable, so equiv_induct ATTEMPTS
+# the full sequential proof; on a large design (e.g. sha256's memory-inclusive
+# miter, or a whole AES cipher whose S-box/GF cones are SAT-intractable) that
+# proof can exceed the LEC wall clock, leaving no final equiv_status → the run
+# is killed. A killed run produced NO completed comparison, so the cause must be
+# NAMED (raise --timeout) instead of read as a mismatch that was never found.
 _TIMEOUT_MARKER = "[lec_run] ERROR: yosys equiv exceeded its time budget"
 _TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
+
+# A wall-budget kill reaches run_yosys_equiv by TWO paths that must be treated
+# identically:
+#   (1) the HOST `subprocess.run(timeout=…)` raises subprocess.TimeoutExpired; or
+#   (2) the CONTAINER-side `timeout` that _docker wraps every call in
+#       (wrap_with_container_timeout, added to stop the orphaned-tool leak) fires
+#       `margin_s` seconds BEFORE the host deadline, so yosys is already dead and
+#       `docker exec` returns NORMALLY with GNU-`timeout`'s exit code — the host
+#       run never times out and path (1) is structurally UNREACHABLE for the
+#       container flow. GNU `timeout` reports 124 when its SIGTERM expiry killed
+#       the command, and 137 (128+9) when `--kill-after` had to escalate to
+#       SIGKILL (the usual outcome for yosys mid-SAT, which ignores SIGTERM). A
+#       container OOM-kill also surfaces as 137 — likewise a resource-exhaustion
+#       no-verdict run, not a proven mismatch — so folding it in here is correct.
+# Without recognising path (2), a killed-mid-proof run (0 completed comparisons,
+# no counterexample) is misread as a hard FAIL (measured on opentitan_aes ×
+# sky130A: 27904 $equiv cells, killed at 7200s, booked verdict=FAIL "may
+# genuinely differ" — a false non-equivalence that halted the whole flow).
+_CONTAINER_TIMEOUT_RCS = (124, 137)
 
 # EVIDENCE-BASED timeout split (merge of local FAIL vs origin #155
 # SKIPPED-CONDITION). A wall-budget kill (parse_error + _TIMEOUT_RE) is a pure
@@ -186,6 +225,49 @@ def induction_did_not_converge(text: str):
     if _PROVED_ZERO_RE.search(text):
         return True, ("equiv_induct proved 0 previously-unproven cells across "
                       "the escalating -seq sweep (a flat induction wall)")
+    return False, ""
+
+
+# #778 / round-2 subservient×sky130A — the escalating `-seq 4/16/64` induction
+# ladder can run OUT of depth on a deep bit-serial datapath (SERV accumulates
+# its memory ADDRESS bit-serially, threading bufreg→bufreg2→arbiter→mux far past
+# a single 32-cycle period) while its DEEPEST rung is STILL proving new cells.
+# MEASURED (subservient×sky130A, 3544 points): equiv_simple proved 3369, then
+# equiv_induct proved 35 (-seq 4), 22 (-seq 16), 27 (-seq 64) — a strictly
+# positive, still-descending tail — leaving 91 unproven with ZERO counterexample
+# (all on `o_wb_mem_adr`/`arbiter.o_wb_mem_adr`). That is "converging but
+# ladder-exhausted", NOT a flat wall (`Proved 0`, handled above) and NOT a proven
+# difference (a counterexample, handled by _MISMATCH_EVIDENCE_RE). It is the SAME
+# disclosed sequential-depth capability gap as `induction_did_not_converge`, so
+# it must ALSO reclassify to INCONCLUSIVE, never a false NOT_EQUIVALENT.
+_EQUIV_INDUCT_MARKER_RE = re.compile(r"equiv_induct", re.IGNORECASE)
+
+
+def induction_ladder_exhausted(text: str):
+    """(bool, evidence) — True when the equiv_INDUCT ladder made POSITIVE but
+    INCOMPLETE progress: at least one induct rung proved >0 previously-unproven
+    cells, yet points remain unproven at equiv_status. This is the -seq depth
+    budget running out on a deep sequential design, NOT a proven difference
+    (witnessed by a counterexample) and NOT a flat wall (`Proved 0`). PRECISION-
+    first / §4.05 NO-LEAK: the caller MUST also confirm NO counterexample AND
+    unproven>0 before re-classing to INCONCLUSIVE. The `Proved N` scan is scoped
+    to the region AFTER the first equiv_induct marker so equiv_simple's OWN
+    proved-count can never trigger it — a genuine mismatch (MISMATCH_OUTPUT:
+    equiv_simple proves 33, equiv_induct then proves 0 and leaves 7 unproven)
+    has NO post-induct `Proved N>0` line and correctly stays FAIL. chip-AGNOSTIC:
+    pure yosys log phrases, no chip/vendor literal."""
+    m = _EQUIV_INDUCT_MARKER_RE.search(text)
+    if not m:
+        return False, ""
+    induct_region = text[m.start():]
+    proved = [int(n) for n in _PROVED_SIMPLE_RE.findall(induct_region)]
+    total = sum(n for n in proved if n > 0)
+    if total > 0:
+        return True, (
+            f"equiv_induct proved {total} previously-unproven cell(s) across "
+            "the escalating -seq sweep but the ladder was exhausted before full "
+            "convergence — a bounded sequential-depth induction gap, not a flat "
+            "wall and not a counterexample")
     return False, ""
 
 # Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
@@ -762,13 +844,131 @@ def parse_equiv_output(text: str) -> Dict:
         # WITHOUT the flat-wall signature also stays FAIL. Never a PASS.
         _noconv, _noconv_ev = induction_did_not_converge(text)
         _has_ctrex = bool(_MISMATCH_EVIDENCE_RE.search(text))
-        if _noconv and not _has_ctrex and (unproven or 0) > 0:
+        # #778 — a `-seq` ladder that ran out of depth WHILE STILL PROVING new
+        # cells on its deepest rung (converging, not a flat wall) is the same
+        # disclosed sequential-depth capability gap. Only consulted when there is
+        # neither a flat wall nor a counterexample, so it can never soften a real
+        # mismatch (which prints a counterexample → stays the blocking FAIL).
+        if not _noconv and not _has_ctrex:
+            _noconv, _noconv_ev = induction_ladder_exhausted(text)
+        # A WALL-CLOCK KILL THAT MADE PARTIAL PROGRESS.
+        #
+        # The three budget guards above all have a precondition this shape
+        # fails, so it fell through to the blocking FAIL below:
+        #   * the `parse_error + _TIMEOUT_RE` branch needs NOTHING parsed;
+        #   * the `proven is None and unproven is None` branch needs NEITHER
+        #     count parsed;
+        #   * `induction_did_not_converge` needs `Proved 0` or `Circuit
+        #     inherently diverges`, and `induction_ladder_exhausted` needs an
+        #     `equiv_induct` marker — NEITHER exists when the clock kills the
+        #     run during equiv_simple, before equiv_induct ever starts.
+        #
+        # So a run killed mid-`equiv_simple` AFTER it proved some cells parses
+        # as `proven=N>0`, `unproven=total-N>0`, no flat wall, no ladder, no
+        # counterexample — and was reported as
+        #     "N/T proven, U unproven — the RTL and gate netlist MAY GENUINELY
+        #      DIFFER at these points."
+        # from a log whose last line is this program's OWN
+        # `_TIMEOUT_MARKER`. That is the exact harm the module docstring says
+        # this file exists to prevent: "a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch", to be "NAMED
+        # (raise --timeout) instead of read as a mismatch that was never
+        # found."
+        #
+        # THE PRECISE DISTINCTION — a MEASURED unproven count vs an INFERRED
+        # one. This is the line the existing doctrine already draws, which the
+        # budget branches simply never consulted:
+        #
+        #   * `equiv_status` emitted "Of those cells N are proven and M are
+        #     unproven" (_FINAL_RE). Those M points WERE attempted and left
+        #     unproven — a real per-point verdict. A timeout marker arriving
+        #     afterwards (e.g. rc=137 re-attaching it) cannot retract it, and
+        #     it must STAY FAIL. Asserted by
+        #     `test_lec_run.test_container_timeout_rc_with_recorded_mismatch_still_fails`
+        #     and `test_v1462_lvs_lec_manifest_capture
+        #      .test_timeout_with_partial_completed_verdict_still_fails`.
+        #
+        #   * NO `_FINAL_RE` line: `unproven` was not measured at all, it was
+        #     RECONSTRUCTED by `total - proven` further up. Those points were
+        #     never attempted — the clock killed the run first. Reporting them
+        #     as points where the designs "may genuinely differ" states a
+        #     comparison that never happened.
+        #
+        # So the re-class fires only on (timeout marker) AND (no completed
+        # equiv_status) AND (no counterexample). §4.05 PRECISION-first /
+        # NO-LEAK: each of the three conjuncts removes a way this could soften
+        # a real result, and `_TIMEOUT_RE` is written only by the two kill
+        # paths in run_yosys_equiv, so an in-budget run is untouched.
+        _budget_killed = bool(_TIMEOUT_RE.search(text))
+        _measured_verdict = bool(_FINAL_RE.search(text))
+        if _budget_killed and not _measured_verdict and not _has_ctrex \
+                and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "the wall-clock budget killed yosys mid-proof, before "
+                "equiv_induct ran — the unproven remainder was never "
+                "attempted, not refuted")
+        # NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A).
+        # A miter WAS built — `not parse_error`, so `total` is known — but
+        # NEITHER a proven NOR an unproven count was ever recorded: equiv_make
+        # ran and then NO equiv_simple / equiv_induct / equiv_status verdict
+        # reached the log, and NO counterexample was seen. A COMPLETED equiv
+        # pass ALWAYS emits at least one count — equiv_status' "N proven / M
+        # unproven" (_FINAL_RE), equiv_simple's "Proved N previously unproven"
+        # (_PROVED_SIMPLE_RE, N may be 0), or equiv_induct's "Found N unproven
+        # … in module equiv" (_INDUCT_FOUND_RE) — so `proven is None AND
+        # unproven is None` means the proof was CUT OFF before any point was
+        # decided: an external kill / crash / container interruption that did
+        # NOT route through the wall-budget marker path (_TIMEOUT_RE absent, so
+        # _budget_killed above did not fire). Zero decided points + zero
+        # counterexamples = no equivalence evidence in EITHER direction — the
+        # exact no-evidence state this module's docstring exists to keep OUT of
+        # a false NOT_EQUIVALENT ("a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch"). §4.05 NO-LEAK:
+        # a real mismatch carries a counterexample (_has_ctrex) OR a completed
+        # status with unproven>0 (proven parsed), so it can NEVER reach here —
+        # this softens ONLY a run that decided nothing. INCONCLUSIVE, never
+        # FAIL, never PASS. MEASURED WITNESS: opentitan_aes's Step-13 lec.rpt
+        # ended mid-`equiv_simple` (only ~1720/31850 cells attempted, no
+        # equiv_status, no "Proved N", no marker) and was booked FAIL "may
+        # genuinely differ" — a fabricated non-equivalence that blocked 24
+        # downstream steps.
+        _no_completed_comparison = (proven is None and unproven is None)
+        if _no_completed_comparison and not _has_ctrex and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "equiv_make built the miter but NO equiv_simple/induct/status "
+                "verdict was ever recorded (no proven and no unproven count) "
+                "and no counterexample was seen — the proof was cut off before "
+                "any point was decided (an interrupted/killed/crashed run "
+                "outside the wall-budget marker path)")
+        if _no_completed_comparison and _noconv and not _has_ctrex:
+            # The miter was built but the proof was cut off before ANY point was
+            # decided. Distinct wording from the convergence-wall case below:
+            # equiv_induct never even ran here, so "did NOT converge" would be
+            # inaccurate — the run recorded NO verdict at all.
+            equivalent = False
+            verdict = "INCONCLUSIVE"
+            verdict_explanation = (
+                f"A {total if total is not None else '?'}-point equivalence "
+                "miter was built, but the proof recorded NO decided points "
+                f"({_noconv_ev}) and NO counterexample "
+                "(non_equivalent_points=0). A run that decided nothing is NOT "
+                "evidence of non-equivalence: a real difference produces a "
+                "counterexample or a completed equiv_status with unproven>0. "
+                "→ INCONCLUSIVE (a killed/interrupted run outside the "
+                "wall-budget marker path), never a false NOT_EQUIVALENT. Re-run "
+                "uninterrupted (raise --timeout) or close with sign-off LEC "
+                "(Conformal/VC LEC). Visible non-PASS (equivalent:false) — "
+                "never a vacuous PASS a regression could hide behind.")
+        elif _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
             verdict_explanation = (
                 f"{proven if proven is not None else 0}/"
                 f"{total if total is not None else '?'} proven, "
-                f"{unproven} unproven — but equiv_induct did NOT converge "
+                f"{unproven if unproven is not None else '?'} unproven — but "
+                "equiv_induct did NOT converge "
                 f"({_noconv_ev}) and NO counterexample was recorded "
                 "(non_equivalent_points=0). Non-convergence is NOT "
                 "non-equivalence: a real difference produces a counterexample. "
@@ -815,6 +1015,15 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "equivalent": parsed["equivalent"],
         # proven $equiv cell count — >0 required for a non-vacuous PASS.
         "compared_points": proven if proven is not None else 0,
+        # The SIZE of the proof obligation, i.e. how many $equiv points
+        # equiv_make built. `parse_equiv_output` has always measured this (it
+        # is the `total` it uses to reconstruct the other two counts) and
+        # build_report has always dropped it, so an INCONCLUSIVE lec.json said
+        # `compared_points: 0` and gave a reader NO way to tell "the budget
+        # nearly covered it, raise --timeout" from "this miter is orders of
+        # magnitude beyond any budget on this machine". Those call for opposite
+        # actions. None only when no total was parseable (never fabricated).
+        "miter_points": parsed.get("total"),
         # Yosys equiv_status does not emit a distinct proven-non-equivalent
         # count; a genuine difference surfaces as `unproven`, so this stays 0.
         "non_equivalent_points": 0,
@@ -932,13 +1141,123 @@ def _netlist_uses_generic_primitives(path: str) -> bool:
     return bool(_GENERIC_PRIM_RE.search(text))
 
 
+# ---------------------------------------------------------------------------
+# FUNCTIONAL-MODE (scan-aware) COMPARISON
+# ---------------------------------------------------------------------------
+# When the gate netlist is a REAL scan-inserted implementation netlist (see
+# programs/fault_scan_chain_insert.py), it carries five DFT ports the RTL gold
+# does not have — `sin`, `shift`, `test`, `tck` (inputs) and `sout` (output) —
+# and its internal wires all carry the prefix `fault chain`'s resynthesis put
+# on them.  Two things then break, and BOTH are name/interface problems, not
+# equivalence problems:
+#
+#   1. `equiv_make` HARD-ERRORS on a gate port with no gold counterpart:
+#        ERROR: Can't match gate port `test_gate' to a gold port.
+#      MEASURED.  So the DFT ports must be REMOVED, not merely constrained;
+#      a yosys `connect -set test 1'b0` tie-off leaves them in the port list.
+#   2. `equiv_make` matches gold/gate wires BY NAME.  A uniform prefix on one
+#      side destroys every internal correspondence and leaves only the output
+#      port, which drops the miter from 97 compared points to 1 and sends
+#      `equiv_induct` into a non-converging wall.  MEASURED: 63 proven with the
+#      prefix mirrored, vs 1 unproven point without.
+#
+# The fix is a one-level wrapper on EACH side, with the gold wrapper's instance
+# name chosen (an escaped identifier containing a dot) so the two `flatten`
+# prefixes come out byte-identical:
+#
+#   gate:  rename <top> <top>__scan
+#          module <top>(<rtl ports>)  { <top>__scan \_LECWRAP (…, .sin(1'b0),
+#              .shift(1'b0), .test(1'b0), .tck(1'b0), .sout()) }
+#   gold:  rename <top> <top>__rtl
+#          module <top>(<rtl ports>)  { <top>__rtl \_LECWRAP.<prefix> (…) }
+#
+# WHAT THIS IS NOT.  It does not compare a different netlist: the file read on
+# the gate side is the post-DFT netlist itself, and the wrapper only ties the
+# DFT controls to their functional-mode values and drops the scan output.  The
+# tie-off VALUES are load-bearing and proven so by controls: tying `test` to 1
+# instead of 0 leaves 0 of 63 points proven, tying `shift` to 1 leaves 32
+# unproven, and a one-gate `nor2_1`→`nand2_1` corruption of the scan netlist
+# leaves 1 unproven.  All three FAIL, so the comparison cannot be vacuous.
+#
+# EVERY NAME HERE IS KNOWN, NOT SNIFFED.  The four tie-off ports and `sout` are
+# `fault chain` OPTION names the scan producer passes; the internal prefix is
+# MEASURED from the artefact by `fault_scan_chain_insert.measure_internal_prefix`
+# and travels in `reports/phase2/dft/scan_chain.json`.  When the prefix cannot
+# be measured the wrapper is still emitted WITHOUT it (the DFT ports still have
+# to go) and the compared-point count simply drops — recorded in the report as
+# `scan_functional_mode.internal_prefix: null`, never silently.
+
+_LEC_WRAP_INST = "_LECWRAP"
+
+
+def scan_mode_from_meta(meta: Optional[Dict]) -> Optional[Dict]:
+    """Normalise `reports/phase2/dft/scan_chain.json` into the wrapper inputs.
+
+    Returns None when the metadata does not describe a published scan netlist —
+    an unpublished or failed chain must never trigger functional-mode wrapping,
+    because then the gate netlist has no DFT ports and the wrapper would be a
+    pure fabrication.  PURE.
+    """
+    if not isinstance(meta, dict):
+        return None
+    if not meta.get("published"):
+        return None
+    tie = meta.get("functional_mode_tieoff")
+    sout = meta.get("scan_out_port")
+    if not isinstance(tie, dict) or not tie or not isinstance(sout, str):
+        return None
+    prefix = meta.get("internal_wire_prefix")
+    return {
+        "tieoff": {str(k): int(v) for k, v in tie.items()},
+        "scan_out_port": sout,
+        "internal_prefix": prefix if isinstance(prefix, str) and prefix
+                           else None,
+    }
+
+
+def build_scan_wrappers(top: str, rtl_ports: List[Tuple[str, str, str]],
+                        scan_mode: Dict) -> Tuple[str, str]:
+    """(gate_wrapper_verilog, gold_wrapper_verilog).  PURE.
+
+    `rtl_ports` is the gold top's port list as `(direction, range, name)`
+    triples — taken from the RTL, so the wrapper's interface IS the RTL's
+    interface by construction and cannot drift from it.
+    """
+    decls = "\n".join(f"  {d} {r}{n};".replace("  ", " ").rstrip()
+                      for d, r, n in rtl_ports)
+    names = ", ".join(n for _, _, n in rtl_ports)
+    conns = ", ".join(f".{n}({n})" for _, _, n in rtl_ports)
+    tie = ", ".join(f".{p}(1'b{v})"
+                    for p, v in sorted(scan_mode["tieoff"].items()))
+    header = (f"/* GENERATED by lec_run.build_scan_wrappers — functional-mode\n"
+              f"   comparison of the post-DFT scan netlist.  Do not edit. */\n")
+    gate = (f"{header}"
+            f"module {top}({names});\n{decls}\n"
+            f"  {top}__scan \\{_LEC_WRAP_INST} (\n"
+            f"    {conns},\n"
+            f"    {tie}, .{scan_mode['scan_out_port']}());\n"
+            f"endmodule\n")
+    # The gold instance name reproduces the gate's FULL flatten prefix —
+    # `<wrapper instance>.<fault-chain prefix>` — as one escaped identifier.
+    pref = scan_mode.get("internal_prefix")
+    gold_inst = f"{_LEC_WRAP_INST}.{pref}" if pref else _LEC_WRAP_INST
+    gold = (f"{header}"
+            f"module {top}({names});\n{decls}\n"
+            f"  {top}__rtl \\{gold_inst} ({conns});\n"
+            f"endmodule\n")
+    return gate, gold
+
+
 def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        liberty: Optional[str],
                        blackbox_v: Optional[List[str]] = None,
                        gate_is_generic: bool = False,
                        gold_frontend: str = "verilog",
                        slang_prefix: str = "",
-                       gold_defines: str = "-DSIMULATION -DYOSYS") -> str:
+                       gold_defines: str = "-DSIMULATION -DYOSYS",
+                       scan_mode: Optional[Dict] = None,
+                       gate_wrapper_v: str = "",
+                       gold_wrapper_v: str = "") -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -1039,9 +1358,28 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                          f"--top {top} {gold_defines}")
     else:
         gold_read_cmd = f"read_verilog -sv {gold_read}"
+    # FUNCTIONAL-MODE WRAPPING (scan netlists only).  Both halves are emitted
+    # together or not at all: a gold wrapper without a gate wrapper would
+    # compare the RTL against nothing, and a gate wrapper without a gold one
+    # would leave the prefixes unmirrored.  When `scan_mode` is None every
+    # string below is empty and the script is BYTE-IDENTICAL to the pre-change
+    # one — a non-scan design's verdict cannot move.
+    gold_rename = gold_wrap_read = ""
+    gate_rename = gate_wrap_read = ""
+    if scan_mode and gate_wrapper_v and gold_wrapper_v:
+        gold_rename = f"rename {top} {top}__rtl\n"
+        gold_wrap_read = f"read_verilog -sv {gold_wrapper_v}\n"
+        gate_rename = f"rename {top} {top}__scan\n"
+        gate_wrap_read = f"read_verilog -sv {gate_wrapper_v}\n"
     return (
         # --- gold = RTL, kept as generic satgen-modelable Yosys cells ---
         f"{gold_read_cmd}\n"
+        # Scan functional-mode only: rename the RTL top out of the way and read
+        # the wrapper that re-declares `{top}` with the RTL's own port list, so
+        # `prep -top {top}` elaborates the wrapper and `flatten` stamps the
+        # gate's prefix onto every gold wire.  Empty otherwise.
+        f"{gold_rename}"
+        f"{gold_wrap_read}"
         f"prep -top {top}\n"
         # #155: legalize any $mem/$mem_v2 (packed by prep's memory_collect) to
         # flops+decode BEFORE flatten so equiv_induct's satgen can model it;
@@ -1071,6 +1409,13 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # --- gate = synth netlist; Liberty cells EXPANDED to $_ logic then
         #     flattened in so the SAT engine can model every point ---
         f"{gate_read}"
+        # Scan functional-mode only: rename the scan netlist's top out of the
+        # way and read the wrapper that ties `shift`/`test`/`sin`/`tck` to their
+        # functional-mode values and leaves `sout` dangling, so the gate's port
+        # set matches the gold's and `equiv_make` does not abort.  Empty
+        # otherwise.
+        f"{gate_rename}"
+        f"{gate_wrap_read}"
         f"hierarchy -check -top {top}\n"
         # #155: same memory legalization on the gate side, in case the gate
         # netlist still carries a $mem*/$mem_v2 cell (no-op otherwise).
@@ -1084,6 +1429,20 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -copy-from gate -as gate {top}\n"
         f"equiv_make gold gate equiv\n"
         f"hierarchy -top equiv\n"
+        # SAT-FREE structural pre-reduction BEFORE any SAT is spent. equiv_struct
+        # merges the $equiv key-points whose driving cones are structurally
+        # identical across gold and gate (the majority of a name-mapped
+        # RTL-vs-synth miter) by structural hashing alone — no solver call. This
+        # is SOUND: it only collapses provably-identical structure, so it can
+        # NEVER launder a real mismatch into a proof (a genuinely different cone
+        # survives to equiv_simple/equiv_induct below). Without it, equiv_simple
+        # SAT-hammers EVERY key-point including the trivially-identical ones, so a
+        # large design (measured: a 31 850-point AES miter) exhausts the wall
+        # clock mid-equiv_simple and yields a false INCONCLUSIVE. equiv_struct
+        # AUGMENTS, never REPLACES, the SAT stages that follow — it only shrinks
+        # the set they must decide (measured 31 850 -> 3 333, a 10x cut). This is
+        # the same pre-pass yosys's own `equiv_opt` runs. chip/PDK-AGNOSTIC.
+        f"equiv_struct\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
         f"equiv_induct -seq 16\n"
@@ -1093,16 +1452,33 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
 
 
 def run_yosys_equiv(container: str, ys_path_in_container: str,
-                    timeout: int = DEFAULT_YOSYS_TIMEOUT_S):
+                    timeout: int = DEFAULT_YOSYS_TIMEOUT_S,
+                    workdir: Optional[str] = None):
     """Run `yosys -s <ys>` in the container. Returns (launched, raw_output).
 
     launched=False means Docker/Yosys could not run at all (the caller then
     returns 1 for a disclosed-skip). launched=True means Yosys emitted output
-    (any outcome), which the parser then classifies."""
+    (any outcome), which the parser then classifies.
+
+    `workdir` runs the gold+gate read from a chosen directory. This is the
+    plugin's own `cwd=design_dir` rule (the one `benchmark_score_cwd_guard.py`
+    enforces for testbench runs) applied to the LEC read, and it is REQUIRED
+    for correctness rather than convenience: a design's memory-initialisation
+    and include references (`$readmemh`/`$readmemb`/`` `include ``) are
+    ORDINARILY written as RELATIVE paths, and the synthesis that produced the
+    gate netlist resolved them because it ran beside the resources the runner
+    staged for it. Reading the gold from a DIFFERENT directory makes those same
+    relative paths unresolvable, which aborts the gold elaboration and yields a
+    zero-point miter — reported downstream as a non-equivalence verdict about a
+    design that was never compared. Passing None preserves the previous
+    behaviour exactly."""
+    cmd = f"yosys -s {shlex.quote(ys_path_in_container)} 2>&1"
+    if workdir:
+        cmd = f"cd {shlex.quote(workdir)} && " + cmd
     try:
         r = _docker(
             container,
-            f"yosys -s {shlex.quote(ys_path_in_container)} 2>&1",
+            cmd,
             timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
@@ -1119,6 +1495,18 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     # a docker-daemon / no-such-container failure yields no Yosys banner.
     launched = ("Yosys" in out or "$equiv" in out
                 or "No SAT model" in out or "ERROR:" in out)
+    # CONTAINER-side budget kill (path (2), see _CONTAINER_TIMEOUT_RCS): the
+    # `timeout` _docker wraps the call in fires before the host deadline, so we
+    # arrive here NORMALLY with GNU-`timeout`'s exit code instead of via
+    # subprocess.TimeoutExpired above. Re-attach the SAME marker the host path
+    # writes, so the parser's budget-exhaustion branch (INCONCLUSIVE /
+    # SKIPPED-CONDITION) fires instead of misreading a killed-mid-proof run as a
+    # hard FAIL. This is a no-verdict signal ONLY: a COMPLETED miter (proven /
+    # unproven parsed) or a recorded counterexample never reaches that branch —
+    # both keep their real FAIL — so this can neither fabricate a PASS nor hide a
+    # real mismatch (proven on opentitan_aes × sky130A and covered by the tests).
+    if launched and getattr(r, "returncode", 0) in _CONTAINER_TIMEOUT_RCS:
+        out = out.rstrip("\n") + f"\n{_TIMEOUT_MARKER} after {timeout}s"
     return launched, out
 
 
@@ -1198,6 +1586,57 @@ def _resolve_gold_files(gold_dir: Path) -> List[str]:
 _MODULE_DECL_RE = re.compile(r"(?m)^\s*module\s+([A-Za-z_]\w*)")
 
 
+# The wrappers' interface is taken from the SCAN NETLIST's own module header,
+# minus the DFT ports — never re-parsed out of the RTL.  Two reasons:
+#   * the netlist header is generated Verilog-2005 (`module m(a, b); input a;
+#     output [3:0] b;`), which parses unambiguously, whereas the RTL may be
+#     ANSI or non-ANSI SystemVerilog with parameters and typedefs;
+#   * `fault chain` only ADDS ports, so "scan netlist ports minus the DFT
+#     ports" IS the RTL's port list.  If it ever were not, `equiv_make` aborts
+#     loudly on the mismatch — the failure mode is a visible error, not a
+#     quietly wrong comparison.
+_NL_MODULE_HDR_RE = re.compile(
+    r"^\s*module\s+(?P<name>\\?[\w$]+)\s*\((?P<ports>[^)]*)\)\s*;",
+    re.M)
+_NL_PORT_DECL_RE = re.compile(
+    r"^\s*(?P<dir>input|output|inout)\s+(?:wire\s+|reg\s+)?"
+    r"(?P<range>\[[^\]]*\]\s*)?(?P<name>\\?[\w$]+)\s*;",
+    re.M)
+
+
+def netlist_top_ports(netlist_text: str, top: str,
+                      exclude: Optional[List[str]] = None
+                      ) -> List[Tuple[str, str, str]]:
+    """`[(direction, range_or_empty, name)]` for module `top`, in header order.
+
+    `exclude` drops named ports (the DFT ports) from the result.  Returns []
+    when the module header cannot be found — the caller must then NOT wrap,
+    rather than wrap against a guessed interface.  PURE.
+    """
+    drop = set(exclude or ())
+    body = None
+    for m in _NL_MODULE_HDR_RE.finditer(netlist_text or ""):
+        if m.group("name").lstrip("\\") == top:
+            body = (m.group("ports"), netlist_text[m.end():])
+            break
+    if body is None:
+        return []
+    order = [p.strip().lstrip("\\") for p in body[0].split(",") if p.strip()]
+    decls: Dict[str, Tuple[str, str]] = {}
+    for d in _NL_PORT_DECL_RE.finditer(body[1]):
+        nm = d.group("name").lstrip("\\")
+        if nm in decls:
+            continue
+        decls[nm] = (d.group("dir"), (d.group("range") or "").strip())
+    out: List[Tuple[str, str, str]] = []
+    for nm in order:
+        if nm in drop or nm not in decls:
+            continue
+        direction, rng = decls[nm]
+        out.append((direction, f"{rng} " if rng else "", nm))
+    return out
+
+
 def _gold_modules(gold_files: List[str]) -> "tuple[set, set]":
     """(declared_modules, instantiated_module_names) across the gold RTL.
 
@@ -1222,24 +1661,154 @@ def _gold_modules(gold_files: List[str]) -> "tuple[set, set]":
     return decls, insts
 
 
-def _resolve_gold_top(gold_files: List[str], top: str) -> "tuple[str, str]":
-    """Ensure the LEC gold top is a module that actually exists in the RTL.
+_MODULE_BODY_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b",
+                             re.S)
+
+
+def _gold_child_map(gold_files: List[str], decls: set) -> "dict":
+    """{module: set(modules it instantiates)} across the gold RTL.
+
+    Same conservative instantiation shape `_gold_modules` uses, but scoped to
+    each module BODY so the hierarchy — not just the flat instantiated set —
+    is available."""
+    children: dict = {}
+    for f in gold_files:
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in _MODULE_BODY_RE.finditer(text):
+            name, body = m.group(1), m.group(2)
+            kids = children.setdefault(name, set())
+            for d in decls:
+                if d == name:
+                    continue
+                if re.search(r"(?<![\w.])" + re.escape(d)
+                             + r"\s+(?:#\s*\([\s\S]*?\)\s*)?[A-Za-z_]\w*\s*\(",
+                             body):
+                    kids.add(d)
+    return children
+
+
+def _descendants(children: dict, root: str) -> set:
+    """Every module reachable BELOW `root` in the gold hierarchy."""
+    seen: set = set()
+    stack = [root]
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return seen
+
+
+def _gate_modules(gate_netlist: Optional[str]) -> "tuple[set, set]":
+    """(declared_modules, instantiated_module_names) in the GATE netlist.
+
+    The exact mirror of `_gold_modules` for the other side of the comparison.
+    An equivalence miter needs the top to exist on BOTH sides; a gate netlist
+    is usually flattened to a single root, so its declared set is small and
+    decisive."""
+    if not gate_netlist:
+        return set(), set()
+    try:
+        text = Path(gate_netlist).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set(), set()
+    decls: set = set(_MODULE_DECL_RE.findall(text))
+    insts: set = set()
+    for d in decls:
+        if re.search(r"(?<![\w.])" + re.escape(d)
+                     + r"\s+(?:#\s*\([\s\S]*?\)\s*)?[A-Za-z_]\w*\s*\(", text):
+            insts.add(d)
+    return decls, insts
+
+
+def _top_is_comparable(gold_files: List[str], gate_netlist: Optional[str],
+                       top: str) -> bool:
+    """Is `top` declared on BOTH sides, so a miter can actually be built?
+
+    This is the PROPERTY the top guard exists to defend. A side whose module
+    set cannot be read at all (empty) is not evidence of absence and does not
+    veto — only a side that demonstrably declares other modules does."""
+    gold_decls, _ = _gold_modules(gold_files)
+    gate_decls, _ = _gate_modules(gate_netlist)
+    if gold_decls and top not in gold_decls:
+        return False
+    if gate_decls and top not in gate_decls:
+        return False
+    return True
+
+
+def _resolve_gold_top(gold_files: List[str], top: str,
+                      gate_netlist: Optional[str] = None) -> "tuple[str, str]":
+    """Ensure the LEC top is a module that actually exists on BOTH sides.
 
     A wrong top (e.g. the default 'chip_top' on a standalone 'spm' design) makes
     Yosys build 0 $equiv cells → a MISLEADING 'may genuinely differ' FAIL that
     proved nothing. If `top` is not declared, auto-correct to the sole ROOT
     module; if the choice is ambiguous, return top unchanged with a diagnostic
     note so the caller can emit an honest 'top not found' verdict instead of a
-    fake mismatch. Returns (resolved_top, note)."""
+    fake mismatch. Returns (resolved_top, note).
+
+    THE GATE SIDE COUNTS TOO. Checking only the gold made "the top exists in
+    the RTL" a PROXY for the property above, and the two come apart on any
+    design whose RTL declares more than one root — e.g. an RTL set carrying
+    both an ASIC top and a board/FPGA top, where synthesis builds the gate from
+    one of them. The gold then declares the caller's top, this guard passes it
+    through, and `hierarchy -check -top <top>` aborts on a gate netlist that
+    has no such module: zero compared points, reported as a verdict about the
+    design. A gate netlist we cannot read yields an empty set and vetoes
+    nothing, so a design that resolves today cannot be moved by this."""
     decls, insts = _gold_modules(gold_files)
-    if not decls or top in decls:
-        return top, ""
-    roots = sorted(m for m in decls if m not in insts)
-    if len(roots) == 1:
-        return roots[0], (f"gold top '{top}' not found in RTL; auto-corrected to "
-                          f"sole root module '{roots[0]}'")
-    return top, (f"gold top '{top}' not found in RTL modules "
-                 f"{sorted(decls)[:8]} and no unique root — cannot select a top")
+    resolved, note = top, ""
+    if decls and top not in decls:
+        roots = sorted(m for m in decls if m not in insts)
+        if len(roots) != 1:
+            return top, (f"gold top '{top}' not found in RTL modules "
+                         f"{sorted(decls)[:8]} and no unique root — cannot "
+                         "select a top")
+        resolved = roots[0]
+        note = (f"gold top '{top}' not found in RTL; auto-corrected to sole "
+                f"root module '{roots[0]}'")
+
+    gate_decls, gate_insts = _gate_modules(gate_netlist)
+    if gate_decls and resolved not in gate_decls:
+        # The candidate must be the gate netlist's SOLE ROOT (what the gate
+        # actually IS) and must be DECLARED BY THE GOLD (so there is something
+        # to compare it against). An unreadable gold is never enough on its own
+        # to let the gate pick a top, and an ambiguous or empty intersection
+        # returns a note so the caller emits an honest SKIPPED-CONDITION —
+        # never a fabricated mismatch and never a fabricated agreement.
+        shared = (decls & gate_decls) if decls else set()
+        cands = sorted(m for m in shared if m not in gate_insts)
+        if len(cands) == 1:
+            # NO-LEAK BAR: never silently substitute a PROPER PART of the
+            # design the caller asked about. A candidate that is a DESCENDANT
+            # of the requested top would shrink the comparison's scope while
+            # still reporting a verdict in the caller's name — the exact
+            # proxy-for-the-property shape this fix exists to remove. A
+            # SIBLING top (an RTL set carrying an ASIC top and a board top,
+            # each instantiating the same blocks) is a naming mismatch and is
+            # the case worth correcting; a descendant is a scope reduction and
+            # is refused.
+            below = _descendants(_gold_child_map(gold_files, decls), resolved) \
+                if decls else set()
+            if cands[0] in below:
+                return resolved, (
+                    f"the gate netlist holds '{cands[0]}', which is a SUBMODULE "
+                    f"of the requested top '{resolved}' — refusing to compare a "
+                    "proper part of the design under the top's name")
+            return cands[0], (
+                f"top '{resolved}' is declared by the RTL but is not a module "
+                f"of the gate netlist {sorted(gate_decls)[:8]}; auto-corrected "
+                f"to '{cands[0]}', the gate's sole root and a sibling top the "
+                "RTL also declares")
+        return resolved, (
+            f"top '{resolved}' is not a module of the gate netlist "
+            f"{sorted(gate_decls)[:8]} and no unique comparable top exists "
+            "— cannot select a top")
+    return resolved, note
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1261,6 +1830,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                          f"(default {DEFAULT_YOSYS_TIMEOUT_S})")
     ap.add_argument("--json", default=DEFAULT_JSON_REL,
                     help="Output JSON path, relative to project")
+    ap.add_argument("--scan-meta", default=None,
+                    help="Path (project-relative) to the scan-chain metadata "
+                         "written by fault_scan_chain_insert.py "
+                         "(reports/phase2/dft/scan_chain.json).  When it is "
+                         "present AND declares a PUBLISHED scan netlist, the "
+                         "gate is compared in FUNCTIONAL MODE: the DFT control "
+                         "ports are tied to their functional values, the scan "
+                         "output is dropped, and the gold is given the gate's "
+                         "own internal-wire prefix so equiv_make can still "
+                         "match points by name.  Absent or unpublished → the "
+                         "script is byte-identical to the non-scan one.")
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -1314,15 +1894,22 @@ def main(argv: Optional[List[str]] = None) -> int:
               "— proceeding without it.", file=sys.stderr)
         liberty = None
 
-    # Defense-in-depth: make sure the gold top actually exists in the RTL. A
+    # Defense-in-depth: make sure the top actually exists on BOTH sides. A
     # wrong top (default 'chip_top' on a standalone 'spm') builds 0 $equiv cells
     # → a MISLEADING 'may genuinely differ' FAIL that proved nothing. Auto-correct
     # to the sole root, or emit an honest 'top not found' SKIPPED-CONDITION.
-    resolved_top, top_note = _resolve_gold_top(gold_files, args.top)
+    # The GATE netlist is consulted as well: a top the gold declares but the
+    # gate does not is exactly as un-comparable as one the gold lacks, and
+    # aborts `hierarchy -check` before a single $equiv point is built.
+    _gate_for_top = str(gate_netlist.resolve()) if gate_netlist else None
+    resolved_top, top_note = _resolve_gold_top(gold_files, args.top,
+                                               _gate_for_top)
     if top_note:
         print(f"[lec_run] {top_note}", file=sys.stderr)
-    gold_decls, _ = _gold_modules(gold_files)
-    if gold_decls and resolved_top not in gold_decls:
+    if not _top_is_comparable(gold_files, _gate_for_top, resolved_top):
+        top_note = top_note or (
+            f"top '{resolved_top}' is not declared on both the RTL and the "
+            "gate netlist, so no equivalence miter can be built")
         parsed = {
             "proven": None, "unproven": None, "total": None,
             "sat_model_unsupported_cells": [], "unproven_cells": [],
@@ -1343,6 +1930,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gate_abs = str(gate_netlist.resolve())
+
+    # ORGANIC-20260801 — an instantiated hard-macro (SRAM/IP) whose model is
+    # STAGED under input/pdk_local (L8) is UNDEFINED in rtl/, so the GOLD read
+    # aborts `unknown module <macro>` (0 compared points → false FAIL) and the
+    # synth GATE netlist instantiates it without a module decl. Blackbox the
+    # macro on BOTH sides — prepend a `(* blackbox *)` stub to the gold read
+    # AND pass it as `blackbox_v` for the gate read — so the miter proves the
+    # surrounding logic under an assume-guarantee on identical macro
+    # interfaces. No-op when the design stages no hard-macro (byte-identical).
+    macro_blackbox_v: List[str] = []
+    for _m in _hms.staged_hardmacro_models(project, gold_files):
+        if _m["v"] is not None:
+            _stub = _hms.emit_blackbox_stub(
+                _m["v"], _m["name"], rpt_out.parent / "lec_hardmacro_bb")
+            macro_blackbox_v.append(str(_stub.resolve()))
+    if macro_blackbox_v:
+        gold_files = macro_blackbox_v + gold_files
+        print(f"[lec_run] staged hard-macro blackbox: "
+              f"{[Path(s).name for s in macro_blackbox_v]}", file=sys.stderr)
+
     # A pre-techmap generic `$_`-primitive netlist must be read with `-icells`
     # and NO Liberty, else `hierarchy -check` aborts on an undefined `\$_DFF_P_`
     # module before any $equiv point is built (compared_points=0 false-FAIL).
@@ -1356,19 +1963,120 @@ def main(argv: Optional[List[str]] = None) -> int:
     # yosys read the RTL/netlist by their host absolute paths).
     ys_host = rpt_out.parent / "lec_equiv.ys"
     ys_in_container = str(ys_host.resolve())
+    # CWD: read the gold from the GATE NETLIST'S OWN DIRECTORY — the directory
+    # the flow stages the gate's companion resources into (memory-init images,
+    # `include headers). A design's `$readmemh`/`$readmemb`/`` `include ``
+    # arguments are ordinarily written as RELATIVE paths, so a read performed
+    # from anywhere else cannot resolve them; the gold elaboration then aborts
+    # and the miter is empty, which is reported downstream as a non-equivalence
+    # verdict about a design that was never compared. This is the plugin's own
+    # `cwd=design_dir` rule (the one `benchmark_score_cwd_guard.py` enforces for
+    # testbench runs) applied to the LEC read. Falls back to the gold RTL dir,
+    # then to None (the previous behaviour) when neither directory exists, so
+    # no design that resolves today can be moved by this.
+    equiv_workdir: Optional[str] = None
+    for _cand in (Path(gate_abs).parent,
+                  Path(gold_files[0]).parent if gold_files else None):
+        if _cand is not None and _cand.is_dir():
+            equiv_workdir = str(_cand.resolve())
+            break
+    if equiv_workdir:
+        print(f"[lec_run] gold+gate read cwd = {equiv_workdir} "
+              "(mirrors the synth cwd so relative $readmemh/`include resolve)",
+              file=sys.stderr)
     gold_frontend = "verilog"
     gold_defines = "-DSIMULATION -DYOSYS"   # synth PRIMARY define set (mirrored)
+
+    # --- functional-mode (scan) comparison ---------------------------------
+    # Only fires when the caller NAMED a scan-chain metadata file AND that file
+    # declares a published scan netlist AND the gate netlist really carries the
+    # DFT ports it describes.  Any one of those missing → no wrapping at all,
+    # and the emitted script is byte-identical to the pre-change one.  Each
+    # decision is recorded in `scan_functional_mode` in the report, so a reader
+    # can see WHY the comparison was or was not functional-mode constrained.
+    scan_mode: Optional[Dict] = None
+    scan_record: Dict = {"requested": bool(args.scan_meta), "applied": False,
+                         "reason": "no --scan-meta given"}
+    gate_wrapper_v = gold_wrapper_v = ""
+    if args.scan_meta:
+        meta_path = project / args.scan_meta
+        try:
+            _meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _meta, scan_record["reason"] = None, (
+                f"scan metadata unreadable ({meta_path}): {exc}")
+        _sm = scan_mode_from_meta(_meta)
+        if _meta is not None and _sm is None:
+            scan_record["reason"] = (
+                "scan metadata does not declare a PUBLISHED scan netlist with "
+                "a functional-mode tie-off — not wrapping (a wrapper over a "
+                "netlist with no DFT ports would be a fabrication)")
+        if _sm is not None:
+            _nl_text = Path(gate_abs).read_text(encoding="utf-8",
+                                                errors="ignore")
+            _dft = sorted({*_sm["tieoff"], _sm["scan_out_port"]})
+            _all_ports = netlist_top_ports(_nl_text, resolved_top)
+            _have = {n for _, _, n in _all_ports}
+            _absent = [p for p in _dft if p not in _have]
+            _rtl_ports = netlist_top_ports(_nl_text, resolved_top,
+                                           exclude=_dft)
+            if not _all_ports:
+                scan_record["reason"] = (
+                    f"could not read module {resolved_top}'s port list out of "
+                    f"the gate netlist — not wrapping against a guessed "
+                    f"interface")
+            elif _absent:
+                # The gate is NOT the scan netlist the metadata describes.
+                # Wrapping anyway would tie off ports that do not exist and the
+                # comparison would say nothing about the real artefact.
+                scan_record["reason"] = (
+                    f"gate netlist {Path(gate_abs).name} does not carry the "
+                    f"DFT port(s) {_absent} the scan metadata declares — the "
+                    f"gate is not the scan netlist, so functional-mode "
+                    f"constraints are NOT applied")
+            else:
+                gate_src, gold_src = build_scan_wrappers(
+                    resolved_top, _rtl_ports, _sm)
+                gate_w = rpt_out.parent / "lec_scan_gate_wrapper.v"
+                gold_w = rpt_out.parent / "lec_scan_gold_wrapper.v"
+                gate_w.write_text(gate_src, encoding="utf-8")
+                gold_w.write_text(gold_src, encoding="utf-8")
+                gate_wrapper_v = str(gate_w.resolve())
+                gold_wrapper_v = str(gold_w.resolve())
+                scan_mode = _sm
+                scan_record = {
+                    "requested": True, "applied": True,
+                    "reason": "gate carries the declared DFT ports",
+                    "tieoff": _sm["tieoff"],
+                    "scan_out_port_dangling": _sm["scan_out_port"],
+                    "internal_prefix": _sm["internal_prefix"],
+                    "compared_interface_ports": [n for _, _, n in _rtl_ports],
+                    "gate_wrapper": str(gate_w.relative_to(project)),
+                    "gold_wrapper": str(gold_w.relative_to(project)),
+                }
+                print(f"[lec_run] functional-mode scan comparison: tie "
+                      f"{_sm['tieoff']}, drop '{_sm['scan_out_port']}', "
+                      f"gold prefix {_sm['internal_prefix']!r}",
+                      file=sys.stderr)
+    if scan_record.get("requested") and not scan_record.get("applied"):
+        print(f"[lec_run] scan functional-mode NOT applied: "
+              f"{scan_record['reason']}", file=sys.stderr)
 
     def _run(frontend: str, slang_prefix: str = "",
              defines: str = "-DSIMULATION -DYOSYS"):
         script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
+                                    blackbox_v=macro_blackbox_v or None,
                                     gate_is_generic=gate_is_generic,
                                     gold_frontend=frontend,
                                     slang_prefix=slang_prefix,
-                                    gold_defines=defines)
+                                    gold_defines=defines,
+                                    scan_mode=scan_mode,
+                                    gate_wrapper_v=gate_wrapper_v,
+                                    gold_wrapper_v=gold_wrapper_v)
         ys_host.write_text(script, encoding="utf-8")
         return run_yosys_equiv(container, ys_in_container,
-                               timeout=args.timeout)
+                               timeout=args.timeout,
+                               workdir=equiv_workdir)
 
     t0 = time.time()
     launched, raw = _run("verilog")
@@ -1492,6 +2200,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # WHY that frontend — empty when the built-in reader built the miter on the
     # first pass; otherwise the explicit justification for the slang fallback.
     report["gold_frontend_reason"] = gold_frontend_reason or None
+    # WHAT WAS CONSTRAINED, ALWAYS. Recorded on every run — including the runs
+    # where nothing was constrained, with the reason — so a PASS on a scan
+    # netlist can never be read without seeing the mode it was proven in, and a
+    # scan netlist compared WITHOUT the constraints is visible as such rather
+    # than looking like an ordinary comparison.
+    report["scan_functional_mode"] = scan_record
     json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
     print(json.dumps({

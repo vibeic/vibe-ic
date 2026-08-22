@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "security_requirements_present": false,
-    "notes": "S/PDIF (IEC 60958 type II) and the companion IEC 61937 compressed-audio encapsulation do not provide confidentiality, integrity, or authentication at the protocol layer. The audio payload is in plaintext (PCM) or in standardized compressed formats (Dolby AC-3 / DTS / MP3 / AAC / Dolby TrueHD / E-AC-3 / ATRAC / WMA Pro) that are not encrypted at the S/PDIF level. The only access-control-like mechanism is SCMS (Serial Copy Management System): channel-status byte 0 bit 2 = copy restrict / copy permit, byte 1 bit 7 = L-bit (original / copy), and the CD-DA convention of alternating byte 0 bit 2 at 4-10 Hz to prevent recording. SCMS is an advisory rights-management hint, not a cryptographic protection — non-compliant receivers can simply ignore the flags."
-  }
-}
