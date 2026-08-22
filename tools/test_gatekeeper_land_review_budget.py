@@ -4,6 +4,14 @@ Owner ruling, 2026-08-21: a landing may spend up to four minutes on
 `gatekeeper_review`, and "if the review cannot decide inside that, it must
 return rc=2 UNDETERMINED and BLOCK, never rc=0".
 
+THE NUMBER MOVED AND THE RULE DID NOT. The four minutes was chosen for a
+review that was going to be HANDED this run's hygiene record. That handover was
+a command-line flag on the one gate that may not be skipped, it is gone, and
+the review now runs the set — so the script's default is 1800 s,
+`repo_hygiene_gate._HYGIENE_STALL_GRACE_S`. Nothing here asserts 240; the
+budget is a parameter of `_drive`, and every case below drives the RULE: a
+review that did not decide arrives as rc 2 and BLOCKS, never rc 0.
+
 The function is EXTRACTED FROM THE REAL SCRIPT rather than restated here. A
 copy of the case statement in a test would go on passing after the script's own
 copy was edited, which is the drift this repo removes from gates one at a time;
@@ -43,7 +51,7 @@ def _drive(tmp_path, stub_body: str, budget: str = "240"):
     script.write_text(
         "set -u\n"
         f'PROGRAMS="{programs}"\nROOT="{tmp_path}"\nBASE="origin/main"\n'
-        f'GK_HYG_RECORD="{tmp_path}/rec.json"\nGK_HYG_RC=0\n'
+        f'GK_REVIEW_RECORD="{tmp_path}/review-hygiene.json"\n'
         f'GK_REVIEW_BUDGET_S="{budget}"\n'
         + _extract("run_gatekeeper_review")
         + 'run_gatekeeper_review; echo "RC=$?"\n',
@@ -187,7 +195,7 @@ def _drive_through_run(tmp_path, stub_body: str, budget: str = "240"):
     script.write_text(
         "set -u\n"
         f'PROGRAMS="{programs}"\nROOT="{tmp_path}"\nBASE="origin/main"\n'
-        f'GK_HYG_RECORD="{tmp_path}/rec.json"\nGK_HYG_RC=0\n'
+        f'GK_REVIEW_RECORD="{tmp_path}/review-hygiene.json"\n'
         f'GK_REVIEW_BUDGET_S="{budget}"\nLANE_DIR="{lanes}"\n'
         'LANE_BROKEN=0\nLANE_WAIT_RC=0\nLANDING_RECORD_ENABLED=0\nFAILED=0\n'
         'EMIT_OUT=""\nEMIT_RC=0\n'

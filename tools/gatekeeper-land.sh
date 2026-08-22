@@ -1354,7 +1354,19 @@ lane_corpus() {
 # record land somewhere the next stage can read it, and when the caller named a
 # path that path is still the one used.
 GK_HYG_RECORD="${GATEKEEPER_HYGIENE_REPORT:-$LANE_DIR/repo-hygiene-summary.json}"
-GK_HYG=(--summary-json "$GK_HYG_RECORD")
+# THE CALLER'S PATH IS PASSED VERBATIM, and that branch is not collapsible into
+# the expansion above. The two are different contracts: a path the VERIFIER
+# named is read outside this process — `hygiene_finding_delta` differences it
+# against the base's record — while the lane-local default is scratch nobody
+# else has been told about. v1.11.67 collapsed them and the record went on
+# landing in the right place, so nothing observable broke; what broke is that
+# the one line saying "the variable the verifier sets is the path used" stopped
+# existing, and that line is the whole of the guarantee.
+if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ]; then
+  GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+else
+  GK_HYG=(--summary-json "$GK_HYG_RECORD")
+fi
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
@@ -1446,10 +1458,6 @@ lane_emit_window() {
 
   lane_join hygiene
   run_emit "full:repo-hygiene" "repo hygiene gates" --last
-  # KEPT FOR THE REVIEW BELOW, and kept SEPARATELY from the record. The record
-  # says which gates were red; only this says whether the set completed, and a
-  # run killed part-way leaves a record that looks finished.
-  GK_HYG_RC="$EMIT_RC"
 
   lane_join audit
   run_emit "full:plugin-audit" "plugin full audit" --last
@@ -1524,26 +1532,86 @@ fi
 # doctrine means no workflow runs before main moves. The lander is the one path
 # every landing actually takes.
 #
-# THE BUDGET IS FOUR MINUTES AND A TIMEOUT BLOCKS. `timeout` returns 124, which
-# is not 0 and not 1, so the case statement below maps it — with every other
-# unexpected status — to rc 2 UNDETERMINED. A review that could not decide must
-# never reach the stamp as a review that decided nothing was wrong.
+# THERE IS A BUDGET AND A TIMEOUT BLOCKS. `timeout` returns 124, which is not 0
+# and not 1, so the case statement below maps it — with every other unexpected
+# status — to rc 2 UNDETERMINED. A review that could not decide must never
+# reach the stamp as a review that decided nothing was wrong. The ruling set
+# that budget at four minutes; what it is now, and why it moved, is below.
 #
-# IT IS FED THIS RUN'S HYGIENE RECORD RATHER THAN RUNNING THE SET AGAIN.
-# Measured: with the published corpus bound, the review's own hygiene run
-# exceeds the whole budget by itself, so wiring it as-is would make every
-# landing time out — unavoidable and never once deciding. `--hygiene-record-in`
-# checks the record against this tree's declared gate set before believing it
-# (see `hygiene_gate_from_record`), so this is a change of RUNNER, not a
-# cheaper subject and not a skip.
-GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-240}"
+# IT RUNS THE HYGIENE SET. IT IS NOT HANDED A RECORD OF ONE.
+#
+# v1.11.67 fed it this run's record through `--hygiene-record-in`, argued as a
+# change of RUNNER rather than of SUBJECT, so that the review would fit a
+# four-minute budget. Two gates that exist for exactly this went red and were
+# right to: `gatekeeper_review.py` may not grow a command-line way to hand its
+# hygiene gate a substitute for running it. Every check that flag made is a
+# check of the record's SHAPE — it parses, an rc came with it, it names the
+# labels a 0.12 s `--list` reports — and a shape is not a provenance: a record
+# marking every declared label PASS is a few lines of JSON, and a caller who
+# can pass a path can pass that one. The flag is gone; the handover keeps its
+# tests and its callers inside the process, where `argv` cannot reach it.
+#
+# SO THE BUDGET MOVED INSTEAD, and this is the trade, stated rather than
+# buried. The ruling's four minutes was chosen for a review that was going to
+# READ a record. Running the set costs what the set costs, and the numbers are
+# MEASURED end to end rather than inferred from the lane above: the hygiene set
+# itself runs in 188-193 s on this host, and the review that runs it decides in
+# 247.5 s. Against a 240 s budget that is an overrun of 3% — small, and enough,
+# because a budget the review cannot meet is a deadline that can only ever
+# expire, and that is not a deadline; it is an unconditional refusal wearing
+# one.
+#
+# THE MARGIN IS STATED BECAUSE IT IS NARROW. An earlier version of this comment
+# argued from a 551 s run and read as though four minutes were hopeless. That
+# run was CONTENDED; quoting it as the cost overstated the case ~3x. The honest
+# claim is the small one: 247.5 s > 240 s on a quiet host, so the ruling's
+# budget expires without deciding even in the good case. 1800 s is the outer bound because it is `repo_hygiene_gate`'s own
+# `_HYGIENE_STALL_GRACE_S`: below it, this `timeout` kills runs that the
+# REVIEW'S OWN SUPERVISOR still considers alive, and the kill would be reported
+# here as the review's verdict.
+#
+# THAT IS NOT THE GRACE THAT GOVERNS THE SET, and the earlier wording here said
+# it was. Measured 2026-08-22: there are TWO watchdogs and they differ 6x.
+# `repo_hygiene_gate` passes `stall_grace` to a supervisor it wraps around the
+# subprocess; it does NOT pass `--stall-grace` to the runner, which therefore
+# uses `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s for every shard.
+# A shard that goes 300 s without a completed gate record is killed as hung,
+# its attestation truncates, and the coverage protocol reports
+# PROGRESS_PROTOCOL_INCOMPLETE / rc 199 — which arrives here as
+# `ERROR parallel hygiene incomplete`, a refusal about the HOST rather than
+# about the tree. Reproduce with `--stall-grace 5` on any tree (~70 s).
+#
+# 1800 remains the right value for THIS timeout: it is an outer bound, it is
+# above every observed complete run, and a landing must never kill a review
+# that is still deciding. The correction is only to what the number means —
+# it bounds the review, not the hygiene set.
+#
+# The half of the ruling that is load-bearing is untouched: a review that did
+# not decide arrives as rc 2 and BLOCKS, never as rc 0. That is what the case
+# statement below does and what `tools/test_gatekeeper_land_review_budget.py`
+# drives, against the real function extracted from this file.
+#
+# `GATEKEEPER_REVIEW_BUDGET_S` is not a skip button and cannot become one:
+# every value of it that stops the review early maps to rc 2 and refuses the
+# landing. Lowering it buys a refusal, never a pass.
+GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
+# Its own path, never `$GK_HYG_RECORD`: that one is the differential's baseline
+# and a second writer would silently replace what `hygiene_finding_delta` came
+# to read.
+#
+# `review()` would keep this record in a temporary directory of its own and
+# adjudicate `gate_red_since` from it in-process, so naming a path changes no
+# verdict. What it buys is the case where the record is worth the most: the
+# `gk_cleanup` trap runs on a normal exit and does NOT run on a SIGKILL, so a
+# landing killed part-way leaves this file behind for a human to read, while
+# the review's own tempdir would have gone with it.
+GK_REVIEW_RECORD="$LANE_DIR/gatekeeper-review-hygiene.json"
 run_gatekeeper_review() {
   local out rc
   out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
          python3 "$PROGRAMS/gatekeeper_review.py" \
          --base "$BASE" --head HEAD --repo "$ROOT" \
-         --hygiene-record-in "$GK_HYG_RECORD" \
-         --hygiene-record-rc "${GK_HYG_RC:-2}" 2>&1)"; rc=$?
+         --gate-record "$GK_REVIEW_RECORD" 2>&1)"; rc=$?
   case "$rc" in
     0|1) ;;
     124|137)

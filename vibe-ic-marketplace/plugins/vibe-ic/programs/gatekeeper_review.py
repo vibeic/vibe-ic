@@ -1378,38 +1378,37 @@ def hygiene_gate_from_record(repo: Path, record: Path,
                              script: Optional[Path] = None) -> GateResult:
     """Adjudicate a hygiene record the CALLER already produced.
 
-    WHY THIS IS NOT THE SKIP BUTTON `repo_hygiene_gate` REFUSES TO GROW.
-    That function's docstring says there is deliberately no CLI flag for
-    `script`, because a command-line way to point the gate at a cheap fixture
-    would be a skip button on the gate whose whole purpose is that it cannot be
-    forgotten. That reasoning is right and it is why this is a different thing:
-    `--hygiene-script` substitutes a CHEAPER SUBJECT, while this substitutes
-    the RUNNER of the same subject. The set still runs, in full, over this
-    tree — it runs in the lander's own hygiene lane, which refuses the landing
-    on its own account, and this reads that run's record instead of paying for
-    a second one.
+    IN-PROCESS CALLERS ONLY. THERE IS NO CLI FLAG AND THERE MUST NOT BE.
+    `review()` reaches this through `hygiene_record_in=`, a FUNCTION KEYWORD in
+    the same spirit as `repo_hygiene_gate`'s `script=` seam and under the same
+    rule that function's docstring states.
 
-    MEASURED, which is why it exists: the owner's ruling gives a landing four
-    minutes for this review. With the published corpus bound the review's own
-    hygiene run exceeds that on its own, so wiring the program as-is would make
-    every landing time out — the check would be unavoidable and would never
-    once decide, which is the opposite of the ruling's intent. With the corpus
-    UNBOUND it takes 45 s, because the hygiene gate refuses early and
-    `gate_red_since` then reports `skipped — 0 gate state(s) examined`. Both
-    ends of that range are a deadline that never adjudicates.
+    v1.11.67 put it on the command line as `--hygiene-record-in`, argued as a
+    change of RUNNER rather than of SUBJECT: the set still runs in full, in the
+    lander's own hygiene lane, and this reads that run's record instead of
+    paying for a second one. The distinction is real and it is why this
+    function exists. It is not a reason to expose it to `argv`, and the two
+    gates that said so were right.
 
-    THE RECORD IS CHECKED, NOT TRUSTED. A caller could hand over anything, so:
-    the record must exist and parse; it must carry the exit status of the run
+    THE RECORD IS CHECKED, NOT TRUSTED — AND A SHAPE IS NOT A PROVENANCE.
+    The record must exist and parse; it must carry the exit status of the run
     that produced it, supplied separately by the caller that watched it; and
     the gates it names must be exactly the set this tree declares, obtained
-    from a `--list` run costing 0.12 s. A record forged to be green must
-    therefore also be forged to name all 85 declared labels, which is no longer
-    "a flag that skips the gate" but a fabricated measurement — a different act
-    with a different name, and one the landing record and this gate's own
-    output both preserve the evidence of.
+    from a `--list` run costing well under a second. Those four are everything
+    this function knows, and all four are properties of the FILE. MEASURED on
+    this repo: `--list` reports 86 declared labels in 0.62 s, and a 6 KB record
+    marking every one of them PASS makes this function return rc 0 green,
+    summarised as `86/86 gate(s) ran`, over a set that never ran. The forgery
+    is not hard and does not need to be; it needs a caller who can name a path.
 
-    Every failure to establish those is rc 2 UNDETERMINED and BLOCKING. Never
-    rc 0: "I could not check the record" must not reach a verdict as "the
+    So the checks defend an in-process caller that has already run the set from
+    a corrupted or truncated record. They do not, and cannot, defend against
+    the caller itself, which is exactly what a command line is. See
+    `tests/test_hygiene_handover_is_in_process_only.py`, which binds that rule
+    to the KEYWORD rather than to any spelling of a flag.
+
+    Every failure to establish the four is rc 2 UNDETERMINED and BLOCKING.
+    Never rc 0: "I could not check the record" must not reach a verdict as "the
     record was clean", which is this repo's `_vacuous_exit` convention applied
     to the handover itself.
     """
@@ -1884,18 +1883,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=("persist the complete repo-hygiene summary/attestation JSON at "
               "this path instead of keeping it only for the in-process "
               "gate-red-since adjudication"))
-    ap.add_argument(
-        "--hygiene-record-in", dest="hygiene_record_in", default=None,
-        help=("adjudicate a repo-hygiene summary JSON the CALLER already "
-              "produced instead of running the set a second time. Requires "
-              "--hygiene-record-rc. The record is checked against this tree's "
-              "declared gate set, not trusted; anything unestablished is rc 2 "
-              "UNDETERMINED and blocking"))
-    ap.add_argument(
-        "--hygiene-record-rc", dest="hygiene_record_rc", type=int, default=None,
-        help=("the exit status of the run that produced --hygiene-record-in. "
-              "Separate because the record says WHICH gates were red and only "
-              "the rc says whether the set completed"))
+    # THERE IS NO `--hygiene-record-in`, AND THERE MUST NOT BE. `review()`
+    # takes `hygiene_record_in=` as a FUNCTION KEYWORD, in the same spirit as
+    # `repo_hygiene_gate`'s `script=` seam and under the same rule that
+    # function's docstring states: no CLI flag, because a command-line way to
+    # hand this gate a substitute for running it is a skip button on the one
+    # gate whose entire purpose is that it cannot be forgotten.
+    #
+    # v1.11.67 grew one, argued as a change of RUNNER rather than of SUBJECT.
+    # The argument does not survive contact with the command line: every check
+    # `hygiene_gate_from_record` makes is a check of the record's SHAPE — it
+    # exists, it parses, an rc came with it, and it names exactly the labels a
+    # 0.12 s `--list` run reports — and a shape is not a provenance. Measured
+    # here: with `--list` naming this tree's declared labels, a record marking
+    # every one of them PASS is a few lines of JSON, and the gate returns rc 0
+    # green over a set that never ran. A caller who can pass a path can pass
+    # that path.
+    #
+    # So the handover keeps its ten tests and its callers inside this process,
+    # and `argv` cannot reach it.
     ap.add_argument(
         "--gate-progress", dest="hygiene_progress", default=None,
         help=("append one owner-only JSONL process attestation after each "
@@ -1938,10 +1944,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    hygiene_report=(Path(args.hygiene_report)
                                    if args.hygiene_report else None),
                    hygiene_progress=(Path(args.hygiene_progress)
-                                     if args.hygiene_progress else None),
-                   hygiene_record_in=(Path(args.hygiene_record_in)
-                                      if args.hygiene_record_in else None),
-                   hygiene_record_rc=args.hygiene_record_rc)
+                                     if args.hygiene_progress else None))
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
