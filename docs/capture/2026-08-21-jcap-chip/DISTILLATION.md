@@ -279,3 +279,51 @@ over all 1266 composed programs (the four censuses all carry tests), D2 PASS,
 131 of 133 ratchet/census tests pass, and this lane's twelve gates return exactly
 their branch verdicts.
 
+### Auditing this record for the failure it keeps describing
+
+Three times in this lane I asserted a fact from a name or a docstring and was
+wrong: `gate:` clauses read as ownership, `programs:` read as the only producer
+declaration, and a ratchet's remedy read from its test's name. That is the same
+failure the ten fail-open gates had — checking one thing, claiming another — so
+the remaining claims in this record that DIRECT SOMEONE'S WORK were tested rather
+than left standing on prose. Both survived.
+
+**"The stamp has exactly two values, so a post-CTS report can answer neither."**
+Exercised `_sta_basis.declared_basis` directly:
+
+    "# STA_BASIS: POST_ROUTE_SPEF"     -> 'POST_ROUTE'
+    "# STA_BASIS: POST_ROUTE_NO_SPEF"  -> 'POST_ROUTE'
+    "# STA_BASIS: PRE_LAYOUT_ESTIMATE" -> 'PRE_LAYOUT'
+    "# STA_BASIS: POST_CTS"            -> None
+    "# STA_BASIS: anything_else"       -> None
+
+CONFIRMED. `POST_CTS` is not merely absent from the vocabulary, it normalises to
+`None` — indistinguishable from an unstamped report. So `clock_tree.rpt` genuinely
+cannot answer, and "closing it needs a third value in the stamp's vocabulary" is
+right.
+
+**"The corpus-pointer contract split is real."** This is why
+`explicit_argument_outranks_the_environment_pointer` enforces only the
+announcement and arbitrates nothing, so it had better be true. Built a fixture
+with a named directory that EXISTS and a pointer aimed elsewhere, and RAN all
+four sides:
+
+    _corpus_location.resolve(named EXISTS)   -> named     (pointer does NOT win)
+    _corpus_location.resolve(named MISSING)  -> pointed   (pointer fills a gap)
+
+    benchmark_evidence_structure_check --tree <named>
+        note: VIBE_IC_BENCHMARK_DATA overrides --tree <named> -> <pointed>
+    tracked_symlink_portability_check <named>
+        note: VIBE_IC_BENCHMARK_DATA overrides <named> -> <pointed>
+    tracked_symlink_target_present_check --subdir <named>
+        note: VIBE_IC_BENCHMARK_DATA overrides --subdir <named> -> <pointed>
+
+CONFIRMED on all four. The resolver holds one rule and all three consumers hold
+the opposite, with a PRESENT named location — behaviour, not comments. The
+neutrality is warranted.
+
+One caution recorded from doing it: the first attempt passed `--tree` to all
+three and two printed nothing. That was the WRONG FLAG, not agreement — they take
+a positional root and `--subdir`. A non-result from a wrong invocation is not
+evidence, which is the same trap as the rest of this file.
+
