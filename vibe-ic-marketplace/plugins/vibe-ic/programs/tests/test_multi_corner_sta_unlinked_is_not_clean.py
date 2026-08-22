@@ -172,3 +172,58 @@ def _pdk():
         drc_deck="/w/drc.lydrc",
         metal_prefix="met",
     )
+
+
+# ── a MENTION of the warning is not the warning (vibe-ic#731) ────────────────
+#
+# `_STA_BLACKBOX_RE` was run over the whole log, comments included, so a line
+# RESTATING the warning read as OpenSTA ISSUING it. A per-corner log is not HDL,
+# but nothing keeps HDL out of one — a flow that folds the netlist into its
+# transcript, or a reader echoing the offending source line, puts `//` and
+# `/* */` text in here.
+#
+# The damage runs OPPOSITE to the defect this file opens with. There, a missed
+# warning kept a falsely-clean corner. Here, a phantom master makes
+# `_emit_multi_corner_sta` `rpt.unlink()` a corner report that is REAL and
+# record that the design did not link, so a mention DESTROYS post-route
+# sign-off data. Both directions are asserted below, on the RETURNED masters.
+
+BANNER = (
+    "OpenSTA 2.7.0 f21d4a3878 Copyright (c) 2026, Parallax Software, Inc.\n"
+    "License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>\n")
+
+REAL_WARNING = (
+    "Warning 198: /w/{t}_synth.v line 3970, module foo_fd_sc__clkinv_1 "
+    "not found. Creating black box for _3145_.\n").format(t=TOP)
+
+# The same two sentences, written ABOUT the tool instead of BY it.
+COMMENTED_LOG = BANNER + (
+    "// module foo_fd_sc__nand2_1 not found. Creating black box for _3176_.\n"
+    "/* module foo_fd_sc__mux2_1 not found. Creating black box for _3177_. */\n")
+
+
+def test_a_commented_warning_is_not_read_as_a_warning(tmp_path):
+    """FORWARD CONTROL — FAILS against the pre-fix helper, which returns
+    ['foo_fd_sc__mux2_1', 'foo_fd_sc__nand2_1'] for this text and would delete
+    a healthy corner report on the strength of two comments."""
+    log = tmp_path / "sta_SS.log"
+    log.write_text(COMMENTED_LOG)
+    assert R._sta_blackboxed_masters(log) == []
+
+
+def test_a_real_warning_beside_a_commented_one_is_still_reported(tmp_path):
+    """REVERSE CONTROL — the strip may not silence the thing it guards. Losing
+    a genuine Warning 198 restores the falsely-clean corner outright."""
+    log = tmp_path / "sta_SS.log"
+    log.write_text(COMMENTED_LOG + REAL_WARNING)
+    assert R._sta_blackboxed_masters(log) == ["foo_fd_sc__clkinv_1"]
+
+
+def test_the_banner_url_does_not_reach_the_next_line(tmp_path):
+    """MEASURED on 64 real per-corner logs on a fleet host: `//` appeared on 50
+    lines and every one was this GPL banner URL — none was a warning line. A
+    strip written with DOTALL would swallow the file from that URL onward and
+    report NO masters at all, which is the falsely-clean corner again."""
+    log = tmp_path / "sta_SS.log"
+    log.write_text(BANNER + REAL_WARNING)
+    assert R._sta_blackboxed_masters(log) == ["foo_fd_sc__clkinv_1"]
