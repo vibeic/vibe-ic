@@ -2706,3 +2706,59 @@ the next module. The watchdog mismatch (§18), the empty-loop-corpus label
 (§28), and `jrows`'s collateral revert are all still open. This branch fixed the
 regression and hardened the property against a rename; it did not fix the gate
 that let the regression through.
+
+## 42. An UNDETERMINED I am leaving open, with its missing inputs named
+
+Following the landing, one observation I can measure and one conclusion I
+cannot reach. It is recorded as undetermined rather than resolved, because the
+honest form of it is more useful than a guess.
+
+**Measured.** `landing_collateral_revert_check` is wired into the lander as a
+BLOCKING cheap-tier gate:
+
+```sh
+run "cheap:collateral-revert" "no collateral revert within the push" \
+    python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
+```
+
+with `RANGE="${BASE}..HEAD"`, and `run` folds any non-zero into `FAILED`, which
+withholds the stamp. Over the span that landing covered:
+
+```
+81cd5321b0..a4caccefea    214 commits, 2 version-assign commits    18 finding(s), rc 1
+546487a8a3..a4caccefea    216 commits                              17 finding(s), rc 1
+```
+
+Two version-assign commits in 214 means that span is essentially ONE landing,
+and `jrows`'s pair sits 4 commits apart inside it — well within any plausible
+range.
+
+**Not determined.** Whether that gate ran, and over what base. I cannot see the
+landing's invocation from here, and there are ordinary explanations I have no
+way to exclude: the landing may have used a base I have not guessed, the batch
+may have been landed in pieces whose individual ranges were each clean, the
+`--batch` shape may scope the check differently, or the record may live
+somewhere I have not looked. The landing commit message is one line and carries
+no verification evidence.
+
+**Named missing inputs**, so this is answerable by someone who has them: the
+actual `BASE` the landing used; whether `tools/gatekeeper-land.sh` was the path
+taken; and the landing journal / completion record for `a4caccefea`, which the
+lander writes when `LANDING_RECORD_ENABLED=1` and which would settle it in one
+read.
+
+**What I am NOT claiming.** Not that a gate was bypassed, not that anyone
+overrode anything, and not that the landing is unsound. A measurement that a
+check is red over a range I chose is not evidence about a run I did not observe.
+This repository's own doctrine is the reason to say so plainly: an
+`unmeasured-reads-as-a-measured-zero` error in the accusing direction is still
+that error.
+
+**One thing that IS resolved, in my own favour and worth saying because of
+that.** My collateral-revert finding — §23, `ff9914c79` un-publishing
+`46d18e377` — is GONE from `main`: neither commit is an ancestor, so the
+landing's history rewrite collapsed the pair. `jrows`'s two ARE ancestors and
+its finding persists. I flagged mine as a blocker for hours and it resolved
+itself in the landing; the one I said was the binding constraint is the one
+still there. §30 called that ordering right, and it is the only prediction in
+this document that the world tested afterwards.
