@@ -647,6 +647,42 @@ def _to_container_path(host_path: str, container: str) -> str:
     return p
 
 
+def _resolve_flow_liberty(project: Path) -> Optional[str]:
+    """Recover the primary std-cell liberty the phase-3 flow ALREADY resolved,
+    by reading the first `read_liberty <path>` out of the PnR / STA TCLs the
+    flow emitted. Many flows (e.g. the caravel harness) never STAGE a liberty
+    under input/pdk/liberty/ — the PDK liberty lives only inside the EDA
+    container (/foss/pdks/...), and that container path is exactly what the
+    flow's own read_liberty already points at (it passes through the container-
+    path translation below unchanged). chip/PDK-AGNOSTIC: returns whatever
+    liberty the flow used, no PDK / cell / corner literal. Returns None when no
+    flow TCL carries a read_liberty."""
+    cands = [
+        project / "phase3/stage3/pnr/pnr.tcl",
+        project / "phase3/stage3/sta/sta_mcorner_ocv_setup.tcl",
+        project / "phase3/stage3/sta/sta_spef_setup.tcl",
+        project / "phase3/stage3/sta/sta_spef_based.tcl",
+    ]
+    cands += sorted(project.glob("phase3/stage3/sta/*.tcl"))
+    seen = set()
+    for c in cands:
+        if c in seen or not c.is_file():
+            continue
+        seen.add(c)
+        try:
+            txt = c.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in txt.splitlines():
+            s = line.strip()
+            if s.startswith("#"):
+                continue
+            m = re.match(r"read_liberty\s+(\S+)", s)
+            if m:
+                return m.group(1).strip('{}"')
+    return None
+
+
 def _docker_exec(container: str, cmd: str, timeout: int = 1800
                  ) -> Tuple[int, str, str]:
     full = ["docker", "exec", container, "bash", "-lc", cmd]
@@ -810,7 +846,37 @@ def run(project: PathLike, *, container: str = "vibeic-eda",
         if not libs:
             libs = sorted((project / "input" / "pdk" / "liberty").glob("*.lib"))
         liberty = str(libs[0]) if libs else ""
+        # field (caravel SI-STA liberty) — a flow that keeps its PDK liberty
+        # only in the container (no staged input/pdk/liberty/) otherwise left
+        # liberty="" here; `_abs("")` resolves to the project DIR, so the emitted
+        # `read_liberty <dir>` made OpenSTA fail with "line 1, syntax error" and
+        # the whole SI STA reported a SELF-INFLICTED ERROR instead of a real
+        # verdict. Recover the liberty the phase-3 flow already resolved.
+        if not liberty:
+            liberty = _resolve_flow_liberty(project) or ""
     macro_libs = macro_libs or []
+
+    # field (caravel SI-STA liberty) — hard guard: a genuinely UNRESOLVABLE
+    # liberty is a CLEAR, NAMED ERROR — never a malformed `read_liberty <dir>`
+    # that produces an opaque OpenSTA syntax error a reader cannot diagnose. The
+    # gate still FAILs (ERROR) on a truly-missing liberty — this only makes the
+    # failure honest and self-describing (not vacuous).
+    if not str(liberty).strip():
+        report = {
+            "program": _PROGRAM, "version": _VERSION,
+            "tool": "opensta-mcf-bounded-si-sta", "design_top": top,
+            "verdict": "ERROR",
+            "error": ("no timing liberty resolvable: none staged under "
+                      "input/pdk/liberty/ and no read_liberty found in the "
+                      "phase-3 PnR/STA TCLs — cannot run SI STA without a "
+                      "liberty."),
+        }
+        out_json_p = (Path(out_json) if out_json
+                      else _pl.report_path(project, "si_mcf_sta.json"))
+        out_json_p.parent.mkdir(parents=True, exist_ok=True)
+        out_json_p.write_text(json.dumps(report, indent=2) + "\n")
+        report["out_json"] = str(out_json_p)
+        return report
 
     work = ex / "si_mcf"
     work.mkdir(parents=True, exist_ok=True)
