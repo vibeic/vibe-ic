@@ -110,11 +110,28 @@ population is rc=2 with zero finding lines. It is proven able to fail.
    | `extraction_coverage_report.json` | D1 | — | flow declares no producer |
    | `extraction_coverage_report.md` | D1 | — | flow declares no producer |
 
-   So ONE has an unambiguous answer already written in the flow, and FIVE are
-   declared by steps that name no producer at all — for those the flow cannot
-   name an owner and a person must. That second fact is worth its own attention:
-   an output the flow REQUIRES but for which it names nobody responsible is how
-   two writers arrive in the first place.
+   **CORRECTION to the sentence that first stood here.** I wrote that the other
+   five are "declared by steps that name no producer at all", and that an output
+   the flow requires but names nobody for is how two writers arrive. That was
+   wrong, and it was wrong the same way my first pass at this table was: I read
+   ONE key and treated its absence as absence of the fact.
+
+   The flow declares producers through THREE mechanisms, and measured across all
+   197 declared outputs:
+
+   | producer declared via | outputs |
+   |---|--:|
+   | `programs:` | 137 |
+   | `skills:` (skill-driven steps, e.g. D1 with 18 skills) | 55 |
+   | `mcp_tools:` (steps 21 and 37, e.g. `eda_pnr`, `eda_gds`) | 5 |
+   | **none** | **0** |
+
+   So every declared output DOES have a declared producer. The other five
+   dual-writer paths are declared by steps whose producer is a SKILL (D1, 32),
+   which is why no `programs:` entry names them — not because nobody is
+   responsible. What a person still has to decide for those five is narrower and
+   more ordinary: which of two Python modules should be the one that writes an
+   output whose declared producer is a skill.
 2. **`clock_tree.rpt` is declared sign-off evidence and carries no stage stamp**,
    and the stamp has exactly two values. A report written after CTS and before
    routing can answer neither honestly. Closing it needs a third value in the
