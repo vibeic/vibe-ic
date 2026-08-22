@@ -3080,6 +3080,81 @@ def test_a_wrapped_denial_in_a_comment_no_longer_miscounts(tmp_path):
     assert "3 site(s)" not in r.stdout, r.stdout
 
 
+# ── guards a mutation sweep found nothing was holding ───────────────────────
+# Deleting each `if ...: continue` in turn and running this file: 8 of 20
+# survived. Three are behaviour-neutral on the shipped tree (measured, byte
+# identical --json) and are fast paths, not guards. The rest are these.
+
+def test_a_denominator_stated_only_in_a_COMMENT_is_not_a_denominator(tmp_path):
+    """The comment rule's other half. The `incr` side had a test; this one did
+    not, and deleting it left the whole suite green."""
+    emitter = ('def script():\n    return ("  set _n 0\\n"\n'
+               '            "  # if {$_n >= 2} { puts ALL }\\n"\n'
+               '            "  if {[catch {a}]} { incr _n }\\n"\n'
+               '            "  if {[catch {b}]} { incr _n }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["counters_examined"] == 0, (
+        "a threshold written only in a comment was compared as though the "
+        "script stated it:\n" + r.stdout)
+    assert r.returncode == RC_VACUOUS, r.stdout + r.stderr
+
+
+def test_a_commented_incr_in_a_HELPER_is_not_evidence_of_a_multiplier(tmp_path):
+    """`multiplied_counters` reads the same text as `counters_of` and must
+    reach the same answer -- two readers disagreeing about one script is #711
+    itself. Its comment rule had no test either."""
+    emitter = ('def _dead(name):\n'
+               '    return "  # incr _n would go here for %s\\n" % name\n\n\n'
+               'def script():\n    return ("  set _n 0\\n"\n'
+               '            + _dead("a") + _dead("b")\n'
+               '            + "  if {[catch {x}]} { incr _n }\\n"\n'
+               '            + "  if {$_n >= 2} { puts ALL }\\n")\n')
+    progs, tests = _tree(tmp_path, emitter, "def test_x():\n    assert True\n")
+    r = _run(progs, tests, "--json", tmp_path / "r.json")
+    doc = json.loads((tmp_path / "r.json").read_text())
+    assert doc["not_determined"] == [], (
+        "commented `incr`s in a helper were read as evidence of a multiplier "
+        "and excused a real disagreement:\n" + r.stdout)
+    assert r.returncode == RC_FAIL, r.stdout + r.stderr
+
+
+def test_a_tests_directory_that_does_not_exist_is_rc3(tmp_path):
+    """`--programs` had this test and `--tests` did not, so deleting its check
+    cost nothing. Both arguments, both rejected before the work."""
+    progs, tests = _tree(tmp_path)
+    r = _run(progs, tmp_path / "no_such_tests_dir")
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_USAGE, out
+    assert "Traceback" not in out, out
+    assert "--tests" in out and "not a directory" in out, out
+
+
+def test_a_pin_in_a_test_naming_a_silent_program_is_deliberately_not_reached(
+        tmp_path):
+    """THE DOCUMENTED LIMIT, pinned as a decision rather than left as an
+    accident. `pins_unmatched` counts pins whose named program states no literal
+    for that phrase; it does NOT count pins in a test whose named program emits
+    nothing matchable, because `if not em` returns before `pins_of` is called.
+
+    Measured on the shipped tree by deleting that guard: `pins_unmatched` goes
+    10 -> 34, which is the 24 this file's docstring sizes. Reaching them costs
+    `pins_of` over every parsed test and changes no verdict, so the guard stays
+    -- and this test is what makes changing it a visible decision."""
+    emitter = 'def script():\n    return "  puts \\"nothing countable here\\"\\n"\n'
+    progs, tests = _tree(
+        tmp_path, emitter,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 7 widgets seen" in script()\n')
+    j = tmp_path / "r.json"
+    _run(progs, tests, "--json", str(j))
+    doc = json.loads(j.read_text())
+    assert doc["pins_unmatched"] == 0, (
+        "this pin was reached after all -- the limit the docstring sizes has "
+        "changed, and the 24 it names are now counted: " + repr(doc))
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):
