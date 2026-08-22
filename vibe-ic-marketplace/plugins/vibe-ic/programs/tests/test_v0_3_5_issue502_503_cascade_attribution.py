@@ -251,6 +251,17 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
         total += len(seen)
     # 1311 -> 1448: the census tracks the flow, and the flow gained six
     # gate-carrying steps (0.5ic, 15.5ic, 26.5ic, 37.5ic, 37.5ip, 1.6x).
-    # The CLAIM is unchanged and still holds — 6 real data dependencies
-    # against 1448 ordering-licensed pairs is still two orders of magnitude.
-    assert total == 1448, total
+    #
+    # 1448 -> 1496 (vibe-ic#1347): ONE `blocks_on` edge, not a step. Step 2
+    # gained `0.5ic` — `slot_pad_budget_check` reads the operator slot files
+    # step 0.5ic ingests, so the ordering edge is a real read and belongs
+    # there. MEASURED: the whole flow's edge count moved 106 -> 107, `0.5ic`
+    # is itself a root with no ancestors of its own, and step 2 has 47 further
+    # steps downstream — so the single edge adds exactly ONE ancestor to each
+    # of 48 steps and the total moves by exactly 48.
+    #
+    # The CLAIM is unchanged and still holds — the DECLARED-dependency list in
+    # `test_declared_dependency_relation_is_small` is still the same 6 pairs
+    # (this edge is an ORDERING edge; it licensed no new declared read), and 6
+    # against 1496 ordering-licensed pairs is still two orders of magnitude.
+    assert total == 1496, total

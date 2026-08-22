@@ -7,13 +7,34 @@ WHAT IT ANSWERS
 and equivalence feasibility axes?" — as `vibeic.ppa.metric.v1` records that
 `ppa_feasibility_check.py` can read.
 
-It is the missing half of the feasibility gate. The gate proves nine axes from
-nine canonical metric names; before this program, seven of those names were
-produced by nothing in this tree, so a run that measured DRC, LVS, antenna, IR,
-EM and LEC and passed every one of them still adjudicated UNDETERMINED — the
-evidence existed and nothing could reach it. With no FEASIBLE candidate
-possible, "both arms feasible" — one of the four conditions a head-to-head
-requires — could never hold, so no PPA comparison could be defended.
+It is the missing half of the feasibility gate. The gate proves its axes from
+canonical metric names; before this program, seven of those names were produced
+by nothing in this tree, so a run that measured DRC, LVS, antenna, IR, EM and
+LEC and passed every one of them still adjudicated UNDETERMINED — the evidence
+existed and nothing could reach it. With no FEASIBLE candidate possible, "both
+arms feasible" — one of the four conditions a head-to-head requires — could
+never hold, so no PPA comparison could be defended.
+
+THE TENTH AXIS ARRIVED IN EXACTLY THAT STATE, AND THIS IS WHERE IT IS FIXED
+===========================================================================
+`eco_readiness` — does this design still carry the spare/ECO cells that make a
+post-tape-out bug fixable by a metal-only ECO instead of a base-layer respin —
+proves from `design_for_eco.*` metric names. The flow already writes the
+evidence: `phase3/stage3/pnr/spare_cells.json` is emitted on every run that
+inserts spares, and `reports/spare_preservation.json` records which of them
+survived to the shipped artefacts. Nothing turned either into a canonical
+record, so on a real run the axis read UNDETERMINED however many spares the
+design actually had — the same defect as the seven above, one axis later.
+
+THE READER IS NOT REIMPLEMENTED HERE. `ppa_eco_spare_records.py` already reads
+those two artefacts, and it holds rules that took measurement to get right: a
+plan whose `count` disagrees with its own `instances` list is INVALID and every
+row derived from that list is INVALID with it; a missing plan is NOT_MEASURED
+and never a zero; a `NO_WITNESS` preservation report vouches for nothing. A
+second reader here would be a second set of those rules, and the first time the
+two disagreed the design would pass one gate and fail the other with nobody able
+to say which was right. So this program calls that one's pure functions and
+appends what they return.
 
 WHAT IT IS NOT
 ==============
@@ -57,9 +78,23 @@ from typing import List, Optional
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import _atomic_artefact  # noqa: E402
+import ppa_eco_spare_records as eco  # noqa: E402
 from _ppa import cli_exit, signoff  # noqa: E402
 
 MARK_CANNOT = "[CANNOT CHECK]"
+
+#: Where the flow puts the two design-for-ECO artefacts. Named here beside the
+#: other `*_REL` constants rather than inside the reader, because "where the
+#: flow writes it" is this program's question and "what it says" is that one's.
+ECO_PLAN_REL = "phase3/stage3/pnr/spare_cells.json"
+ECO_PRESERVATION_REL = "reports/spare_preservation.json"
+
+#: The spare plan describes the placed-and-routed database, so the records are
+#: scoped to the same stage the antenna and IR axes use. It is NOT
+#: `post_route_extracted`: no parasitic extraction is involved in counting
+#: cells, and claiming a stage the measurement did not come from is how two
+#: incomparable numbers end up filed as one.
+ECO_STAGE = "post_route"
 
 RC_OK = 0
 RC_UNDETERMINED = 2
@@ -91,6 +126,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return RC_BAD_INVOCATION
 
     doc = signoff.bundle(run)
+    _add_eco_records(run, doc)
     if args.json:
         _atomic_artefact.write_json(args.json, doc, indent=2, sort_keys=True)
 
@@ -113,6 +149,61 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return RC_UNDETERMINED
     return RC_OK
+
+
+def _add_eco_records(run: pathlib.Path, doc: dict) -> None:
+    """Append the design-for-ECO records to the bundle, and re-count.
+
+    The census is RECOMPUTED rather than incremented, so it cannot drift from
+    the records it describes — the same reason `signoff.bundle` computes it
+    instead of letting its caller quote one.
+    """
+    plan_path = run / ECO_PLAN_REL
+    pres_path = run / ECO_PRESERVATION_REL
+    plan, plan_digest, plan_reason = eco.read_artefact(str(plan_path),
+                                                      "spare plan")
+    scope = {"stage": ECO_STAGE, "tool": eco.PLAN_TOOL}
+    source = (eco._source(str(plan_path), plan_digest, "spare_plan")
+              if plan is not None and plan_digest else None)
+    records = eco.records_from_plan(plan, scope, source, plan_reason)
+
+    pres = pres_digest = pres_reason = None
+    if pres_path.exists():
+        pres, pres_digest, pres_reason = eco.read_artefact(
+            str(pres_path), "spare preservation report")
+    else:
+        pres_reason = (f"{ECO_PRESERVATION_REL} is not in this run, so whether "
+                       "the inserted spares are still named by the shipped "
+                       "artefacts was not established")
+    pres_source = (eco._source(str(pres_path), pres_digest,
+                               "spare_preservation")
+                   if pres is not None and pres_digest else None)
+    records.append(eco.survival_record(pres, scope, pres_source, pres_reason))
+
+    doc["records"].extend(records)
+    for rec in records:
+        doc["notes"].append({
+            "metric": rec["metric"], "status": rec["status"],
+            "artefact": (ECO_PRESERVATION_REL
+                         if rec["metric"] == eco.feas.ECO_M_SURVIVING
+                         else ECO_PLAN_REL),
+            "present": (pres is not None
+                        if rec["metric"] == eco.feas.ECO_M_SURVIVING
+                        else plan is not None),
+            "reason": rec.get("reason") or None})
+    measured = [r for r in doc["records"] if r["status"] == signoff.MEASURED]
+    doc["census"] = {"records": len(doc["records"]),
+                     "measured": len(measured),
+                     "not_measured": len(doc["records"]) - len(measured)}
+    doc["eco_readiness_reader"] = {
+        "program": eco.PROGRAM,
+        "why": ("the two design-for-ECO artefacts have ONE reader in this "
+                "tree, so no two gates can disagree about what the plan says"),
+        "spare_plan": str(plan_path),
+        "spare_plan_read": plan is not None,
+        "preservation": str(pres_path),
+        "preservation_read": pres is not None,
+    }
 
 
 if __name__ == "__main__":

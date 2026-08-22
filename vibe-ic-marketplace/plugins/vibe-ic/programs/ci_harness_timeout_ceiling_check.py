@@ -294,7 +294,7 @@ _LANDING_LANE_SHA256 = {
 #: them, the launcher, the window, and everything before them.
 _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "8cbd45a1e6382e5e3a1c25bb377e8238f977784a15cb655c14f89761a853e70b"
+    "cfc5dabcce04cd9a335114b36e6e565f4d9198996d457c917181f8a3f2bef419"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -331,10 +331,63 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 #     rewind that ships with this commit. Each was reviewed at its own landing;
 #     what nobody did afterwards was turn this ratchet.
 #
+#
+# RE-PINNED AGAIN on 2026-08-21, for the landing review. Both digests moved and
+# the three `_LANDING_LANE_SHA256` bodies did NOT, which is this file's own
+# independent witness that no lane body was touched.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * INSIDE the prefix (so it is control flow, and reviewed as such): the
+#     hygiene `--summary-json` record became UNCONDITIONAL — it used to be
+#     written only when `GATEKEEPER_HYGIENE_REPORT` named a path — and
+#     `lane_emit_window` gained one assignment, `GK_HYG_RC="$EMIT_RC"`, kept
+#     because the record says WHICH gates were red and only the rc says the set
+#     finished. Neither removes, reorders nor rewrites a lane; neither adds an
+#     exit; the window still launches and joins exactly the same lanes.
+#   * AFTER the anchor (so it is in the whole-file digest only): a new
+#     `full:gatekeeper-review` unit between `full:plugin-audit` and
+#     `full:write-guard-final`. It runs `gatekeeper_review.py` under a 240 s
+#     budget and maps a timeout — and every unexpected exit status — to rc 2
+#     UNDETERMINED, blocking. It is deliberately outside the prefix: it cannot
+#     affect whether the three populations run, and the prefix exists to pin
+#     exactly that.
+#
+#
+# RE-PINNED AGAIN, same day, because the two paragraphs above describe a wiring
+# that did not survive its own gates. `--hygiene-record-in` was a command-line
+# way to hand `gatekeeper_review`'s hygiene gate a substitute for running it,
+# and two gates that exist for exactly that were red about it. Both digests
+# moved again; the three `_LANDING_LANE_SHA256` bodies did NOT, which is again
+# this file's own independent witness that no lane body was touched.
+#
+# WHAT MOVED, reviewed rather than absorbed:
+#   * INSIDE the prefix: the caller's `GATEKEEPER_HYGIENE_REPORT` is passed to
+#     `--summary-json` at the call site again instead of through a `:-`
+#     default, and the record stays unconditional in the other branch — the
+#     two are different contracts and only the first has a reader outside this
+#     process. `lane_emit_window` LOST the `GK_HYG_RC="$EMIT_RC"` assignment
+#     the paragraph above added, because the only thing that read it was the
+#     flag that is gone. Neither removes, reorders nor rewrites a lane;
+#     neither adds an exit; the window still launches and joins exactly the
+#     same lanes.
+#   * AFTER the anchor: `full:gatekeeper-review` no longer passes a record to
+#     the review, so the review runs the hygiene set, and the budget it is
+#     given moved from 240 s to 1800 s — `repo_hygiene_gate`'s own
+#     `_HYGIENE_STALL_GRACE_S`, below which this `timeout` would kill runs the
+#     gate itself still considers alive. A timeout is still rc 2 UNDETERMINED
+#     and still blocking; that half did not move and is what
+#     `tools/test_gatekeeper_land_review_budget.py` drives.
+#
+# RE-PINNED a third time, and ONLY the whole-file digest: the edit is a comment
+# BELOW the `lane_emit_window` anchor, correcting what 1800 s bounds (the
+# review's supervisor, not the hygiene set's 300 s shard watchdog). The
+# execution-prefix digest did NOT move, which is this file's own witness that
+# the change is downstream of the anchor and touches no control flow.
+#
 # Every digest here is DERIVED — this file run over the reviewed tree, and the
 # sha256 it reports read back — never hand-transcribed.
 _LANDING_SCRIPT_SHA256 = (
-    "6f771cc98d2a907b6b6fe81070cbaace2def23aea8e91b323465eb69a3c4c2a9"
+    "466a820a222afbbc1c9492d8a0a52ced3577cf99f2e267a83bb42f1ba62a34f2"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

@@ -102,5 +102,5 @@ def test_the_shipped_tree_is_RED_on_drv():
     assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
     assert "drv" in r.stdout
     assert "timing.drv.violations" in r.stdout
-    assert "feasibility axes:          9" in r.stdout, (
+    assert "feasibility axes:          10" in r.stdout, (
         f"the axis population moved; re-derive the finding\n{r.stdout}")

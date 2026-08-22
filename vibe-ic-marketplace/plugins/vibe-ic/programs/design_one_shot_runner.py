@@ -8476,6 +8476,67 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
                       extras={"exit_code": rc})
 
 
+def step_slot_pad_budget(project: Path, top_name: str) -> StepResult:
+    """Flow step 2 — can this design's declared interface be bonded out at all?
+
+    WIRED HERE BECAUSE THE FLOW CLAUSE ALONE CANNOT BLOCK (#306). A
+    `program_exit_zero` clause in `flow/phase1_phase2_phase3.yaml` is evaluated
+    by `flow_compliance_check`, which this runner invokes as `final_audit` —
+    the LAST step, after every artefact has already been written. That is the
+    measured #306 defect: `cts_quality_check` FAILed on the same cell across
+    three plugin versions while the flow shipped a 181 MB routed.def every
+    time. A gate wired only in the YAML can describe a run that already
+    happened; it cannot refuse one.
+
+    So the clause is kept (it is where the verdict is DECLARED, and it is what
+    `flow_compliance_check` re-checks) and the spawn lives here, where the exit
+    status reaches a control-flow decision and `flow_gate_enforcement_audit`
+    can prove it does.
+
+    THE THREE OUTCOMES ARE THREE, NOT TWO:
+        rc 0  FITS / FITS_AFTER_FOLD — PASS
+        rc 1  DOES_NOT_FIT           — FAIL, and the step is red
+        rc 2  UNDECIDED              — SKIP carrying the program's OWN reason.
+              This is the cell/IP path, which has no shuttle operator and
+              therefore no slot. A skip that printed nothing would read
+              downstream as "nothing needed doing", so the reason is quoted
+              into the record rather than inferred from an absence.
+
+    `--top` is the runner's own top name, not this program's `chip_top`
+    default: a design whose top is named otherwise would otherwise answer
+    UNDECIDED and disclose a skip for a question that was perfectly askable.
+    """
+    t0 = time.time()
+    out_rel = "reports/phase2/gates/slot_pad_budget.json"
+    cmd = [sys.executable, str(Path(__file__).resolve().parent
+                               / "slot_pad_budget_check.py"),
+           str(project), "--top", top_name, "--json", out_rel]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                           cwd=str(project))
+        rc = r.returncode
+        detail = (r.stdout or r.stderr or "").strip().splitlines()
+        detail = " | ".join(x.strip() for x in detail[:3]) or f"rc={rc}"
+    except (subprocess.SubprocessError, OSError) as e:  # noqa: BLE001
+        return StepResult("slot_pad_budget", "FAIL", time.time() - t0,
+                          f"the pad-budget gate could not run ({e}); a check "
+                          f"that could not look is not a clean check")
+    # Written as an explicit branch on `rc`, not a lookup table. The exit
+    # status has to REACH a control-flow decision for this gate to be able to
+    # stop the step, and `flow_gate_enforcement_audit` proves that structurally
+    # -- a dict `.get(rc, ...)` is outside the set of shapes it can prove and
+    # comes back INLINE_UNPROVEN, which is not enforcement, because unknown is
+    # not yes.
+    if rc == 0:
+        status = "PASS"
+    elif rc == 1:
+        status = "FAIL"
+    else:
+        status = "SKIP"
+    return StepResult("slot_pad_budget", status, time.time() - t0, detail,
+                      [out_rel], extras={"exit_code": rc})
+
+
 def step_stamp_gate_reports(project: Path) -> StepResult:
     """ORGANIC-20260606 #497 ROUND-2: caller-side identity stamp of every
     gate/lint JSON the gate-audit step produced. Runs AFTER step_final_audit
@@ -15688,6 +15749,13 @@ def main() -> int:
     # so a design that ran no cross-layer search leaves a
     # NOT_APPLICABLE record rather than a silence.
     plan.append(step_crosslayer_rewrite_fidelity(project))
+
+    # Flow step 2 — pad-budget feasibility. Placed HERE, right after the RTL is
+    # stable and long before synthesis/DFT/PnR, because the whole point of the
+    # gate is that "this interface cannot be bonded out on any purchasable
+    # slot" is arithmetic over files already on disk, and five of nine
+    # benchmark ICs learned it instead by building until they hit a wall.
+    plan.append(step_slot_pad_budget(project, args.top_name))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.

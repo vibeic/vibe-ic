@@ -16,7 +16,7 @@ The check is a set difference between two tables that already exist.
 
 WHAT IT FINDS, AND WHY IT IS NOT INVENTORIED
 ============================================
-    9 feasibility axes, 18 emitting modules, 110 declared names
+    10 feasibility axes, 38 emitting modules, 143 declared names
     ONE axis has NOT ONE of its proof names produced:
 
         drv   timing.drv.violations
@@ -97,20 +97,90 @@ def _axes(programs: Path) -> Optional[Dict[str, List[List[str]]]]:
     return out
 
 
+def _const_table(files) -> Dict[Tuple[str, str], str]:
+    """`NAME = "a.b.c"` at module level, over EVERY module including the
+    consumers. A producer may name a metric through the consumer's own
+    constant (`M.measured(feas.ECO_M_COUNT, ...)`); excluding the consumer as
+    a PRODUCER must not also hide where the string is defined."""
+    out: Dict[Tuple[str, str], str] = {}
+    for f in files:
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for n in tree.body:
+            if (isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+                    and isinstance(n.value.value, str)
+                    and _METRIC_NAME.match(n.value.value)):
+                for tg in n.targets:
+                    if isinstance(tg, ast.Name):
+                        out[(f.stem, tg.id)] = n.value.value
+    return out
+
+
 def _produced(programs: Path) -> Tuple[Set[str], int]:
+    """Names mentioned by the PRODUCING side of the ppa layer.
+
+    THE POPULATION IS THE LAYER RELATION, NOT A DIRECTORY. An earlier version
+    of this gate scanned `programs/_ppa/` only. That is a filename-shaped
+    population and it MISSED the real producers, which are top-level programs:
+    `ppa_eco_spare_records.py` emits `design_for_eco.spares.count` and does not
+    live under `_ppa/`. Measured on the merged tree, the directory population
+    reported the eco_readiness axis unprovable when it is produced -- a FALSE
+    POSITIVE, and against a name landed after this gate was written.
+
+    So the population is every non-test module that is IN the `_ppa` package
+    or IMPORTS it, minus the consumers. That is the same relation this branch's
+    `layer_membership_is_declared_not_inferred_from_a_filename_prefix` gate
+    tells the ppa layer to use, applied to itself.
+
+    A mention is a metric-shaped string literal OR an attribute reference that
+    resolves through `_const_table`. This is deliberately a NECESSARY
+    condition, not a sufficient one: production here is partly dynamic, so the
+    gate cannot prove a name IS produced. It can only prove a name is mentioned
+    NOWHERE on the producing side, and an axis all of whose proof names are
+    absent from every producer is unprovable whatever the runtime does.
+    """
+    files = [f for f in sorted(programs.rglob("*.py")) if "tests" not in f.parts]
+    consts = _const_table(files)
     names: Set[str] = set()
     mods = 0
-    pkg = programs / "_ppa"
-    for f in sorted(pkg.rglob("*.py")):
+    for f in files:
         if f.name in _CONSUMERS:
             continue
         try:
             tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
         except (OSError, SyntaxError, ValueError):
             continue
-        got = {c.value for c in ast.walk(tree)
-               if isinstance(c, ast.Constant) and isinstance(c.value, str)
-               and _METRIC_NAME.match(c.value)}
+        alias: Dict[str, str] = {}
+        imports_ppa = False
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                if n.module and n.module.split(".")[0] == "_ppa":
+                    imports_ppa = True
+                for a in n.names:
+                    alias[a.asname or a.name] = a.name
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name.split(".")[0] == "_ppa":
+                        imports_ppa = True
+                    alias[a.asname or a.name.split(".")[0]] = a.name.split(".")[-1]
+        # The population is the UNION of the package's own modules and the
+        # layer's importers. A module inside `_ppa/` need not import `_ppa`
+        # (it uses relative imports); restricting to importers alone dropped
+        # the extractor tables and made setup/hold/ir/lvs/equivalence look
+        # unprovable -- five false positives, caught by re-running.
+        if not (imports_ppa or "_ppa" in f.parts):
+            continue
+        got: Set[str] = set()
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and _METRIC_NAME.match(n.value)):
+                got.add(n.value)
+            elif isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+                key = (alias.get(n.value.id, n.value.id), n.attr)
+                if key in consts:
+                    got.add(consts[key])
         if got:
             mods += 1
             names |= got
