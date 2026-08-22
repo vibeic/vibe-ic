@@ -1969,9 +1969,23 @@ F14 BLOCKING (matrix) — jdistmat TURNS AN EXISTING MAIN GATE RED, and my own
     THE SINGLE-SITE TEST THAT PRECEDED IT, kept because it isolates the cost per
     file. Converted ONE offender in a throwaway copy —
     `population_pin_without_its_member_set.py:368`, its `--json` write — to the
-    helper, using the idiom the repository already uses elsewhere
-    (`from _atomic_artefact import write_json as atomic_write_json`, as in
-    analog_netlist_include_order_check.py and two others):
+    helper, using the repository's own idiom. THE CITATION HERE WAS WRONG until
+    2026-08-22: I named `write_json as atomic_write_json` "as in
+    analog_netlist_include_order_check.py", and that program imports
+    `write_text`. Counted across main rather than cited from memory:
+
+        from _atomic_artefact import write_text    93 programs
+        from _atomic_artefact import write_json    23
+        from _atomic_artefact import writing       10
+
+    Both are house style; which is right is decided by what the call site
+    writes, and all twenty F14 sites pass a STRING to
+    `.write_text(json.dumps(...))`, so it is `write_text`. (Programs that do
+    use write_json: atomic_artifact_write_check.py, atomic_write_pr_
+    attribution.py, closed_loop_executable_coverage_check.py.) This
+    mis-citation is where the wrong idiom in my own remedy advice came from,
+    and it survived three re-readings because it looked like a fact about the
+    repository rather than a claim needing a check:
 
         offenders BEFORE   533   (baseline 515)
         offenders AFTER    532
@@ -2126,7 +2140,9 @@ F1  BLOCKING (chip) — `only_the_declaring_step_writes_its_output` EXITS 1 ON T
               the REFUSAL. Fixed by ONE line — adding `--strict` to the test
               helper's invocation, since those tests are asserting the refusal
               and the program is now advisory unless asked. After that:
-              57 passed, including the whole
+              57 passed (at f3f0beeb6; 61 at today's tip, the branch having
+              added tests — and the ~8 lines above are 10 as re-built),
+              including the whole
               `test_chip_path_rules_rc_contract` family, which is untouched
               because crash->rc2, bad-invocation->rc3 and empty->no-finding all
               still hold.
