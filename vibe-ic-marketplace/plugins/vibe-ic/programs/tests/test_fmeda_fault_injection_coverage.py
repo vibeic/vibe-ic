@@ -657,7 +657,27 @@ def test_local_image_probe_reports_absence_where_resolve_invents_a_pin(
         returncode = 1        # `docker image inspect` -> not present locally
 
     monkeypatch.setattr(fi.subprocess, "run", lambda *a, **k: _Absent())
-    assert fi._resolve_docker_image() == fi._IMAGE_CANDIDATES[0]  # invents one
+
+    # WHAT CHANGED HERE, AND WHAT DID NOT. This used to read
+    # `fi._IMAGE_CANDIDATES[0]` — a pinned literal list that no longer exists,
+    # because the image is now RESOLVED from the registry to a digest. The
+    # PROPERTY being guarded is unchanged and is the reason this test exists:
+    # one function must always name something runnable, and the other must be
+    # willing to say "nothing here". Asserting the identity of the invented ref
+    # would just re-pin the literal under a different name.
+    # MEASURED while writing this: with the daemon holding nothing AND the
+    # registry unreachable, resolve lands on the LEGACY image
+    # `hpretl/iic-osic-tools:latest` and says so on stderr. That is the module's
+    # documented last resort, not a defect — so this test asserts the contract
+    # ("always names something runnable"), NOT a particular ref. Asserting
+    # "vibeic-eda in it" here would have failed the honest fallback, and
+    # asserting "never :latest" would have contradicted it: the no-floating-tag
+    # rule belongs to the resolver's own happy path and is guarded there, by
+    # `test_the_eda_image_is_resolved_not_remembered.py
+    #  ::test_resolve_returns_a_digest_not_a_floating_tag`.
+    resolved = fi._resolve_docker_image()
+    assert resolved and isinstance(resolved, str), (
+        f"resolve must always name a runnable ref; got {resolved!r}")
     assert fi._local_docker_image() is None                       # honest None
 
 
