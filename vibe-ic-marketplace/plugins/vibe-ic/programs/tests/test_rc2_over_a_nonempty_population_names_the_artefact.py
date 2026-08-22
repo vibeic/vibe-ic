@@ -190,7 +190,8 @@ def _referents(lines, subject: str):
     return sorted(set(found))
 
 
-def assert_rc2_names_the_missing_artefact(proc, subjects, label):
+def assert_rc2_names_the_missing_artefact(proc, subjects, label,
+                                          known_population=None):
     """THE RULE. Returns quietly for any rc but 2, and for an empty population.
 
     `subjects` are the paths the checker's OWN corpus walk found, so a gate is
@@ -199,7 +200,14 @@ def assert_rc2_names_the_missing_artefact(proc, subjects, label):
     if proc.returncode != RC_UNDETERMINED:
         return
     text = proc.stdout + "\n" + proc.stderr
-    population, undecided = _counts(text)
+    parsed, undecided = _counts(text)
+    # A KNOWN population OUTRANKS a parsed one, and this is not a convenience.
+    # `_counts` reads the denominator out of the gate's own roll-up line, and a
+    # gate that prints no roll-up would parse as ZERO and be excused by the
+    # empty-corpus branch below -- so the rule could be evaded by printing less.
+    # The exact-path rows have no roll-up at all: their population is the
+    # document the wiring named, which exists, which the caller already knows.
+    population = known_population if known_population is not None else parsed
     if population == 0:
         return                      # the empty-corpus case; a different rule
     wanted = max(undecided, 1)
@@ -495,32 +503,145 @@ def _wired_corpus_invocations():
     return out
 
 
-def test_the_live_arm_has_something_to_measure():
-    """A live arm that resolved to nothing would pass every case below in
-    silence, which is the shape of test this repository has shipped before."""
-    wired = _wired_corpus_invocations()
-    if not wired:
-        pytest.skip("no in-tree PPA corpus gate is wired in this checkout")
-    assert len(wired) >= 2, wired
+def test_a_gate_cannot_escape_the_rule_by_printing_no_count():
+    """`known_population` has teeth, and without it the rule is opt-out.
+
+    `_counts` reads the denominator out of the gate's OWN roll-up line. A gate
+    that prints no roll-up therefore parses as population ZERO and takes the
+    empty-corpus exit -- so the cheapest way to satisfy this whole file would
+    have been to print less. The exact-path rows genuinely print no roll-up,
+    which is how the hole was noticed rather than reasoned about.
+    """
+    class _P:
+        returncode = RC_UNDETERMINED
+        stdout = "[CANNOT CHECK] something is missing\n"   # no count, no name
+        stderr = ""
+    # Parsed population is 0, so the rule would fall silent...
+    assert _counts(_P.stdout)[0] == 0
+    assert_rc2_names_the_missing_artefact(_P, [Path("/c/x.json")], "silent gate")
+    # ...and with the population supplied by the caller it must refuse.
+    with pytest.raises(AssertionError, match="SUBJECT is unnamed"):
+        assert_rc2_names_the_missing_artefact(
+            _P, [Path("/c/x.json")], "silent gate", known_population=1)
+
+
+#: Flags that name ONE document rather than a population to walk.
+def _wired_ppa_invocations():
+    """Every PPA gate line in the wiring, as the argv the dispatcher will run.
+
+    Not just the `--corpus` ones: the point below is about the ARGUMENTS, so a
+    row is only measured if it is reproduced whole.
+    """
+    if not WIRING.is_file():                        # pragma: no cover
+        pytest.skip(f"wiring not present at {WIRING}")
+    rows = []
+    for line in _logical_lines(WIRING.read_text(encoding="utf-8")):
+        if line.lstrip().startswith("#") or "$PG/ppa_" not in line:
+            continue
+        argv = shlex.split(line, comments=True)
+        try:
+            start = next(i for i, a in enumerate(argv) if a.startswith("$PG/"))
+        except StopIteration:                       # pragma: no cover
+            continue
+        checker = argv[start].split("/")[-1]
+        rest = [a.replace("$ROOT", str(REPO)).replace("${ROOT}", str(REPO))
+                for a in argv[start + 1:]]
+        rows.append((checker, rest))
+    return rows
+
+
+_EXACT_PATH_FLAGS = ("--coverage", "--candidates", "--contract", "--baseline",
+                     "--frontier", "--expect", "--candidate")
+
+
+def _wired_rows():
+    """(checker, argv, subjects, population) for every wired PPA row in tree.
+
+    BOTH SHAPES, because the rule is about gates and not about corpora. Until
+    this function existed the live arm reached only `--corpus` rows, and two
+    wired gates refuse over a non-empty population through an EXACT PATH --
+    `ppa_measurement_check --coverage` and `ppa_pareto_check --candidates`.
+    They were covered by hand-written fixtures in this file and NOT by the rule
+    applied to the wiring, so re-aiming either of them, or wiring a new
+    exact-path row, escaped the guard entirely. That is the same gap one level
+    up as the one this whole file is about.
+
+    The argv is the wiring's OWN, not a reconstruction: a row is only measured
+    if it is reproduced whole.
+    """
+    rows = []
+    for checker, rest in _wired_ppa_invocations():
+        if checker not in CORPUS_GATES and "--corpus" in rest:
+            continue
+        if "--corpus" in rest:
+            corpus = Path(rest[rest.index("--corpus") + 1])
+            if "benchmark-data" in corpus.parts or not corpus.is_dir():
+                continue
+            subjects = _subjects(checker, corpus)
+            rows.append((checker, rest, subjects, len(subjects)))
+            continue
+        named = [Path(rest[i + 1]) for i, a in enumerate(rest)
+                 if a in _EXACT_PATH_FLAGS and i + 1 < len(rest)]
+        subjects = [q for q in named if q.is_file()]
+        if not subjects:
+            continue
+        # An exact-path row's population is the document the wiring named. It
+        # exists -- that is what `is_file()` just established -- so the gate has
+        # a subject whether or not it prints a count.
+        rows.append((checker, rest, subjects, len(subjects)))
+    return rows
+
+
+def test_the_live_arm_reaches_both_wiring_shapes():
+    """The paired half of the parametrisation itself.
+
+    A live arm that quietly resolved to corpus rows only is exactly the state
+    this function was written to end, and it would pass every case below in
+    silence.
+    """
+    rows = _wired_rows()
+    if not rows:
+        pytest.skip("no in-tree PPA row is wired in this checkout")
+    exact = [c for c, argv, _, _ in rows if "--corpus" not in argv]
+    corpus = [c for c, argv, _, _ in rows if "--corpus" in argv]
+    assert corpus, f"no --corpus row reached: {rows}"
+    assert exact, (
+        "the live arm reached no EXACT-PATH row, so `--coverage` and "
+        "`--candidates` gates are unguarded by the rule this file ships")
+
+
+def _row_id(row):
+    """`checker:--flag:subject-name` — enough to tell two rows of one gate apart."""
+    checker, argv, subjects, _ = row
+    flags = "+".join(a.lstrip("-") for a in argv if a.startswith("--"))
+    if "--corpus" in argv:
+        where = Path(argv[argv.index("--corpus") + 1]).name
+    else:
+        where = subjects[0].name
+    return f"{Path(checker).stem}:{flags}:{where}"
+
+
+_WIRED_ROWS = _wired_rows()
 
 
 @pytest.mark.parametrize(
-    "checker,corpus",
-    _wired_corpus_invocations() or [pytest.param(
-        None, None, marks=pytest.mark.skip(reason="no in-tree corpus wired"))],
-    ids=lambda v: Path(str(v)).name if v else "none")
-def test_every_wired_corpus_gate_that_refuses_names_what_is_missing(
-        checker, corpus):
-    """THE ONE THIS FILE IS FOR, on the real wiring.
+    "checker,argv,subjects,population",
+    _WIRED_ROWS or [pytest.param(
+        None, None, None, None,
+        marks=pytest.mark.skip(reason="no in-tree PPA row wired"))],
+    ids=[_row_id(r) for r in _WIRED_ROWS] or ["none"])
+def test_every_wired_gate_that_refuses_names_what_is_missing(
+        checker, argv, subjects, population):
+    """THE ONE THIS FILE IS FOR, on the real wiring, in both shapes.
 
     Silent for a gate that PASSES or FAILS -- both of those reached a verdict.
     It speaks only when a gate stood in front of a population it had opened and
     said it could not look.
     """
-    subjects = _subjects(checker, corpus)
-    proc = _run(checker, ["--corpus", corpus])
+    proc = _run(checker, argv)
     assert_rc2_names_the_missing_artefact(
-        proc, subjects, f"{checker} --corpus {corpus.name}")
+        proc, subjects, f"{checker} {' '.join(argv)}",
+        known_population=population)
 
 
 # ===========================================================================
@@ -639,30 +760,6 @@ def test_the_paired_half_a_clean_bundle_with_no_denominator_is_still_rc_2(tmp_pa
         "a clean bundle with no declared denominator must stay NOT CHECKED; "
         "turning it into a finding would be inventing one\n"
         + proc.stdout + proc.stderr)
-
-
-def _wired_ppa_invocations():
-    """Every PPA gate line in the wiring, as the argv the dispatcher will run.
-
-    Not just the `--corpus` ones: the point below is about the ARGUMENTS, so a
-    row is only measured if it is reproduced whole.
-    """
-    if not WIRING.is_file():                        # pragma: no cover
-        pytest.skip(f"wiring not present at {WIRING}")
-    rows = []
-    for line in _logical_lines(WIRING.read_text(encoding="utf-8")):
-        if line.lstrip().startswith("#") or "$PG/ppa_" not in line:
-            continue
-        argv = shlex.split(line, comments=True)
-        try:
-            start = next(i for i, a in enumerate(argv) if a.startswith("$PG/"))
-        except StopIteration:                       # pragma: no cover
-            continue
-        checker = argv[start].split("/")[-1]
-        rest = [a.replace("$ROOT", str(REPO)).replace("${ROOT}", str(REPO))
-                for a in argv[start + 1:]]
-        rows.append((checker, rest))
-    return rows
 
 
 @pytest.mark.parametrize(

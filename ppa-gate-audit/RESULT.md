@@ -1576,3 +1576,85 @@ changed here:
 
     31 failed, 769 passed, 104 skipped, 4 xfailed
     failures on this branch and not the base: (none)
+
+---
+
+# Part 15 — the guard's own blind spot, closed the same way the gates' were
+
+Part 14 found the two exact-path rows BY HAND, because the guard's live arm
+reached only `--corpus` rows. It then covered them with fixtures in `tmp_path`
+and left the arm as it was. That is the same defect this file has been about,
+one level up: the rule was enforced on the wired corpus rows and NOT on the
+wired exact-path rows, so re-aiming `PPA measurement coverage` or
+`PPA frontier recomputes`, or wiring a new exact-path row, escaped it entirely.
+A fixture proves a program behaves; only the wiring arm proves the ROW is
+guarded.
+
+Measured, before:
+
+    test_every_wired_corpus_gate_that_refuses_names_what_is_missing
+      [ppa_head_to_head_check.py-ppa-crosslayer]     7 rows, all --corpus
+      [ppa_head_to_head_check.py-ppa-e2e]            and NEITHER exact-path row
+      [ppa_contract_check.py-ppa-crosslayer]
+      [ppa_contract_check.py-ppa-e2e]
+      [ppa_feasibility_check.py-ppa-crosslayer]
+      [ppa_problem_integrity_check.py-ppa-crosslayer]
+      [ppa_problem_integrity_check.py-ppa-e2e]
+
+After — one arm, both shapes, running the wiring's OWN argv rather than a
+reconstructed `--corpus` one:
+
+    test_every_wired_gate_that_refuses_names_what_is_missing
+      [ppa_head_to_head_check:corpus:ppa-crosslayer]
+      [ppa_head_to_head_check:corpus:ppa-e2e]
+      [ppa_contract_check:corpus:ppa-crosslayer]
+      [ppa_contract_check:corpus:ppa-e2e]
+      [ppa_measurement_check:coverage:records_flat.json]     <- new
+      [ppa_feasibility_check:corpus:ppa-crosslayer]
+      [ppa_pareto_check:candidates:candidates.json]          <- new
+      [ppa_problem_integrity_check:corpus:ppa-crosslayer]
+      [ppa_problem_integrity_check:corpus:ppa-e2e]
+
+`test_the_live_arm_reaches_both_wiring_shapes` is the paired half: an arm that
+quietly resolved to corpus rows only is exactly the state this change ends, and
+it would pass every case in silence.
+
+## AND THE RULE HAD AN OPT-OUT
+
+`_counts` reads the denominator out of the gate's OWN roll-up line. A gate that
+prints no roll-up parses as population ZERO and takes the empty-corpus exit — so
+**the cheapest way to satisfy this entire file was to print less.** That is not a
+hypothetical: the two exact-path rows print no roll-up at all, which is how the
+hole was noticed rather than reasoned about.
+
+A population the CALLER knows now outranks a parsed one, and
+`test_a_gate_cannot_escape_the_rule_by_printing_no_count` pins both directions —
+silent with a parsed zero, refusing once the population is supplied.
+
+## Negative control F — the extension has teeth on the WIRED row
+
+Control E in Part 14 reverted the frontier naming and caught **one** test, the
+fixture. The same revert against this part:
+
+    2 failed, 31 passed
+      test_every_wired_gate_that_refuses_names_what_is_missing[ppa_pareto_check:candidates:candidates.json]   <- NEW
+      test_a_frontier_refusal_names_the_document_and_BOTH_missing_artefacts
+
+    AssertionError: ppa_pareto_check.py --candidates .../trials/z23/candidates.json:
+    rc 2 over a population of 1 with 0 undecided, and the output names 0 of them.
+    A refusal whose SUBJECT is unnamed cannot be acted on.
+      named: []
+      --- output ---
+      [CANNOT CHECK] the contract declares no objective, so there is no
+      trade-off to compute a frontier over
+    assert 0 >= 1
+
+The second failure is the fixture, which Part 14 already had. The FIRST is the
+wired row, which nothing guarded until now.
+
+## No verdict changes
+
+No program changed in this part. The guard file holds 34 tests.
+
+    31 failed, 772 passed, 104 skipped, 4 xfailed
+    failures on this branch and not the base: (none)
