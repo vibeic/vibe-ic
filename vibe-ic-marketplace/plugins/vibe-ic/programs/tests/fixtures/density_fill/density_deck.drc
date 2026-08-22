@@ -1,0 +1,10 @@
+# fixture density deck (KLayout DRC DSL)
+met1        = input(68, 20)
+met1_fill   = input(68, 36)
+met1_via    = input(68, 44)
+met1_label  = polygons(68, 5)
+other       = polygons(99, 0)
+
+met1_all = met1 + met1_fill
+met1_all.raw.forget
+# density rule: (met1_all.area / chip.area) * 100 < 30
