@@ -29,6 +29,8 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from _prose_polarity import is_denied, sentence_scope
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -54,29 +56,91 @@ _DISQUALIFY_RE = re.compile(
     r"\brate\s*[2-9]\s*/|\bk\s*/\s*n\b")
 
 
+def _is_denied_at(prompt: str, m) -> bool:
+    """Whether the statement around an already-found match denies it."""
+    lo, hi = sentence_scope(prompt, m.start(), m.end(),
+                            extra_breaks=_PROMPT_LINE_BREAKS)
+    return bool(is_denied(prompt[lo:hi]))
+
+
+def _first_live(pattern: str, prompt: str, flags: int = 0):
+    """The first match of `pattern` in `prompt` that is NOT denied, or None.
+
+    ONE HELPER FOR EVERY READ IN THIS FILE (vibe-ic#712). The generator
+    polynomials were guarded first and the constraint length beside them was
+    not -- two readers of one prompt, disagreeing about a denial, deciding one
+    encoder between them:
+
+        "The constraint length K = 7 is no longer used.\n Use K = 5."  -> 7
+
+    K and the generators together ARE the code. Reading one of them from a
+    retired sentence builds an encoder the prompt does not describe.
+
+    A denied match does not END the search, or a prompt that retires one value
+    and states another yields nothing.
+    """
+    for m in re.finditer(pattern, prompt, flags):
+        if _is_denied_at(prompt, m):
+            continue
+        return m
+    return None
+
+
 def _parse_K(prompt: str) -> Optional[int]:
-    m = re.search(
+    m = _first_live(
         r"constraint\s+length\s*\(?[Kk]\)?\s*(?:is\s+)?"
         r"(?:fixed\s+at\s+|=\s*|of\s+)?(\d+)", prompt, re.I)
     if m:
         return int(m.group(1))
-    m = re.search(r"\b[Kk]\s*=\s*(\d+)", prompt)
+    m = _first_live(r"\b[Kk]\s*=\s*(\d+)", prompt)
     return int(m.group(1)) if m else None
+
+
+#: A prompt ends sentences at a line end as often as with ". ", and the shared
+#: vocabulary breaks on the latter only. Without these, the scope of a live
+#: match reaches back over the full stop into a denial on the line above and
+#: refuses a polynomial the prompt plainly states. ADDS to `SENTENCE_BREAKS`;
+#: `sentence_scope` cannot remove from it. Not "\n" alone: a prompt wraps
+#: mid-sentence, and breaking there would miss a denial written across two
+#: lines -- the under-reach that publishes the denied value.
+_PROMPT_LINE_BREAKS = (".\n", "!\n", "?\n")
 
 
 def _parse_generators(prompt: str) -> List[Tuple[int, str]]:
     """Return [(index, tapstring)] sorted by index. Accepts `g1 is "111"`,
-    `g2 = "101"`, `generator polynomial g1 "111"`, with straight or curly quotes."""
+    `g2 = "101"`, `generator polynomial g1 "111"`, with straight or curly quotes.
+
+    POLARITY IS ASKED (vibe-ic#712). A prompt is written by a person, and a
+    person states a RETIRED polynomial as readily as a live one:
+
+        'g1 = "111" is no longer used. The encoder uses g2 = "101".'
+        'The encoder does not use g1 = "111".'
+
+    Both published g1 = 111. That is a denied value returned as a declaration,
+    and here it decides which convolutional encoder gets SYNTHESISED.
+
+    It compounds with `setdefault`, which keeps the FIRST match: a retired
+    polynomial stated before the live one wins outright, so the denial does not
+    merely add a wrong entry, it can take the right one's place."""
     found: Dict[int, str] = {}
-    for m in re.finditer(r"\bg(\d+)\b[^.\"'\n]{0,48}?[\"“”']([01]{2,})[\"“”']",
-                         prompt):
+    # THE SAME HELPER the constraint length and the port finder use. Its
+    # own inline loop was the fourth copy of one rule in this file, and
+    # four copies is how `_parse_K` came to be read by a different rule
+    # from the generators it decides an encoder with.
+    for m in re.finditer(
+            r"\bg(\d+)\b[^.\"'\n]{0,48}?[\"\u201c\u201d']([01]{2,})[\"\u201c\u201d']",
+            prompt):
+        if _is_denied_at(prompt, m):
+            continue
         found.setdefault(int(m.group(1)), m.group(2))
     return sorted(found.items())
 
 
 def _find_port(prompt: str, *patterns) -> Optional[str]:
     for pat in patterns:
-        m = re.search(pat, prompt, re.I)
+        # A port NAME taken from a retired sentence is a phantom port on the
+        # generated module -- the same defect the interface recoverer had.
+        m = _first_live(pat, prompt, re.I)
         if m:
             return m.group(1)
     return None
