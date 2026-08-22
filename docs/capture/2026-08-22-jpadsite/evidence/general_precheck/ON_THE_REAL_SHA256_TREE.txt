@@ -39,3 +39,30 @@ WHAT THIS DOES AND DOES NOT CHANGE:
   * The tree is sky130A. That is the PDK the design DECLARES (L19
     pdk_target = "sky130"), so this is the pre-check speaking about the pairing
     the design actually names, not the gf180mcuD one this brief measured.
+
+AND THE SAME CHECK RUN OVER EVERY ARTEFACT, since one had been wrong
+====================================================================
+The `/gp` slip was found by reading a field I had never read -- the artefact's
+own declaration of what it was run on. Every evidence JSON was then checked the
+same way:
+
+  gate_ab_PRE_fix_padring.json          /run/ab_pre     constructed, disclosed
+  gate_ab_POST_fix_padring.json         /run/ab_post    constructed, disclosed
+  general_precheck/sha256_..._.json     /gp             constructed -- NOW disclosed
+  sha256_gf180_padring_DEFAULT_R0.json  /w/proj         regenerated 2026-08-22,
+                                                        disclosed
+  sha256_gf180_padring_report.json      /run/proj_R90   pre-ruling, disclosed
+
+ALL FIVE ARE CONSTRUCTED PROJECTS AND ALL FIVE ARE NOW SAID TO BE. One was not
+until today.
+
+A CORROBORATION FELL OUT OF IT: `proj_R90` in the last path independently
+confirms that artefact was built at PAD_ROTATION_VERTICAL=R90 -- which
+normalises to the DEF spelling 'W', the value I had attributed to it from its
+`config.rotation` field alone. Two independent sources for an attribution I had
+made from one.
+
+WHAT NONE OF THIS CHANGES: the constructed projects were the right tool for
+isolating the DEFECT, and the report says so. What they were never a
+substitute for is the SUBJECT, and the pre-check was the one place that
+distinction mattered to the brief's own question.
