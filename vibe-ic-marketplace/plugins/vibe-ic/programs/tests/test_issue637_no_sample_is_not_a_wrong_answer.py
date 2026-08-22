@@ -36,6 +36,8 @@ import json
 import pathlib
 import sys
 
+from _published_corpus import corpus_root, needs_corpus
+
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _SCORER = _REPO / "vibe-ic-marketplace/plugins/vibe-ic/benchmark/score_iverilog_tb.py"
@@ -50,11 +52,23 @@ except SystemExit:            # the scorer has a __main__ guard; importing is fi
 
 
 # ── the two published runs it was measured on ──────────────────────────────
+#
+# ALL THREE CORPUS TESTS BELOW LOST THEIR SUBJECT, not their point: the scored
+# runs under `benchmark-data/evaluation/` are published results and moved to
+# vibeic/benchmark-data. Two of them used to `return` on a missing file, which
+# is the exact failure this whole branch is about — a check that could not look
+# reporting that it looked and found nothing wrong. They skip now, naming the
+# corpus, and they read it from wherever the caller pointed
+# `VIBE_IC_BENCHMARK_DATA`, so the published numbers are measured again the
+# moment a clone is available instead of being permanently green and blind.
+@needs_corpus
 def test_it_reproduces_the_published_human_run():
-    f = (_REPO / "benchmark-data/evaluation/verilogeval_human"
+    f = (corpus_root() / "evaluation/verilogeval_human"
          / "run_kimi_k3_20260718" / "pass_at_1.json")
-    if not f.is_file():
-        return
+    assert f.is_file(), (
+        f"the corpus is present but does not carry {f}; this test cites a "
+        f"PUBLISHED number and a published number that has disappeared is a "
+        f"finding, not a reason to stay quiet")
     d = json.loads(f.read_text())
     n_ns, probs, pct, partial = S.no_sample_disclosure(
         d["results"], d["total"], d["passed"], "problem")
@@ -63,23 +77,24 @@ def test_it_reproduces_the_published_human_run():
     assert d["pass_at_1_pct"] == 95.51, "the headline is unchanged by design"
 
 
+@needs_corpus
 def test_it_reproduces_the_published_v2_run():
-    f = (_REPO / "benchmark-data/evaluation/verilogeval_v2"
+    f = (corpus_root() / "evaluation/verilogeval_v2"
          / "run_kimi_k3_20260718" / "pass_at_1.json")
-    if not f.is_file():
-        return
+    assert f.is_file(), (
+        f"the corpus is present but does not carry {f}; see the note above — "
+        f"a published number that has disappeared is a finding")
     d = json.loads(f.read_text())
     n_ns, _probs, pct, partial = S.no_sample_disclosure(
         d["results"], d["total"], d["passed"], "problem")
     assert (n_ns, pct, partial) == (4, 96.71, True)
 
 
+@needs_corpus
 def test_a_complete_run_is_not_flagged():
     """THE ACCEPT CASE, and the one that decides whether this can ship: the
     corpus is mostly complete runs, and every one of them must stay silent."""
-    base = _REPO / "benchmark-data/evaluation"
-    if not base.is_dir():
-        return
+    base = corpus_root() / "evaluation"
     checked = 0
     for f in base.rglob("pass_at_1.json"):
         d = json.loads(f.read_text())

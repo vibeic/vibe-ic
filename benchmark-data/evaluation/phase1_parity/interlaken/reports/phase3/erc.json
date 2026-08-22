@@ -1,9 +1,0 @@
-{
-  "tool": "openroad",
-  "mode": "erc_floating_nets_and_metrics",
-  "floating_nets": 2,
-  "clean": false,
-  "source": "reports/phase3/erc.rpt",
-  "verdict": "REVIEW",
-  "note": "open-source ERC screen; full Calibre PERC (latch-up/ESD) deferred"
-}
