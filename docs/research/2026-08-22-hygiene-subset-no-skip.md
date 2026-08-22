@@ -4794,3 +4794,54 @@ Protected paths whose live bytes match NEITHER recorded state: **11 → 12.** Th
 landing moved another one without a PREPARE. §63's finding is not static debt —
 it accrues with every batch that touches a protected path, and the parity gate
 will keep saying so.
+
+## 70. Re-measured against the new `main` — 22 → 4 again, and the ledger merge held
+
+§66's aggregate was against `a4caccefea`. `main` is now `ae78abb285`, so it was
+re-run rather than carried forward. Interleaved, two rounds, on the NEW main and
+the four LANDABLE branches (the selector rule is excluded — it edits a protected
+path and cannot land without the PREPARE of §63):
+
+    round1   NEW main 22 failed / 723 passed      merged 4 failed / 754 passed
+    round2   NEW main 22 failed / 723 passed      merged 4 failed / 754 passed
+
+Identical counts and identical name sets, both rounds, both arms.
+
+**And the name sets are identical to the OLD main's as well.** The landing's
+message claims nine reds fixed; none of them is in this lane. Every red these
+branches close is still red on the new `main`, and the four survivors are the
+same four blocked items. That was worth one `diff` rather than an assumption.
+
+### The ledger merge was the real risk, and it held
+
+The landing also edited `tools/ci/gate_red_since.json` — appending `|| SUPERSEDED`
+notes to the `bound_because` of BOTH rows §64 kept, while leaving `since` and
+`max_commits` untouched (no re-dating; the discipline held on their side too).
+
+`next/retire-five-stale-acknowledgements` rewrites that whole file from the OLD
+text. Git reported the merge clean, and **clean is not correct** — a
+whole-file rewrite merged against someone's in-place edit is exactly where an
+annotation disappears without a conflict. Checked the merged CONTENT rather than
+the exit code:
+
+    L-doc field producer          carries the landing's note: True
+    evidence citation resolves    carries the landing's note: True
+
+Both preserved. The line-level merge kept their edits to the two surviving rows
+and applied my deletion of the five.
+
+### What their notes say, because it revises §64 rather than confirming it
+
+* **L-doc field producer:** the corpus moved and now holds NO L-doc carrying a
+  `fields` object at all, so the remedy §64 quoted — populate the fields or
+  declare them optional — *"is no longer the question. The gate returns rc 2
+  UNDETERMINED over a zero denominator, which is correct behaviour; what is
+  wrong is the DISPATCH recording rc 2 as FAIL."* That is a different defect
+  from the one the row was opened for, and it is not in `benchmark-data`.
+* **evidence citation resolves:** the corpus shrank from 1037 enumerated files
+  to 70; the figures are now 132 baseline entries resolving and 5 dangling, not
+  the 113 and 4 §64 quoted. The shape of the reasoning stands; the counts moved.
+
+Neither changes what my branch does — a gate at rc 2 is not PASS, so neither row
+is stale and both correctly stay. But §64's account of *why* they are red is now
+superseded on the first one, and the fix it points at is the wrong fix.
