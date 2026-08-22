@@ -383,3 +383,80 @@ def test_w21_structural_fail_still_blocks_burn(
     assert "otp_module_uses_supported_pattern_check" in body["failed_gates"]
     # Step-level warnings must still be attached on the rejection too.
     assert body.get("step_level_warnings"), body
+
+
+class TestASharedDirectoryIsNeverAProjectRoot:
+    """`_resolve_project_root_from_sof` scores a directory by whether it
+    CONTAINS a name like `input/`, `rtl/` or `waivers.json`.
+
+    That is a PROXY for "this is a project root", and in a directory shared by
+    every process on the box the proxy fires without the property. MEASURED on
+    a fleet host: a stray `/tmp/waivers.json` left by an unrelated run in July
+    made the resolver return `/tmp` for a SOF anywhere beneath it, so the
+    pre-burn flow_compliance audit ran against `/tmp` as though it were the
+    user's project.
+
+    The failure that surfaced it is the shape worth remembering: the SAME
+    COMMIT was green on a host with a clean `/tmp` and red on one without. A
+    verdict that depends on another process's litter is not reproducible from
+    the tree, so neither result could be believed.
+    """
+
+    def test_the_directories_no_project_can_own_are_refused(self, driver,
+                                                            tmp_path):
+        import os
+        assert driver._is_shared_directory("/tmp") is True
+        assert driver._is_shared_directory("/") is True
+        assert driver._is_shared_directory(os.path.expanduser("~")) is True
+        # …and an ordinary directory is still perfectly able to be a root.
+        assert driver._is_shared_directory(str(tmp_path)) is False
+
+    def test_a_marker_sitting_in_a_shared_directory_does_not_elect_it(
+            self, driver, tmp_path, monkeypatch):
+        """The regression, driven deterministically.
+
+        `/tmp` cannot be used as the fixture — whether it carries a marker is
+        exactly the machine-dependent fact this test exists to stop mattering.
+        So a directory is DECLARED shared for the duration, a marker is planted
+        in it, and the resolver must still refuse to elect it.
+
+        Without the shared-directory filter this returns the planted directory
+        and the test fails, which is the whole point of writing it this way.
+        """
+        shared = tmp_path / "shared"
+        (shared / "deep" / "fpga").mkdir(parents=True)
+        (shared / "waivers.json").write_text("{}")      # the stray marker
+        sof = shared / "deep" / "fpga" / "stranded.sof"
+        sof.write_bytes(b"\x00")
+
+        # APPEND, never replace: replacing drops the real `/tmp` from the list,
+        # and this walk passes through `/tmp` on the way up. The first draft of
+        # this test replaced, and on a host with a stray `/tmp/waivers.json` the
+        # resolver elected `/tmp` — the test reproduced the very bug it guards.
+        monkeypatch.setattr(driver, "_SHARED_ROOTS",
+                            driver._SHARED_ROOTS + (str(shared),))
+        assert driver._resolve_project_root_from_sof(str(sof)) is None
+
+    def test_a_real_project_under_a_shared_directory_is_still_found(
+            self, driver, tmp_path, monkeypatch):
+        """Refusing the shared directory must not refuse what is INSIDE it.
+
+        Scratch checkouts genuinely live under `/tmp`, and a project there is
+        a real project. Only the shared directory ITSELF is disqualified.
+        """
+        shared = tmp_path / "shared"
+        project = shared / "myproj"
+        (project / "fpga" / "output_files").mkdir(parents=True)
+        (project / "rtl").mkdir()
+        (project / "input").mkdir()
+        (shared / "waivers.json").write_text("{}")      # the stray marker again
+        sof = project / "fpga" / "output_files" / "top.sof"
+        sof.write_bytes(b"\x00")
+
+        # APPEND, never replace: replacing drops the real `/tmp` from the list,
+        # and this walk passes through `/tmp` on the way up. The first draft of
+        # this test replaced, and on a host with a stray `/tmp/waivers.json` the
+        # resolver elected `/tmp` — the test reproduced the very bug it guards.
+        monkeypatch.setattr(driver, "_SHARED_ROOTS",
+                            driver._SHARED_ROOTS + (str(shared),))
+        assert driver._resolve_project_root_from_sof(str(sof)) == str(project)
