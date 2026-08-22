@@ -924,6 +924,17 @@ if _bR.returncode == 0:
 # Both stated figures are bound, not just the fast one: the report says N checks
 # and "+ M authoritative" under --slow, so the expected total differs by mode and
 # a check that only knew the fast number would fail every slow run.
+# A count in prose that IS the argument -- the cost of reading every record --
+# rather than decoration. Three counts in this report went stale in one sitting;
+# two said nothing their sentence needed and were rewritten without the number,
+# which is this batch's own A-26 remedy applied to itself. This one carries the
+# argument, so it is bound instead.
+_cost = re.findall(r"(\d+) records needs (\d+) readings", MD)
+control("reading-cost", bool(_cost))
+check("the per-record reading cost quotes the live record count",
+      all(int(a) == len(RECS) and int(b) == len(RECS) for a, b in _cost),
+      f"records {len(RECS)}, quoted {_cost}")
+
 _qextra = {int(m) for m in re.findall(r"\+ (\d+) authoritative", MD)}
 _expect = ({c + e for c in _quoted_checks for e in _qextra} if SLOW
            else set(_quoted_checks))

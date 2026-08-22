@@ -32,7 +32,7 @@ number — which is the failure `A-27` records. The drift is bounded instead: of
 none is in the PPA layer, so no swept population moved by more than six. Main moved 30 commits under this branch while it was open,
 and one of them (`506ff68c1`) landed this bundle's own earlier snapshot at the
 canonical path — so this branch UPDATES that bundle rather than adding a second
-copy, and the fourteen records it carried are a subset of the thirty-one here.
+copy, and the fourteen records it carried are a subset of those here.
 Sources: `ppa-e2e/FINDINGS.md` (F-1..F-18), `ppa-e2e/RESULT.md` (13 requests),
 `ppa-crosslayer/RESULT.md` (10 requests), and six lane records in
 `/tmp/capture_lanes/`.
@@ -2447,8 +2447,8 @@ instead of the text.
 
 **This is where the ladder ends.** Figures that are projections of repository
 data can be bound, and now are. What a binding proves can be tested, and was.
-Whether a name is honest can be read, and was, for the verifier's 53 checks. The
-same question about 35 records needs 35 readings, and the honest report is the
+Whether a name is honest can be read, and was, for the verifier's 54 checks. The
+same question about 44 records needs 44 readings, and the honest report is the
 three that were done rather than a number that would look derived.
 
 ## Three check NAMES promised more than their predicates deliver
@@ -3143,7 +3143,7 @@ settled it, and reading main properly is what exposed the relocation.
 Three consequences, all now in the tree:
 
 - **The bundle is at the canonical path** and UPDATES the landed one. The
-  fourteen records that landed with the snapshot are a subset of the thirty-one
+  fourteen records that landed with the snapshot are a subset of those
   here; the single one not carried forward is the optional-import rule, which its
   own corpus sweep DEMOTED from Bucket A to C-2, so it survives as a C record
   rather than being dropped.
@@ -3532,7 +3532,7 @@ route so the next reader can see it was asked rather than skipped.
 
 **Before landing, run this — and read its exit code, not its output:**
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            53 checks   exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py            54 checks   exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow     + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 That instruction is here because I learned it the expensive way in this lane: I
@@ -3552,7 +3552,7 @@ be landed by re-pinning in place. So it is stated rather than quietly left:
 every claim in this document is re-measurable only by someone who remembers to
 run the command.
 
-    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     53 checks, exit 0 = every claim holds
+    python3 docs/capture/2026-08-21-jcap-ppa/verify.py     54 checks, exit 0 = every claim holds
     python3 docs/capture/2026-08-21-jcap-ppa/verify.py --slow   + 4 authoritative checks (gate runs and the quoted pytest figures)
 
 **It was held to the two invocation properties this batch records about other
