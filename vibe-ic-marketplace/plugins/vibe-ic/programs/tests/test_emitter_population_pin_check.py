@@ -2948,6 +2948,64 @@ def test_the_extractor_still_looks_like_an_extractor_and_consults_polarity():
         f"polarity: {blind}")
 
 
+# ── a phrase in an emitted COMMENT is not a phrase the emitter prints ───────
+
+COMMENT_EMITTER = '''\
+def script() -> str:
+    return (
+        "  # the summary no longer prints \\"of 3 repairs refused\\"\\n"
+        "  set _n 0\\n"
+        "  if {[catch {a}]} { incr _n }\\n"
+        "  if {[catch {b}]} { incr _n }\\n"
+        "  puts \\"PARTIAL: $_n of 2 repairs refused\\"\\n"
+        "  if {$_n >= 2} { puts ALL }\\n"
+    )
+'''
+
+
+def test_a_pin_on_a_value_only_a_COMMENT_states_is_refused(tmp_path):
+    """The FALSE PASS this found. `phrases_of` offered both 3 and 2 as values
+    the emitter states, because the retired 3 appears in an emitted comment
+    saying it is no longer printed. A test still pinning 3 was found in that
+    set and raised nothing -- a denial counted as a confirmation, #712's own
+    shape, in a function the #712 gate does not audit."""
+    progs, tests = _tree(
+        tmp_path, COMMENT_EMITTER,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 3 repairs refused" in script()\n')
+    r = _run(progs, tests)
+    out = r.stdout + r.stderr
+    assert r.returncode == RC_FAIL, (
+        "a test pinning a value the emitter says it NO LONGER prints was "
+        "accepted, because a comment supplied it:\n" + out)
+    assert "[POPULATION]" in r.stdout, out
+    assert "states 2" in r.stdout, out
+
+
+def test_a_printed_line_carrying_a_hash_is_still_a_phrase(tmp_path):
+    """The other direction, which the fix must not buy the first one with. Only
+    the text BEFORE the match on its own line is examined, so a `puts` whose
+    output happens to contain a hash is still a phrase the emitter prints --
+    refusing it would be the false refusal `phrases_of` exists to avoid."""
+    emitter = ('def script() -> str:\n'
+               '    return (\n'
+               '        "  set _n 0\\n"\n'
+               '        "  if {[catch {a}]} { incr _n }\\n"\n'
+               '        "  if {[catch {b}]} { incr _n }\\n"\n'
+               '        "  puts \\"# $_n of 2 repairs refused\\"\\n"\n'
+               '        "  if {$_n >= 2} { puts ALL }\\n"\n'
+               '    )\n')
+    progs, tests = _tree(
+        tmp_path, emitter,
+        'from thing_emit import script\n\n\n'
+        'def test_it():\n    assert "of 2 repairs refused" in script()\n')
+    r = _run(progs, tests)
+    assert r.returncode == RC_PASS, (
+        "a phrase on a PRINTED line was dropped because the line carries a "
+        "hash:\n" + r.stdout + r.stderr)
+    assert "1 test pin(s) COMPARED" in r.stdout, r.stdout
+
+
 # ── the vacuous tier ─────────────────────────────────────────────────────────
 
 def test_a_tree_stating_no_population_twice_is_vacuous_and_says_so(tmp_path):

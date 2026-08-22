@@ -415,6 +415,34 @@ def emitted_script_of(tree: ast.AST) -> str:
         (n.lineno, n.col_offset, n.value) for n in _emitted_nodes(tree)))
 
 
+def _in_an_emitted_comment(script: str, at: int) -> bool:
+    """True when the EMITTED line holding `at` is a Tcl comment.
+
+    Not a polarity question, which is why it is answered here rather than by
+    `_prose_polarity`: this set claims to hold every phrase the emitter CAN
+    PRINT, and a comment is not printed. Reading one as printable is wrong on
+    the set's own terms, whatever the comment says.
+
+    It matters because the failure is a FALSE PASS, the silent direction. An
+    emitted script carrying
+
+        # the summary no longer prints "of 3 repairs refused"
+        puts "PARTIAL: $_n of 2 repairs refused"
+
+    offered BOTH 3 and 2 as values the emitter states, so a test still pinning
+    the retired 3 was found in that set and raised nothing -- a denial counted
+    as a confirmation, #712's own shape, in a function the #712 gate does not
+    audit (`_writes_a_declared_value` is False here, for reasons of spelling
+    recorded in `phrases_of`).
+
+    A LINE, not a scope: only the text before the match on its own line is
+    examined, so `puts "# of 3 things"` -- a printed line that happens to carry
+    a hash -- is kept. Dropping that would be the false refusal `phrases_of`
+    exists to avoid, and this fix must not buy one direction with the other."""
+    start = script.rfind("\n", 0, at) + 1
+    return script[start:at].lstrip().startswith("#")
+
+
 def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     """``{tail: {(value, lineno)}}`` -- every population phrase the emitter CAN
     print.
@@ -509,6 +537,8 @@ def phrases_of(tree: ast.AST) -> Dict[str, Set[Tuple[str, int]]]:
     out: Dict[str, Set[Tuple[str, int]]] = {}
     for node in _emitted_nodes(tree):
         for m in PHRASE.finditer(node.value):
+            if _in_an_emitted_comment(node.value, m.start()):
+                continue
             out.setdefault(m.group(2).strip(), set()).add(
                 (m.group(1), node.lineno))
     return out
