@@ -289,3 +289,38 @@ This reconstruction was performed to VERIFY that eleven rows are mechanical, and
 the result is deliberately not shipped here. The file belongs to its authors, and
 a merged register handed over by a third party is exactly the artefact nobody
 audits. What is offered is the finding: the work is one decision, not twelve.
+
+### The one row: it is a real delete, and no replacement covers it
+
+Checked, because "deleted" and "renamed differently" need different answers, and
+because a nearby rule looked like it might supersede it. Neither guess survived.
+
+`jcap-ppa`'s merge-base with main IS `a4caccefe`, and the row is present there, so
+this is not a branch that forked before the rule existed. Searched `jcap-ppa` by
+CONTENT rather than by name: the best match for the retired row scores **0.08**.
+It is a genuine deletion, not a rename.
+
+The nearest rule `jcap-ppa` adds is NOT a replacement:
+
+    retired : an optional import is guarded by capability not by exception type
+              step repo.host_independence -- an optional dependency imported inside
+              a handler that catches the import failure, with a fallback that binds
+              a name whose attributes nothing checks
+    added   : a third-party import at test module scope must be guarded or it
+              aborts collection
+              step repo.test_population -- a TEST file importing an optional package
+              at module scope, which aborts pytest collection on a host without it
+
+Different step, different scope, different failure. The added rule is about test
+COLLECTION; the retired one is about capability checking after a guarded import
+anywhere. Retiring the first is not covered by adding the second.
+
+So the question for the `jcap-ppa` author is specific: **was dropping the
+`repo.host_independence` capability-check rule intended?** If yes the merged file
+holds 44 rows; if it was incidental, `jdistmat`'s renamed row should survive and it
+holds 45.
+
+This is the shape of loss this file is most exposed to. A recovery register does
+not fail loudly when a rule leaves it -- nothing goes red, the rule is simply never
+applied again. That is why this one row was worth chasing to the end instead of
+being folded into a union.
