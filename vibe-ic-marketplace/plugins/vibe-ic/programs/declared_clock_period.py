@@ -294,6 +294,34 @@ _PERIOD_TOKEN_RE = re.compile(r"clock\s*period|period|時脈週期|週期",
 _IO_WINDOW = 240
 
 
+#: vibe-ic#712 — the comment form of the documents this module reads.
+#:
+#: THE HDL STRIPPER IS THE WRONG TOOL HERE and using it would be a REGRESSION.
+#: `_design_module_set.strip_comments` removes `//[^\n]*`, and these are design
+#: DOCUMENTS: a line carrying `https://spec.example/timing#io-delay` would lose
+#: everything after the scheme, so a real I/O-delay statement sharing that line
+#: would be silently dropped. Under-reading a declaration is the same class of
+#: defect as over-reading one, pointed the other way.
+#:
+#: `<!-- ... -->` is the comment form these documents actually have, and a
+#: commented-out paragraph is exactly the hazard: "<!-- I/O delay is 20 % of the
+#: clock period -->" carries an I/O token, a period token and one percentage
+#: inside one window, so unstripped it reads as a live mandate.
+_DOC_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _strip_doc_comments(text: str) -> str:
+    """`text` with markdown/HTML comments blanked, OFFSETS PRESERVED.
+
+    Every character is replaced one-for-one — newlines stay newlines and
+    everything else becomes a space — so `text.count("\n", 0, start)` and
+    `_sentence_scope` see exactly the positions they saw before. A stripper
+    that deleted the span would move every line number and citation after it.
+    """
+    return _DOC_COMMENT_RE.sub(
+        lambda m: "".join("\n" if c == "\n" else " " for c in m.group(0)), text)
+
+
 def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
     """The fraction of the clock period the design declares as its I/O delay.
 
@@ -329,6 +357,11 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
             text = d.read_text(errors="ignore")
         except Exception:
             continue
+        # vibe-ic#712 — strip on the value that REACHES the scan. Offsets are
+        # preserved, so the line numbers and denial citations below are
+        # unchanged; only commented-out prose stops being readable as a
+        # declaration.
+        text = _strip_doc_comments(text)
         for m in _IO_TOKEN_RE.finditer(text):
             window = text[m.start():m.start() + _IO_WINDOW]
             # The window must not run past a blank line into the next topic.

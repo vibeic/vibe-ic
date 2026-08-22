@@ -39,6 +39,56 @@ touching. So this program computes every gap in the ring walk and refuses a
 ring whose gaps the declared filler cells cannot close, and records the gaps
 so the later filler step has its input.
 
+THE ALONG-THE-ROW EXTENT IS THE MASTER'S WIDTH, ON ALL FOUR SIDES
+=================================================================
+This program used to take each pad's along-the-row extent from the ORIENTED
+footprint, so a side whose declared rotation did not swap the axes summed the
+master's HEIGHT. Two independent sources say that is wrong, and neither of them
+is the outcome:
+
+    upstream `pad_cfg.tcl` measures a cell in exactly two places and BOTH are
+    `[[$inst getMaster] getWidth]`, for all four sides including the vertical
+    ones — the fit sum, and the along-the-row step
+    `cur_pos + space_between_pads_min_filler + $width`. There is no
+    `getHeight` anywhere in its side arithmetic.
+
+    MEASURED, four SEPARATE OpenROAD processes (26Q3-1165), one per
+    `PAD_ROTATION_VERTICAL` value so no row from an earlier pass could be
+    reused by a later one:
+        ROTV = R0 / R90 / R180 / MX
+        WEST -> orient MXR90, EAST -> orient R90
+        75 um along the row, 350 um into the die, IDENTICAL in all four.
+
+The correction is right whichever way it moves a verdict — it was made on the
+strength of those two sources, not because a ring then fits. On a real ring it
+happened to be a 4.4x error: 19 x 350 = 6650 um against a 1500 um side, which
+refused a ring upstream places.
+
+`PAD_ROTATION_VERTICAL` IS INERT, AND SAYS SO OUT LOUD
+======================================================
+The same measurement shows the placer does not read it. Silently honouring an
+inert variable is a lie; silently ignoring a declared one is the defect. So it
+degrades loudly in BOTH directions:
+
+    at librelane's default `R0`   — indistinguishable from never having set it
+                                    — PROCEED, and carry
+                                    `rotation_vertical_inert` in the report,
+                                    with the measurement, in EVERY report
+                                    including the skips. A disclosure only
+                                    present on the happy path is not one.
+    declared non-default          — refuse **rc 2, NOT DETERMINED**, naming the
+                                    variable and saying the placer ignores it.
+                                    Never rc 0 and never rc 1: "I cannot
+                                    honour what you asked" is neither a pass
+                                    nor a finding about the design. An author
+                                    who sets a knob is entitled to be told the
+                                    knob does nothing.
+
+And the DEF carries the orientation the placer ACTUALLY produces on the
+vertical sides (`_pad_ring.VERTICAL_SIDE_ORIENT`), not the declared one, so the
+footprint a DEF reader derives matches the geometry this step recorded. An
+artefact that disagrees with itself is worse than either half alone.
+
 WHAT THIS PROGRAM WILL NOT DO
 =============================
 It will not invent the config. The variables in `_pad_ring.REQUIRED_VARS` are
@@ -98,8 +148,13 @@ UPSTREAM_DECLARATION_REQUIRED: Tuple[str, ...] = (
     "already INSTANTIATE the IO cells. This flow's synthesis emits a bare "
     "core; no step instantiates one.",
     "(2) PAD_SITE_NAME / PAD_CORNER_SITE_NAME must name PAD-class SITEs the "
-    "PDK's IO library declares. Measured: only half the IO libraries in the "
-    "pinned image ship any.",
+    "PDK declares — in EITHER of the two views a distribution uses: a "
+    "top-level SITE record in the IO library's LEFs, or a PAD_FAKE_SITES "
+    "entry in the IO library's tech-view config, which is upstream's own PDK "
+    "variable for `the LEF does not include the site definitions for the IO "
+    "pads`. Measured: only half the IO libraries in the pinned image ship a "
+    "LEF SITE record, and the ones that do not declare their sites the other "
+    "way. A name declared by neither view is still refused.",
     "(3) PAD_EDGE_SPACING, PAD_ROTATION_HORIZONTAL / _VERTICAL / _CORNER, "
     "PAD_CORNER and PAD_FILLERS complete the geometry. Without a filler the "
     "ring cannot abut, and abutment is what carries its supply.",
@@ -123,6 +178,29 @@ UPSTREAM_REFUSALS_MADE_MACHINE_READABLE: Tuple[Tuple[str, str], ...] = (
      '"The remaining area for the pads on the side (<x>) is not divisible by '
      'the minimum site width."'),
 )
+
+
+#: `PAD_ROTATION_VERTICAL` is INERT, and this is the evidence, carried in the
+#: report so a reader is told rather than left to find out.
+ROTATION_VERTICAL_INERT: Dict[str, Any] = {
+    "variable": "PAD_ROTATION_VERTICAL",
+    "honoured": False,
+    "reason": (
+        "the placer does not read it. MEASURED in four SEPARATE OpenROAD "
+        "processes, one per value so no row from an earlier pass could be "
+        "reused by a later one: PAD_ROTATION_VERTICAL = R0 / R90 / R180 / MX "
+        "all produced WEST orient=MXR90 and EAST orient=R90, 75 um along the "
+        "row and 350 um into the die, IDENTICAL in all four. The vertical-side "
+        "orientation is a constant of the placer, not a function of this "
+        "variable."),
+    "measured_orientation": {"W": "MXR90", "E": "R90"},
+    "librelane_default": PR.ROTATION_DEFAULT,
+    "what_this_step_does": (
+        "emits the orientation the placer produces, so the DEF does not "
+        "contradict its own geometry. A run that DECLARES a non-default value "
+        "is refused NOT_DETERMINED rather than silently ignored — an author "
+        "who sets a knob is entitled to be told the knob does nothing."),
+}
 
 
 #: What this step declares it does NOT do. In the artefact rather than left
@@ -165,6 +243,7 @@ def _report(verdict: str, reason: str, **kw: Any) -> Dict[str, Any]:
         "fillers_placed": None,
         "spacing": None,
         "unperformed": dict(UNPERFORMED),
+        "rotation_vertical_inert": dict(ROTATION_VERTICAL_INERT),
         "bterms": None,
         "findings": [],
     }
@@ -229,11 +308,16 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
             "width_dbu": dx, "height_dbu": dy,
         })
 
+    # The vertical sides take the orientation the placer ACTUALLY produces,
+    # measured, not the declared one — see `_pad_ring.VERTICAL_SIDE_ORIENT`.
+    # `PAD_ROTATION_VERTICAL` does not reach this dict because it does not
+    # reach the tool either; `main` refuses before here if a run DECLARED a
+    # non-default value, so nobody is silently ignored.
     side_orient = {
         "S": cfg["rotation"]["PAD_ROTATION_HORIZONTAL"],
         "N": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_HORIZONTAL"], 2),
-        "W": cfg["rotation"]["PAD_ROTATION_VERTICAL"],
-        "E": PR.rotate_cw(cfg["rotation"]["PAD_ROTATION_VERTICAL"], 2),
+        "W": PR.VERTICAL_SIDE_ORIENT["W"],
+        "E": PR.VERTICAL_SIDE_ORIENT["E"],
     }
     side_width = {
         "S": (urx - llx) - 2 * edge - 2 * corner_sw,
@@ -248,12 +332,26 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
         insts = cfg["sides"][side]
         orient = side_orient[side]
         axis = "x" if side in PR.HORIZONTAL_SIDES else "y"
-        # 1. sum the pad widths for the side. Upstream sums the MASTER width
-        #    on every side: the rotation puts a cell's width along the row.
-        boxes = [PR.footprint(lib.masters[die.components[i].master],
-                              orient, units) for i in insts]
-        along = [b[0] if axis == "x" else b[1] for b in boxes]
-        into = [b[1] if axis == "x" else b[0] for b in boxes]
+        # 1. sum the pad widths for the side. THE MASTER'S WIDTH, ON EVERY
+        #    SIDE — never the oriented footprint's extent.
+        #
+        #    Upstream measures a cell in exactly two places and both are
+        #    `[[$inst getMaster] getWidth]`, for all four sides including the
+        #    vertical ones: the fit sum, and the along-the-row step
+        #    `cur_pos + space_between_pads_min_filler + $width`. There is no
+        #    `getHeight` anywhere in its side arithmetic. The tool agrees when
+        #    asked: a vertical-side pad is placed 75 um along the row and
+        #    350 um into the die for EVERY value of PAD_ROTATION_VERTICAL.
+        #
+        #    Taking the ORIENTED extent here summed the master's HEIGHT on a
+        #    vertical side whose declared rotation did not swap the axes — a
+        #    4.4x error on a real ring (19 x 350 = 6650 against a 1500 um
+        #    side), refusing a ring upstream places. This is a correction to
+        #    match the tool and upstream, and it is right whichever way it
+        #    moves a verdict.
+        sizes = [lib.masters[die.components[i].master] for i in insts]
+        along = [int(round(w * units)) for w, _h in sizes]
+        into = [int(round(h * units)) for _w, h in sizes]
         total = sum(along)
         avail = side_width[side]
         # 2. if that value is larger than the side, throw an error
@@ -394,7 +492,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     asg_path = project / PR.ASSIGNMENT_REL
     lefs = ([Path(p) for p in args.io_lef] if args.io_lef
             else PR.discover_io_lefs(args.pdk_root, args.pdk))
-    lib = PR.IoLibrary(lefs)
+    # The PDK's TECH view, which is where a distribution whose IO LEFs carry
+    # no top-level SITE record declares its pad sites. Discovered from the PDK
+    # regardless of `--io-lef`: a caller may hand this step the LEFs it wants
+    # the masters read out of, but only the PDK may declare a site.
+    site_decls = PR.discover_io_site_declarations(args.pdk_root, args.pdk)
+    lib = PR.IoLibrary(lefs, site_decls)
 
     # ── the SKIP branch: name the absent variables one by one ──────────────
     missing: List[Dict[str, Any]] = []
@@ -507,6 +610,45 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _fail("PAD_CONFIG_MALFORMED",
                      f"{PR.ASSIGNMENT_REL}: {exc}", die=die_rec)
 
+    # ── the declared rotation this step CANNOT honour ─────────────────────
+    # rc 2, NOT rc 0 and NOT rc 1. "I cannot honour what you asked" is not a
+    # pass and it is not a finding about the design — it is the flow's
+    # could-not-measure tier, which is exactly what this is. A run that leaves
+    # the variable at librelane's default is indistinguishable from a run that
+    # never set it, so it proceeds and is TOLD, in `rotation_vertical_inert`.
+    declared_rotv = PR.normalise_orient(
+        cfg["rotation"]["PAD_ROTATION_VERTICAL"])
+    if declared_rotv != PR.normalise_orient(PR.ROTATION_DEFAULT):
+        raw = json.loads(asg_path.read_text(errors="replace")).get(
+            "PAD_ROTATION_VERTICAL")
+        reason = (
+            f"NOT DETERMINED: this run DECLARES PAD_ROTATION_VERTICAL={raw!r}, "
+            f"a value other than librelane's default "
+            f"{PR.ROTATION_DEFAULT!r}, and the placer does not read it. "
+            f"{ROTATION_VERTICAL_INERT['reason']} Placing the ring anyway "
+            f"would silently give you the orientation you did not ask for, "
+            f"and reporting PASS would say the declaration was honoured. "
+            f"Neither is true, so no ring is placed and no verdict is claimed. "
+            f"Remove the declaration, or set it to {PR.ROTATION_DEFAULT!r}, to "
+            f"proceed on the placer's own measured orientation "
+            f"({ROTATION_VERTICAL_INERT['measured_orientation']}).")
+        rep = _report("SKIP", reason, inputs=inputs,
+                      io_cell_library=lib.as_dict(), die=die_rec,
+                      missing_inputs=[{
+                          "input": "a pad rotation the placer can honour",
+                          "path": PR.ASSIGNMENT_REL,
+                          "variables_absent": ["PAD_ROTATION_VERTICAL"]}],
+                      findings=[_finding(
+                          "INFO", "PAD_ROTATION_VERTICAL_NOT_HONOURED",
+                          reason)])
+        _write(project, args.json, rep)
+        _skip_marker(project, reason)
+        print(f"=== {PROGRAM} ({project.name}) ===")
+        print("  verdict: SKIP (NOT DETERMINED)")
+        print(f"  PAD_ROTATION_VERTICAL_NOT_HONOURED: declared {raw!r}, "
+              f"placer ignores it")
+        return 2
+
     cfg_rec = {
         "PAD_SITE_NAME": cfg["site"],
         "PAD_CORNER_SITE_NAME": cfg["corner_site"],
@@ -517,20 +659,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pads_per_side": {PR.SIDE_VAR[s]: len(cfg["sides"][s])
                           for s in PR.SIDES},
     }
+    # Filled by the site lookups below, so the artefact says which PDK view
+    # each of the two sites was resolved from rather than leaving a reader to
+    # go and look.
+    cfg_rec["site_source"] = {}
 
     # upstream: the two site lookups, and their two class checks, first.
+    #
+    # Both PDK views are consulted — see `_pad_ring`'s header. Two IO
+    # libraries in one tree declaring one site name at two sizes is refused
+    # before either lookup, because the site width is what every gap in the
+    # ring is rounded to and picking it by file order would put the ring's
+    # abutment on a directory listing.
+    if lib.site_declaration_conflicts:
+        names = sorted(lib.site_declaration_conflicts)
+        return _fail(
+            "PAD_SITE_DECLARATION_AMBIGUOUS",
+            f"{len(names)} pad site(s) are declared at more than one size by "
+            f"the PDK tech views this run resolved: "
+            f"{lib.as_dict()['site_declaration_conflicts']} — the site width "
+            f"is what the ring's spacing arithmetic rounds to, so this step "
+            f"refuses rather than resolve it by the order the files were "
+            f"read",
+            die=die_rec, config=cfg_rec)
     site_wh: Dict[str, Tuple[int, int]] = {}
+    site_src: Dict[str, str] = {}
     for key, name, var in (("pad", cfg["site"], "PAD_SITE_NAME"),
                            ("corner", cfg["corner_site"],
                             "PAD_CORNER_SITE_NAME")):
-        site = lib.sites.get(name)
+        site = lib.resolve_site(name)
         if site is None:
             return _fail(
                 "PAD_SITE_NOT_FOUND",
-                f"{var}={name!r} is not a SITE in the IO cell library this "
-                f"run resolved ({len(lib.sites)} site(s) from {len(lefs)} "
-                f"LEF(s); PAD-class: {lib.as_dict()['pad_class_sites']})",
+                f"{var}={name!r} is declared by neither PDK view this run "
+                f"resolved: {len(lib.sites)} LEF SITE record(s) from "
+                f"{len(lefs)} LEF(s) and {len(lib.declared_sites)} tech-view "
+                f"declaration(s) from {len(lib.site_declarations)} config "
+                f"file(s). PAD-class sites available: "
+                f"{lib.pad_class_site_names()}",
                 die=die_rec, config=cfg_rec)
+        site_src[var] = str(site["source"])
+        cfg_rec["site_source"] = site_src
         if site["class"] != "PAD":
             return _fail(
                 "PAD_SITE_CLASS_NOT_PAD",
@@ -545,6 +714,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 die=die_rec, config=cfg_rec)
         site_wh[key] = (int(round(site["size"][0] * die.units)),
                         int(round(site["size"][1] * die.units)))
+        if "declared_in" in site:
+            site_src[var] += f" ({site['declared_in']})"
     if site_wh["pad"][0] <= 0:
         return _fail("PAD_SITE_NOT_FOUND",
                      f"PAD_SITE_NAME={cfg['site']!r} has width 0, and the "

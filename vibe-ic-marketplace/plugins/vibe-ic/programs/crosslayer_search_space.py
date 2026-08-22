@@ -527,6 +527,20 @@ def _pnr_exclusion() -> Dict[str, object]:
     So the owner is looked for at the moment the sentence is written. If it is
     there its own lever names are used and the reason cites it; if it is not,
     the reason SAYS the levers are unowned rather than claiming an owner.
+
+    AND DELEGATION IS NOT UNCONDITIONAL, WHICH THE SENTENCE ALSO HAS TO SAY.
+    One of the delegated knobs -- the design-for-ECO spare-cell density -- is
+    admitted by its owner only BOUNDED BELOW once a design declares a spare/ECO
+    requirement, because setting it to zero deletes the cells that make a bug
+    found after tape-out fixable by a metal-only ECO instead of a base-layer
+    respin. A handoff row that lists it beside ten unconditional knobs reads as
+    "freely searchable, elsewhere", and a reader who follows that record into
+    the owner without a declaration or a `--project` gets exactly the unbounded
+    lever this campaign closed. So the levers carrying a precondition are named
+    SEPARATELY, and -- like the owner's name and the lever names -- they are
+    MEASURED from the owner's own table (`eco_bounded`) rather than re-typed
+    here. A list re-typed here is a list that stops being true the first time
+    the owner adds a twelfth lever.
     """
     owner = Path(__file__).resolve().parent / PNR_OWNER
     if not owner.is_file():
@@ -539,21 +553,39 @@ def _pnr_exclusion() -> Dict[str, object]:
                 f"emits a space containing them. They are UNOWNED, not "
                 f"delegated — checked when this sentence was written."),
         }
+    conditional: List[str] = []
     try:
         sys.path.insert(0, str(owner.parent))
         import ppa_pnr_search_space as _pnr             # noqa: WPS433
         names = sorted(str(l["lever"]) for l in _pnr.LEVERS)
+        conditional = sorted(str(l["lever"]) for l in _pnr.LEVERS
+                             if l.get("eco_bounded"))
     except Exception:                                   # pragma: no cover
         names = sorted(_PNR_LEVERS_FALLBACK)
-    return {
+    row: Dict[str, object] = {
         "pnr_levers_excluded_on_purpose": names,
         "pnr_owner": PNR_OWNER,
+        "pnr_levers_delegated_with_a_precondition": conditional,
         "pnr_exclusion_reason": (
             f"these are the place-and-route knobs {PNR_OWNER} owns and emits "
             f"a space for; a cross-layer arm that also moved them would not "
             f"be measuring the cross-layer contribution. The owner was "
             f"checked for, and its own lever names are the ones listed."),
     }
+    if conditional:
+        row["pnr_precondition_reason"] = (
+            f"{conditional} is delegated but NOT unconditionally. Spare/ECO "
+            "cells are what make a bug found after tape-out fixable by a "
+            "metal-only ECO instead of a base-layer respin, so setting this "
+            f"knob to zero removes a property a tape-out-bound design is "
+            f"required to have. {PNR_OWNER} therefore admits it only BOUNDED "
+            "BELOW once a design declares a design-for-ECO requirement, and "
+            "refuses to publish a space at all for a design the flow routed to "
+            "a chip terminal with no such declaration. Driving that owner "
+            "without `--eco-declaration` or `--project` is what produced a "
+            "published candidate that had deleted every spare/ECO cell in the "
+            "design. Read from the owner's own lever table, not re-typed here.")
+    return row
 
 
 def audit_space(space: Dict[str, object]) -> List[str]:

@@ -265,3 +265,119 @@ class TestVerifyMode:
 
     def test_verifying_a_missing_file_is_NOT_MEASURED(self, tmp_path):
         assert mod.main([str(tmp_path), "--verify", "nope.json"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# DELEGATION IS NOT UNCONDITIONAL, AND THE HANDOFF ROW HAS TO SAY SO
+# ---------------------------------------------------------------------------
+"""This program withholds the place-and-route knobs and names the owner that
+emits a space for them. One of those knobs -- the design-for-ECO spare-cell
+density -- is admitted by that owner only BOUNDED BELOW once a design declares a
+spare/ECO requirement, because zero deletes the cells that make a bug found
+after tape-out fixable by a metal-only ECO instead of a base-layer respin.
+
+Listing it beside ten unconditional knobs reads as "freely searchable,
+elsewhere", and a reader who follows that record into the owner without a
+declaration gets exactly the unbounded lever that produced a published candidate
+with every spare deleted. So the conditional levers are named separately -- and
+MEASURED from the owner's own table, never re-typed here.
+"""
+import pathlib as _pathlib  # noqa: E402
+import subprocess  # noqa: E402
+
+import pytest  # noqa: E402
+import sys  # noqa: E402
+
+_PROGRAMS = _pathlib.Path(__file__).resolve().parents[1]
+
+
+def _exclusion():
+    return mod._pnr_exclusion()
+
+
+# --- POSITIVE ---------------------------------------------------------------
+def test_the_handoff_names_the_lever_that_carries_a_precondition():
+    row = _exclusion()
+    assert row["pnr_owner"] == mod.PNR_OWNER
+    assert row["pnr_levers_delegated_with_a_precondition"] == [
+        "spare_cell_density"]
+    assert "metal-only ECO" in row["pnr_precondition_reason"]
+    # and it is still one of the delegated levers, not moved out of the list
+    assert "spare_cell_density" in row["pnr_levers_excluded_on_purpose"]
+
+
+# --- NEGATIVE / MUTATION ----------------------------------------------------
+def test_M_the_precondition_list_is_MEASURED_not_typed_here(monkeypatch):
+    """THE MUTATION ARM. A list re-typed in this file stops being true the
+    first time the owner changes, and would go on claiming a precondition that
+    had been removed -- or missing one that had been added. Both directions are
+    driven here, so the detector is shown to follow the owner rather than a
+    constant that happens to agree today.
+    """
+    import ppa_pnr_search_space as pnr
+
+    # (a) the owner drops the flag -> this file must stop claiming it
+    stripped = tuple({k: v for k, v in l.items() if k != "eco_bounded"}
+                     for l in pnr.LEVERS)
+    monkeypatch.setattr(pnr, "LEVERS", stripped)
+    row = _exclusion()
+    assert row["pnr_levers_delegated_with_a_precondition"] == []
+    assert "pnr_precondition_reason" not in row, (
+        "a reason was published for a precondition no lever carries")
+
+    # (b) the owner marks a DIFFERENT lever -> this file must follow it there
+    moved = tuple({**l, "eco_bounded": l["lever"] == "cell_padding"}
+                  if l["lever"] in ("cell_padding", "spare_cell_density")
+                  else l for l in pnr.LEVERS)
+    monkeypatch.setattr(pnr, "LEVERS", moved)
+    assert _exclusion()["pnr_levers_delegated_with_a_precondition"] == [
+        "cell_padding"]
+
+
+# --- VACUOUS ----------------------------------------------------------------
+def test_vacuous_an_absent_owner_claims_no_precondition_it_could_not_measure(
+        monkeypatch, tmp_path):
+    """With the owner gone this program cannot know which levers carry a
+    precondition, and the honest row says nothing rather than repeating a
+    fallback. The same discipline the owner-name sentence already has: an
+    unowned lever is reported as unowned, not as delegated."""
+    monkeypatch.setattr(mod, "PNR_OWNER", "no_such_owner_program.py")
+    row = _exclusion()
+    assert row["pnr_owner"] is None
+    assert row.get("pnr_levers_delegated_with_a_precondition", []) == []
+    assert "pnr_precondition_reason" not in row
+    assert "UNOWNED" in row["pnr_exclusion_reason"]
+
+
+# --- BAD INVOCATION ---------------------------------------------------------
+def test_bad_invocation_is_never_a_pass(tmp_path):
+    """Whatever else it does, a misspelled flag must not exit 0."""
+    r = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "crosslayer_search_space.py"),
+         str(tmp_path), "--this-flag-does-not-exist"],
+        capture_output=True, text=True)
+    assert r.returncode != 0, (
+        "a bad invocation exited 0, so a typo'd flag reads as a clean space")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="PRE-EXISTING, and a published-interface change I am not making "
+           "unasked. `crosslayer_search_space.py` exits 2 -- argparse's own "
+           "convention -- on an unrecognised flag, and 2 is this program's "
+           "NOT_MEASURED code. A caller that treats 2 as 'nothing to check "
+           "here, carry on' therefore reads a typo as a step that measured "
+           "nothing, which is exactly the confusion `_ppa/cli_exit.py` was "
+           "written to end (it measured 12 of 14 shipped ppa_* programs with "
+           "it). The one-line fix is `cli_exit.parse_or_refuse`, already in "
+           "the tree. I am not applying it here because this program is not a "
+           "`ppa_*` CLI -- the layer sweep never reaches it, no strict pin "
+           "covers it -- and its own docstring declares a three-code contract "
+           "with no 3 in it, so introducing one changes a published "
+           "interface. Recorded rather than fixed, and named in RESULT.md.")
+def test_bad_invocation_is_3_not_2(tmp_path):
+    r = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "crosslayer_search_space.py"),
+         str(tmp_path), "--this-flag-does-not-exist"],
+        capture_output=True, text=True)
+    assert r.returncode == 3
