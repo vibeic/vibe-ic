@@ -3350,7 +3350,8 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"}}\n")
 
 
-def _build_unplaceable_master_cap_tcl() -> str:
+def _build_unplaceable_master_cap_tcl(
+        cts_masters: Optional[Sequence[str]] = None) -> str:
     """Forbid every master too WIDE to have a legal site on this floorplan.
 
     Measured field failure: a flow shipped a `routed.def` carrying 563 signal
@@ -3569,11 +3570,107 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "      puts \"UNPLACEABLE_INSTANCES_PRESENT: [llength $_wc_pre] "
         "instance(s) already in the netlist exceed the bound -- $_wc_pre\"\n"
         "    }\n"
+        "    # REPORT-ONLY: masters EXACTLY at the bound. The comparison above\n"
+        "    # is deliberately STRICT and must stay so -- on the floorplan that\n"
+        "    # produced it the SURVIVING masters sat exactly here, so `>=` would\n"
+        "    # empty the pool. But `one fits` is not `many fit`: an instance this\n"
+        "    # wide needs the single longest free run on the die, so a step that\n"
+        "    # creates them in QUANTITY cannot be legalized, and nothing said so.\n"
+        "    set _wc_at {}\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_m [$_wc_lib getMasters] {\n"
+        "          if {![$_wc_m isCore]} { continue }\n"
+        "          if {[$_wc_m getWidth] == $_wc_run} { lappend _wc_at [$_wc_m getName] }\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "    if {[llength $_wc_at] > 0} {\n"
+        "      puts \"MASTERS_AT_PLACEABILITY_BOUND: [llength $_wc_at] core "
+        "master(s) are EXACTLY the measured free-site run "
+        "([expr {$_wc_run / $_wc_sw}] site(s)); one instance places, many "
+        "cannot -- kept usable by the strict bound above -- $_wc_at\"\n"
+        "    }\n"
         "  }\n"
-        "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
+        + _cts_master_bound_check_tcl(cts_masters)
+        + "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
 
 
-def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
+def _cts_master_bound_check_tcl(
+        cts_masters: Optional[Sequence[str]] = None) -> str:
+    """REPORT-ONLY: name the CTS masters that sit at or above the bound.
+
+    `PLACEABLE_WIDTH_BOUND` is measured from the live tap grid and then
+    PRINTED AND NEVER CONSULTED -- a `git grep` finds it in this emitter, in
+    its own tests, and nowhere else.  Meanwhile `clk_buf_root` comes from the
+    PDK registry (or, when absent, from "the LAST clkbuf in the Liberty", i.e.
+    the WIDEST one) and is fixed before any floorplan exists.  Nothing joins
+    the two, so the flow can hand `clock_tree_synthesis -root_buf` a master
+    that its own cap has just measured to be exactly at the placeability
+    limit -- and then CTS instantiates it thousands of times.
+
+    Measured, three independent designs on one open PDK, all three printing
+    `PLACEABLE_WIDTH_BOUND: 56000 dbu = 50 site(s)` and all three naming a
+    50-site master as `-root_buf`.  On the small one CTS used it ONCE and the
+    design legalized.  On the large one CTS used it 2 055 times, the post-hold
+    legalizer was left with ~2 344 illegal cells, and the full-die rung had
+    recovered 11 % of them after ten hours of one core.  Downsizing exactly
+    those instances takes the residual to 303 in sixteen minutes.
+
+    This does NOT change the choice and does NOT exclude anything: excluding a
+    master at the bound is explicitly wrong (the strict `>` is pinned by
+    `test_a_master_exactly_at_the_bound_stays_legal`, whose own floorplan had
+    the SURVIVORS sitting exactly there).  It makes the condition SAYABLE at
+    floorplan time instead of discoverable ten hours into a legalizer.
+
+    chip-AGNOSTIC: the master names are the caller's already-resolved
+    values; no design, PDK, cell or dimension literal appears here.  With no
+    names supplied the function is INERT and emits nothing, so a caller that
+    does not know them is unchanged.
+    """
+    names = [n for n in (cts_masters or []) if n]
+    if not names:
+        return ""
+    seen, uniq = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            uniq.append(n)
+    lst = " ".join(uniq)
+    return (
+        "  # REPORT-ONLY: the masters this flow will hand to CTS, against the\n"
+        "  # bound just measured. Printed, never enforced.\n"
+        "  # `_wc_run`/`_wc_sw` are set inside the rows block; a floorplan with no\n"
+        "  # rows never runs it, and an unset read would abort the whole cap into\n"
+        "  # its NONFATAL branch -- a report-only addition must not be able to do\n"
+        "  # that, so it checks before it reads.\n"
+        "  if {[info exists _wc_run] && [info exists _wc_sw] && $_wc_run > 0} {\n"
+        f"    foreach _wc_cm {{{lst}}} {{\n"
+        "      # resolved by walking the libs, the same way the cap above finds\n"
+        "      # its masters -- not `findMaster`, so this block needs nothing the\n"
+        "      # block it is appended to does not already use.\n"
+        "      set _wc_cw -1\n"
+        "      foreach _wc_lb [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_mm [$_wc_lb getMasters] {\n"
+        "          if {[$_wc_mm getName] eq $_wc_cm} { set _wc_cw [$_wc_mm getWidth] }\n"
+        "        }\n"
+        "      }\n"
+        "      if {$_wc_cw < 0} { continue }\n"
+        "      if {$_wc_cw >= $_wc_run} {\n"
+        "        puts \"CTS_MASTER_AT_PLACEABILITY_BOUND: $_wc_cm is "
+        "[expr {$_wc_cw / $_wc_sw}] site(s) against a measured free-site run "
+        "of [expr {$_wc_run / $_wc_sw}] site(s) -- every instance CTS creates "
+        "from it needs the longest free run on the die, so a clock tree that "
+        "uses it in quantity cannot be legalized\"\n"
+        "      }\n"
+        "    }\n"
+        "  }\n")
+
+
+
+def _build_tapcell_and_placeability_tcl(
+        pdk: "PdkConfig",
+        cts_masters: Optional[Sequence[str]] = None) -> str:
     """`tapcell` insertion followed by the unplaceable-master width cap.
 
     ORDER IS THE POINT and is why these two are composed in one place rather
@@ -3588,7 +3685,8 @@ def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
     call site) is deliberate: the ordering contract is then testable by calling
     this function, with no need to inspect the emitter's source.
     """
-    return _build_tapcell_tcl(pdk) + _build_unplaceable_master_cap_tcl()
+    return (_build_tapcell_tcl(pdk)
+            + _build_unplaceable_master_cap_tcl(cts_masters))
 
 
 
@@ -20576,7 +20674,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in
     # programs/tests/test_phase3_backend_fixes.py).
-    tapcell_block = _build_tapcell_and_placeability_tcl(pdk)
+    tapcell_block = _build_tapcell_and_placeability_tcl(
+        pdk, cts_masters=(clk_buf, clk_buf_root))
     # #684 R6 (post-place) — sparse-die anti-flood tap prune, emitted after
     # placement (real geometry) and BEFORE placed.def (keeps DEF-stage
     # monotonicity). Pre-mark the spare grid positions (inserted after
