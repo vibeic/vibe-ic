@@ -2004,6 +2004,21 @@ Not "sixteen verified guards", and not a bare name count either. The claims are
 demonstrably not resting on tests that assert only the happy path, and the
 residual is a regex's blind spot rather than a doubt about the guards.
 
+**A correction to what follows, found late and by reading a section this report
+admitted skipping.** The originating lanes had already done this. One of the six
+lane records carries a table of ten mutation arms — *"a guard that cannot go red
+is not a guard"* — and its arms 1, 2, 4 and 5 are the same mutations run below
+for F-5, F-4, F-9 and F-10, against the same tests, with the same result. Another
+carries fifteen arms with a control this report only adopted later: every row
+verified green-BEFORE as well as green-after, so a test already failing cannot be
+mistaken for a working arm.
+
+So the execution evidence below is **a re-confirmation on a tree 244 commits
+later, not a first demonstration**. That is worth having — a mutation arm from a
+past lane can rot, and these did not — but it is a different claim from the one
+the next paragraph originally made, and the difference is exactly the kind this
+report spends its length insisting on.
+
 **And then the question was answered by EXECUTION rather than by inspection**,
 for the three findings the brief singles out. Everything above reads code; a
 named negative arm can still be vacuous, so each guard was made to fail by
