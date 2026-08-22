@@ -66,6 +66,26 @@ got = sh(f"git ls-remote --heads origin refs/heads/{BR}", WT)
 row("external", f"{BR} on the remote", "f99979a73",
     (got.split()[0][:9] if got else "GONE"))
 
+BR2 = "next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path"
+got2 = sh(f"git ls-remote --heads origin refs/heads/{BR2}", WT)
+row("external", "the report branch on the remote", "450aba8fe",
+    (got2.split()[0][:9] if got2 else "GONE"))
+
+# The pushed report is a SNAPSHOT.  This directory's copy keeps moving, so the two
+# WILL diverge -- that is expected, not a failure, and it is reported so nobody quotes
+# the pushed copy as current.  A silent snapshot is how a stale number gets a URL.
+import hashlib
+def _h(path):
+    try: return hashlib.sha256(open(path, "rb").read()).hexdigest()[:9]
+    except OSError: return "missing"
+live = _h("RESULT.md")
+pushed = sh(f"git show {BR2}:selftapeout-adjudication/RESULT.md 2>/dev/null | "
+            f"sha256sum | cut -c1-9", WT) or "unreadable"
+row("external", "pushed RESULT.md == this directory's RESULT.md",
+    "equal at push time", "EQUAL" if live == pushed else f"DRIFTED (live {live} / pushed {pushed})",
+    ok=True, note="informational: the canonical copy is the one in _jself_priv; the "
+                  "pushed one is a named snapshot and re-push is how it catches up")
+
 # ---- (a) FROZEN source on main: the wall S7 rests on. ----
 wall = sh("git archive origin/main plugins/vibe-ic/programs/pad_ring_gen.py 2>/dev/null "
           "| tar -xO 2>/dev/null | grep -c PAD_INSTANCE_NOT_IN_BLOCK || true", WT)

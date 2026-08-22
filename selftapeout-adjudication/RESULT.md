@@ -410,7 +410,7 @@ at the verdict line reproduces J51 and J61 to the digit — J73.)*
 ---
 
 agent `jself`, host 8HD-d / 192.168.1.112. PDK `gf180mcuD` (open).
-Evidence: **`findings.md`** (J0–J81). Scripts `meas/`, synthesis `synth/`,
+Evidence: **`findings.md`** (J0–J82). Scripts `meas/`, synthesis `synth/`,
 chip-path runs `proj/`, pad-ring probes `probe_padring/` and `meas/_probe_*`.
 **★ And the rung-5 INTERIOR is now read rather than assumed silent (J81): the die-4200 arm broke a 10-hour silence at 15:59:23 and its full-die rung has recovered **255 of 2 296 (11.1 %)**, phase-2 illegal down to **2 035**; die 3800 has **31 of 2 340**; dies 5153 and 5434 are at **0**, on roughly half the CPU, so that is *not yet* rather than *never*. The rung works — it is just 7× worse than the next one (J80) at 60× the cost.**
 
@@ -3149,6 +3149,20 @@ a detail, either way.
 ---
 
 ## 8. What this job put back into the plugin
+
+### ★ And the adjudication itself is now published under a name (J82)
+
+`next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path` @ **`450aba8fe`** —
+20 files, +10 869: this report, the journal, the standing controls and the J80 probe
+with its registered predictions, off `origin/main` = `a4caccefe`. **Not on main, no
+version bump.** Scanned first with the repo's OWN file guard
+(`source_chip_agnostic_check.py`): **PASS, 16 files, NDA panel 20 of 20** — and with a
+positive control (`--extra-tokens` on a word known to be in the text) returning
+**FAIL, 11 occurrences**, so the PASS is a measurement rather than a blind spot. Read
+back from the remote by fetching the blob: `ALL SIX DECIDED` at line 3.
+**The pushed copy is a SNAPSHOT** and this directory's is canonical; the decay ledger
+now compares the two by hash and reports drift, because a stale number with a URL
+outranks a current one without.
 
 ### ★ A SECOND finding, authored, verified, and PUSHED on this dispatch (J80)
 

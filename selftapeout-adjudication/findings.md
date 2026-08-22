@@ -6332,3 +6332,62 @@ was too strong, a ledger proxy replaced with a monotone one, and the standing of
 ledger itself: it was built to catch published numbers going stale, and the first thing
 it actually caught was a live measurement changing under a report that would otherwise
 have gone on quoting `40.6×` and `stuck at 2296`.
+
+---
+
+## J82 — the work is now on the remote under two names, and the scan that let it go was itself controlled
+
+Two branches, both off `origin/main` = `a4caccefe` (v1.11.69), **neither on main and
+neither carrying a version bump**:
+
+```
+next/clkbuf-downsize-diagnostic-is-inverted                         f99979a73
+    the plugin fix (J80): 2 files, +51 -1
+next/six-shuttle-refusals-readjudicated-on-the-self-tapeout-path    450aba8fe
+    the adjudication: 20 files, +10 869 -- RESULT.md, findings.md, the standing
+    controls, and the J80 probe with its registered predictions
+```
+
+**Both verified by reading the remote back, not by trusting the push's exit code.**
+`git ls-remote` returns both shas; the fix's blob fetched back from `f99979a73` carries
+`if {[catch {` without the `!`; the report's blob fetched back from `450aba8fe` carries
+`ALL SIX DECIDED` at line 3. That matters here specifically: **J74 measured that two
+branches an earlier dispatch pushed had both vanished from the remote unlanded**, so
+"I pushed it" is exactly the claim in this report with a track record of expiring.
+
+### The scan that let it out, and why its PASS is a measurement
+
+A 216 KB report is a much larger surface than a commit message, and the commit-msg
+hook only scans messages. So the whole assembled directory went through **the repo's
+own file scanner**, `source_chip_agnostic_check.py`:
+
+```
+REAL SCAN          PASS (16 file(s) scanned) ... NDA panel read 20 of 20 tree-wide   rc 0
+POSITIVE CONTROL   --extra-tokens <a word that IS in the report>
+                   FAIL: 11 occurrence(s)  RESULT.md 2, findings.md 9               rc 1
+NEGATIVE CONTROL   --extra-tokens <a word that is NOT in the report>   PASS          rc 0
+```
+
+The positive control is what makes the PASS worth anything: it proves the scanner is
+**reading these files and can flag content inside them**. Without it, `PASS` and
+`I read nothing` are the same output. The gate agrees — pointed at a directory with no
+scannable files it returns `NOTHING_SCANNED ... a clean result over an empty scan is
+not a clean result`, rc 2, which is the first thing it said to me and the reason the
+scan was re-aimed rather than believed.
+
+### The hazard this publication CREATES, named rather than left
+
+**A pushed report is a snapshot, and this directory's copy keeps moving.** Every J
+entry after the push makes the two diverge, and the pushed one has a URL — which is
+precisely how a stale number acquires more authority than a current one. So the decay
+ledger now carries a row comparing the two by content hash and reporting `DRIFTED` as
+**informational**, with the canonical copy named as the one in `_jself_priv`. It is
+re-pushed at the end of a dispatch to catch up; between those points the ledger says so
+out loud.
+
+Both branches are also pinned in the ledger by sha, for the same reason J74 exists.
+
+### What moves
+
+**No verdict, no number.** What moves is that the six adjudications, the journal that
+argues them, and the controls that check them are no longer only on one disk.
