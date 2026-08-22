@@ -340,6 +340,25 @@ content was stood in for), and still the weaker answer.
 the 7 gates that actually apply run against the tree they are judging. The
 result of that run is the gate evidence for this branch.
 
+## An instruction I did not follow literally, and what I did instead
+
+The brief says **measure on a clean tree: `git clean -xdfq`,
+`PYTHONDONTWRITEBYTECODE=1`**. `PYTHONDONTWRITEBYTECODE=1` was used throughout,
+and `__pycache__` was cleared before the mutation run. `git clean -xdfq` was
+NOT run, and the substitution is stated rather than left for someone to notice:
+
+the shared checkout on this host carries a large tree of UNTRACKED benchmark
+artefacts belonging to other agents' runs. `git clean -xdfq` there deletes
+them — irreversibly, and they are not mine. So every measurement here was taken
+in a **fresh `git worktree` cut from `origin/main`**, which is clean by
+construction and gave the same property the instruction asks for: nothing from a
+previous run could contaminate a result.
+
+It is not a free substitution and the difference is named: a fresh worktree does
+NOT reproduce the host's untracked state, which is how the pre-push hook came to
+refuse for a directory that exists in the primary checkout and in no worktree —
+recorded in the section above. That refusal is the visible cost of this choice.
+
 ## What this must not be quoted as
 
 * The pin guard proves five anchors are present in **one image generation**
