@@ -259,25 +259,44 @@ if sky_pass is not None:
     check("the report's sky130A minimum matches the PASSING run's die",
           sky_pass * 1000, 3612000)
 
-print("\nTHE RULING MOVED NOTHING -- PRE-RULING vs DEFAULT-R0 ARTEFACTS")
-_pre, _post = _ev / "sha256_gf180_padring_report.json", _ev / "sha256_gf180_padring_DEFAULT_R0.json"
-if not (_pre.exists() and _post.exists()):
-    print("  [NOT VERIFIED] a ring artefact is missing -- cannot judge")
+print("\nTHE ORIENTATION FIX MOVED NOTHING -- PRE/POST, SAME NETLIST")
+# A/B regenerated 2026-08-22 from ONE netlist and ONE builder, with only the
+# PROGRAMS swapped (main's vs this branch's). The earlier pair could not be
+# compared this way: its two halves came from different netlists, so the pad
+# positions differed for reasons that had nothing to do with the fix, and this
+# check reported "positions changed" when the real answer was "you compared
+# two different rings".
+_pre_f, _post_f = _ev / "orient_AB_PRE_fix.json", _ev / "orient_AB_POST_fix.json"
+if not (_pre_f.exists() and _post_f.exists()):
+    print("  [NOT VERIFIED] an orientation A/B artefact is missing")
     UNVERIFIED += 1
+    _b = {}
 else:
-    _a = json.loads(_pre.read_text()).get("producer", {})
-    _b = json.loads(_post.read_text()).get("producer", {})
-    xy = lambda d, k: {(p["instance"], p["x"], p["y"]) for p in d.get(k, [])}
-    check("pad positions unchanged by the ruling", xy(_a,"pads") == xy(_b,"pads"), True)
-    check("corner positions unchanged", xy(_a,"corners") == xy(_b,"corners"), True)
+    _a = json.loads(_pre_f.read_text())
+    _a = _a.get("producer", _a)
+    _b = json.loads(_post_f.read_text())
+    _b = _b.get("producer", _b)
+    xy = lambda d, k: {(x["instance"], x["x"], x["y"]) for x in d.get(k, [])}
+    check("pad positions unchanged by the orientation fix",
+          xy(_a, "pads") == xy(_b, "pads"), True)
+    check("corner positions unchanged", xy(_a, "corners") == xy(_b, "corners"), True)
     check("die unchanged", _a["die"]["diearea"] == _b["die"]["diearea"], True)
-    orients = lambda d: {(p["instance"], p["orient"]) for p in d.get("pads", [])}
-    diff = orients(_a) - orients(_b)
-    check("orientation differs on exactly the vertical pads",
-          len(diff), sum(1 for p in _b.get("pads", []) if p["side"] in ("E","W")))
-    check("and on no horizontal pad",
-          {i for i,_ in diff} & {p["instance"] for p in _b.get("pads", []) if p["side"] in ("N","S")},
-          set())
+    _o = lambda d: {(p["instance"], p["orient"]) for p in d["pads"]}
+    _chg = {i for i, _ in _o(_a) - _o(_b)}
+    _side = {p["instance"]: p["side"] for p in _b["pads"]}
+    check("every pad whose orientation changed is on the NORTH side",
+          {_side[i] for i in _chg}, {"N"})
+    check("and that is every north pad",
+          len(_chg), sum(1 for p in _b["pads"] if p["side"] == "N"))
+    check("NORTH was a rotation and is now the placer's mirror",
+          (sorted({p["orient"] for p in _a["pads"] if p["side"] == "N"}),
+           sorted({p["orient"] for p in _b["pads"] if p["side"] == "N"})),
+          (["S"], ["FS"]))
+    check("the two corners the tool mirrors were rotated before",
+          ({c["position"]: c["orient"] for c in _a["corners"]},
+           {c["position"]: c["orient"] for c in _b["corners"]}),
+          ({"SW": "N", "SE": "E",  "NE": "S", "NW": "W"},
+           {"SW": "N", "SE": "FN", "NE": "S", "NW": "FS"}))
 
 print("\nPART 3 OF THE RULING, READ OUT OF THE DEF THE TOOL WROTE")
 # "The DEF must not contradict itself": the vertical sides must carry the

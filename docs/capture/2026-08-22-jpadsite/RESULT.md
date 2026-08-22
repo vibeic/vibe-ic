@@ -1,5 +1,47 @@
 DEFAULT_ROTATION_RERUN: PASS pads=77 die=2.262 mm rc=0
 
+THREE ORIENTATION DEFECTS FOUND 2026-08-22, AFTER THE FIX HAD LANDED, BY
+RE-RUNNING MY OWN PROBE. They are on main now. All three are one mistake:
+I COMPUTED ORIENTATIONS THAT THE TOOL PRODUCES.
+
+  1. `PAD_ROTATION_VERTICAL` is NOT inert. Re-measured in OpenROAD 26Q3-1581,
+     holding one rotation parameter and varying the other across all four
+     sides: `-rotation_horizontal` moves WEST and EAST, `-rotation_vertical`
+     moves SOUTH and NORTH. THE PARAMETERS ARE NAMED FOR THE ROW AXIS, NOT THE
+     SIDE. My probe varied PAD_ROTATION_VERTICAL while watching only W and E --
+     the wrong pairing -- so it correctly saw no change and I drew the wrong
+     conclusion. The shipped record said "the placer does not read it".
+  2. NORTH pads carried `S` (a 180-degree ROTATION) where the placer produces
+     `MX` -> `FS` (a MIRROR).
+  3. TWO OF FOUR CORNERS carried `E` and `W` where the placer produces `FN` and
+     `FS`. The placer alternates rotation and mirror -- R0, MY, R180, MX --
+     and this step walked a pure rotation.
+
+WHY NOTHING CAUGHT ANY OF THEM: a mirror and a rotation give the SAME BOUNDING
+BOX for these cells, so every fit, abutment, spacing and BTerm check agrees
+either way. 77/77 BTerms and "ring abuts" were true before and after. Only a DEF
+reader deriving PIN POSITIONS sees the difference -- which is exactly the
+failure part 3 of the flow owner's ruling names.
+
+MEASURED, A/B from ONE netlist and ONE builder with only the PROGRAMS swapped:
+pad positions IDENTICAL, corner positions IDENTICAL, die IDENTICAL, and exactly
+21 orientations changed -- all 19 NORTH pads plus the SE and NW corners. The fix
+moves nothing.
+
+    evidence/orient_AB_PRE_fix.json    main's programs, this netlist
+    evidence/orient_AB_POST_fix.json   this branch's, same netlist and builder
+    evidence/orient_AB_PRE_fix.def     the DEFs a downstream reader would parse
+    evidence/orient_AB_POST_fix.def    -- FS/FN appear only in the second
+
+The DEF counts say it plainly: the corrected ring writes FN once (SE corner),
+FS twenty times (19 north pads + NW corner), FW nineteen (west), N twenty-one
+(20 south + SW corner), S once (NE corner), W nineteen (east) -- 81 components.
+The pre-fix DEF contains no FN or FS at all.
+
+THE PASS AT THE TOP OF THIS FILE STANDS: the geometry never depended on these.
+The published artefacts have been REGENERATED with the corrected code and the
+gate re-run on them (rc 0).
+
 WHAT THAT PASS DOES NOT CERTIFY -- four lines, because the full scoping is far below
 under the heading SCOPE OF THE DEFAULT_ROTATION_RERUN PASS -- grep that, not a
 line number, which drifts with every edit above it -- and the number travels
