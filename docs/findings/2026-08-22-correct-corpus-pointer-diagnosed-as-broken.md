@@ -277,3 +277,53 @@ restoration condition. The four dispatcher/empty-corpus pinning modules —
 `test_routed_def_corpus_dispatch`, `test_issue886_undeclared_gate_is_not_exempt`
 — are **58 passed** on this branch (loadavg 16.24, nproc 32). An empty corpus did
 not become a pass and cannot have.
+
+## The hole the fourth state opened, found by attacking it rather than restating it
+
+`_has_cells` walks the FILESYSTEM. So a corpus clone whose cells were deleted,
+half-checked-out or never materialised is byte-identical to a corpus that
+publishes none — and the first version of this repair called that a MEASUREMENT
+of zero. It is not: it publishes cells you do not have.
+
+Measured on a checkout of the publisher at `146d665` with `ic/*/v*` removed from
+the working tree:
+
+| | |
+|---|---|
+| cells on disk | **0** |
+| cell files still tracked in git's index | **1384** |
+
+| tree | verdict on that checkout |
+|---|---|
+| `origin/main` | raise — right outcome, wrong sentence (*"empty of cells"*) |
+| `95a57f089` (this branch, before hardening) | `measured-empty`: *"IS the published corpus … publishes 0 cells"* |
+| `173818697` (now) | raise, naming the index/tree disagreement |
+
+That is the loosening this module exists to refuse, introduced by the commit that
+was meant to tighten it — a skip where there should be a refusal. It was found by
+asking what could satisfy `is_published_corpus` while the population claim was
+false, not by re-reading the diff.
+
+**The fix is #1764's distinction one level further in:** ask git's INDEX. Index
+carries cells while the tree carries none → damaged checkout, raise and say
+which. Index agrees there are none → genuinely measured empty.
+
+**Git stays optional and the cross-check must not smuggle it back in.**
+`_index_publishes_cells` returns `None` — not `False` — when git cannot be asked,
+and `None` leaves the filesystem answer standing, so an archive export of the
+corpus is still readable. `False` would be a claim about a population nobody
+read. The pathspec is `:(glob)ic/*/v*/**`; without the glob magic a bare `*` in a
+git pathspec matches `/` too and a cell-shaped directory three levels down would
+count. Both properties are pinned.
+
+**One of the new tests was wrong first.** It asserted that
+`ic/<design>/verification/` must not count as a cell in the index — but
+`_has_cells` accepts *any* directory whose name starts with `v`, so the
+filesystem counts it too. Demanding strictness of one side would have
+manufactured a tree/index disagreement out of nothing, and a disagreement is
+exactly what now reads as a damaged checkout. The property is **agreement**, not
+strictness.
+
+The headline result is unchanged by the hardening: pointer at the real landing
+checkout, `--collect-only` over the same 55 modules gives **1362 collected, 0
+errors** (1357 + the 5 new cases), against 52 collected / 52 errors on `main`.
