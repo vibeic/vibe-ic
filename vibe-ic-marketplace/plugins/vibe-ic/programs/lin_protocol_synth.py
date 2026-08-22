@@ -25,6 +25,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+import _pack_top_module as _ptm  # L9.top_module: one decision, one provenance stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -35,7 +38,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def apply_lin_synth(generated_docs_dir: Path, is_lin: bool,
@@ -692,7 +697,7 @@ def apply_lin_synth(generated_docs_dir: Path, is_lin: bool,
         # authoritative — wire_side / node_side replace UART subkeys.
         d["module_role"] = (
             "Single-master / multiple-slave UART-byte-framed serial bus on a single wire, intended for low-cost mechatronic clusters in vehicles where the bandwidth and versatility of CAN are not required. Implemented on each node as a master task (master node only) + slave task on top of a UART/SCI peripheral or pure state machine.")
-        d["top_module"] = "lin_node"
+        _ptm.apply(d, "lin_node")
         d["integration_overview"] = {
             "wire_side":   "Single LIN bus wire shared by master + slaves; VBAT for line termination via 1 kΩ (master) / 30 kΩ (slave) pull-ups; common GND.",
             "node_side":   "UART/SCI peripheral (or pure state machine) on a microcontroller, plus a LIN transceiver IC bridging TTL UART pins (TXD/RXD) to the LIN bus line.",
