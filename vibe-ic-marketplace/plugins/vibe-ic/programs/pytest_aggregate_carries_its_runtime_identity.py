@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""test_aggregate_carries_its_runtime_identity.py — a failure count names the
-runtime that produced it, or it may not be subtracted from another.
+"""pytest_aggregate_carries_its_runtime_identity.py — a failure count names
+the runtime that produced it, or it may not be subtracted from another.
 
 WHY IT IS NOT CALLED `test_aggregate_...`
 =========================================

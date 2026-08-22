@@ -908,7 +908,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `published_record_staleness_check` | any | — | a landed gate rule does not reach the records the gate already published. |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style). |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
-| `pytest_aggregate_carries_its_runtime_identity` | any | — | test_aggregate_carries_its_runtime_identity.py — a failure count names the runtime that produced it, or it may not be subtracted from ano... |
+| `pytest_aggregate_carries_its_runtime_identity` | any | — | a failure count names the runtime that produced it, or it may not be subtracted from another. |
 | `pytest_per_file_junit` | any | — | run the whole selection once, then recover with ONE pytest session per selected file only when that aggregate record is lost, so a file t... |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper. |
@@ -2148,7 +2148,7 @@ _(no programs in this group)_
 - `published_record_staleness_check` — a landed gate rule does not reach the records the gate already published.
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style).
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
-- `pytest_aggregate_carries_its_runtime_identity` — test_aggregate_carries_its_runtime_identity.py — a failure count names the runtime that produced it, or it may not be subtracted from ano...
+- `pytest_aggregate_carries_its_runtime_identity` — a failure count names the runtime that produced it, or it may not be subtracted from another.
 - `pytest_per_file_junit` — run the whole selection once, then recover with ONE pytest session per selected file only when that aggregate record is lost, so a file t...
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qspi_ospi_protocol_synth` — Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper.  _[v0.1.91]_

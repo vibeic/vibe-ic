@@ -6,6 +6,10 @@
       "reason": "A 4096-byte head window over a sign-off report, searched for a format marker. Same shape, same remedy: keep the window for display and re-search the full text on a miss."
     },
     {
+      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/_signoff_drc_format.py::text::head::65536",
+      "reason": "REVEALED BY THE RULE, NOT INTRODUCED BY IT. `_signoff_drc_format.py:274` searches the router marker inside `text[:_HEAD_BYTES]`, 65536 bytes, and the bound is behind a NAME \u2014 so it was invisible to this rule for as long as the rule read literals only, on a file that ALREADY carried a row for its 4096-byte sibling four lines above. The site is byte-identical on origin/main a4caccefe, so it is pre-existing debt this batch EXPOSED and not debt this batch created. 65536 is generous and generous is still a bound doing a predicate's work: a report whose router marker sits past 64 KiB is attributed to the wrong producer, and the miss reads as the marker being absent. Same remedy as every row here: keep the window for display, re-search the full text on a miss, and report a marker found outside it as its own outcome with its byte offset."
+    },
+    {
       "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/flow_gate_enforcement_audit.py::text::head::4000",
       "reason": "THE INSTANCE THE CAPTURE MEASURED. `declared_intent` searches the ENFORCEMENT declaration inside `text[:4000]`, so a twelve-line intent block at byte 8249 was reported as 'declares no intent at all' \u2014 prose above the marker silently un-declares the gate. Control pair through this exact predicate: a byte-identical declaration returns 'blocking' at byte 26 and None at byte 5121. On this tree every declaration is inside the window, so the repair adds no finding today; it prevents the next one."
     },

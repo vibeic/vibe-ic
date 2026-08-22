@@ -45,6 +45,62 @@ def age():
     return G.git_age(REPO)
 
 
+@pytest.fixture(scope="module")
+def straddling_clock(rows):
+    """`(age, behind)` for the clock read at a tree the row's bound can straddle.
+
+    WHY THE DIRECTION TESTS BELOW CANNOT READ THE CLOCK AT `HEAD` ANY MORE, AND
+    WHY THE ANSWER IS NOT A BIGGER BOUND.
+
+    Each of them takes a shipped row and SYNTHESISES a bound either side of the
+    red's measured age -- `behind - 1` must expire, `behind + 1` must not. That
+    construction has a ceiling built into it that nothing declared: a bound is
+    only legal up to `MAX_BOUND_COMMITS`, and once the age read at HEAD passes
+    that ceiling NEITHER side can be built. `behind - 1` is refused as
+    `unbounded` before the expiry clause is ever reached, and `behind + 1`
+    clamps to the ceiling and lands BELOW the age, so it expires too. MEASURED
+    on this tree: `rows[0]` is 941 commits old at HEAD, ceiling 500, and all
+    three tests reported the wrong clause. Nothing about the ROWS changed --
+    every shipped row was already past its bound on the base, and no verdict
+    moves. What went dark is the PROOF.
+
+    `MAX_BOUND_COMMITS` is a ceiling on how large a bound may be DECLARED. It
+    is not a deadline, and raising it to fit a test would be raising a limit to
+    make a measurement come out -- so the endpoint moves instead, which costs
+    the tests nothing they were actually asserting. `git_age` already takes the
+    tree the clock counts TO: it is the production `--head-ref`, and a landing
+    passes its BASE for exactly this reason. Here it is handed a tree partway
+    along the row's own real history, so `behind` is a distance a row is
+    ALLOWED to declare a bound for, at any age the row ever reaches. `since` is
+    untouched, the row is the shipped one, and the history is this repository's.
+
+    The endpoint is MEASURED, not assumed: merges make "the Nth commit after
+    `since`" and "N commits ahead of `since`" different numbers, so candidates
+    are probed with the same `age` the adjudicator uses and the first one
+    inside the window is returned.
+    """
+    since = str(rows[0]["since"])
+    listing = subprocess.run(
+        ["git", "-C", str(REPO), "rev-list", "--reverse", "--ancestry-path",
+         f"{since}..HEAD"], capture_output=True, text=True).stdout.split()
+    assert listing, (
+        f"no commit of this repository lies between {since[:12]} and HEAD, so "
+        f"no endpoint can be chosen and neither direction of the expiry rule "
+        f"can be constructed here")
+    hi = G.MAX_BOUND_COMMITS - 1
+    for nth in (hi // 2, hi // 4, hi // 8, 32, 8, 2, 1):
+        if not 0 < nth <= len(listing):
+            continue
+        at = G.git_age(REPO, listing[nth - 1])
+        behind = at(since)
+        if behind is not None and 1 < behind <= hi:
+            return at, behind
+    raise AssertionError(
+        f"no tree between {since[:12]} and HEAD sits a declarable distance "
+        f"(2..{hi}) from it, so the expiry rule cannot be exercised in either "
+        f"direction on this history")
+
+
 def _record(states):
     """A dispatch record in the shape `_gate_dispatch.sh --summary-json` writes."""
     gates = [{"label": lab, "state": st, "seconds": 1}
@@ -101,12 +157,17 @@ def test_every_bound_is_a_bound(rows):
 # THE EXPIRY BITES. Both directions, over the SHIPPED rows and real history.
 # --------------------------------------------------------------------------
 
-def test_a_row_whose_since_has_fallen_past_its_bound_refuses(rows, age):
+def test_a_row_whose_since_has_fallen_past_its_bound_refuses(
+        rows, straddling_clock):
     """Direction one. Take a shipped row, leave `since` where the measurement
-    put it, and set the bound BELOW the red's real age. It must fail."""
+    put it, and set the bound BELOW the red's real age. It must fail.
+
+    The clock is read at a tree the bound can straddle rather than at HEAD --
+    see `straddling_clock` for why, and for what stayed the same.
+    """
+    age, behind = straddling_clock
     row = dict(rows[0])
-    behind = age(row["since"])
-    assert behind and behind > 1
+    assert 1 < behind <= G.MAX_BOUND_COMMITS, behind
     row["max_commits"] = behind - 1
     findings, _, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
@@ -117,12 +178,23 @@ def test_a_row_whose_since_has_fallen_past_its_bound_refuses(rows, age):
         "it is behind")
 
 
-def test_the_same_row_inside_its_bound_does_not_refuse(rows, age):
+def test_the_same_row_inside_its_bound_does_not_refuse(
+        rows, straddling_clock):
     """Direction two, and it is the one that makes direction one mean
-    something: if every row refused, `expired` would be a constant."""
+    something: if every row refused, `expired` would be a constant.
+
+    The bound is `behind + 1` and is NOT clamped any more. Clamping was how
+    this direction went dark: once the age passed the ceiling, `min(...)` chose
+    the ceiling, which is BELOW the age, so the row expired and the test read
+    that as the rule being broken. A bound the ceiling cannot express is a
+    stimulus that no longer exists, not a smaller stimulus.
+    """
+    age, behind = straddling_clock
     row = dict(rows[0])
-    behind = age(row["since"])
-    row["max_commits"] = min(behind + 1, G.MAX_BOUND_COMMITS)
+    row["max_commits"] = behind + 1
+    assert row["max_commits"] <= G.MAX_BOUND_COMMITS, (
+        "the endpoint left no room for a bound ABOVE the age; direction two "
+        "cannot be constructed and must not be silently weakened to fit")
     findings, known, _ = G.adjudicate(
         _record({row["gate"]: "FAIL"}), [row], age)
     assert [f.kind for f in findings] == [], [f.line() for f in findings]
@@ -214,14 +286,19 @@ def test_the_ledger_is_tracked_so_every_renewal_has_an_author():
         assert author, f"a commit touching the ledger carries no author: {line}"
 
 
-def test_no_environment_variable_can_move_the_clock(rows, age):
+def test_no_environment_variable_can_move_the_clock(rows, straddling_clock):
     """`adjudicate` takes (record, ledger, age) and nothing else, and this is
     the behavioural proof rather than a reading of the signature: a row that
     has expired stays expired with the environment stuffed with every name a
-    reader might guess at."""
+    reader might guess at.
+
+    It needs an EXPIRED row to poison the environment around, and it built one
+    the same way direction one did, so it went dark for the same reason. Same
+    repair: the clock is read at a tree the bound can straddle.
+    """
+    age, behind = straddling_clock
     row = dict(rows[0])
-    behind = age(row["since"])
-    row["max_commits"] = max(1, behind - 1)
+    row["max_commits"] = behind - 1
     red = _record({row["gate"]: "FAIL"})
     before = [f.line() for f in G.adjudicate(red, [row], age)[0]]
     assert any("expired" in line for line in before)
@@ -417,11 +494,32 @@ def test_a_ref_that_predates_the_ledger_is_empty_not_an_error(tmp_path):
 
 def test_a_ref_that_does_not_exist_is_an_error(tmp_path):
     """A caller that names a ref and is wrong about it must not be handed an
-    empty ledger, which would read as `nothing is acknowledged`."""
+    empty ledger, which would read as `nothing is acknowledged`.
+
+    AND IT MUST NOT BE HANDED A FINDING EITHER, which is the half this test did
+    not say and which cost a clean tree its merge: `--ledger-ref` reads through
+    `git show`, so any tree that is not a git repository failed the read, and
+    the read failure was graded rc 1 -- a refusal about the ENVIRONMENT printed
+    in the words of a finding about the CANDIDATE. Both directions are pinned
+    below: the exception is `LedgerUnreadable` and NAMES the path and the ref,
+    and the CLI grades it rc 2 NOT CHECKED with the vacuity disclosed on both
+    channels. A bare `pytest.raises(ValueError)` accepted either grading.
+    """
     r, since, base = _repo_with_ledger(
         tmp_path, [{"gate": "g", "max_commits": 1}], [])
-    with pytest.raises(ValueError):
+    with pytest.raises(G.LedgerUnreadable) as caught:
         G.load_ledger_from_ref(r, "no-such-ref-9f3a")
+    named = str(caught.value)
+    assert G.LEDGER_REL in named and "no-such-ref-9f3a" in named, named
+
+    out = _cli(r, _rec_file(tmp_path, {"g": "FAIL"}),
+               "--ledger-ref", "no-such-ref-9f3a")
+    assert out.returncode == 2, (out.returncode, out.stdout, out.stderr)
+    assert "[VACUOUS]" in out.stdout, out.stdout
+    assert "[FAIL]" not in out.stdout, out.stdout
+    assert G.LEDGER_REL in out.stdout and "no-such-ref-9f3a" in out.stdout, \
+        out.stdout
+    assert "VACUOUS_PASS:" in out.stderr, out.stderr
 
 
 def test_the_review_passes_both_halves_from_the_base(tmp_path, monkeypatch):
